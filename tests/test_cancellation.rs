@@ -19,7 +19,7 @@ impl ToolHandler for CancellableToolHandler {
                 Ok(json!({ "result": "completed" }))
             }
             () = extra.cancelled() => {
-                Err(pmcp::Error::cancelled("Operation cancelled"))
+                Err(pmcp::Error::cancelled())
             }
         }
     }
@@ -32,12 +32,9 @@ struct PeriodicCheckToolHandler;
 #[async_trait::async_trait]
 impl ToolHandler for PeriodicCheckToolHandler {
     async fn handle(&self, _args: Value, extra: RequestHandlerExtra) -> pmcp::Result<Value> {
-        for i in 0..10 {
+        for _i in 0..10 {
             if extra.is_cancelled() {
-                return Err(pmcp::Error::cancelled(format!(
-                    "Operation cancelled at step {}",
-                    i
-                )));
+                return Err(pmcp::Error::cancelled());
             }
             sleep(Duration::from_millis(100)).await;
         }

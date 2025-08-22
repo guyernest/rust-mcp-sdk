@@ -1,11 +1,16 @@
 //! Protocol helper functions for parsing and creating messages.
 
 use crate::error::{Error, Result};
+use crate::shared::simd_parsing::SimdJsonParser;
 use crate::types::{
     ClientNotification, ClientRequest, JSONRPCNotification, JSONRPCRequest, Notification, Request,
     RequestId, ServerNotification, ServerRequest,
 };
 use serde_json::Value;
+use std::sync::LazyLock;
+
+/// Global SIMD JSON parser instance for high-performance parsing
+static SIMD_PARSER: LazyLock<SimdJsonParser> = LazyLock::new(SimdJsonParser::new);
 
 /// Parse a JSON-RPC request into a typed Request.
 pub fn parse_request(request: JSONRPCRequest<Value>) -> Result<(RequestId, Request)> {
@@ -243,6 +248,56 @@ fn server_notification_to_jsonrpc(notif: ServerNotification) -> (String, Option<
             Some(serde_json::to_value(params).unwrap()),
         ),
     }
+}
+
+/// SIMD-accelerated JSON-RPC parsing functions
+///
+/// These functions provide high-performance alternatives to standard parsing
+/// by leveraging SIMD optimizations when available on the target CPU.
+/// Parse a JSON-RPC request from raw bytes using SIMD optimization.
+pub fn parse_request_bytes(data: &[u8]) -> Result<(RequestId, Request)> {
+    let request = SIMD_PARSER
+        .parse_request(data)
+        .map_err(|e| Error::parse(format!("SIMD JSON parsing failed: {}", e)))?;
+    parse_request(request)
+}
+
+/// Parse a JSON-RPC response from raw bytes using SIMD optimization.
+pub fn parse_response_bytes(data: &[u8]) -> Result<crate::types::jsonrpc::JSONRPCResponse> {
+    SIMD_PARSER
+        .parse_response(data)
+        .map_err(|e| Error::parse(format!("SIMD JSON response parsing failed: {}", e)))
+}
+
+/// Parse a batch of JSON-RPC requests from raw bytes using SIMD optimization with parallel processing.
+pub fn parse_batch_requests_bytes(data: &[u8]) -> Result<Vec<(RequestId, Request)>> {
+    let requests = SIMD_PARSER
+        .parse_batch_requests(data)
+        .map_err(|e| Error::parse(format!("SIMD batch parsing failed: {}", e)))?;
+
+    requests
+        .into_iter()
+        .map(parse_request)
+        .collect::<Result<Vec<_>>>()
+}
+
+/// Parse a batch of JSON-RPC responses from raw bytes using SIMD optimization.
+pub fn parse_batch_responses_bytes(
+    data: &[u8],
+) -> Result<Vec<crate::types::jsonrpc::JSONRPCResponse>> {
+    SIMD_PARSER
+        .parse_batch_responses(data)
+        .map_err(|e| Error::parse(format!("SIMD batch response parsing failed: {}", e)))
+}
+
+/// Get SIMD parsing performance metrics.
+pub fn get_simd_parsing_metrics() -> crate::shared::simd_parsing::ParsingMetrics {
+    SIMD_PARSER.get_metrics()
+}
+
+/// Check if SIMD features are available on the current CPU.
+pub fn get_cpu_features() -> crate::shared::simd_parsing::CpuFeatures {
+    SIMD_PARSER.get_cpu_features()
 }
 
 #[cfg(test)]

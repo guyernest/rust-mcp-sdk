@@ -200,7 +200,7 @@ proptest! {
 
     #[test]
     fn property_error_code_bijection(code in -32700i32..=-32000) {
-        let error_code = pmcp::error::ErrorCode::from_i32(code);
+        let error_code = pmcp::error::ErrorCode::other(code);
         let back = error_code.as_i32();
 
         // Known error codes should roundtrip exactly

@@ -1,6 +1,6 @@
 [package]
 name = "pmcp"
-version = "1.2.1"
+version = "1.4.0"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility"
@@ -103,7 +103,8 @@ dashmap = "6.1"  # Already in main deps but needed for examples
 
 [features]
 default = ["validation"]
-full = ["websocket", "http", "streamable-http", "validation", "resource-watcher", "rayon"]
+full = ["websocket", "http", "streamable-http", "sse", "validation", "resource-watcher", "rayon"]
+sse = ["dep:bytes", "dep:tokio", "dep:tokio-util", "dep:tracing-subscriber"]
 websocket = ["dep:tokio-tungstenite", "dep:tokio", "dep:tokio-util", "dep:tracing-subscriber"]
 http = ["dep:hyper", "dep:hyper-util", "dep:tokio", "dep:tokio-util", "dep:tracing-subscriber"]
 streamable-http = ["dep:hyper", "dep:hyper-util", "dep:futures-util", "dep:bytes", "dep:axum", "dep:tokio", "dep:tokio-util", "dep:tokio-stream", "dep:tracing-subscriber"]
@@ -266,6 +267,36 @@ name = "24_streamable_http_client"
 path = "examples/24_streamable_http_client.rs"
 required-features = ["streamable-http"]
 
+[[example]]
+name = "27_websocket_server_enhanced"
+path = "examples/27_websocket_server_enhanced.rs"
+required-features = ["websocket"]
+
+[[example]]
+name = "28_sse_optimized"
+path = "examples/28_sse_optimized.rs"
+required-features = ["sse"]
+
+[[example]]
+name = "29_connection_pool"
+path = "examples/29_connection_pool.rs"
+required-features = ["full"]
+
+[[example]]
+name = "30_enhanced_middleware"
+path = "examples/30_enhanced_middleware.rs"
+required-features = ["full"]
+
+[[example]]
+name = "31_advanced_error_recovery"
+path = "examples/31_advanced_error_recovery.rs"
+required-features = ["full"]
+
+
+
+[[bench]]
+name = "comprehensive_benchmarks"
+harness = false
 [workspace]
 members = ["pmcp-macros", "examples/wasm-client", "examples/25-oauth-basic", "examples/test-basic"]
 exclude = ["fuzz"]

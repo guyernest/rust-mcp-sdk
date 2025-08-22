@@ -103,6 +103,81 @@ pdmt_deterministic_todos --requirement "implement feature X" --mode strict --cov
 - Full quality gate validation
 - Documentation coverage verification
 
+## ALWAYS Requirements for New Features (MANDATORY)
+
+**Every new feature MUST include ALL of the following - NO EXCEPTIONS:**
+
+### 1. FUZZ Testing (ALWAYS REQUIRED)
+```bash
+# Property-based fuzzing for robustness
+cargo fuzz run fuzz_target_name
+# OR using proptest for property-based testing
+cargo test proptest
+```
+
+### 2. PROPERTY Testing (ALWAYS REQUIRED)
+```bash
+# Invariant verification with quickcheck/proptest
+cargo test property_tests
+# Comprehensive property-based testing coverage
+```
+
+### 3. UNIT Testing (ALWAYS REQUIRED)
+```bash
+# Comprehensive unit test coverage (80%+ required)
+cargo test unit_tests
+# All functions must have unit tests
+```
+
+### 4. EXAMPLE Demonstration (ALWAYS REQUIRED)
+```bash
+# Working example that demonstrates the feature
+cargo run --example feature_name
+# Must include real-world usage scenario
+```
+
+### Additional Testing Requirements:
+- **Integration Tests**: Full client-server integration scenarios
+- **Doctests**: All public APIs with working examples
+- **Performance Tests**: Benchmarks for performance-critical features
+- **Security Tests**: Security validation for auth/transport features
+
+## Toyota Way Development Workflow (Updated)
+
+### Feature Development Kata (The "Always" Process)
+
+**For EVERY new feature, follow this exact sequence:**
+
+#### Step 1: PLANNING (PDMT Required)
+```bash
+# Generate deterministic todos with quality gates
+pdmt_deterministic_todos --requirement "implement feature X" --mode strict --coverage-target 80
+```
+
+#### Step 2: IMPLEMENTATION (ALWAYS Include)
+1. **Write Property Tests FIRST** - Define the invariants
+2. **Write Unit Tests** - Cover all edge cases
+3. **Implement Feature** - Meet the test requirements
+4. **Add Fuzz Testing** - Verify robustness
+5. **Create Example** - Demonstrate real usage
+
+#### Step 3: QUALITY VALIDATION (ALWAYS Required)
+```bash
+# MANDATORY validation before any commit
+make pre-commit-gate     # All quality checks
+make test-fuzz          # Fuzz testing
+make test-property      # Property tests  
+make test-unit          # Unit tests
+make test-examples      # Example verification
+make test-integration   # Integration tests
+```
+
+#### Step 4: DOCUMENTATION (ALWAYS Required)
+- **API Documentation**: Comprehensive rustdoc with examples
+- **Usage Examples**: Real-world scenarios in examples/
+- **Integration Guide**: How to use with existing systems
+- **Property Documentation**: What invariants are maintained
+
 ## Quality Standards Summary
 
 ✅ **Zero tolerance for defects**
@@ -114,6 +189,7 @@ pdmt_deterministic_todos --requirement "implement feature X" --mode strict --cov
 ✅ **Cognitive complexity ≤25 per function**
 ✅ **Zero SATD comments allowed**
 ✅ **Comprehensive documentation required**
+✅ **ALWAYS requirements: fuzz, property, unit, cargo run --example**
 
 ## Emergency Override (USE WITH EXTREME CAUTION)
 ```bash

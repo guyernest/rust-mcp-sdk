@@ -12,8 +12,6 @@ jobs:
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
     steps:
     - uses: actions/checkout@v4
     
@@ -38,15 +36,13 @@ jobs:
     
     - name: Create Release
       id: create_release
-      uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ github.ref }}
-        release_name: ${{ steps.get_version.outputs.VERSION }}
-        body: ${{ steps.changelog.outputs.CHANGELOG }}
-        draft: false
-        prerelease: false
+      run: |
+        gh release create "${{ steps.get_version.outputs.VERSION }}" \
+          --title "${{ steps.get_version.outputs.VERSION }}" \
+          --notes "${{ steps.changelog.outputs.CHANGELOG }}" \
+          --verify-tag
 
   publish-crate:
     name: Publish to crates.io

@@ -50,7 +50,7 @@ impl ToolHandler for ErrorDemoTool {
 
             "invalid_request" => {
                 // Missing required parameters
-                Err(Error::invalid_request("Missing required parameter 'input'"))
+                Err(Error::validation("Missing required parameter 'input'"))
             },
 
             "method_not_found" => {
@@ -76,14 +76,16 @@ impl ToolHandler for ErrorDemoTool {
 
             "rate_limit" => {
                 // Simulate rate limiting
-                Err(Error::protocol_with_data(
+                Err(Error::protocol(
                     ErrorCode::other(-32001),
-                    "Rate limit exceeded",
-                    json!({
-                        "retry_after": 60,
-                        "limit": 100,
-                        "window": "1h"
-                    }),
+                    format!(
+                        "Rate limit exceeded: {}",
+                        json!({
+                            "retry_after": 60,
+                            "limit": 100,
+                            "window": "1h"
+                        })
+                    ),
                 ))
             },
 

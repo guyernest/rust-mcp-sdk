@@ -10,7 +10,13 @@ pub mod protocol_helpers;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod reconnect;
 pub mod session;
+pub mod simd_parsing;
 pub mod sse_parser;
+
+#[cfg(feature = "sse")]
+pub mod sse_optimized;
+
+pub mod connection_pool;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stdio;
 pub mod transport;
@@ -48,7 +54,10 @@ pub use event_store::{
 pub use logging::init_logging;
 pub use logging::{CorrelatedLogger, LogConfig, LogEntry, LogFormat, LogLevel};
 pub use middleware::{
-    AuthMiddleware, LoggingMiddleware, Middleware, MiddlewareChain, RetryMiddleware,
+    AdvancedMiddleware, AuthMiddleware, CircuitBreakerMiddleware, CompressionMiddleware,
+    CompressionType, EnhancedMiddlewareChain, LoggingMiddleware, MetricsMiddleware, Middleware,
+    MiddlewareChain, MiddlewareContext, MiddlewarePriority, PerformanceMetrics,
+    RateLimitMiddleware, RetryMiddleware,
 };
 pub use protocol::{ProgressCallback, Protocol, ProtocolOptions, RequestOptions};
 pub use protocol_helpers::{
@@ -76,3 +85,15 @@ pub use http::{HttpConfig, HttpTransport};
 
 #[cfg(all(feature = "streamable-http", not(target_arch = "wasm32")))]
 pub use streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig};
+
+#[cfg(feature = "sse")]
+pub use sse_optimized::{OptimizedSseConfig, OptimizedSseTransport};
+
+pub use connection_pool::{
+    ConnectionId, ConnectionPool, ConnectionPoolConfig, HealthStatus, LoadBalanceStrategy,
+    PoolStats, PooledTransport,
+};
+
+pub use simd_parsing::{
+    CpuFeatures, ParsingMetrics, SimdBase64, SimdHttpHeaderParser, SimdJsonParser, SimdSseParser,
+};

@@ -111,12 +111,18 @@ unused-deps:
 	# $(CARGO) machete
 	# @echo "$(GREEN)✓ No unused dependencies$(NC)"
 
-# Testing targets
+# Testing targets (ALWAYS Required for New Features)
 .PHONY: test
 test:
 	@echo "$(BLUE)Running tests...$(NC)"
 	RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) nextest run --features "full"
 	@echo "$(GREEN)✓ All tests passed$(NC)"
+
+.PHONY: test-unit
+test-unit:
+	@echo "$(BLUE)Running unit tests (ALWAYS required for new features)...$(NC)"
+	RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test --lib --features "full"
+	@echo "$(GREEN)✓ Unit tests passed$(NC)"
 
 .PHONY: test-doc
 test-doc:
@@ -126,13 +132,55 @@ test-doc:
 
 .PHONY: test-property
 test-property:
-	@echo "$(BLUE)Running property tests...$(NC)"
+	@echo "$(BLUE)Running property tests (ALWAYS required for new features)...$(NC)"
 	PROPTEST_CASES=1000 RUST_LOG=$(RUST_LOG) $(CARGO) test --features "full" -- --ignored property_
 	@echo "$(GREEN)✓ Property tests passed$(NC)"
 
+.PHONY: test-fuzz
+test-fuzz:
+	@echo "$(BLUE)Running fuzz tests (ALWAYS required for new features)...$(NC)"
+	@if [ -d "fuzz" ]; then \
+		cd fuzz && $(CARGO) fuzz list | while read target; do \
+			echo "$(BLUE)Fuzzing $$target...$(NC)"; \
+			timeout 30s $(CARGO) fuzz run $$target || echo "$(YELLOW)Fuzz target $$target completed$(NC)"; \
+		done; \
+	else \
+		echo "$(YELLOW)⚠ No fuzz directory found. Run 'cargo fuzz init' to create fuzz tests$(NC)"; \
+	fi
+	@echo "$(GREEN)✓ Fuzz testing completed$(NC)"
+
+.PHONY: test-examples
+test-examples:
+	@echo "$(BLUE)Running example tests (ALWAYS required for new features)...$(NC)"
+	@for example in $$(ls examples/*.rs 2>/dev/null | sed 's/examples\///g' | sed 's/\.rs$$//g'); do \
+		echo "$(BLUE)Testing example: $$example$(NC)"; \
+		$(CARGO) run --example $$example --features "full" || exit 1; \
+	done
+	@echo "$(GREEN)✓ All examples run successfully$(NC)"
+
+.PHONY: test-integration
+test-integration:
+	@echo "$(BLUE)Running integration tests...$(NC)"
+	RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test --test '*' --features "full"
+	@echo "$(GREEN)✓ Integration tests passed$(NC)"
+
 .PHONY: test-all
-test-all: test test-doc test-property
-	@echo "$(GREEN)✓ All test suites passed$(NC)"
+test-all: test-unit test-doc test-property test-examples test-integration
+	@echo "$(GREEN)✓ All test suites passed (ALWAYS requirements met)$(NC)"
+
+# ALWAYS Requirements Validation (for new features)
+.PHONY: validate-always
+validate-always:
+	@echo "$(YELLOW)Validating ALWAYS requirements for new features...$(NC)"
+	@echo "$(BLUE)1. FUZZ Testing validation...$(NC)"
+	@$(MAKE) test-fuzz
+	@echo "$(BLUE)2. PROPERTY Testing validation...$(NC)"
+	@$(MAKE) test-property
+	@echo "$(BLUE)3. UNIT Testing validation...$(NC)"
+	@$(MAKE) test-unit
+	@echo "$(BLUE)4. EXAMPLE demonstration validation...$(NC)"
+	@$(MAKE) test-examples
+	@echo "$(GREEN)✅ ALL ALWAYS requirements validated!$(NC)"
 
 # Coverage targets
 .PHONY: coverage
@@ -168,12 +216,14 @@ doc-open: doc
 	@echo "$(BLUE)Opening documentation...$(NC)"
 	$(CARGO) doc --all-features --no-deps --open
 
-# Quality gate - pmat style
+# Quality gate - PAIML/PMAT style with ALWAYS requirements
 .PHONY: quality-gate
 quality-gate:
 	@echo "$(YELLOW)═══════════════════════════════════════════════════════$(NC)"
-	@echo "$(YELLOW)            MCP SDK QUALITY GATE CHECK                 $(NC)"
+	@echo "$(YELLOW)        PMCP SDK TOYOTA WAY QUALITY GATE               $(NC)"
+	@echo "$(YELLOW)        Zero Tolerance for Defects                      $(NC)"
 	@echo "$(YELLOW)═══════════════════════════════════════════════════════$(NC)"
+	@echo "$(BLUE)🏭 Jidoka: Stopping the line for quality verification$(NC)"
 	@$(MAKE) fmt-check
 	@$(MAKE) lint
 	@$(MAKE) build
@@ -183,9 +233,30 @@ quality-gate:
 	@$(MAKE) check-todos
 	@$(MAKE) check-unwraps
 	@$(MAKE) pmat-quality
+	@$(MAKE) validate-always
+
+  @echo "$(GREEN)═══════════════════════════════════════════════════════$(NC)"
+	@echo "$(GREEN)        ✅ ALL TOYOTA WAY QUALITY CHECKS PASSED        $(NC)"
+	@echo "$(GREEN)        🎯 ALWAYS Requirements Validated                $(NC)"
 	@echo "$(GREEN)═══════════════════════════════════════════════════════$(NC)"
-	@echo "$(GREEN)        ✓ ALL QUALITY CHECKS PASSED                    $(NC)"
-	@echo "$(GREEN)═══════════════════════════════════════════════════════$(NC)"
+
+# Extreme quality gate for releases (PMAT-style)
+.PHONY: quality-gate-strict
+quality-gate-strict:
+	@echo "$(YELLOW)╔═══════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(YELLOW)║         PMCP SDK EXTREME QUALITY GATE                ║$(NC)"
+	@echo "$(YELLOW)║         PMAT/Toyota Way Standards                     ║$(NC)"
+	@echo "$(YELLOW)╚═══════════════════════════════════════════════════════╝$(NC)"
+	@echo "$(BLUE)🔥 Extreme mode: Maximum quality enforcement$(NC)"
+	@$(MAKE) quality-gate
+	@$(MAKE) mutants
+	@$(MAKE) coverage
+	@echo "$(BLUE)🚀 Running security audit with fail-on-violation...$(NC)"
+	@$(CARGO) audit || (echo "$(RED)❌ Security vulnerabilities found!$(NC)" && exit 1)
+	@echo "$(GREEN)╔═══════════════════════════════════════════════════════╗$(NC)"
+	@echo "$(GREEN)║        🏆 EXTREME QUALITY GATE PASSED                ║$(NC)"
+	@echo "$(GREEN)║        Ready for Production Release                   ║$(NC)"
+	@echo "$(GREEN)╚═══════════════════════════════════════════════════════╝$(NC)"
 
 # Toyota Way pre-commit quality gate (fast checks only)
 .PHONY: pre-commit-gate

@@ -54,7 +54,7 @@ impl ResourceHandler for TestResourceHandler {
                 }],
             })
         } else {
-            Err(Error::resource_not_found(uri))
+            Err(Error::not_found(uri))
         }
     }
 
