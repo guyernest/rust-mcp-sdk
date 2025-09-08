@@ -4,6 +4,7 @@ name: Release Tester Binary
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 jobs:
   build-release:
@@ -16,7 +17,7 @@ jobs:
             asset_name: mcp-tester-linux-x86_64
             target: x86_64-unknown-linux-gnu
           - os: macos-latest
-            asset_name: mcp-tester-macos-x86_64
+            asset_name: mcp-tester-macos-x88_64
             target: x86_64-apple-darwin
           - os: windows-latest
             asset_name: mcp-tester-windows-x86_64.exe
