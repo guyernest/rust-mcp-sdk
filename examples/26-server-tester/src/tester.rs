@@ -1935,10 +1935,48 @@ impl ServerTester {
         })
     }
 
-    pub async fn read_resource(&mut self, _uri: &str) -> Result<pmcp::types::ReadResourceResult> {
-        // For now, return empty resource
-        // This would need to be implemented based on the transport type
-        Ok(pmcp::types::ReadResourceResult { contents: vec![] })
+    pub async fn read_resource(&mut self, uri: &str) -> Result<pmcp::types::ReadResourceResult> {
+        // Try to use existing HTTP client if initialized
+        if let Some(client) = &mut self.pmcp_client {
+            return client.read_resource(uri.to_string()).await.map_err(|e| e.into());
+        }
+
+        // Try stdio client
+        if let Some(client) = &mut self.stdio_client {
+            return client.read_resource(uri.to_string()).await.map_err(|e| e.into());
+        }
+
+        // Fallback for direct JSON-RPC HTTP (without pmcp client wrapper)
+        match self.transport_type {
+            TransportType::JsonRpcHttp => {
+                let request = JsonRpcRequest {
+                    jsonrpc: "2.0".to_string(),
+                    method: "resources/read".to_string(),
+                    params: Some(json!({"uri": uri})),
+                    id: Some(json!(rand::random::<u64>())),
+                };
+
+                match self.send_json_rpc_request(request).await {
+                    Ok(response) => {
+                        if let Some(error) = response.error {
+                            return Err(anyhow::anyhow!("JSON-RPC error: {:?}", error));
+                        } else if let Some(result) = response.result {
+                            match serde_json::from_value::<pmcp::types::ReadResourceResult>(result) {
+                                Ok(resource) => Ok(resource),
+                                Err(e) => Err(anyhow::anyhow!("Failed to parse resource: {}", e)),
+                            }
+                        } else {
+                            Err(anyhow::anyhow!("Empty response from server"))
+                        }
+                    },
+                    Err(e) => Err(anyhow::anyhow!("Request failed: {}", e)),
+                }
+            },
+            _ => {
+                // Return empty resource for other transport types
+                Ok(pmcp::types::ReadResourceResult { contents: vec![] })
+            }
+        }
     }
 
     pub fn get_tools(&self) -> Option<&Vec<ToolInfo>> {
@@ -1987,15 +2025,67 @@ impl ServerTester {
 
     pub async fn get_prompt(
         &mut self,
-        _name: &str,
-        _arguments: Value,
+        name: &str,
+        arguments: Value,
     ) -> Result<pmcp::types::GetPromptResult> {
-        // For now, return empty prompt
-        // This would need to be implemented based on the transport type
-        Ok(pmcp::types::GetPromptResult {
-            messages: vec![],
-            description: None,
-        })
+        // Convert JSON Value arguments to HashMap<String, String>
+        let args_map: std::collections::HashMap<String, String> = if let Value::Object(map) = &arguments {
+            map.iter()
+                .filter_map(|(k, v)| {
+                    v.as_str().map(|s| (k.clone(), s.to_string()))
+                })
+                .collect()
+        } else {
+            std::collections::HashMap::new()
+        };
+
+        // Try to use existing HTTP client if initialized
+        if let Some(client) = &mut self.pmcp_client {
+            return client.get_prompt(name.to_string(), args_map).await.map_err(|e| e.into());
+        }
+
+        // Try stdio client
+        if let Some(client) = &mut self.stdio_client {
+            return client.get_prompt(name.to_string(), args_map).await.map_err(|e| e.into());
+        }
+
+        // Fallback for direct JSON-RPC HTTP (without pmcp client wrapper)
+        match self.transport_type {
+            TransportType::JsonRpcHttp => {
+                let request = JsonRpcRequest {
+                    jsonrpc: "2.0".to_string(),
+                    method: "prompts/get".to_string(),
+                    params: Some(json!({
+                        "name": name,
+                        "arguments": arguments
+                    })),
+                    id: Some(json!(rand::random::<u64>())),
+                };
+
+                match self.send_json_rpc_request(request).await {
+                    Ok(response) => {
+                        if let Some(error) = response.error {
+                            return Err(anyhow::anyhow!("JSON-RPC error: {:?}", error));
+                        } else if let Some(result) = response.result {
+                            match serde_json::from_value::<pmcp::types::GetPromptResult>(result) {
+                                Ok(prompt) => Ok(prompt),
+                                Err(e) => Err(anyhow::anyhow!("Failed to parse prompt: {}", e)),
+                            }
+                        } else {
+                            Err(anyhow::anyhow!("Empty response from server"))
+                        }
+                    },
+                    Err(e) => Err(anyhow::anyhow!("Request failed: {}", e)),
+                }
+            },
+            _ => {
+                // Return empty prompt for other transport types
+                Ok(pmcp::types::GetPromptResult {
+                    messages: vec![],
+                    description: None,
+                })
+            }
+        }
     }
 
     pub async fn send_custom_request(&mut self, method: &str, params: Value) -> Result<Value> {
