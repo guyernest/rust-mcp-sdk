@@ -1,6 +1,6 @@
 [package]
 name = "pmcp"
-version = "1.5.5"
+version = "1.6.0"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility"
@@ -32,6 +32,7 @@ regex = "1.11"
 lazy_static = "1.5"
 urlencoding = "2.1"
 indexmap = { version = "2.10", features = ["serde"] }
+smallvec = { version = "1.13", features = ["serde", "union"] }
 parking_lot = "0.12"
 dashmap = "6.1"
 bytes = { version = "1.10", optional = true }
@@ -105,13 +106,14 @@ dashmap = "6.1"  # Already in main deps but needed for examples
 
 [features]
 default = ["validation"]
-full = ["websocket", "http", "streamable-http", "sse", "validation", "resource-watcher", "rayon"]
+full = ["websocket", "http", "streamable-http", "sse", "validation", "resource-watcher", "rayon", "schema-generation"]
 sse = ["dep:bytes"]
 websocket = ["dep:tokio-tungstenite"]
 http = ["dep:hyper", "dep:hyper-util", "dep:bytes"]
 streamable-http = ["dep:hyper", "dep:hyper-util", "dep:futures-util", "dep:bytes", "dep:axum"]
 validation = ["dep:jsonschema", "dep:garde"]
 resource-watcher = ["dep:notify", "dep:glob-match"]
+schema-generation = ["dep:schemars"]
 # macros = ["dep:pmcp-macros", "dep:schemars"]
 wasm = ["websocket-wasm", "uuid/js", "dep:futures-channel", "dep:futures-locks"]
 websocket-wasm = []
@@ -294,7 +296,30 @@ name = "31_advanced_error_recovery"
 path = "examples/31_advanced_error_recovery.rs"
 required-features = ["full"]
 
+[[example]]
+name = "49_tool_with_sampling_server"
+path = "examples/49_tool_with_sampling_server.rs"
+required-features = ["full"]
 
+[[example]]
+name = "50_workflow_minimal"
+path = "examples/50_workflow_minimal.rs"
+
+[[example]]
+name = "51_workflow_handles_preview"
+path = "examples/51_workflow_handles_preview.rs"
+
+[[example]]
+name = "52_workflow_prompt_server"
+path = "examples/52_workflow_prompt_server.rs"
+
+[[example]]
+name = "53_workflow_error_messages"
+path = "examples/53_workflow_error_messages.rs"
+
+[[example]]
+name = "54_workflow_dsl_cookbook"
+path = "examples/54_workflow_dsl_cookbook.rs"
 
 [[bench]]
 name = "comprehensive_benchmarks"

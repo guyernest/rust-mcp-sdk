@@ -50,6 +50,9 @@ pub mod simple_resources;
 /// Simple tool implementations with schema support.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simple_tool;
+/// Workflow-based prompt system with type-safe handles and ergonomic builders.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod workflow;
 
 // For WASM, provide a simple stub for RequestHandlerExtra
 #[cfg(target_arch = "wasm32")]
