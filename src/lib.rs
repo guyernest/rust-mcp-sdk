@@ -96,6 +96,7 @@ pub use server::{
     simple_prompt::{SimplePrompt, SyncPrompt},
     simple_resources::{DynamicResourceHandler, ResourceCollection, StaticResource},
     simple_tool::{SimpleTool, SyncTool},
+    typed_tool::{SimpleToolExt, SyncToolExt, TypedSyncTool, TypedTool, TypedToolWithOutput},
     PromptHandler, ResourceHandler, SamplingHandler, Server, ServerBuilder, ToolHandler,
 };
 #[cfg(not(target_arch = "wasm32"))]

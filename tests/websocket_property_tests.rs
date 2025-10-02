@@ -2,6 +2,8 @@
 //!
 //! PMCP-4001: Property tests for connection reliability and message ordering
 
+#![cfg(all(feature = "websocket", not(target_arch = "wasm32")))]
+
 use pmcp::server::transport::websocket_enhanced::*;
 use pmcp::shared::TransportMessage;
 use proptest::prelude::*;

@@ -112,6 +112,15 @@ jobs:
               echo "Skipping example: $example_name (requires streamable-http feature)"
               continue
             fi
+            if [[ "$example_name" == "32_typed_tools" ]] || \
+               [[ "$example_name" == "33_advanced_typed_tools" ]] || \
+               [[ "$example_name" == "34_serverbuilder_typed" ]] || \
+               [[ "$example_name" == "35_wasm_typed_tools" ]] || \
+               [[ "$example_name" == "36_typed_tool_v2_example" ]] || \
+               [[ "$example_name" == "37_description_variants_example" ]]; then
+              echo "Skipping example: $example_name (requires schema-generation feature)"
+              continue
+            fi
             if [[ "$example_name" == "28_sse_optimized" ]]; then
               echo "Skipping example: $example_name (requires sse feature)"
               continue

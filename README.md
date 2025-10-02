@@ -24,26 +24,106 @@ Code Name: *Angel Rust*
 
 > **🎉 Claude Code Compatible!** Version 1.4.0+ includes full JSON-RPC 2.0 compatibility, enabling seamless integration with Claude Code and all standard MCP clients. If you're experiencing connection issues, please [upgrade to v1.4.1+](MIGRATION_GUIDE.md).
 
-## 🎉 Version 1.5.4 - Enhanced Testing & Metadata Support!
+## Quick Start
 
-### 🧪 **MCP Server Tester Enhancements**
+### Installation
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+pmcp = "1.6"
+```
+
+### Type-Safe Tools with Automatic Schema Generation (v1.6.0+)
+
+Create tools with compile-time type safety and automatic JSON schema generation:
+
+```rust
+use pmcp::{ServerBuilder, TypedTool, TypedSyncTool, SimpleToolExt};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+// Define your argument type with JsonSchema derive
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct CalculatorArgs {
+    operation: String,
+    a: f64,
+    b: f64,
+}
+
+// Create a server with typed tools
+let server = ServerBuilder::new()
+    .name("calculator-server")
+    .version("1.0.0")
+    // Use the new tool_typed builder method
+    .tool_typed("calculator", |args: CalculatorArgs, _extra| {
+        Box::pin(async move {
+            let result = match args.operation.as_str() {
+                "add" => args.a + args.b,
+                "subtract" => args.a - args.b,
+                "multiply" => args.a * args.b,
+                "divide" => args.a / args.b,
+                _ => return Err(pmcp::Error::Validation("Unknown operation".into())),
+            };
+            Ok(serde_json::json!({ "result": result }))
+        })
+    })
+    .build()?;
+```
+
+The schema is automatically generated and included in the `tools/list` response, enabling:
+- **Type Safety**: Arguments are validated at compile time
+- **Auto-completion**: Clients can provide better UI based on schema
+- **Documentation**: Schema includes descriptions from doc comments
+- **Validation**: Runtime validation against the generated schema
+
+## 🎉 Version 1.6.0 - Production-Ready Type-Safe Tools & Cross-Transport Support!
+
+### 🚀 **Type-Safe Schema Generation Enhancement**
+- **Production-Ready Improvements**:
+  - 📏 **Schema Normalization**: Configurable depth/size limits prevent huge expanded schemas
+  - 🎯 **Consistent Error Codes**: Standardized validation error codes for client elicitation
+  - 🔒 **Cross-Platform Path Validation**: Robust Windows/Unix path handling with security constraints
+  - 📝 **Output Typing**: Optional `TypedToolWithOutput<TIn, TOut>` for better testing and documentation
+
+- **Cross-Transport Support** ("Write Once, Run Anywhere"):
+  - ✅ **Transport Compatibility**: Typed tools work seamlessly across HTTP, SSE, and WebSocket
+  - 🌐 **WASM Support**: Browser and Cloudflare Workers compatible typed tool API (input typing only)
+  - 🧪 **Comprehensive Testing**: E2E transport tests ensure compatibility
+  - 🏗️ **Ergonomic Builder**: New `tool_typed()` and `tool_typed_sync()` builder methods
+
+- **Validation Helpers**:
+  - 📧 Email, URL, and regex pattern validation
+  - 🔢 Range, length, and array size validation
+  - 🛡️ Path traversal protection
+  - 🤖 Elicitation-friendly error responses
+
+### 📚 **New Examples**:
+- `32_typed_tools` - Basic typed tool usage with automatic schemas
+- `33_advanced_typed_tools` - Complex validation and nested structures
+- `34_serverbuilder_typed` - Using the ergonomic builder methods
+- `35_wasm_typed_tools` - WASM-compatible typed tools for browser/edge
+
+## 🎉 Version 1.5.5 - Type-Safe Schema Generation & Critical Fixes!
+
+### 🛡️ **Type-Safe Tool Creation with Automatic Schema Generation**
+- 🎯 **TypedTool & TypedSyncTool**: Type-safe tool implementations with automatic JSON schema generation
+- 📝 **Schema Generation**: Automatic schema generation from Rust types using `schemars`
+- ✨ **Extension Traits**: `SimpleToolExt` and `SyncToolExt` for adding schemas to existing tools
+- 🔍 **Compile-Time Validation**: Type checking at compile time for tool arguments
+- 📚 **Example**: New `32_typed_tools` example demonstrating all features
+
+### 🐛 **Critical Bug Fix**
+- 🔧 **Tool Description Serialization**: Fixed critical bug where `SimpleTool.with_description()` wasn't properly serializing descriptions in the `tools/list` response
+- ✅ **Metadata Handling**: Corrected `handle_list_tools` to properly use tool metadata instead of hardcoding `None`
+
+### 🎯 **Previous: Version 1.5.4 - Enhanced Testing & Metadata Support**
 - 🔍 **Schema Validation**: Automatic validation of tool JSON schemas with detailed warnings
 - 🤖 **Scenario Generation**: Auto-generate test scenarios from server capabilities
 - 📦 **Resource Testing**: Comprehensive resource discovery and validation
 - 💬 **Prompt Testing**: Full prompt template and argument validation
 - 📊 **Smart Value Generation**: Context-aware test data based on schema definitions
-
-### 🎯 **New Metadata & Helper Types**
-- ✨ **SimpleTool**: Streamlined tool creation with builder pattern
-- 📚 **SimplePrompt**: Easy prompt template creation with metadata
-- 🗂️ **SimpleResource**: Simplified resource management with MIME types
-- 🔧 **Enhanced Type Support**: Full prompt and resource metadata structures
-
-### 🐛 **Bug Fixes & Improvements**
-- 🚀 **Performance**: Increased SIMD test timeout for CI stability
-- 🔧 **CI/CD**: Updated GitHub Actions to eliminate deprecation warnings
-- 📝 **Documentation**: Comprehensive test scenario examples and guides
-- ✅ **Quality**: Zero clippy warnings, improved test coverage
 
 ## 🎉 Version 1.4.2 - MCP Server Tester & Enhanced Compatibility!
 
@@ -139,17 +219,6 @@ Code Name: *Angel Rust*
 - 📁 **Roots Management**: Directory/URI registration and management
 - 📊 **Comprehensive Testing**: Property tests, fuzzing, and integration tests
 - 🏗️ **Quality First**: Zero technical debt, no unwraps in production code
-
-## Quick Start
-
-### Installation
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-pmcp = "1.4"
-```
 
 > **⚠️ Important for Claude Code users**: Version 1.4.0+ is required for Claude Code compatibility. Earlier versions use a different message format that is incompatible with standard MCP clients. See the [Migration Guide](MIGRATION_GUIDE.md) if upgrading from < 1.4.0.
 
@@ -300,8 +369,19 @@ cargo run --example 29_advanced_error_recovery --features full
 # Complete advanced error recovery example with cascade detection
 cargo run --example 31_advanced_error_recovery --features full
 
-# SIMD parsing performance demonstration with benchmarks
-cargo run --example 32_simd_parsing_performance --features full
+# NEW in v1.6.0 - Type-Safe Tools with Schema Generation
+
+# Type-safe tools with automatic JSON schema generation
+cargo run --example 32_typed_tools --features schema-generation
+
+# Advanced typed tools with complex validation and nested structures
+cargo run --example 33_advanced_typed_tools --features schema-generation
+
+# ServerBuilder typed tool methods demonstration
+cargo run --example 34_serverbuilder_typed --features schema-generation
+
+# WASM-compatible typed tools for browser and edge environments
+cargo run --example 35_wasm_typed_tools --target wasm32-wasi --features schema-generation
 
 # NEW in v1.4.1 - Enhanced Examples with TypeScript SDK Parity
 
@@ -524,8 +604,6 @@ let batcher = MessageBatcher::new(BatchingConfig {
     ..Default::default()
 });
 ```
-
-## Quick Start
 
 ### Client Example
 
