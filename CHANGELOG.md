@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] - 2025-10-02
+
+### Added
+- **Enhanced Prompt Management**: Safer and more flexible way to add prompts to MCP servers
+  - Improved workflow integration for tools and resources
+  - Better error handling for prompt creation and management
+  - Enhanced type safety for prompt arguments
+  - Streamlined API for defining prompts with tools and resources workflows
+
+### Improved
+- Refined prompt builder patterns for better developer experience
+- Enhanced validation for prompt configurations
+- Better integration between prompts, tools, and resources
+
 ## [1.5.3] - 2025-09-26
 
 ### Fixed
