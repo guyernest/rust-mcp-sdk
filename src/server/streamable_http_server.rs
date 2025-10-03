@@ -6,8 +6,8 @@ use crate::shared::http_constants::{
 };
 use crate::shared::TransportMessage;
 use crate::types::{ClientRequest, Request};
+use async_trait::async_trait;
 use axum::{
-    async_trait,
     extract::State,
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{sse::Event, IntoResponse, Response, Sse},
@@ -163,8 +163,8 @@ pub struct StreamableHttpServerConfig {
     pub session_id_generator: Option<Box<dyn Fn() -> String + Send + Sync>>,
     /// Enable JSON responses instead of SSE
     pub enable_json_response: bool,
-    /// Event store for resumability
-    pub event_store: Option<Arc<dyn EventStore>>,
+    /// Event store for resumability (using concrete type for object safety)
+    pub event_store: Option<Arc<InMemoryEventStore>>,
     /// Callback when session is initialized
     pub on_session_initialized: Option<SessionCallback>,
     /// Callback when session is closed

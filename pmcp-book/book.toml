@@ -22,6 +22,11 @@ create-missing = false  # Prevent accidental file creation
 # command = "./tools/pmcp-preprocessor"
 # renderer = ["html"]
 
+# Mermaid diagrams preprocessor (renders ```mermaid blocks to SVG)
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+renderer = ["html"]
+
 [output.html]
 default-theme = "rust"
 preferred-dark-theme = "ayu"
@@ -29,7 +34,14 @@ smart-punctuation = true
 mathjax-support = false
 copy-fonts = true
 additional-css = ["theme/pmcp.css", "theme/code-enhancements.css", "theme/syntax-highlight.css"]
-additional-js = ["theme/pmcp-highlight.js", "theme/examples.js"]
+additional-js = [
+    "mermaid.min.js",
+    "mermaid-init.js",
+    # Init script gracefully no-ops if Mermaid runtime is absent
+    "theme/mermaid-init.js",
+    "theme/pmcp-highlight.js",
+    "theme/examples.js"
+]
 git-repository-url = "https://github.com/paiml/pmcp"
 git-repository-icon = "fa-github"
 edit-url-template = "https://github.com/paiml/pmcp/edit/main/pmcp-book/{path}"

@@ -545,7 +545,7 @@ async fn run_resources_test(
         println!("Connecting to {}...", url);
     }
 
-    tester.run_resources_discovery().await
+    tester.run_resources_discovery_with_verbose(verbose).await
 }
 
 async fn run_prompts_test(
