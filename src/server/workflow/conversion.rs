@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Information about a registered tool
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ToolInfo {
     /// Tool name
     pub name: String,
@@ -24,7 +24,7 @@ pub struct ToolInfo {
 }
 
 /// Information about a registered resource
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResourceInfo {
     /// Resource URI
     pub uri: String,

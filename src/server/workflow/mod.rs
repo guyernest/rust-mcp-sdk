@@ -33,6 +33,7 @@ pub mod handles;
 pub mod into_prompt_content;
 pub mod newtypes;
 pub mod prompt_content;
+pub mod prompt_handler;
 pub mod sequential;
 pub mod workflow_step;
 
@@ -44,5 +45,6 @@ pub use handles::{ResourceHandle, ToolHandle};
 pub use into_prompt_content::IntoPromptContent;
 pub use newtypes::{ArgName, BindingName, StepName, Uri};
 pub use prompt_content::{InternalPromptMessage, PromptContent};
+pub use prompt_handler::WorkflowPromptHandler;
 pub use sequential::{ArgumentSpec, SequentialWorkflow};
 pub use workflow_step::WorkflowStep;
