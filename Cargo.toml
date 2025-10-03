@@ -32,6 +32,7 @@ regex = "1.11"
 lazy_static = "1.5"
 urlencoding = "2.1"
 indexmap = { version = "2.10", features = ["serde"] }
+smallvec = { version = "1.13", features = ["serde", "union"] }
 parking_lot = "0.12"
 dashmap = "6.1"
 bytes = { version = "1.10", optional = true }
@@ -326,7 +327,27 @@ name = "37_description_variants_example"
 path = "examples/37_description_variants_example.rs"
 required-features = ["schema-generation"]
 
+[[example]]
+name = "49_tool_with_sampling_server"
+path = "examples/49_tool_with_sampling_server.rs"
+required-features = ["full"]
 
+[[example]]
+name = "50_workflow_minimal"
+path = "examples/50_workflow_minimal.rs"
+
+[[example]]
+name = "51_workflow_error_messages"
+path = "examples/51_workflow_error_messages.rs"
+
+[[example]]
+name = "52_workflow_dsl_cookbook"
+path = "examples/52_workflow_dsl_cookbook.rs"
+
+[[example]]
+name = "53_typed_tools_workflow_integration"
+path = "examples/53_typed_tools_workflow_integration.rs"
+required-features = ["schema-generation"]
 
 [[bench]]
 name = "comprehensive_benchmarks"

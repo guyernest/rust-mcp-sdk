@@ -50,6 +50,9 @@ pub mod simple_resources;
 /// Simple tool implementations with schema support.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simple_tool;
+/// Workflow-based prompt system with type-safe handles and ergonomic builders.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod workflow;
 
 /// Typed tool implementations with automatic schema generation.
 #[cfg(not(target_arch = "wasm32"))]
@@ -283,6 +286,77 @@ impl Server {
     pub fn has_prompt(&self, name: &str) -> bool {
         self.prompts.contains_key(name)
     }
+
+    /// Build tool and resource registries for workflow expansion.
+    ///
+    /// Creates `HashMap` registries that can be used to build an `ExpansionContext`
+    /// for converting workflow prompts to protocol types. The registries are
+    /// automatically populated from all registered tools and resources.
+    ///
+    /// Returns a tuple of (`tools_map`, `resources_map`) that can be used with
+    /// `ExpansionContext`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use pmcp::Server;
+    /// use pmcp::server::workflow::{InternalPromptMessage, ToolHandle, PromptContent, conversion::ExpansionContext};
+    /// use pmcp::types::Role;
+    ///
+    /// # async fn example() -> pmcp::Result<()> {
+    /// let server = Server::builder()
+    ///     .name("example-server")
+    ///     .version("1.0.0")
+    ///     .build()?;
+    ///
+    /// // Build registries from registered tools/resources
+    /// let (tools, resources) = server.build_expansion_registries();
+    ///
+    /// // Create expansion context
+    /// let ctx = ExpansionContext {
+    ///     tools: &tools,
+    ///     resources: &resources,
+    /// };
+    ///
+    /// // Use it to convert workflow prompts to protocol types
+    /// let msg = InternalPromptMessage::new(
+    ///     Role::System,
+    ///     PromptContent::ToolHandle(ToolHandle::new("my_tool"))
+    /// );
+    /// let protocol_msg = msg.to_protocol(&ctx)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn build_expansion_registries(
+        &self,
+    ) -> (
+        HashMap<Arc<str>, workflow::conversion::ToolInfo>,
+        HashMap<Arc<str>, workflow::conversion::ResourceInfo>,
+    ) {
+        use std::collections::HashMap;
+
+        // Build tools map from registered tool handlers
+        let mut tools_map = HashMap::new();
+        for (name, handler) in &self.tools {
+            if let Some(metadata) = handler.metadata() {
+                tools_map.insert(
+                    Arc::from(name.as_str()),
+                    workflow::conversion::ToolInfo {
+                        name: metadata.name,
+                        description: metadata.description.unwrap_or_default(),
+                        input_schema: metadata.input_schema,
+                    },
+                );
+            }
+        }
+
+        // Build resources map (currently empty - resources don't have metadata())
+        // This could be enhanced in the future when resources have better metadata
+        let resources_map = HashMap::new();
+
+        (tools_map, resources_map)
+    }
+
     /// Send a notification.
     ///
     /// Sends a notification to the connected client. Notifications are one-way
@@ -822,11 +896,20 @@ impl Server {
     fn handle_list_prompts(&self, _req: ListPromptsRequest) -> Result<Value> {
         let prompts = self
             .prompts
-            .keys()
-            .map(|name| crate::types::PromptInfo {
-                name: name.clone(),
-                description: None,
-                arguments: None,
+            .iter()
+            .map(|(name, handler)| {
+                // Use prompt metadata if provided, otherwise use defaults
+                if let Some(mut info) = handler.metadata() {
+                    // Ensure the name matches the registered name
+                    info.name.clone_from(name);
+                    info
+                } else {
+                    crate::types::PromptInfo {
+                        name: name.clone(),
+                        description: None,
+                        arguments: None,
+                    }
+                }
             })
             .collect::<Vec<_>>();
 
@@ -1808,6 +1891,83 @@ impl ServerBuilder {
     ) -> Self {
         self.prompts.insert(name.into(), Arc::new(handler));
         self
+    }
+
+    /// Register a workflow-based prompt with automatic validation.
+    ///
+    /// This method validates the workflow before registration and converts it
+    /// to a prompt handler. The workflow's instructions become the prompt messages,
+    /// and the workflow's arguments become the prompt arguments.
+    ///
+    /// # Arguments
+    ///
+    /// * `workflow` - The workflow definition to register as a prompt
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the workflow validation fails (e.g., undefined bindings,
+    /// undefined prompt arguments, etc.).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::{Server, ServerBuilder};
+    /// use pmcp::server::workflow::{SequentialWorkflow, InternalPromptMessage};
+    /// use pmcp::types::Role;
+    ///
+    /// # fn main() -> pmcp::Result<()> {
+    /// let workflow = SequentialWorkflow::new(
+    ///     "code_review_workflow",
+    ///     "Review code with multiple steps"
+    /// )
+    /// .argument("code", "Code to review", true)
+    /// .instruction(InternalPromptMessage::new(
+    ///     Role::System,
+    ///     "You are a code reviewer. Review the provided code carefully."
+    /// ));
+    ///
+    /// let server = Server::builder()
+    ///     .name("code-server")
+    ///     .version("1.0.0")
+    ///     .prompt_workflow(workflow)?
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn prompt_workflow(mut self, workflow: workflow::SequentialWorkflow) -> Result<Self> {
+        // Validate the workflow before registration
+        workflow
+            .validate()
+            .map_err(|e| Error::Validation(format!("Workflow validation failed: {}", e)))?;
+
+        // Build tool and resource registries from currently registered handlers
+        // Note: This captures the current state of registered tools/resources
+        let mut tools = std::collections::HashMap::new();
+        for (name, handler) in &self.tools {
+            if let Some(metadata) = handler.metadata() {
+                tools.insert(
+                    Arc::from(name.as_str()),
+                    workflow::conversion::ToolInfo {
+                        name: metadata.name,
+                        description: metadata.description.unwrap_or_default(),
+                        input_schema: metadata.input_schema,
+                    },
+                );
+            }
+        }
+
+        let resources = std::collections::HashMap::new();
+
+        // Get the workflow name before moving it
+        let name = workflow.name().to_string();
+
+        // Create workflow prompt handler
+        let handler = workflow::WorkflowPromptHandler::new(workflow, tools, resources);
+
+        // Register as a prompt
+        self.prompts.insert(name, Arc::new(handler));
+
+        Ok(self)
     }
 
     /// Set the resource handler.

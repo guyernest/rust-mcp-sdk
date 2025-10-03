@@ -482,6 +482,12 @@ fn build_response(
             },
         };
 
+        // DEBUG: Log the serialized bytes
+        if let Ok(debug_str) = String::from_utf8(json_bytes.clone()) {
+            eprintln!("[DEBUG] build_response (JSON mode): Serialized bytes:");
+            eprintln!("{}", debug_str);
+        }
+
         // Parse JSON bytes to Value for Json response
         let json_value: serde_json::Value = match serde_json::from_slice(&json_bytes) {
             Ok(val) => val,
@@ -493,6 +499,11 @@ fn build_response(
                 );
             },
         };
+
+        eprintln!("[DEBUG] build_response (JSON mode): Final JSON value:");
+        if let Ok(pretty) = serde_json::to_string_pretty(&json_value) {
+            eprintln!("{}", pretty);
+        }
 
         let mut resp = (StatusCode::OK, Json(json_value)).into_response();
         add_cors_headers(resp.headers_mut());
@@ -671,6 +682,13 @@ async fn handle_post_request(
         TransportMessage::Request { id, request } => {
             let server = state.server.lock().await;
             let json_response = server.handle_request(id, request).await;
+
+            // DEBUG: Log response payload before building TransportMessage
+            eprintln!("[DEBUG] StreamableHttpServer: JSON response payload:");
+            if let Ok(json_str) = serde_json::to_string_pretty(&json_response) {
+                eprintln!("{}", json_str);
+            }
+
             let response = TransportMessage::Response(json_response.clone());
 
             // Handle initialization response
