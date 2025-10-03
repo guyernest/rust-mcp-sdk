@@ -2,6 +2,8 @@
 //!
 //! PMCP-4002: Property tests for SSE performance and reliability
 
+#![cfg(feature = "sse")]
+
 use pmcp::shared::OptimizedSseConfig;
 use proptest::prelude::*;
 use std::time::Duration;

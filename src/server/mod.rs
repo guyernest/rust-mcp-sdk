@@ -50,6 +50,33 @@ pub mod simple_resources;
 /// Simple tool implementations with schema support.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simple_tool;
+/// Workflow-based prompt system with type-safe handles and ergonomic builders.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod workflow;
+
+/// Typed tool implementations with automatic schema generation.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod typed_tool;
+
+/// Validation helpers for typed tools.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod validation;
+
+/// Schema utilities for normalizing and inlining JSON schemas.
+#[cfg(feature = "schema-generation")]
+pub mod schema_utils;
+
+/// Standard error codes for validation with client elicitation support.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod error_codes;
+
+/// Cross-platform path validation with security constraints.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod path_validation;
+
+/// WASM-compatible typed tools with automatic schema generation.
+#[cfg(target_arch = "wasm32")]
+pub mod wasm_typed_tool;
 
 // For WASM, provide a simple stub for RequestHandlerExtra
 #[cfg(target_arch = "wasm32")]
@@ -259,6 +286,77 @@ impl Server {
     pub fn has_prompt(&self, name: &str) -> bool {
         self.prompts.contains_key(name)
     }
+
+    /// Build tool and resource registries for workflow expansion.
+    ///
+    /// Creates `HashMap` registries that can be used to build an `ExpansionContext`
+    /// for converting workflow prompts to protocol types. The registries are
+    /// automatically populated from all registered tools and resources.
+    ///
+    /// Returns a tuple of (`tools_map`, `resources_map`) that can be used with
+    /// `ExpansionContext`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use pmcp::Server;
+    /// use pmcp::server::workflow::{InternalPromptMessage, ToolHandle, PromptContent, conversion::ExpansionContext};
+    /// use pmcp::types::Role;
+    ///
+    /// # async fn example() -> pmcp::Result<()> {
+    /// let server = Server::builder()
+    ///     .name("example-server")
+    ///     .version("1.0.0")
+    ///     .build()?;
+    ///
+    /// // Build registries from registered tools/resources
+    /// let (tools, resources) = server.build_expansion_registries();
+    ///
+    /// // Create expansion context
+    /// let ctx = ExpansionContext {
+    ///     tools: &tools,
+    ///     resources: &resources,
+    /// };
+    ///
+    /// // Use it to convert workflow prompts to protocol types
+    /// let msg = InternalPromptMessage::new(
+    ///     Role::System,
+    ///     PromptContent::ToolHandle(ToolHandle::new("my_tool"))
+    /// );
+    /// let protocol_msg = msg.to_protocol(&ctx)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn build_expansion_registries(
+        &self,
+    ) -> (
+        HashMap<Arc<str>, workflow::conversion::ToolInfo>,
+        HashMap<Arc<str>, workflow::conversion::ResourceInfo>,
+    ) {
+        use std::collections::HashMap;
+
+        // Build tools map from registered tool handlers
+        let mut tools_map = HashMap::new();
+        for (name, handler) in &self.tools {
+            if let Some(metadata) = handler.metadata() {
+                tools_map.insert(
+                    Arc::from(name.as_str()),
+                    workflow::conversion::ToolInfo {
+                        name: metadata.name,
+                        description: metadata.description.unwrap_or_default(),
+                        input_schema: metadata.input_schema,
+                    },
+                );
+            }
+        }
+
+        // Build resources map (currently empty - resources don't have metadata())
+        // This could be enhanced in the future when resources have better metadata
+        let resources_map = HashMap::new();
+
+        (tools_map, resources_map)
+    }
+
     /// Send a notification.
     ///
     /// Sends a notification to the connected client. Notifications are one-way
@@ -798,11 +896,20 @@ impl Server {
     fn handle_list_prompts(&self, _req: ListPromptsRequest) -> Result<Value> {
         let prompts = self
             .prompts
-            .keys()
-            .map(|name| crate::types::PromptInfo {
-                name: name.clone(),
-                description: None,
-                arguments: None,
+            .iter()
+            .map(|(name, handler)| {
+                // Use prompt metadata if provided, otherwise use defaults
+                if let Some(mut info) = handler.metadata() {
+                    // Ensure the name matches the registered name
+                    info.name.clone_from(name);
+                    info
+                } else {
+                    crate::types::PromptInfo {
+                        name: name.clone(),
+                        description: None,
+                        arguments: None,
+                    }
+                }
             })
             .collect::<Vec<_>>();
 
@@ -1352,6 +1459,389 @@ impl ServerBuilder {
         self
     }
 
+    /// Add a type-safe tool handler with automatic schema generation.
+    ///
+    /// This method provides first-class support for creating tools with:
+    /// - Automatic JSON schema generation from Rust types
+    /// - Compile-time type safety
+    /// - Runtime validation
+    /// - Field descriptions from doc comments
+    ///
+    /// # Example
+    /// ```no_run
+    /// # #[cfg(feature = "schema-generation")]
+    /// # {
+    /// use pmcp::ServerBuilder;
+    /// use schemars::JsonSchema;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+    /// struct EchoArgs {
+    ///     /// The message to echo
+    ///     message: String,
+    ///     /// Optional prefix
+    ///     prefix: Option<String>,
+    /// }
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), pmcp::Error> {
+    /// let server = ServerBuilder::new()
+    ///     .name("example")
+    ///     .tool_typed("echo", |args: EchoArgs, _| {
+    ///         Box::pin(async move {
+    ///             let message = match args.prefix {
+    ///                 Some(p) => format!("{}: {}", p, args.message),
+    ///                 None => args.message,
+    ///             };
+    ///             Ok(serde_json::json!({ "message": message }))
+    ///         })
+    ///     })
+    ///     .build();
+    /// # Ok::<(), pmcp::Error>(())
+    /// # }
+    /// # }
+    /// ```
+    #[cfg(feature = "schema-generation")]
+    pub fn tool_typed<T, F, Fut>(mut self, name: impl Into<String>, handler: F) -> Self
+    where
+        T: serde::de::DeserializeOwned + schemars::JsonSchema + Send + Sync + 'static,
+        F: Fn(T, crate::RequestHandlerExtra) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = crate::Result<serde_json::Value>> + Send + 'static,
+    {
+        use crate::server::typed_tool::TypedTool;
+        use std::pin::Pin;
+
+        let name_str = name.into();
+
+        // Wrap the handler to return Pin<Box<dyn Future>>
+        let wrapped_handler = move |args: T,
+                                    extra: crate::RequestHandlerExtra|
+              -> Pin<
+            Box<dyn std::future::Future<Output = crate::Result<serde_json::Value>> + Send>,
+        > { Box::pin(handler(args, extra)) };
+
+        let tool = TypedTool::new(name_str.clone(), wrapped_handler);
+        self.tools.insert(name_str, Arc::new(tool));
+        self
+    }
+
+    /// Add a type-safe tool handler with automatic schema generation and description.
+    ///
+    /// This is a convenience overload that allows setting a description directly
+    /// without needing to chain `.with_description()`.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # #[cfg(feature = "schema-generation")]
+    /// # {
+    /// use pmcp::ServerBuilder;
+    /// use schemars::JsonSchema;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+    /// struct EchoArgs {
+    ///     /// The message to echo
+    ///     message: String,
+    ///     /// Optional prefix
+    ///     prefix: Option<String>,
+    /// }
+    ///
+    /// let server = ServerBuilder::new()
+    ///     .name("example")
+    ///     .tool_typed_with_description(
+    ///         "echo",
+    ///         "Echoes back a message with an optional prefix",
+    ///         |args: EchoArgs, _| {
+    ///             Box::pin(async move {
+    ///                 let message = match args.prefix {
+    ///                     Some(p) => format!("{}: {}", p, args.message),
+    ///                     None => args.message,
+    ///                 };
+    ///                 Ok(serde_json::json!({ "message": message }))
+    ///             })
+    ///         }
+    ///     );
+    /// # }
+    /// ```
+    #[cfg(feature = "schema-generation")]
+    pub fn tool_typed_with_description<T, F, Fut>(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        handler: F,
+    ) -> Self
+    where
+        T: serde::de::DeserializeOwned + schemars::JsonSchema + Send + Sync + 'static,
+        F: Fn(T, crate::RequestHandlerExtra) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = crate::Result<serde_json::Value>> + Send + 'static,
+    {
+        use crate::server::typed_tool::TypedTool;
+        use std::pin::Pin;
+
+        let name_str = name.into();
+
+        // Wrap the handler to return Pin<Box<dyn Future>>
+        let wrapped_handler = move |args: T,
+                                    extra: crate::RequestHandlerExtra|
+              -> Pin<
+            Box<dyn std::future::Future<Output = crate::Result<serde_json::Value>> + Send>,
+        > { Box::pin(handler(args, extra)) };
+
+        let tool = TypedTool::new(name_str.clone(), wrapped_handler).with_description(description);
+        self.tools.insert(name_str, Arc::new(tool));
+        self
+    }
+
+    /// Add a synchronous type-safe tool handler with automatic schema generation.
+    ///
+    /// Similar to `tool_typed` but for synchronous handlers.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # #[cfg(feature = "schema-generation")]
+    /// # {
+    /// use pmcp::ServerBuilder;
+    /// use schemars::JsonSchema;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+    /// struct MathArgs {
+    ///     /// First number
+    ///     a: f64,
+    ///     /// Second number
+    ///     b: f64,
+    ///     /// Operation to perform
+    ///     op: String,
+    /// }
+    ///
+    /// # fn main() -> Result<(), pmcp::Error> {
+    /// let server = ServerBuilder::new()
+    ///     .name("example")
+    ///     .tool_typed_sync("calculator", |args: MathArgs, _| {
+    ///         let result = match args.op.as_str() {
+    ///             "add" => args.a + args.b,
+    ///             "subtract" => args.a - args.b,
+    ///             "multiply" => args.a * args.b,
+    ///             "divide" => args.a / args.b,
+    ///             _ => return Err(pmcp::Error::Validation("Unknown operation".into())),
+    ///         };
+    ///         Ok(serde_json::json!({ "result": result }))
+    ///     })
+    ///     .build();
+    /// # Ok::<(), pmcp::Error>(())
+    /// # }
+    /// # }
+    /// ```
+    #[cfg(feature = "schema-generation")]
+    pub fn tool_typed_sync<T, F>(mut self, name: impl Into<String>, handler: F) -> Self
+    where
+        T: serde::de::DeserializeOwned + schemars::JsonSchema + Send + Sync + 'static,
+        F: Fn(T, crate::RequestHandlerExtra) -> crate::Result<serde_json::Value>
+            + Send
+            + Sync
+            + 'static,
+    {
+        use crate::server::typed_tool::TypedSyncTool;
+        let name_str = name.into();
+        let tool = TypedSyncTool::new(name_str.clone(), handler);
+        self.tools.insert(name_str, Arc::new(tool));
+        self
+    }
+
+    /// Add a synchronous type-safe tool handler with automatic schema generation and description.
+    ///
+    /// This is a convenience overload that allows setting a description directly
+    /// without needing to chain `.with_description()`.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # #[cfg(feature = "schema-generation")]
+    /// # {
+    /// use pmcp::ServerBuilder;
+    /// use schemars::JsonSchema;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+    /// struct MathArgs {
+    ///     /// First number
+    ///     a: f64,
+    ///     /// Second number
+    ///     b: f64,
+    ///     /// Operation to perform
+    ///     op: String,
+    /// }
+    ///
+    /// let server = ServerBuilder::new()
+    ///     .name("example")
+    ///     .tool_typed_sync_with_description(
+    ///         "calculator",
+    ///         "Performs synchronous mathematical operations",
+    ///         |args: MathArgs, _| {
+    ///             let result = match args.op.as_str() {
+    ///                 "add" => args.a + args.b,
+    ///                 "subtract" => args.a - args.b,
+    ///                 "multiply" => args.a * args.b,
+    ///                 "divide" => args.a / args.b,
+    ///                 _ => return Err(pmcp::Error::Validation("Unknown operation".into())),
+    ///             };
+    ///             Ok(serde_json::json!({ "result": result }))
+    ///         }
+    ///     );
+    /// # }
+    /// ```
+    #[cfg(feature = "schema-generation")]
+    pub fn tool_typed_sync_with_description<T, F>(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        handler: F,
+    ) -> Self
+    where
+        T: serde::de::DeserializeOwned + schemars::JsonSchema + Send + Sync + 'static,
+        F: Fn(T, crate::RequestHandlerExtra) -> crate::Result<serde_json::Value>
+            + Send
+            + Sync
+            + 'static,
+    {
+        use crate::server::typed_tool::TypedSyncTool;
+        let name_str = name.into();
+        let tool = TypedSyncTool::new(name_str.clone(), handler).with_description(description);
+        self.tools.insert(name_str, Arc::new(tool));
+        self
+    }
+
+    /// Add a type-safe tool handler with both input and output typing.
+    ///
+    /// This method provides full type safety for both input and output types,
+    /// which is useful for testing, documentation, and API contracts.
+    /// Note that output schemas are not part of the MCP protocol but can be
+    /// valuable for development and integration testing.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `TIn` - Input type that implements `JsonSchema`, `Deserialize`, `Send`, `Sync`
+    /// * `TOut` - Output type that implements `JsonSchema`, `Serialize`, `Send`, `Sync`
+    ///
+    /// # Example
+    /// ```no_run
+    /// # #[cfg(feature = "schema-generation")]
+    /// # {
+    /// use pmcp::{ServerBuilder, TypedToolWithOutput};
+    /// use schemars::JsonSchema;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(JsonSchema, Deserialize)]
+    /// struct MathInput { a: f64, b: f64, op: String }
+    ///
+    /// #[derive(JsonSchema, Serialize)]
+    /// struct MathOutput { result: f64, operation: String }
+    ///
+    /// let server = ServerBuilder::new()
+    ///     .name("example")
+    ///     .tool_typed_with_output::<MathInput, MathOutput>("math", |args, _| {
+    ///         Box::pin(async move {
+    ///             let result = match args.op.as_str() {
+    ///                 "add" => args.a + args.b,
+    ///                 "subtract" => args.a - args.b,
+    ///                 _ => return Err(pmcp::Error::Validation("Unknown operation".into())),
+    ///             };
+    ///             Ok(MathOutput {
+    ///                 result,
+    ///                 operation: args.op,
+    ///             })
+    ///         })
+    ///     });
+    /// # }
+    /// ```
+    #[cfg(feature = "schema-generation")]
+    pub fn tool_typed_with_output<TIn, TOut>(
+        mut self,
+        name: impl Into<String>,
+        handler: impl Fn(
+                TIn,
+                crate::RequestHandlerExtra,
+            )
+                -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::Result<TOut>> + Send>>
+            + Send
+            + Sync
+            + 'static,
+    ) -> Self
+    where
+        TIn: serde::de::DeserializeOwned + schemars::JsonSchema + Send + Sync + 'static,
+        TOut: serde::Serialize + schemars::JsonSchema + Send + Sync + 'static,
+    {
+        use crate::server::typed_tool::TypedToolWithOutput;
+
+        let name_str = name.into();
+        let tool = TypedToolWithOutput::new(name_str.clone(), handler);
+        self.tools.insert(name_str, Arc::new(tool));
+        self
+    }
+
+    /// Add a type-safe tool handler with both input and output typing and description.
+    ///
+    /// This is a convenience overload that allows setting a description directly
+    /// without needing to chain `.with_description()`.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # #[cfg(feature = "schema-generation")]
+    /// # {
+    /// use pmcp::ServerBuilder;
+    /// use schemars::JsonSchema;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(JsonSchema, Deserialize)]
+    /// struct MathInput { a: f64, b: f64, op: String }
+    ///
+    /// #[derive(JsonSchema, Serialize)]
+    /// struct MathOutput { result: f64, operation: String }
+    ///
+    /// let server = ServerBuilder::new()
+    ///     .name("example")
+    ///     .tool_typed_with_output_and_description::<MathInput, MathOutput>(
+    ///         "math",
+    ///         "Performs basic mathematical operations on two numbers",
+    ///         |args, _| {
+    ///             Box::pin(async move {
+    ///                 let result = match args.op.as_str() {
+    ///                     "add" => args.a + args.b,
+    ///                     "subtract" => args.a - args.b,
+    ///                     _ => return Err(pmcp::Error::Validation("Unknown operation".into())),
+    ///                 };
+    ///                 Ok(MathOutput { result, operation: args.op })
+    ///             })
+    ///         }
+    ///     );
+    /// # }
+    /// ```
+    #[cfg(feature = "schema-generation")]
+    pub fn tool_typed_with_output_and_description<TIn, TOut>(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        handler: impl Fn(
+                TIn,
+                crate::RequestHandlerExtra,
+            )
+                -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::Result<TOut>> + Send>>
+            + Send
+            + Sync
+            + 'static,
+    ) -> Self
+    where
+        TIn: serde::de::DeserializeOwned + schemars::JsonSchema + Send + Sync + 'static,
+        TOut: serde::Serialize + schemars::JsonSchema + Send + Sync + 'static,
+    {
+        use crate::server::typed_tool::TypedToolWithOutput;
+
+        let name_str = name.into();
+        let tool =
+            TypedToolWithOutput::new(name_str.clone(), handler).with_description(description);
+        self.tools.insert(name_str, Arc::new(tool));
+        self
+    }
+
     /// Add a prompt handler.
     ///
     /// Registers a prompt that clients can retrieve via the prompts/get method.
@@ -1401,6 +1891,83 @@ impl ServerBuilder {
     ) -> Self {
         self.prompts.insert(name.into(), Arc::new(handler));
         self
+    }
+
+    /// Register a workflow-based prompt with automatic validation.
+    ///
+    /// This method validates the workflow before registration and converts it
+    /// to a prompt handler. The workflow's instructions become the prompt messages,
+    /// and the workflow's arguments become the prompt arguments.
+    ///
+    /// # Arguments
+    ///
+    /// * `workflow` - The workflow definition to register as a prompt
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the workflow validation fails (e.g., undefined bindings,
+    /// undefined prompt arguments, etc.).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::{Server, ServerBuilder};
+    /// use pmcp::server::workflow::{SequentialWorkflow, InternalPromptMessage};
+    /// use pmcp::types::Role;
+    ///
+    /// # fn main() -> pmcp::Result<()> {
+    /// let workflow = SequentialWorkflow::new(
+    ///     "code_review_workflow",
+    ///     "Review code with multiple steps"
+    /// )
+    /// .argument("code", "Code to review", true)
+    /// .instruction(InternalPromptMessage::new(
+    ///     Role::System,
+    ///     "You are a code reviewer. Review the provided code carefully."
+    /// ));
+    ///
+    /// let server = Server::builder()
+    ///     .name("code-server")
+    ///     .version("1.0.0")
+    ///     .prompt_workflow(workflow)?
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn prompt_workflow(mut self, workflow: workflow::SequentialWorkflow) -> Result<Self> {
+        // Validate the workflow before registration
+        workflow
+            .validate()
+            .map_err(|e| Error::Validation(format!("Workflow validation failed: {}", e)))?;
+
+        // Build tool and resource registries from currently registered handlers
+        // Note: This captures the current state of registered tools/resources
+        let mut tools = std::collections::HashMap::new();
+        for (name, handler) in &self.tools {
+            if let Some(metadata) = handler.metadata() {
+                tools.insert(
+                    Arc::from(name.as_str()),
+                    workflow::conversion::ToolInfo {
+                        name: metadata.name,
+                        description: metadata.description.unwrap_or_default(),
+                        input_schema: metadata.input_schema,
+                    },
+                );
+            }
+        }
+
+        let resources = std::collections::HashMap::new();
+
+        // Get the workflow name before moving it
+        let name = workflow.name().to_string();
+
+        // Create workflow prompt handler
+        let handler = workflow::WorkflowPromptHandler::new(workflow, tools, resources);
+
+        // Register as a prompt
+        self.prompts.insert(name, Arc::new(handler));
+
+        Ok(self)
     }
 
     /// Set the resource handler.
@@ -1631,6 +2198,71 @@ impl ServerBuilder {
         self
     }
 
+    /// Add a description to a tool (Note: Limited support).
+    ///
+    /// **Important**: Due to the immutable design of tool handlers, this method
+    /// cannot retroactively add descriptions to already-registered tools.
+    ///
+    /// **Recommended**: Use the `*_with_description` variants instead:
+    /// - `.tool_typed_with_description()`
+    /// - `.tool_typed_sync_with_description()`
+    /// - `.tool_typed_with_output_and_description()`
+    ///
+    /// This method is provided for API completeness but will log warnings
+    /// when used, encouraging migration to the preferred approaches.
+    ///
+    /// # Preferred Examples
+    ///
+    /// ```rust,no_run
+    /// # #[cfg(feature = "schema-generation")]
+    /// # {
+    /// use pmcp::ServerBuilder;
+    /// use schemars::JsonSchema;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+    /// struct MathArgs { a: f64, b: f64 }
+    ///
+    /// // Preferred: Use the direct description variants
+    /// let server = ServerBuilder::new()
+    ///     .name("example")
+    ///     .tool_typed_with_description(
+    ///         "add",
+    ///         "Adds two numbers together",
+    ///         |args: MathArgs, _| {
+    ///             Box::pin(async move {
+    ///                 Ok(serde_json::json!({ "result": args.a + args.b }))
+    ///             })
+    ///         }
+    ///     )
+    ///     .build();
+    /// # }
+    /// ```
+    #[deprecated(
+        since = "1.6.0",
+        note = "Use tool_typed_with_description() and similar variants instead"
+    )]
+    pub fn with_tool_description(
+        self,
+        tool_name: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        let tool_name = tool_name.into();
+        let _description = description.into();
+
+        tracing::warn!(
+            "with_tool_description('{}') called but cannot modify immutable tools. \
+            Use tool_typed_with_description() variants instead.",
+            tool_name
+        );
+
+        self
+    }
+
+    /// Build the server.
+    ///
+    /// Constructs the final Server instance from the configured builder.
+    /// This validates that required fields (name and version) are set.
     ///
     /// # Errors
     ///

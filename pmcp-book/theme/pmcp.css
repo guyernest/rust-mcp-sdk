@@ -141,6 +141,35 @@
     font-family: monospace;
 }
 
+/* Mermaid diagram tweaks */
+.mermaid {
+    display: block;
+    margin: 16px 0;
+    overflow-x: auto; /* allow horizontal scroll if needed */
+}
+
+.mermaid svg {
+    max-width: 100%;
+    height: auto;
+}
+
+/* Improve contrast for text in both themes */
+.light .mermaid text,
+.light .mermaid .label {
+    fill: var(--pmcp-text) !important;
+}
+
+.ayu .mermaid text,
+.ayu .mermaid .label {
+    fill: var(--pmcp-text-dark) !important;
+}
+
+/* Optional: give diagrams a subtle background in dark mode */
+.ayu .mermaid svg {
+    background: rgba(255,255,255,0.03);
+    border-radius: 6px;
+}
+
 .protocol-step {
     padding: 8px 16px;
     background-color: var(--pmcp-bg-code);

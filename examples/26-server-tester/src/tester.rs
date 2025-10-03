@@ -318,6 +318,13 @@ impl ServerTester {
     }
 
     pub async fn run_resources_discovery(&mut self) -> Result<TestReport> {
+        self.run_resources_discovery_with_verbose(false).await
+    }
+
+    pub async fn run_resources_discovery_with_verbose(
+        &mut self,
+        verbose: bool,
+    ) -> Result<TestReport> {
         let mut report = TestReport::new();
         let start = Instant::now();
 
@@ -347,7 +354,31 @@ impl ServerTester {
         }
 
         // List and validate resources
-        report.add_test(self.test_resources_list().await);
+        let list_result = self.test_resources_list().await;
+        report.add_test(list_result.clone());
+
+        if verbose && list_result.status == TestStatus::Passed {
+            if let Some(ref resources) = self.resources {
+                println!("  ✓ Found {} resources:", resources.len());
+                for resource in resources {
+                    println!("    • {} ({})", resource.name, resource.uri);
+                    if let Some(ref desc) = resource.description {
+                        println!("      {}", desc);
+                    }
+                    if let Some(ref mime) = resource.mime_type {
+                        println!("      MIME: {}", mime);
+                    }
+                }
+                println!();
+            }
+        }
+
+        // Read and validate each resource if we have any
+        if let Some(ref resources) = self.resources {
+            if !resources.is_empty() {
+                report.add_test(self.test_resources_read(verbose).await);
+            }
+        }
 
         report.duration = start.elapsed();
         Ok(report)
@@ -1316,6 +1347,271 @@ impl ServerTester {
         }
     }
 
+    async fn test_resources_read(&mut self, verbose: bool) -> TestResult {
+        let start = Instant::now();
+        let name = "Read and Validate Resources".to_string();
+
+        // Get resources to test
+        let resources = match &self.resources {
+            Some(r) if !r.is_empty() => r.clone(),
+            _ => {
+                return TestResult {
+                    name,
+                    category: TestCategory::Resources,
+                    status: TestStatus::Skipped,
+                    duration: start.elapsed(),
+                    error: None,
+                    details: Some("No resources to read".to_string()),
+                };
+            },
+        };
+
+        let mut warnings = Vec::new();
+        let mut errors = Vec::new();
+        let mut read_count = 0;
+
+        // Test reading each resource (limit to first 5 to avoid overwhelming output)
+        let resources_to_test = resources.iter().take(5);
+
+        if verbose {
+            println!("  Reading and validating resources...");
+        }
+
+        for resource in resources_to_test {
+            match self.read_resource(&resource.uri).await {
+                Ok(result) => {
+                    read_count += 1;
+
+                    if verbose {
+                        println!("    ✓ Read resource: {}", resource.name);
+                    }
+
+                    // Validate resource content structure
+                    if result.contents.is_empty() {
+                        warnings.push(format!(
+                            "Resource '{}' returned empty contents array",
+                            resource.name
+                        ));
+                        continue;
+                    }
+
+                    for content in &result.contents {
+                        // Verbose output showing content
+                        if verbose {
+                            match content {
+                                pmcp::types::Content::Text { text } => {
+                                    let preview = if text.len() > 200 {
+                                        format!("{}... ({} chars total)", &text[..200], text.len())
+                                    } else {
+                                        text.clone()
+                                    };
+                                    println!("      Content type: Text");
+                                    println!("      Preview: {}", preview);
+                                },
+                                pmcp::types::Content::Image { data, mime_type } => {
+                                    println!("      Content type: Image");
+                                    println!("      MIME type: {}", mime_type);
+                                    println!("      Data size: {} bytes (base64)", data.len());
+                                },
+                                pmcp::types::Content::Resource {
+                                    uri,
+                                    text,
+                                    mime_type,
+                                } => {
+                                    println!("      Content type: Resource Reference");
+                                    println!("      URI: {}", uri);
+                                    if let Some(ref mime) = mime_type {
+                                        println!("      MIME type: {}", mime);
+                                    }
+                                    if let Some(ref t) = text {
+                                        let preview = if t.len() > 200 {
+                                            format!("{}... ({} chars)", &t[..200], t.len())
+                                        } else {
+                                            t.clone()
+                                        };
+                                        println!("      Text: {}", preview);
+                                    }
+                                },
+                            }
+                        }
+
+                        // Validate content structure based on type
+                        match content {
+                            pmcp::types::Content::Text { text } => {
+                                if text.is_empty() {
+                                    warnings.push(format!(
+                                        "Resource '{}' has empty text content",
+                                        resource.name
+                                    ));
+                                }
+                                // Validate MIME type consistency
+                                if let Some(ref mime) = resource.mime_type {
+                                    if !mime.starts_with("text/")
+                                        && !mime.contains("json")
+                                        && !mime.contains("xml")
+                                    {
+                                        warnings.push(format!(
+                                            "Resource '{}' has MIME type '{}' but returns text content",
+                                            resource.name, mime
+                                        ));
+                                    }
+                                }
+                            },
+                            pmcp::types::Content::Image { data, mime_type } => {
+                                if data.is_empty() {
+                                    warnings.push(format!(
+                                        "Resource '{}' has empty image data",
+                                        resource.name
+                                    ));
+                                }
+                                // Validate MIME type consistency
+                                if let Some(ref list_mime) = resource.mime_type {
+                                    if list_mime != mime_type {
+                                        warnings.push(format!(
+                                            "Resource '{}' MIME type mismatch: list='{}', content='{}'",
+                                            resource.name, list_mime, mime_type
+                                        ));
+                                    }
+                                }
+                                if !mime_type.starts_with("image/") {
+                                    warnings.push(format!(
+                                        "Resource '{}' has non-image MIME type '{}' for image content",
+                                        resource.name, mime_type
+                                    ));
+                                }
+                            },
+                            pmcp::types::Content::Resource {
+                                uri,
+                                text: _,
+                                mime_type,
+                            } => {
+                                if uri.is_empty() {
+                                    warnings.push(format!(
+                                        "Resource '{}' reference has empty URI",
+                                        resource.name
+                                    ));
+                                }
+                                // Check MIME type consistency if present
+                                if let (Some(ref list_mime), Some(ref content_mime)) =
+                                    (&resource.mime_type, mime_type)
+                                {
+                                    if list_mime != content_mime {
+                                        warnings.push(format!(
+                                            "Resource '{}' MIME type mismatch: list='{}', content='{}'",
+                                            resource.name, list_mime, content_mime
+                                        ));
+                                    }
+                                }
+                            },
+                        }
+                    }
+
+                    // Check for annotations (warning only)
+                    let warnings_before = warnings.len();
+                    self.check_resource_annotations(&resource.uri, &mut warnings)
+                        .await;
+
+                    // Show annotation warnings in verbose mode
+                    if verbose && warnings.len() > warnings_before {
+                        for warning in &warnings[warnings_before..] {
+                            println!("      ⚠ {}", warning);
+                        }
+                    }
+                },
+                Err(e) => {
+                    let error_msg = format!("Failed to read resource '{}': {}", resource.name, e);
+                    errors.push(error_msg.clone());
+
+                    if verbose {
+                        println!("      ✗ {}", error_msg);
+                    }
+                },
+            }
+        }
+
+        if verbose {
+            println!();
+        }
+
+        // Build result message
+        let mut details_parts = vec![format!("Successfully read {} resources", read_count)];
+
+        if !warnings.is_empty() {
+            details_parts.push(format!("Warnings ({}):", warnings.len()));
+            for warning in &warnings {
+                details_parts.push(format!("  - {}", warning));
+            }
+        }
+
+        if !errors.is_empty() {
+            details_parts.push(format!("Errors ({}):", errors.len()));
+            for error in &errors {
+                details_parts.push(format!("  - {}", error));
+            }
+        }
+
+        let status = if !errors.is_empty() {
+            TestStatus::Failed
+        } else if !warnings.is_empty() {
+            TestStatus::Warning
+        } else {
+            TestStatus::Passed
+        };
+
+        TestResult {
+            name,
+            category: TestCategory::Resources,
+            status,
+            duration: start.elapsed(),
+            error: if !errors.is_empty() {
+                Some(errors.join("; "))
+            } else {
+                None
+            },
+            details: Some(details_parts.join("\n")),
+        }
+    }
+
+    async fn check_resource_annotations(&self, uri: &str, warnings: &mut Vec<String>) {
+        // Try to fetch the raw JSON to check for annotations
+        // This is a best-effort check - we look for common annotation patterns
+
+        // Check if the description contains priority hints
+        if let Some(resources) = &self.resources {
+            if let Some(resource) = resources.iter().find(|r| r.uri == uri) {
+                let has_priority_hint = resource
+                    .description
+                    .as_ref()
+                    .map(|d| d.to_lowercase().contains("priority"))
+                    .unwrap_or(false);
+
+                let has_modified_hint = resource
+                    .description
+                    .as_ref()
+                    .map(|d| {
+                        d.to_lowercase().contains("updated on")
+                            || d.to_lowercase().contains("modified")
+                            || d.to_lowercase().contains("last update")
+                    })
+                    .unwrap_or(false);
+
+                if !has_priority_hint {
+                    warnings.push(format!(
+                        "Resource '{}' may be missing priority annotation (not found in description)",
+                        resource.name
+                    ));
+                }
+
+                if !has_modified_hint {
+                    warnings.push(format!(
+                        "Resource '{}' may be missing modification timestamp (not found in description)",
+                        resource.name
+                    ));
+                }
+            }
+        }
+    }
+
     async fn test_prompts_list(&mut self) -> TestResult {
         let start = Instant::now();
         let name = "List Prompts".to_string();
@@ -1479,7 +1775,31 @@ impl ServerTester {
             // Check for common JSON Schema properties
             if !obj.contains_key("type") {
                 warnings.push(format!("Tool '{}' schema missing 'type' field", tool.name));
+            } else if let Some(schema_type) = obj.get("type") {
+                // Validate the type value
+                if let Some(type_str) = schema_type.as_str() {
+                    // Valid JSON Schema types
+                    let valid_types = ["object", "array", "string", "number", "integer", "boolean"];
+
+                    if type_str == "null" {
+                        // Special case: "null" as a type is almost always a bug
+                        // (from Rust unit type () serializing to "null")
+                        warnings.push(format!(
+                            "Tool '{}' has invalid inputSchema.type = \"null\" - this will be rejected by MCP clients like Claude Code. \
+                            Expected \"object\" for structured input, or omit inputSchema if no parameters required. \
+                            (This often happens when using unit type () in Rust - use an empty struct instead)",
+                            tool.name
+                        ));
+                    } else if !valid_types.contains(&type_str) {
+                        warnings.push(format!(
+                            "Tool '{}' has invalid inputSchema.type = \"{}\". \
+                            Must be one of: object, array, string, number, integer, boolean",
+                            tool.name, type_str
+                        ));
+                    }
+                }
             }
+
             if obj.get("type") == Some(&json!("object")) && !obj.contains_key("properties") {
                 warnings.push(format!(
                     "Tool '{}' schema missing 'properties' field for object type",
@@ -1935,10 +2255,55 @@ impl ServerTester {
         })
     }
 
-    pub async fn read_resource(&mut self, _uri: &str) -> Result<pmcp::types::ReadResourceResult> {
-        // For now, return empty resource
-        // This would need to be implemented based on the transport type
-        Ok(pmcp::types::ReadResourceResult { contents: vec![] })
+    pub async fn read_resource(&mut self, uri: &str) -> Result<pmcp::types::ReadResourceResult> {
+        // Try to use existing HTTP client if initialized
+        if let Some(client) = &mut self.pmcp_client {
+            return client
+                .read_resource(uri.to_string())
+                .await
+                .map_err(|e| e.into());
+        }
+
+        // Try stdio client
+        if let Some(client) = &mut self.stdio_client {
+            return client
+                .read_resource(uri.to_string())
+                .await
+                .map_err(|e| e.into());
+        }
+
+        // Fallback for direct JSON-RPC HTTP (without pmcp client wrapper)
+        match self.transport_type {
+            TransportType::JsonRpcHttp => {
+                let request = JsonRpcRequest {
+                    jsonrpc: "2.0".to_string(),
+                    method: "resources/read".to_string(),
+                    params: Some(json!({"uri": uri})),
+                    id: Some(json!(rand::random::<u64>())),
+                };
+
+                match self.send_json_rpc_request(request).await {
+                    Ok(response) => {
+                        if let Some(error) = response.error {
+                            return Err(anyhow::anyhow!("JSON-RPC error: {:?}", error));
+                        } else if let Some(result) = response.result {
+                            match serde_json::from_value::<pmcp::types::ReadResourceResult>(result)
+                            {
+                                Ok(resource) => Ok(resource),
+                                Err(e) => Err(anyhow::anyhow!("Failed to parse resource: {}", e)),
+                            }
+                        } else {
+                            Err(anyhow::anyhow!("Empty response from server"))
+                        }
+                    },
+                    Err(e) => Err(anyhow::anyhow!("Request failed: {}", e)),
+                }
+            },
+            _ => {
+                // Return empty resource for other transport types
+                Ok(pmcp::types::ReadResourceResult { contents: vec![] })
+            },
+        }
     }
 
     pub fn get_tools(&self) -> Option<&Vec<ToolInfo>> {
@@ -1987,15 +2352,72 @@ impl ServerTester {
 
     pub async fn get_prompt(
         &mut self,
-        _name: &str,
-        _arguments: Value,
+        name: &str,
+        arguments: Value,
     ) -> Result<pmcp::types::GetPromptResult> {
-        // For now, return empty prompt
-        // This would need to be implemented based on the transport type
-        Ok(pmcp::types::GetPromptResult {
-            messages: vec![],
-            description: None,
-        })
+        // Convert JSON Value arguments to HashMap<String, String>
+        let args_map: std::collections::HashMap<String, String> =
+            if let Value::Object(map) = &arguments {
+                map.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            } else {
+                std::collections::HashMap::new()
+            };
+
+        // Try to use existing HTTP client if initialized
+        if let Some(client) = &mut self.pmcp_client {
+            return client
+                .get_prompt(name.to_string(), args_map)
+                .await
+                .map_err(|e| e.into());
+        }
+
+        // Try stdio client
+        if let Some(client) = &mut self.stdio_client {
+            return client
+                .get_prompt(name.to_string(), args_map)
+                .await
+                .map_err(|e| e.into());
+        }
+
+        // Fallback for direct JSON-RPC HTTP (without pmcp client wrapper)
+        match self.transport_type {
+            TransportType::JsonRpcHttp => {
+                let request = JsonRpcRequest {
+                    jsonrpc: "2.0".to_string(),
+                    method: "prompts/get".to_string(),
+                    params: Some(json!({
+                        "name": name,
+                        "arguments": arguments
+                    })),
+                    id: Some(json!(rand::random::<u64>())),
+                };
+
+                match self.send_json_rpc_request(request).await {
+                    Ok(response) => {
+                        if let Some(error) = response.error {
+                            return Err(anyhow::anyhow!("JSON-RPC error: {:?}", error));
+                        } else if let Some(result) = response.result {
+                            match serde_json::from_value::<pmcp::types::GetPromptResult>(result) {
+                                Ok(prompt) => Ok(prompt),
+                                Err(e) => Err(anyhow::anyhow!("Failed to parse prompt: {}", e)),
+                            }
+                        } else {
+                            Err(anyhow::anyhow!("Empty response from server"))
+                        }
+                    },
+                    Err(e) => Err(anyhow::anyhow!("Request failed: {}", e)),
+                }
+            },
+            _ => {
+                // Return empty prompt for other transport types
+                Ok(pmcp::types::GetPromptResult {
+                    messages: vec![],
+                    description: None,
+                })
+            },
+        }
     }
 
     pub async fn send_custom_request(&mut self, method: &str, params: Value) -> Result<Value> {

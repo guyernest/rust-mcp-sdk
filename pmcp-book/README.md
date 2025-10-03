@@ -30,6 +30,22 @@ make book-test
 make book-open
 ```
 
+### Mermaid Diagram Support
+
+This book renders Mermaid diagrams via the `mdbook-mermaid` preprocessor. Install it once:
+
+```bash
+cargo install mdbook-mermaid
+```
+
+Then build/serve as usual (`mdbook build` or `mdbook serve`). If the plugin is not installed, Mermaid code blocks will not render in HTML.
+
+Troubleshooting:
+- Ensure the plugin is in your PATH: `export PATH="$HOME/.cargo/bin:$PATH"`
+- Verify install: `mdbook-mermaid --version`
+- Check build logs for a missing preprocessor warning; if seen, reinstall the plugin and restart `mdbook serve`.
+- Diagrams still low-contrast? We force a neutral Mermaid theme and add CSS for better readability in light/dark modes.
+
 ### Manual Commands
 
 ```bash

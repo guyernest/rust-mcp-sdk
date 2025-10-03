@@ -295,40 +295,73 @@ impl<'a> ScenarioExecutor<'a> {
                 }
             },
 
-            Operation::ListTools => {
-                let tools = self.tester.list_tools().await?;
-                Ok(json!({
-                    "tools": tools.tools
-                }))
+            Operation::ListTools => match self.tester.list_tools().await {
+                Ok(tools) => Ok(json!({
+                    "success": true,
+                    "tools": tools.tools,
+                    "error": null
+                })),
+                Err(e) => Ok(json!({
+                    "success": false,
+                    "tools": [],
+                    "error": e.to_string()
+                })),
             },
 
-            Operation::ListResources => {
-                let resources = self.tester.list_resources().await?;
-                Ok(json!({
-                    "resources": resources.resources
-                }))
+            Operation::ListResources => match self.tester.list_resources().await {
+                Ok(resources) => Ok(json!({
+                    "success": true,
+                    "resources": resources.resources,
+                    "error": null
+                })),
+                Err(e) => Ok(json!({
+                    "success": false,
+                    "resources": [],
+                    "error": e.to_string()
+                })),
             },
 
-            Operation::ReadResource { uri } => {
-                let result = self.tester.read_resource(&uri).await?;
-                Ok(json!({
-                    "contents": result.contents
-                }))
+            Operation::ReadResource { uri } => match self.tester.read_resource(&uri).await {
+                Ok(result) => Ok(json!({
+                    "success": true,
+                    "contents": result.contents,
+                    "error": null
+                })),
+                Err(e) => Ok(json!({
+                    "success": false,
+                    "contents": [],
+                    "error": e.to_string()
+                })),
             },
 
-            Operation::ListPrompts => {
-                let prompts = self.tester.list_prompts().await?;
-                Ok(json!({
-                    "prompts": prompts.prompts
-                }))
+            Operation::ListPrompts => match self.tester.list_prompts().await {
+                Ok(prompts) => Ok(json!({
+                    "success": true,
+                    "prompts": prompts.prompts,
+                    "error": null
+                })),
+                Err(e) => Ok(json!({
+                    "success": false,
+                    "prompts": [],
+                    "error": e.to_string()
+                })),
             },
 
             Operation::GetPrompt { name, arguments } => {
-                let result = self.tester.get_prompt(&name, arguments).await?;
-                Ok(json!({
-                    "messages": result.messages,
-                    "description": result.description
-                }))
+                match self.tester.get_prompt(&name, arguments).await {
+                    Ok(result) => Ok(json!({
+                        "success": true,
+                        "messages": result.messages,
+                        "description": result.description,
+                        "error": null
+                    })),
+                    Err(e) => Ok(json!({
+                        "success": false,
+                        "messages": [],
+                        "description": null,
+                        "error": e.to_string()
+                    })),
+                }
             },
 
             Operation::Custom { method, params } => {

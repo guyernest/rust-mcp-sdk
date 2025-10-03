@@ -112,13 +112,24 @@ jobs:
               echo "Skipping example: $example_name (requires streamable-http feature)"
               continue
             fi
+            if [[ "$example_name" == "32_typed_tools" ]] || \
+               [[ "$example_name" == "33_advanced_typed_tools" ]] || \
+               [[ "$example_name" == "34_serverbuilder_typed" ]] || \
+               [[ "$example_name" == "35_wasm_typed_tools" ]] || \
+               [[ "$example_name" == "36_typed_tool_v2_example" ]] || \
+               [[ "$example_name" == "37_description_variants_example" ]] || \
+               [[ "$example_name" == "53_typed_tools_workflow_integration" ]]; then
+              echo "Skipping example: $example_name (requires schema-generation feature)"
+              continue
+            fi
             if [[ "$example_name" == "28_sse_optimized" ]]; then
               echo "Skipping example: $example_name (requires sse feature)"
               continue
             fi
             if [[ "$example_name" == "29_connection_pool" ]] || \
                [[ "$example_name" == "30_enhanced_middleware" ]] || \
-               [[ "$example_name" == "31_advanced_error_recovery" ]]; then
+               [[ "$example_name" == "31_advanced_error_recovery" ]] || \
+               [[ "$example_name" == "49_tool_with_sampling_server" ]]; then
               echo "Skipping example: $example_name (requires full feature)"
               continue
             fi
