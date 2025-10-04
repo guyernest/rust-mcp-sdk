@@ -2,7 +2,7 @@
 //!
 //! Defines where workflow step arguments get their values from.
 
-use super::newtypes::{ArgName, StepName};
+use super::newtypes::{ArgName, BindingName};
 use serde_json::Value;
 
 /// Source of data for workflow step arguments
@@ -12,10 +12,13 @@ pub enum DataSource {
     /// Value from prompt arguments (user-provided)
     PromptArg(ArgName),
 
-    /// Value from a previous step's output
+    /// Value from a previous step's output (by binding name)
+    ///
+    /// The `step` field refers to the **binding name** set via `.bind()`,
+    /// not the step name passed to `WorkflowStep::new()`.
     StepOutput {
-        /// The step whose output to use
-        step: StepName,
+        /// The binding name of the step whose output to use
+        step: BindingName,
         /// Optional field to extract from step output
         /// If None, use entire output
         field: Option<String>,
@@ -31,16 +34,22 @@ impl DataSource {
         Self::PromptArg(name.into())
     }
 
-    /// Create a data source from a step's entire output
-    pub fn from_step(step: impl Into<StepName>) -> Self {
+    /// Create a data source from a step's entire output (by binding name)
+    ///
+    /// The `step` parameter should be the **binding name** set via `.bind()`,
+    /// not the step name passed to `WorkflowStep::new()`.
+    pub fn from_step(step: impl Into<BindingName>) -> Self {
         Self::StepOutput {
             step: step.into(),
             field: None,
         }
     }
 
-    /// Create a data source from a step's output field
-    pub fn from_step_field(step: impl Into<StepName>, field: impl Into<String>) -> Self {
+    /// Create a data source from a step's output field (by binding name)
+    ///
+    /// The `step` parameter should be the **binding name** set via `.bind()`,
+    /// not the step name passed to `WorkflowStep::new()`.
+    pub fn from_step_field(step: impl Into<BindingName>, field: impl Into<String>) -> Self {
         Self::StepOutput {
             step: step.into(),
             field: Some(field.into()),

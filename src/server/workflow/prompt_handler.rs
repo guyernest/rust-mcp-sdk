@@ -1,65 +1,116 @@
-//! `PromptHandler` implementation for `SequentialWorkflow`
+//! `PromptHandler` implementation for `SequentialWorkflow` with server-side execution
 //!
-//! Enables workflows to be registered as prompts in the server.
+//! Enables workflows to be registered as prompts in the server with full tool execution.
+//!
+//! # MCP-Compliant Workflow Execution
+//!
+//! This module implements server-side workflow execution during `prompts/get`. When a user
+//! invokes a workflow prompt, the server:
+//!
+//! 1. Creates a user intent message from the workflow description and arguments
+//! 2. Creates an assistant plan message listing all workflow steps
+//! 3. Executes each step sequentially:
+//!    - Announces the tool call (assistant message)
+//!    - Executes the tool server-side
+//!    - Returns the tool result (user message)
+//!    - Stores the result in execution context (bindings)
+//! 4. Returns the complete conversation trace to the client
+//!
+//! This approach provides:
+//! - Complete execution context for the LLM
+//! - Efficient single-round-trip execution
+//! - Clear error handling and debugging
+//! - Data flow via bindings between steps
 
 use super::{
-    conversion::{ExpansionContext, ResourceInfo, ToolInfo},
-    sequential::SequentialWorkflow,
+    conversion::ToolInfo, data_source::DataSource, newtypes::BindingName,
+    sequential::SequentialWorkflow, workflow_step::WorkflowStep,
 };
 use crate::error::Result;
 use crate::server::cancellation::RequestHandlerExtra;
-use crate::server::PromptHandler;
-use crate::types::{GetPromptResult, PromptArgument, PromptInfo};
+use crate::server::{PromptHandler, ResourceHandler, ToolHandler};
+use crate::types::{
+    Content, GetPromptResult, MessageContent, PromptArgument, PromptInfo, PromptMessage, Role,
+};
 use async_trait::async_trait;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Stores step execution results (bindings) during workflow execution
+#[derive(Debug)]
+struct ExecutionContext {
+    bindings: HashMap<BindingName, Value>,
+}
+
+impl ExecutionContext {
+    fn new() -> Self {
+        Self {
+            bindings: HashMap::new(),
+        }
+    }
+
+    fn store_binding(&mut self, name: BindingName, value: Value) {
+        self.bindings.insert(name, value);
+    }
+
+    fn get_binding(&self, name: &BindingName) -> Option<&Value> {
+        self.bindings.get(name)
+    }
+}
+
 /// `PromptHandler` implementation for `SequentialWorkflow`
 ///
-/// Wraps a validated workflow and provides prompt handler functionality.
-/// The workflow's instructions are returned as the prompt messages.
-///
-/// # Metadata Implementation
-///
-/// This handler properly implements `PromptHandler::metadata()` to expose:
-/// - **name**: The workflow name from `SequentialWorkflow::name()`
-/// - **description**: The workflow description from `SequentialWorkflow::description()`
-/// - **arguments**: All workflow arguments with their descriptions and required flags
-///
-/// When registered via `ServerBuilder::prompt_workflow()`, the metadata is automatically
-/// available in `prompts/list` responses.
+/// Executes workflow steps server-side during `prompts/get` and returns a conversation trace
+/// showing the complete execution flow.
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use pmcp::Server;
-/// use pmcp::server::workflow::{SequentialWorkflow, InternalPromptMessage};
-/// use pmcp::types::Role;
+/// use pmcp::server::workflow::{SequentialWorkflow, WorkflowStep, ToolHandle};
 ///
 /// let workflow = SequentialWorkflow::new(
 ///     "add_task",
 ///     "Add a task to a project"
 /// )
 /// .argument("project", "Project name", true)
-/// .argument("task", "Task description", true);
+/// .argument("task", "Task description", true)
+/// .step(
+///     WorkflowStep::new("list_pages", ToolHandle::new("list_pages"))
+///         .bind("pages")
+/// );
 ///
 /// let server = Server::builder()
 ///     .name("server")
 ///     .version("1.0.0")
+///     .tool("list_pages", /* tool handler */)
 ///     .prompt_workflow(workflow)?
 ///     .build()?;
-///
-/// // The workflow metadata is now available in prompts/list
-/// # Ok::<(), pmcp::Error>(())
 /// ```
-#[derive(Debug)]
 pub struct WorkflowPromptHandler {
     /// The workflow definition
     workflow: SequentialWorkflow,
-    /// Tool registry for handle expansion
+    /// Tool registry for handle expansion and metadata
     tools: HashMap<Arc<str>, ToolInfo>,
-    /// Resource registry for handle expansion
-    resources: HashMap<Arc<str>, ResourceInfo>,
+    /// Tool handlers for actual execution
+    tool_handlers: HashMap<Arc<str>, Arc<dyn ToolHandler>>,
+    /// Resource handler for fetching resource content
+    resource_handler: Option<Arc<dyn ResourceHandler>>,
+}
+
+impl std::fmt::Debug for WorkflowPromptHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkflowPromptHandler")
+            .field("workflow", &self.workflow.name())
+            .field("tools", &self.tools.keys().collect::<Vec<_>>())
+            .field(
+                "tool_handlers",
+                &self.tool_handlers.keys().collect::<Vec<_>>(),
+            )
+            .field("resource_handler", &self.resource_handler.is_some())
+            .finish()
+    }
 }
 
 impl WorkflowPromptHandler {
@@ -68,28 +119,306 @@ impl WorkflowPromptHandler {
     /// # Arguments
     ///
     /// * `workflow` - The workflow definition (should be validated before passing)
-    /// * `tools` - Tool registry for expanding tool handles
-    /// * `resources` - Resource registry for expanding resource handles
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use pmcp::server::workflow::{SequentialWorkflow, WorkflowPromptHandler};
-    /// use std::collections::HashMap;
-    ///
-    /// let workflow = SequentialWorkflow::new("my_workflow", "A test workflow");
-    /// let handler = WorkflowPromptHandler::new(workflow, HashMap::new(), HashMap::new());
-    /// ```
+    /// * `tools` - Tool registry for metadata
+    /// * `tool_handlers` - Actual tool handlers for execution
+    /// * `resource_handler` - Resource handler for fetching resource content
     pub fn new(
         workflow: SequentialWorkflow,
         tools: HashMap<Arc<str>, ToolInfo>,
-        resources: HashMap<Arc<str>, ResourceInfo>,
+        tool_handlers: HashMap<Arc<str>, Arc<dyn ToolHandler>>,
+        resource_handler: Option<Arc<dyn ResourceHandler>>,
     ) -> Self {
         Self {
             workflow,
             tools,
-            resources,
+            tool_handlers,
+            resource_handler,
         }
+    }
+
+    /// Substitute argument values into template text
+    ///
+    /// Replaces `{arg_name}` patterns with actual argument values.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let template = "Find page matching '{project}' in the list";
+    /// let mut args = HashMap::new();
+    /// args.insert("project".to_string(), "MCP Tester".to_string());
+    /// let result = substitute_arguments(template, &args);
+    /// // result: "Find page matching 'MCP Tester' in the list"
+    /// ```
+    fn substitute_arguments(template: &str, args: &HashMap<String, String>) -> String {
+        let mut result = template.to_string();
+        for (key, value) in args {
+            result = result.replace(&format!("{{{}}}", key), value);
+        }
+        result
+    }
+
+    /// Create user intent message from workflow description and arguments
+    fn create_user_intent(&self, args: &HashMap<String, String>) -> PromptMessage {
+        let description = self.workflow.description();
+
+        // Format arguments nicely
+        let args_display = if args.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\nParameters:\n{}",
+                args.iter()
+                    .map(|(k, v)| format!("  - {}: \"{}\"", k, v))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        };
+
+        PromptMessage {
+            role: Role::User,
+            content: MessageContent::Text {
+                text: format!("I want to {}.{}", description, args_display),
+            },
+        }
+    }
+
+    /// Create assistant plan message listing all workflow steps
+    fn create_assistant_plan(&self) -> Result<PromptMessage> {
+        let mut plan = String::from("Here's my plan:\n");
+
+        for (idx, step) in self.workflow.steps().iter().enumerate() {
+            let tool_info = self.tools.get(step.tool().name()).ok_or_else(|| {
+                crate::Error::Internal(format!(
+                    "Tool '{}' not found in registry",
+                    step.tool().name()
+                ))
+            })?;
+
+            plan.push_str(&format!(
+                "{}. {} - {}\n",
+                idx + 1,
+                step.tool().name(),
+                tool_info.description
+            ));
+        }
+
+        Ok(PromptMessage {
+            role: Role::Assistant,
+            content: MessageContent::Text { text: plan },
+        })
+    }
+
+    /// Create assistant message announcing the tool call with resolved parameters
+    fn create_tool_call_announcement(
+        &self,
+        step: &WorkflowStep,
+        args: &HashMap<String, String>,
+        ctx: &ExecutionContext,
+    ) -> Result<PromptMessage> {
+        let params = self.resolve_tool_parameters(step, args, ctx)?;
+
+        Ok(PromptMessage {
+            role: Role::Assistant,
+            content: MessageContent::Text {
+                text: format!(
+                    "Calling tool '{}' with parameters:\n{}",
+                    step.tool().name(),
+                    serde_json::to_string_pretty(&params)
+                        .unwrap_or_else(|_| format!("{:?}", params))
+                ),
+            },
+        })
+    }
+
+    /// Fetch a resource and extract its text content
+    ///
+    /// Returns the text content from the resource, or an error if fetching fails
+    /// or the resource doesn't contain text content.
+    async fn fetch_resource_content(
+        &self,
+        uri: &str,
+        extra: &RequestHandlerExtra,
+    ) -> Result<String> {
+        // Check if resource handler is available
+        let handler = self.resource_handler.as_ref().ok_or_else(|| {
+            crate::Error::validation(
+                "No resource handler configured - cannot fetch resources in workflows".to_string(),
+            )
+        })?;
+
+        // Fetch the resource
+        let result = handler.read(uri, extra.clone()).await?;
+
+        // Extract text content from the result
+        let mut text_content = String::new();
+        for content in result.contents {
+            match content {
+                Content::Text { text } => {
+                    if !text_content.is_empty() {
+                        text_content.push('\n');
+                    }
+                    text_content.push_str(&text);
+                },
+                Content::Resource { uri, text, .. } => {
+                    // Add newline before content
+                    if !text_content.is_empty() {
+                        text_content.push('\n');
+                    }
+                    // If resource has embedded text, use it; otherwise include the URI reference
+                    if let Some(text) = text {
+                        text_content.push_str(&text);
+                    } else {
+                        text_content.push_str(&format!("[Resource: {}]", uri));
+                    }
+                },
+                Content::Image { .. } => {
+                    // Skip image content - we only embed text
+                },
+            }
+        }
+
+        if text_content.is_empty() {
+            return Err(crate::Error::validation(format!(
+                "Resource {} contains no text content",
+                uri
+            )));
+        }
+
+        Ok(text_content)
+    }
+
+    /// Check if resolved parameters satisfy the tool's input schema
+    ///
+    /// Returns true if the params object contains all required fields defined in the tool's schema.
+    /// This prevents attempting to execute tools with incomplete parameters.
+    fn params_satisfy_tool_schema(&self, step: &WorkflowStep, params: &Value) -> Result<bool> {
+        // Get the tool info (includes schema)
+        let tool_info = self.tools.get(step.tool().name()).ok_or_else(|| {
+            crate::Error::Internal(format!(
+                "Tool '{}' not found in registry",
+                step.tool().name()
+            ))
+        })?;
+
+        // Check if params object has all required fields from schema
+        if let Some(schema_obj) = tool_info.input_schema.as_object() {
+            if let Some(required) = schema_obj.get("required").and_then(|r| r.as_array()) {
+                if let Some(params_obj) = params.as_object() {
+                    // Check each required field
+                    for req_field in required {
+                        if let Some(field_name) = req_field.as_str() {
+                            if !params_obj.contains_key(field_name) {
+                                // Missing required field - params don't satisfy schema
+                                return Ok(false);
+                            }
+                        }
+                    }
+                } else if !required.is_empty() {
+                    // Params is not an object, but schema requires fields
+                    return Ok(false);
+                }
+            }
+        }
+
+        // All required fields present (or no required fields/schema)
+        Ok(true)
+    }
+
+    /// Execute a workflow step by calling the actual tool handler
+    async fn execute_tool_step(
+        &self,
+        step: &WorkflowStep,
+        args: &HashMap<String, String>,
+        ctx: &ExecutionContext,
+        extra: &RequestHandlerExtra,
+    ) -> Result<Value> {
+        // Get the tool handler
+        let handler = self.tool_handlers.get(step.tool().name()).ok_or_else(|| {
+            crate::Error::Internal(format!("Tool handler '{}' not found", step.tool().name()))
+        })?;
+
+        // Resolve parameters using bindings and arguments
+        let params = self.resolve_tool_parameters(step, args, ctx)?;
+
+        // Execute the tool
+        handler.handle(params, extra.clone()).await
+    }
+
+    /// Resolve tool parameters from `DataSources` (prompt args, bindings, constants)
+    fn resolve_tool_parameters(
+        &self,
+        step: &WorkflowStep,
+        args: &HashMap<String, String>,
+        ctx: &ExecutionContext,
+    ) -> Result<Value> {
+        let mut params = serde_json::Map::new();
+
+        for (arg_name, data_source) in step.arguments() {
+            let value = match data_source {
+                DataSource::PromptArg(arg_name) => {
+                    // Get from prompt arguments
+                    if let Some(value) = args.get(arg_name.as_str()) {
+                        Value::String(value.clone())
+                    } else {
+                        // Check if this argument is optional in the workflow
+                        let is_required = self
+                            .workflow
+                            .arguments()
+                            .get(arg_name)
+                            .is_none_or(|spec| spec.required); // Default to required if not found
+
+                        if is_required {
+                            // Required argument missing - error
+                            return Err(crate::Error::validation(format!(
+                                "Missing required argument '{}' for step '{}'",
+                                arg_name,
+                                step.name()
+                            )));
+                        }
+                        // Optional argument missing - skip it (don't add to params)
+                        continue;
+                    }
+                },
+
+                DataSource::Constant(val) => val.clone(),
+
+                DataSource::StepOutput {
+                    step: binding_name,
+                    field: None,
+                } => {
+                    // Get entire output from previous step
+                    ctx.get_binding(binding_name).cloned().ok_or_else(|| {
+                        crate::Error::validation(format!(
+                            "Binding '{}' not found (step may not have executed yet)",
+                            binding_name
+                        ))
+                    })?
+                },
+
+                DataSource::StepOutput {
+                    step: binding_name,
+                    field: Some(field_name),
+                } => {
+                    // Extract specific field from previous step output
+                    let binding_value = ctx.get_binding(binding_name).ok_or_else(|| {
+                        crate::Error::validation(format!("Binding '{}' not found", binding_name))
+                    })?;
+
+                    binding_value
+                        .get(field_name.as_str())
+                        .cloned()
+                        .ok_or_else(|| {
+                            crate::Error::validation(format!(
+                                "Field '{}' not found in binding '{}'",
+                                field_name, binding_name
+                            ))
+                        })?
+                },
+            };
+
+            params.insert(arg_name.to_string(), value);
+        }
+
+        Ok(Value::Object(params))
     }
 }
 
@@ -97,22 +426,132 @@ impl WorkflowPromptHandler {
 impl PromptHandler for WorkflowPromptHandler {
     async fn handle(
         &self,
-        _args: HashMap<String, String>,
-        _extra: RequestHandlerExtra,
+        args: HashMap<String, String>,
+        extra: RequestHandlerExtra,
     ) -> Result<GetPromptResult> {
-        // Create expansion context for converting handles to protocol types
-        let ctx = ExpansionContext {
-            tools: &self.tools,
-            resources: &self.resources,
-        };
-
-        // Convert workflow instructions to protocol messages
         let mut messages = Vec::new();
-        for internal_msg in self.workflow.instructions() {
-            let protocol_msg = internal_msg.to_protocol(&ctx).map_err(|e| {
-                crate::Error::Internal(format!("Failed to convert workflow message: {}", e))
-            })?;
-            messages.push(protocol_msg);
+        let mut execution_context = ExecutionContext::new();
+
+        // 1️⃣ User Intent Message
+        messages.push(self.create_user_intent(&args));
+
+        // 2️⃣ Assistant Plan Message (list all workflow steps)
+        messages.push(self.create_assistant_plan()?);
+
+        // 3️⃣ Execute workflow steps sequentially
+        for step in self.workflow.steps() {
+            // Add guidance message (if present) - BEFORE attempting execution
+            // Guidance helps LLM understand the step's intent, especially for hybrid execution
+            if let Some(guidance_template) = step.guidance() {
+                let guidance_text = Self::substitute_arguments(guidance_template, &args);
+                messages.push(PromptMessage {
+                    role: Role::Assistant,
+                    content: MessageContent::Text {
+                        text: guidance_text,
+                    },
+                });
+            }
+
+            // Fetch and embed resources (if any) - BEFORE attempting tool execution
+            // Resources provide context (documentation, schemas, examples) for the LLM
+            for resource_handle in step.resources() {
+                let uri = resource_handle.uri();
+                match self.fetch_resource_content(uri, &extra).await {
+                    Ok(content) => {
+                        // Embed resource content as user message
+                        messages.push(PromptMessage {
+                            role: Role::User,
+                            content: MessageContent::Text {
+                                text: format!("Resource content from {}:\n{}", uri, content),
+                            },
+                        });
+                    },
+                    Err(e) => {
+                        // Resource fetch failed - add error message and stop
+                        messages.push(PromptMessage {
+                            role: Role::User,
+                            content: MessageContent::Text {
+                                text: format!("Error fetching resource {}: {}", uri, e),
+                            },
+                        });
+                        // Don't continue - resource might be critical for this step
+                        return Ok(GetPromptResult {
+                            description: Some(self.workflow.description().to_string()),
+                            messages,
+                        });
+                    },
+                }
+            }
+
+            // Try to resolve parameters and announce tool call
+            match self.create_tool_call_announcement(step, &args, &execution_context) {
+                Ok(announcement) => {
+                    // Parameters resolved - but do they satisfy the tool's schema?
+                    let Ok(params) = self.resolve_tool_parameters(step, &args, &execution_context)
+                    else {
+                        // Resolution failed (shouldn't happen if announcement succeeded)
+                        break;
+                    };
+
+                    // Check if resolved params satisfy tool's required fields
+                    let Ok(satisfies_schema) = self.params_satisfy_tool_schema(step, &params)
+                    else {
+                        // Schema check error (tool not found, etc.)
+                        break;
+                    };
+
+                    if !satisfies_schema {
+                        // Params resolved but incomplete (missing required fields)
+                        // This is a graceful handoff - client should provide missing params
+                        // Guidance message (if present) was already added above
+                        break;
+                    }
+
+                    // Params complete - execute tool server-side
+                    messages.push(announcement);
+
+                    match self
+                        .execute_tool_step(step, &args, &execution_context, &extra)
+                        .await
+                    {
+                        Ok(result) => {
+                            // User message with successful result
+                            messages.push(PromptMessage {
+                                role: Role::User,
+                                content: MessageContent::Text {
+                                    text: format!(
+                                        "Tool result:\n{}",
+                                        serde_json::to_string_pretty(&result)
+                                            .unwrap_or_else(|_| format!("{:?}", result))
+                                    ),
+                                },
+                            });
+
+                            // Store binding for next steps
+                            if let Some(binding) = step.binding() {
+                                execution_context.store_binding(binding.clone(), result);
+                            }
+                        },
+                        Err(e) => {
+                            // Execution error - STOP with error
+                            messages.push(PromptMessage {
+                                role: Role::User,
+                                content: MessageContent::Text {
+                                    text: format!("Error executing tool: {}", e),
+                                },
+                            });
+                            break; // Let LLM handle recovery
+                        },
+                    }
+                },
+                Err(_) => {
+                    // Cannot resolve parameters deterministically
+                    // This is NOT an error - it's a handoff to client LLM for hybrid execution
+                    // The guidance message (if present) was already added above
+                    // Client can continue using the context provided
+                    break; // Graceful handoff - return partial trace
+                },
+            }
         }
 
         Ok(GetPromptResult {
@@ -151,8 +590,12 @@ impl PromptHandler for WorkflowPromptHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::workflow::{InternalPromptMessage, SequentialWorkflow};
-    use crate::types::Role;
+    use crate::server::workflow::dsl::{from_step, prompt_arg};
+    use crate::server::workflow::{
+        InternalPromptMessage, SequentialWorkflow, ToolHandle, WorkflowStep,
+    };
+    use crate::SimpleTool;
+    use serde_json::json;
 
     #[tokio::test]
     async fn test_workflow_prompt_handler_basic() {
@@ -160,15 +603,51 @@ mod tests {
             InternalPromptMessage::new(Role::System, "Process the request"),
         );
 
-        let handler = WorkflowPromptHandler::new(workflow, HashMap::new(), HashMap::new());
+        let handler = WorkflowPromptHandler::new(workflow, HashMap::new(), HashMap::new(), None);
 
         // Test metadata
         let metadata = handler.metadata().expect("Should have metadata");
         assert_eq!(metadata.name, "test_workflow");
         assert_eq!(metadata.description, Some("A test workflow".to_string()));
         assert!(metadata.arguments.is_none());
+    }
 
-        // Test handle
+    #[tokio::test]
+    async fn test_workflow_execution_with_tools() {
+        let workflow = SequentialWorkflow::new("add_project_task", "add a task to a project")
+            .argument("project", "Project name", true)
+            .argument("task", "Task description", true)
+            .step(WorkflowStep::new("list_pages", ToolHandle::new("list_pages")).bind("pages"));
+
+        // Create simple tool for testing
+        let list_pages_tool = SimpleTool::new("list_pages", |_args, _extra| {
+            Box::pin(async move { Ok(serde_json::json!({"pages": ["Website", "Mobile"]})) })
+        })
+        .with_description("List all pages")
+        .with_schema(serde_json::json!({"type": "object"}));
+
+        // Get tool metadata
+        let mut tools = HashMap::new();
+        let tool_metadata = list_pages_tool.metadata().unwrap();
+        tools.insert(
+            Arc::from("list_pages"),
+            ToolInfo {
+                name: tool_metadata.name.clone(),
+                description: tool_metadata.description.unwrap_or_default(),
+                input_schema: tool_metadata.input_schema,
+            },
+        );
+
+        // Create tool handlers map
+        let mut tool_handlers: HashMap<Arc<str>, Arc<dyn ToolHandler>> = HashMap::new();
+        tool_handlers.insert(Arc::from("list_pages"), Arc::new(list_pages_tool));
+
+        let handler = WorkflowPromptHandler::new(workflow, tools, tool_handlers, None);
+
+        let mut args = HashMap::new();
+        args.insert("project".to_string(), "Website".to_string());
+        args.insert("task".to_string(), "Fix bug".to_string());
+
         let extra = RequestHandlerExtra {
             cancellation_token: Default::default(),
             request_id: "test-1".to_string(),
@@ -176,202 +655,1283 @@ mod tests {
             auth_info: None,
             auth_context: None,
         };
+
         let result = handler
-            .handle(HashMap::new(), extra)
+            .handle(args, extra)
             .await
             .expect("Should execute successfully");
 
-        assert_eq!(result.messages.len(), 1);
-        assert_eq!(result.messages[0].role, Role::System);
+        // Should have: user intent, assistant plan, assistant call, user result
+        assert_eq!(result.messages.len(), 4, "Should have 4 messages");
+
+        // First message: user intent
+        assert_eq!(result.messages[0].role, Role::User);
+        if let MessageContent::Text { text } = &result.messages[0].content {
+            assert!(text.contains("add a task to a project"));
+            assert!(text.contains("Website"));
+            assert!(text.contains("Fix bug"));
+        }
+
+        // Second message: assistant plan
+        assert_eq!(result.messages[1].role, Role::Assistant);
+        if let MessageContent::Text { text } = &result.messages[1].content {
+            assert!(text.contains("Here's my plan"));
+            assert!(text.contains("list_pages"));
+        }
+
+        // Third message: assistant tool call announcement
+        assert_eq!(result.messages[2].role, Role::Assistant);
+        if let MessageContent::Text { text } = &result.messages[2].content {
+            assert!(text.contains("Calling tool 'list_pages'"));
+        }
+
+        // Fourth message: user tool result
+        assert_eq!(result.messages[3].role, Role::User);
+        if let MessageContent::Text { text } = &result.messages[3].content {
+            assert!(text.contains("Tool result"));
+            assert!(text.contains("Website"));
+            assert!(text.contains("Mobile"));
+        }
     }
 
     #[tokio::test]
-    async fn test_workflow_prompt_handler_with_arguments() {
-        let workflow = SequentialWorkflow::new("test_workflow", "A test workflow")
-            .argument("topic", "The topic to process", true)
-            .argument("style", "Writing style", false)
-            .instruction(InternalPromptMessage::new(
-                Role::System,
-                "Process the request",
-            ));
+    async fn test_complete_workflow_execution_with_bindings() {
+        use crate::server::workflow::dsl::*;
 
-        let handler = WorkflowPromptHandler::new(workflow, HashMap::new(), HashMap::new());
-
-        // Test metadata includes arguments
-        let metadata = handler.metadata().expect("Should have metadata");
-        let args = metadata.arguments.expect("Should have arguments");
-        assert_eq!(args.len(), 2);
-        assert_eq!(args[0].name, "topic");
-        assert!(args[0].required);
-        assert_eq!(
-            args[0].description,
-            Some("The topic to process".to_string())
-        );
-        assert_eq!(args[1].name, "style");
-        assert!(!args[1].required);
-        assert_eq!(args[1].description, Some("Writing style".to_string()));
-    }
-
-    #[test]
-    fn test_workflow_metadata_serialization() {
-        use serde_json;
-
+        // Define a workflow that adds a task to a project with validation
         let workflow = SequentialWorkflow::new(
             "add_project_task",
-            "Add a task to a Logseq project with proper task formatting and scheduling",
+            "add a task to a project with validation",
         )
-        .argument(
-            "project",
-            "The project name (Logseq page) to add the task to",
-            true,
+        .argument("project", "Project name", true)
+        .argument("task", "Task description", true)
+        // Step 1: List all available pages (read-only operation)
+        .step(WorkflowStep::new("list_pages", ToolHandle::new("list_pages")).bind("pages"))
+        // Step 2: Verify project exists (uses output from step 1)
+        .step(
+            WorkflowStep::new("verify_project", ToolHandle::new("verify_project"))
+                .arg("project", prompt_arg("project"))
+                .arg("available_pages", from_step("pages")) // Use binding from step 1
+                .bind("project_info"), // Bind output as "project_info"
         )
-        .argument("task", "The task description", true);
-
-        let handler = WorkflowPromptHandler::new(workflow, HashMap::new(), HashMap::new());
-
-        // Get metadata
-        let metadata = handler.metadata().expect("Should have metadata");
-
-        // Verify all fields are populated
-        assert_eq!(metadata.name, "add_project_task");
-        assert_eq!(
-            metadata.description,
-            Some(
-                "Add a task to a Logseq project with proper task formatting and scheduling"
-                    .to_string()
-            )
+        // Step 3: Add task (uses outputs from previous steps)
+        .step(
+            WorkflowStep::new("add_task", ToolHandle::new("add_journal_task"))
+                .arg("project", prompt_arg("project"))
+                .arg("task", prompt_arg("task"))
+                .arg("project_path", field("project_info", "path")), // Extract field from step 2
         );
 
-        // Verify JSON serialization works correctly
-        let json = serde_json::to_value(&metadata).expect("Should serialize to JSON");
+        // Create mock tools
+        let list_pages_tool = SimpleTool::new("list_pages", |_args, _extra| {
+            Box::pin(async move {
+                Ok(serde_json::json!({
+                    "pages": ["Website", "Mobile", "Backend"]
+                }))
+            })
+        })
+        .with_description("List all available pages")
+        .with_schema(serde_json::json!({"type": "object"}));
 
-        // Check JSON structure matches MCP protocol expectations
-        assert_eq!(json["name"], "add_project_task");
-        assert_eq!(
-            json["description"],
-            "Add a task to a Logseq project with proper task formatting and scheduling"
-        );
+        let verify_project_tool = SimpleTool::new("verify_project", |args, _extra| {
+            Box::pin(async move {
+                let project = args.get("project").and_then(|v| v.as_str()).unwrap_or("");
+                let empty_vec = vec![];
+                let pages = args
+                    .get("available_pages")
+                    .and_then(|v| v.get("pages"))
+                    .and_then(|v| v.as_array())
+                    .unwrap_or(&empty_vec);
 
-        let json_args = json["arguments"]
-            .as_array()
-            .expect("arguments should be array");
-        assert_eq!(json_args.len(), 2);
+                let exists = pages.iter().any(|p| p.as_str() == Some(project));
 
-        // Verify first argument
-        assert_eq!(json_args[0]["name"], "project");
-        assert_eq!(
-            json_args[0]["description"],
-            "The project name (Logseq page) to add the task to"
-        );
-        assert!(json_args[0]["required"].as_bool().unwrap());
-
-        // Verify second argument
-        assert_eq!(json_args[1]["name"], "task");
-        assert_eq!(json_args[1]["description"], "The task description");
-        assert!(json_args[1]["required"].as_bool().unwrap());
-
-        // Also verify directly on the metadata struct
-        let args = metadata.arguments.as_ref().expect("Should have arguments");
-        assert_eq!(args.len(), 2);
-        assert_eq!(args[0].name, "project");
-        assert_eq!(
-            args[0].description,
-            Some("The project name (Logseq page) to add the task to".to_string())
-        );
-        assert!(args[0].required);
-        assert_eq!(args[1].name, "task");
-        assert_eq!(
-            args[1].description,
-            Some("The task description".to_string())
-        );
-        assert!(args[1].required);
-    }
-
-    #[tokio::test]
-    async fn test_workflow_prompt_integration_with_server() {
-        use crate::Server;
-
-        // Create workflow
-        let workflow = SequentialWorkflow::new(
-            "add_project_task",
-            "Add a task to a Logseq project with proper task formatting and scheduling",
-        )
-        .argument(
-            "project",
-            "The project name (Logseq page) to add the task to",
-            true,
-        )
-        .argument("task", "The task description", true)
-        .instruction(InternalPromptMessage::new(
-            crate::types::Role::System,
-            "Add the task to the project",
-        ));
-
-        // Build server with workflow prompt
-        let server = Server::builder()
-            .name("test-server")
-            .version("1.0.0")
-            .prompt_workflow(workflow)
-            .expect("Should register workflow")
-            .build()
-            .expect("Should build server");
-
-        // Get the server's core to access prompts
-        // Note: We need to use the internal API for testing
-        // In a real scenario, this would go through the protocol handler
-
-        // Simulate ListPromptsRequest
-        let prompts_data = server.prompts;
-        let prompts: Vec<_> = prompts_data
-            .iter()
-            .map(|(name, handler)| {
-                if let Some(mut info) = handler.metadata() {
-                    info.name.clone_from(name);
-                    info
+                if exists {
+                    Ok(serde_json::json!({
+                        "exists": true,
+                        "path": format!("/projects/{}", project)
+                    }))
                 } else {
-                    crate::types::PromptInfo {
-                        name: name.clone(),
-                        description: None,
-                        arguments: None,
-                    }
+                    Err(crate::Error::validation(format!(
+                        "Project '{}' not found",
+                        project
+                    )))
                 }
             })
-            .collect();
+        })
+        .with_description("Verify project exists")
+        .with_schema(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "project": {"type": "string"},
+                "available_pages": {"type": "object"}
+            },
+            "required": ["project", "available_pages"]
+        }));
 
-        // Verify we have one prompt
-        assert_eq!(prompts.len(), 1);
+        let add_task_tool = SimpleTool::new("add_journal_task", |args, _extra| {
+            Box::pin(async move {
+                let project = args.get("project").and_then(|v| v.as_str()).unwrap_or("");
+                let task = args.get("task").and_then(|v| v.as_str()).unwrap_or("");
+                let path = args
+                    .get("project_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
 
-        // Verify the prompt has all metadata
-        let prompt_info = &prompts[0];
-        assert_eq!(prompt_info.name, "add_project_task");
-        assert!(
-            prompt_info.description.is_some(),
-            "Description should be present"
+                Ok(serde_json::json!({
+                    "success": true,
+                    "task_id": "task-123",
+                    "project": project,
+                    "task": task,
+                    "location": format!("{}/tasks", path)
+                }))
+            })
+        })
+        .with_description("Add a task to a journal")
+        .with_schema(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "project": {"type": "string"},
+                "task": {"type": "string"},
+                "project_path": {"type": "string"}
+            },
+            "required": ["project", "task", "project_path"]
+        }));
+
+        // Build tool registries
+        let mut tools = HashMap::new();
+        let mut tool_handlers: HashMap<Arc<str>, Arc<dyn ToolHandler>> = HashMap::new();
+
+        for (name, tool) in [
+            (
+                "list_pages",
+                Arc::new(list_pages_tool) as Arc<dyn ToolHandler>,
+            ),
+            ("verify_project", Arc::new(verify_project_tool)),
+            ("add_journal_task", Arc::new(add_task_tool)),
+        ] {
+            if let Some(metadata) = tool.metadata() {
+                tools.insert(
+                    Arc::from(name),
+                    ToolInfo {
+                        name: metadata.name.clone(),
+                        description: metadata.description.unwrap_or_default(),
+                        input_schema: metadata.input_schema,
+                    },
+                );
+            }
+            tool_handlers.insert(Arc::from(name), tool);
+        }
+
+        let handler = WorkflowPromptHandler::new(workflow, tools, tool_handlers, None);
+
+        let mut args = HashMap::new();
+        args.insert("project".to_string(), "Website".to_string());
+        args.insert("task".to_string(), "Fix login bug".to_string());
+
+        let extra = RequestHandlerExtra {
+            cancellation_token: Default::default(),
+            request_id: "test-integration".to_string(),
+            session_id: None,
+            auth_info: None,
+            auth_context: None,
+        };
+
+        let result = handler
+            .handle(args, extra)
+            .await
+            .expect("Workflow should execute successfully");
+
+        // Should have 8 messages total:
+        // 1. User intent
+        // 2. Assistant plan
+        // 3. Assistant call (list_pages)
+        // 4. User result (list_pages)
+        // 5. Assistant call (verify_project)
+        // 6. User result (verify_project)
+        // 7. Assistant call (add_task)
+        // 8. User result (add_task)
+        assert_eq!(result.messages.len(), 8, "Should have 8 messages in trace");
+
+        // Verify message 1: User intent
+        assert_eq!(result.messages[0].role, Role::User);
+        if let MessageContent::Text { text } = &result.messages[0].content {
+            assert!(text.contains("add a task to a project"));
+            assert!(text.contains("Website"));
+            assert!(text.contains("Fix login bug"));
+        }
+
+        // Verify message 2: Assistant plan
+        assert_eq!(result.messages[1].role, Role::Assistant);
+        if let MessageContent::Text { text } = &result.messages[1].content {
+            assert!(text.contains("Here's my plan"));
+            assert!(text.contains("list_pages"));
+            assert!(text.contains("verify_project"));
+            assert!(text.contains("add_journal_task"));
+        }
+
+        // Verify message 8: Final result contains data from all steps
+        assert_eq!(result.messages[7].role, Role::User);
+        if let MessageContent::Text { text } = &result.messages[7].content {
+            assert!(text.contains("Tool result"));
+            assert!(text.contains("success"));
+            assert!(text.contains("task-123"));
+            assert!(text.contains("/projects/Website/tasks"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_optional_arguments_handling() {
+        // Test that optional arguments work correctly when not provided
+        let workflow = SequentialWorkflow::new("add_task", "add a task with optional priority")
+            .argument("task", "Task name", true) // required
+            .argument("priority", "Priority level", false) // optional
+            .step(
+                WorkflowStep::new("add", ToolHandle::new("add_task"))
+                    .arg("task", prompt_arg("task"))
+                    .arg("priority", prompt_arg("priority")) // Optional, may not be provided
+                    .bind("result"),
+            );
+
+        let add_task_tool = SimpleTool::new("add_task", |args, _extra| {
+            Box::pin(async move {
+                let task = args.get("task").and_then(|v| v.as_str()).unwrap_or("");
+                let priority = args.get("priority").and_then(|v| v.as_str());
+
+                Ok(json!({
+                    "success": true,
+                    "task": task,
+                    "priority": priority, // Will be null if not provided
+                }))
+            })
+        })
+        .with_description("Add a task")
+        .with_schema(json!({
+            "type": "object",
+            "properties": {
+                "task": {"type": "string"},
+                "priority": {"type": "string"}
+            },
+            "required": ["task"]
+        }));
+
+        let mut tools = HashMap::new();
+        tools.insert(
+            Arc::from("add_task"),
+            ToolInfo {
+                name: "add_task".to_string(),
+                description: "Add a task".to_string(),
+                input_schema: json!({"type": "object"}),
+            },
         );
+
+        let mut tool_handlers: HashMap<Arc<str>, Arc<dyn ToolHandler>> = HashMap::new();
+        tool_handlers.insert(Arc::from("add_task"), Arc::new(add_task_tool));
+
+        let handler = WorkflowPromptHandler::new(workflow, tools, tool_handlers, None);
+
+        // Test 1: Provide only required argument (task), omit optional (priority)
+        let mut args = HashMap::new();
+        args.insert("task".to_string(), "Fix bug".to_string());
+        // Note: priority is NOT provided
+
+        let extra = crate::server::cancellation::RequestHandlerExtra {
+            cancellation_token: Default::default(),
+            request_id: "test".to_string(),
+            session_id: None,
+            auth_info: None,
+            auth_context: None,
+        };
+
+        let result = handler
+            .handle(args.clone(), extra.clone())
+            .await
+            .expect("Should execute successfully with optional arg missing");
+
+        // Should have 4 messages: user intent, assistant plan, tool call, tool result
+        assert_eq!(result.messages.len(), 4);
+
+        // Verify message 3: Tool call should NOT include priority parameter
+        assert_eq!(result.messages[2].role, Role::Assistant);
+        if let MessageContent::Text { text } = &result.messages[2].content {
+            assert!(text.contains("add_task"));
+            assert!(text.contains("Fix bug"));
+            // Priority should NOT be in parameters since it wasn't provided
+            assert!(!text.contains("priority"));
+        }
+
+        // Verify message 4: Result should show priority as null
+        assert_eq!(result.messages[3].role, Role::User);
+        if let MessageContent::Text { text } = &result.messages[3].content {
+            assert!(text.contains("Tool result"));
+            assert!(text.contains("success"));
+        }
+
+        // Test 2: Provide both required and optional arguments
+        let mut args_with_priority = HashMap::new();
+        args_with_priority.insert("task".to_string(), "Write docs".to_string());
+        args_with_priority.insert("priority".to_string(), "high".to_string());
+
+        let result2 = handler
+            .handle(args_with_priority, extra)
+            .await
+            .expect("Should execute successfully with optional arg provided");
+
+        // Verify message 3: Tool call SHOULD include priority parameter
+        if let MessageContent::Text { text } = &result2.messages[2].content {
+            assert!(text.contains("add_task"));
+            assert!(text.contains("Write docs"));
+            assert!(text.contains("priority"));
+            assert!(text.contains("high"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_error_messages_appear_as_user_role() {
+        // Test that tool execution errors appear as user messages, not assistant messages
+        let workflow = SequentialWorkflow::new("test", "test workflow")
+            .argument("input", "Input value", true)
+            .step(
+                WorkflowStep::new("step1", ToolHandle::new("process"))
+                    .arg("value", prompt_arg("input"))
+                    .bind("result"),
+            );
+
+        // Tool that always fails
+        let process_tool = SimpleTool::new("process", |_args, _extra| {
+            Box::pin(async move {
+                Err(crate::Error::validation(
+                    "Tool execution failed: invalid input",
+                ))
+            })
+        })
+        .with_description("Process data")
+        .with_schema(json!({"type": "object"}));
+
+        let mut tools = HashMap::new();
+        tools.insert(
+            Arc::from("process"),
+            ToolInfo {
+                name: "process".to_string(),
+                description: "Process data".to_string(),
+                input_schema: json!({"type": "object"}),
+            },
+        );
+
+        let mut tool_handlers: HashMap<Arc<str>, Arc<dyn ToolHandler>> = HashMap::new();
+        tool_handlers.insert(Arc::from("process"), Arc::new(process_tool));
+
+        let handler = WorkflowPromptHandler::new(workflow, tools, tool_handlers, None);
+
+        let mut args = HashMap::new();
+        args.insert("input".to_string(), "test".to_string());
+
+        let extra = crate::server::cancellation::RequestHandlerExtra {
+            cancellation_token: Default::default(),
+            request_id: "test".to_string(),
+            session_id: None,
+            auth_info: None,
+            auth_context: None,
+        };
+
+        let result = handler
+            .handle(args, extra)
+            .await
+            .expect("Should return partial trace even with tool error");
+
+        // Should have 4 messages: user intent, assistant plan, tool call announcement, error message
+        assert_eq!(result.messages.len(), 4);
+
+        // Verify message 1: User intent
+        assert_eq!(result.messages[0].role, Role::User);
+
+        // Verify message 2: Assistant plan
+        assert_eq!(result.messages[1].role, Role::Assistant);
+
+        // Verify message 3: Tool call announcement
+        assert_eq!(result.messages[2].role, Role::Assistant);
+
+        // Verify message 4: Error should be a USER message (not assistant)
         assert_eq!(
-            prompt_info.description.as_ref().unwrap(),
-            "Add a task to a Logseq project with proper task formatting and scheduling"
+            result.messages[3].role,
+            Role::User,
+            "Tool execution error should appear as user message"
+        );
+        if let MessageContent::Text { text } = &result.messages[3].content {
+            assert!(
+                text.contains("Error executing tool"),
+                "Error message should indicate tool execution error"
+            );
+            assert!(
+                text.contains("invalid input"),
+                "Error message should contain the tool error details"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_hybrid_execution_with_guidance() {
+        // Test hybrid execution where server executes deterministic steps
+        // and provides guidance for steps requiring LLM reasoning
+        let workflow = SequentialWorkflow::new(
+            "add_project_task",
+            "add a task to a Logseq project with intelligent matching",
+        )
+        .argument("project", "Project name (can be fuzzy)", true)
+        .argument("task", "Task description", true)
+        // Step 1: Server executes (deterministic)
+        .step(
+            WorkflowStep::new("list_pages", ToolHandle::new("list_pages"))
+                .with_guidance("I'll first get all available page names from Logseq")
+                .bind("pages"),
+        )
+        // Step 2: Client continues (needs LLM reasoning for fuzzy matching)
+        .step(
+            WorkflowStep::new("add_task", ToolHandle::new("add_journal_task"))
+                .with_guidance(
+                    "I'll now:\n\
+                     1. Find the page name from the list above that best matches '{project}'\n\
+                     2. Format the task as: [[matched-page-name]] {task}\n\
+                     3. Call add_journal_task with the formatted task",
+                )
+                // No .arg() mappings - server will detect params don't satisfy schema
+                // and gracefully hand off to client LLM
+                .bind("result"),
         );
 
-        // Verify arguments
-        assert!(
-            prompt_info.arguments.is_some(),
-            "Arguments should be present"
-        );
-        let args = prompt_info.arguments.as_ref().unwrap();
-        assert_eq!(args.len(), 2, "Should have 2 arguments");
-        assert_eq!(args[0].name, "project");
-        assert!(args[0].required);
-        assert_eq!(args[1].name, "task");
-        assert!(args[1].required);
+        let list_pages_tool = SimpleTool::new("list_pages", |_args, _extra| {
+            Box::pin(async move {
+                Ok(json!({
+                    "page_names": ["mcp-tester", "MCP Rust SDK", "Test Page"]
+                }))
+            })
+        })
+        .with_description("List all pages")
+        .with_schema(json!({"type": "object"}));
 
-        // Verify JSON serialization
-        let json = serde_json::to_value(prompt_info).expect("Should serialize");
-        assert_eq!(json["name"], "add_project_task");
+        let add_task_tool = SimpleTool::new("add_journal_task", |_args, _extra| {
+            Box::pin(async move { Ok(json!({"success": true})) })
+        })
+        .with_description("Add a task")
+        .with_schema(json!({
+            "type": "object",
+            "properties": {
+                "formatted_task": {"type": "string"}
+            },
+            "required": ["formatted_task"]  // ← Required field triggers handoff
+        }));
+
+        let mut tools = HashMap::new();
+        tools.insert(
+            Arc::from("list_pages"),
+            ToolInfo {
+                name: "list_pages".to_string(),
+                description: "List all pages".to_string(),
+                input_schema: json!({"type": "object"}),
+            },
+        );
+        tools.insert(
+            Arc::from("add_journal_task"),
+            ToolInfo {
+                name: "add_journal_task".to_string(),
+                description: "Add a task".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "formatted_task": {"type": "string"}
+                    },
+                    "required": ["formatted_task"]
+                }),
+            },
+        );
+
+        let mut tool_handlers: HashMap<Arc<str>, Arc<dyn ToolHandler>> = HashMap::new();
+        tool_handlers.insert(Arc::from("list_pages"), Arc::new(list_pages_tool));
+        tool_handlers.insert(Arc::from("add_journal_task"), Arc::new(add_task_tool));
+
+        let handler = WorkflowPromptHandler::new(workflow, tools, tool_handlers, None);
+
+        let mut args = HashMap::new();
+        args.insert("project".to_string(), "MCP Tester".to_string());
+        args.insert("task".to_string(), "Fix workflow bug".to_string());
+
+        let extra = crate::server::cancellation::RequestHandlerExtra {
+            cancellation_token: Default::default(),
+            request_id: "test".to_string(),
+            session_id: None,
+            auth_info: None,
+            auth_context: None,
+        };
+
+        let result = handler
+            .handle(args, extra)
+            .await
+            .expect("Should execute with hybrid execution");
+
+        // Expected message structure:
+        // 1. User intent
+        // 2. Assistant plan
+        // 3. Guidance for step 1 (list_pages)
+        // 4. Assistant tool call (list_pages)
+        // 5. User tool result (list_pages)
+        // 6. Guidance for step 2 (add_task) - with argument substitution
+        // Then handoff to client (no more messages - can't execute step 2)
+
         assert_eq!(
-            json["description"],
-            "Add a task to a Logseq project with proper task formatting and scheduling"
+            result.messages.len(),
+            6,
+            "Should have 6 messages before handoff"
         );
-        assert!(json["arguments"].is_array());
+
+        // Verify message 1: User intent
+        assert_eq!(result.messages[0].role, Role::User);
+        if let MessageContent::Text { text } = &result.messages[0].content {
+            assert!(text.contains("add a task to a Logseq project"));
+            assert!(text.contains("MCP Tester"));
+            assert!(text.contains("Fix workflow bug"));
+        }
+
+        // Verify message 2: Assistant plan
+        assert_eq!(result.messages[1].role, Role::Assistant);
+        if let MessageContent::Text { text } = &result.messages[1].content {
+            assert!(text.contains("Here's my plan"));
+        }
+
+        // Verify message 3: Guidance for step 1
+        assert_eq!(result.messages[2].role, Role::Assistant);
+        if let MessageContent::Text { text } = &result.messages[2].content {
+            assert_eq!(
+                text, "I'll first get all available page names from Logseq",
+                "Guidance should be rendered as-is"
+            );
+        }
+
+        // Verify message 4: Tool call announcement
+        assert_eq!(result.messages[3].role, Role::Assistant);
+        if let MessageContent::Text { text } = &result.messages[3].content {
+            assert!(text.contains("list_pages"));
+        }
+
+        // Verify message 5: Tool result
+        assert_eq!(result.messages[4].role, Role::User);
+        if let MessageContent::Text { text } = &result.messages[4].content {
+            assert!(text.contains("Tool result"));
+            assert!(text.contains("mcp-tester"));
+            assert!(text.contains("MCP Rust SDK"));
+        }
+
+        // Verify message 6: Guidance for step 2 (with argument substitution)
+        assert_eq!(result.messages[5].role, Role::Assistant);
+        if let MessageContent::Text { text } = &result.messages[5].content {
+            assert!(
+                text.contains(
+                    "Find the page name from the list above that best matches 'MCP Tester'"
+                ),
+                "Guidance should have {{project}} replaced with 'MCP Tester'"
+            );
+            assert!(
+                text.contains("[[matched-page-name]] Fix workflow bug"),
+                "Guidance should have {{task}} replaced with 'Fix workflow bug'"
+            );
+            assert!(text.contains("Call add_journal_task"));
+        }
+
+        // No message 7 - execution stopped (handoff to client for fuzzy matching)
+        // Client LLM can now:
+        // 1. See the page list from step 1
+        // 2. Read the guidance on how to proceed
+        // 3. Match "MCP Tester" to "mcp-tester"
+        // 4. Call add_journal_task with formatted task
+    }
+
+    #[tokio::test]
+    async fn test_argument_substitution_in_guidance() {
+        // Test that {arg_name} patterns are substituted correctly in guidance
+        let workflow = SequentialWorkflow::new("test", "test workflow")
+            .argument("name", "User name", true)
+            .argument("action", "Action to perform", true)
+            .step(
+                WorkflowStep::new("step1", ToolHandle::new("process"))
+                    .with_guidance("Processing '{action}' for user '{name}'")
+                    // Reference non-existent binding to force handoff
+                    .arg("data", from_step("nonexistent"))
+                    .bind("result"),
+            );
+
+        let process_tool = SimpleTool::new("process", |_args, _extra| {
+            Box::pin(async move { Ok(json!({"ok": true})) })
+        })
+        .with_description("Process")
+        .with_schema(json!({"type": "object"}));
+
+        let mut tools = HashMap::new();
+        tools.insert(
+            Arc::from("process"),
+            ToolInfo {
+                name: "process".to_string(),
+                description: "Process".to_string(),
+                input_schema: json!({"type": "object"}),
+            },
+        );
+
+        let mut tool_handlers: HashMap<Arc<str>, Arc<dyn ToolHandler>> = HashMap::new();
+        tool_handlers.insert(Arc::from("process"), Arc::new(process_tool));
+
+        let handler = WorkflowPromptHandler::new(workflow, tools, tool_handlers, None);
+
+        let mut args = HashMap::new();
+        args.insert("name".to_string(), "Alice".to_string());
+        args.insert("action".to_string(), "login".to_string());
+
+        let extra = crate::server::cancellation::RequestHandlerExtra {
+            cancellation_token: Default::default(),
+            request_id: "test".to_string(),
+            session_id: None,
+            auth_info: None,
+            auth_context: None,
+        };
+
+        let result = handler
+            .handle(args, extra)
+            .await
+            .expect("Should execute with guidance");
+
+        // Should have: user intent, plan, guidance (then handoff)
+        assert_eq!(result.messages.len(), 3);
+
+        // Verify guidance has substituted arguments
+        assert_eq!(result.messages[2].role, Role::Assistant);
+        if let MessageContent::Text { text } = &result.messages[2].content {
+            assert_eq!(
+                text, "Processing 'login' for user 'Alice'",
+                "All argument placeholders should be substituted"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_full_execution_with_guidance() {
+        // Test that guidance messages appear even when server can execute fully
+        let workflow = SequentialWorkflow::new("greet", "greet a user")
+            .argument("name", "User name", true)
+            .step(
+                WorkflowStep::new("greet", ToolHandle::new("greet_user"))
+                    .with_guidance("I'll greet the user '{name}'")
+                    .arg("name", prompt_arg("name"))
+                    .bind("greeting"),
+            );
+
+        let greet_tool = SimpleTool::new("greet_user", |args, _extra| {
+            Box::pin(async move {
+                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("Guest");
+                Ok(json!({"message": format!("Hello, {}!", name)}))
+            })
+        })
+        .with_description("Greet user")
+        .with_schema(json!({"type": "object"}));
+
+        let mut tools = HashMap::new();
+        tools.insert(
+            Arc::from("greet_user"),
+            ToolInfo {
+                name: "greet_user".to_string(),
+                description: "Greet user".to_string(),
+                input_schema: json!({"type": "object"}),
+            },
+        );
+
+        let mut tool_handlers: HashMap<Arc<str>, Arc<dyn ToolHandler>> = HashMap::new();
+        tool_handlers.insert(Arc::from("greet_user"), Arc::new(greet_tool));
+
+        let handler = WorkflowPromptHandler::new(workflow, tools, tool_handlers, None);
+
+        let mut args = HashMap::new();
+        args.insert("name".to_string(), "Bob".to_string());
+
+        let extra = crate::server::cancellation::RequestHandlerExtra {
+            cancellation_token: Default::default(),
+            request_id: "test".to_string(),
+            session_id: None,
+            auth_info: None,
+            auth_context: None,
+        };
+
+        let result = handler
+            .handle(args, extra)
+            .await
+            .expect("Should execute fully");
+
+        // Should have: user intent, plan, guidance, tool call, tool result
+        assert_eq!(result.messages.len(), 5);
+
+        // Verify message 3 is guidance
+        assert_eq!(result.messages[2].role, Role::Assistant);
+        if let MessageContent::Text { text } = &result.messages[2].content {
+            assert_eq!(text, "I'll greet the user 'Bob'");
+        }
+
+        // Verify execution completed
+        assert_eq!(result.messages[4].role, Role::User);
+        if let MessageContent::Text { text } = &result.messages[4].content {
+            assert!(text.contains("Hello, Bob!"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_automatic_handoff_for_incomplete_params() {
+        // Test that steps with guidance but insufficient args trigger graceful handoff
+        // (not validation errors) when params don't satisfy tool schema
+        let workflow = SequentialWorkflow::new("workflow", "test workflow")
+            .argument("input", "Input value", true)
+            .step(
+                WorkflowStep::new("process", ToolHandle::new("process_data"))
+                    .with_guidance("Process the data using '{input}'"), // No .arg() mappings, but tool requires 'data' parameter
+            );
+
+        let process_tool = SimpleTool::new("process_data", |_args, _extra| {
+            Box::pin(async move { Ok(json!({"result": "ok"})) })
+        })
+        .with_description("Process data")
+        .with_schema(json!({
+            "type": "object",
+            "properties": {
+                "data": {"type": "string"}
+            },
+            "required": ["data"]  // ← Required field not provided by workflow
+        }));
+
+        let mut tools = HashMap::new();
+        tools.insert(
+            Arc::from("process_data"),
+            ToolInfo {
+                name: "process_data".to_string(),
+                description: "Process data".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "data": {"type": "string"}
+                    },
+                    "required": ["data"]
+                }),
+            },
+        );
+
+        let mut tool_handlers: HashMap<Arc<str>, Arc<dyn ToolHandler>> = HashMap::new();
+        tool_handlers.insert(Arc::from("process_data"), Arc::new(process_tool));
+
+        let handler = WorkflowPromptHandler::new(workflow, tools, tool_handlers, None);
+
+        let mut args = HashMap::new();
+        args.insert("input".to_string(), "test".to_string());
+
+        let extra = crate::server::cancellation::RequestHandlerExtra {
+            cancellation_token: Default::default(),
+            request_id: "test".to_string(),
+            session_id: None,
+            auth_info: None,
+            auth_context: None,
+        };
+
+        let result = handler
+            .handle(args, extra)
+            .await
+            .expect("Should handoff gracefully without error");
+
+        // Should have: user intent, plan, guidance
+        // Should NOT have: tool call announcement or error message
+        assert_eq!(
+            result.messages.len(),
+            3,
+            "Should have 3 messages (intent, plan, guidance) before handoff"
+        );
+
+        // Message 1: User intent
+        assert_eq!(result.messages[0].role, Role::User);
+
+        // Message 2: Assistant plan
+        assert_eq!(result.messages[1].role, Role::Assistant);
+
+        // Message 3: Guidance (NOT an error)
+        assert_eq!(result.messages[2].role, Role::Assistant);
+        if let MessageContent::Text { text } = &result.messages[2].content {
+            assert!(
+                text.contains("Process the data"),
+                "Last message should be guidance"
+            );
+            assert!(
+                !text.contains("Error"),
+                "Should NOT contain error message - this is a graceful handoff"
+            );
+            assert!(
+                !text.contains("validation"),
+                "Should NOT contain validation error"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_partial_params_trigger_handoff() {
+        // Test that steps with some (but not all) required params trigger handoff
+        let workflow = SequentialWorkflow::new("workflow", "test workflow")
+            .argument("input", "Input value", true)
+            .step(
+                WorkflowStep::new("process", ToolHandle::new("multi_param_tool"))
+                    .with_guidance("Process data with '{input}' and additional context")
+                    .arg("field1", prompt_arg("input")), // field2 is missing but required by tool schema
+            );
+
+        let multi_param_tool = SimpleTool::new("multi_param_tool", |_args, _extra| {
+            Box::pin(async move { Ok(json!({"result": "ok"})) })
+        })
+        .with_description("Tool with multiple required params")
+        .with_schema(json!({
+            "type": "object",
+            "properties": {
+                "field1": {"type": "string"},
+                "field2": {"type": "string"}
+            },
+            "required": ["field1", "field2"]  // ← Both required, but only field1 provided
+        }));
+
+        let mut tools = HashMap::new();
+        tools.insert(
+            Arc::from("multi_param_tool"),
+            ToolInfo {
+                name: "multi_param_tool".to_string(),
+                description: "Tool with multiple required params".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "field1": {"type": "string"},
+                        "field2": {"type": "string"}
+                    },
+                    "required": ["field1", "field2"]
+                }),
+            },
+        );
+
+        let mut tool_handlers: HashMap<Arc<str>, Arc<dyn ToolHandler>> = HashMap::new();
+        tool_handlers.insert(Arc::from("multi_param_tool"), Arc::new(multi_param_tool));
+
+        let handler = WorkflowPromptHandler::new(workflow, tools, tool_handlers, None);
+
+        let mut args = HashMap::new();
+        args.insert("input".to_string(), "test".to_string());
+
+        let extra = crate::server::cancellation::RequestHandlerExtra {
+            cancellation_token: Default::default(),
+            request_id: "test".to_string(),
+            session_id: None,
+            auth_info: None,
+            auth_context: None,
+        };
+
+        let result = handler
+            .handle(args, extra)
+            .await
+            .expect("Should handoff gracefully");
+
+        // Should handoff before tool call (partial params)
+        assert_eq!(
+            result.messages.len(),
+            3,
+            "Should have 3 messages before handoff (intent, plan, guidance)"
+        );
+
+        // Last message should be guidance, not error
+        assert_eq!(result.messages[2].role, Role::Assistant);
+        if let MessageContent::Text { text } = &result.messages[2].content {
+            assert!(text.contains("Process data"));
+            assert!(!text.contains("Error"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_workflow_with_resource_fetching() {
+        use crate::server::ResourceHandler;
+        use crate::types::{Content, ReadResourceResult};
+        use async_trait::async_trait;
+
+        // Create mock resource handler
+        struct MockResourceHandler;
+
+        #[async_trait]
+        impl ResourceHandler for MockResourceHandler {
+            async fn read(
+                &self,
+                uri: &str,
+                _extra: crate::server::cancellation::RequestHandlerExtra,
+            ) -> Result<ReadResourceResult> {
+                if uri == "docs://task-format" {
+                    Ok(ReadResourceResult {
+                        contents: vec![Content::Text {
+                            text: "Task Format Guide:\n- Use [[page-name]] for links\n- Add TODO prefix for tasks".to_string(),
+                        }],
+                    })
+                } else {
+                    Err(crate::Error::validation(format!(
+                        "Unknown resource: {}",
+                        uri
+                    )))
+                }
+            }
+
+            async fn list(
+                &self,
+                _cursor: Option<String>,
+                _extra: crate::server::cancellation::RequestHandlerExtra,
+            ) -> Result<crate::types::ListResourcesResult> {
+                Ok(crate::types::ListResourcesResult {
+                    resources: vec![],
+                    next_cursor: None,
+                })
+            }
+        }
+
+        // Create workflow with resource
+        let workflow = SequentialWorkflow::new("add_task", "Add a task with formatting guide")
+            .argument("task", "Task description", true)
+            .step(
+                WorkflowStep::new("add_task", ToolHandle::new("add_journal_task"))
+                    .with_guidance("Format the task according to the guide")
+                    .with_resource("docs://task-format")
+                    .expect("Valid resource URI")
+                    .arg("task", DataSource::prompt_arg("task"))
+                    .bind("result"),
+            );
+
+        // Create mock tool
+        let add_task_tool = SimpleTool::new("add_journal_task", |args, _extra| {
+            Box::pin(async move {
+                let task = args.get("task").and_then(|v| v.as_str()).unwrap_or("");
+                Ok(serde_json::json!({
+                    "success": true,
+                    "task": task
+                }))
+            })
+        })
+        .with_description("Add a task")
+        .with_schema(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "task": {"type": "string"}
+            },
+            "required": ["task"]
+        }));
+
+        // Create tool info and handlers
+        let mut tools = HashMap::new();
+        tools.insert(
+            Arc::from("add_journal_task"),
+            ToolInfo {
+                name: "add_journal_task".to_string(),
+                description: "Add a task".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "task": {"type": "string"}
+                    },
+                    "required": ["task"]
+                }),
+            },
+        );
+
+        let mut tool_handlers: HashMap<Arc<str>, Arc<dyn ToolHandler>> = HashMap::new();
+        tool_handlers.insert(Arc::from("add_journal_task"), Arc::new(add_task_tool));
+
+        // Create handler with resource handler
+        let handler = WorkflowPromptHandler::new(
+            workflow,
+            tools,
+            tool_handlers,
+            Some(Arc::new(MockResourceHandler)),
+        );
+
+        let mut args = HashMap::new();
+        args.insert("task".to_string(), "Fix bug".to_string());
+
+        let extra = crate::server::cancellation::RequestHandlerExtra {
+            cancellation_token: Default::default(),
+            request_id: "test".to_string(),
+            session_id: None,
+            auth_info: None,
+            auth_context: None,
+        };
+
+        let result = handler
+            .handle(args, extra)
+            .await
+            .expect("Should execute successfully");
+
+        // Should have messages:
+        // 1. User intent
+        // 2. Assistant plan
+        // 3. Guidance message
+        // 4. Resource content (User)
+        // 5. Tool call announcement
+        // 6. Tool result
+        assert_eq!(result.messages.len(), 6);
+
+        // Check resource was embedded
+        assert_eq!(result.messages[3].role, Role::User);
+        if let MessageContent::Text { text } = &result.messages[3].content {
+            assert!(text.contains("Resource content from docs://task-format"));
+            assert!(text.contains("Task Format Guide"));
+            assert!(text.contains("[[page-name]]"));
+        } else {
+            panic!("Expected text message for resource content");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_workflow_with_multiple_resources() {
+        use crate::server::ResourceHandler;
+        use crate::types::{Content, ReadResourceResult};
+        use async_trait::async_trait;
+
+        // Create mock resource handler
+        struct MockResourceHandler;
+
+        #[async_trait]
+        impl ResourceHandler for MockResourceHandler {
+            async fn read(
+                &self,
+                uri: &str,
+                _extra: crate::server::cancellation::RequestHandlerExtra,
+            ) -> Result<ReadResourceResult> {
+                match uri {
+                    "docs://format" => Ok(ReadResourceResult {
+                        contents: vec![Content::Text {
+                            text: "Format: [[link]]".to_string(),
+                        }],
+                    }),
+                    "docs://examples" => Ok(ReadResourceResult {
+                        contents: vec![Content::Text {
+                            text: "Examples:\n- [[project]] Task 1\n- [[project]] Task 2"
+                                .to_string(),
+                        }],
+                    }),
+                    _ => Err(crate::Error::validation(format!(
+                        "Unknown resource: {}",
+                        uri
+                    ))),
+                }
+            }
+
+            async fn list(
+                &self,
+                _cursor: Option<String>,
+                _extra: crate::server::cancellation::RequestHandlerExtra,
+            ) -> Result<crate::types::ListResourcesResult> {
+                Ok(crate::types::ListResourcesResult {
+                    resources: vec![],
+                    next_cursor: None,
+                })
+            }
+        }
+
+        // Create workflow with multiple resources
+        let workflow = SequentialWorkflow::new("add_task", "Add a task with guides")
+            .argument("task", "Task description", true)
+            .step(
+                WorkflowStep::new("add_task", ToolHandle::new("add_journal_task"))
+                    .with_guidance("Use the format and examples provided")
+                    .with_resource("docs://format")
+                    .expect("Valid resource URI")
+                    .with_resource("docs://examples")
+                    .expect("Valid resource URI")
+                    .arg("task", DataSource::prompt_arg("task"))
+                    .bind("result"),
+            );
+
+        // Create mock tool
+        let add_task_tool = SimpleTool::new("add_journal_task", |args, _extra| {
+            Box::pin(async move {
+                let task = args.get("task").and_then(|v| v.as_str()).unwrap_or("");
+                Ok(serde_json::json!({
+                    "success": true,
+                    "task": task
+                }))
+            })
+        })
+        .with_description("Add a task")
+        .with_schema(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "task": {"type": "string"}
+            },
+            "required": ["task"]
+        }));
+
+        // Create tool info and handlers
+        let mut tools = HashMap::new();
+        tools.insert(
+            Arc::from("add_journal_task"),
+            ToolInfo {
+                name: "add_journal_task".to_string(),
+                description: "Add a task".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "task": {"type": "string"}
+                    },
+                    "required": ["task"]
+                }),
+            },
+        );
+
+        let mut tool_handlers: HashMap<Arc<str>, Arc<dyn ToolHandler>> = HashMap::new();
+        tool_handlers.insert(Arc::from("add_journal_task"), Arc::new(add_task_tool));
+
+        // Create handler with resource handler
+        let handler = WorkflowPromptHandler::new(
+            workflow,
+            tools,
+            tool_handlers,
+            Some(Arc::new(MockResourceHandler)),
+        );
+
+        let mut args = HashMap::new();
+        args.insert("task".to_string(), "Fix bug".to_string());
+
+        let extra = crate::server::cancellation::RequestHandlerExtra {
+            cancellation_token: Default::default(),
+            request_id: "test".to_string(),
+            session_id: None,
+            auth_info: None,
+            auth_context: None,
+        };
+
+        let result = handler
+            .handle(args, extra)
+            .await
+            .expect("Should execute successfully");
+
+        // Should have messages:
+        // 1. User intent
+        // 2. Assistant plan
+        // 3. Guidance message
+        // 4. First resource content (User)
+        // 5. Second resource content (User)
+        // 6. Tool call announcement
+        // 7. Tool result
+        assert_eq!(result.messages.len(), 7);
+
+        // Check both resources were embedded
+        assert_eq!(result.messages[3].role, Role::User);
+        if let MessageContent::Text { text } = &result.messages[3].content {
+            assert!(text.contains("docs://format"));
+            assert!(text.contains("Format: [[link]]"));
+        } else {
+            panic!("Expected first resource content");
+        }
+
+        assert_eq!(result.messages[4].role, Role::User);
+        if let MessageContent::Text { text } = &result.messages[4].content {
+            assert!(text.contains("docs://examples"));
+            assert!(text.contains("Examples:"));
+        } else {
+            panic!("Expected second resource content");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_workflow_resource_fetch_error() {
+        use crate::server::ResourceHandler;
+        use crate::types::ReadResourceResult;
+        use async_trait::async_trait;
+
+        // Create mock resource handler that always fails
+        struct FailingResourceHandler;
+
+        #[async_trait]
+        impl ResourceHandler for FailingResourceHandler {
+            async fn read(
+                &self,
+                uri: &str,
+                _extra: crate::server::cancellation::RequestHandlerExtra,
+            ) -> Result<ReadResourceResult> {
+                Err(crate::Error::validation(format!(
+                    "Resource not found: {}",
+                    uri
+                )))
+            }
+
+            async fn list(
+                &self,
+                _cursor: Option<String>,
+                _extra: crate::server::cancellation::RequestHandlerExtra,
+            ) -> Result<crate::types::ListResourcesResult> {
+                Ok(crate::types::ListResourcesResult {
+                    resources: vec![],
+                    next_cursor: None,
+                })
+            }
+        }
+
+        // Create workflow with resource
+        let workflow = SequentialWorkflow::new("add_task", "Add a task with guide")
+            .argument("task", "Task description", true)
+            .step(
+                WorkflowStep::new("add_task", ToolHandle::new("add_journal_task"))
+                    .with_guidance("Format the task")
+                    .with_resource("docs://missing")
+                    .expect("Valid resource URI")
+                    .arg("task", DataSource::prompt_arg("task")),
+            );
+
+        let mut tools = HashMap::new();
+        tools.insert(
+            Arc::from("add_journal_task"),
+            ToolInfo {
+                name: "add_journal_task".to_string(),
+                description: "Add a task".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "task": {"type": "string"}
+                    },
+                    "required": ["task"]
+                }),
+            },
+        );
+
+        let handler = WorkflowPromptHandler::new(
+            workflow,
+            tools,
+            HashMap::new(),
+            Some(Arc::new(FailingResourceHandler)),
+        );
+
+        let mut args = HashMap::new();
+        args.insert("task".to_string(), "Fix bug".to_string());
+
+        let extra = crate::server::cancellation::RequestHandlerExtra {
+            cancellation_token: Default::default(),
+            request_id: "test".to_string(),
+            session_id: None,
+            auth_info: None,
+            auth_context: None,
+        };
+
+        let result = handler
+            .handle(args, extra)
+            .await
+            .expect("Should return result with error message");
+
+        // Should have messages:
+        // 1. User intent
+        // 2. Assistant plan
+        // 3. Guidance message
+        // 4. Resource fetch error (User)
+        assert_eq!(result.messages.len(), 4);
+
+        // Last message should be error
+        assert_eq!(result.messages[3].role, Role::User);
+        if let MessageContent::Text { text } = &result.messages[3].content {
+            assert!(text.contains("Error fetching resource"));
+            assert!(text.contains("docs://missing"));
+        } else {
+            panic!("Expected error message");
+        }
     }
 }

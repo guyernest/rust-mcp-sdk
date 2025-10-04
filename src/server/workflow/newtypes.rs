@@ -139,12 +139,13 @@ pub struct Uri(#[serde(with = "arc_str_serde")] Arc<str>);
 impl Uri {
     /// Create a new URI with validation
     ///
-    /// URIs must start with "resource://" or "file://"
+    /// URIs must contain a scheme (protocol) with "://" separator.
+    /// Common schemes include "resource://", "file://", "docs://", etc.
     pub fn new(uri: impl AsRef<str>) -> Result<Self, WorkflowError> {
         let uri_str = uri.as_ref();
 
-        // Validate URI format (basic check)
-        if !uri_str.starts_with("resource://") && !uri_str.starts_with("file://") {
+        // Validate URI format (must have a scheme with ://)
+        if !uri_str.contains("://") {
             return Err(WorkflowError::InvalidUri {
                 uri: uri_str.to_string(),
             });
@@ -205,10 +206,11 @@ mod tests {
 
     #[test]
     fn test_uri_invalid() {
-        let result = Uri::new("http://example.com");
+        // URIs without :// separator should be rejected
+        let result = Uri::new("invalid-uri");
         assert!(result.is_err());
 
-        let result = Uri::new("invalid-uri");
+        let result = Uri::new("relative/path");
         assert!(result.is_err());
     }
 
@@ -314,18 +316,16 @@ mod tests {
     }
 
     #[test]
-    fn test_uri_validation_http_rejected() {
+    fn test_uri_validation_custom_schemes() {
+        // Any URI scheme with :// is accepted
         let result = Uri::new("http://example.com");
-        assert!(result.is_err());
-        if let Err(e) = result {
-            assert!(e.to_string().contains("http://example.com"));
-        }
-    }
+        assert!(result.is_ok());
 
-    #[test]
-    fn test_uri_validation_https_rejected() {
         let result = Uri::new("https://example.com");
-        assert!(result.is_err());
+        assert!(result.is_ok());
+
+        let result = Uri::new("docs://example/path");
+        assert!(result.is_ok());
     }
 
     #[test]

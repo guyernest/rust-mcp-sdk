@@ -1,21 +1,22 @@
-//! Typed Tools + Workflow Prompts Integration Example
+//! Typed Tools + Workflow Server-Side Execution Example
 //!
-//! This example demonstrates the integration of two powerful features:
-//! - Typed tools with automatic JSON schema generation
-//! - Workflow-based prompts with type-safe handles
+//! This example demonstrates the complete integration of typed tools with workflows
+//! including **server-side execution** during `prompts/get`.
 //!
 //! Key features demonstrated:
-//! 1. Using `TypedTool` for automatic schema generation
-//! 2. Using `.prompt_workflow()` for validated workflow registration
-//! 3. Automatic ExpansionContext building from typed tools
-//! 4. Type-safe workflow construction with handles
+//! 1. Typed tools with automatic JSON schema generation
+//! 2. Workflow-based prompts with server-side tool execution
+//! 3. Data binding and flow between workflow steps
+//! 4. Conversation trace generation showing execution results
 //!
-//! The example creates a code review workflow that uses typed tools.
+//! **IMPORTANT**: With the new implementation, workflows execute tools SERVER-SIDE
+//! during `prompts/get`, not client-side. The server returns a complete conversation
+//! trace showing all tool calls and results.
 
 #![cfg(feature = "schema-generation")]
 
-use pmcp::server::workflow::{InternalPromptMessage, SequentialWorkflow};
-use pmcp::types::Role;
+use pmcp::server::workflow::dsl::*;
+use pmcp::server::workflow::{SequentialWorkflow, ToolHandle, WorkflowStep};
 use pmcp::{RequestHandlerExtra, Result, Server};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -49,20 +50,10 @@ fn default_depth() -> u8 {
 /// Code review tool input
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 struct ReviewCodeInput {
-    /// Code analysis results
+    /// Code analysis results (JSON string)
     analysis: String,
     /// Review focus areas
-    focus: Vec<ReviewFocus>,
-}
-
-/// Review focus areas
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-enum ReviewFocus {
-    Security,
-    Performance,
-    Maintainability,
-    Style,
+    focus: Vec<String>,
 }
 
 /// Code formatter tool input
@@ -70,19 +61,8 @@ enum ReviewFocus {
 struct FormatCodeInput {
     /// Code to format
     code: String,
-    /// Formatting style
-    #[serde(default)]
-    style: FormattingStyle,
-}
-
-/// Formatting styles
-#[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-enum FormattingStyle {
-    #[default]
-    Standard,
-    Compact,
-    Verbose,
+    /// Issues found from review
+    issues: Vec<String>,
 }
 
 // ============================================================================
@@ -94,167 +74,288 @@ async fn analyze_code(input: AnalyzeCodeInput, _extra: RequestHandlerExtra) -> R
     Ok(json!({
         "language": input.language,
         "depth": input.depth,
+        "lines_of_code": input.code.lines().count(),
         "issues_found": 3,
         "complexity_score": 7.5,
-        "analysis": format!(
+        "analysis_summary": format!(
             "Analyzed {} lines of {} code at depth {}. Found 3 potential issues.",
             input.code.lines().count(),
             input.language,
             input.depth
-        )
-    }))
-}
-
-async fn review_code(input: ReviewCodeInput, _extra: RequestHandlerExtra) -> Result<Value> {
-    // Simulate code review
-    Ok(json!({
-        "review_summary": format!(
-            "Reviewed code with focus on: {:?}. {}",
-            input.focus,
-            input.analysis
         ),
-        "recommendations": [
-            "Consider refactoring complex functions",
-            "Add more inline documentation",
-            "Improve error handling"
+        "issue_details": [
+            "Function 'process_data' has high cyclomatic complexity",
+            "Missing error handling in 'read_file'",
+            "Consider using Result<T> instead of panicking"
         ]
     }))
 }
 
+async fn review_code(input: ReviewCodeInput, _extra: RequestHandlerExtra) -> Result<Value> {
+    // Simulate code review based on analysis
+    Ok(json!({
+        "review_summary": format!(
+            "Reviewed code with focus on: {}. Analysis: {}",
+            input.focus.join(", "),
+            input.analysis
+        ),
+        "recommendations": [
+            "Refactor complex functions into smaller units",
+            "Add comprehensive error handling",
+            "Improve inline documentation",
+            "Add unit tests for edge cases"
+        ],
+        "priority_issues": input.focus,
+        "approval_status": "conditional"
+    }))
+}
+
 async fn format_code(input: FormatCodeInput, _extra: RequestHandlerExtra) -> Result<Value> {
-    // Simulate code formatting
-    let formatted = match input.style {
-        FormattingStyle::Compact => input.code.replace("    ", "  "),
-        FormattingStyle::Verbose => input
-            .code
-            .lines()
-            .map(|l| format!("    {}", l))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        FormattingStyle::Standard => input.code.clone(),
-    };
+    // Simulate code formatting with issue annotations
+    let formatted = input.code.clone();
+    let annotations = input
+        .issues
+        .iter()
+        .enumerate()
+        .map(|(i, issue)| format!("// TODO (Issue {}): {}", i + 1, issue))
+        .collect::<Vec<_>>()
+        .join("\n");
 
     Ok(json!({
-        "formatted_code": formatted,
-        "style": format!("{:?}", input.style)
+        "formatted_code": format!("{}\n\n{}", annotations, formatted),
+        "changes_made": "Added TODO comments for identified issues",
+        "issues_annotated": input.issues.len()
     }))
 }
 
 // ============================================================================
-// Workflow Creation
+// Workflow Creation with Server-Side Execution
 // ============================================================================
 
-/// Create a code review workflow using typed tool handles
+/// Create a code review workflow that executes server-side
 ///
 /// This workflow demonstrates:
-/// - Type-safe tool references with ToolHandle
-/// - Workflow validation at build time
-/// - Automatic schema inheritance from typed tools
+/// - Server-side tool execution during `prompts/get`
+/// - Data binding between workflow steps
+/// - Conversation trace generation
+///
+/// **Execution Flow**:
+/// 1. Server receives `prompts/get` request with {code: "...", language: "..."}
+/// 2. Server executes all three tools sequentially
+/// 3. Server returns conversation trace showing:
+///    - User intent
+///    - Assistant plan
+///    - For each step: Assistant tool call → User result
+/// 4. Client/LLM sees complete execution context
 fn create_code_review_workflow() -> SequentialWorkflow {
     SequentialWorkflow::new(
         "code_review_workflow",
-        "Comprehensive code review with analysis, review, and formatting"
+        "perform comprehensive code review with analysis and formatting",
     )
     .argument("code", "Source code to review", true)
     .argument("language", "Programming language (default: rust)", false)
-    .instruction(InternalPromptMessage::new(
-        Role::System,
-        "You are an expert code reviewer. Use the provided tools to analyze, review, and format code."
-    ))
-    .instruction(InternalPromptMessage::new(
-        Role::User,
-        "Please review the provided code thoroughly, focusing on security, performance, and maintainability."
-    ))
-    // Note: The workflow doesn't execute tools - it just provides instructions
-    // The actual tool execution is handled by the LLM/client
+
+    // Step 1: Analyze code (server executes this tool)
+    .step(
+        WorkflowStep::new("analyze", ToolHandle::new("analyze_code"))
+            .arg("code", prompt_arg("code"))
+            .arg("language", prompt_arg("language"))
+            .arg("depth", constant(json!(2)))
+            .bind("analysis_result"),  // ← Server stores result
+    )
+
+    // Step 2: Review code (uses analysis result from step 1)
+    .step(
+        WorkflowStep::new("review", ToolHandle::new("review_code"))
+            .arg("analysis", field("analysis_result", "analysis_summary"))  // ← Extract field
+            .arg("focus", constant(json!(["security", "performance", "maintainability"])))
+            .bind("review_result"),  // ← Server stores result
+    )
+
+    // Step 3: Format code (uses results from both previous steps)
+    .step(
+        WorkflowStep::new("format", ToolHandle::new("format_code"))
+            .arg("code", prompt_arg("code"))
+            .arg("issues", field("review_result", "recommendations"))  // ← Extract field
+            .bind("formatted_result"),  // ← Server stores final result
+    )
 }
 
 // ============================================================================
-// Server Setup
+// Server Setup and Demo
 // ============================================================================
 
-fn main() -> Result<()> {
-    println!("=== Typed Tools + Workflow Prompts Integration ===\n");
+#[tokio::main]
+async fn main() -> Result<()> {
+    println!("=== Typed Tools + Workflow Server-Side Execution ===\n");
 
-    // Build server with typed tools and workflow prompt
-    let _server = Server::builder()
+    // Build server with typed tools and workflow
+    let server = Server::builder()
         .name("code-review-server")
         .version("1.0.0")
         // Register typed tools (automatic schema generation)
         .tool_typed("analyze_code", analyze_code)
         .tool_typed("review_code", review_code)
         .tool_typed("format_code", format_code)
-        // Register workflow-based prompt (automatic validation)
+        // Register workflow (enables server-side execution)
         .prompt_workflow(create_code_review_workflow())?
         .build()?;
 
-    println!("✓ Server built successfully");
-    println!("\nRegistered typed tools:");
-    println!("  - analyze_code: Analyzes source code");
-    println!("  - review_code: Reviews code with specific focus areas");
-    println!("  - format_code: Formats code with different styles");
+    println!("✓ Server built successfully\n");
 
-    println!("\nRegistered workflow prompts:");
-    println!("  - code_review_workflow: Multi-step code review process");
+    // =================================================================
+    // Demonstrate Server-Side Execution
+    // =================================================================
 
-    println!("\n=== Key Features Demonstrated ===\n");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("📝 Simulating prompts/get Request");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
-    println!("1. Typed Tools:");
-    println!("   - Automatic JSON schema generation from Rust types");
-    println!("   - Type-safe input validation");
-    println!("   - Enum support for constrained values");
-    println!("   - Default values and optional fields");
+    println!("Client sends:");
+    println!("{{");
+    println!("  \"method\": \"prompts/get\",");
+    println!("  \"params\": {{");
+    println!("    \"name\": \"code_review_workflow\",");
+    println!("    \"arguments\": {{");
+    println!("      \"code\": \"fn main() {{ println!(\\\"Hello\\\"); }}\",");
+    println!("      \"language\": \"rust\"");
+    println!("    }}");
+    println!("  }}");
+    println!("}}\n");
 
-    println!("\n2. Workflow Prompts:");
-    println!("   - Type-safe tool handles (ToolHandle)");
-    println!("   - Automatic workflow validation");
-    println!("   - Prompt argument definitions");
-    println!("   - Instruction message composition");
+    // Get the workflow prompt handler
+    let prompt_handler = server
+        .get_prompt("code_review_workflow")
+        .expect("Workflow should be registered");
 
-    println!("\n3. Integration Benefits:");
-    println!("   - ExpansionContext automatically built from typed tools");
-    println!("   - Tool schemas available for workflow expansion");
-    println!("   - Single source of truth for tool definitions");
-    println!("   - Compile-time type safety + runtime validation");
+    let mut args = std::collections::HashMap::new();
+    args.insert(
+        "code".to_string(),
+        "fn main() { println!(\"Hello\"); }".to_string(),
+    );
+    args.insert("language".to_string(), "rust".to_string());
 
-    println!("\n=== Server Capabilities ===\n");
+    let extra = pmcp::server::cancellation::RequestHandlerExtra {
+        cancellation_token: Default::default(),
+        request_id: "demo-request".to_string(),
+        session_id: None,
+        auth_info: None,
+        auth_context: None,
+    };
 
-    // Demonstrate that tools are properly registered with schemas
-    println!("The server provides:");
-    println!("  - tools/list: Returns typed tools with auto-generated schemas");
-    println!("  - prompts/list: Returns workflow prompts with argument schemas");
-    println!("  - tools/call: Executes typed tools with validated inputs");
-    println!("  - prompts/get: Returns workflow instructions for LLM");
+    // Execute workflow server-side
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("⚙️  Server Executing Workflow (Server-Side)");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
-    println!("\n=== Example Workflow Usage ===\n");
+    let result = prompt_handler
+        .handle(args, extra)
+        .await
+        .expect("Workflow execution should succeed");
 
-    println!("1. Client calls prompts/get with:");
-    println!("   {{");
-    println!("     \"name\": \"code_review_workflow\",");
-    println!("     \"arguments\": {{");
-    println!("       \"code\": \"fn main() {{ println!(\\\"Hello\\\"); }}\",");
-    println!("       \"language\": \"rust\"");
-    println!("     }}");
-    println!("   }}");
+    println!(
+        "Server executed {} tools and generated {} messages\n",
+        3,
+        result.messages.len()
+    );
 
-    println!("\n2. Server returns workflow instructions to LLM");
+    // =================================================================
+    // Display Conversation Trace
+    // =================================================================
 
-    println!("\n3. LLM calls tools in sequence:");
-    println!("   - tools/call: analyze_code");
-    println!("   - tools/call: review_code");
-    println!("   - tools/call: format_code");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("💬 Generated Conversation Trace (Returned to Client)");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
-    println!("\n4. Each tool call uses the auto-generated schema");
-    println!("   for validation and type coercion");
+    for (i, msg) in result.messages.iter().enumerate() {
+        println!("Message {} [{:?}]:", i + 1, msg.role);
+        if let pmcp::types::MessageContent::Text { text } = &msg.content {
+            // Truncate long messages for display
+            let display_text = if text.len() > 200 {
+                format!("{}... (truncated)", &text[..200])
+            } else {
+                text.clone()
+            };
+            println!("{}\n", display_text);
+        }
+    }
 
-    println!("\n=== Migration Guide ===\n");
+    // =================================================================
+    // Explain the Architecture
+    // =================================================================
 
-    println!("Migrating from plain tools to typed tools + workflows:");
-    println!("1. Define input types with serde + schemars derives");
-    println!("2. Use .tool_typed() instead of .tool()");
-    println!("3. Create workflows with ToolHandle references");
-    println!("4. Use .prompt_workflow() for automatic validation");
-    println!("5. Remove manual ExpansionContext building");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("🏗️  Architecture: How It Works");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+    println!("1. Client Request:");
+    println!("   → Client calls prompts/get with workflow name + arguments\n");
+
+    println!("2. Server-Side Execution:");
+    println!("   → Server receives request");
+    println!("   → Server executes each workflow step:");
+    println!("      • Step 1: analyze_code → stores in 'analysis_result' binding");
+    println!("      • Step 2: review_code → uses 'analysis_result', stores in 'review_result'");
+    println!("      • Step 3: format_code → uses 'review_result', stores in 'formatted_result'");
+    println!("   → Server builds conversation trace showing all executions\n");
+
+    println!("3. Server Response:");
+    println!("   → Returns {} messages:", result.messages.len());
+    println!("      • Message 1: User intent");
+    println!("      • Message 2: Assistant plan");
+    println!("      • Messages 3-8: Tool calls + results (3 steps × 2 messages each)");
+    println!("   → Client/LLM sees complete execution context\n");
+
+    println!("4. Benefits:");
+    println!("   ✓ Single round-trip (fast)");
+    println!("   ✓ Deterministic execution");
+    println!("   ✓ Complete context for LLM");
+    println!("   ✓ Data flow via bindings");
+    println!("   ✓ Error handling at each step\n");
+
+    // =================================================================
+    // Key Differences from Old Approach
+    // =================================================================
+
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("🔄 Key Difference: Server-Side vs Client-Side Execution");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+    println!("❌ OLD (Guidance-Only):");
+    println!("   → prompts/get returns: 'Use these tools in this order'");
+    println!("   → Client/LLM calls tools one by one");
+    println!("   → 6+ round trips for 3-step workflow");
+    println!("   → No guaranteed execution order\n");
+
+    println!("✅ NEW (Server-Side Execution):");
+    println!("   → prompts/get EXECUTES all tools server-side");
+    println!("   → Returns complete conversation trace");
+    println!("   → 1 round trip total");
+    println!("   → Deterministic, sequential execution");
+    println!("   → Data flow enforced via bindings\n");
+
+    // =================================================================
+    // Summary
+    // =================================================================
+
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("📚 Summary");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+    println!("This example demonstrated:");
+    println!("  1. Typed tools with automatic JSON schema generation");
+    println!("  2. Workflow with .step() definitions");
+    println!("  3. Server-side tool execution during prompts/get");
+    println!("  4. Data binding between steps (field extraction)");
+    println!("  5. Conversation trace generation");
+    println!("  6. Complete workflow execution in single round-trip\n");
+
+    println!("Workflows enable:");
+    println!("  ✓ Multi-step orchestration with type safety");
+    println!("  ✓ Automatic data flow via bindings");
+    println!("  ✓ Efficient server-side execution");
+    println!("  ✓ Complete execution context for LLMs");
+    println!("  ✓ Deterministic, reproducible workflows\n");
 
     Ok(())
 }
@@ -264,61 +365,56 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_typed_tool_schemas_generated() {
+    async fn test_workflow_executes_server_side() {
         let server = Server::builder()
             .name("test")
             .version("1.0.0")
             .tool_typed("analyze_code", analyze_code)
+            .tool_typed("review_code", review_code)
+            .tool_typed("format_code", format_code)
+            .prompt_workflow(create_code_review_workflow())
+            .expect("Should register workflow")
             .build()
             .expect("Server should build");
 
-        // Build registries to verify tool schemas are available
-        let (tools, _resources) = server.build_expansion_registries();
+        let prompt_handler = server
+            .get_prompt("code_review_workflow")
+            .expect("Workflow should be registered");
 
-        assert!(tools.contains_key("analyze_code"));
-        let tool_info = &tools["analyze_code"];
-        assert_eq!(tool_info.name, "analyze_code");
-        assert!(!tool_info.input_schema.is_null());
+        let mut args = std::collections::HashMap::new();
+        args.insert("code".to_string(), "fn test() {}".to_string());
+        args.insert("language".to_string(), "rust".to_string());
 
-        // Verify schema has expected properties
-        let schema = &tool_info.input_schema;
-        let properties = schema
-            .get("properties")
-            .expect("Schema should have properties");
-        assert!(properties.get("code").is_some());
-        assert!(properties.get("language").is_some());
-        assert!(properties.get("depth").is_some());
-    }
+        let extra = pmcp::server::cancellation::RequestHandlerExtra {
+            cancellation_token: Default::default(),
+            request_id: "test".to_string(),
+            session_id: None,
+            auth_info: None,
+            auth_context: None,
+        };
 
-    #[test]
-    fn test_workflow_validation_passes() {
-        let workflow = create_code_review_workflow();
+        let result = prompt_handler
+            .handle(args, extra)
+            .await
+            .expect("Workflow should execute");
 
-        // Workflow should validate successfully
-        assert!(workflow.validate().is_ok());
+        // Should have 8 messages:
+        // 1. User intent
+        // 2. Assistant plan
+        // 3-4. Step 1 (analyze): call + result
+        // 5-6. Step 2 (review): call + result
+        // 7-8. Step 3 (format): call + result
+        assert_eq!(result.messages.len(), 8, "Should have 8 messages in trace");
 
-        // Verify workflow properties
-        assert_eq!(workflow.name(), "code_review_workflow");
-        assert_eq!(workflow.arguments().len(), 2);
-        assert!(workflow.arguments().contains_key(&"code".into()));
-        assert!(workflow.arguments().contains_key(&"language".into()));
-    }
+        // Verify first message is user intent
+        assert_eq!(result.messages[0].role, pmcp::types::Role::User);
 
-    #[test]
-    fn test_server_builder_with_workflow() {
-        // Test that .prompt_workflow() works correctly
-        let result = Server::builder()
-            .name("test")
-            .version("1.0.0")
-            .tool_typed("analyze_code", analyze_code)
-            .prompt_workflow(create_code_review_workflow());
+        // Verify second message is assistant plan
+        assert_eq!(result.messages[1].role, pmcp::types::Role::Assistant);
 
-        assert!(result.is_ok());
-
-        let server = result.unwrap().build().expect("Server should build");
-
-        // Verify registries are built correctly
-        let (tools, _) = server.build_expansion_registries();
-        assert!(tools.contains_key("analyze_code"));
+        // Verify tool results are present
+        if let pmcp::types::MessageContent::Text { text } = &result.messages[3].content {
+            assert!(text.contains("Tool result"));
+        }
     }
 }
