@@ -42,3 +42,6 @@ proptest-regressions/
 **/mutants.out*/
 tests/integration/typescript-interop/node_modules/
 examples/spin
+
+# MCP Registry tokens
+.mcpregistry_*

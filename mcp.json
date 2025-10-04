@@ -1,0 +1,14 @@
+{
+  "name": "pmcp",
+  "version": "1.6.1",
+  "description": "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility",
+  "main": "target/release/pmcp",
+  "bin": {
+    "pmcp": "target/release/pmcp"
+  },
+  "mcp": {
+    "runtime": "binary",
+    "tools": {},
+    "resources": {}
+  }
+}
