@@ -1564,7 +1564,7 @@ mod tests {
                 if uri == "docs://task-format" {
                     Ok(ReadResourceResult {
                         contents: vec![Content::Text {
-                            text: "Task Format Guide:\n- Use [[page-name]] for links\n- Add TODO prefix for tasks".to_string(),
+                            text: "Task Format Guide:\n- Use [[page-name]] for links\n- Add TASK prefix for action items".to_string(),
                         }],
                     })
                 } else {
