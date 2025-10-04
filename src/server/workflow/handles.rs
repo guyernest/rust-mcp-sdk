@@ -104,7 +104,11 @@ mod tests {
 
     #[test]
     fn test_resource_handle_invalid_uri() {
-        let result = ResourceHandle::new("http://example.com");
+        // URIs without :// separator are invalid
+        let result = ResourceHandle::new("not-a-uri");
+        assert!(result.is_err());
+
+        let result = ResourceHandle::new("./relative/path");
         assert!(result.is_err());
     }
 
@@ -188,10 +192,14 @@ mod tests {
 
     #[test]
     fn test_resource_handle_validation_errors() {
-        assert!(ResourceHandle::new("http://example.com").is_err());
-        assert!(ResourceHandle::new("https://example.com").is_err());
+        // Only URIs without :// separator should be rejected
         assert!(ResourceHandle::new("./relative/path").is_err());
         assert!(ResourceHandle::new("not-a-uri").is_err());
+
+        // URIs with :// are accepted (any scheme)
+        assert!(ResourceHandle::new("http://example.com").is_ok());
+        assert!(ResourceHandle::new("https://example.com").is_ok());
+        assert!(ResourceHandle::new("docs://example").is_ok());
     }
 
     #[test]

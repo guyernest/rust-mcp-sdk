@@ -1604,6 +1604,405 @@ impl ServerBuilder {
 
 ---
 
+## Workflow Execution Model: MCP-Compliant Server-Side Execution
+
+### Executive Summary
+
+Based on MCP protocol research and best practices, workflow prompts execute **server-side during `prompts/get`**, not client-side. The server returns a **conversation trace** showing the full execution flow, allowing the LLM to see the complete context and results.
+
+### Key Insight from MCP Research
+
+From the MCP Prompts research:
+
+> "Prompts are user-triggered workflows that users explicitly select for use. MCP prompts can return multi-turn conversation sequences that set up context, demonstrate workflows, and pre-execute server-side operations before the LLM takes over."
+
+**Critical distinction:**
+- ❌ **NOT**: Prompts tell the LLM which tools to call (guidance-only)
+- ✅ **YES**: Prompts execute workflows server-side and return the execution trace
+
+### The Conversation Pattern
+
+Workflow execution during `prompts/get` generates a structured conversation:
+
+```
+Message 1 [User]:      "I want to add task 'Fix bug' to project 'Website'"
+Message 2 [Assistant]: "Here's my plan: 1. list_pages, 2. verify_project, 3. add_task"
+Message 3 [Assistant]: "Calling tool 'list_pages' with parameters: {}"
+Message 4 [User]:      "Tool result: {\"pages\": [\"Website\", \"Mobile\", \"Blog\"]}"
+Message 5 [Assistant]: "Calling tool 'verify_project' with {\"project\": \"Website\", ...}"
+Message 6 [User]:      "Tool result: {\"exists\": true, \"path\": \"/projects/Website\"}"
+Message 7 [Assistant]: "Calling tool 'add_task' with {\"project\": \"Website\", \"task\": \"Fix bug\", ...}"
+Message 8 [User]:      "Tool result: {\"success\": true, \"task_id\": \"123\"}"
+```
+
+**Key benefits:**
+1. **Complete context**: LLM sees the entire execution trace
+2. **Pre-executed tools**: Read-only operations completed server-side
+3. **Data flow visible**: Step outputs bound and passed to next steps
+4. **Minimal client interaction**: MCP client just displays the result
+5. **Execution stops on error**: Clear failure point for LLM to address
+
+### Why Server-Side Execution?
+
+From the research:
+
+> "The server is responsible for injecting the argument values into the prompt's content wherever needed, as well as pulling in any other context (from files, databases, etc.) that the prompt is designed to include."
+
+**Rationale:**
+- **Server has context**: Access to tools, resources, and data
+- **Deterministic workflows**: Same inputs → same execution path
+- **Atomic operations**: Workflow completes or fails as a unit
+- **Efficient**: No round-trips for read-only operations
+- **Safe**: Server validates and executes in controlled environment
+
+### Architecture: Execution During prompts/get
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ Client Invokes Prompt                                          │
+│ Request: prompts/get { name: "add_task", args: {...} }        │
+└────────────────────┬───────────────────────────────────────────┘
+                     │
+                     ▼
+┌────────────────────────────────────────────────────────────────┐
+│ Server: WorkflowPromptHandler::handle()                        │
+│                                                                 │
+│ 1. Create user intent message from workflow description        │
+│ 2. Create assistant plan message (list all steps)              │
+│ 3. Execute workflow steps sequentially:                        │
+│    FOR EACH step:                                              │
+│      a. Build tool parameters from bindings + arguments        │
+│      b. Create assistant message: "Calling tool X with {...}"  │
+│      c. Execute tool handler server-side                       │
+│      d. Create user message: "Tool result: {...}"              │
+│      e. Store result in ExecutionContext (binding)             │
+│      f. If error → STOP, return partial trace                  │
+│ 4. Return GetPromptResult with all messages                    │
+└────────────────────┬───────────────────────────────────────────┘
+                     │
+                     ▼
+┌────────────────────────────────────────────────────────────────┐
+│ Client Receives Conversation Trace                             │
+│ - Displays messages to user (or keeps hidden)                  │
+│ - Feeds entire trace to LLM as context                         │
+│ - LLM continues conversation with full knowledge               │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### ExecutionContext: Binding Storage
+
+During workflow execution, we need to store step outputs for use by subsequent steps:
+
+```rust
+/// Stores step execution results (bindings) during workflow execution
+struct ExecutionContext {
+    bindings: HashMap<BindingName, Value>,
+}
+
+impl ExecutionContext {
+    fn new() -> Self {
+        Self {
+            bindings: HashMap::new(),
+        }
+    }
+
+    fn store_binding(&mut self, name: BindingName, value: Value) {
+        self.bindings.insert(name, value);
+    }
+
+    fn get_binding(&self, name: &BindingName) -> Option<&Value> {
+        self.bindings.get(name)
+    }
+}
+```
+
+**Purpose:**
+- Stores outputs from executed steps
+- Enables data flow between steps
+- Used to resolve `DataSource::StepOutput` references
+
+### Tool Parameter Resolution
+
+Steps declare how to build tool parameters from available data:
+
+```rust
+fn resolve_tool_parameters(
+    step: &WorkflowStep,
+    args: &HashMap<String, String>,
+    ctx: &ExecutionContext,
+) -> Result<Value> {
+    let mut params = serde_json::Map::new();
+
+    for (arg_name, data_source) in step.arguments() {
+        let value = match data_source {
+            // From prompt arguments
+            DataSource::PromptArg(arg_name) => {
+                args.get(arg_name.as_str())
+                    .map(|s| Value::String(s.clone()))
+                    .ok_or_else(|| Error::validation(format!(
+                        "Missing required argument '{}'", arg_name
+                    )))?
+            }
+
+            // From constant
+            DataSource::Constant(val) => val.clone(),
+
+            // From previous step (entire output)
+            DataSource::StepOutput { step: binding_name, field: None } => {
+                ctx.get_binding(binding_name)
+                    .cloned()
+                    .ok_or_else(|| Error::validation(format!(
+                        "Binding '{}' not found", binding_name
+                    )))?
+            }
+
+            // From previous step (specific field)
+            DataSource::StepOutput { step: binding_name, field: Some(field_name) } => {
+                let binding_value = ctx.get_binding(binding_name)
+                    .ok_or_else(|| Error::validation(format!(
+                        "Binding '{}' not found", binding_name
+                    )))?;
+
+                binding_value.get(field_name.as_str())
+                    .cloned()
+                    .ok_or_else(|| Error::validation(format!(
+                        "Field '{}' not found in binding '{}'",
+                        field_name, binding_name
+                    )))?
+            }
+        };
+
+        params.insert(arg_name.to_string(), value);
+    }
+
+    Ok(Value::Object(params))
+}
+```
+
+### Updated WorkflowPromptHandler
+
+```rust
+pub struct WorkflowPromptHandler {
+    workflow: SequentialWorkflow,
+    tools: HashMap<Arc<str>, ToolInfo>,
+    resources: HashMap<Arc<str>, ResourceInfo>,
+    // NEW: Access to actual tool handlers for execution
+    tool_handlers: HashMap<Arc<str>, Arc<dyn ToolHandler>>,
+}
+
+#[async_trait]
+impl PromptHandler for WorkflowPromptHandler {
+    async fn handle(
+        &self,
+        args: HashMap<String, String>,
+        extra: RequestHandlerExtra,
+    ) -> Result<GetPromptResult> {
+        let mut messages = Vec::new();
+        let mut execution_context = ExecutionContext::new();
+
+        // 1. User Intent Message
+        messages.push(self.create_user_intent(&args)?);
+
+        // 2. Assistant Plan Message (list all workflow steps)
+        messages.push(self.create_assistant_plan()?);
+
+        // 3. Execute workflow steps sequentially
+        for step in self.workflow.steps() {
+            // Assistant announces the tool call with parameters
+            match self.create_tool_call_announcement(step, &args, &execution_context) {
+                Ok(announcement) => messages.push(announcement),
+                Err(e) => {
+                    // Can't build parameters - missing argument
+                    messages.push(PromptMessage {
+                        role: Role::Assistant,
+                        content: MessageContent::Text {
+                            text: format!(
+                                "Cannot proceed with step '{}': {}",
+                                step.name(), e
+                            ),
+                        },
+                    });
+                    break; // Stop execution
+                }
+            }
+
+            // Execute the tool server-side
+            match self.execute_tool_step(step, &args, &execution_context, &extra).await {
+                Ok(result) => {
+                    // User message with successful result
+                    messages.push(PromptMessage {
+                        role: Role::User,
+                        content: MessageContent::Text {
+                            text: format!(
+                                "Tool result:\n{}",
+                                serde_json::to_string_pretty(&result)
+                                    .unwrap_or_else(|_| format!("{:?}", result))
+                            ),
+                        },
+                    });
+
+                    // Store binding for next steps
+                    if let Some(binding) = step.binding() {
+                        execution_context.store_binding(binding.clone(), result);
+                    }
+                }
+                Err(e) => {
+                    // User message with error - STOP EXECUTION
+                    messages.push(PromptMessage {
+                        role: Role::User,
+                        content: MessageContent::Text {
+                            text: format!("Error executing tool: {}", e),
+                        },
+                    });
+                    break; // Let LLM handle recovery
+                }
+            }
+        }
+
+        Ok(GetPromptResult {
+            description: Some(self.workflow.description().to_string()),
+            messages,
+        })
+    }
+}
+```
+
+### Execution Flow Examples
+
+#### Success Case: All Steps Complete
+
+```
+Input: { project: "Website", task: "Fix login bug" }
+
+Message 1 [User]:
+  I want to add a task to a project.
+  Parameters:
+    - project: "Website"
+    - task: "Fix login bug"
+
+Message 2 [Assistant]:
+  Here's my plan:
+  1. list_pages - Get all available pages
+  2. verify_project - Check if project exists
+  3. add_journal_task - Add the task to the project
+
+Message 3 [Assistant]:
+  Calling tool 'list_pages' with parameters:
+  {}
+
+Message 4 [User]:
+  Tool result:
+  {
+    "pages": ["Website", "Mobile", "Blog"]
+  }
+
+Message 5 [Assistant]:
+  Calling tool 'verify_project' with parameters:
+  {
+    "project": "Website",
+    "available_pages": ["Website", "Mobile", "Blog"]
+  }
+
+Message 6 [User]:
+  Tool result:
+  {
+    "exists": true,
+    "path": "/projects/Website"
+  }
+
+Message 7 [Assistant]:
+  Calling tool 'add_journal_task' with parameters:
+  {
+    "project": "Website",
+    "task": "Fix login bug",
+    "project_path": "/projects/Website"
+  }
+
+Message 8 [User]:
+  Tool result:
+  {
+    "success": true,
+    "task_id": "task-123"
+  }
+```
+
+**LLM receives:** Complete execution trace → can summarize or take next action
+
+#### Error Case: Step Fails Mid-Workflow
+
+```
+Message 1 [User]:
+  I want to add a task to a project.
+  Parameters:
+    - project: "Nonexistent"
+    - task: "Fix bug"
+
+Message 2 [Assistant]:
+  Here's my plan:
+  1. list_pages - Get all available pages
+  2. verify_project - Check if project exists
+  3. add_journal_task - Add the task to the project
+
+Message 3 [Assistant]:
+  Calling tool 'list_pages' with parameters:
+  {}
+
+Message 4 [User]:
+  Tool result:
+  {
+    "pages": ["Website", "Mobile", "Blog"]
+  }
+
+Message 5 [Assistant]:
+  Calling tool 'verify_project' with parameters:
+  {
+    "project": "Nonexistent",
+    "available_pages": ["Website", "Mobile", "Blog"]
+  }
+
+Message 6 [User]:
+  Error executing tool: Project 'Nonexistent' not found in available pages
+```
+
+**LLM receives:** Partial trace with error → can explain problem to user or suggest corrections
+
+### Benefits of This Approach
+
+1. **MCP-Compliant**: Follows protocol specification for prompt workflows
+2. **Complete Context**: LLM sees full execution trace
+3. **Efficient**: No round-trips for data fetching
+4. **Deterministic**: Same inputs produce same execution
+5. **Error Transparent**: Clear failure points
+6. **Data Flow Visible**: Step bindings shown in results
+7. **Debuggable**: Conversation trace shows exactly what happened
+
+### Comparison: Guidance vs. Execution
+
+**Old Approach (Guidance Only):**
+```
+Message [User]: "Use tool 'list_pages', then 'verify_project', then 'add_task'"
+→ LLM must call each tool separately
+→ Client mediates each tool call
+→ 6+ round trips for 3-step workflow
+```
+
+**New Approach (Server-Side Execution):**
+```
+8 Messages returned immediately:
+- User intent
+- Assistant plan
+- Assistant call 1 + User result 1
+- Assistant call 2 + User result 2
+- Assistant call 3 + User result 3
+→ All tools executed server-side
+→ 1 round trip total
+→ LLM has complete context
+```
+
+**Performance:** ~6x faster for 3-step workflows
+
+---
+
 ## API Examples
 
 ### Example 1: Simple Workflow

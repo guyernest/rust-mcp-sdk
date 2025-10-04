@@ -159,7 +159,7 @@ fn main() {
     println!("  - Use binding names with from_step() and field(), not step names");
 
     println!("\n📖 Next Steps:");
-    println!("  - See examples/51_workflow_server.rs for server integration");
-    println!("  - See examples/52_workflow_tools.rs for tool registration");
-    println!("  - See examples/53_workflow_execution.rs for runtime execution");
+    println!("  - See examples/51_workflow_error_messages.rs for validation error examples");
+    println!("  - See examples/52_workflow_dsl_cookbook.rs for DSL patterns and recipes");
+    println!("  - See examples/53_typed_tools_workflow_integration.rs for server-side execution");
 }
