@@ -29,6 +29,7 @@ pub enum TestCategory {
     Resources,
     Prompts,
     Performance,
+    Compatibility,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

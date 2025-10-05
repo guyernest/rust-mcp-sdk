@@ -1403,8 +1403,7 @@ mod tests {
     use crate::shared::Transport;
     use crate::types::{
         jsonrpc::{JSONRPCError, ResponsePayload},
-        JSONRPCResponse, ProgressNotification, ProgressToken, ResourceCapabilities,
-        ToolCapabilities, TransportMessage,
+        JSONRPCResponse, ProgressNotification, ProgressToken, TransportMessage,
     };
     use async_trait::async_trait;
     use serde_json::json;
@@ -1514,12 +1513,7 @@ mod tests {
         let transport = MockTransport::with_responses(vec![init_response]);
         let mut client = Client::new(transport);
 
-        let caps = ClientCapabilities {
-            tools: Some(ToolCapabilities {
-                list_changed: Some(true),
-            }),
-            ..Default::default()
-        };
+        let caps = ClientCapabilities::minimal();
 
         let result = client.initialize(caps).await;
         assert!(result.is_ok());
@@ -1592,12 +1586,7 @@ mod tests {
         let mut client = Client::new(transport);
 
         // Initialize with tools capability
-        let _ = client
-            .initialize(ClientCapabilities {
-                tools: Some(ToolCapabilities::default()),
-                ..Default::default()
-            })
-            .await;
+        let _ = client.initialize(ClientCapabilities::minimal()).await;
 
         // List tools
         let result = client.list_tools(None).await;
@@ -1798,12 +1787,7 @@ mod tests {
         let mut client = Client::new(transport);
 
         // Initialize
-        let _ = client
-            .initialize(ClientCapabilities {
-                resources: Some(ResourceCapabilities::default()),
-                ..Default::default()
-            })
-            .await;
+        let _ = client.initialize(ClientCapabilities::minimal()).await;
 
         // Read resource
         let result = client.read_resource("test://test".to_string()).await;

@@ -171,6 +171,8 @@ impl ServerTester {
             let mut req = client
                 .post(&self.url)
                 .header("Content-Type", "application/json")
+                // Set Accept header for streamable HTTP servers
+                .header("Accept", "application/json, text/event-stream")
                 .json(&request);
 
             // Add API key headers if provided
@@ -206,6 +208,51 @@ impl ServerTester {
         } else {
             Err(anyhow::anyhow!("JSON-RPC client not available"))
         }
+    }
+
+    async fn send_json_rpc_request_with_client(
+        &self,
+        client: &Client,
+        request: JsonRpcRequest,
+    ) -> Result<JsonRpcResponse> {
+        let mut req = client
+            .post(&self.url)
+            .header("Content-Type", "application/json")
+            // Critical: Set Accept header to match Cursor IDE behavior
+            // Streamable HTTP servers use this to determine response mode
+            .header("Accept", "application/json, text/event-stream")
+            .json(&request);
+
+        // Add API key headers if provided
+        if let Some(api_key) = &self.api_key {
+            req = req
+                .header("Authorization", format!("Bearer {}", api_key))
+                .header("X-API-Key", api_key);
+        }
+
+        let response = req
+            .send()
+            .await
+            .context("Failed to send JSON-RPC request")?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(anyhow::anyhow!("HTTP error {}: {}", status, error_text));
+        }
+
+        let response_text = response
+            .text()
+            .await
+            .context("Failed to read response body")?;
+
+        let json_response: JsonRpcResponse = serde_json::from_str(&response_text)
+            .context("Failed to parse JSON-RPC response")?;
+
+        Ok(json_response)
     }
 
     pub async fn run_full_suite(&mut self, with_tools: bool) -> Result<TestReport> {
@@ -302,6 +349,9 @@ impl ServerTester {
         report.add_test(self.test_required_methods().await);
         report.add_test(self.test_error_codes().await);
         report.add_test(self.test_json_rpc_compliance().await);
+
+        // Cursor IDE compatibility test
+        report.add_test(self.test_cursor_compatibility().await);
 
         // In strict mode, warnings become failures
         if strict {
@@ -701,7 +751,8 @@ impl ServerTester {
                     "version": "0.1.0"
                 },
                 "capabilities": {
-                    "tools": {}
+                    "sampling": {},
+                    "roots": {"listChanged": false}
                 }
             })),
             id: Some(json!(999)),
@@ -775,7 +826,9 @@ impl ServerTester {
         let name = "Initialize".to_string();
 
         let capabilities = ClientCapabilities {
-            tools: Some(Default::default()),
+            sampling: Some(Default::default()),
+            elicitation: Some(Default::default()),
+            roots: Some(Default::default()),
             ..Default::default()
         };
 
@@ -825,7 +878,8 @@ impl ServerTester {
                             "version": "0.1.0"
                         },
                         "capabilities": {
-                            "tools": {}
+                            "sampling": {},
+                            "roots": {"listChanged": false}
                         }
                     })),
                     id: Some(json!(1)),
@@ -901,6 +955,126 @@ impl ServerTester {
                 error: Some(e.to_string()),
                 details: None,
             },
+        }
+    }
+
+    /// Test Cursor IDE compatibility - ensures server handles spec-compliant client capabilities
+    ///
+    /// Cursor IDE and other spec-compliant clients send client capabilities that follow
+    /// the official MCP specification. This test simulates Cursor IDE v1.7.33's exact behavior:
+    /// - Sends Accept: application/json, text/event-stream header (for streamable HTTP)
+    /// - Sends spec-compliant client capabilities (sampling, elicitation, roots)
+    /// - Does NOT send server-only capabilities (tools, prompts, resources)
+    pub async fn test_cursor_compatibility(&self) -> TestResult {
+        let start = Instant::now();
+        let name = "Cursor IDE Compatibility".to_string();
+
+        // Simulate Cursor IDE v1.7.33 initialization request
+        // This matches the actual headers and capabilities Cursor sends
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            method: "initialize".to_string(),
+            params: Some(json!({
+                "protocolVersion": "2024-11-05",
+                "clientInfo": {
+                    "name": "cursor-ide",
+                    "version": "1.7.33"
+                },
+                "capabilities": {
+                    // Spec-compliant client capabilities (what the CLIENT supports)
+                    "sampling": {},      // Client can handle sampling/LLM requests
+                    "elicitation": {},   // Client can provide user input
+                    "roots": {"listChanged": false},  // Client supports roots notifications
+                    // Note: tools, prompts, resources are SERVER capabilities only
+                }
+            })),
+            id: Some(json!(999)),
+        };
+
+        // Try to get an HTTP client - either the existing json_rpc_client or create one on the fly
+        let client = if let Some(client) = &self.json_rpc_client {
+            Some(client.clone())
+        } else if self.http_config.is_some() || matches!(self.transport_type, TransportType::Http) {
+            // For streamable HTTP transport, create a temporary client
+            let mut client_builder = reqwest::ClientBuilder::new().timeout(Duration::from_secs(30));
+            if self.insecure {
+                client_builder = client_builder.danger_accept_invalid_certs(true);
+            }
+            client_builder.build().ok()
+        } else {
+            None
+        };
+
+        match client {
+            Some(client) => {
+                match self.send_json_rpc_request_with_client(&client, request).await {
+                    Ok(response) => {
+                        if let Some(error) = response.error {
+                            // Server rejected spec-compliant capabilities
+                            TestResult {
+                                name,
+                                category: TestCategory::Compatibility,
+                                status: TestStatus::Failed,
+                                duration: start.elapsed(),
+                                error: Some(format!(
+                                    "⚠️  CURSOR IDE INCOMPATIBLE: Server rejected spec-compliant client capabilities. Error: {:?}",
+                                    error
+                                )),
+                                details: Some(
+                                    "Your server will NOT work with Cursor IDE, Claude Desktop, or other spec-compliant MCP clients. \
+                                    This usually happens when the server expects invalid client capabilities (tools, prompts, resources) \
+                                    instead of the correct ones (sampling, elicitation, roots). \
+                                    See: https://spec.modelcontextprotocol.io/specification/2024-11-05/client/".to_string()
+                                ),
+                            }
+                        } else if response.result.is_some() {
+                            // Server accepted spec-compliant capabilities
+                            TestResult {
+                                name,
+                                category: TestCategory::Compatibility,
+                                status: TestStatus::Passed,
+                                duration: start.elapsed(),
+                                error: None,
+                                details: Some(
+                                    "✅ Server correctly handles spec-compliant client capabilities. \
+                                    Compatible with Cursor IDE, Claude Desktop, and other standard MCP clients.".to_string()
+                                ),
+                            }
+                        } else {
+                            TestResult {
+                                name,
+                                category: TestCategory::Compatibility,
+                                status: TestStatus::Warning,
+                                duration: start.elapsed(),
+                                error: Some("Unexpected response format".to_string()),
+                                details: Some("Server returned neither result nor error".to_string()),
+                            }
+                        }
+                    }
+                    Err(e) => TestResult {
+                        name,
+                        category: TestCategory::Compatibility,
+                        status: TestStatus::Failed,
+                        duration: start.elapsed(),
+                        error: Some(format!("Failed to send request: {}", e)),
+                        details: Some("Could not test Cursor compatibility due to connection error".to_string()),
+                    },
+                }
+            }
+            None => {
+                // For non-HTTP transports (stdio/websocket), we can't easily test this
+                TestResult {
+                    name,
+                    category: TestCategory::Compatibility,
+                    status: TestStatus::Skipped,
+                    duration: start.elapsed(),
+                    error: None,
+                    details: Some(
+                        "Cursor compatibility test only available for HTTP/HTTPS transports. \
+                        For stdio/websocket servers, ensure your server follows the MCP spec for client capabilities.".to_string()
+                    ),
+                }
+            }
         }
     }
 

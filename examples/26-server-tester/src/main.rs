@@ -22,6 +22,7 @@ use tester::ServerTester;
 
 Key Features:
 • Protocol compliance validation with detailed error reporting
+• Cursor IDE & Claude Desktop compatibility testing
 • Tool discovery with JSON schema validation and warnings
 • Resource and prompt testing with metadata validation
 • Automated test scenario generation from server capabilities

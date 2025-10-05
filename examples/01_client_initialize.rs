@@ -22,18 +22,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut client = Client::new(transport);
 
     // Define client capabilities
+    // Note: Client capabilities indicate what the CLIENT can do (handle sampling requests,
+    // provide user input). Server capabilities (tools, prompts, resources) are advertised
+    // by servers, not clients.
     let capabilities = ClientCapabilities {
-        // Client supports tools
-        tools: Some(pmcp::types::capabilities::ToolCapabilities::default()),
-        // Client supports prompts
-        prompts: Some(pmcp::types::capabilities::PromptCapabilities::default()),
-        // Client supports resources
-        resources: Some(pmcp::types::capabilities::ResourceCapabilities::default()),
-        // Client supports logging
-        logging: Some(pmcp::types::capabilities::LoggingCapabilities::default()),
-        // Client supports sampling
+        // Client can handle sampling/LLM requests
         sampling: Some(pmcp::types::capabilities::SamplingCapabilities::default()),
-        // Client supports roots
+        // Client can provide user input when requested
+        elicitation: Some(pmcp::types::capabilities::ElicitationCapabilities::default()),
+        // Client supports roots notifications
         roots: Some(pmcp::types::capabilities::RootsCapabilities::default()),
         // No experimental features
         experimental: None,

@@ -22,11 +22,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let transport = StdioTransport::new();
     let mut client = Client::new(transport);
 
-    // Initialize with prompt support
-    let capabilities = ClientCapabilities {
-        prompts: Some(Default::default()),
-        ..Default::default()
-    };
+    // Use minimal capabilities - client doesn't need to advertise any special features
+    // to get prompts from a server
+    let capabilities = ClientCapabilities::minimal();
 
     println!("Connecting to server...");
     let _server_info = client.initialize(capabilities).await?;

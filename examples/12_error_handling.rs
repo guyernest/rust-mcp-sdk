@@ -199,10 +199,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let transport = StdioTransport::new();
     let mut client = Client::new(transport);
 
-    let capabilities = ClientCapabilities {
-        tools: Some(Default::default()),
-        ..Default::default()
-    };
+    let capabilities = ClientCapabilities::minimal();
 
     println!("Connecting to server...");
     let _server_info = client.initialize(capabilities).await?;
