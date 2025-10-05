@@ -249,8 +249,8 @@ impl ServerTester {
             .await
             .context("Failed to read response body")?;
 
-        let json_response: JsonRpcResponse = serde_json::from_str(&response_text)
-            .context("Failed to parse JSON-RPC response")?;
+        let json_response: JsonRpcResponse =
+            serde_json::from_str(&response_text).context("Failed to parse JSON-RPC response")?;
 
         Ok(json_response)
     }
@@ -1007,7 +1007,10 @@ impl ServerTester {
 
         match client {
             Some(client) => {
-                match self.send_json_rpc_request_with_client(&client, request).await {
+                match self
+                    .send_json_rpc_request_with_client(&client, request)
+                    .await
+                {
                     Ok(response) => {
                         if let Some(error) = response.error {
                             // Server rejected spec-compliant capabilities
@@ -1047,20 +1050,25 @@ impl ServerTester {
                                 status: TestStatus::Warning,
                                 duration: start.elapsed(),
                                 error: Some("Unexpected response format".to_string()),
-                                details: Some("Server returned neither result nor error".to_string()),
+                                details: Some(
+                                    "Server returned neither result nor error".to_string(),
+                                ),
                             }
                         }
-                    }
+                    },
                     Err(e) => TestResult {
                         name,
                         category: TestCategory::Compatibility,
                         status: TestStatus::Failed,
                         duration: start.elapsed(),
                         error: Some(format!("Failed to send request: {}", e)),
-                        details: Some("Could not test Cursor compatibility due to connection error".to_string()),
+                        details: Some(
+                            "Could not test Cursor compatibility due to connection error"
+                                .to_string(),
+                        ),
                     },
                 }
-            }
+            },
             None => {
                 // For non-HTTP transports (stdio/websocket), we can't easily test this
                 TestResult {
@@ -1074,7 +1082,7 @@ impl ServerTester {
                         For stdio/websocket servers, ensure your server follows the MCP spec for client capabilities.".to_string()
                     ),
                 }
-            }
+            },
         }
     }
 
