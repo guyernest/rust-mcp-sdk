@@ -4,7 +4,7 @@
 
 use super::{
     data_source::DataSource,
-    newtypes::{ArgName, StepName},
+    newtypes::{ArgName, BindingName},
 };
 use serde_json::Value;
 
@@ -33,7 +33,7 @@ pub fn prompt_arg(name: impl Into<ArgName>) -> DataSource {
 /// // Reference it as:
 /// let source = from_step("output");  // Use binding name, not "my_step"
 /// ```
-pub fn from_step(step: impl Into<StepName>) -> DataSource {
+pub fn from_step(step: impl Into<BindingName>) -> DataSource {
     DataSource::from_step(step)
 }
 
@@ -50,7 +50,7 @@ pub fn from_step(step: impl Into<StepName>) -> DataSource {
 /// // Reference a field as:
 /// let source = field("output", "result");  // Use binding name, not "my_step"
 /// ```
-pub fn field(step: impl Into<StepName>, field: impl Into<String>) -> DataSource {
+pub fn field(step: impl Into<BindingName>, field: impl Into<String>) -> DataSource {
     DataSource::from_step_field(step, field)
 }
 

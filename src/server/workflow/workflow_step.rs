@@ -5,7 +5,7 @@
 use super::{
     data_source::DataSource,
     error::WorkflowError,
-    handles::ToolHandle,
+    handles::{ResourceHandle, ToolHandle},
     newtypes::{ArgName, BindingName, StepName},
 };
 use indexmap::IndexMap;
@@ -22,6 +22,22 @@ pub struct WorkflowStep {
     arguments: IndexMap<ArgName, DataSource>,
     /// Optional binding name for step output
     binding: Option<BindingName>,
+    /// Optional guidance for client LLM about what this step should accomplish
+    ///
+    /// When provided, this guidance is rendered as an assistant message in the
+    /// conversation trace. It helps the client understand the step's intent,
+    /// especially when the server cannot execute it deterministically.
+    ///
+    /// Guidance text supports argument substitution using `{arg_name}` syntax.
+    /// For example: `"Find the page matching '{project}' in the list above"`
+    guidance: Option<String>,
+    /// Resources to fetch and embed before executing this step
+    ///
+    /// Resources are fetched server-side and their content is embedded in the
+    /// conversation trace as user messages. This enables hybrid execution where
+    /// the server provides all necessary context (tool results + resource content)
+    /// before the client LLM continues.
+    resources: Vec<ResourceHandle>,
 }
 
 impl WorkflowStep {
@@ -40,6 +56,8 @@ impl WorkflowStep {
             tool,
             arguments: IndexMap::new(),
             binding: None,
+            guidance: None,
+            resources: Vec::new(),
         }
     }
 
@@ -74,6 +92,69 @@ impl WorkflowStep {
         self
     }
 
+    /// Add guidance for the client LLM about what this step should accomplish (chainable)
+    ///
+    /// Guidance is rendered as an assistant message and helps the client understand
+    /// the step's intent, especially when the server cannot execute it deterministically.
+    ///
+    /// Guidance text supports argument substitution using `{arg_name}` syntax.
+    /// At runtime, `{arg_name}` will be replaced with the actual argument value.
+    ///
+    /// # Example
+    /// ```
+    /// use pmcp::server::workflow::{WorkflowStep, ToolHandle};
+    ///
+    /// let step = WorkflowStep::new("match_project", ToolHandle::new("add_task"))
+    ///     .with_guidance("Find the page name from the list above that best matches '{project}'");
+    /// ```
+    ///
+    /// # Use Cases
+    ///
+    /// Use guidance when:
+    /// - The step requires LLM reasoning (fuzzy matching, context-aware decisions)
+    /// - The server cannot resolve all parameters deterministically
+    /// - You want to enable hybrid execution (server starts, client continues)
+    #[must_use]
+    pub fn with_guidance(mut self, guidance: impl Into<String>) -> Self {
+        self.guidance = Some(guidance.into());
+        self
+    }
+
+    /// Add a resource to fetch and embed before executing this step (chainable)
+    ///
+    /// Resources are fetched server-side during workflow execution and their content
+    /// is embedded in the conversation trace as user messages. This ensures the client
+    /// LLM has all necessary context (tool results + resource content) when it continues
+    /// execution.
+    ///
+    /// Multiple resources can be added by calling this method multiple times.
+    ///
+    /// # Example
+    /// ```
+    /// use pmcp::server::workflow::{WorkflowStep, ToolHandle};
+    ///
+    /// let step = WorkflowStep::new("add_task", ToolHandle::new("add_journal_task"))
+    ///     .with_guidance("Format the task as shown in the guide")
+    ///     .with_resource("docs://logseq/task-format")
+    ///     .expect("Valid resource URI");
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `WorkflowError` if the URI is invalid (must use resource:// or file:// scheme)
+    ///
+    /// # Use Cases
+    ///
+    /// Use resources when:
+    /// - The step requires documentation or context that's stored as a resource
+    /// - You want to provide formatting guides, examples, or schemas to the client LLM
+    /// - The resource content is needed for the client to make informed decisions
+    pub fn with_resource(mut self, uri: impl AsRef<str>) -> Result<Self, WorkflowError> {
+        let handle = ResourceHandle::new(uri)?;
+        self.resources.push(handle);
+        Ok(self)
+    }
+
     /// Get step name
     pub fn name(&self) -> &StepName {
         &self.name
@@ -92,6 +173,16 @@ impl WorkflowStep {
     /// Get binding name if set
     pub fn binding(&self) -> Option<&BindingName> {
         self.binding.as_ref()
+    }
+
+    /// Get guidance text if set
+    pub fn guidance(&self) -> Option<&str> {
+        self.guidance.as_deref()
+    }
+
+    /// Get resources to fetch for this step
+    pub fn resources(&self) -> &[ResourceHandle] {
+        &self.resources
     }
 
     /// Validate the step

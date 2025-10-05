@@ -71,7 +71,7 @@ fn test_workflow_prompt_info_round_trip() {
         .argument("project", "Project name", true)
         .argument("task", "Task description", true);
 
-    let handler = WorkflowPromptHandler::new(workflow, HashMap::new(), HashMap::new());
+    let handler = WorkflowPromptHandler::new(workflow, HashMap::new(), HashMap::new(), None);
 
     let metadata = handler.metadata().expect("Should have metadata");
 

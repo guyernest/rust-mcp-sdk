@@ -4,6 +4,8 @@
 [Foreword](foreword.md)
 [Introduction](introduction.md)
 
+- [Chapter 0: Why MCP?](ch00-why-mcp.md)
+
 ## Part I: Getting Started
 
 - [Chapter 1: Installation & Setup](ch01-installation.md)

@@ -287,6 +287,11 @@ impl Server {
         self.prompts.contains_key(name)
     }
 
+    /// Get a prompt handler by name
+    pub fn get_prompt(&self, name: &str) -> Option<&Arc<dyn PromptHandler>> {
+        self.prompts.get(name)
+    }
+
     /// Build tool and resource registries for workflow expansion.
     ///
     /// Creates `HashMap` registries that can be used to build an `ExpansionContext`
@@ -1956,13 +1961,24 @@ impl ServerBuilder {
             }
         }
 
-        let resources = std::collections::HashMap::new();
+        // Build tool handlers map for workflow execution
+        // Clone Arc references for shared ownership
+        let mut tool_handlers: std::collections::HashMap<Arc<str>, Arc<dyn ToolHandler>> =
+            std::collections::HashMap::new();
+        for (name, handler) in &self.tools {
+            tool_handlers.insert(Arc::from(name.as_str()), Arc::clone(handler));
+        }
 
         // Get the workflow name before moving it
         let name = workflow.name().to_string();
 
-        // Create workflow prompt handler
-        let handler = workflow::WorkflowPromptHandler::new(workflow, tools, resources);
+        // Create workflow prompt handler with tool execution and resource fetching capability
+        let handler = workflow::WorkflowPromptHandler::new(
+            workflow,
+            tools,
+            tool_handlers,
+            self.resources.clone(),
+        );
 
         // Register as a prompt
         self.prompts.insert(name, Arc::new(handler));

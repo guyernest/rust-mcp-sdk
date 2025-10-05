@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.2] - 2025-10-04
+
+### Added
+- **Hybrid Workflow Execution Model**: Server-side tool execution with graceful client handoff
+  - Workflows now execute deterministic steps during `prompts/get` and return conversation traces
+  - Server-side tool execution improves workflow compliance from ~60-70% to ~85-95%
+  - Graceful handoff when parameters require LLM reasoning
+
+- **Server-Side Resource Fetching**: `.with_resource(uri)` on workflow steps
+  - Resources fetched and embedded during workflow execution
+  - Content embedded as user messages in conversation trace
+  - Multiple resources per step supported
+  - Reduces LLM hallucination by providing actual documentation
+
+- **Workflow Guidance Messages**: `.with_guidance(text)` on workflow steps
+  - Assistant messages explaining what each step should accomplish
+  - Supports `{arg_name}` argument substitution with actual values
+  - Critical for graceful handoff to client LLM
+  - Shown even when server executes the step
+
+- **New Example**: `examples/54_hybrid_workflow_execution.rs`
+  - Demonstrates Logseq task creation with fuzzy page matching
+  - Shows server-side execution (list_pages) + client continuation (matching)
+  - Includes resource embedding for task format documentation
+  - Complete hybrid execution pattern
+
+### Improved
+- **Workflow Execution**: Server executes steps with resolved parameters, stops when reasoning needed
+- **Client Autonomy Support**: Designed for autonomous MCP clients that can follow, ignore, or modify instructions
+- **Conversation Traces**: Return complete execution history (tool results + resources + guidance)
+- **Parameter Resolution**: Validates tool schema satisfaction before execution
+- **Error Handling**: Graceful failure with informative error messages in conversation trace
+
+### Documentation
+- Updated Chapter 7 (Prompts) with comprehensive hybrid execution documentation
+- Added section on MCP client autonomy and compliance metrics
+- Documented `.with_guidance()` and `.with_resource()` methods
+- Added best practices for hybrid workflow design
+- Updated comparison table showing execution model differences
+
+### Fixed
+- CI technical debt checker false positive on test string containing "TODO" documentation example
+
 ## [1.6.1] - 2025-10-02
 
 ### Added
