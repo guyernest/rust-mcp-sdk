@@ -78,6 +78,34 @@ The schema is automatically generated and included in the `tools/list` response,
 - **Documentation**: Schema includes descriptions from doc comments
 - **Validation**: Runtime validation against the generated schema
 
+## 🎉 Version 1.6.2 - Hybrid Workflow Execution & Server-Side Resource Fetching!
+
+### 🚀 **Prompts as Workflows - Built-in Support**
+- **Hybrid Execution Model**: Server executes deterministic steps, client continues with full context
+  - 📈 **Compliance Improvement**: ~60-70% (instruction-only) → ~85-95% (hybrid execution)
+  - 🔄 **Server-Side Tool Execution**: Tools execute during `prompts/get`, return conversation traces
+  - 📚 **Resource Embedding**: Automatic fetch and embed of documentation/context
+  - 🎯 **Graceful Handoff**: Server does deterministic work, hands off with guidance
+
+- **New Workflow Features**:
+  - ✨ **`.with_guidance(text)`**: Assistant messages explaining what steps should do
+  - 📦 **`.with_resource(uri)`**: Server-side resource fetching and embedding
+  - 🔄 **Argument Substitution**: `{arg_name}` placeholders in guidance replaced with actual values
+  - 🤖 **Client Autonomy Awareness**: Designed for autonomous MCP clients that can follow, ignore, or modify instructions
+
+- **Complete Hybrid Execution**:
+  - Server creates user intent + assistant plan messages
+  - Server executes steps with resolved parameters
+  - Server fetches and embeds resources as user messages
+  - Server stops when parameters need LLM reasoning (graceful handoff)
+  - Client receives: tool results + resources + guidance → continues with complete context
+
+### 📚 **New Example**:
+- `54_hybrid_workflow_execution` - Logseq task creation with fuzzy matching and resource embedding
+
+### 📖 **Documentation**:
+- Updated Chapter 7 with hybrid execution model, client autonomy, and compliance metrics
+
 ## 🎉 Version 1.6.0 - Production-Ready Type-Safe Tools & Cross-Transport Support!
 
 ### 🚀 **Type-Safe Schema Generation Enhancement**
