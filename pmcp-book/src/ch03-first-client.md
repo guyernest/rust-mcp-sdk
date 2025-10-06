@@ -751,26 +751,41 @@ match client.initialize(capabilities).await {
 
 ### 2. Capability Negotiation
 
-**Declare only what you need:**
+**Important:** Client capabilities indicate what the CLIENT can do (handle sampling requests, provide user input). Server capabilities (tools, prompts, resources) are advertised by SERVERS, not clients.
+
+**Declare only what you support:**
 
 ```rust
 let capabilities = ClientCapabilities {
-    // Only request tools if you'll use them
-    tools: Some(pmcp::types::ToolCapabilities::default()),
+    // Advertise if you can handle LLM sampling requests from the server
+    sampling: Some(pmcp::types::SamplingCapabilities::default()),
 
-    // Don't request sampling if your client doesn't support LLM calls
-    sampling: None,
+    // Advertise if you can provide user input when requested
+    elicitation: Some(pmcp::types::ElicitationCapabilities::default()),
+
+    // Advertise if you support roots/workspace notifications
+    roots: Some(pmcp::types::RootsCapabilities::default()),
 
     ..Default::default()
 };
+
+// Or use minimal() for most clients (no special features)
+let capabilities = ClientCapabilities::minimal();
 ```
 
-**Check server capabilities before use:**
+**Check SERVER capabilities before use:**
 
 ```rust
+// Check if the SERVER provides tools (not the client!)
 if !server_info.capabilities.provides_tools() {
-    eprintln!("Server doesn't support tools");
-    return Err("Missing required capability".into());
+    eprintln!("Server doesn't provide tools");
+    return Err("Missing required server capability".into());
+}
+
+// Check if the SERVER provides resources
+if !server_info.capabilities.provides_resources() {
+    eprintln!("Server doesn't provide resources");
+    return Err("Server must provide resources".into());
 }
 ```
 

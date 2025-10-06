@@ -109,12 +109,8 @@ async fn run_logging_client() -> Result<(), Box<dyn std::error::Error>> {
     let transport = StdioTransport::new();
     let mut client = Client::new(transport);
 
-    // Enable logging support
-    let capabilities = ClientCapabilities {
-        logging: Some(Default::default()),
-        tools: Some(Default::default()),
-        ..Default::default()
-    };
+    // Use minimal capabilities - logging is a server feature, not a client capability
+    let capabilities = ClientCapabilities::minimal();
 
     // Set up log handler (not yet implemented in client)
     // In a real implementation, this would handle log messages from the server

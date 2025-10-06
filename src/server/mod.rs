@@ -417,11 +417,11 @@ impl Server {
     ///
     /// // Check client capabilities after initialization
     /// if let Some(capabilities) = server.get_client_capabilities().await {
-    ///     if capabilities.tools.is_some() {
-    ///         println!("Client supports tools");
+    ///     if capabilities.sampling.is_some() {
+    ///         println!("Client supports LLM sampling requests");
     ///     }
-    ///     if capabilities.resources.is_some() {
-    ///         println!("Client supports resources");
+    ///     if capabilities.elicitation.is_some() {
+    ///         println!("Client supports user input requests");
     ///     }
     /// }
     /// # Ok(())
@@ -2347,7 +2347,7 @@ mod tests {
     use crate::shared::Transport;
     use crate::types::{
         jsonrpc::ResponsePayload, ClientCapabilities, InitializeRequest, ServerCapabilities,
-        ToolCapabilities, TransportMessage,
+        TransportMessage,
     };
     use async_trait::async_trait;
     use serde_json::json;
@@ -2536,10 +2536,7 @@ mod tests {
             id: RequestId::from(1i64),
             request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest {
                 protocol_version: "2024-11-05".to_string(),
-                capabilities: ClientCapabilities {
-                    tools: Some(ToolCapabilities::default()),
-                    ..Default::default()
-                },
+                capabilities: ClientCapabilities::minimal(),
                 client_info: Implementation {
                     name: "test-client".to_string(),
                     version: "1.0.0".to_string(),

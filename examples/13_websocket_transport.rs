@@ -31,10 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize the connection
     info!("Initializing MCP connection");
-    let capabilities = ClientCapabilities {
-        tools: Some(Default::default()),
-        ..Default::default()
-    };
+    let capabilities = ClientCapabilities::minimal();
 
     let server_info = client.initialize(capabilities).await?;
     info!(

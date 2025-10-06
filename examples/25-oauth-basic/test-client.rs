@@ -37,10 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut client = Client::new(transport.clone());
 
     // Define client capabilities
-    let capabilities = ClientCapabilities {
-        tools: Some(Default::default()),
-        ..Default::default()
-    };
+    let capabilities = ClientCapabilities::minimal();
 
     // Initialize connection
     println!("📡 Initializing connection...");

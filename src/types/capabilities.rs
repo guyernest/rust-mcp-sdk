@@ -23,25 +23,13 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientCapabilities {
-    /// Tool calling capabilities
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<ToolCapabilities>,
-
-    /// Prompt capabilities
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompts: Option<PromptCapabilities>,
-
-    /// Resource capabilities
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub resources: Option<ResourceCapabilities>,
-
-    /// Logging capabilities
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub logging: Option<LoggingCapabilities>,
-
     /// Sampling capabilities (for LLM providers)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sampling: Option<SamplingCapabilities>,
+
+    /// Elicitation capabilities (for user input)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elicitation: Option<ElicitationCapabilities>,
 
     /// Roots capabilities
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -134,6 +122,17 @@ pub struct SamplingCapabilities {
     pub models: Option<Vec<String>>,
 }
 
+/// Elicitation capabilities for user input.
+///
+/// This capability indicates that the client supports requesting user input
+/// during tool execution or other operations. The structure is intentionally
+/// minimal as per the MCP specification.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationCapabilities {
+    // Empty object as per MCP spec - client just advertises support
+}
+
 /// Roots capabilities.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -162,10 +161,8 @@ impl ClientCapabilities {
     ///
     /// // Create minimal capabilities (no features advertised)
     /// let capabilities = ClientCapabilities::minimal();
-    /// assert!(!capabilities.supports_tools());
-    /// assert!(!capabilities.supports_prompts());
-    /// assert!(!capabilities.supports_resources());
     /// assert!(!capabilities.supports_sampling());
+    /// assert!(!capabilities.supports_elicitation());
     ///
     /// // Use in client initialization
     /// # use pmcp::{Client, StdioTransport};
@@ -182,23 +179,25 @@ impl ClientCapabilities {
 
     /// Create a full set of client capabilities.
     ///
+    /// Advertises all standard client capabilities defined in the MCP specification.
+    /// Note: Client capabilities indicate what the CLIENT can do (e.g., handle sampling
+    /// requests, provide user input). Server capabilities (tools, prompts, resources)
+    /// are advertised by servers, not clients.
+    ///
     /// # Examples
     ///
     /// ```rust
     /// use pmcp::ClientCapabilities;
     ///
-    /// // Create full capabilities (all features supported)
+    /// // Create full capabilities (all client features supported)
     /// let capabilities = ClientCapabilities::full();
-    /// assert!(capabilities.supports_tools());
-    /// assert!(capabilities.supports_prompts());
-    /// assert!(capabilities.supports_resources());
     /// assert!(capabilities.supports_sampling());
+    /// assert!(capabilities.supports_elicitation());
     ///
     /// // Inspect specific capabilities
-    /// assert!(capabilities.tools.unwrap().list_changed.unwrap());
-    /// assert!(capabilities.resources.unwrap().subscribe.unwrap());
+    /// assert!(capabilities.roots.unwrap().list_changed);
     ///
-    /// // Use in client that needs all features
+    /// // Use in client that supports all MCP client features
     /// # use pmcp::{Client, StdioTransport};
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let transport = StdioTransport::new();
@@ -209,130 +208,43 @@ impl ClientCapabilities {
     /// ```
     pub fn full() -> Self {
         Self {
-            tools: Some(ToolCapabilities {
-                list_changed: Some(true),
-            }),
-            prompts: Some(PromptCapabilities {
-                list_changed: Some(true),
-            }),
-            resources: Some(ResourceCapabilities {
-                subscribe: Some(true),
-                list_changed: Some(true),
-            }),
-            logging: Some(LoggingCapabilities {
-                levels: Some(vec![
-                    "debug".to_string(),
-                    "info".to_string(),
-                    "warning".to_string(),
-                    "error".to_string(),
-                ]),
-            }),
             sampling: Some(SamplingCapabilities::default()),
+            elicitation: Some(ElicitationCapabilities::default()),
             roots: Some(RootsCapabilities { list_changed: true }),
             experimental: None,
         }
     }
 
-    /// Check if the client supports tools.
+    /// Check if the client supports elicitation (user input requests).
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use pmcp::{ClientCapabilities, types::capabilities::ToolCapabilities};
+    /// use pmcp::{ClientCapabilities, types::capabilities::ElicitationCapabilities};
     ///
-    /// // Minimal capabilities don't support tools
-    /// let minimal = ClientCapabilities::minimal();
-    /// assert!(!minimal.supports_tools());
-    ///
-    /// // Full capabilities support tools
-    /// let full = ClientCapabilities::full();
-    /// assert!(full.supports_tools());
-    ///
-    /// // Custom capabilities with only tools
-    /// let tools_only = ClientCapabilities {
-    ///     tools: Some(ToolCapabilities {
-    ///         list_changed: Some(true),
-    ///     }),
-    ///     ..Default::default()
-    /// };
-    /// assert!(tools_only.supports_tools());
-    ///
-    /// // Use to conditionally enable features
-    /// fn setup_client(caps: &ClientCapabilities) {
-    ///     if caps.supports_tools() {
-    ///         println!("Client can call tools");
-    ///     }
-    /// }
-    /// ```
-    pub fn supports_tools(&self) -> bool {
-        self.tools.is_some()
-    }
-
-    /// Check if the client supports prompts.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use pmcp::{ClientCapabilities, types::capabilities::PromptCapabilities};
-    ///
-    /// // Check prompt support
+    /// // Check elicitation support
     /// let caps = ClientCapabilities::full();
-    /// assert!(caps.supports_prompts());
+    /// assert!(caps.supports_elicitation());
     ///
-    /// // Build capabilities with just prompts
-    /// let prompts_only = ClientCapabilities {
-    ///     prompts: Some(PromptCapabilities {
-    ///         list_changed: Some(true),
-    ///     }),
+    /// // Build capabilities with elicitation
+    /// let interactive_client = ClientCapabilities {
+    ///     elicitation: Some(ElicitationCapabilities::default()),
     ///     ..Default::default()
     /// };
-    /// assert!(prompts_only.supports_prompts());
-    /// assert!(!prompts_only.supports_tools());
+    /// assert!(interactive_client.supports_elicitation());
     ///
-    /// // Conditional logic based on prompt support
+    /// // Use for interactive tools
     /// # use pmcp::{Client, StdioTransport};
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let caps = ClientCapabilities::full();
-    /// if caps.supports_prompts() {
-    ///     // Client can use prompts
-    ///     println!("This client supports prompts");
+    /// if caps.supports_elicitation() {
+    ///     println!("Client can handle user input requests");
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    pub fn supports_prompts(&self) -> bool {
-        self.prompts.is_some()
-    }
-
-    /// Check if the client supports resources.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use pmcp::{ClientCapabilities, types::capabilities::ResourceCapabilities};
-    ///
-    /// // Check resource support with subscriptions
-    /// let caps = ClientCapabilities::full();
-    /// assert!(caps.supports_resources());
-    ///
-    /// // Build capabilities with advanced resource features
-    /// let advanced_resources = ClientCapabilities {
-    ///     resources: Some(ResourceCapabilities {
-    ///         subscribe: Some(true),
-    ///         list_changed: Some(true),
-    ///     }),
-    ///     ..Default::default()
-    /// };
-    /// assert!(advanced_resources.supports_resources());
-    ///
-    /// // Check specific resource capabilities
-    /// if let Some(resource_caps) = &advanced_resources.resources {
-    ///     assert!(resource_caps.subscribe.unwrap_or(false));
-    ///     println!("Client can subscribe to resource changes");
-    /// }
-    /// ```
-    pub fn supports_resources(&self) -> bool {
-        self.resources.is_some()
+    pub fn supports_elicitation(&self) -> bool {
+        self.elicitation.is_some()
     }
 
     /// Check if the client supports sampling.
@@ -662,16 +574,12 @@ mod tests {
     #[test]
     fn client_capabilities_helpers() {
         let minimal = ClientCapabilities::minimal();
-        assert!(!minimal.supports_tools());
-        assert!(!minimal.supports_prompts());
-        assert!(!minimal.supports_resources());
         assert!(!minimal.supports_sampling());
+        assert!(!minimal.supports_elicitation());
 
         let full = ClientCapabilities::full();
-        assert!(full.supports_tools());
-        assert!(full.supports_prompts());
-        assert!(full.supports_resources());
         assert!(full.supports_sampling());
+        assert!(full.supports_elicitation());
     }
 
     #[test]
@@ -690,14 +598,19 @@ mod tests {
     #[test]
     fn capabilities_serialization() {
         let caps = ClientCapabilities {
-            tools: Some(ToolCapabilities {
-                list_changed: Some(true),
-            }),
+            sampling: Some(SamplingCapabilities::default()),
+            elicitation: Some(ElicitationCapabilities::default()),
+            roots: Some(RootsCapabilities { list_changed: true }),
             ..Default::default()
         };
 
         let json = serde_json::to_value(&caps).unwrap();
-        assert_eq!(json["tools"]["listChanged"], true);
+        assert!(json.get("sampling").is_some());
+        assert!(json.get("elicitation").is_some());
+        assert_eq!(json["roots"]["listChanged"], true);
+        // Verify invalid fields are not present
+        assert!(json.get("tools").is_none());
         assert!(json.get("prompts").is_none());
+        assert!(json.get("resources").is_none());
     }
 }

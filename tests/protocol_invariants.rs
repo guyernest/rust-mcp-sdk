@@ -252,30 +252,28 @@ proptest! {
 
     #[test]
     fn property_capabilities_never_empty_object(
-        has_tools in prop::bool::ANY,
-        has_prompts in prop::bool::ANY,
-        has_resources in prop::bool::ANY,
-        has_logging in prop::bool::ANY,
+        has_sampling in prop::bool::ANY,
+        has_elicitation in prop::bool::ANY,
+        has_roots in prop::bool::ANY,
     ) {
+        use pmcp::types::capabilities::{ElicitationCapabilities, RootsCapabilities, SamplingCapabilities};
+
         let mut caps = ClientCapabilities::default();
 
-        if has_tools {
-            caps.tools = Some(ToolCapabilities::default());
+        if has_sampling {
+            caps.sampling = Some(SamplingCapabilities::default());
         }
-        if has_prompts {
-            caps.prompts = Some(PromptCapabilities::default());
+        if has_elicitation {
+            caps.elicitation = Some(ElicitationCapabilities::default());
         }
-        if has_resources {
-            caps.resources = Some(ResourceCapabilities::default());
-        }
-        if has_logging {
-            caps.logging = Some(LoggingCapabilities::default());
+        if has_roots {
+            caps.roots = Some(RootsCapabilities::default());
         }
 
         let json = serde_json::to_value(&caps).unwrap();
 
         // Empty capabilities should serialize to {}
-        if !has_tools && !has_prompts && !has_resources && !has_logging {
+        if !has_sampling && !has_elicitation && !has_roots {
             let empty = json!({});
             prop_assert_eq!(json.clone(), empty);
         } else {
@@ -284,9 +282,8 @@ proptest! {
 
         // Should always deserialize back correctly
         let parsed: ClientCapabilities = serde_json::from_value(json.clone()).unwrap();
-        prop_assert_eq!(caps.supports_tools(), parsed.supports_tools());
-        prop_assert_eq!(caps.supports_prompts(), parsed.supports_prompts());
-        prop_assert_eq!(caps.supports_resources(), parsed.supports_resources());
+        prop_assert_eq!(caps.supports_sampling(), parsed.supports_sampling());
+        prop_assert_eq!(caps.supports_elicitation(), parsed.supports_elicitation());
     }
 }
 

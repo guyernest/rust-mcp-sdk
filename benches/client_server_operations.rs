@@ -5,6 +5,7 @@
 
 use async_trait::async_trait;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use pmcp::types::capabilities::ElicitationCapabilities;
 use pmcp::types::*;
 use pmcp::{Server, ToolHandler};
 use serde_json::{json, Value};
@@ -273,20 +274,10 @@ fn bench_capabilities(c: &mut Criterion) {
     let mut group = c.benchmark_group("capabilities");
 
     let full_client_capabilities = ClientCapabilities {
-        tools: Some(ToolCapabilities {
-            list_changed: Some(true),
-        }),
-        prompts: Some(PromptCapabilities {
-            list_changed: Some(true),
-        }),
-        resources: Some(ResourceCapabilities {
-            subscribe: Some(true),
-            list_changed: Some(true),
-        }),
-        roots: Some(RootsCapabilities { list_changed: true }),
         sampling: Some(SamplingCapabilities { models: None }),
+        elicitation: Some(ElicitationCapabilities::default()),
+        roots: Some(RootsCapabilities { list_changed: true }),
         experimental: None,
-        logging: None,
     };
 
     group.bench_function("serialize_full_client_capabilities", |b| {

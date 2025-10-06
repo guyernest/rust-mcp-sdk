@@ -176,10 +176,9 @@ fn bench_capabilities(c: &mut Criterion) {
 
     group.bench_function("client_capability_checks", |b| {
         b.iter(|| {
-            black_box(client_caps.supports_tools());
-            black_box(client_caps.supports_resources());
-            black_box(client_caps.supports_prompts());
             black_box(client_caps.supports_sampling());
+            black_box(client_caps.supports_elicitation());
+            black_box(client_caps.roots.is_some());
         });
     });
 

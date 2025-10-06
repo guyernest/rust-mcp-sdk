@@ -10,22 +10,13 @@ prop_compose! {
         version_idx in 0..3usize,
         client_name in "[a-zA-Z][a-zA-Z0-9_-]{0,20}",
         client_version in "[0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]{1,2}",
-        has_tools in prop::bool::ANY,
-        has_resources in prop::bool::ANY,
-        has_prompts in prop::bool::ANY,
     ) -> InitializeParams {
         let versions = ["2024-11-05", "2024-10-15", "2024-09-01"];
 
-        let mut capabilities = ClientCapabilities::default();
-        if has_tools {
-            capabilities.tools = Some(ToolCapabilities::default());
-        }
-        if has_resources {
-            capabilities.resources = Some(ResourceCapabilities::default());
-        }
-        if has_prompts {
-            capabilities.prompts = Some(PromptCapabilities::default());
-        }
+        // Note: Client capabilities are what the CLIENT supports (sampling, elicitation, roots)
+        // not what the SERVER provides (tools, resources, prompts)
+        // For property testing, we just use minimal capabilities
+        let capabilities = ClientCapabilities::minimal();
 
         InitializeParams {
             protocol_version: versions[version_idx % versions.len()].to_string(),

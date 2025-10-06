@@ -78,6 +78,52 @@ The schema is automatically generated and included in the `tools/list` response,
 - **Documentation**: Schema includes descriptions from doc comments
 - **Validation**: Runtime validation against the generated schema
 
+## 🎉 Version 1.7.0 - ClientCapabilities Schema Fix for MCP Specification Compliance!
+
+### 🛡️ **BREAKING CHANGE: Fixed ClientCapabilities Schema**
+- **🔧 Spec Compliance**: `ClientCapabilities` now matches the official MCP specification
+  - ❌ **REMOVED**: `tools`, `prompts`, `resources`, `logging` fields (these are SERVER capabilities only)
+  - ✅ **ADDED**: `elicitation` field for user input support
+  - ✅ **KEPT**: `sampling`, `roots`, `experimental` (valid client capabilities)
+
+- **🎯 Why This Matters**:
+  - ✅ **Cursor IDE Compatible**: Fixes "Method not found: initialize" errors with spec-compliant clients
+  - ✅ **TypeScript SDK Parity**: Now 100% compatible with official TypeScript SDK
+  - ✅ **mcp-tester Fixed**: Universal testing tool now sends correct capabilities
+  - 📖 **Clear Separation**: Client capabilities (what client can do) vs Server capabilities (what server provides)
+
+- **📝 Migration Guide**:
+  ```rust
+  // Before (WRONG - not spec compliant):
+  let caps = ClientCapabilities {
+      tools: Some(ToolCapabilities::default()),     // ❌ Invalid for clients
+      prompts: Some(PromptCapabilities::default()), // ❌ Invalid for clients
+      ..Default::default()
+  };
+
+  // After (CORRECT - spec compliant):
+  let caps = ClientCapabilities {
+      sampling: Some(SamplingCapabilities::default()),      // ✅ Client can handle sampling requests
+      elicitation: Some(ElicitationCapabilities::default()), // ✅ Client can provide user input
+      roots: Some(RootsCapabilities::default()),            // ✅ Client supports roots notifications
+      ..Default::default()
+  };
+
+  // Or simply use minimal() for most clients:
+  let caps = ClientCapabilities::minimal();
+  ```
+
+- **🔨 What Changed**:
+  - API: Removed `supports_tools()`, `supports_prompts()`, `supports_resources()` from `ClientCapabilities`
+  - API: Added `supports_elicitation()` to `ClientCapabilities`
+  - All examples updated to use correct capabilities
+  - mcp-tester fixed to send spec-compliant capabilities
+  - Documentation clarifies client vs server capabilities
+
+- **✅ Wire Protocol Compatibility**: Existing servers remain compatible - old clients will still work, but should be updated
+
+---
+
 ## 🎉 Version 1.6.2 - Hybrid Workflow Execution & Server-Side Resource Fetching!
 
 ### 🚀 **Prompts as Workflows - Built-in Support**
@@ -457,7 +503,7 @@ mcp-tester test http://localhost:8080
 # Test with tools validation
 mcp-tester test http://localhost:8080 --with-tools
 
-# Protocol compliance check
+# Protocol compliance check (includes Cursor IDE compatibility test)
 mcp-tester compliance http://localhost:8080 --strict
 
 # Connection diagnostics
