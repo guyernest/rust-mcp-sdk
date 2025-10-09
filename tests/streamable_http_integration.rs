@@ -55,6 +55,7 @@ async fn test_streamable_http_stateless_mode() {
         session_id: None,
         enable_json_response: true,
         on_resumption_token: None,
+        http_middleware_chain: None,
     };
 
     let mut transport = StreamableHttpTransport::new(client_config);
@@ -131,6 +132,7 @@ async fn test_streamable_http_stateful_mode() {
         session_id: None,
         enable_json_response: false,
         on_resumption_token: None,
+        http_middleware_chain: None,
     };
 
     let mut transport = StreamableHttpTransport::new(client_config);
@@ -227,6 +229,7 @@ async fn test_transport_send_receive_multiple() {
         session_id: None,
         enable_json_response: true,
         on_resumption_token: None,
+        http_middleware_chain: None,
     };
 
     let mut transport = StreamableHttpTransport::new(client_config);
@@ -308,6 +311,7 @@ async fn test_transport_with_headers() {
         session_id: None,
         enable_json_response: true,
         on_resumption_token: None,
+        http_middleware_chain: None,
     };
 
     let mut transport = StreamableHttpTransport::new(client_config);

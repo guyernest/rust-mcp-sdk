@@ -91,6 +91,7 @@ async fn test_workflow_prompt_metadata_over_http() -> Result<()> {
         session_id: None,
         enable_json_response: true,
         on_resumption_token: None,
+        http_middleware_chain: None,
     };
     let transport = StreamableHttpTransport::new(config);
     let mut client = Client::new(transport);

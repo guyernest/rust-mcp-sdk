@@ -42,6 +42,7 @@ async fn test_streamable_http_transport_send_receive() -> Result<()> {
         session_id: None,
         enable_json_response: false,
         on_resumption_token: None,
+        http_middleware_chain: None,
     };
     let mut client_transport = StreamableHttpTransport::new(client_config);
 

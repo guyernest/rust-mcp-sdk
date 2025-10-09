@@ -81,30 +81,77 @@ Accept rules:
 
 ## Client (Streamable HTTP)
 
-Types: `pmcp::shared::streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig}` (feature: `streamable-http`).
+Types: `pmcp::shared::streamable_http::{StreamableHttpTransport, StreamableHttpConfig}` (feature: `streamable-http`).
+
+### Basic Client
 
 ```rust
-use pmcp::{Client, ClientCapabilities};
-use pmcp::shared::streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig};
-use url::Url;
+use pmcp::{ClientBuilder, ClientCapabilities};
+use pmcp::shared::{StreamableHttpTransport, StreamableHttpConfig};
 
 #[tokio::main]
 async fn main() -> pmcp::Result<()> {
-    let cfg = StreamableHttpTransportConfig {
-        url: Url::parse("http://localhost:8080")?,
-        extra_headers: vec![],
-        auth_provider: None,
-        session_id: None,
-        enable_json_response: true, // or false to use SSE
-        on_resumption_token: None,
-    };
+    let config = StreamableHttpConfig::new("http://localhost:8080".to_string())
+        .with_extra_headers(vec![
+            ("X-Custom-Header".to_string(), "value".to_string())
+        ]);
 
-    let transport = StreamableHttpTransport::new(cfg);
-    let mut client = Client::new(transport);
+    let transport = StreamableHttpTransport::with_config(config).await?;
+    let mut client = ClientBuilder::new(transport).build();
+
     let _info = client.initialize(ClientCapabilities::minimal()).await?;
     Ok(())
 }
 ```
+
+### HTTP Middleware Support
+
+StreamableHttpTransport supports HTTP-level middleware for authentication, headers, and request/response processing:
+
+```rust
+use pmcp::{ClientBuilder, ClientCapabilities};
+use pmcp::shared::{StreamableHttpTransport, StreamableHttpConfig};
+use pmcp::client::http_middleware::HttpMiddlewareChain;
+use pmcp::client::oauth_middleware::{OAuthClientMiddleware, BearerToken};
+use std::sync::Arc;
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() -> pmcp::Result<()> {
+    // 1. Create HTTP middleware chain
+    let mut http_chain = HttpMiddlewareChain::new();
+
+    // Add OAuth middleware for automatic token injection
+    let token = BearerToken::with_expiry(
+        "api-token-12345".to_string(),
+        Duration::from_secs(3600) // 1 hour
+    );
+    http_chain.add(Arc::new(OAuthClientMiddleware::new(token)));
+
+    // 2. Create transport config with HTTP middleware
+    let config = StreamableHttpConfig::new("http://localhost:8080".to_string())
+        .with_http_middleware(Arc::new(http_chain));
+
+    let transport = StreamableHttpTransport::with_config(config).await?;
+
+    // 3. Create client (protocol middleware optional)
+    let mut client = ClientBuilder::new(transport).build();
+
+    let _info = client.initialize(ClientCapabilities::minimal()).await?;
+    Ok(())
+}
+```
+
+**HTTP Middleware Features**:
+- Automatic OAuth token injection (OAuthClientMiddleware)
+- Token expiry checking and refresh triggers
+- Custom header injection (implement HttpMiddleware trait)
+- Request/response logging and metrics at HTTP layer
+- Priority-based execution ordering
+
+**OAuth Precedence**: If both `auth_provider` and HTTP middleware OAuth are configured, `auth_provider` takes precedence to avoid duplicate authentication.
+
+See [Chapter 11: Middleware](ch11-middleware.md#http-level-middleware) for complete HTTP middleware documentation.
 
 ## Examples
 

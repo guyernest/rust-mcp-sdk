@@ -1,7 +1,9 @@
 //! MCP client implementation.
 
 use crate::error::{Error, Result};
-use crate::shared::{Protocol, ProtocolOptions, Transport};
+use crate::shared::{
+    EnhancedMiddlewareChain, MiddlewareContext, Protocol, ProtocolOptions, Transport,
+};
 use crate::types::{
     CallToolRequest, CallToolResult, CancelledNotification, ClientCapabilities, ClientNotification,
     ClientRequest, CompleteRequest, CompleteResult, CreateMessageRequest, CreateMessageResult,
@@ -26,12 +28,15 @@ use futures_locks::RwLock;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod auth;
+pub mod http_middleware;
+pub mod oauth_middleware;
 pub mod transport;
 
 /// MCP client for connecting to servers.
 pub struct Client<T: Transport> {
     transport: Arc<RwLock<T>>,
     protocol: Arc<RwLock<Protocol>>,
+    middleware_chain: Arc<RwLock<EnhancedMiddlewareChain>>,
     capabilities: Option<ClientCapabilities>,
     server_capabilities: Option<ServerCapabilities>,
     server_version: Option<Implementation>,
@@ -100,6 +105,7 @@ impl<T: Transport> Client<T> {
         Self {
             transport: Arc::new(RwLock::new(transport)),
             protocol: Arc::new(RwLock::new(Protocol::new(ProtocolOptions::default()))),
+            middleware_chain: Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             capabilities: None,
             server_capabilities: None,
             server_version: None,
@@ -144,6 +150,7 @@ impl<T: Transport> Client<T> {
         Self {
             transport: Arc::new(RwLock::new(transport)),
             protocol: Arc::new(RwLock::new(Protocol::new(options))),
+            middleware_chain: Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             capabilities: None,
             server_capabilities: None,
             server_version: None,
@@ -1262,12 +1269,27 @@ impl<T: Transport> Client<T> {
         request_id: RequestId,
         request: Request,
     ) -> Result<crate::types::JSONRPCResponse> {
+        use crate::shared::protocol_helpers::create_request;
+
         // Track request for cancellation
         let (cancel_tx, _cancel_rx) = oneshot::channel();
         self.active_requests
             .write()
             .await
             .insert(request_id.clone(), cancel_tx);
+
+        // Create middleware context
+        let context = MiddlewareContext::with_request_id(request_id.to_string());
+
+        // Convert to JSONRPC request
+        let mut jsonrpc_request = create_request(request_id.clone(), request.clone());
+
+        // Process request through middleware chain
+        self.middleware_chain
+            .write()
+            .await
+            .process_request_with_context(&mut jsonrpc_request, &context)
+            .await?;
 
         // Send request through transport
         let message = crate::types::TransportMessage::Request {
@@ -1285,7 +1307,15 @@ impl<T: Transport> Client<T> {
         self.active_requests.write().await.remove(&request_id);
 
         match response_message {
-            crate::types::TransportMessage::Response(response) => Ok(response),
+            crate::types::TransportMessage::Response(mut response) => {
+                // Process response through middleware chain
+                self.middleware_chain
+                    .write()
+                    .await
+                    .process_response_with_context(&mut response, &context)
+                    .await?;
+                Ok(response)
+            },
             _ => Err(Error::protocol_msg(
                 "Expected response, got different message type",
             )),
@@ -1335,6 +1365,7 @@ impl<T: Transport> Client<T> {
 pub struct ClientBuilder<T: Transport> {
     transport: T,
     options: ProtocolOptions,
+    middleware_chain: EnhancedMiddlewareChain,
 }
 
 impl<T: Transport> std::fmt::Debug for ClientBuilder<T> {
@@ -1352,6 +1383,7 @@ impl<T: Transport> ClientBuilder<T> {
         Self {
             transport,
             options: ProtocolOptions::default(),
+            middleware_chain: EnhancedMiddlewareChain::new(),
         }
     }
 
@@ -1367,16 +1399,73 @@ impl<T: Transport> ClientBuilder<T> {
         self
     }
 
+    /// Add middleware to the client.
+    ///
+    /// Middleware are executed in priority order (Critical → High → Normal → Low → Lowest).
+    /// Multiple middleware with the same priority are executed in the order they were added.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::{ClientBuilder, StdioTransport};
+    /// use pmcp::shared::MetricsMiddleware;
+    /// use std::sync::Arc;
+    ///
+    /// # async fn example() -> Result<(), pmcp::Error> {
+    /// let transport = StdioTransport::new();
+    /// let client = ClientBuilder::new(transport)
+    ///     .with_middleware(Arc::new(MetricsMiddleware::new("my-service".to_string())))
+    ///     .build();
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_middleware(
+        mut self,
+        middleware: Arc<dyn crate::shared::AdvancedMiddleware>,
+    ) -> Self {
+        self.middleware_chain.add(middleware);
+        self
+    }
+
+    /// Set the entire middleware chain.
+    ///
+    /// This replaces any previously configured middleware.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::{ClientBuilder, StdioTransport};
+    /// use pmcp::shared::EnhancedMiddlewareChain;
+    ///
+    /// # async fn example() -> Result<(), pmcp::Error> {
+    /// let mut chain = EnhancedMiddlewareChain::new();
+    /// // Add middleware to chain...
+    ///
+    /// let transport = StdioTransport::new();
+    /// let client = ClientBuilder::new(transport)
+    ///     .middleware_chain(chain)
+    ///     .build();
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn middleware_chain(mut self, chain: EnhancedMiddlewareChain) -> Self {
+        self.middleware_chain = chain;
+        self
+    }
+
     /// Build the client.
     pub fn build(self) -> Client<T> {
-        Client::with_options(
+        let mut client = Client::with_options(
             self.transport,
             Implementation {
                 name: "pmcp-client".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
             self.options,
-        )
+        );
+        // Replace the default middleware chain with the configured one
+        client.middleware_chain = Arc::new(RwLock::new(self.middleware_chain));
+        client
     }
 }
 
@@ -1385,6 +1474,7 @@ impl<T: Transport> Clone for Client<T> {
         Self {
             transport: self.transport.clone(),
             protocol: self.protocol.clone(),
+            middleware_chain: self.middleware_chain.clone(),
             capabilities: self.capabilities.clone(),
             server_capabilities: self.server_capabilities.clone(),
             server_version: self.server_version.clone(),
