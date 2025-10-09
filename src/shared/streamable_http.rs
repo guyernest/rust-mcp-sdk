@@ -590,8 +590,13 @@ impl StreamableHttpTransport {
                 .status(status_code)
                 .body(Full::new(Bytes::new()))
                 .unwrap();
-            self.apply_response_middleware("POST", url.as_str(), &temp_response, body_bytes.to_vec())
-                .await?
+            self.apply_response_middleware(
+                "POST",
+                url.as_str(),
+                &temp_response,
+                body_bytes.to_vec(),
+            )
+            .await?
         } else {
             // No middleware - use body directly (fast path)
             body_bytes.to_vec()

@@ -17,8 +17,8 @@ use pmcp::shared::streamable_http::{
     AuthProvider, StreamableHttpTransport, StreamableHttpTransportConfig,
 };
 use pmcp::types::capabilities::ServerCapabilities;
-use pmcp::RequestHandlerExtra;
 use pmcp::ClientBuilder;
+use pmcp::RequestHandlerExtra;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
@@ -63,11 +63,8 @@ async fn test_oauth_middleware_injects_token() {
         on_session_closed: None,
     };
 
-    let server_instance = StreamableHttpServer::with_config(
-        "127.0.0.1:0".parse().unwrap(),
-        server.clone(),
-        config,
-    );
+    let server_instance =
+        StreamableHttpServer::with_config("127.0.0.1:0".parse().unwrap(), server.clone(), config);
 
     let (addr, handle) = server_instance.start().await.unwrap();
 
@@ -132,11 +129,8 @@ async fn test_auth_provider_takes_precedence_over_oauth() {
         on_session_closed: None,
     };
 
-    let server_instance = StreamableHttpServer::with_config(
-        "127.0.0.1:0".parse().unwrap(),
-        server.clone(),
-        config,
-    );
+    let server_instance =
+        StreamableHttpServer::with_config("127.0.0.1:0".parse().unwrap(), server.clone(), config);
 
     let (addr, handle) = server_instance.start().await.unwrap();
 
@@ -193,11 +187,8 @@ async fn test_oauth_token_expiry_triggers_error() {
         on_session_closed: None,
     };
 
-    let server_instance = StreamableHttpServer::with_config(
-        "127.0.0.1:0".parse().unwrap(),
-        server.clone(),
-        config,
-    );
+    let server_instance =
+        StreamableHttpServer::with_config("127.0.0.1:0".parse().unwrap(), server.clone(), config);
 
     let (addr, handle) = server_instance.start().await.unwrap();
 
@@ -254,20 +245,14 @@ async fn test_multiple_requests_with_oauth() {
         on_session_closed: None,
     };
 
-    let server_instance = StreamableHttpServer::with_config(
-        "127.0.0.1:0".parse().unwrap(),
-        server.clone(),
-        config,
-    );
+    let server_instance =
+        StreamableHttpServer::with_config("127.0.0.1:0".parse().unwrap(), server.clone(), config);
 
     let (addr, handle) = server_instance.start().await.unwrap();
 
     // Create HTTP middleware chain with OAuth
     let mut http_chain = HttpMiddlewareChain::new();
-    let token = BearerToken::with_expiry(
-        "persistent-token".to_string(),
-        Duration::from_secs(3600),
-    );
+    let token = BearerToken::with_expiry("persistent-token".to_string(), Duration::from_secs(3600));
     http_chain.add(Arc::new(OAuthClientMiddleware::new(token)));
 
     // Create client
@@ -315,11 +300,8 @@ async fn test_oauth_with_case_insensitive_header_check() {
         on_session_closed: None,
     };
 
-    let server_instance = StreamableHttpServer::with_config(
-        "127.0.0.1:0".parse().unwrap(),
-        server.clone(),
-        config,
-    );
+    let server_instance =
+        StreamableHttpServer::with_config("127.0.0.1:0".parse().unwrap(), server.clone(), config);
 
     let (addr, handle) = server_instance.start().await.unwrap();
 
@@ -333,7 +315,10 @@ async fn test_oauth_with_case_insensitive_header_check() {
         url: Url::parse(&format!("http://{}", addr)).unwrap(),
         extra_headers: vec![
             // This should be detected by OAuth middleware despite case difference
-            ("AUTHORIZATION".to_string(), "Bearer manual-token".to_string()),
+            (
+                "AUTHORIZATION".to_string(),
+                "Bearer manual-token".to_string(),
+            ),
         ],
         auth_provider: None,
         session_id: None,

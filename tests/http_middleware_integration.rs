@@ -418,13 +418,22 @@ async fn test_header_case_insensitivity() {
     assert!(request.has_header("Authorization"), "Mixed case check");
     assert!(request.has_header("AUTHORIZATION"), "Uppercase check");
     assert!(request.has_header("x-custom-header"), "Custom header check");
-    assert!(request.has_header("X-Custom-Header"), "Custom header mixed case");
+    assert!(
+        request.has_header("X-Custom-Header"),
+        "Custom header mixed case"
+    );
 
     // Verify remove_header is case-insensitive
     let removed = request.remove_header("CONTENT-TYPE");
     assert_eq!(removed, Some("application/json".to_string()));
-    assert!(!request.has_header("content-type"), "Header should be removed");
-    assert!(!request.has_header("Content-Type"), "Header should be removed (any case)");
+    assert!(
+        !request.has_header("content-type"),
+        "Header should be removed"
+    );
+    assert!(
+        !request.has_header("Content-Type"),
+        "Header should be removed (any case)"
+    );
 
     // Test HttpResponse case-insensitive headers
     let mut response = HttpResponse::new(200, vec![]);
@@ -479,7 +488,7 @@ async fn test_oauth_duplicate_detection_case_insensitive() {
 
     // Add Authorization header with different case than OAuth middleware uses
     request.add_header(
-        "AUTHORIZATION".to_string(),  // Uppercase
+        "AUTHORIZATION".to_string(), // Uppercase
         "Bearer existing-token".to_string(),
     );
 
@@ -488,12 +497,12 @@ async fn test_oauth_duplicate_detection_case_insensitive() {
 
     // Verify original header is preserved (should be stored as lowercase)
     assert_eq!(
-        request.get_header("authorization"),  // lowercase lookup
+        request.get_header("authorization"), // lowercase lookup
         Some(&"Bearer existing-token".to_string()),
         "Original header should be preserved"
     );
     assert_eq!(
-        request.get_header("Authorization"),  // mixed case lookup
+        request.get_header("Authorization"), // mixed case lookup
         Some(&"Bearer existing-token".to_string()),
         "Case-insensitive lookup should work"
     );
@@ -504,7 +513,11 @@ async fn test_oauth_duplicate_detection_case_insensitive() {
         .iter()
         .filter(|(k, _)| k.as_str() == "authorization")
         .collect();
-    assert_eq!(auth_headers.len(), 1, "Should only have one authorization header");
+    assert_eq!(
+        auth_headers.len(),
+        1,
+        "Should only have one authorization header"
+    );
 }
 
 #[tokio::test]
@@ -520,9 +533,18 @@ async fn test_middleware_chain_with_mixed_case_headers() {
             _context: &HttpMiddlewareContext,
         ) -> pmcp::Result<()> {
             // Check using different case variations
-            assert!(request.has_header("authorization"), "Should find auth header");
-            assert!(request.has_header("Authorization"), "Should be case-insensitive");
-            assert!(request.has_header("AUTHORIZATION"), "Should work with uppercase");
+            assert!(
+                request.has_header("authorization"),
+                "Should find auth header"
+            );
+            assert!(
+                request.has_header("Authorization"),
+                "Should be case-insensitive"
+            );
+            assert!(
+                request.has_header("AUTHORIZATION"),
+                "Should work with uppercase"
+            );
 
             let auth = request.get_header("AuThOrIzAtIoN");
             assert!(auth.is_some(), "Mixed case lookup should work");
@@ -557,5 +579,208 @@ async fn test_middleware_chain_with_mixed_case_headers() {
     assert_eq!(
         request.get_header("authorization"),
         Some(&"Bearer test-token".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_oauth_retry_coordination_with_metadata() {
+    use pmcp::client::oauth_middleware::{BearerToken, OAuthClientMiddleware};
+
+    /// Middleware that simulates a retry mechanism coordinating with OAuth
+    struct RetryCoordinationMiddleware {
+        retry_attempted: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl HttpMiddleware for RetryCoordinationMiddleware {
+        async fn on_error(
+            &self,
+            error: &pmcp::Error,
+            context: &HttpMiddlewareContext,
+        ) -> pmcp::Result<()> {
+            // Check if this is an auth error (from OAuth middleware)
+            if matches!(error, pmcp::Error::Authentication(_)) {
+                // Verify OAuth set the metadata
+                if context.get_metadata("auth_failure") == Some("true".to_string()) {
+                    // Check if retry was already attempted
+                    if context.get_metadata("oauth.retry_used").is_some() {
+                        // Don't retry again - would create infinite loop
+                        tracing::warn!("OAuth retry already attempted, not retrying again");
+                        return Ok(());
+                    }
+
+                    // Mark that we're attempting a retry
+                    context.set_metadata("oauth.retry_used".to_string(), "true".to_string());
+                    self.retry_attempted.fetch_add(1, AtomicOrdering::SeqCst);
+
+                    tracing::info!("Retry middleware: auth failure detected, would retry here");
+                }
+            }
+
+            Ok(())
+        }
+
+        fn priority(&self) -> i32 {
+            5 // Priority doesn't matter for on_error - all middleware called
+        }
+    }
+
+    let token = BearerToken::new("test-token".to_string());
+    let oauth_mw = Arc::new(OAuthClientMiddleware::new(token));
+
+    let retry_mw = Arc::new(RetryCoordinationMiddleware {
+        retry_attempted: Arc::new(AtomicUsize::new(0)),
+    });
+
+    let mut chain = HttpMiddlewareChain::new();
+    chain.add(oauth_mw);
+    chain.add(retry_mw.clone());
+
+    // Create a 401 response
+    let mut response = HttpResponse::new(401, vec![]);
+    let context = HttpMiddlewareContext::new("http://test.com".to_string(), "POST".to_string());
+
+    // Process response - OAuth should detect 401 and set metadata
+    let result = chain.process_response(&mut response, &context).await;
+
+    // OAuth should return error for 401
+    assert!(result.is_err(), "OAuth should return error for 401");
+
+    // Verify metadata was set
+    assert_eq!(
+        context.get_metadata("auth_failure"),
+        Some("true".to_string()),
+        "OAuth should set auth_failure metadata"
+    );
+    assert_eq!(
+        context.get_metadata("status_code"),
+        Some("401".to_string()),
+        "OAuth should set status_code metadata"
+    );
+
+    // Verify retry middleware detected it and marked retry as used
+    assert_eq!(
+        context.get_metadata("oauth.retry_used"),
+        Some("true".to_string()),
+        "Retry middleware should set retry_used metadata"
+    );
+
+    // Verify retry was attempted once
+    assert_eq!(
+        retry_mw.retry_attempted.load(AtomicOrdering::SeqCst),
+        1,
+        "Retry should have been attempted once"
+    );
+}
+
+#[tokio::test]
+async fn test_double_retry_protection() {
+    use pmcp::client::oauth_middleware::{BearerToken, OAuthClientMiddleware};
+
+    /// Middleware that tracks retry attempts
+    struct RetryTrackingMiddleware {
+        retry_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl HttpMiddleware for RetryTrackingMiddleware {
+        async fn on_error(
+            &self,
+            error: &pmcp::Error,
+            context: &HttpMiddlewareContext,
+        ) -> pmcp::Result<()> {
+            // Only retry on auth errors
+            if matches!(error, pmcp::Error::Authentication(_))
+                && context.get_metadata("auth_failure") == Some("true".to_string())
+            {
+                if context.get_metadata("oauth.retry_used").is_none() {
+                    // First retry
+                    context.set_metadata("oauth.retry_used".to_string(), "true".to_string());
+                    self.retry_count.fetch_add(1, AtomicOrdering::SeqCst);
+                    tracing::info!("First retry attempt");
+                } else {
+                    // Would be second retry - don't do it
+                    tracing::warn!("Retry already used, preventing double retry");
+                }
+            }
+            Ok(())
+        }
+
+        fn priority(&self) -> i32 {
+            5 // Priority doesn't matter for on_error - all middleware called
+        }
+    }
+
+    let token = BearerToken::new("test-token".to_string());
+    let oauth_mw = Arc::new(OAuthClientMiddleware::new(token));
+
+    let retry_tracker = Arc::new(RetryTrackingMiddleware {
+        retry_count: Arc::new(AtomicUsize::new(0)),
+    });
+
+    let mut chain = HttpMiddlewareChain::new();
+    chain.add(oauth_mw);
+    chain.add(retry_tracker.clone());
+
+    // Simulate first 401 response
+    let mut response1 = HttpResponse::new(401, vec![]);
+    let context = HttpMiddlewareContext::new("http://test.com".to_string(), "POST".to_string());
+
+    // Process first response - should trigger retry
+    let _ = chain.process_response(&mut response1, &context).await;
+
+    // Verify first retry was attempted
+    assert_eq!(
+        retry_tracker.retry_count.load(AtomicOrdering::SeqCst),
+        1,
+        "First retry should have been attempted"
+    );
+
+    // Simulate second 401 response (retry failed)
+    let mut response2 = HttpResponse::new(401, vec![]);
+
+    // Process second response with SAME context (simulating retry)
+    let _ = chain.process_response(&mut response2, &context).await;
+
+    // Verify retry was NOT attempted again (still 1, not 2)
+    assert_eq!(
+        retry_tracker.retry_count.load(AtomicOrdering::SeqCst),
+        1,
+        "Second retry should have been prevented by oauth.retry_used metadata"
+    );
+
+    // Verify metadata is still set
+    assert_eq!(
+        context.get_metadata("oauth.retry_used"),
+        Some("true".to_string()),
+        "Retry metadata should persist"
+    );
+}
+
+#[tokio::test]
+async fn test_oauth_error_hook_logging() {
+    use pmcp::client::oauth_middleware::{BearerToken, OAuthClientMiddleware};
+
+    let token = BearerToken::new("test-token".to_string());
+    let oauth_mw = OAuthClientMiddleware::new(token);
+
+    let context = HttpMiddlewareContext::new("http://test.com".to_string(), "POST".to_string());
+
+    // Create an authentication error
+    let error = pmcp::Error::authentication("Test authentication error");
+
+    // Call on_error hook - should not panic
+    let result = oauth_mw.on_error(&error, &context).await;
+    assert!(
+        result.is_ok(),
+        "on_error should handle auth errors gracefully"
+    );
+
+    // Call with non-auth error - should also be fine
+    let other_error = pmcp::Error::internal("Other error");
+    let result = oauth_mw.on_error(&other_error, &context).await;
+    assert!(
+        result.is_ok(),
+        "on_error should handle non-auth errors gracefully"
     );
 }
