@@ -70,24 +70,24 @@ impl HttpRequest {
         }
     }
 
-    /// Add a header
+    /// Add a header (case-insensitive: stored as lowercase)
     pub fn add_header(&mut self, name: String, value: String) {
-        self.headers.insert(name, value);
+        self.headers.insert(name.to_lowercase(), value);
     }
 
-    /// Get a header value
+    /// Get a header value (case-insensitive lookup)
     pub fn get_header(&self, name: &str) -> Option<&String> {
-        self.headers.get(name)
+        self.headers.get(&name.to_lowercase())
     }
 
-    /// Check if a header exists
+    /// Check if a header exists (case-insensitive)
     pub fn has_header(&self, name: &str) -> bool {
-        self.headers.contains_key(name)
+        self.headers.contains_key(&name.to_lowercase())
     }
 
-    /// Remove a header
+    /// Remove a header (case-insensitive)
     pub fn remove_header(&mut self, name: &str) -> Option<String> {
-        self.headers.remove(name)
+        self.headers.remove(&name.to_lowercase())
     }
 }
 
@@ -112,28 +112,34 @@ impl HttpResponse {
         }
     }
 
-    /// Create a response with headers
+    /// Create a response with headers (normalizes header names to lowercase)
     pub fn with_headers(status: u16, headers: HashMap<String, String>, body: Vec<u8>) -> Self {
+        // Normalize all header names to lowercase for case-insensitive handling
+        let normalized_headers = headers
+            .into_iter()
+            .map(|(k, v)| (k.to_lowercase(), v))
+            .collect();
+
         Self {
             status,
-            headers,
+            headers: normalized_headers,
             body,
         }
     }
 
-    /// Add a header
+    /// Add a header (case-insensitive: stored as lowercase)
     pub fn add_header(&mut self, name: String, value: String) {
-        self.headers.insert(name, value);
+        self.headers.insert(name.to_lowercase(), value);
     }
 
-    /// Get a header value
+    /// Get a header value (case-insensitive lookup)
     pub fn get_header(&self, name: &str) -> Option<&String> {
-        self.headers.get(name)
+        self.headers.get(&name.to_lowercase())
     }
 
-    /// Check if a header exists
+    /// Check if a header exists (case-insensitive)
     pub fn has_header(&self, name: &str) -> bool {
-        self.headers.contains_key(name)
+        self.headers.contains_key(&name.to_lowercase())
     }
 
     /// Check if response is success (2xx)

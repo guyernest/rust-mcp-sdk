@@ -371,3 +371,191 @@ async fn test_concurrency_no_shared_state_contention() {
     // All should succeed
     assert_eq!(success_count, 100, "All parallel requests should succeed");
 }
+
+#[tokio::test]
+async fn test_header_case_insensitivity() {
+    use pmcp::client::http_middleware::{HttpRequest, HttpResponse};
+    use std::collections::HashMap;
+
+    // Test HttpRequest case-insensitive headers
+    let mut request = HttpRequest::new("POST".to_string(), "http://test.com".to_string(), vec![]);
+
+    // Add headers with different cases
+    request.add_header("Content-Type".to_string(), "application/json".to_string());
+    request.add_header("Authorization".to_string(), "Bearer token".to_string());
+    request.add_header("x-custom-header".to_string(), "value".to_string());
+
+    // Verify case-insensitive lookup works
+    assert_eq!(
+        request.get_header("content-type"),
+        Some(&"application/json".to_string()),
+        "Lowercase lookup should work"
+    );
+    assert_eq!(
+        request.get_header("Content-Type"),
+        Some(&"application/json".to_string()),
+        "Mixed case lookup should work"
+    );
+    assert_eq!(
+        request.get_header("CONTENT-TYPE"),
+        Some(&"application/json".to_string()),
+        "Uppercase lookup should work"
+    );
+
+    assert_eq!(
+        request.get_header("authorization"),
+        Some(&"Bearer token".to_string()),
+        "Authorization header should be accessible"
+    );
+    assert_eq!(
+        request.get_header("AUTHORIZATION"),
+        Some(&"Bearer token".to_string()),
+        "Case variation should work"
+    );
+
+    // Verify has_header is case-insensitive
+    assert!(request.has_header("authorization"), "Lowercase check");
+    assert!(request.has_header("Authorization"), "Mixed case check");
+    assert!(request.has_header("AUTHORIZATION"), "Uppercase check");
+    assert!(request.has_header("x-custom-header"), "Custom header check");
+    assert!(request.has_header("X-Custom-Header"), "Custom header mixed case");
+
+    // Verify remove_header is case-insensitive
+    let removed = request.remove_header("CONTENT-TYPE");
+    assert_eq!(removed, Some("application/json".to_string()));
+    assert!(!request.has_header("content-type"), "Header should be removed");
+    assert!(!request.has_header("Content-Type"), "Header should be removed (any case)");
+
+    // Test HttpResponse case-insensitive headers
+    let mut response = HttpResponse::new(200, vec![]);
+    response.add_header("Content-Length".to_string(), "123".to_string());
+    response.add_header("cache-control".to_string(), "no-cache".to_string());
+
+    assert_eq!(
+        response.get_header("content-length"),
+        Some(&"123".to_string())
+    );
+    assert_eq!(
+        response.get_header("CONTENT-LENGTH"),
+        Some(&"123".to_string())
+    );
+    assert_eq!(
+        response.get_header("Cache-Control"),
+        Some(&"no-cache".to_string())
+    );
+
+    // Test with_headers constructor normalizes
+    let mut headers = HashMap::new();
+    headers.insert("Content-Type".to_string(), "text/plain".to_string());
+    headers.insert("X-Custom".to_string(), "value".to_string());
+
+    let response2 = HttpResponse::with_headers(200, headers, vec![]);
+    assert_eq!(
+        response2.get_header("content-type"),
+        Some(&"text/plain".to_string()),
+        "with_headers should normalize to lowercase"
+    );
+    assert_eq!(
+        response2.get_header("CONTENT-TYPE"),
+        Some(&"text/plain".to_string()),
+        "Case-insensitive lookup should work"
+    );
+    assert_eq!(
+        response2.get_header("x-custom"),
+        Some(&"value".to_string()),
+        "Custom headers should be normalized"
+    );
+}
+
+#[tokio::test]
+async fn test_oauth_duplicate_detection_case_insensitive() {
+    use pmcp::client::oauth_middleware::{BearerToken, OAuthClientMiddleware};
+
+    let token = BearerToken::new("oauth-token".to_string());
+    let oauth_mw = OAuthClientMiddleware::new(token);
+
+    let mut request = HttpRequest::new("POST".to_string(), "http://test.com".to_string(), vec![]);
+    let context = HttpMiddlewareContext::new("http://test.com".to_string(), "POST".to_string());
+
+    // Add Authorization header with different case than OAuth middleware uses
+    request.add_header(
+        "AUTHORIZATION".to_string(),  // Uppercase
+        "Bearer existing-token".to_string(),
+    );
+
+    // OAuth middleware should detect the existing header regardless of case
+    oauth_mw.on_request(&mut request, &context).await.unwrap();
+
+    // Verify original header is preserved (should be stored as lowercase)
+    assert_eq!(
+        request.get_header("authorization"),  // lowercase lookup
+        Some(&"Bearer existing-token".to_string()),
+        "Original header should be preserved"
+    );
+    assert_eq!(
+        request.get_header("Authorization"),  // mixed case lookup
+        Some(&"Bearer existing-token".to_string()),
+        "Case-insensitive lookup should work"
+    );
+
+    // Should only have one authorization header (not duplicated)
+    let auth_headers: Vec<_> = request
+        .headers
+        .iter()
+        .filter(|(k, _)| k.as_str() == "authorization")
+        .collect();
+    assert_eq!(auth_headers.len(), 1, "Should only have one authorization header");
+}
+
+#[tokio::test]
+async fn test_middleware_chain_with_mixed_case_headers() {
+    /// Middleware that checks for Authorization header
+    struct AuthCheckMiddleware;
+
+    #[async_trait]
+    impl HttpMiddleware for AuthCheckMiddleware {
+        async fn on_request(
+            &self,
+            request: &mut HttpRequest,
+            _context: &HttpMiddlewareContext,
+        ) -> pmcp::Result<()> {
+            // Check using different case variations
+            assert!(request.has_header("authorization"), "Should find auth header");
+            assert!(request.has_header("Authorization"), "Should be case-insensitive");
+            assert!(request.has_header("AUTHORIZATION"), "Should work with uppercase");
+
+            let auth = request.get_header("AuThOrIzAtIoN");
+            assert!(auth.is_some(), "Mixed case lookup should work");
+
+            Ok(())
+        }
+
+        fn priority(&self) -> i32 {
+            20
+        }
+    }
+
+    let mut chain = HttpMiddlewareChain::new();
+
+    // Add OAuth middleware first (priority 10)
+    let token = BearerToken::new("test-token".to_string());
+    chain.add(Arc::new(OAuthClientMiddleware::new(token)));
+
+    // Add auth checker (priority 20 - runs after OAuth)
+    chain.add(Arc::new(AuthCheckMiddleware));
+
+    let mut request = HttpRequest::new("POST".to_string(), "http://test.com".to_string(), vec![]);
+    let context = HttpMiddlewareContext::new("http://test.com".to_string(), "POST".to_string());
+
+    // Process request - OAuth adds "Authorization", checker verifies case-insensitive access
+    chain.process_request(&mut request, &context).await.unwrap();
+
+    // Verify the header is accessible via any case variation
+    assert!(request.has_header("authorization"));
+    assert!(request.has_header("Authorization"));
+    assert!(request.has_header("AUTHORIZATION"));
+    assert_eq!(
+        request.get_header("authorization"),
+        Some(&"Bearer test-token".to_string())
+    );
+}
