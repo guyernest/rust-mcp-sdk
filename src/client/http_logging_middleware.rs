@@ -44,6 +44,16 @@ use std::collections::HashSet;
 ///
 /// Logs HTTP requests and responses at the transport layer with automatic redaction
 /// of sensitive headers to prevent accidental exposure of credentials and secrets.
+///
+/// # Customization
+///
+/// All defaults can be customized:
+/// - Add custom sensitive headers via `.redact_header()`
+/// - Remove headers from redaction via `.allow_header()` (use with caution)
+/// - Enable query parameter redaction via `.with_redact_query()`
+/// - Control body logging via `.with_max_body_bytes()` (respects content-type)
+///
+/// See examples in module documentation for common customization patterns.
 #[derive(Debug, Clone)]
 pub struct HttpLoggingMiddleware {
     level: tracing::Level,
@@ -51,6 +61,8 @@ pub struct HttpLoggingMiddleware {
     show_auth_scheme: bool,
     max_header_value_len: Option<usize>,
     max_body_bytes: Option<usize>,
+    redact_query: bool,
+    log_body_content_types: HashSet<String>,
 }
 
 impl Default for HttpLoggingMiddleware {
@@ -62,20 +74,56 @@ impl Default for HttpLoggingMiddleware {
 impl HttpLoggingMiddleware {
     /// Create a new HTTP logging middleware with secure defaults.
     ///
-    /// Defaults:
-    /// - Log level: INFO
-    /// - Redacted headers: authorization, cookie, set-cookie, x-api-key, proxy-authorization, x-auth-token
-    /// - Show auth scheme: true (logs "Bearer [REDACTED]" instead of "[REDACTED]")
-    /// - Max header value length: None (no truncation)
-    /// - Max body bytes: None (don't log bodies)
+    /// # Defaults
+    ///
+    /// - **Log level**: INFO
+    /// - **Redacted headers** (customize via `.redact_header()` or `.allow_header()`):
+    ///   - authorization, proxy-authorization
+    ///   - cookie, set-cookie
+    ///   - x-api-key, x-auth-token
+    ///   - x-amz-security-token (AWS)
+    ///   - x-goog-api-key (Google Cloud)
+    /// - **Show auth scheme**: true (logs "Bearer [REDACTED]" instead of "[REDACTED]")
+    /// - **Max header value length**: None (no truncation)
+    /// - **Max body bytes**: None (don't log bodies by default)
+    /// - **Redact query params**: false (customize via `.with_redact_query()`)
+    /// - **Body content types**: application/json, text/* when body logging enabled
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
+    /// use hyper::http::header::HeaderName;
+    ///
+    /// // Use defaults
+    /// let middleware = HttpLoggingMiddleware::new();
+    ///
+    /// // Customize: add custom header and enable query redaction
+    /// let custom = HttpLoggingMiddleware::new()
+    ///     .redact_header(HeaderName::from_static("x-custom-secret"))
+    ///     .with_redact_query(true)
+    ///     .with_max_body_bytes(512); // Log first 512 bytes of JSON bodies
+    /// ```
     pub fn new() -> Self {
         let mut redact_headers = HashSet::new();
+        // Standard auth headers
         redact_headers.insert(HeaderName::from_static("authorization"));
+        redact_headers.insert(HeaderName::from_static("proxy-authorization"));
+        // Cookie headers
         redact_headers.insert(HeaderName::from_static("cookie"));
         redact_headers.insert(HeaderName::from_static("set-cookie"));
+        // API key headers
         redact_headers.insert(HeaderName::from_static("x-api-key"));
-        redact_headers.insert(HeaderName::from_static("proxy-authorization"));
         redact_headers.insert(HeaderName::from_static("x-auth-token"));
+        // Cloud provider security tokens
+        redact_headers.insert(HeaderName::from_static("x-amz-security-token"));
+        redact_headers.insert(HeaderName::from_static("x-goog-api-key"));
+
+        let mut log_body_content_types = HashSet::new();
+        log_body_content_types.insert("application/json".to_string());
+        log_body_content_types.insert("text/plain".to_string());
+        log_body_content_types.insert("text/html".to_string());
+        log_body_content_types.insert("text/xml".to_string());
 
         Self {
             level: tracing::Level::INFO,
@@ -83,6 +131,8 @@ impl HttpLoggingMiddleware {
             show_auth_scheme: true,
             max_header_value_len: None,
             max_body_bytes: None,
+            redact_query: false,
+            log_body_content_types,
         }
     }
 
@@ -120,8 +170,49 @@ impl HttpLoggingMiddleware {
     }
 
     /// Set maximum body bytes to log. If None, bodies are not logged.
+    ///
+    /// Body logging respects content-type - only logs text-based content
+    /// (application/json, text/*) to avoid logging binary data.
+    ///
+    /// # Security Note
+    ///
+    /// Even with body logging enabled, keep the byte limit small (e.g., 512-1024 bytes)
+    /// to avoid logging sensitive data in request/response bodies.
     pub fn with_max_body_bytes(mut self, max_bytes: usize) -> Self {
         self.max_body_bytes = Some(max_bytes);
+        self
+    }
+
+    /// Enable or disable query parameter redaction in URLs.
+    ///
+    /// When true, URLs are logged without query parameters to prevent
+    /// leaking sensitive data in query strings (e.g., tokens, API keys).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
+    ///
+    /// let middleware = HttpLoggingMiddleware::new()
+    ///     .with_redact_query(true);
+    ///
+    /// // Will log: http://example.com/api/users?[REDACTED]
+    /// // Instead of: http://example.com/api/users?token=secret&id=123
+    /// ```
+    pub fn with_redact_query(mut self, redact: bool) -> Self {
+        self.redact_query = redact;
+        self
+    }
+
+    /// Add a content type that should be logged when body logging is enabled.
+    ///
+    /// By default, only text-based content types are logged:
+    /// - application/json
+    /// - text/plain, text/html, text/xml
+    ///
+    /// Use this to add custom content types (e.g., "application/xml").
+    pub fn allow_body_content_type(mut self, content_type: impl Into<String>) -> Self {
+        self.log_body_content_types.insert(content_type.into());
         self
     }
 
@@ -168,6 +259,41 @@ impl HttpLoggingMiddleware {
         }
     }
 
+    /// Redact query parameters from a URL if configured.
+    fn redact_url(&self, url: &str) -> String {
+        if !self.redact_query {
+            return url.to_string();
+        }
+
+        if let Some(query_start) = url.find('?') {
+            format!("{}?[REDACTED]", &url[..query_start])
+        } else {
+            url.to_string()
+        }
+    }
+
+    /// Check if a content-type should be logged.
+    fn should_log_body(&self, content_type: Option<&str>) -> bool {
+        if self.max_body_bytes.is_none() {
+            return false;
+        }
+
+        let Some(ct) = content_type else {
+            return false;
+        };
+
+        // Extract base content type (ignore charset, etc.)
+        let base_ct = ct.split(';').next().unwrap_or(ct).trim();
+
+        // Check exact match or text/* wildcard
+        self.log_body_content_types.contains(base_ct)
+            || (base_ct.starts_with("text/")
+                && self
+                    .log_body_content_types
+                    .iter()
+                    .any(|t| t == "text/plain"))
+    }
+
     /// Format headers for logging with redaction.
     ///
     /// This is public for testing purposes.
@@ -204,8 +330,15 @@ impl HttpLoggingMiddleware {
 
     /// Log a request with redacted headers.
     fn log_request(&self, request: &HttpRequest, context: &HttpMiddlewareContext) {
+        let url = self.redact_url(&request.url);
         let headers_str = self.format_headers(&request.headers);
-        let body_info = if let Some(max_bytes) = self.max_body_bytes {
+
+        // Check content-type to determine if body should be logged
+        let content_type = request.get_header("content-type");
+        let should_log = self.should_log_body(content_type);
+
+        let body_info = if should_log && self.max_body_bytes.is_some() {
+            let max_bytes = self.max_body_bytes.unwrap();
             let body_len = request.body.len();
             if body_len > 0 {
                 let preview_len = max_bytes.min(body_len);
@@ -230,7 +363,7 @@ impl HttpLoggingMiddleware {
                 request_id = ?context.request_id,
                 "HTTP {} {} | headers: [{}]{}",
                 request.method,
-                request.url,
+                url,
                 headers_str,
                 body_info
             ),
@@ -238,7 +371,7 @@ impl HttpLoggingMiddleware {
                 request_id = ?context.request_id,
                 "HTTP {} {} | headers: [{}]{}",
                 request.method,
-                request.url,
+                url,
                 headers_str,
                 body_info
             ),
@@ -246,20 +379,20 @@ impl HttpLoggingMiddleware {
                 request_id = ?context.request_id,
                 "HTTP {} {}{}",
                 request.method,
-                request.url,
-                if self.max_body_bytes.is_some() { body_info.as_str() } else { "" }
+                url,
+                if should_log { body_info.as_str() } else { "" }
             ),
             tracing::Level::WARN => tracing::warn!(
                 request_id = ?context.request_id,
                 "HTTP {} {}",
                 request.method,
-                request.url
+                url
             ),
             tracing::Level::ERROR => tracing::error!(
                 request_id = ?context.request_id,
                 "HTTP {} {}",
                 request.method,
-                request.url
+                url
             ),
         }
     }
@@ -267,7 +400,13 @@ impl HttpLoggingMiddleware {
     /// Log a response with redacted headers.
     fn log_response(&self, response: &HttpResponse, context: &HttpMiddlewareContext) {
         let headers_str = self.format_headers(&response.headers);
-        let body_info = if let Some(max_bytes) = self.max_body_bytes {
+
+        // Check content-type to determine if body should be logged
+        let content_type = response.get_header("content-type");
+        let should_log = self.should_log_body(content_type);
+
+        let body_info = if should_log && self.max_body_bytes.is_some() {
+            let max_bytes = self.max_body_bytes.unwrap();
             let body_len = response.body.len();
             if body_len > 0 {
                 let preview_len = max_bytes.min(body_len);
@@ -462,5 +601,91 @@ mod tests {
         // Should have both set-cookie entries redacted
         assert!(formatted.contains("[REDACTED]"));
         assert!(formatted.contains("application/json"));
+    }
+
+    #[test]
+    fn test_query_redaction_enabled() {
+        let middleware = HttpLoggingMiddleware::new().with_redact_query(true);
+
+        let url_with_query = "http://example.com/api/users?token=secret&id=123";
+        let redacted = middleware.redact_url(url_with_query);
+        assert_eq!(redacted, "http://example.com/api/users?[REDACTED]");
+
+        let url_without_query = "http://example.com/api/users";
+        let redacted2 = middleware.redact_url(url_without_query);
+        assert_eq!(redacted2, "http://example.com/api/users");
+    }
+
+    #[test]
+    fn test_query_redaction_disabled() {
+        let middleware = HttpLoggingMiddleware::new(); // default: redact_query = false
+
+        let url_with_query = "http://example.com/api/users?token=secret&id=123";
+        let redacted = middleware.redact_url(url_with_query);
+        assert_eq!(redacted, url_with_query);
+    }
+
+    #[test]
+    fn test_cloud_provider_headers_redacted() {
+        let middleware = HttpLoggingMiddleware::new();
+
+        // AWS
+        let aws_header = HeaderName::from_static("x-amz-security-token");
+        assert!(middleware.redact_headers.contains(&aws_header));
+        let redacted = middleware.redact_header_value(&aws_header, "aws-session-token-12345");
+        assert_eq!(redacted, "[REDACTED]");
+
+        // GCP
+        let gcp_header = HeaderName::from_static("x-goog-api-key");
+        assert!(middleware.redact_headers.contains(&gcp_header));
+        let redacted2 = middleware.redact_header_value(&gcp_header, "gcp-api-key-67890");
+        assert_eq!(redacted2, "[REDACTED]");
+    }
+
+    #[test]
+    fn test_body_logging_content_type_gating() {
+        let middleware = HttpLoggingMiddleware::new().with_max_body_bytes(1024);
+
+        // JSON should be logged
+        assert!(middleware.should_log_body(Some("application/json")));
+        assert!(middleware.should_log_body(Some("application/json; charset=utf-8")));
+
+        // Text types should be logged
+        assert!(middleware.should_log_body(Some("text/plain")));
+        assert!(middleware.should_log_body(Some("text/html")));
+        assert!(middleware.should_log_body(Some("text/xml")));
+
+        // Other text/* types should be logged (via text/plain wildcard)
+        assert!(middleware.should_log_body(Some("text/csv")));
+
+        // Binary types should NOT be logged
+        assert!(!middleware.should_log_body(Some("application/octet-stream")));
+        assert!(!middleware.should_log_body(Some("image/png")));
+        assert!(!middleware.should_log_body(Some("video/mp4")));
+
+        // No content-type should NOT be logged
+        assert!(!middleware.should_log_body(None));
+    }
+
+    #[test]
+    fn test_body_logging_disabled_by_default() {
+        let middleware = HttpLoggingMiddleware::new(); // max_body_bytes = None
+
+        // Even with valid content-type, should not log if max_body_bytes is None
+        assert!(!middleware.should_log_body(Some("application/json")));
+        assert!(!middleware.should_log_body(Some("text/plain")));
+    }
+
+    #[test]
+    fn test_allow_custom_body_content_type() {
+        let middleware = HttpLoggingMiddleware::new()
+            .with_max_body_bytes(1024)
+            .allow_body_content_type("application/xml");
+
+        // Custom content type should be allowed
+        assert!(middleware.should_log_body(Some("application/xml")));
+
+        // Default types still work
+        assert!(middleware.should_log_body(Some("application/json")));
     }
 }
