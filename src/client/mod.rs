@@ -1427,6 +1427,38 @@ impl<T: Transport> ClientBuilder<T> {
         self
     }
 
+    /// Add protocol-level middleware to the client.
+    ///
+    /// This is an alias for `with_middleware()` that provides explicit naming to distinguish
+    /// protocol middleware (operates on JSON-RPC messages) from HTTP middleware
+    /// (operates on HTTP requests/responses via `StreamableHttpTransportConfigBuilder`).
+    ///
+    /// Middleware are executed in priority order (Critical → High → Normal → Low → Lowest).
+    /// Multiple middleware with the same priority are executed in the order they were added.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::{ClientBuilder, StdioTransport};
+    /// use pmcp::shared::{MetricsMiddleware, LoggingMiddleware};
+    /// use std::sync::Arc;
+    ///
+    /// # async fn example() -> Result<(), pmcp::Error> {
+    /// let transport = StdioTransport::new();
+    /// let client = ClientBuilder::new(transport)
+    ///     .with_protocol_middleware(Arc::new(LoggingMiddleware::new()))
+    ///     .with_protocol_middleware(Arc::new(MetricsMiddleware::new("my-service".to_string())))
+    ///     .build();
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_protocol_middleware(
+        self,
+        middleware: Arc<dyn crate::shared::AdvancedMiddleware>,
+    ) -> Self {
+        self.with_middleware(middleware)
+    }
+
     /// Set the entire middleware chain.
     ///
     /// This replaces any previously configured middleware.
