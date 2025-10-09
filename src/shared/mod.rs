@@ -5,6 +5,7 @@ pub mod context;
 pub mod event_store;
 pub mod logging;
 pub mod middleware;
+pub mod middleware_presets;
 pub mod protocol;
 pub mod protocol_helpers;
 #[cfg(not(target_arch = "wasm32"))]
