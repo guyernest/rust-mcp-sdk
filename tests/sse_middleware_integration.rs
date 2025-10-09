@@ -156,6 +156,28 @@ async fn test_middleware_runs_on_sse_get() {
 
 #[tokio::test]
 async fn test_middleware_with_multiple_http_methods() {
+    // Middleware that tracks HTTP methods
+    #[derive(Debug)]
+    struct MethodTrackingMiddleware {
+        methods: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl HttpMiddleware for MethodTrackingMiddleware {
+        async fn on_request(
+            &self,
+            request: &mut HttpRequest,
+            _context: &HttpMiddlewareContext,
+        ) -> pmcp::Result<()> {
+            self.methods.lock().await.push(request.method.clone());
+            Ok(())
+        }
+
+        fn priority(&self) -> i32 {
+            50
+        }
+    }
+
     // Create server
     let server = Server::builder()
         .name("multi-method-test")
@@ -179,28 +201,6 @@ async fn test_middleware_with_multiple_http_methods() {
     );
 
     let (addr, handle) = server_instance.start().await.unwrap();
-
-    // Middleware that tracks HTTP methods
-    #[derive(Debug)]
-    struct MethodTrackingMiddleware {
-        methods: Arc<Mutex<Vec<String>>>,
-    }
-
-    #[async_trait]
-    impl HttpMiddleware for MethodTrackingMiddleware {
-        async fn on_request(
-            &self,
-            request: &mut HttpRequest,
-            _context: &HttpMiddlewareContext,
-        ) -> pmcp::Result<()> {
-            self.methods.lock().await.push(request.method.clone());
-            Ok(())
-        }
-
-        fn priority(&self) -> i32 {
-            50
-        }
-    }
 
     let method_tracker = Arc::new(MethodTrackingMiddleware {
         methods: Arc::new(Mutex::new(Vec::new())),
@@ -259,7 +259,7 @@ async fn test_middleware_modifies_request_headers() {
             request: &mut HttpRequest,
             _context: &HttpMiddlewareContext,
         ) -> pmcp::Result<()> {
-            request.add_header("X-Custom-Test".to_string(), self.header_value.clone());
+            request.add_header("X-Custom-Test", &self.header_value);
             Ok(())
         }
 

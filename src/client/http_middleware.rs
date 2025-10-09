@@ -71,8 +71,8 @@ impl HttpRequest {
     }
 
     /// Add a header (case-insensitive: stored as lowercase)
-    pub fn add_header(&mut self, name: String, value: String) {
-        self.headers.insert(name.to_lowercase(), value);
+    pub fn add_header(&mut self, name: &str, value: &str) {
+        self.headers.insert(name.to_lowercase(), value.to_string());
     }
 
     /// Get a header value (case-insensitive lookup)
@@ -128,8 +128,8 @@ impl HttpResponse {
     }
 
     /// Add a header (case-insensitive: stored as lowercase)
-    pub fn add_header(&mut self, name: String, value: String) {
-        self.headers.insert(name.to_lowercase(), value);
+    pub fn add_header(&mut self, name: &str, value: &str) {
+        self.headers.insert(name.to_lowercase(), value.to_string());
     }
 
     /// Get a header value (case-insensitive lookup)
@@ -190,7 +190,7 @@ impl HttpResponse {
 ///         request: &mut HttpRequest,
 ///         _context: &HttpMiddlewareContext,
 ///     ) -> pmcp::Result<()> {
-///         request.add_header("X-API-Key".to_string(), self.api_key.clone());
+///         request.add_header("X-API-Key", &self.api_key);
 ///         Ok(())
 ///     }
 /// }
@@ -311,9 +311,9 @@ impl HttpMiddlewareChain {
         Ok(())
     }
 
-    /// Handle error by calling on_error for all middleware.
+    /// Handle error by calling `on_error` for all middleware.
     ///
-    /// Errors from on_error itself are logged but don't propagate.
+    /// Errors from `on_error` itself are logged but don't propagate.
     async fn handle_error(&self, error: &crate::error::Error, context: &HttpMiddlewareContext) {
         for middleware in &self.middlewares {
             if let Err(e) = middleware.on_error(error, context).await {

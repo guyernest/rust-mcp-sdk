@@ -196,7 +196,7 @@ impl HttpMiddleware for OAuthClientMiddleware {
 
         // Inject bearer token into Authorization header
         let token = self.token.read();
-        request.add_header("Authorization".to_string(), token.to_header_value());
+        request.add_header("Authorization", &token.to_header_value());
 
         tracing::trace!("OAuth token injected into Authorization header");
 

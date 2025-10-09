@@ -84,18 +84,16 @@ impl HttpMiddleware for CorrelationHeaderMiddleware {
         context: &HttpMiddlewareContext,
     ) -> pmcp::Result<()> {
         // Add correlation headers
-        request.add_header("X-Service-Name".to_string(), self.service_name.clone());
-        request.add_header(
-            "X-Request-Timestamp".to_string(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-                .to_string(),
-        );
+        request.add_header("X-Service-Name", &self.service_name);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .to_string();
+        request.add_header("X-Request-Timestamp", &timestamp);
 
         if let Some(req_id) = &context.request_id {
-            request.add_header("X-Request-ID".to_string(), req_id.clone());
+            request.add_header("X-Request-ID", req_id);
         }
 
         println!(

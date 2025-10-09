@@ -1,8 +1,8 @@
-//! Integration tests for StreamableHttpServer + OAuth middleware.
+//! Integration tests for `StreamableHttpServer` + OAuth middleware.
 //!
 //! Tests real client-server interaction with OAuth middleware:
 //! - OAuth middleware injects tokens correctly
-//! - auth_provider precedence over OAuth middleware
+//! - `auth_provider` precedence over OAuth middleware
 //! - Authorization header propagation to server
 //! - Server-side token validation
 

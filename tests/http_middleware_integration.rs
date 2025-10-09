@@ -1,4 +1,4 @@
-//! Integration tests for HTTP middleware with StreamableHttpTransport
+//! Integration tests for HTTP middleware with `StreamableHttpTransport`
 //!
 //! Tests:
 //! - Ordering: Multiple middleware with different priorities
@@ -206,10 +206,7 @@ async fn test_oauth_duplicate_header_detection() {
     let mut request = HttpRequest::new("POST".to_string(), "http://test.com".to_string(), vec![]);
 
     // Pre-add Authorization header (simulating transport auth or config)
-    request.add_header(
-        "Authorization".to_string(),
-        "Bearer existing-token".to_string(),
-    );
+    request.add_header("Authorization", "Bearer existing-token");
 
     let context = HttpMiddlewareContext::new("http://test.com".to_string(), "POST".to_string());
 
@@ -381,9 +378,9 @@ async fn test_header_case_insensitivity() {
     let mut request = HttpRequest::new("POST".to_string(), "http://test.com".to_string(), vec![]);
 
     // Add headers with different cases
-    request.add_header("Content-Type".to_string(), "application/json".to_string());
-    request.add_header("Authorization".to_string(), "Bearer token".to_string());
-    request.add_header("x-custom-header".to_string(), "value".to_string());
+    request.add_header("Content-Type", "application/json");
+    request.add_header("Authorization", "Bearer token");
+    request.add_header("x-custom-header", "value");
 
     // Verify case-insensitive lookup works
     assert_eq!(
@@ -437,8 +434,8 @@ async fn test_header_case_insensitivity() {
 
     // Test HttpResponse case-insensitive headers
     let mut response = HttpResponse::new(200, vec![]);
-    response.add_header("Content-Length".to_string(), "123".to_string());
-    response.add_header("cache-control".to_string(), "no-cache".to_string());
+    response.add_header("Content-Length", "123");
+    response.add_header("cache-control", "no-cache");
 
     assert_eq!(
         response.get_header("content-length"),
@@ -488,8 +485,8 @@ async fn test_oauth_duplicate_detection_case_insensitive() {
 
     // Add Authorization header with different case than OAuth middleware uses
     request.add_header(
-        "AUTHORIZATION".to_string(), // Uppercase
-        "Bearer existing-token".to_string(),
+        "AUTHORIZATION", // Uppercase
+        "Bearer existing-token",
     );
 
     // OAuth middleware should detect the existing header regardless of case
@@ -508,14 +505,13 @@ async fn test_oauth_duplicate_detection_case_insensitive() {
     );
 
     // Should only have one authorization header (not duplicated)
-    let auth_headers: Vec<_> = request
+    let auth_header_count = request
         .headers
         .iter()
         .filter(|(k, _)| k.as_str() == "authorization")
-        .collect();
+        .count();
     assert_eq!(
-        auth_headers.len(),
-        1,
+        auth_header_count, 1,
         "Should only have one authorization header"
     );
 }

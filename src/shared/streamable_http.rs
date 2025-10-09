@@ -330,12 +330,12 @@ impl StreamableHttpTransport {
         Ok(())
     }
 
-    /// Build a hyper::Request with middleware integration.
+    /// Build a `hyper::Request` with middleware integration.
     ///
     /// This method:
     /// 1. Builds initial request with config headers, auth, session, protocol version
     /// 2. Runs HTTP middleware on the request
-    /// 3. Returns the modified hyper::Request ready to send
+    /// 3. Returns the modified `hyper::Request` ready to send
     async fn build_request_with_middleware(
         &self,
         method: Method,
@@ -397,9 +397,9 @@ impl StreamableHttpTransport {
             let mut http_req = HttpRequest::new(method.as_str().to_string(), url.to_string(), body);
 
             // Copy headers
-            for (key, value) in headers.iter() {
+            for (key, value) in headers {
                 if let Ok(value_str) = value.to_str() {
-                    http_req.add_header(key.to_string(), value_str.to_string());
+                    http_req.add_header(key.as_str(), value_str);
                 }
             }
 
@@ -435,6 +435,7 @@ impl StreamableHttpTransport {
     }
 
     /// Apply HTTP middleware to a response after receiving.
+    #[allow(clippy::future_not_send)]
     async fn apply_response_middleware(
         &self,
         method: &str,
@@ -448,7 +449,7 @@ impl StreamableHttpTransport {
         if let Some(chain) = middleware_chain {
             // Create HttpResponse from hyper components
             let mut header_map = std::collections::HashMap::new();
-            for (key, value) in response.headers().iter() {
+            for (key, value) in response.headers() {
                 if let Ok(value_str) = value.to_str() {
                     header_map.insert(key.to_string(), value_str.to_string());
                 }
