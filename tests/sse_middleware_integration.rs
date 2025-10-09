@@ -58,7 +58,7 @@ impl HttpMiddleware for RequestTrackingMiddleware {
         self.request_count.fetch_add(1, Ordering::SeqCst);
 
         // Track Last-Event-ID header if present
-        let last_event_id = request.get_header("Last-Event-ID").cloned();
+        let last_event_id = request.get_header("Last-Event-ID").map(|s| s.to_string());
         self.last_event_ids.lock().await.push(last_event_id);
 
         tracing::debug!(

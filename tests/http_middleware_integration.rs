@@ -170,7 +170,7 @@ async fn test_oauth_no_provider() {
     // Verify Authorization header was added
     assert_eq!(
         request.get_header("Authorization"),
-        Some(&"Bearer test-token".to_string())
+        Some("Bearer test-token")
     );
 }
 
@@ -216,7 +216,7 @@ async fn test_oauth_duplicate_header_detection() {
     // Verify original header is preserved (not overwritten)
     assert_eq!(
         request.get_header("Authorization"),
-        Some(&"Bearer existing-token".to_string()),
+        Some("Bearer existing-token"),
         "Existing auth header should not be overwritten"
     );
 }
@@ -371,8 +371,8 @@ async fn test_concurrency_no_shared_state_contention() {
 
 #[tokio::test]
 async fn test_header_case_insensitivity() {
+    use hyper::http::HeaderMap;
     use pmcp::client::http_middleware::{HttpRequest, HttpResponse};
-    use std::collections::HashMap;
 
     // Test HttpRequest case-insensitive headers
     let mut request = HttpRequest::new("POST".to_string(), "http://test.com".to_string(), vec![]);
@@ -385,28 +385,28 @@ async fn test_header_case_insensitivity() {
     // Verify case-insensitive lookup works
     assert_eq!(
         request.get_header("content-type"),
-        Some(&"application/json".to_string()),
+        Some("application/json"),
         "Lowercase lookup should work"
     );
     assert_eq!(
         request.get_header("Content-Type"),
-        Some(&"application/json".to_string()),
+        Some("application/json"),
         "Mixed case lookup should work"
     );
     assert_eq!(
         request.get_header("CONTENT-TYPE"),
-        Some(&"application/json".to_string()),
+        Some("application/json"),
         "Uppercase lookup should work"
     );
 
     assert_eq!(
         request.get_header("authorization"),
-        Some(&"Bearer token".to_string()),
+        Some("Bearer token"),
         "Authorization header should be accessible"
     );
     assert_eq!(
         request.get_header("AUTHORIZATION"),
-        Some(&"Bearer token".to_string()),
+        Some("Bearer token"),
         "Case variation should work"
     );
 
@@ -437,39 +437,30 @@ async fn test_header_case_insensitivity() {
     response.add_header("Content-Length", "123");
     response.add_header("cache-control", "no-cache");
 
-    assert_eq!(
-        response.get_header("content-length"),
-        Some(&"123".to_string())
-    );
-    assert_eq!(
-        response.get_header("CONTENT-LENGTH"),
-        Some(&"123".to_string())
-    );
-    assert_eq!(
-        response.get_header("Cache-Control"),
-        Some(&"no-cache".to_string())
-    );
+    assert_eq!(response.get_header("content-length"), Some("123"));
+    assert_eq!(response.get_header("CONTENT-LENGTH"), Some("123"));
+    assert_eq!(response.get_header("Cache-Control"), Some("no-cache"));
 
-    // Test with_headers constructor normalizes
-    let mut headers = HashMap::new();
-    headers.insert("Content-Type".to_string(), "text/plain".to_string());
-    headers.insert("X-Custom".to_string(), "value".to_string());
+    // Test with_headers constructor
+    let mut headers = HeaderMap::new();
+    headers.insert("Content-Type", "text/plain".parse().unwrap());
+    headers.insert("X-Custom", "value".parse().unwrap());
 
     let response2 = HttpResponse::with_headers(200, headers, vec![]);
     assert_eq!(
         response2.get_header("content-type"),
-        Some(&"text/plain".to_string()),
-        "with_headers should normalize to lowercase"
+        Some("text/plain"),
+        "with_headers should work with HeaderMap"
     );
     assert_eq!(
         response2.get_header("CONTENT-TYPE"),
-        Some(&"text/plain".to_string()),
+        Some("text/plain"),
         "Case-insensitive lookup should work"
     );
     assert_eq!(
         response2.get_header("x-custom"),
-        Some(&"value".to_string()),
-        "Custom headers should be normalized"
+        Some("value"),
+        "Custom headers should be accessible"
     );
 }
 
@@ -492,15 +483,15 @@ async fn test_oauth_duplicate_detection_case_insensitive() {
     // OAuth middleware should detect the existing header regardless of case
     oauth_mw.on_request(&mut request, &context).await.unwrap();
 
-    // Verify original header is preserved (should be stored as lowercase)
+    // Verify original header is preserved
     assert_eq!(
         request.get_header("authorization"), // lowercase lookup
-        Some(&"Bearer existing-token".to_string()),
+        Some("Bearer existing-token"),
         "Original header should be preserved"
     );
     assert_eq!(
         request.get_header("Authorization"), // mixed case lookup
-        Some(&"Bearer existing-token".to_string()),
+        Some("Bearer existing-token"),
         "Case-insensitive lookup should work"
     );
 
@@ -574,7 +565,7 @@ async fn test_middleware_chain_with_mixed_case_headers() {
     assert!(request.has_header("AUTHORIZATION"));
     assert_eq!(
         request.get_header("authorization"),
-        Some(&"Bearer test-token".to_string())
+        Some("Bearer test-token")
     );
 }
 

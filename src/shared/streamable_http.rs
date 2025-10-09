@@ -421,7 +421,7 @@ impl StreamableHttpTransport {
             // Rebuild request with modified headers and body
             let mut final_builder = Request::builder().method(method).uri(url);
 
-            for (key, value) in http_req.headers {
+            for (key, value) in &http_req.headers {
                 final_builder = final_builder.header(key, value);
             }
 
@@ -448,12 +448,7 @@ impl StreamableHttpTransport {
         let middleware_chain = self.config.read().http_middleware_chain.clone();
         if let Some(chain) = middleware_chain {
             // Create HttpResponse from hyper components
-            let mut header_map = std::collections::HashMap::new();
-            for (key, value) in response.headers() {
-                if let Ok(value_str) = value.to_str() {
-                    header_map.insert(key.to_string(), value_str.to_string());
-                }
-            }
+            let header_map = response.headers().clone();
 
             let mut http_resp =
                 HttpResponse::with_headers(response.status().as_u16(), header_map, body);
