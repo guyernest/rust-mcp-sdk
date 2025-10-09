@@ -62,6 +62,7 @@ pub struct SendOptions {
 ///     session_id: None,
 ///     enable_json_response: false,
 ///     on_resumption_token: None,
+///     http_middleware_chain: None,
 /// };
 ///
 /// // Configuration with session for stateful operation
@@ -74,6 +75,7 @@ pub struct SendOptions {
 ///     session_id: Some("session-123".to_string()),
 ///     enable_json_response: false,
 ///     on_resumption_token: None,
+///     http_middleware_chain: None,
 /// };
 ///
 /// // Configuration for simple request/response (no streaming)
@@ -84,6 +86,7 @@ pub struct SendOptions {
 ///     session_id: None,
 ///     enable_json_response: true,  // JSON instead of SSE
 ///     on_resumption_token: None,
+///     http_middleware_chain: None,
 /// };
 /// ```
 #[derive(Clone)]
@@ -100,6 +103,8 @@ pub struct StreamableHttpTransportConfig {
     pub enable_json_response: bool,
     /// Callback when resumption token is received
     pub on_resumption_token: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    /// HTTP middleware chain for request/response transformation
+    pub http_middleware_chain: Option<Arc<crate::client::http_middleware::HttpMiddlewareChain>>,
 }
 
 impl Debug for StreamableHttpTransportConfig {
@@ -111,6 +116,7 @@ impl Debug for StreamableHttpTransportConfig {
             .field("session_id", &self.session_id)
             .field("enable_json_response", &self.enable_json_response)
             .field("on_resumption_token", &self.on_resumption_token.is_some())
+            .field("http_middleware_chain", &self.http_middleware_chain.is_some())
             .finish()
     }
 }
@@ -299,6 +305,100 @@ impl StreamableHttpTransport {
         }
 
         Ok(builder)
+    }
+
+    /// Apply HTTP middleware to a request before sending.
+    ///
+    /// This extracts the request details, runs middleware, and reconstructs the request.
+    async fn apply_request_middleware(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &reqwest::header::HeaderMap,
+        body: Vec<u8>,
+    ) -> Result<(std::collections::HashMap<String, String>, Vec<u8>)> {
+        use crate::client::http_middleware::{HttpMiddlewareContext, HttpRequest};
+
+        let middleware_chain = self.config.read().http_middleware_chain.clone();
+        if let Some(chain) = middleware_chain {
+            // Create HttpRequest from reqwest components
+            let mut http_req = HttpRequest::new(method.to_string(), url.to_string(), body);
+
+            // Copy headers
+            for (key, value) in headers.iter() {
+                if let Ok(value_str) = value.to_str() {
+                    http_req.add_header(key.to_string(), value_str.to_string());
+                }
+            }
+
+            // Create context
+            let context = HttpMiddlewareContext::new(url.to_string(), method.to_string());
+
+            // Check if auth was set by transport
+            if headers.contains_key("Authorization") {
+                context.set_metadata("auth_already_set".to_string(), "true".to_string());
+            }
+
+            // Run middleware chain
+            if let Err(e) = chain.process_request(&mut http_req, &context).await {
+                // Call error handlers
+                chain.handle_transport_error(&e, &context).await;
+                return Err(e);
+            }
+
+            // Return modified headers and body
+            Ok((http_req.headers, http_req.body))
+        } else {
+            // No middleware - return original
+            let header_map: std::collections::HashMap<String, String> = headers
+                .iter()
+                .filter_map(|(k, v)| {
+                    v.to_str().ok().map(|v_str| (k.to_string(), v_str.to_string()))
+                })
+                .collect();
+            Ok((header_map, body))
+        }
+    }
+
+    /// Apply HTTP middleware to a response after receiving.
+    async fn apply_response_middleware(
+        &self,
+        method: &str,
+        url: &str,
+        status: u16,
+        headers: &reqwest::header::HeaderMap,
+        body: Vec<u8>,
+    ) -> Result<Vec<u8>> {
+        use crate::client::http_middleware::{HttpMiddlewareContext, HttpResponse};
+
+        let middleware_chain = self.config.read().http_middleware_chain.clone();
+        if let Some(chain) = middleware_chain {
+            // Create HttpResponse from reqwest components
+            let mut header_map = std::collections::HashMap::new();
+            for (key, value) in headers.iter() {
+                if let Ok(value_str) = value.to_str() {
+                    header_map.insert(key.to_string(), value_str.to_string());
+                }
+            }
+
+            let mut http_resp = HttpResponse::with_headers(status, header_map, body);
+
+            // Create context
+            let context = HttpMiddlewareContext::new(url.to_string(), method.to_string());
+
+            // Run middleware chain
+            if let Err(e) = chain.process_response(&mut http_resp, &context).await {
+                // Call error handlers
+                chain.handle_transport_error(&e, &context).await;
+                return Err(e);
+            }
+
+            // Return modified body
+            Ok(http_resp.body)
+        } else {
+            // No middleware - return original body
+            Ok(body)
+        }
     }
 
     /// Process response headers and extract session/protocol information

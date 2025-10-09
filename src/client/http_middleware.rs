@@ -49,6 +49,10 @@ impl HttpMiddlewareContext {
 /// Simple HTTP request/response representation for middleware
 #[derive(Debug, Clone)]
 pub struct HttpRequest {
+    /// HTTP method (GET, POST, etc.)
+    pub method: String,
+    /// Request URL
+    pub url: String,
     /// Request headers
     pub headers: HashMap<String, String>,
     /// Request body
@@ -57,8 +61,10 @@ pub struct HttpRequest {
 
 impl HttpRequest {
     /// Create a new HTTP request
-    pub fn new(body: Vec<u8>) -> Self {
+    pub fn new(method: String, url: String, body: Vec<u8>) -> Self {
         Self {
+            method,
+            url,
             headers: HashMap::new(),
             body,
         }
@@ -72,6 +78,16 @@ impl HttpRequest {
     /// Get a header value
     pub fn get_header(&self, name: &str) -> Option<&String> {
         self.headers.get(name)
+    }
+
+    /// Check if a header exists
+    pub fn has_header(&self, name: &str) -> bool {
+        self.headers.contains_key(name)
+    }
+
+    /// Remove a header
+    pub fn remove_header(&mut self, name: &str) -> Option<String> {
+        self.headers.remove(name)
     }
 }
 
@@ -96,6 +112,15 @@ impl HttpResponse {
         }
     }
 
+    /// Create a response with headers
+    pub fn with_headers(status: u16, headers: HashMap<String, String>, body: Vec<u8>) -> Self {
+        Self {
+            status,
+            headers,
+            body,
+        }
+    }
+
     /// Add a header
     pub fn add_header(&mut self, name: String, value: String) {
         self.headers.insert(name, value);
@@ -104,6 +129,26 @@ impl HttpResponse {
     /// Get a header value
     pub fn get_header(&self, name: &str) -> Option<&String> {
         self.headers.get(name)
+    }
+
+    /// Check if a header exists
+    pub fn has_header(&self, name: &str) -> bool {
+        self.headers.contains_key(name)
+    }
+
+    /// Check if response is success (2xx)
+    pub fn is_success(&self) -> bool {
+        (200..300).contains(&self.status)
+    }
+
+    /// Check if response is client error (4xx)
+    pub fn is_client_error(&self) -> bool {
+        (400..500).contains(&self.status)
+    }
+
+    /// Check if response is server error (5xx)
+    pub fn is_server_error(&self) -> bool {
+        (500..600).contains(&self.status)
     }
 }
 
@@ -115,6 +160,12 @@ impl HttpResponse {
 /// - Request/response logging with HTTP details
 /// - Compression
 /// - Status code-based error handling
+///
+/// # Error Handling
+///
+/// - If `on_request` returns `Err`, the chain short-circuits and `on_error` is called for all middleware
+/// - If `on_response` returns `Err`, the chain short-circuits and `on_error` is called for all middleware
+/// - `on_error` allows middleware to clean up resources or log errors
 ///
 /// # Examples
 ///
@@ -160,6 +211,23 @@ pub trait HttpMiddleware: Send + Sync {
         Ok(())
     }
 
+    /// Called when an error occurs during middleware execution or transport operations.
+    ///
+    /// This hook allows middleware to:
+    /// - Clean up resources (e.g., release locks, close connections)
+    /// - Log errors with context
+    /// - Record metrics for failures
+    ///
+    /// Note: Errors from `on_error` itself are logged but don't propagate to avoid cascading failures.
+    async fn on_error(
+        &self,
+        error: &crate::error::Error,
+        context: &HttpMiddlewareContext,
+    ) -> Result<()> {
+        let _ = (error, context);
+        Ok(())
+    }
+
     /// Priority for ordering (lower runs first)
     fn priority(&self) -> i32 {
         50 // Default priority
@@ -191,7 +259,12 @@ impl HttpMiddlewareChain {
         self.middlewares.sort_by_key(|m| m.priority());
     }
 
-    /// Process request through all middleware
+    /// Process request through all middleware.
+    ///
+    /// If any middleware returns an error:
+    /// 1. Processing short-circuits immediately
+    /// 2. `on_error` is called for all middleware (to allow cleanup)
+    /// 3. The original error is returned
     pub async fn process_request(
         &self,
         request: &mut HttpRequest,
@@ -199,13 +272,22 @@ impl HttpMiddlewareChain {
     ) -> Result<()> {
         for middleware in &self.middlewares {
             if middleware.should_execute(context).await {
-                middleware.on_request(request, context).await?;
+                if let Err(e) = middleware.on_request(request, context).await {
+                    // Short-circuit: call on_error for all middleware
+                    self.handle_error(&e, context).await;
+                    return Err(e);
+                }
             }
         }
         Ok(())
     }
 
-    /// Process response through all middleware (in reverse order)
+    /// Process response through all middleware (in reverse order).
+    ///
+    /// If any middleware returns an error:
+    /// 1. Processing short-circuits immediately
+    /// 2. `on_error` is called for all middleware (to allow cleanup)
+    /// 3. The original error is returned
     pub async fn process_response(
         &self,
         response: &mut HttpResponse,
@@ -213,10 +295,42 @@ impl HttpMiddlewareChain {
     ) -> Result<()> {
         for middleware in self.middlewares.iter().rev() {
             if middleware.should_execute(context).await {
-                middleware.on_response(response, context).await?;
+                if let Err(e) = middleware.on_response(response, context).await {
+                    // Short-circuit: call on_error for all middleware
+                    self.handle_error(&e, context).await;
+                    return Err(e);
+                }
             }
         }
         Ok(())
+    }
+
+    /// Handle error by calling on_error for all middleware.
+    ///
+    /// Errors from on_error itself are logged but don't propagate.
+    async fn handle_error(&self, error: &crate::error::Error, context: &HttpMiddlewareContext) {
+        for middleware in &self.middlewares {
+            if let Err(e) = middleware.on_error(error, context).await {
+                // Log but don't propagate to avoid cascading failures
+                tracing::error!(
+                    "Error in middleware on_error hook: {} (original error: {})",
+                    e,
+                    error
+                );
+            }
+        }
+    }
+
+    /// Handle error from transport operations.
+    ///
+    /// This should be called when a transport error occurs (e.g., network failure)
+    /// to allow middleware to clean up resources.
+    pub async fn handle_transport_error(
+        &self,
+        error: &crate::error::Error,
+        context: &HttpMiddlewareContext,
+    ) {
+        self.handle_error(error, context).await;
     }
 }
 

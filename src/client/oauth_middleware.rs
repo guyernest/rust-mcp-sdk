@@ -167,8 +167,24 @@ impl HttpMiddleware for OAuthClientMiddleware {
     async fn on_request(
         &self,
         request: &mut HttpRequest,
-        _context: &HttpMiddlewareContext,
+        context: &HttpMiddlewareContext,
     ) -> Result<()> {
+        // OAuth Precedence Policy: Skip if auth already set by transport
+        // Priority: transport auth_provider > HttpMiddleware OAuth > extra headers
+        if context.get_metadata("auth_already_set").is_some() {
+            tracing::debug!("Skipping OAuth middleware - auth already set by transport auth_provider");
+            return Ok(());
+        }
+
+        // Skip if Authorization header already present (from higher-priority middleware or config)
+        if request.has_header("Authorization") {
+            tracing::warn!(
+                "Authorization header already present - skipping OAuth middleware injection. \
+                Check for duplicate auth configuration."
+            );
+            return Ok(());
+        }
+
         // Check if token needs refresh
         if self.needs_refresh() {
             return Err(Error::authentication(
@@ -179,6 +195,8 @@ impl HttpMiddleware for OAuthClientMiddleware {
         // Inject bearer token into Authorization header
         let token = self.token.read();
         request.add_header("Authorization".to_string(), token.to_header_value());
+
+        tracing::trace!("OAuth token injected into Authorization header");
 
         Ok(())
     }
@@ -194,10 +212,40 @@ impl HttpMiddleware for OAuthClientMiddleware {
             context.set_metadata("auth_failure".to_string(), "true".to_string());
             context.set_metadata("status_code".to_string(), response.status.to_string());
 
+            // Check if this is a retry scenario
+            if context.get_metadata("oauth.retry_used").is_some() {
+                tracing::warn!(
+                    "Authentication failed after OAuth retry - token may be invalid"
+                );
+            }
+
             return Err(Error::authentication(format!(
                 "Authentication failed with status {}",
                 response.status
             )));
+        }
+
+        Ok(())
+    }
+
+    async fn on_error(
+        &self,
+        error: &Error,
+        context: &HttpMiddlewareContext,
+    ) -> Result<()> {
+        // Log authentication errors with context
+        if matches!(error, Error::Authentication(_)) {
+            tracing::error!(
+                "OAuth authentication error for {} {}: {}",
+                context.method,
+                context.url,
+                error
+            );
+
+            // If token was expired, log for monitoring
+            if self.token.read().is_expired() {
+                tracing::error!("OAuth token was expired at time of error");
+            }
         }
 
         Ok(())
@@ -261,7 +309,11 @@ mod tests {
         let token = BearerToken::new("my-secret-token".to_string());
         let middleware = OAuthClientMiddleware::new(token);
 
-        let mut request = HttpRequest::new(vec![]);
+        let mut request = HttpRequest::new(
+            "POST".to_string(),
+            "http://example.com".to_string(),
+            vec![],
+        );
         let context =
             HttpMiddlewareContext::new("http://example.com".to_string(), "POST".to_string());
 
