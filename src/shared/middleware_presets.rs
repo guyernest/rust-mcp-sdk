@@ -146,9 +146,7 @@ impl PresetConfig {
         let mut chain = EnhancedMiddlewareChain::new();
 
         // Add metrics middleware for performance tracking
-        chain.add(Arc::new(MetricsMiddleware::new(
-            self.service_name.clone(),
-        )));
+        chain.add(Arc::new(MetricsMiddleware::new(self.service_name.clone())));
 
         chain
     }

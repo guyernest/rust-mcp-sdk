@@ -219,10 +219,7 @@ impl StreamableHttpTransportConfigBuilder {
     }
 
     /// Set callback for resumption token updates.
-    pub fn on_resumption_token(
-        mut self,
-        callback: Arc<dyn Fn(String) + Send + Sync>,
-    ) -> Self {
+    pub fn on_resumption_token(mut self, callback: Arc<dyn Fn(String) + Send + Sync>) -> Self {
         self.on_resumption_token = Some(callback);
         self
     }

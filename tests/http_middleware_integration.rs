@@ -771,3 +771,217 @@ async fn test_oauth_error_hook_logging() {
         "on_error should handle non-auth errors gracefully"
     );
 }
+
+#[tokio::test]
+async fn test_http_logging_redacts_sensitive_headers() {
+    use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
+
+    let middleware = HttpLoggingMiddleware::new();
+
+    // Test Authorization header redaction with different casings
+    let mut request = HttpRequest::new("GET".to_string(), "http://test.com".to_string(), vec![]);
+    request.add_header("Authorization", "Bearer my-secret-token-12345");
+    request.add_header("AUTHORIZATION", "Bearer another-secret");
+    request.add_header("cookie", "session=abc123");
+    request.add_header("x-api-key", "api-key-secret");
+    request.add_header("content-type", "application/json");
+
+    let context = HttpMiddlewareContext::new("http://test.com".to_string(), "GET".to_string());
+
+    // Process request (this will log with redaction)
+    middleware.on_request(&mut request, &context).await.unwrap();
+
+    // Verify headers are redacted in the internal redaction logic
+    let formatted = middleware.redact_header_value(
+        &hyper::http::HeaderName::from_static("authorization"),
+        "Bearer secret",
+    );
+    assert_eq!(formatted, "Bearer [REDACTED]");
+
+    let formatted_cookie = middleware.redact_header_value(
+        &hyper::http::HeaderName::from_static("cookie"),
+        "session=abc123",
+    );
+    assert_eq!(formatted_cookie, "[REDACTED]");
+
+    // Content-type should not be redacted
+    let formatted_ct = middleware.redact_header_value(
+        &hyper::http::HeaderName::from_static("content-type"),
+        "application/json",
+    );
+    assert_eq!(formatted_ct, "application/json");
+}
+
+#[tokio::test]
+async fn test_http_logging_respects_overrides() {
+    use hyper::http::HeaderName;
+    use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
+
+    // Remove x-api-key from redaction list
+    let middleware =
+        HttpLoggingMiddleware::new().allow_header(&HeaderName::from_static("x-api-key"));
+
+    // x-api-key should NOT be redacted now
+    let formatted =
+        middleware.redact_header_value(&HeaderName::from_static("x-api-key"), "my-api-key-12345");
+    assert_eq!(formatted, "my-api-key-12345");
+
+    // But authorization should still be redacted
+    let formatted_auth = middleware.redact_header_value(
+        &HeaderName::from_static("authorization"),
+        "Bearer secret-token",
+    );
+    assert_eq!(formatted_auth, "Bearer [REDACTED]");
+}
+
+#[tokio::test]
+async fn test_http_logging_multivalue_headers() {
+    use hyper::http::HeaderMap;
+    use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
+
+    let middleware = HttpLoggingMiddleware::new();
+
+    // Create headers with multiple set-cookie entries
+    let mut headers = HeaderMap::new();
+    headers.append("set-cookie", "session1=abc123".parse().unwrap());
+    headers.append("set-cookie", "session2=def456".parse().unwrap());
+    headers.append("set-cookie", "user=john".parse().unwrap());
+    headers.insert("content-type", "application/json".parse().unwrap());
+
+    // Format headers - all set-cookie values should be redacted
+    let formatted = middleware.format_headers(&headers);
+
+    // Should contain [REDACTED] for each set-cookie entry
+    assert!(formatted.contains("[REDACTED]"));
+
+    // Should contain content-type unredacted
+    assert!(formatted.contains("application/json"));
+
+    // Verify all set-cookie entries are redacted (not just one)
+    let redacted_count = formatted.matches("[REDACTED]").count();
+    assert!(
+        redacted_count >= 3,
+        "Expected at least 3 redacted values, got {}",
+        redacted_count
+    );
+}
+
+#[tokio::test]
+async fn test_http_logging_body_disabled_by_default() {
+    use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
+
+    // Default middleware should NOT log bodies
+    let middleware_default = HttpLoggingMiddleware::new();
+    assert!(
+        middleware_default.max_body_bytes().is_none(),
+        "Default middleware should not log bodies"
+    );
+
+    // With max_body_bytes set, it should log bodies
+    let middleware_with_body = HttpLoggingMiddleware::new().with_max_body_bytes(1024);
+    assert_eq!(
+        middleware_with_body.max_body_bytes(),
+        Some(1024),
+        "Middleware with body logging should have max_body_bytes set"
+    );
+
+    // Create a request with a body
+    let body = b"sensitive data in body";
+    let mut request = HttpRequest::new(
+        "POST".to_string(),
+        "http://test.com".to_string(),
+        body.to_vec(),
+    );
+    let context = HttpMiddlewareContext::new("http://test.com".to_string(), "POST".to_string());
+
+    // Both should succeed, but default won't log the body content
+    middleware_default
+        .on_request(&mut request, &context)
+        .await
+        .unwrap();
+    middleware_with_body
+        .on_request(&mut request, &context)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_http_logging_authorization_without_scheme() {
+    use hyper::http::HeaderName;
+    use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
+
+    // With show_auth_scheme = false, should completely redact
+    let middleware = HttpLoggingMiddleware::new().with_show_auth_scheme(false);
+
+    let formatted = middleware.redact_header_value(
+        &HeaderName::from_static("authorization"),
+        "Bearer my-secret-token",
+    );
+    assert_eq!(formatted, "[REDACTED]");
+
+    let formatted_basic = middleware.redact_header_value(
+        &HeaderName::from_static("authorization"),
+        "Basic dXNlcjpwYXNz",
+    );
+    assert_eq!(formatted_basic, "[REDACTED]");
+}
+
+#[tokio::test]
+async fn test_http_logging_header_value_truncation() {
+    use hyper::http::HeaderName;
+    use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
+
+    // Set max header value length to 20 characters
+    let middleware = HttpLoggingMiddleware::new().with_max_header_value_len(20);
+
+    // Long non-sensitive header should be truncated
+    let long_value = "this-is-a-very-long-content-type-value-that-exceeds-the-limit";
+    let formatted =
+        middleware.redact_header_value(&HeaderName::from_static("content-type"), long_value);
+
+    assert!(formatted.len() <= 23, "Truncated value too long"); // 20 + "..."
+    assert!(formatted.ends_with("..."), "Should end with ellipsis");
+}
+
+#[tokio::test]
+async fn test_http_logging_case_insensitive_redaction() {
+    use hyper::http::HeaderName;
+    use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
+
+    let middleware = HttpLoggingMiddleware::new();
+
+    // Test different casings of Authorization header
+    let test_cases = vec![
+        ("authorization", "Bearer secret"),
+        ("Authorization", "Bearer secret"),
+        ("AUTHORIZATION", "Bearer secret"),
+        ("AuThOrIzAtIoN", "Bearer secret"),
+    ];
+
+    for (header_name, value) in test_cases {
+        let name = HeaderName::from_bytes(header_name.as_bytes()).unwrap();
+        let formatted = middleware.redact_header_value(&name, value);
+        assert_eq!(
+            formatted, "Bearer [REDACTED]",
+            "Failed for header name: {}",
+            header_name
+        );
+    }
+
+    // Test Cookie header casings
+    let cookie_cases = vec![
+        ("cookie", "session=abc"),
+        ("Cookie", "session=abc"),
+        ("COOKIE", "session=abc"),
+    ];
+
+    for (header_name, value) in cookie_cases {
+        let name = HeaderName::from_bytes(header_name.as_bytes()).unwrap();
+        let formatted = middleware.redact_header_value(&name, value);
+        assert_eq!(
+            formatted, "[REDACTED]",
+            "Failed for header name: {}",
+            header_name
+        );
+    }
+}

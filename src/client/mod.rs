@@ -28,6 +28,7 @@ use futures_locks::RwLock;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod auth;
+pub mod http_logging_middleware;
 pub mod http_middleware;
 pub mod oauth_middleware;
 pub mod transport;
