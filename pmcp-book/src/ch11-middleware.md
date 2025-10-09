@@ -819,8 +819,418 @@ impl AdvancedMiddleware for SchemaValidationMiddleware {
 - `examples/30_enhanced_middleware.rs`: Advanced patterns with built-in middleware
 - Inline doctests in `src/shared/middleware.rs` demonstrate each middleware
 
+---
+
+## HTTP-Level Middleware
+
+HTTP-level middleware operates at the HTTP transport layer, before MCP protocol processing. This is useful for header injection, authentication, compression, and other HTTP-specific concerns.
+
+### Architecture: Two-Layer Middleware System
+
+PMCP has two distinct middleware layers:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Client Application                                         │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Protocol-Level Middleware (AdvancedMiddleware)             │
+│  - Operates on JSONRPCRequest/JSONRPCResponse               │
+│  - LoggingMiddleware, MetricsMiddleware, ValidationMiddleware│
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│  HTTP-Level Middleware (HttpMiddleware)                     │
+│  - Operates on HTTP request/response                        │
+│  - OAuthClientMiddleware, header injection, compression     │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│  HTTP Transport (StreamableHttpTransport)                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key principle**: Middleware doesn't run twice. Protocol-level operates on JSON-RPC messages, HTTP-level operates on HTTP requests.
+
+### HttpMiddleware Trait
+
+```rust
+use pmcp::client::http_middleware::{HttpMiddleware, HttpRequest, HttpResponse, HttpMiddlewareContext};
+use async_trait::async_trait;
+
+#[async_trait]
+pub trait HttpMiddleware: Send + Sync {
+    /// Called before HTTP request is sent
+    async fn on_request(
+        &self,
+        request: &mut HttpRequest,
+        context: &HttpMiddlewareContext,
+    ) -> pmcp::Result<()> {
+        Ok(())
+    }
+
+    /// Called after HTTP response is received
+    async fn on_response(
+        &self,
+        response: &mut HttpResponse,
+        context: &HttpMiddlewareContext,
+    ) -> pmcp::Result<()> {
+        Ok(())
+    }
+
+    /// Called when an error occurs
+    async fn on_error(
+        &self,
+        error: &pmcp::Error,
+        context: &HttpMiddlewareContext,
+    ) -> pmcp::Result<()> {
+        Ok(())
+    }
+
+    /// Priority for ordering (lower runs first)
+    fn priority(&self) -> i32 {
+        50 // Default priority
+    }
+
+    /// Should this middleware execute for this context?
+    async fn should_execute(&self, _context: &HttpMiddlewareContext) -> bool {
+        true
+    }
+}
+```
+
+### HttpRequest and HttpResponse
+
+Simplified HTTP representations for middleware:
+
+```rust
+pub struct HttpRequest {
+    pub method: String,           // "GET", "POST", etc.
+    pub url: String,
+    pub headers: HashMap<String, String>,
+    pub body: Vec<u8>,
+}
+
+pub struct HttpResponse {
+    pub status: u16,
+    pub headers: HashMap<String, String>,
+    pub body: Vec<u8>,
+}
+```
+
+### HttpMiddlewareContext
+
+Context for HTTP middleware execution:
+
+```rust
+pub struct HttpMiddlewareContext {
+    pub request_id: Option<String>,
+    pub url: String,
+    pub method: String,
+    pub attempt: u32,
+    pub metadata: Arc<RwLock<HashMap<String, String>>>,
+}
+
+// Usage
+let context = HttpMiddlewareContext::new(url.to_string(), "POST".to_string());
+context.set_metadata("user_id".to_string(), "user-123".to_string());
+let user_id = context.get_metadata("user_id");
+```
+
+### OAuthClientMiddleware
+
+Built-in OAuth middleware for automatic token injection:
+
+```rust
+use pmcp::client::oauth_middleware::{OAuthClientMiddleware, BearerToken};
+use std::time::Duration;
+
+// Create bearer token
+let token = BearerToken::new("my-api-token".to_string());
+
+// Or with expiration
+let token = BearerToken::with_expiry(
+    "my-api-token".to_string(),
+    Duration::from_secs(3600) // 1 hour
+);
+
+// Create OAuth middleware
+let oauth_middleware = OAuthClientMiddleware::new(token);
+
+// Add to HttpMiddlewareChain
+let mut http_chain = HttpMiddlewareChain::new();
+http_chain.add(Arc::new(oauth_middleware));
+```
+
+**Features**:
+- Automatic token injection into `Authorization` header
+- Token expiry checking before each request
+- 401/403 detection for token refresh triggers
+- OAuth precedence policy (respects transport auth_provider)
+
+### OAuth Precedence Policy
+
+To avoid duplicate authentication, OAuth middleware follows this precedence:
+
+```
+1. Transport auth_provider (highest priority)
+   ↓
+2. HttpMiddleware OAuth (OAuthClientMiddleware)
+   ↓
+3. Extra headers from config (lowest priority)
+```
+
+The middleware checks `auth_already_set` metadata to skip injection when transport auth is configured:
+
+```rust
+// OAuth middleware checks metadata
+if context.get_metadata("auth_already_set").is_some() {
+    // Skip - transport auth_provider takes precedence
+    return Ok(());
+}
+
+// Also skips if Authorization header already present
+if request.has_header("Authorization") {
+    // Warn about duplicate auth configuration
+    return Ok(());
+}
+```
+
+### Example: Custom HTTP Middleware
+
+```rust
+use pmcp::client::http_middleware::{HttpMiddleware, HttpRequest, HttpMiddlewareContext};
+use async_trait::async_trait;
+
+/// Adds custom correlation headers
+struct CorrelationHeaderMiddleware {
+    service_name: String,
+}
+
+#[async_trait]
+impl HttpMiddleware for CorrelationHeaderMiddleware {
+    async fn on_request(
+        &self,
+        request: &mut HttpRequest,
+        context: &HttpMiddlewareContext,
+    ) -> pmcp::Result<()> {
+        // Add service name header
+        request.add_header("X-Service-Name".to_string(), self.service_name.clone());
+
+        // Add timestamp header
+        request.add_header(
+            "X-Request-Timestamp".to_string(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                .to_string(),
+        );
+
+        // Add request ID if available
+        if let Some(req_id) = &context.request_id {
+            request.add_header("X-Request-ID".to_string(), req_id.clone());
+        }
+
+        Ok(())
+    }
+
+    fn priority(&self) -> i32 {
+        20 // Run after OAuth (priority 10)
+    }
+}
+```
+
+### Integration with ClientBuilder
+
+Use `ClientBuilder::with_middleware()` for protocol-level middleware:
+
+```rust
+use pmcp::ClientBuilder;
+use pmcp::shared::{MetricsMiddleware, LoggingMiddleware};
+use std::sync::Arc;
+
+let transport = /* your transport */;
+
+let client = ClientBuilder::new(transport)
+    .with_middleware(Arc::new(MetricsMiddleware::new("my-client".to_string())))
+    .with_middleware(Arc::new(LoggingMiddleware::default()))
+    .build();
+```
+
+**Note**: HTTP middleware is configured separately on the transport (StreamableHttpTransport), not via ClientBuilder.
+
+### Integration with StreamableHttpTransport
+
+Configure HTTP middleware when creating the transport:
+
+```rust
+use pmcp::shared::{StreamableHttpTransport, StreamableHttpConfig};
+use pmcp::client::http_middleware::HttpMiddlewareChain;
+use pmcp::client::oauth_middleware::{OAuthClientMiddleware, BearerToken};
+use std::sync::Arc;
+use std::time::Duration;
+
+// Create HTTP middleware chain
+let mut http_chain = HttpMiddlewareChain::new();
+
+// Add OAuth middleware
+let token = BearerToken::with_expiry(
+    "api-token-12345".to_string(),
+    Duration::from_secs(3600)
+);
+http_chain.add(Arc::new(OAuthClientMiddleware::new(token)));
+
+// Add custom middleware
+http_chain.add(Arc::new(CorrelationHeaderMiddleware {
+    service_name: "my-client".to_string(),
+}));
+
+// Create transport config with HTTP middleware
+let config = StreamableHttpConfig::new("https://api.example.com".to_string())
+    .with_http_middleware(Arc::new(http_chain));
+
+let transport = StreamableHttpTransport::with_config(config).await?;
+```
+
+### Complete Example: OAuth + Protocol Middleware
+
+```rust
+use pmcp::{ClientBuilder, ClientCapabilities};
+use pmcp::shared::{StreamableHttpTransport, StreamableHttpConfig, MetricsMiddleware};
+use pmcp::client::http_middleware::HttpMiddlewareChain;
+use pmcp::client::oauth_middleware::{OAuthClientMiddleware, BearerToken};
+use std::sync::Arc;
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() -> pmcp::Result<()> {
+    // 1. Create HTTP middleware chain
+    let mut http_chain = HttpMiddlewareChain::new();
+
+    // Add OAuth (priority 10 - runs first)
+    let token = BearerToken::with_expiry(
+        std::env::var("API_TOKEN")?,
+        Duration::from_secs(3600)
+    );
+    http_chain.add(Arc::new(OAuthClientMiddleware::new(token)));
+
+    // Add correlation headers (priority 20 - runs after OAuth)
+    http_chain.add(Arc::new(CorrelationHeaderMiddleware {
+        service_name: "my-service".to_string(),
+    }));
+
+    // 2. Create transport with HTTP middleware
+    let config = StreamableHttpConfig::new("https://api.example.com".to_string())
+        .with_http_middleware(Arc::new(http_chain));
+
+    let transport = StreamableHttpTransport::with_config(config).await?;
+
+    // 3. Create client with protocol middleware
+    let client = ClientBuilder::new(transport)
+        .with_middleware(Arc::new(MetricsMiddleware::new("my-client".to_string())))
+        .build();
+
+    // 4. Use client - both middleware layers automatically apply
+    let mut client = client;
+    let init_result = client.initialize(ClientCapabilities::minimal()).await?;
+
+    println!("Connected: {}", init_result.server_info.name);
+
+    Ok(())
+}
+```
+
+### Middleware Execution Flow
+
+For a typical HTTP POST request:
+
+```
+1. Client.call_tool(name, args)
+   ↓
+2. Protocol Middleware (Request):
+   - MetricsMiddleware::on_request()
+   - LoggingMiddleware::on_request()
+   ↓
+3. Transport serialization (JSON-RPC → bytes)
+   ↓
+4. HTTP Middleware (Request):
+   - OAuthClientMiddleware::on_request() → Add Authorization header
+   - CorrelationHeaderMiddleware::on_request() → Add X-Service-Name, X-Request-ID
+   ↓
+5. HTTP Transport sends POST request
+   ↓
+6. HTTP Transport receives response
+   ↓
+7. HTTP Middleware (Response) [reverse order]:
+   - CorrelationHeaderMiddleware::on_response()
+   - OAuthClientMiddleware::on_response() → Check for 401
+   ↓
+8. Transport deserialization (bytes → JSON-RPC)
+   ↓
+9. Protocol Middleware (Response) [reverse order]:
+   - LoggingMiddleware::on_response()
+   - MetricsMiddleware::on_response()
+   ↓
+10. Client receives result
+```
+
+### Error Handling
+
+Both middleware layers support error hooks:
+
+```rust
+#[async_trait]
+impl HttpMiddleware for MyMiddleware {
+    async fn on_error(
+        &self,
+        error: &pmcp::Error,
+        context: &HttpMiddlewareContext,
+    ) -> pmcp::Result<()> {
+        // Log error with context
+        tracing::error!(
+            "HTTP error for {} {}: {}",
+            context.method,
+            context.url,
+            error
+        );
+
+        // Clean up resources if needed
+        self.cleanup().await;
+
+        Ok(())
+    }
+}
+```
+
+**Short-circuit behavior**: If middleware returns an error:
+1. Processing stops immediately
+2. `on_error()` is called for ALL middleware in the chain
+3. Original error is returned to caller
+
+### Middleware Priority Reference
+
+**HTTP Middleware**:
+- `0-9`: Reserved for critical security middleware
+- `10`: OAuthClientMiddleware (default)
+- `20-49`: Custom authentication/authorization
+- `50`: Default priority
+- `51-99`: Logging, metrics, headers
+
+**Protocol Middleware**:
+- `Critical (0)`: Validation, security
+- `High (1)`: Rate limiting, circuit breakers
+- `Normal (2)`: Business logic, compression
+- `Low (3)`: Metrics, logging
+- `Lowest (4)`: Cleanup
+
 ### Further Reading
 
 - Repository docs: `docs/advanced/middleware-composition.md`
 - Advanced Middleware API: https://docs.rs/pmcp/latest/pmcp/shared/middleware/
 - Performance Metrics API: https://docs.rs/pmcp/latest/pmcp/shared/middleware/struct.PerformanceMetrics.html
+- Example: `examples/40_middleware_demo.rs` - Complete two-layer middleware demonstration
