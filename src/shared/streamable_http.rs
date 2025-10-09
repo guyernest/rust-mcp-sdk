@@ -120,7 +120,10 @@ impl Debug for StreamableHttpTransportConfig {
             .field("session_id", &self.session_id)
             .field("enable_json_response", &self.enable_json_response)
             .field("on_resumption_token", &self.on_resumption_token.is_some())
-            .field("http_middleware_chain", &self.http_middleware_chain.is_some())
+            .field(
+                "http_middleware_chain",
+                &self.http_middleware_chain.is_some(),
+            )
             .finish()
     }
 }
@@ -215,18 +218,23 @@ impl StreamableHttpTransport {
         let url = self.config.read().url.clone();
 
         // Build GET request with middleware integration
-        let mut request = self.build_request_with_middleware(
-            Method::GET,
-            url.as_str(),
-            vec![], // Empty body for GET
-        ).await?;
+        let mut request = self
+            .build_request_with_middleware(
+                Method::GET,
+                url.as_str(),
+                vec![], // Empty body for GET
+            )
+            .await?;
 
         // Add SSE-specific headers
         request.headers_mut().insert(
             ACCEPT,
             TEXT_EVENT_STREAM.parse().map_err(|e| {
-                Error::Transport(TransportError::InvalidMessage(format!("Invalid header: {}", e)))
-            })?
+                Error::Transport(TransportError::InvalidMessage(format!(
+                    "Invalid header: {}",
+                    e
+                )))
+            })?,
         );
 
         // Add Last-Event-ID for resumability
@@ -234,13 +242,19 @@ impl StreamableHttpTransport {
             request.headers_mut().insert(
                 LAST_EVENT_ID,
                 token.parse().map_err(|e| {
-                    Error::Transport(TransportError::InvalidMessage(format!("Invalid header: {}", e)))
-                })?
+                    Error::Transport(TransportError::InvalidMessage(format!(
+                        "Invalid header: {}",
+                        e
+                    )))
+                })?,
             );
         }
 
         // Send request
-        let response = self.client.request(request).await
+        let response = self
+            .client
+            .request(request)
+            .await
             .map_err(|e| Error::Transport(TransportError::Request(e.to_string())))?;
 
         // Handle 405 (SSE not supported) gracefully
@@ -266,17 +280,19 @@ impl StreamableHttpTransport {
             .map_err(|e| Error::Transport(TransportError::Request(e.to_string())))?
             .to_bytes();
 
-        // Run response middleware (create a minimal response for middleware processing)
-        let temp_response = HyperResponse::builder()
-            .status(200)
-            .body(Full::new(Bytes::new()))
-            .unwrap();
-        let modified_body = self.apply_response_middleware(
-            "GET",
-            url.as_str(),
-            &temp_response,
-            body_bytes.to_vec(),
-        ).await?;
+        // Fast path: Check if middleware exists before creating temp response
+        let modified_body = if self.config.read().http_middleware_chain.is_some() {
+            // Run response middleware (create a minimal response for middleware processing)
+            let temp_response = HyperResponse::builder()
+                .status(200)
+                .body(Full::new(Bytes::new()))
+                .unwrap();
+            self.apply_response_middleware("GET", url.as_str(), &temp_response, body_bytes.to_vec())
+                .await?
+        } else {
+            // No middleware - use body directly (fast path)
+            body_bytes.to_vec()
+        };
 
         // Start streaming task
         let sender = self.sender.clone();
@@ -340,9 +356,7 @@ impl StreamableHttpTransport {
         };
 
         // Start building request with hyper
-        let mut request_builder = Request::builder()
-            .method(method.clone())
-            .uri(url);
+        let mut request_builder = Request::builder().method(method.clone()).uri(url);
 
         // Add extra headers from config
         for (key, value) in &extra_headers {
@@ -365,7 +379,8 @@ impl StreamableHttpTransport {
 
         // Add protocol version header if we have one
         if let Some(protocol_version) = self.protocol_version.read().as_ref() {
-            request_builder = request_builder.header(MCP_PROTOCOL_VERSION, protocol_version.as_str());
+            request_builder =
+                request_builder.header(MCP_PROTOCOL_VERSION, protocol_version.as_str());
         }
 
         // Build temporary request to extract headers for middleware
@@ -379,11 +394,7 @@ impl StreamableHttpTransport {
         // Run HTTP middleware if configured
         if let Some(chain) = middleware_chain {
             // Create HttpRequest from hyper components
-            let mut http_req = HttpRequest::new(
-                method.as_str().to_string(),
-                url.to_string(),
-                body,
-            );
+            let mut http_req = HttpRequest::new(method.as_str().to_string(), url.to_string(), body);
 
             // Copy headers
             for (key, value) in headers.iter() {
@@ -408,9 +419,7 @@ impl StreamableHttpTransport {
             }
 
             // Rebuild request with modified headers and body
-            let mut final_builder = Request::builder()
-                .method(method)
-                .uri(url);
+            let mut final_builder = Request::builder().method(method).uri(url);
 
             for (key, value) in http_req.headers {
                 final_builder = final_builder.header(key, value);
@@ -445,11 +454,8 @@ impl StreamableHttpTransport {
                 }
             }
 
-            let mut http_resp = HttpResponse::with_headers(
-                response.status().as_u16(),
-                header_map,
-                body,
-            );
+            let mut http_resp =
+                HttpResponse::with_headers(response.status().as_u16(), header_map, body);
 
             // Create context
             let context = HttpMiddlewareContext::new(url.to_string(), method.to_string());
@@ -504,28 +510,35 @@ impl StreamableHttpTransport {
         let url = self.config.read().url.clone();
 
         // Build POST request with middleware integration
-        let mut request = self.build_request_with_middleware(
-            Method::POST,
-            url.as_str(),
-            body_bytes,
-        ).await?;
+        let mut request = self
+            .build_request_with_middleware(Method::POST, url.as_str(), body_bytes)
+            .await?;
 
         // Add request-specific headers
         request.headers_mut().insert(
             CONTENT_TYPE,
             APPLICATION_JSON.parse().map_err(|e| {
-                Error::Transport(TransportError::InvalidMessage(format!("Invalid header: {}", e)))
-            })?
+                Error::Transport(TransportError::InvalidMessage(format!(
+                    "Invalid header: {}",
+                    e
+                )))
+            })?,
         );
         request.headers_mut().insert(
             ACCEPT,
             ACCEPT_STREAMABLE.parse().map_err(|e| {
-                Error::Transport(TransportError::InvalidMessage(format!("Invalid header: {}", e)))
-            })?
+                Error::Transport(TransportError::InvalidMessage(format!(
+                    "Invalid header: {}",
+                    e
+                )))
+            })?,
         );
 
         // Send request
-        let response = self.client.request(request).await
+        let response = self
+            .client
+            .request(request)
+            .await
             .map_err(|e| Error::Transport(TransportError::Request(e.to_string())))?;
 
         // Process headers for session and protocol info
@@ -570,17 +583,19 @@ impl StreamableHttpTransport {
             .map_err(|e| Error::Transport(TransportError::Request(e.to_string())))?
             .to_bytes();
 
-        // Run response middleware (create a minimal response for middleware processing)
-        let temp_response = HyperResponse::builder()
-            .status(status_code)
-            .body(Full::new(Bytes::new()))
-            .unwrap();
-        let modified_body = self.apply_response_middleware(
-            "POST",
-            url.as_str(),
-            &temp_response,
-            body_bytes.to_vec(),
-        ).await?;
+        // Fast path: Check if middleware exists before creating temp response
+        let modified_body = if self.config.read().http_middleware_chain.is_some() {
+            // Run response middleware (create a minimal response for middleware processing)
+            let temp_response = HyperResponse::builder()
+                .status(status_code)
+                .body(Full::new(Bytes::new()))
+                .unwrap();
+            self.apply_response_middleware("POST", url.as_str(), &temp_response, body_bytes.to_vec())
+                .await?
+        } else {
+            // No middleware - use body directly (fast path)
+            body_bytes.to_vec()
+        };
 
         // If it's a 200 response with Content-Length: 0 or no Content-Type
         if status_code == StatusCode::OK && (content_length == Some(0) || content_type.is_empty()) {
@@ -712,11 +727,9 @@ impl Transport for StreamableHttpTransport {
         // Optionally send a DELETE request to terminate the session
         if let Some(_session_id) = self.session_id() {
             let url = self.config.read().url.clone();
-            let request = self.build_request_with_middleware(
-                Method::DELETE,
-                url.as_str(),
-                vec![],
-            ).await?;
+            let request = self
+                .build_request_with_middleware(Method::DELETE, url.as_str(), vec![])
+                .await?;
 
             // Send DELETE request (ignore 405 as per spec)
             let response = self.client.request(request).await;

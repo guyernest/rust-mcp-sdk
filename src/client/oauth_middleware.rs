@@ -172,7 +172,9 @@ impl HttpMiddleware for OAuthClientMiddleware {
         // OAuth Precedence Policy: Skip if auth already set by transport
         // Priority: transport auth_provider > HttpMiddleware OAuth > extra headers
         if context.get_metadata("auth_already_set").is_some() {
-            tracing::debug!("Skipping OAuth middleware - auth already set by transport auth_provider");
+            tracing::debug!(
+                "Skipping OAuth middleware - auth already set by transport auth_provider"
+            );
             return Ok(());
         }
 
@@ -214,9 +216,7 @@ impl HttpMiddleware for OAuthClientMiddleware {
 
             // Check if this is a retry scenario
             if context.get_metadata("oauth.retry_used").is_some() {
-                tracing::warn!(
-                    "Authentication failed after OAuth retry - token may be invalid"
-                );
+                tracing::warn!("Authentication failed after OAuth retry - token may be invalid");
             }
 
             return Err(Error::authentication(format!(
@@ -228,11 +228,7 @@ impl HttpMiddleware for OAuthClientMiddleware {
         Ok(())
     }
 
-    async fn on_error(
-        &self,
-        error: &Error,
-        context: &HttpMiddlewareContext,
-    ) -> Result<()> {
+    async fn on_error(&self, error: &Error, context: &HttpMiddlewareContext) -> Result<()> {
         // Log authentication errors with context
         if matches!(error, Error::Authentication(_)) {
             tracing::error!(
@@ -309,11 +305,8 @@ mod tests {
         let token = BearerToken::new("my-secret-token".to_string());
         let middleware = OAuthClientMiddleware::new(token);
 
-        let mut request = HttpRequest::new(
-            "POST".to_string(),
-            "http://example.com".to_string(),
-            vec![],
-        );
+        let mut request =
+            HttpRequest::new("POST".to_string(), "http://example.com".to_string(), vec![]);
         let context =
             HttpMiddlewareContext::new("http://example.com".to_string(), "POST".to_string());
 
