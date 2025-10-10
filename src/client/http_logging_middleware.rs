@@ -37,7 +37,7 @@ use crate::client::http_middleware::{
 };
 use crate::error::Result;
 use async_trait::async_trait;
-use hyper::http::header::HeaderName;
+use http::header::HeaderName;
 use std::collections::HashSet;
 
 /// HTTP logging middleware with sensitive header redaction.
@@ -93,7 +93,7 @@ impl HttpLoggingMiddleware {
     ///
     /// ```rust
     /// use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
-    /// use hyper::http::header::HeaderName;
+    /// use http::header::HeaderName;
     ///
     /// // Use defaults
     /// let middleware = HttpLoggingMiddleware::new();
@@ -506,7 +506,7 @@ impl HttpMiddleware for HttpLoggingMiddleware {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hyper::http::HeaderMap;
+    use http::HeaderMap;
 
     #[test]
     fn test_default_redaction_list() {

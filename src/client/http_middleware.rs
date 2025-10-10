@@ -5,8 +5,8 @@
 
 use crate::error::Result;
 use async_trait::async_trait;
-use hyper::http::header::{HeaderName, HeaderValue};
-use hyper::http::HeaderMap;
+use http::header::{HeaderName, HeaderValue};
+use http::HeaderMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 

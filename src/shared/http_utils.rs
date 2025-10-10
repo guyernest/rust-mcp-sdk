@@ -4,7 +4,7 @@
 //! server-side HTTP middleware, ensuring consistent behavior and avoiding
 //! code duplication.
 
-use hyper::http::{HeaderMap, HeaderName, HeaderValue};
+use http::{HeaderMap, HeaderName, HeaderValue};
 use std::collections::HashSet;
 
 /// Redact sensitive header values.

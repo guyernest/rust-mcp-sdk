@@ -34,7 +34,7 @@
 
 use crate::error::{Error, Result};
 use async_trait::async_trait;
-use hyper::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
+use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
@@ -1001,7 +1001,7 @@ pub mod adapters {
         use super::super::{HeaderMap, Method, StatusCode};
         use super::*;
         use axum::body::Body;
-        use hyper::http::Request;
+        use http::Request;
 
         #[tokio::test]
         async fn test_from_axum_basic() {
