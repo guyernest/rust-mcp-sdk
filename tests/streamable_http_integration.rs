@@ -40,6 +40,7 @@ async fn test_streamable_http_stateless_mode() {
         event_store: None,
         on_session_initialized: None,
         on_session_closed: None,
+        http_middleware: None,
     };
 
     let server_instance =
@@ -214,6 +215,7 @@ async fn test_transport_send_receive_multiple() {
         event_store: None,
         on_session_initialized: None,
         on_session_closed: None,
+        http_middleware: None,
     };
 
     let server_instance =
