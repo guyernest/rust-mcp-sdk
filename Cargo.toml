@@ -359,6 +359,10 @@ required-features = ["streamable-http"]
 name = "56_dynamic_resources"
 path = "examples/56_dynamic_resources.rs"
 
+[[example]]
+name = "57_tool_middleware_oauth"
+path = "examples/57_tool_middleware_oauth.rs"
+
 [[bench]]
 name = "comprehensive_benchmarks"
 harness = false

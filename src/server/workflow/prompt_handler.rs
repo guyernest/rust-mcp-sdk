@@ -654,6 +654,7 @@ mod tests {
             session_id: None,
             auth_info: None,
             auth_context: None,
+            metadata: std::collections::HashMap::new(),
         };
 
         let result = handler
@@ -834,6 +835,7 @@ mod tests {
             session_id: None,
             auth_info: None,
             auth_context: None,
+            metadata: std::collections::HashMap::new(),
         };
 
         let result = handler
@@ -940,6 +942,7 @@ mod tests {
             session_id: None,
             auth_info: None,
             auth_context: None,
+            metadata: std::collections::HashMap::new(),
         };
 
         let result = handler
@@ -1031,6 +1034,7 @@ mod tests {
             session_id: None,
             auth_info: None,
             auth_context: None,
+            metadata: std::collections::HashMap::new(),
         };
 
         let result = handler
@@ -1160,6 +1164,7 @@ mod tests {
             session_id: None,
             auth_info: None,
             auth_context: None,
+            metadata: std::collections::HashMap::new(),
         };
 
         let result = handler
@@ -1288,6 +1293,7 @@ mod tests {
             session_id: None,
             auth_info: None,
             auth_context: None,
+            metadata: std::collections::HashMap::new(),
         };
 
         let result = handler
@@ -1353,6 +1359,7 @@ mod tests {
             session_id: None,
             auth_info: None,
             auth_context: None,
+            metadata: std::collections::HashMap::new(),
         };
 
         let result = handler
@@ -1429,6 +1436,7 @@ mod tests {
             session_id: None,
             auth_info: None,
             auth_context: None,
+            metadata: std::collections::HashMap::new(),
         };
 
         let result = handler
@@ -1523,6 +1531,7 @@ mod tests {
             session_id: None,
             auth_info: None,
             auth_context: None,
+            metadata: std::collections::HashMap::new(),
         };
 
         let result = handler
@@ -1655,6 +1664,7 @@ mod tests {
             session_id: None,
             auth_info: None,
             auth_context: None,
+            metadata: std::collections::HashMap::new(),
         };
 
         let result = handler
@@ -1799,6 +1809,7 @@ mod tests {
             session_id: None,
             auth_info: None,
             auth_context: None,
+            metadata: std::collections::HashMap::new(),
         };
 
         let result = handler
@@ -1911,6 +1922,7 @@ mod tests {
             session_id: None,
             auth_info: None,
             auth_context: None,
+            metadata: std::collections::HashMap::new(),
         };
 
         let result = handler

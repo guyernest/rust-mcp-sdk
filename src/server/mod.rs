@@ -57,6 +57,9 @@ pub mod simple_resources;
 /// Simple tool implementations with schema support.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simple_tool;
+/// Tool middleware for cross-cutting concerns in tool execution.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tool_middleware;
 /// Workflow-based prompt system with type-safe handles and ergonomic builders.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod workflow;

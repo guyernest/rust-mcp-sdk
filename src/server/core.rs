@@ -31,6 +31,8 @@ use super::cancellation::{CancellationManager, RequestHandlerExtra};
 use super::roots::RootsManager;
 #[cfg(not(target_arch = "wasm32"))]
 use super::subscriptions::SubscriptionManager;
+#[cfg(not(target_arch = "wasm32"))]
+use super::tool_middleware::{ToolContext, ToolMiddlewareChain};
 use super::{PromptHandler, ResourceHandler, SamplingHandler, ToolHandler};
 
 /// Protocol-agnostic request handler trait.
@@ -129,6 +131,10 @@ pub struct ServerCore {
 
     /// Protocol middleware chain for request/response/notification processing
     protocol_middleware: Arc<RwLock<EnhancedMiddlewareChain>>,
+
+    /// Tool middleware chain for cross-cutting concerns in tool execution
+    #[cfg(not(target_arch = "wasm32"))]
+    tool_middleware: Arc<RwLock<ToolMiddlewareChain>>,
 }
 
 impl ServerCore {
@@ -144,6 +150,7 @@ impl ServerCore {
         auth_provider: Option<Arc<dyn AuthProvider>>,
         tool_authorizer: Option<Arc<dyn ToolAuthorizer>>,
         protocol_middleware: Arc<RwLock<EnhancedMiddlewareChain>>,
+        #[cfg(not(target_arch = "wasm32"))] tool_middleware: Arc<RwLock<ToolMiddlewareChain>>,
     ) -> Self {
         Self {
             info,
@@ -160,6 +167,8 @@ impl ServerCore {
             auth_provider,
             tool_authorizer,
             protocol_middleware,
+            #[cfg(not(target_arch = "wasm32"))]
+            tool_middleware,
         }
     }
 
@@ -234,23 +243,69 @@ impl ServerCore {
 
         // Create request handler extra data
         let request_id = format!("tool_{}", req.name);
-        let extra = RequestHandlerExtra {
-            cancellation_token: self
-                .cancellation_manager
+        let mut extra = RequestHandlerExtra::new(
+            request_id.clone(),
+            self.cancellation_manager
                 .create_token(request_id.clone())
                 .await,
-            request_id,
-            session_id: None,
-            auth_info: None,
-            auth_context: None,
+        );
+
+        // Execute tool with or without middleware depending on platform
+        #[cfg(not(target_arch = "wasm32"))]
+        let result = {
+            // Create tool context for middleware
+            let context = ToolContext::new(&req.name, &request_id);
+
+            // Clone arguments for middleware processing
+            let mut args = req.arguments.clone();
+
+            // Process request through tool middleware chain
+            // Middleware rejection short-circuits tool execution (on_error already called by chain)
+            self.tool_middleware
+                .read()
+                .await
+                .process_request(&req.name, &mut args, &mut extra, &context)
+                .await?;
+
+            // Execute the tool with potentially modified args and extra
+            let mut result = handler.handle(args, extra).await;
+
+            // Process response through tool middleware chain
+            if let Err(e) = self
+                .tool_middleware
+                .read()
+                .await
+                .process_response(&req.name, &mut result, &context)
+                .await
+            {
+                // Log error but continue with original result
+                tracing::warn!("Tool response middleware processing failed: {}", e);
+            }
+
+            // If tool execution failed, call handle_tool_error
+            if let Err(ref e) = result {
+                self.tool_middleware
+                    .read()
+                    .await
+                    .handle_tool_error(&req.name, e, &context)
+                    .await;
+            }
+
+            result
         };
 
-        // Execute the tool
-        let result = handler.handle(req.arguments.clone(), extra).await?;
+        #[cfg(target_arch = "wasm32")]
+        let result = {
+            // On WASM, execute tool directly without middleware
+            let args = req.arguments.clone();
+            handler.handle(args, extra).await
+        };
 
+        // Convert result to CallToolResult
+        let value = result?;
         Ok(CallToolResult {
             content: vec![Content::Text {
-                text: serde_json::to_string_pretty(&result)?,
+                text: serde_json::to_string_pretty(&value)?,
             }],
             is_error: false,
         })
@@ -318,16 +373,12 @@ impl ServerCore {
 
         // Create request handler extra data
         let request_id = format!("prompt_{}", req.name);
-        let extra = RequestHandlerExtra {
-            cancellation_token: self
-                .cancellation_manager
+        let extra = RequestHandlerExtra::new(
+            request_id.clone(),
+            self.cancellation_manager
                 .create_token(request_id.clone())
                 .await,
-            request_id,
-            session_id: None,
-            auth_info: None,
-            auth_context: None,
-        };
+        );
 
         handler.handle(req.arguments.clone(), extra).await
     }
@@ -340,16 +391,12 @@ impl ServerCore {
         match &self.resources {
             Some(handler) => {
                 let request_id = "list_resources".to_string();
-                let extra = RequestHandlerExtra {
-                    cancellation_token: self
-                        .cancellation_manager
+                let extra = RequestHandlerExtra::new(
+                    request_id.clone(),
+                    self.cancellation_manager
                         .create_token(request_id.clone())
                         .await,
-                    request_id,
-                    session_id: None,
-                    auth_info: None,
-                    auth_context: None,
-                };
+                );
                 handler.list(req.cursor.clone(), extra).await
             },
             None => Ok(ListResourcesResult {
@@ -366,16 +413,12 @@ impl ServerCore {
         })?;
 
         let request_id = format!("read_{}", req.uri);
-        let extra = RequestHandlerExtra {
-            cancellation_token: self
-                .cancellation_manager
+        let extra = RequestHandlerExtra::new(
+            request_id.clone(),
+            self.cancellation_manager
                 .create_token(request_id.clone())
                 .await,
-            request_id,
-            session_id: None,
-            auth_info: None,
-            auth_context: None,
-        };
+        );
 
         handler.read(&req.uri, extra).await
     }
@@ -582,6 +625,7 @@ impl ServerCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::tool_middleware::ToolMiddlewareChain;
     use crate::types::ClientCapabilities;
 
     struct TestTool;
@@ -614,6 +658,7 @@ mod tests {
             None,
             None,
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
+            Arc::new(RwLock::new(ToolMiddlewareChain::new())),
         );
 
         assert!(!server.is_initialized().await);
@@ -658,6 +703,7 @@ mod tests {
             None,
             None,
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
+            Arc::new(RwLock::new(ToolMiddlewareChain::new())),
         );
 
         // Initialize first

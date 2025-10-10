@@ -348,6 +348,9 @@ mod tests {
             None,
             None,
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
+            Arc::new(RwLock::new(
+                crate::server::tool_middleware::ToolMiddlewareChain::new(),
+            )),
         );
 
         let handler = Arc::new(server);
