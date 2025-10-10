@@ -846,11 +846,23 @@ async fn handle_post_with_middleware(
         .process_request(&mut server_request, &http_context)
         .await
     {
+        // Call error hooks before returning
+        let _ = http_middleware.handle_error(&e, &http_context).await;
         return create_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             -32603,
             &format!("Middleware rejected request: {}", e),
         );
+    }
+
+    // Validate headers (consistent with fast path)
+    if let Err(error_response) = validate_headers(&server_request.headers, "POST") {
+        // Call error hooks for validation failures
+        let validation_error = crate::Error::protocol_msg("Header validation failed");
+        let _ = http_middleware
+            .handle_error(&validation_error, &http_context)
+            .await;
+        return error_response;
     }
 
     // Parse JSON-RPC from body
@@ -887,12 +899,26 @@ async fn handle_post_with_middleware(
     let (response_session_id, _) = if is_init_request {
         match process_init_session(&state, session_id.clone(), protocol_version.clone()) {
             Ok(result) => result,
-            Err(error_response) => return error_response,
+            Err(error_response) => {
+                // Call error hooks for session initialization failures
+                let session_error = crate::Error::protocol_msg("Session initialization failed");
+                let _ = http_middleware
+                    .handle_error(&session_error, &http_context)
+                    .await;
+                return error_response;
+            },
         }
     } else {
         match validate_non_init_session(&state, session_id.clone()) {
             Ok(sid) => (sid, false),
-            Err(error_response) => return error_response,
+            Err(error_response) => {
+                // Call error hooks for session validation failures
+                let session_error = crate::Error::protocol_msg("Session validation failed");
+                let _ = http_middleware
+                    .handle_error(&session_error, &http_context)
+                    .await;
+                return error_response;
+            },
         }
     };
 
@@ -901,6 +927,11 @@ async fn handle_post_with_middleware(
         if let Err(error_response) =
             validate_protocol_version(&state, session_id.as_ref(), protocol_version.as_ref())
         {
+            // Call error hooks for protocol version validation failures
+            let version_error = crate::Error::protocol_msg("Protocol version validation failed");
+            let _ = http_middleware
+                .handle_error(&version_error, &http_context)
+                .await;
             return error_response;
         }
     }
@@ -934,6 +965,12 @@ async fn handle_post_with_middleware(
             let response_body = match serde_json::to_vec(&response_msg) {
                 Ok(b) => b,
                 Err(e) => {
+                    // Call error hooks for serialization failures
+                    let serialization_error =
+                        crate::Error::internal(format!("Failed to serialize response: {}", e));
+                    let _ = http_middleware
+                        .handle_error(&serialization_error, &http_context)
+                        .await;
                     return create_error_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         -32603,
