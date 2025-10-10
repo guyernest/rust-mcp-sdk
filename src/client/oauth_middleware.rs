@@ -314,7 +314,7 @@ mod tests {
 
         assert_eq!(
             request.get_header("Authorization"),
-            Some(&"Bearer my-secret-token".to_string())
+            Some("Bearer my-secret-token")
         );
     }
 

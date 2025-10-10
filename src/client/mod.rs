@@ -28,6 +28,7 @@ use futures_locks::RwLock;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod auth;
+pub mod http_logging_middleware;
 pub mod http_middleware;
 pub mod oauth_middleware;
 pub mod transport;
@@ -1264,6 +1265,7 @@ impl<T: Transport> Client<T> {
     }
 
     /// Send a request and wait for response.
+    #[allow(clippy::cognitive_complexity)]
     async fn send_request(
         &self,
         request_id: RequestId,
@@ -1284,9 +1286,9 @@ impl<T: Transport> Client<T> {
         // Convert to JSONRPC request
         let mut jsonrpc_request = create_request(request_id.clone(), request.clone());
 
-        // Process request through middleware chain
+        // Process request through middleware chain (read-only access)
         self.middleware_chain
-            .write()
+            .read()
             .await
             .process_request_with_context(&mut jsonrpc_request, &context)
             .await?;
@@ -1299,26 +1301,67 @@ impl<T: Transport> Client<T> {
 
         self.transport.write().await.send(message).await?;
 
-        // Wait for response (this would be implemented with proper response routing)
-        // For now, receive next message and assume it's our response
-        let response_message = self.transport.write().await.receive().await?;
+        // Wait for response, dispatching any unsolicited notifications along the way
+        loop {
+            let response_message = self.transport.write().await.receive().await?;
 
-        // Remove from active requests
-        self.active_requests.write().await.remove(&request_id);
+            match response_message {
+                crate::types::TransportMessage::Response(mut response) => {
+                    // Remove from active requests
+                    self.active_requests.write().await.remove(&request_id);
 
-        match response_message {
-            crate::types::TransportMessage::Response(mut response) => {
-                // Process response through middleware chain
-                self.middleware_chain
-                    .write()
-                    .await
-                    .process_response_with_context(&mut response, &context)
-                    .await?;
-                Ok(response)
-            },
-            _ => Err(Error::protocol_msg(
-                "Expected response, got different message type",
-            )),
+                    // Process response through middleware chain (read-only access)
+                    self.middleware_chain
+                        .read()
+                        .await
+                        .process_response_with_context(&mut response, &context)
+                        .await?;
+                    return Ok(response);
+                },
+                crate::types::TransportMessage::Notification(notification) => {
+                    // Unsolicited notification (e.g., progress, resource changes, SSE events)
+                    // Convert to JSONRPC notification for middleware processing
+                    use crate::shared::protocol_helpers::create_notification;
+                    let mut jsonrpc_notification = create_notification(notification.clone());
+
+                    // Process through protocol middleware chain
+                    let notif_context = MiddlewareContext::default();
+
+                    if let Err(e) = self
+                        .middleware_chain
+                        .write()
+                        .await
+                        .process_notification_with_context(
+                            &mut jsonrpc_notification,
+                            &notif_context,
+                        )
+                        .await
+                    {
+                        // Log error but don't terminate dispatcher - continue processing
+                        tracing::warn!(
+                            "Notification middleware processing failed for {}: {}",
+                            jsonrpc_notification.method,
+                            e
+                        );
+                    }
+
+                    // Forward to notification handler if registered
+                    if let Some(tx) = &self.notification_tx {
+                        if let Err(e) = tx.send(notification).await {
+                            tracing::debug!("Notification channel closed: {}", e);
+                        }
+                    }
+
+                    // Continue loop to wait for the actual response
+                },
+                crate::types::TransportMessage::Request { .. } => {
+                    // Unexpected message type
+                    self.active_requests.write().await.remove(&request_id);
+                    return Err(Error::protocol_msg(
+                        "Unexpected message type while waiting for response",
+                    ));
+                },
+            }
         }
     }
 
@@ -1425,6 +1468,37 @@ impl<T: Transport> ClientBuilder<T> {
     ) -> Self {
         self.middleware_chain.add(middleware);
         self
+    }
+
+    /// Add protocol-level middleware to the client.
+    ///
+    /// This is an alias for `with_middleware()` that provides explicit naming to distinguish
+    /// protocol middleware (operates on JSON-RPC messages) from HTTP middleware
+    /// (operates on HTTP requests/responses via `StreamableHttpTransportConfigBuilder`).
+    ///
+    /// Middleware are executed in priority order (Critical → High → Normal → Low → Lowest).
+    /// Multiple middleware with the same priority are executed in the order they were added.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::{ClientBuilder, StdioTransport};
+    /// use pmcp::shared::MetricsMiddleware;
+    /// use std::sync::Arc;
+    ///
+    /// # async fn example() -> Result<(), pmcp::Error> {
+    /// let transport = StdioTransport::new();
+    /// let client = ClientBuilder::new(transport)
+    ///     .with_protocol_middleware(Arc::new(MetricsMiddleware::new("my-service".to_string())))
+    ///     .build();
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_protocol_middleware(
+        self,
+        middleware: Arc<dyn crate::shared::AdvancedMiddleware>,
+    ) -> Self {
+        self.with_middleware(middleware)
     }
 
     /// Set the entire middleware chain.

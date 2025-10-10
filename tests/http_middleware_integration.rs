@@ -170,7 +170,7 @@ async fn test_oauth_no_provider() {
     // Verify Authorization header was added
     assert_eq!(
         request.get_header("Authorization"),
-        Some(&"Bearer test-token".to_string())
+        Some("Bearer test-token")
     );
 }
 
@@ -216,7 +216,7 @@ async fn test_oauth_duplicate_header_detection() {
     // Verify original header is preserved (not overwritten)
     assert_eq!(
         request.get_header("Authorization"),
-        Some(&"Bearer existing-token".to_string()),
+        Some("Bearer existing-token"),
         "Existing auth header should not be overwritten"
     );
 }
@@ -371,8 +371,8 @@ async fn test_concurrency_no_shared_state_contention() {
 
 #[tokio::test]
 async fn test_header_case_insensitivity() {
+    use http::HeaderMap;
     use pmcp::client::http_middleware::{HttpRequest, HttpResponse};
-    use std::collections::HashMap;
 
     // Test HttpRequest case-insensitive headers
     let mut request = HttpRequest::new("POST".to_string(), "http://test.com".to_string(), vec![]);
@@ -385,28 +385,28 @@ async fn test_header_case_insensitivity() {
     // Verify case-insensitive lookup works
     assert_eq!(
         request.get_header("content-type"),
-        Some(&"application/json".to_string()),
+        Some("application/json"),
         "Lowercase lookup should work"
     );
     assert_eq!(
         request.get_header("Content-Type"),
-        Some(&"application/json".to_string()),
+        Some("application/json"),
         "Mixed case lookup should work"
     );
     assert_eq!(
         request.get_header("CONTENT-TYPE"),
-        Some(&"application/json".to_string()),
+        Some("application/json"),
         "Uppercase lookup should work"
     );
 
     assert_eq!(
         request.get_header("authorization"),
-        Some(&"Bearer token".to_string()),
+        Some("Bearer token"),
         "Authorization header should be accessible"
     );
     assert_eq!(
         request.get_header("AUTHORIZATION"),
-        Some(&"Bearer token".to_string()),
+        Some("Bearer token"),
         "Case variation should work"
     );
 
@@ -437,39 +437,30 @@ async fn test_header_case_insensitivity() {
     response.add_header("Content-Length", "123");
     response.add_header("cache-control", "no-cache");
 
-    assert_eq!(
-        response.get_header("content-length"),
-        Some(&"123".to_string())
-    );
-    assert_eq!(
-        response.get_header("CONTENT-LENGTH"),
-        Some(&"123".to_string())
-    );
-    assert_eq!(
-        response.get_header("Cache-Control"),
-        Some(&"no-cache".to_string())
-    );
+    assert_eq!(response.get_header("content-length"), Some("123"));
+    assert_eq!(response.get_header("CONTENT-LENGTH"), Some("123"));
+    assert_eq!(response.get_header("Cache-Control"), Some("no-cache"));
 
-    // Test with_headers constructor normalizes
-    let mut headers = HashMap::new();
-    headers.insert("Content-Type".to_string(), "text/plain".to_string());
-    headers.insert("X-Custom".to_string(), "value".to_string());
+    // Test with_headers constructor
+    let mut headers = HeaderMap::new();
+    headers.insert("Content-Type", "text/plain".parse().unwrap());
+    headers.insert("X-Custom", "value".parse().unwrap());
 
     let response2 = HttpResponse::with_headers(200, headers, vec![]);
     assert_eq!(
         response2.get_header("content-type"),
-        Some(&"text/plain".to_string()),
-        "with_headers should normalize to lowercase"
+        Some("text/plain"),
+        "with_headers should work with HeaderMap"
     );
     assert_eq!(
         response2.get_header("CONTENT-TYPE"),
-        Some(&"text/plain".to_string()),
+        Some("text/plain"),
         "Case-insensitive lookup should work"
     );
     assert_eq!(
         response2.get_header("x-custom"),
-        Some(&"value".to_string()),
-        "Custom headers should be normalized"
+        Some("value"),
+        "Custom headers should be accessible"
     );
 }
 
@@ -492,15 +483,15 @@ async fn test_oauth_duplicate_detection_case_insensitive() {
     // OAuth middleware should detect the existing header regardless of case
     oauth_mw.on_request(&mut request, &context).await.unwrap();
 
-    // Verify original header is preserved (should be stored as lowercase)
+    // Verify original header is preserved
     assert_eq!(
         request.get_header("authorization"), // lowercase lookup
-        Some(&"Bearer existing-token".to_string()),
+        Some("Bearer existing-token"),
         "Original header should be preserved"
     );
     assert_eq!(
         request.get_header("Authorization"), // mixed case lookup
-        Some(&"Bearer existing-token".to_string()),
+        Some("Bearer existing-token"),
         "Case-insensitive lookup should work"
     );
 
@@ -574,7 +565,7 @@ async fn test_middleware_chain_with_mixed_case_headers() {
     assert!(request.has_header("AUTHORIZATION"));
     assert_eq!(
         request.get_header("authorization"),
-        Some(&"Bearer test-token".to_string())
+        Some("Bearer test-token")
     );
 }
 
@@ -779,4 +770,216 @@ async fn test_oauth_error_hook_logging() {
         result.is_ok(),
         "on_error should handle non-auth errors gracefully"
     );
+}
+
+#[tokio::test]
+async fn test_http_logging_redacts_sensitive_headers() {
+    use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
+
+    let middleware = HttpLoggingMiddleware::new();
+
+    // Test Authorization header redaction with different casings
+    let mut request = HttpRequest::new("GET".to_string(), "http://test.com".to_string(), vec![]);
+    request.add_header("Authorization", "Bearer my-secret-token-12345");
+    request.add_header("AUTHORIZATION", "Bearer another-secret");
+    request.add_header("cookie", "session=abc123");
+    request.add_header("x-api-key", "api-key-secret");
+    request.add_header("content-type", "application/json");
+
+    let context = HttpMiddlewareContext::new("http://test.com".to_string(), "GET".to_string());
+
+    // Process request (this will log with redaction)
+    middleware.on_request(&mut request, &context).await.unwrap();
+
+    // Verify headers are redacted in the internal redaction logic
+    let formatted = middleware.redact_header_value(
+        &http::HeaderName::from_static("authorization"),
+        "Bearer secret",
+    );
+    assert_eq!(formatted, "Bearer [REDACTED]");
+
+    let formatted_cookie =
+        middleware.redact_header_value(&http::HeaderName::from_static("cookie"), "session=abc123");
+    assert_eq!(formatted_cookie, "[REDACTED]");
+
+    // Content-type should not be redacted
+    let formatted_ct = middleware.redact_header_value(
+        &http::HeaderName::from_static("content-type"),
+        "application/json",
+    );
+    assert_eq!(formatted_ct, "application/json");
+}
+
+#[tokio::test]
+async fn test_http_logging_respects_overrides() {
+    use http::HeaderName;
+    use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
+
+    // Remove x-api-key from redaction list
+    let middleware =
+        HttpLoggingMiddleware::new().allow_header(&HeaderName::from_static("x-api-key"));
+
+    // x-api-key should NOT be redacted now
+    let formatted =
+        middleware.redact_header_value(&HeaderName::from_static("x-api-key"), "my-api-key-12345");
+    assert_eq!(formatted, "my-api-key-12345");
+
+    // But authorization should still be redacted
+    let formatted_auth = middleware.redact_header_value(
+        &HeaderName::from_static("authorization"),
+        "Bearer secret-token",
+    );
+    assert_eq!(formatted_auth, "Bearer [REDACTED]");
+}
+
+#[tokio::test]
+async fn test_http_logging_multivalue_headers() {
+    use http::HeaderMap;
+    use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
+
+    let middleware = HttpLoggingMiddleware::new();
+
+    // Create headers with multiple set-cookie entries
+    let mut headers = HeaderMap::new();
+    headers.append("set-cookie", "session1=abc123".parse().unwrap());
+    headers.append("set-cookie", "session2=def456".parse().unwrap());
+    headers.append("set-cookie", "user=john".parse().unwrap());
+    headers.insert("content-type", "application/json".parse().unwrap());
+
+    // Format headers - all set-cookie values should be redacted
+    let formatted = middleware.format_headers(&headers);
+
+    // Should contain [REDACTED] for each set-cookie entry
+    assert!(formatted.contains("[REDACTED]"));
+
+    // Should contain content-type unredacted
+    assert!(formatted.contains("application/json"));
+
+    // Verify all set-cookie entries are redacted (not just one)
+    let redacted_count = formatted.matches("[REDACTED]").count();
+    assert!(
+        redacted_count >= 3,
+        "Expected at least 3 redacted values, got {}",
+        redacted_count
+    );
+}
+
+#[tokio::test]
+async fn test_http_logging_body_disabled_by_default() {
+    use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
+
+    // Default middleware should NOT log bodies
+    let middleware_default = HttpLoggingMiddleware::new();
+    assert!(
+        middleware_default.max_body_bytes().is_none(),
+        "Default middleware should not log bodies"
+    );
+
+    // With max_body_bytes set, it should log bodies
+    let middleware_with_body = HttpLoggingMiddleware::new().with_max_body_bytes(1024);
+    assert_eq!(
+        middleware_with_body.max_body_bytes(),
+        Some(1024),
+        "Middleware with body logging should have max_body_bytes set"
+    );
+
+    // Create a request with a body
+    let body = b"sensitive data in body";
+    let mut request = HttpRequest::new(
+        "POST".to_string(),
+        "http://test.com".to_string(),
+        body.to_vec(),
+    );
+    let context = HttpMiddlewareContext::new("http://test.com".to_string(), "POST".to_string());
+
+    // Both should succeed, but default won't log the body content
+    middleware_default
+        .on_request(&mut request, &context)
+        .await
+        .unwrap();
+    middleware_with_body
+        .on_request(&mut request, &context)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_http_logging_authorization_without_scheme() {
+    use http::HeaderName;
+    use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
+
+    // With show_auth_scheme = false, should completely redact
+    let middleware = HttpLoggingMiddleware::new().with_show_auth_scheme(false);
+
+    let formatted = middleware.redact_header_value(
+        &HeaderName::from_static("authorization"),
+        "Bearer my-secret-token",
+    );
+    assert_eq!(formatted, "[REDACTED]");
+
+    let formatted_basic = middleware.redact_header_value(
+        &HeaderName::from_static("authorization"),
+        "Basic dXNlcjpwYXNz",
+    );
+    assert_eq!(formatted_basic, "[REDACTED]");
+}
+
+#[tokio::test]
+async fn test_http_logging_header_value_truncation() {
+    use http::HeaderName;
+    use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
+
+    // Set max header value length to 20 characters
+    let middleware = HttpLoggingMiddleware::new().with_max_header_value_len(20);
+
+    // Long non-sensitive header should be truncated
+    let long_value = "this-is-a-very-long-content-type-value-that-exceeds-the-limit";
+    let formatted =
+        middleware.redact_header_value(&HeaderName::from_static("content-type"), long_value);
+
+    assert!(formatted.len() <= 23, "Truncated value too long"); // 20 + "..."
+    assert!(formatted.ends_with("..."), "Should end with ellipsis");
+}
+
+#[tokio::test]
+async fn test_http_logging_case_insensitive_redaction() {
+    use http::HeaderName;
+    use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
+
+    let middleware = HttpLoggingMiddleware::new();
+
+    // Test different casings of Authorization header
+    let test_cases = vec![
+        ("authorization", "Bearer secret"),
+        ("Authorization", "Bearer secret"),
+        ("AUTHORIZATION", "Bearer secret"),
+        ("AuThOrIzAtIoN", "Bearer secret"),
+    ];
+
+    for (header_name, value) in test_cases {
+        let name = HeaderName::from_bytes(header_name.as_bytes()).unwrap();
+        let formatted = middleware.redact_header_value(&name, value);
+        assert_eq!(
+            formatted, "Bearer [REDACTED]",
+            "Failed for header name: {}",
+            header_name
+        );
+    }
+
+    // Test Cookie header casings
+    let cookie_cases = vec![
+        ("cookie", "session=abc"),
+        ("Cookie", "session=abc"),
+        ("COOKIE", "session=abc"),
+    ];
+
+    for (header_name, value) in cookie_cases {
+        let name = HeaderName::from_bytes(header_name.as_bytes()).unwrap();
+        let formatted = middleware.redact_header_value(&name, value);
+        assert_eq!(
+            formatted, "[REDACTED]",
+            "Failed for header name: {}",
+            header_name
+        );
+    }
 }

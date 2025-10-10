@@ -23,6 +23,7 @@ async-trait = "0.1"
 thiserror = "2.0"
 anyhow = "1.0"
 tracing = "0.1"
+http = "1.1"
 
 # Utility dependencies (needed on all platforms)
 url = "2.5"
@@ -348,6 +349,11 @@ path = "examples/52_workflow_dsl_cookbook.rs"
 name = "53_typed_tools_workflow_integration"
 path = "examples/53_typed_tools_workflow_integration.rs"
 required-features = ["schema-generation"]
+
+[[example]]
+name = "55_server_middleware"
+path = "examples/55_server_middleware.rs"
+required-features = ["streamable-http"]
 
 [[bench]]
 name = "comprehensive_benchmarks"

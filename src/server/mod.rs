@@ -41,6 +41,10 @@ pub mod auth;
 pub mod batch;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cancellation;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod http_middleware;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod preset;
 /// Simple prompt implementations with metadata support.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simple_prompt;
@@ -258,6 +262,9 @@ pub struct Server {
     auth_provider: Option<Arc<dyn auth::AuthProvider>>,
     /// Tool authorizer for fine-grained access control
     tool_authorizer: Option<Arc<dyn auth::ToolAuthorizer>>,
+    /// HTTP middleware chain for `StreamableHttpServer` (configured via `ServerBuilder`)
+    #[cfg(feature = "streamable-http")]
+    http_middleware: Option<Arc<http_middleware::ServerHttpMiddlewareChain>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -290,6 +297,40 @@ impl Server {
     /// Get a prompt handler by name
     pub fn get_prompt(&self, name: &str) -> Option<&Arc<dyn PromptHandler>> {
         self.prompts.get(name)
+    }
+
+    /// Get the HTTP middleware chain configured via `ServerBuilder`.
+    ///
+    /// Returns the HTTP middleware chain that was set using
+    /// `ServerBuilder::with_http_middleware()`. This can be used when
+    /// creating a `StreamableHttpServer`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[cfg(feature = "streamable-http")]
+    /// # {
+    /// use pmcp::Server;
+    /// use pmcp::server::streamable_http_server::StreamableHttpServerConfig;
+    ///
+    /// # async fn example() -> pmcp::Result<()> {
+    /// let server = Server::builder()
+    ///     .name("my-server")
+    ///     .version("1.0.0")
+    ///     // ... with_http_middleware() called here
+    ///     .build()?;
+    ///
+    /// let config = StreamableHttpServerConfig {
+    ///     http_middleware: server.http_middleware(),
+    ///     ..Default::default()
+    /// };
+    /// # Ok(())
+    /// # }
+    /// # }
+    /// ```
+    #[cfg(feature = "streamable-http")]
+    pub fn http_middleware(&self) -> Option<Arc<http_middleware::ServerHttpMiddlewareChain>> {
+        self.http_middleware.clone()
     }
 
     /// Build tool and resource registries for workflow expansion.
@@ -1285,6 +1326,9 @@ pub struct ServerBuilder {
     tool_authorizer: Option<Arc<dyn auth::ToolAuthorizer>>,
     /// Tool protection requirements to be applied at build time
     tool_protections: HashMap<String, Vec<String>>,
+    /// HTTP middleware chain for `StreamableHttpServer`
+    #[cfg(feature = "streamable-http")]
+    http_middleware: Option<Arc<http_middleware::ServerHttpMiddlewareChain>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1338,6 +1382,8 @@ impl ServerBuilder {
             auth_provider: None,
             tool_authorizer: None,
             tool_protections: HashMap::new(),
+            #[cfg(feature = "streamable-http")]
+            http_middleware: None,
         }
     }
 
@@ -2275,6 +2321,50 @@ impl ServerBuilder {
         self
     }
 
+    /// Configure HTTP middleware chain for `StreamableHttpServer`.
+    ///
+    /// This is a convenience method that stores the HTTP middleware chain
+    /// so it can be retrieved later when creating a `StreamableHttpServer`.
+    ///
+    /// # Arguments
+    ///
+    /// * `middleware` - The HTTP middleware chain
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # #[cfg(feature = "streamable-http")]
+    /// # fn example() -> Result<(), pmcp::Error> {
+    /// use pmcp::Server;
+    /// use pmcp::server::http_middleware::{ServerHttpLoggingMiddleware, ServerHttpMiddlewareChain};
+    /// use std::sync::Arc;
+    ///
+    /// let mut http_chain = ServerHttpMiddlewareChain::new();
+    /// http_chain.add(Arc::new(ServerHttpLoggingMiddleware::new()));
+    ///
+    /// let server = Server::builder()
+    ///     .name("my-server")
+    ///     .version("1.0.0")
+    ///     .with_http_middleware(Arc::new(http_chain))
+    ///     .build()?;
+    ///
+    /// // Later when creating StreamableHttpServer:
+    /// // let config = StreamableHttpServerConfig {
+    /// //     http_middleware: server.http_middleware(),
+    /// //     ..Default::default()
+    /// // };
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "streamable-http")]
+    pub fn with_http_middleware(
+        mut self,
+        middleware: Arc<http_middleware::ServerHttpMiddlewareChain>,
+    ) -> Self {
+        self.http_middleware = Some(middleware);
+        self
+    }
+
     /// Build the server.
     ///
     /// Constructs the final Server instance from the configured builder.
@@ -2330,6 +2420,8 @@ impl ServerBuilder {
             elicitation_manager: None,
             auth_provider: self.auth_provider,
             tool_authorizer,
+            #[cfg(feature = "streamable-http")]
+            http_middleware: self.http_middleware,
         })
     }
 }

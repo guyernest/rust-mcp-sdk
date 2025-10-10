@@ -182,6 +182,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         event_store: None,            // No event store needed
         on_session_initialized: None, // No session callbacks
         on_session_closed: None,
+        http_middleware: None, // No HTTP middleware
     };
 
     // Create the streamable HTTP server in stateless mode

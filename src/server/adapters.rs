@@ -332,6 +332,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_adapter() {
+        use crate::runtime::RwLock;
+        use crate::shared::middleware::EnhancedMiddlewareChain;
+
         let server = ServerCore::new(
             Implementation {
                 name: "test-server".to_string(),
@@ -344,6 +347,7 @@ mod tests {
             None,
             None,
             None,
+            Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
         );
 
         let handler = Arc::new(server);

@@ -128,6 +128,153 @@ impl Debug for StreamableHttpTransportConfig {
     }
 }
 
+/// Builder for `StreamableHttpTransportConfig`.
+///
+/// Provides a fluent API for configuring HTTP transport with middleware support.
+///
+/// # Examples
+///
+/// ```rust
+/// use pmcp::shared::streamable_http::StreamableHttpTransportConfigBuilder;
+/// use pmcp::client::http_middleware::HttpMiddlewareChain;
+/// use url::Url;
+/// use std::sync::Arc;
+///
+/// # async fn example() -> Result<(), pmcp::Error> {
+/// let mut http_chain = HttpMiddlewareChain::new();
+/// // Add middleware to chain...
+///
+/// let config = StreamableHttpTransportConfigBuilder::new(
+///         Url::parse("http://localhost:8080").unwrap()
+///     )
+///     .with_http_middleware(Arc::new(http_chain))
+///     .with_header("X-API-Key", "secret")
+///     .build();
+/// # Ok(())
+/// # }
+/// ```
+pub struct StreamableHttpTransportConfigBuilder {
+    url: Url,
+    extra_headers: Vec<(String, String)>,
+    auth_provider: Option<Arc<dyn AuthProvider>>,
+    session_id: Option<String>,
+    enable_json_response: bool,
+    on_resumption_token: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    http_middleware_chain: Option<Arc<crate::client::http_middleware::HttpMiddlewareChain>>,
+}
+
+impl Debug for StreamableHttpTransportConfigBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamableHttpTransportConfigBuilder")
+            .field("url", &self.url)
+            .field("extra_headers", &self.extra_headers)
+            .field("auth_provider", &self.auth_provider.is_some())
+            .field("session_id", &self.session_id)
+            .field("enable_json_response", &self.enable_json_response)
+            .field("on_resumption_token", &self.on_resumption_token.is_some())
+            .field(
+                "http_middleware_chain",
+                &self.http_middleware_chain.is_some(),
+            )
+            .finish()
+    }
+}
+
+impl StreamableHttpTransportConfigBuilder {
+    /// Create a new config builder with the specified URL.
+    pub fn new(url: Url) -> Self {
+        Self {
+            url,
+            extra_headers: Vec::new(),
+            auth_provider: None,
+            session_id: None,
+            enable_json_response: false,
+            on_resumption_token: None,
+            http_middleware_chain: None,
+        }
+    }
+
+    /// Add an HTTP header to include in all requests.
+    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.extra_headers.push((name.into(), value.into()));
+        self
+    }
+
+    /// Set the authentication provider.
+    pub fn with_auth_provider(mut self, provider: Arc<dyn AuthProvider>) -> Self {
+        self.auth_provider = Some(provider);
+        self
+    }
+
+    /// Set the session ID for stateful operation.
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = Some(session_id.into());
+        self
+    }
+
+    /// Enable JSON responses instead of SSE streams.
+    pub fn enable_json_response(mut self) -> Self {
+        self.enable_json_response = true;
+        self
+    }
+
+    /// Set callback for resumption token updates.
+    pub fn on_resumption_token(mut self, callback: Arc<dyn Fn(String) + Send + Sync>) -> Self {
+        self.on_resumption_token = Some(callback);
+        self
+    }
+
+    /// Set the HTTP middleware chain for request/response transformation.
+    ///
+    /// HTTP middleware operates at the transport layer, before protocol processing.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::shared::streamable_http::StreamableHttpTransportConfigBuilder;
+    /// use pmcp::client::http_middleware::HttpMiddlewareChain;
+    /// use pmcp::client::oauth_middleware::{BearerToken, OAuthClientMiddleware};
+    /// use url::Url;
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    ///
+    /// # async fn example() -> Result<(), pmcp::Error> {
+    /// let mut http_chain = HttpMiddlewareChain::new();
+    ///
+    /// // Add OAuth middleware
+    /// let token = BearerToken::with_expiry("my-token".to_string(), Duration::from_secs(3600));
+    /// http_chain.add(Arc::new(OAuthClientMiddleware::new(token)));
+    ///
+    /// let config = StreamableHttpTransportConfigBuilder::new(
+    ///         Url::parse("http://localhost:8080").unwrap()
+    ///     )
+    ///     .with_http_middleware(Arc::new(http_chain))
+    ///     .build();
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_http_middleware(
+        mut self,
+        chain: Arc<crate::client::http_middleware::HttpMiddlewareChain>,
+    ) -> Self {
+        self.http_middleware_chain = Some(chain);
+        self
+    }
+
+    /// Build the configuration.
+    pub fn build(self) -> StreamableHttpTransportConfig {
+        StreamableHttpTransportConfig {
+            url: self.url,
+            extra_headers: self.extra_headers,
+            auth_provider: self.auth_provider,
+            session_id: self.session_id,
+            enable_json_response: self.enable_json_response,
+            on_resumption_token: self.on_resumption_token,
+            http_middleware_chain: self.http_middleware_chain,
+        }
+    }
+}
+
 /// A streamable HTTP transport for MCP.
 ///
 /// This transport supports both stateless and stateful operation modes:
@@ -421,7 +568,7 @@ impl StreamableHttpTransport {
             // Rebuild request with modified headers and body
             let mut final_builder = Request::builder().method(method).uri(url);
 
-            for (key, value) in http_req.headers {
+            for (key, value) in &http_req.headers {
                 final_builder = final_builder.header(key, value);
             }
 
@@ -448,12 +595,7 @@ impl StreamableHttpTransport {
         let middleware_chain = self.config.read().http_middleware_chain.clone();
         if let Some(chain) = middleware_chain {
             // Create HttpResponse from hyper components
-            let mut header_map = std::collections::HashMap::new();
-            for (key, value) in response.headers() {
-                if let Ok(value_str) = value.to_str() {
-                    header_map.insert(key.to_string(), value_str.to_string());
-                }
-            }
+            let header_map = response.headers().clone();
 
             let mut http_resp =
                 HttpResponse::with_headers(response.status().as_u16(), header_map, body);

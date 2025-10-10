@@ -5,6 +5,8 @@
 
 use crate::error::Result;
 use async_trait::async_trait;
+use http::header::{HeaderName, HeaderValue};
+use http::HeaderMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -53,8 +55,8 @@ pub struct HttpRequest {
     pub method: String,
     /// Request URL
     pub url: String,
-    /// Request headers
-    pub headers: HashMap<String, String>,
+    /// Request headers (case-insensitive)
+    pub headers: HeaderMap,
     /// Request body
     pub body: Vec<u8>,
 }
@@ -65,29 +67,41 @@ impl HttpRequest {
         Self {
             method,
             url,
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body,
         }
     }
 
-    /// Add a header (case-insensitive: stored as lowercase)
+    /// Add a header (case-insensitive)
+    ///
+    /// # Panics
+    /// Panics if the header name or value is invalid
     pub fn add_header(&mut self, name: &str, value: &str) {
-        self.headers.insert(name.to_lowercase(), value.to_string());
+        let header_name = HeaderName::from_bytes(name.as_bytes()).expect("Invalid header name");
+        let header_value = HeaderValue::from_str(value).expect("Invalid header value");
+        self.headers.insert(header_name, header_value);
     }
 
     /// Get a header value (case-insensitive lookup)
-    pub fn get_header(&self, name: &str) -> Option<&String> {
-        self.headers.get(&name.to_lowercase())
+    pub fn get_header(&self, name: &str) -> Option<&str> {
+        let header_name = HeaderName::from_bytes(name.as_bytes()).ok()?;
+        self.headers.get(header_name)?.to_str().ok()
     }
 
     /// Check if a header exists (case-insensitive)
     pub fn has_header(&self, name: &str) -> bool {
-        self.headers.contains_key(&name.to_lowercase())
+        HeaderName::from_bytes(name.as_bytes())
+            .ok()
+            .and_then(|n| self.headers.get(n))
+            .is_some()
     }
 
     /// Remove a header (case-insensitive)
     pub fn remove_header(&mut self, name: &str) -> Option<String> {
-        self.headers.remove(&name.to_lowercase())
+        let header_name = HeaderName::from_bytes(name.as_bytes()).ok()?;
+        self.headers
+            .remove(header_name)
+            .and_then(|v| v.to_str().ok().map(|s| s.to_string()))
     }
 }
 
@@ -96,8 +110,8 @@ impl HttpRequest {
 pub struct HttpResponse {
     /// HTTP status code
     pub status: u16,
-    /// Response headers
-    pub headers: HashMap<String, String>,
+    /// Response headers (case-insensitive)
+    pub headers: HeaderMap,
     /// Response body
     pub body: Vec<u8>,
 }
@@ -107,39 +121,42 @@ impl HttpResponse {
     pub fn new(status: u16, body: Vec<u8>) -> Self {
         Self {
             status,
-            headers: HashMap::new(),
+            headers: HeaderMap::new(),
             body,
         }
     }
 
-    /// Create a response with headers (normalizes header names to lowercase)
-    pub fn with_headers(status: u16, headers: HashMap<String, String>, body: Vec<u8>) -> Self {
-        // Normalize all header names to lowercase for case-insensitive handling
-        let normalized_headers = headers
-            .into_iter()
-            .map(|(k, v)| (k.to_lowercase(), v))
-            .collect();
-
+    /// Create a response with headers
+    pub fn with_headers(status: u16, headers: HeaderMap, body: Vec<u8>) -> Self {
         Self {
             status,
-            headers: normalized_headers,
+            headers,
             body,
         }
     }
 
-    /// Add a header (case-insensitive: stored as lowercase)
+    /// Add a header (case-insensitive)
+    ///
+    /// # Panics
+    /// Panics if the header name or value is invalid
     pub fn add_header(&mut self, name: &str, value: &str) {
-        self.headers.insert(name.to_lowercase(), value.to_string());
+        let header_name = HeaderName::from_bytes(name.as_bytes()).expect("Invalid header name");
+        let header_value = HeaderValue::from_str(value).expect("Invalid header value");
+        self.headers.insert(header_name, header_value);
     }
 
     /// Get a header value (case-insensitive lookup)
-    pub fn get_header(&self, name: &str) -> Option<&String> {
-        self.headers.get(&name.to_lowercase())
+    pub fn get_header(&self, name: &str) -> Option<&str> {
+        let header_name = HeaderName::from_bytes(name.as_bytes()).ok()?;
+        self.headers.get(header_name)?.to_str().ok()
     }
 
     /// Check if a header exists (case-insensitive)
     pub fn has_header(&self, name: &str) -> bool {
-        self.headers.contains_key(&name.to_lowercase())
+        HeaderName::from_bytes(name.as_bytes())
+            .ok()
+            .and_then(|n| self.headers.get(n))
+            .is_some()
     }
 
     /// Check if response is success (2xx)

@@ -58,7 +58,7 @@ impl HttpMiddleware for RequestTrackingMiddleware {
         self.request_count.fetch_add(1, Ordering::SeqCst);
 
         // Track Last-Event-ID header if present
-        let last_event_id = request.get_header("Last-Event-ID").cloned();
+        let last_event_id = request.get_header("Last-Event-ID").map(|s| s.to_string());
         self.last_event_ids.lock().await.push(last_event_id);
 
         tracing::debug!(
@@ -92,6 +92,7 @@ async fn test_middleware_runs_on_sse_get() {
         event_store: Some(Arc::new(event_store)),
         on_session_initialized: None,
         on_session_closed: None,
+        http_middleware: None,
     };
 
     let server_instance = StreamableHttpServer::with_config(
@@ -192,6 +193,7 @@ async fn test_middleware_with_multiple_http_methods() {
         event_store: None,
         on_session_initialized: None,
         on_session_closed: None,
+        http_middleware: None,
     };
 
     let server_instance = StreamableHttpServer::with_config(
@@ -282,6 +284,7 @@ async fn test_middleware_modifies_request_headers() {
         event_store: None,
         on_session_initialized: None,
         on_session_closed: None,
+        http_middleware: None,
     };
 
     let server_instance = StreamableHttpServer::with_config(
@@ -367,6 +370,7 @@ async fn test_middleware_response_processing() {
         event_store: None,
         on_session_initialized: None,
         on_session_closed: None,
+        http_middleware: None,
     };
 
     let server_instance = StreamableHttpServer::with_config(

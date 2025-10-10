@@ -5,6 +5,8 @@
 //! WASM/WASI targets.
 
 use crate::error::{Error, Result};
+use crate::shared::middleware::{EnhancedMiddlewareChain, MiddlewareContext};
+use crate::shared::protocol_helpers::{create_notification, create_request};
 use crate::types::jsonrpc::ResponsePayload;
 use crate::types::{
     CallToolParams, CallToolResult, ClientCapabilities, ClientRequest, Content, GetPromptParams,
@@ -124,6 +126,9 @@ pub struct ServerCore {
 
     /// Tool authorizer for fine-grained access control (optional)
     tool_authorizer: Option<Arc<dyn ToolAuthorizer>>,
+
+    /// Protocol middleware chain for request/response/notification processing
+    protocol_middleware: Arc<RwLock<EnhancedMiddlewareChain>>,
 }
 
 impl ServerCore {
@@ -138,6 +143,7 @@ impl ServerCore {
         sampling: Option<Arc<dyn SamplingHandler>>,
         auth_provider: Option<Arc<dyn AuthProvider>>,
         tool_authorizer: Option<Arc<dyn ToolAuthorizer>>,
+        protocol_middleware: Arc<RwLock<EnhancedMiddlewareChain>>,
     ) -> Self {
         Self {
             info,
@@ -153,6 +159,7 @@ impl ServerCore {
             subscription_manager: Arc::new(RwLock::new(SubscriptionManager::new())),
             auth_provider,
             tool_authorizer,
+            protocol_middleware,
         }
     }
 
@@ -410,6 +417,79 @@ impl ServerCore {
 #[async_trait]
 impl ProtocolHandler for ServerCore {
     async fn handle_request(&self, id: RequestId, request: Request) -> JSONRPCResponse {
+        // Convert Request to JSONRPCRequest for middleware processing
+        let mut jsonrpc_request = create_request(id.clone(), request.clone());
+
+        // Create middleware context with request_id, method, and start_time
+        let context = MiddlewareContext::with_request_id(id.to_string());
+        context.set_metadata("method".to_string(), jsonrpc_request.method.clone());
+
+        // Process request through protocol middleware chain (read-only access)
+        if let Err(e) = self
+            .protocol_middleware
+            .read()
+            .await
+            .process_request_with_context(&mut jsonrpc_request, &context)
+            .await
+        {
+            // Middleware rejected the request (on_error already called by chain)
+            return Self::error_response(id, -32603, e.to_string());
+        }
+
+        // Execute the actual request handling
+        let mut response = self.handle_request_internal(id.clone(), request).await;
+
+        // Process response through protocol middleware chain (read-only access)
+        if let Err(e) = self
+            .protocol_middleware
+            .read()
+            .await
+            .process_response_with_context(&mut response, &context)
+            .await
+        {
+            // Log error but return the response anyway
+            tracing::warn!("Response middleware processing failed: {}", e);
+        }
+
+        response
+    }
+
+    async fn handle_notification(&self, notification: Notification) -> Result<()> {
+        // Convert Notification to JSONRPCNotification for middleware processing
+        let mut jsonrpc_notification = create_notification(notification.clone());
+
+        // Create middleware context with method and start_time (no request_id for notifications)
+        let context = MiddlewareContext::default();
+        context.set_metadata("method".to_string(), jsonrpc_notification.method.clone());
+
+        // Process notification through protocol middleware chain (read-only access)
+        if let Err(e) = self
+            .protocol_middleware
+            .read()
+            .await
+            .process_notification_with_context(&mut jsonrpc_notification, &context)
+            .await
+        {
+            // Log error but continue
+            tracing::warn!("Notification middleware processing failed: {}", e);
+        }
+
+        // Handle the actual notification (current implementation does nothing)
+        self.handle_notification_internal(notification).await
+    }
+
+    fn capabilities(&self) -> &ServerCapabilities {
+        &self.capabilities
+    }
+
+    fn info(&self) -> &Implementation {
+        &self.info
+    }
+}
+
+impl ServerCore {
+    /// Internal request handler without middleware processing.
+    async fn handle_request_internal(&self, id: RequestId, request: Request) -> JSONRPCResponse {
         match request {
             Request::Client(ref boxed_req)
                 if matches!(**boxed_req, ClientRequest::Initialize(_)) =>
@@ -491,18 +571,11 @@ impl ProtocolHandler for ServerCore {
         }
     }
 
-    async fn handle_notification(&self, _notification: Notification) -> Result<()> {
+    /// Internal notification handler without middleware processing.
+    async fn handle_notification_internal(&self, _notification: Notification) -> Result<()> {
         // Handle notifications if needed
         // Most notifications from client to server don't require action
         Ok(())
-    }
-
-    fn capabilities(&self) -> &ServerCapabilities {
-        &self.capabilities
-    }
-
-    fn info(&self) -> &Implementation {
-        &self.info
     }
 }
 
@@ -540,6 +613,7 @@ mod tests {
             None,
             None,
             None,
+            Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
         );
 
         assert!(!server.is_initialized().await);
@@ -583,6 +657,7 @@ mod tests {
             None,
             None,
             None,
+            Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
         );
 
         // Initialize first
