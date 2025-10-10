@@ -15,7 +15,7 @@
 //!
 //! ```rust
 //! use pmcp::server::preset::ServerPreset;
-//! use pmcp::server::builder::ServerCoreBuilder;
+//! use pmcp::Server;
 //! use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
 //! use std::sync::Arc;
 //! use tokio::sync::Mutex;
@@ -24,16 +24,16 @@
 //! // Create preset with defaults: metrics + HTTP logging
 //! let preset = ServerPreset::default();
 //!
-//! // Build server with protocol middleware
-//! let server = ServerCoreBuilder::new()
+//! // Build server with HTTP middleware
+//! let server = Server::builder()
 //!     .name("my-server")
 //!     .version("1.0.0")
-//!     .protocol_middleware(preset.protocol_middleware())
+//!     .with_http_middleware(preset.http_middleware().unwrap())
 //!     .build()?;
 //!
-//! // Create HTTP server with HTTP middleware
+//! // Create HTTP server using server's middleware
 //! let config = StreamableHttpServerConfig {
-//!     http_middleware: preset.http_middleware(),
+//!     http_middleware: server.http_middleware(),
 //!     ..Default::default()
 //! };
 //!

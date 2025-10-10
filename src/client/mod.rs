@@ -1483,13 +1483,12 @@ impl<T: Transport> ClientBuilder<T> {
     ///
     /// ```rust
     /// use pmcp::{ClientBuilder, StdioTransport};
-    /// use pmcp::shared::{MetricsMiddleware, LoggingMiddleware};
+    /// use pmcp::shared::MetricsMiddleware;
     /// use std::sync::Arc;
     ///
     /// # async fn example() -> Result<(), pmcp::Error> {
     /// let transport = StdioTransport::new();
     /// let client = ClientBuilder::new(transport)
-    ///     .with_protocol_middleware(Arc::new(LoggingMiddleware::new()))
     ///     .with_protocol_middleware(Arc::new(MetricsMiddleware::new("my-service".to_string())))
     ///     .build();
     /// # Ok(())

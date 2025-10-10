@@ -84,10 +84,11 @@ impl PresetConfig {
     /// ```rust
     /// use pmcp::shared::middleware_presets::PresetConfig;
     /// use pmcp::shared::streamable_http::StreamableHttpTransportConfigBuilder;
-    /// use pmcp::{ClientBuilder, StreamableHttpTransport};
+    /// use pmcp::shared::StreamableHttpTransport;
+    /// use pmcp::ClientBuilder;
     /// use url::Url;
     ///
-    /// # async fn example() -> Result<(), pmcp::Error> {
+    /// # fn example() -> Result<(), pmcp::Error> {
     /// // Protocol middleware preset
     /// let protocol_chain = PresetConfig::http().build_protocol_chain();
     ///
@@ -98,7 +99,7 @@ impl PresetConfig {
     ///     // .with_http_middleware(...) // Add HTTP middleware here
     ///     .build();
     ///
-    /// let transport = StreamableHttpTransport::new(config).await?;
+    /// let transport = StreamableHttpTransport::new(config);
     /// let client = ClientBuilder::new(transport)
     ///     .middleware_chain(protocol_chain)
     ///     .build();

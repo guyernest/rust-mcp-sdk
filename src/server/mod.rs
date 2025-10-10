@@ -2334,7 +2334,7 @@ impl ServerBuilder {
     ///
     /// ```rust,no_run
     /// # #[cfg(feature = "streamable-http")]
-    /// # {
+    /// # fn example() -> Result<(), pmcp::Error> {
     /// use pmcp::Server;
     /// use pmcp::server::http_middleware::{ServerHttpLoggingMiddleware, ServerHttpMiddlewareChain};
     /// use std::sync::Arc;
@@ -2353,7 +2353,7 @@ impl ServerBuilder {
     /// //     http_middleware: server.http_middleware(),
     /// //     ..Default::default()
     /// // };
-    /// # Ok::<(), pmcp::Error>(())
+    /// # Ok(())
     /// # }
     /// ```
     #[cfg(feature = "streamable-http")]
