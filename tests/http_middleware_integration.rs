@@ -798,10 +798,8 @@ async fn test_http_logging_redacts_sensitive_headers() {
     );
     assert_eq!(formatted, "Bearer [REDACTED]");
 
-    let formatted_cookie = middleware.redact_header_value(
-        &http::HeaderName::from_static("cookie"),
-        "session=abc123",
-    );
+    let formatted_cookie =
+        middleware.redact_header_value(&http::HeaderName::from_static("cookie"), "session=abc123");
     assert_eq!(formatted_cookie, "[REDACTED]");
 
     // Content-type should not be redacted

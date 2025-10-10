@@ -911,10 +911,7 @@ pub mod adapters {
     ///     Response::new(Body::empty())
     /// }
     /// ```
-    pub async fn from_axum(
-        parts: http::request::Parts,
-        body: Body,
-    ) -> Result<ServerHttpRequest> {
+    pub async fn from_axum(parts: http::request::Parts, body: Body) -> Result<ServerHttpRequest> {
         use axum::body::to_bytes;
 
         // Extract body bytes
@@ -982,10 +979,7 @@ pub mod adapters {
     /// Convert a hyper Request into a `ServerHttpRequest` (thin wrapper).
     ///
     /// This is a thin wrapper around `from_axum` since axum uses hyper internally.
-    pub async fn from_hyper(
-        parts: http::request::Parts,
-        body: Body,
-    ) -> Result<ServerHttpRequest> {
+    pub async fn from_hyper(parts: http::request::Parts, body: Body) -> Result<ServerHttpRequest> {
         from_axum(parts, body).await
     }
 
