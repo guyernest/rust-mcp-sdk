@@ -1,9 +1,11 @@
 //! Builder pattern for constructing `ServerCore` instances.
 
 use crate::error::{Error, Result};
+use crate::runtime::RwLock;
 use crate::server::auth::{AuthProvider, ToolAuthorizer};
 use crate::server::core::ServerCore;
 use crate::server::{PromptHandler, ResourceHandler, SamplingHandler, ToolHandler};
+use crate::shared::middleware::EnhancedMiddlewareChain;
 use crate::types::{Implementation, ServerCapabilities};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -52,6 +54,7 @@ pub struct ServerCoreBuilder {
     sampling: Option<Arc<dyn SamplingHandler>>,
     auth_provider: Option<Arc<dyn AuthProvider>>,
     tool_authorizer: Option<Arc<dyn ToolAuthorizer>>,
+    protocol_middleware: Arc<RwLock<EnhancedMiddlewareChain>>,
 }
 
 impl Default for ServerCoreBuilder {
@@ -73,6 +76,7 @@ impl ServerCoreBuilder {
             sampling: None,
             auth_provider: None,
             tool_authorizer: None,
+            protocol_middleware: Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
         }
     }
 
@@ -258,7 +262,36 @@ impl ServerCoreBuilder {
         self
     }
 
+    /// Set the protocol middleware chain.
+    ///
+    /// Protocol middleware processes JSON-RPC requests, responses, and notifications
+    /// at the protocol layer, enabling logging, metrics, validation, and more.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use pmcp::server::builder::ServerCoreBuilder;
+    /// use pmcp::shared::middleware::{EnhancedMiddlewareChain, LoggingMiddleware};
+    /// use std::sync::Arc;
+    /// use pmcp::runtime::RwLock;
+    ///
+    /// let mut chain = EnhancedMiddlewareChain::new();
+    /// chain.add(Arc::new(LoggingMiddleware::new()));
+    ///
+    /// let server = ServerCoreBuilder::new()
+    ///     .name("my-server")
+    ///     .version("1.0.0")
+    ///     .protocol_middleware(Arc::new(RwLock::new(chain)))
+    ///     .build()?;
+    /// ```
+    pub fn protocol_middleware(mut self, middleware: Arc<RwLock<EnhancedMiddlewareChain>>) -> Self {
+        self.protocol_middleware = middleware;
+        self
+    }
+
     /// Build the `ServerCore` instance.
+    ///
+    /// # Errors
     ///
     /// Returns an error if required fields (name, version) are not set.
     pub fn build(self) -> Result<ServerCore> {
@@ -281,6 +314,7 @@ impl ServerCoreBuilder {
             self.sampling,
             self.auth_provider,
             self.tool_authorizer,
+            self.protocol_middleware,
         ))
     }
 }
