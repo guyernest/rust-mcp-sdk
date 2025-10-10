@@ -594,7 +594,7 @@ mod tests {
         assert_eq!(context.get_metadata("key1"), Some(&"value1".to_string()));
     }
 
-    /// Test OAuth token injection flow from auth_context to metadata
+    /// Test OAuth token injection flow from `auth_context` to metadata
     #[tokio::test]
     async fn test_oauth_injection_flow() {
         use crate::server::auth::AuthContext;
@@ -654,7 +654,7 @@ mod tests {
         );
     }
 
-    /// Test conditional execution based on ToolContext
+    /// Test conditional execution based on `ToolContext`
     #[tokio::test]
     async fn test_conditional_execution_by_context() {
         struct SessionAwareMiddleware {

@@ -300,7 +300,7 @@ impl ServerCoreBuilder {
     /// Tool middleware provides cross-cutting concerns for tool execution,
     /// such as OAuth token injection, logging, metrics, and authorization.
     ///
-    /// Middleware is sorted by priority during build() - lower priority values
+    /// Middleware is sorted by priority during `build()` - lower priority values
     /// execute first (e.g., auth: 10, default: 50, logging: 90).
     ///
     /// # Examples

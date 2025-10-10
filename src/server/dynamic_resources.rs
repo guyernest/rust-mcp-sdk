@@ -125,7 +125,7 @@ impl UriParams {
         self.variables.is_empty()
     }
 
-    /// Convert to inner HashMap.
+    /// Convert to inner `HashMap`.
     pub fn into_inner(self) -> HashMap<String, String> {
         self.variables
     }
@@ -303,7 +303,7 @@ pub(crate) struct MatchedProvider {
     pub(crate) template: ResourceTemplate,
 }
 
-/// Internal helper to store a template with its parsed UriTemplate.
+/// Internal helper to store a template with its parsed `UriTemplate`.
 struct ParsedTemplate {
     template: ResourceTemplate,
     parsed: UriTemplate,
