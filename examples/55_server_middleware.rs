@@ -13,11 +13,9 @@ use pmcp::server::http_middleware::{
     ServerHttpContext, ServerHttpLoggingMiddleware, ServerHttpMiddleware,
     ServerHttpMiddlewareChain, ServerHttpResponse,
 };
-use pmcp::server::streamable_http_server::{
-    StreamableHttpServer, StreamableHttpServerConfig,
-};
-use pmcp::{RequestHandlerExtra, Server, ToolHandler};
+use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
 use pmcp::types::capabilities::ServerCapabilities;
+use pmcp::{RequestHandlerExtra, Server, ToolHandler};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -52,7 +50,10 @@ impl ServerHttpMiddleware for CorsMiddleware {
         _context: &ServerHttpContext,
     ) -> Result<()> {
         // Add CORS headers
-        response.add_header("Access-Control-Allow-Origin", &self.allowed_origins.join(", "));
+        response.add_header(
+            "Access-Control-Allow-Origin",
+            &self.allowed_origins.join(", "),
+        );
         response.add_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         response.add_header(
             "Access-Control-Allow-Headers",
@@ -107,18 +108,19 @@ async fn main() -> Result<()> {
     tracing::info!("   2. CorsMiddleware (priority 90)");
     tracing::info!("      - Allows: localhost:3000, example.com");
 
-    // Step 2: Build server
+    // Step 2: Build server with HTTP middleware
     tracing::info!("🔧 Building server...");
     let server = Server::builder()
         .name("middleware-demo-server")
         .version("1.0.0")
         .capabilities(ServerCapabilities::tools_only())
         .tool("echo", EchoTool)
+        .with_http_middleware(Arc::new(http_chain))
         .build()?;
 
-    // Step 3: Create HTTP server with HTTP middleware
+    // Step 3: Create HTTP server config (middleware retrieved from server)
     let config = StreamableHttpServerConfig {
-        http_middleware: Some(Arc::new(http_chain)),
+        http_middleware: server.http_middleware(),
         session_id_generator: Some(Box::new(|| {
             format!("demo-session-{}", uuid::Uuid::new_v4())
         })),
@@ -128,11 +130,8 @@ async fn main() -> Result<()> {
 
     let server = Arc::new(Mutex::new(server));
 
-    let http_server = StreamableHttpServer::with_config(
-        "127.0.0.1:8080".parse().unwrap(),
-        server,
-        config,
-    );
+    let http_server =
+        StreamableHttpServer::with_config("127.0.0.1:8080".parse().unwrap(), server, config);
 
     // Step 4: Start server
     tracing::info!("🌐 Starting HTTP server...");

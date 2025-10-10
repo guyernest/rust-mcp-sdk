@@ -146,6 +146,7 @@ type SessionCallback = Box<dyn Fn(&str) + Send + Sync>;
 ///     event_store: None,
 ///     on_session_initialized: None,
 ///     on_session_closed: None,
+///     http_middleware: None,
 /// };
 ///
 /// // Stateful configuration with custom session IDs
@@ -161,6 +162,7 @@ type SessionCallback = Box<dyn Fn(&str) + Send + Sync>;
 ///     on_session_closed: Some(Box::new(|session_id| {
 ///         println!("Session ended: {}", session_id);
 ///     })),
+///     http_middleware: None,
 /// };
 /// ```
 pub struct StreamableHttpServerConfig {
@@ -798,6 +800,7 @@ async fn handle_post_fast_path(
 }
 
 /// Handler with HTTP middleware integration
+#[allow(clippy::cognitive_complexity)]
 async fn handle_post_with_middleware(
     state: ServerState,
     request: axum::extract::Request<Body>,
@@ -829,8 +832,7 @@ async fn handle_post_with_middleware(
     // Generate or extract request ID
     let request_id = server_request
         .get_header("x-request-id")
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+        .map_or_else(|| Uuid::new_v4().to_string(), |s| s.to_string());
 
     // Create HTTP middleware context
     let http_context = ServerHttpContext {
@@ -951,19 +953,17 @@ async fn handle_post_with_middleware(
             // Add protocol version header
             let version_to_send = if is_init_request {
                 negotiated_version.unwrap_or_else(|| crate::DEFAULT_PROTOCOL_VERSION.to_string())
-            } else {
-                if let Some(ref sid) = response_session_id {
-                    if let Some(session_info) = state.sessions.read().get(sid) {
-                        session_info
-                            .protocol_version
-                            .clone()
-                            .unwrap_or_else(|| crate::DEFAULT_PROTOCOL_VERSION.to_string())
-                    } else {
-                        crate::DEFAULT_PROTOCOL_VERSION.to_string()
-                    }
+            } else if let Some(ref sid) = response_session_id {
+                if let Some(session_info) = state.sessions.read().get(sid) {
+                    session_info
+                        .protocol_version
+                        .clone()
+                        .unwrap_or_else(|| crate::DEFAULT_PROTOCOL_VERSION.to_string())
                 } else {
                     crate::DEFAULT_PROTOCOL_VERSION.to_string()
                 }
+            } else {
+                crate::DEFAULT_PROTOCOL_VERSION.to_string()
             };
 
             response_headers.insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());

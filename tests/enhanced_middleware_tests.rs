@@ -397,9 +397,7 @@ async fn test_notification_middleware_priority_ordering() {
             _notification: &mut JSONRPCNotification,
             context: &MiddlewareContext,
         ) -> Result<()> {
-            let mut order = context
-                .get_metadata("order")
-                .unwrap_or_else(|| String::new());
+            let mut order = context.get_metadata("order").unwrap_or_default();
             if !order.is_empty() {
                 order.push(',');
             }

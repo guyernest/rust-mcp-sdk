@@ -1265,6 +1265,7 @@ impl<T: Transport> Client<T> {
     }
 
     /// Send a request and wait for response.
+    #[allow(clippy::cognitive_complexity)]
     async fn send_request(
         &self,
         request_id: RequestId,
@@ -1353,7 +1354,7 @@ impl<T: Transport> Client<T> {
 
                     // Continue loop to wait for the actual response
                 },
-                _ => {
+                crate::types::TransportMessage::Request { .. } => {
                     // Unexpected message type
                     self.active_requests.write().await.remove(&request_id);
                     return Err(Error::protocol_msg(

@@ -12,8 +12,8 @@
 //! processing), providing symmetry with client-side HTTP middleware.
 //!
 //! Two-layer model:
-//! - **HTTP Layer**: ServerHttpMiddleware for transport-level concerns
-//! - **Protocol Layer**: EnhancedMiddleware for JSON-RPC message processing
+//! - **HTTP Layer**: `ServerHttpMiddleware` for transport-level concerns
+//! - **Protocol Layer**: `EnhancedMiddleware` for JSON-RPC message processing
 //!
 //! # Examples
 //!
@@ -886,12 +886,12 @@ mod tests {
 /// middleware types and framework-specific types (axum, hyper, etc.).
 #[cfg(feature = "streamable-http")]
 pub mod adapters {
-    use super::*;
+    use super::{Result, ServerHttpRequest, ServerHttpResponse};
     use axum::body::Body;
     use axum::response::Response;
     use hyper::body::Buf;
 
-    /// Convert an axum Request into a ServerHttpRequest.
+    /// Convert an axum Request into a `ServerHttpRequest`.
     ///
     /// This adapter extracts the method, URI, headers, and body from an axum
     /// request, converting the streaming body into bytes.
@@ -920,7 +920,7 @@ pub mod adapters {
         // Extract body bytes
         let body_bytes = to_bytes(body, usize::MAX)
             .await
-            .map_err(|e| crate::Error::internal(&format!("Failed to read request body: {}", e)))?;
+            .map_err(|e| crate::Error::internal(format!("Failed to read request body: {}", e)))?;
 
         Ok(ServerHttpRequest {
             method: parts.method,
@@ -930,7 +930,7 @@ pub mod adapters {
         })
     }
 
-    /// Convert a ServerHttpResponse into an axum Response.
+    /// Convert a `ServerHttpResponse` into an axum Response.
     ///
     /// This adapter applies the status code, headers (including multi-value headers),
     /// and body to an axum response. Content-Length is set automatically based on
@@ -958,7 +958,7 @@ pub mod adapters {
         let mut axum_response = Response::builder().status(response.status);
 
         // Apply all headers (including multi-value headers)
-        for (name, value) in response.headers.iter() {
+        for (name, value) in &response.headers {
             axum_response = axum_response.header(name, value);
         }
 
@@ -979,9 +979,9 @@ pub mod adapters {
             })
     }
 
-    /// Convert a hyper Request into a ServerHttpRequest (thin wrapper).
+    /// Convert a hyper Request into a `ServerHttpRequest` (thin wrapper).
     ///
-    /// This is a thin wrapper around from_axum since axum uses hyper internally.
+    /// This is a thin wrapper around `from_axum` since axum uses hyper internally.
     pub async fn from_hyper(
         parts: hyper::http::request::Parts,
         body: Body,
@@ -989,15 +989,16 @@ pub mod adapters {
         from_axum(parts, body).await
     }
 
-    /// Convert a ServerHttpResponse into a hyper Response (thin wrapper).
+    /// Convert a `ServerHttpResponse` into a hyper Response (thin wrapper).
     ///
-    /// This is a thin wrapper around into_axum since axum uses hyper internally.
+    /// This is a thin wrapper around `into_axum` since axum uses hyper internally.
     pub fn into_hyper(response: ServerHttpResponse) -> Response {
         into_axum(response)
     }
 
     #[cfg(test)]
     mod tests {
+        use super::super::{HeaderMap, Method, StatusCode};
         use super::*;
         use axum::body::Body;
         use hyper::http::Request;
@@ -1155,14 +1156,14 @@ pub mod adapters {
             response_headers.insert("content-type", "application/json".parse().unwrap());
             response_headers.insert("x-response", "response-value".parse().unwrap());
 
-            let server_res = ServerHttpResponse::new(
+            let response = ServerHttpResponse::new(
                 StatusCode::CREATED,
                 response_headers.clone(),
                 br#"{"status":"created"}"#.to_vec(),
             );
 
             // Convert to axum Response
-            let axum_res = into_axum(server_res);
+            let axum_res = into_axum(response);
 
             // Verify response conversion
             assert_eq!(axum_res.status(), StatusCode::CREATED);
@@ -1211,9 +1212,9 @@ pub mod adapters {
             assert_eq!(server_req.uri.path(), "/test");
 
             // Test into_hyper
-            let server_res =
+            let response =
                 ServerHttpResponse::new(StatusCode::OK, HeaderMap::new(), b"response".to_vec());
-            let hyper_res = into_hyper(server_res);
+            let hyper_res = into_hyper(response);
             assert_eq!(hyper_res.status(), StatusCode::OK);
         }
 
@@ -1231,9 +1232,9 @@ pub mod adapters {
             assert!(server_req.body.is_empty());
 
             // Test empty response body
-            let server_res =
+            let response =
                 ServerHttpResponse::new(StatusCode::NO_CONTENT, HeaderMap::new(), vec![]);
-            let axum_res = into_axum(server_res);
+            let axum_res = into_axum(response);
             assert_eq!(axum_res.status(), StatusCode::NO_CONTENT);
 
             // Empty body should not have content-length

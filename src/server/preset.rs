@@ -90,8 +90,8 @@ use std::sync::Arc;
 /// Server middleware preset with sensible defaults.
 ///
 /// Provides a pre-configured middleware bundle combining:
-/// - **Protocol Layer**: MetricsMiddleware for request/response metrics
-/// - **HTTP Layer**: ServerHttpLoggingMiddleware (INFO level, redaction enabled)
+/// - **Protocol Layer**: `MetricsMiddleware` for request/response metrics
+/// - **HTTP Layer**: `ServerHttpLoggingMiddleware` (INFO level, redaction enabled)
 ///
 /// # Defaults
 ///
@@ -168,8 +168,11 @@ impl ServerPreset {
     /// let preset = ServerPreset::new("my-service")
     ///     .with_http_middleware(MyAuthMiddleware);
     /// ```
-    pub fn with_http_middleware_item(mut self, middleware: impl ServerHttpMiddleware + 'static) -> Self {
-        if let Some(chain) = Arc::get_mut(&mut self.http_chain.as_mut().unwrap()) {
+    pub fn with_http_middleware_item(
+        mut self,
+        middleware: impl ServerHttpMiddleware + 'static,
+    ) -> Self {
+        if let Some(chain) = Arc::get_mut(self.http_chain.as_mut().unwrap()) {
             chain.add(Arc::new(middleware));
         } else {
             // Chain is shared, clone and add
@@ -203,7 +206,6 @@ impl ServerPreset {
         }
         self
     }
-
 
     /// Get the protocol middleware chain.
     ///
