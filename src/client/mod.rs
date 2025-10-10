@@ -1300,26 +1300,67 @@ impl<T: Transport> Client<T> {
 
         self.transport.write().await.send(message).await?;
 
-        // Wait for response (this would be implemented with proper response routing)
-        // For now, receive next message and assume it's our response
-        let response_message = self.transport.write().await.receive().await?;
+        // Wait for response, dispatching any unsolicited notifications along the way
+        loop {
+            let response_message = self.transport.write().await.receive().await?;
 
-        // Remove from active requests
-        self.active_requests.write().await.remove(&request_id);
+            match response_message {
+                crate::types::TransportMessage::Response(mut response) => {
+                    // Remove from active requests
+                    self.active_requests.write().await.remove(&request_id);
 
-        match response_message {
-            crate::types::TransportMessage::Response(mut response) => {
-                // Process response through middleware chain
-                self.middleware_chain
-                    .write()
-                    .await
-                    .process_response_with_context(&mut response, &context)
-                    .await?;
-                Ok(response)
-            },
-            _ => Err(Error::protocol_msg(
-                "Expected response, got different message type",
-            )),
+                    // Process response through middleware chain
+                    self.middleware_chain
+                        .write()
+                        .await
+                        .process_response_with_context(&mut response, &context)
+                        .await?;
+                    return Ok(response);
+                },
+                crate::types::TransportMessage::Notification(notification) => {
+                    // Unsolicited notification (e.g., progress, resource changes, SSE events)
+                    // Convert to JSONRPC notification for middleware processing
+                    use crate::shared::protocol_helpers::create_notification;
+                    let mut jsonrpc_notification = create_notification(notification.clone());
+
+                    // Process through protocol middleware chain
+                    let notif_context = MiddlewareContext::default();
+
+                    if let Err(e) = self
+                        .middleware_chain
+                        .write()
+                        .await
+                        .process_notification_with_context(
+                            &mut jsonrpc_notification,
+                            &notif_context,
+                        )
+                        .await
+                    {
+                        // Log error but don't terminate dispatcher - continue processing
+                        tracing::warn!(
+                            "Notification middleware processing failed for {}: {}",
+                            jsonrpc_notification.method,
+                            e
+                        );
+                    }
+
+                    // Forward to notification handler if registered
+                    if let Some(tx) = &self.notification_tx {
+                        if let Err(e) = tx.send(notification).await {
+                            tracing::debug!("Notification channel closed: {}", e);
+                        }
+                    }
+
+                    // Continue loop to wait for the actual response
+                },
+                _ => {
+                    // Unexpected message type
+                    self.active_requests.write().await.remove(&request_id);
+                    return Err(Error::protocol_msg(
+                        "Unexpected message type while waiting for response",
+                    ));
+                },
+            }
         }
     }
 
