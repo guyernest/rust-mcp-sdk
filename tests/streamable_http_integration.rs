@@ -118,6 +118,7 @@ async fn test_streamable_http_stateful_mode() {
                 *closed.lock().await = true;
             });
         })),
+        http_middleware: None,
     };
 
     let server_instance =

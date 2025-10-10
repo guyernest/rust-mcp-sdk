@@ -43,6 +43,8 @@ pub mod batch;
 pub mod cancellation;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod http_middleware;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod preset;
 /// Simple prompt implementations with metadata support.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simple_prompt;

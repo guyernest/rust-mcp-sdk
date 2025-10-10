@@ -536,7 +536,7 @@ mod spec_compliance_tests {
             event_store: None,
             on_session_initialized: None,
             on_session_closed: None,
-            http_middleware: None,
+        http_middleware: None,
         };
         let http_server = StreamableHttpServer::with_config(addr, server, config);
         http_server.start().await.map_err(box_err)
