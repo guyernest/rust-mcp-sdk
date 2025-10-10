@@ -1228,6 +1228,488 @@ impl HttpMiddleware for MyMiddleware {
 - `Low (3)`: Metrics, logging
 - `Lowest (4)`: Cleanup
 
+---
+
+## Server Middleware
+
+Server middleware provides the same two-layer architecture for MCP servers: protocol-level (JSON-RPC) and HTTP-level (transport).
+
+### Architecture: Server Two-Layer Middleware
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Client HTTP Request                                        │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Server HTTP Middleware (ServerHttpMiddleware)              │
+│  - Operates on HTTP request/response                        │
+│  - ServerHttpLoggingMiddleware, auth verification, CORS     │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Protocol-Level Middleware (AdvancedMiddleware)             │
+│  - Operates on JSONRPCRequest/JSONRPCResponse               │
+│  - MetricsMiddleware, validation, business logic            │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Server Request Handler                                     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Execution order**:
+- **Request**: HTTP middleware → Protocol middleware → Handler
+- **Response**: Handler → Protocol middleware → HTTP middleware
+- **Notification**: Protocol middleware only (SSE streaming)
+
+### ServerHttpMiddleware Trait
+
+HTTP-level middleware for server transport:
+
+```rust
+use pmcp::server::http_middleware::{
+    ServerHttpMiddleware, ServerHttpRequest, ServerHttpResponse, ServerHttpContext
+};
+use async_trait::async_trait;
+
+#[async_trait]
+pub trait ServerHttpMiddleware: Send + Sync {
+    /// Called before processing HTTP request
+    async fn on_request(
+        &self,
+        request: &mut ServerHttpRequest,
+        context: &ServerHttpContext,
+    ) -> pmcp::Result<()> {
+        Ok(())
+    }
+
+    /// Called after generating HTTP response
+    async fn on_response(
+        &self,
+        response: &mut ServerHttpResponse,
+        context: &ServerHttpContext,
+    ) -> pmcp::Result<()> {
+        Ok(())
+    }
+
+    /// Called when an error occurs
+    async fn on_error(
+        &self,
+        error: &pmcp::Error,
+        context: &ServerHttpContext,
+    ) -> pmcp::Result<()> {
+        Ok(())
+    }
+
+    /// Priority for ordering (lower runs first)
+    fn priority(&self) -> i32 {
+        50 // Default priority
+    }
+
+    /// Should this middleware execute?
+    async fn should_execute(&self, _context: &ServerHttpContext) -> bool {
+        true
+    }
+}
+```
+
+### ServerHttpRequest and ServerHttpResponse
+
+Simplified HTTP representations with HeaderMap support:
+
+```rust
+use hyper::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
+
+pub struct ServerHttpRequest {
+    pub method: Method,
+    pub uri: Uri,
+    pub headers: HeaderMap<HeaderValue>,
+    pub body: Vec<u8>,
+}
+
+pub struct ServerHttpResponse {
+    pub status: StatusCode,
+    pub headers: HeaderMap<HeaderValue>,
+    pub body: Vec<u8>,
+}
+
+// Helper methods
+impl ServerHttpRequest {
+    pub fn get_header(&self, name: &str) -> Option<&str>;
+    pub fn add_header(&mut self, name: &str, value: &str);
+}
+
+impl ServerHttpResponse {
+    pub fn new(status: StatusCode, headers: HeaderMap<HeaderValue>, body: Vec<u8>) -> Self;
+    pub fn get_header(&self, name: &str) -> Option<&str>;
+    pub fn add_header(&mut self, name: &str, value: &str);
+}
+```
+
+### ServerHttpContext
+
+Context for server HTTP middleware:
+
+```rust
+pub struct ServerHttpContext {
+    pub request_id: String,
+    pub session_id: Option<String>,
+    pub start_time: std::time::Instant,
+}
+
+impl ServerHttpContext {
+    /// Get elapsed time since request started
+    pub fn elapsed(&self) -> std::time::Duration;
+}
+```
+
+### ServerHttpLoggingMiddleware
+
+Built-in logging middleware with sensitive data redaction:
+
+```rust
+use pmcp::server::http_middleware::ServerHttpLoggingMiddleware;
+
+// Create with secure defaults
+let logging = ServerHttpLoggingMiddleware::new()
+    .with_level(tracing::Level::INFO)       // Log level
+    .with_redact_query(true)                // Strip query params
+    .with_max_body_bytes(1024);             // Log first 1KB of body
+
+// Default sensitive headers are redacted:
+// - authorization, cookie, x-api-key, x-amz-security-token, x-goog-api-key
+
+// Add custom redacted header
+let logging = logging.redact_header("x-internal-token");
+
+// Allow specific header (use with caution!)
+let logging = logging.allow_header("x-debug-header");
+```
+
+**Features**:
+- **Secure by default**: Redacts authorization, cookies, API keys
+- **Query stripping**: Optionally redact query parameters
+- **Body gating**: Only log safe content types (JSON, text)
+- **SSE detection**: Skips body logging for `text/event-stream`
+- **Multi-value headers**: Preserves all header values
+
+**Use cases**: Request/response visibility, debugging, audit trails, compliance.
+
+### ServerPreset: Default Middleware Bundles
+
+ServerPreset provides pre-configured middleware for common server scenarios:
+
+```rust
+use pmcp::server::preset::ServerPreset;
+use pmcp::server::builder::ServerCoreBuilder;
+use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+// Create preset with defaults
+let preset = ServerPreset::default();
+
+// Build server with protocol middleware
+let server = ServerCoreBuilder::new()
+    .name("my-server")
+    .version("1.0.0")
+    .protocol_middleware(preset.protocol_middleware())
+    .build()?;
+
+// Create HTTP server with HTTP middleware
+let config = StreamableHttpServerConfig {
+    http_middleware: preset.http_middleware(),
+    ..Default::default()
+};
+
+let http_server = StreamableHttpServer::with_config(
+    "127.0.0.1:3000".parse().unwrap(),
+    Arc::new(Mutex::new(server)),
+    config,
+);
+```
+
+**Defaults**:
+- **Protocol**: `MetricsMiddleware` (tracks requests, durations, errors)
+- **HTTP**: `ServerHttpLoggingMiddleware` (INFO level, redaction enabled)
+
+**Opt-in customization**:
+
+```rust
+use pmcp::shared::middleware::RateLimitMiddleware;
+use std::time::Duration;
+
+// Add rate limiting (protocol layer)
+let preset = ServerPreset::new("my-service")
+    .with_rate_limit(RateLimitMiddleware::new(100, 100, Duration::from_secs(60)));
+
+// Add custom HTTP middleware (transport layer)
+let preset = preset.with_http_middleware_item(MyCustomMiddleware);
+```
+
+### Example: Custom Server HTTP Middleware
+
+```rust
+use pmcp::server::http_middleware::{ServerHttpMiddleware, ServerHttpRequest, ServerHttpContext};
+use async_trait::async_trait;
+
+/// Adds CORS headers for browser clients
+struct CorsMiddleware {
+    allowed_origins: Vec<String>,
+}
+
+#[async_trait]
+impl ServerHttpMiddleware for CorsMiddleware {
+    async fn on_response(
+        &self,
+        response: &mut ServerHttpResponse,
+        context: &ServerHttpContext,
+    ) -> pmcp::Result<()> {
+        // Add CORS headers
+        response.add_header(
+            "Access-Control-Allow-Origin",
+            &self.allowed_origins.join(", ")
+        );
+        response.add_header(
+            "Access-Control-Allow-Methods",
+            "GET, POST, OPTIONS"
+        );
+        response.add_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization"
+        );
+
+        Ok(())
+    }
+
+    fn priority(&self) -> i32 {
+        90 // Run late (after logging)
+    }
+}
+```
+
+### Integration with StreamableHttpServer
+
+Configure middleware when creating the server:
+
+```rust
+use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
+use pmcp::server::http_middleware::ServerHttpMiddlewareChain;
+use pmcp::server::preset::ServerPreset;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+// Option 1: Use ServerPreset (recommended)
+let preset = ServerPreset::new("my-service");
+
+let server = ServerCoreBuilder::new()
+    .name("my-server")
+    .version("1.0.0")
+    .protocol_middleware(preset.protocol_middleware())
+    .build()?;
+
+let config = StreamableHttpServerConfig {
+    http_middleware: preset.http_middleware(),
+    ..Default::default()
+};
+
+let http_server = StreamableHttpServer::with_config(
+    "127.0.0.1:3000".parse().unwrap(),
+    Arc::new(Mutex::new(server)),
+    config,
+);
+
+// Option 2: Custom HTTP middleware chain
+let mut http_chain = ServerHttpMiddlewareChain::new();
+http_chain.add(Arc::new(ServerHttpLoggingMiddleware::new()));
+http_chain.add(Arc::new(CorsMiddleware {
+    allowed_origins: vec!["https://example.com".to_string()],
+}));
+
+let config = StreamableHttpServerConfig {
+    http_middleware: Some(Arc::new(http_chain)),
+    ..Default::default()
+};
+```
+
+### Server Middleware Execution Flow
+
+For a typical HTTP POST request:
+
+```
+1. HTTP POST arrives at StreamableHttpServer
+   ↓
+2. Server HTTP Middleware (Request):
+   - ServerHttpLoggingMiddleware::on_request() → Log request
+   - CorsMiddleware::on_request() → Check origin
+   ↓
+3. Deserialize JSON-RPC from body
+   ↓
+4. Protocol Middleware (Request):
+   - MetricsMiddleware::on_request() → Increment counter
+   - ValidationMiddleware::on_request() → Validate method
+   ↓
+5. Server Request Handler (tool/prompt/resource)
+   ↓
+6. Protocol Middleware (Response) [reverse order]:
+   - ValidationMiddleware::on_response()
+   - MetricsMiddleware::on_response() → Record duration
+   ↓
+7. Serialize JSON-RPC to body
+   ↓
+8. Server HTTP Middleware (Response) [reverse order]:
+   - CorsMiddleware::on_response() → Add CORS headers
+   - ServerHttpLoggingMiddleware::on_response() → Log response
+   ↓
+9. HTTP response sent to client
+```
+
+### Protocol Middleware Ordering
+
+Protocol middleware execution order is determined by priority:
+
+```rust
+use pmcp::shared::middleware::MiddlewarePriority;
+
+pub enum MiddlewarePriority {
+    Critical = 0,  // Validation, security - executed first
+    High = 1,      // Rate limiting, circuit breakers
+    Normal = 2,    // Business logic, transformation
+    Low = 3,       // Metrics
+    Lowest = 4,    // Logging, cleanup
+}
+```
+
+**Request order**: Lower priority value executes first (Critical → High → Normal → Low → Lowest)
+**Response order**: Reverse (Lowest → Low → Normal → High → Critical)
+**Notification order**: Same as request (Critical → High → Normal → Low → Lowest)
+
+### SSE Notification Routing
+
+For SSE streaming, notifications go through protocol middleware only:
+
+```
+1. Server generates notification (e.g., progress update)
+   ↓
+2. Protocol Middleware (Notification):
+   - ValidationMiddleware::on_notification()
+   - MetricsMiddleware::on_notification()
+   ↓
+3. Serialize as SSE event
+   ↓
+4. Stream to client (no HTTP middleware - already connected)
+```
+
+**Note**: HTTP middleware does NOT run for SSE notifications, only for the initial connection.
+
+### Fast-Path Optimization
+
+StreamableHttpServer uses a fast path when no HTTP middleware is configured:
+
+```rust
+// Fast path: No HTTP middleware
+if config.http_middleware.is_none() {
+    // Direct JSON-RPC parsing, zero copies
+    return handle_post_fast_path(state, request).await;
+}
+
+// Middleware path: Full chain processing
+handle_post_with_middleware(state, request).await
+```
+
+**Performance**: Fast path skips HTTP request/response conversions entirely.
+
+### Example: Complete Server Setup
+
+```rust
+use pmcp::server::preset::ServerPreset;
+use pmcp::server::builder::ServerCoreBuilder;
+use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
+use pmcp::server::ToolHandler;
+use pmcp::shared::middleware::RateLimitMiddleware;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::Mutex;
+
+#[tokio::main]
+async fn main() -> pmcp::Result<()> {
+    // 1. Create preset with defaults + rate limiting
+    let preset = ServerPreset::new("my-api-server")
+        .with_rate_limit(RateLimitMiddleware::new(100, 100, Duration::from_secs(60)));
+
+    // 2. Build server with protocol middleware
+    let server = ServerCoreBuilder::new()
+        .name("my-api-server")
+        .version("1.0.0")
+        .tool("echo", EchoTool)
+        .tool("calculate", CalculateTool)
+        .protocol_middleware(preset.protocol_middleware())
+        .build()?;
+
+    // 3. Create HTTP server with HTTP middleware
+    let config = StreamableHttpServerConfig {
+        http_middleware: preset.http_middleware(),
+        session_id_generator: Some(Box::new(|| {
+            format!("session-{}", uuid::Uuid::new_v4())
+        })),
+        ..Default::default()
+    };
+
+    let http_server = StreamableHttpServer::with_config(
+        "127.0.0.1:3000".parse().unwrap(),
+        Arc::new(Mutex::new(server)),
+        config,
+    );
+
+    // 4. Start server
+    let (addr, handle) = http_server.start().await?;
+    println!("Server listening on: {}", addr);
+
+    // Server now has:
+    // - HTTP logging with redaction
+    // - Protocol metrics collection
+    // - Rate limiting (100 req/min)
+    // - Session management
+
+    handle.await?;
+    Ok(())
+}
+```
+
+### Best Practices
+
+1. **Use ServerPreset for common cases**: Defaults cover most production needs
+2. **HTTP middleware for transport concerns**: Auth, CORS, logging, compression
+3. **Protocol middleware for business logic**: Validation, metrics, rate limiting
+4. **Order matters**:
+   - HTTP: Auth → CORS → Logging
+   - Protocol: Validation → Rate Limit → Metrics
+5. **Redaction is critical**: Never log sensitive headers/query params
+6. **Fast path for performance**: Omit HTTP middleware if not needed
+7. **SSE optimization**: Don't buffer bodies for `text/event-stream`
+
+### Server Middleware Priority Reference
+
+**HTTP Middleware**:
+- `0-9`: Reserved for critical security middleware
+- `10-29`: Authentication, authorization
+- `30-49`: CORS, security headers
+- `50`: Default priority (ServerHttpLoggingMiddleware)
+- `51-99`: Metrics, custom headers
+
+**Protocol Middleware** (same as client):
+- `Critical (0)`: Validation, security
+- `High (1)`: Rate limiting, circuit breakers
+- `Normal (2)`: Business logic
+- `Low (3)`: Metrics
+- `Lowest (4)`: Logging, cleanup
+
+---
+
 ### Further Reading
 
 - Repository docs: `docs/advanced/middleware-composition.md`
