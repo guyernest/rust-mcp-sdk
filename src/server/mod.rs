@@ -41,6 +41,9 @@ pub mod auth;
 pub mod batch;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cancellation;
+/// Dynamic resource provider system for pattern-based resource routing.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod dynamic_resources;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod http_middleware;
 #[cfg(not(target_arch = "wasm32"))]

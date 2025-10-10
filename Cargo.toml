@@ -355,6 +355,10 @@ name = "55_server_middleware"
 path = "examples/55_server_middleware.rs"
 required-features = ["streamable-http"]
 
+[[example]]
+name = "56_dynamic_resources"
+path = "examples/56_dynamic_resources.rs"
+
 [[bench]]
 name = "comprehensive_benchmarks"
 harness = false
