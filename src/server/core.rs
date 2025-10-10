@@ -417,16 +417,17 @@ impl ServerCore {
 #[async_trait]
 impl ProtocolHandler for ServerCore {
     async fn handle_request(&self, id: RequestId, request: Request) -> JSONRPCResponse {
-        // Create middleware context
-        let context = MiddlewareContext::default();
-
         // Convert Request to JSONRPCRequest for middleware processing
         let mut jsonrpc_request = create_request(id.clone(), request.clone());
 
-        // Process request through protocol middleware chain
+        // Create middleware context with request_id, method, and start_time
+        let context = MiddlewareContext::with_request_id(id.to_string());
+        context.set_metadata("method".to_string(), jsonrpc_request.method.clone());
+
+        // Process request through protocol middleware chain (read-only access)
         if let Err(e) = self
             .protocol_middleware
-            .write()
+            .read()
             .await
             .process_request_with_context(&mut jsonrpc_request, &context)
             .await
@@ -438,10 +439,10 @@ impl ProtocolHandler for ServerCore {
         // Execute the actual request handling
         let mut response = self.handle_request_internal(id.clone(), request).await;
 
-        // Process response through protocol middleware chain
+        // Process response through protocol middleware chain (read-only access)
         if let Err(e) = self
             .protocol_middleware
-            .write()
+            .read()
             .await
             .process_response_with_context(&mut response, &context)
             .await
@@ -454,16 +455,17 @@ impl ProtocolHandler for ServerCore {
     }
 
     async fn handle_notification(&self, notification: Notification) -> Result<()> {
-        // Create middleware context
-        let context = MiddlewareContext::default();
-
         // Convert Notification to JSONRPCNotification for middleware processing
         let mut jsonrpc_notification = create_notification(notification.clone());
 
-        // Process notification through protocol middleware chain
+        // Create middleware context with method and start_time (no request_id for notifications)
+        let context = MiddlewareContext::default();
+        context.set_metadata("method".to_string(), jsonrpc_notification.method.clone());
+
+        // Process notification through protocol middleware chain (read-only access)
         if let Err(e) = self
             .protocol_middleware
-            .write()
+            .read()
             .await
             .process_notification_with_context(&mut jsonrpc_notification, &context)
             .await

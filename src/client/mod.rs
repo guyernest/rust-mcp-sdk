@@ -1286,9 +1286,9 @@ impl<T: Transport> Client<T> {
         // Convert to JSONRPC request
         let mut jsonrpc_request = create_request(request_id.clone(), request.clone());
 
-        // Process request through middleware chain
+        // Process request through middleware chain (read-only access)
         self.middleware_chain
-            .write()
+            .read()
             .await
             .process_request_with_context(&mut jsonrpc_request, &context)
             .await?;
@@ -1310,9 +1310,9 @@ impl<T: Transport> Client<T> {
                     // Remove from active requests
                     self.active_requests.write().await.remove(&request_id);
 
-                    // Process response through middleware chain
+                    // Process response through middleware chain (read-only access)
                     self.middleware_chain
-                        .write()
+                        .read()
                         .await
                         .process_response_with_context(&mut response, &context)
                         .await?;
