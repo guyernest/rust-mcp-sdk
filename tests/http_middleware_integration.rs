@@ -371,7 +371,7 @@ async fn test_concurrency_no_shared_state_contention() {
 
 #[tokio::test]
 async fn test_header_case_insensitivity() {
-    use hyper::http::HeaderMap;
+    use http::HeaderMap;
     use pmcp::client::http_middleware::{HttpRequest, HttpResponse};
 
     // Test HttpRequest case-insensitive headers
@@ -793,20 +793,20 @@ async fn test_http_logging_redacts_sensitive_headers() {
 
     // Verify headers are redacted in the internal redaction logic
     let formatted = middleware.redact_header_value(
-        &hyper::http::HeaderName::from_static("authorization"),
+        &http::HeaderName::from_static("authorization"),
         "Bearer secret",
     );
     assert_eq!(formatted, "Bearer [REDACTED]");
 
     let formatted_cookie = middleware.redact_header_value(
-        &hyper::http::HeaderName::from_static("cookie"),
+        &http::HeaderName::from_static("cookie"),
         "session=abc123",
     );
     assert_eq!(formatted_cookie, "[REDACTED]");
 
     // Content-type should not be redacted
     let formatted_ct = middleware.redact_header_value(
-        &hyper::http::HeaderName::from_static("content-type"),
+        &http::HeaderName::from_static("content-type"),
         "application/json",
     );
     assert_eq!(formatted_ct, "application/json");
@@ -814,7 +814,7 @@ async fn test_http_logging_redacts_sensitive_headers() {
 
 #[tokio::test]
 async fn test_http_logging_respects_overrides() {
-    use hyper::http::HeaderName;
+    use http::HeaderName;
     use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
 
     // Remove x-api-key from redaction list
@@ -836,7 +836,7 @@ async fn test_http_logging_respects_overrides() {
 
 #[tokio::test]
 async fn test_http_logging_multivalue_headers() {
-    use hyper::http::HeaderMap;
+    use http::HeaderMap;
     use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
 
     let middleware = HttpLoggingMiddleware::new();
@@ -907,7 +907,7 @@ async fn test_http_logging_body_disabled_by_default() {
 
 #[tokio::test]
 async fn test_http_logging_authorization_without_scheme() {
-    use hyper::http::HeaderName;
+    use http::HeaderName;
     use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
 
     // With show_auth_scheme = false, should completely redact
@@ -928,7 +928,7 @@ async fn test_http_logging_authorization_without_scheme() {
 
 #[tokio::test]
 async fn test_http_logging_header_value_truncation() {
-    use hyper::http::HeaderName;
+    use http::HeaderName;
     use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
 
     // Set max header value length to 20 characters
@@ -945,7 +945,7 @@ async fn test_http_logging_header_value_truncation() {
 
 #[tokio::test]
 async fn test_http_logging_case_insensitive_redaction() {
-    use hyper::http::HeaderName;
+    use http::HeaderName;
     use pmcp::client::http_logging_middleware::HttpLoggingMiddleware;
 
     let middleware = HttpLoggingMiddleware::new();

@@ -297,7 +297,7 @@ impl HttpLoggingMiddleware {
     /// Format headers for logging with redaction.
     ///
     /// This is public for testing purposes.
-    pub fn format_headers(&self, headers: &hyper::http::HeaderMap) -> String {
+    pub fn format_headers(&self, headers: &http::HeaderMap) -> String {
         let mut header_strs = Vec::new();
 
         for (name, _value) in headers {

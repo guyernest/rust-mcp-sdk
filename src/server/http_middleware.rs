@@ -912,7 +912,7 @@ pub mod adapters {
     /// }
     /// ```
     pub async fn from_axum(
-        parts: hyper::http::request::Parts,
+        parts: http::request::Parts,
         body: Body,
     ) -> Result<ServerHttpRequest> {
         use axum::body::to_bytes;
@@ -973,7 +973,7 @@ pub mod adapters {
             .unwrap_or_else(|e| {
                 // Fallback to error response if construction fails
                 Response::builder()
-                    .status(hyper::http::StatusCode::INTERNAL_SERVER_ERROR)
+                    .status(http::StatusCode::INTERNAL_SERVER_ERROR)
                     .body(Body::from(format!("Failed to build response: {}", e)))
                     .unwrap()
             })
@@ -983,7 +983,7 @@ pub mod adapters {
     ///
     /// This is a thin wrapper around `from_axum` since axum uses hyper internally.
     pub async fn from_hyper(
-        parts: hyper::http::request::Parts,
+        parts: http::request::Parts,
         body: Body,
     ) -> Result<ServerHttpRequest> {
         from_axum(parts, body).await
