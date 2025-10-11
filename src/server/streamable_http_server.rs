@@ -641,7 +641,7 @@ async fn handle_post_request(
 async fn extract_and_validate_auth(
     state: &ServerState,
     headers: &HeaderMap,
-) -> Result<Option<crate::server::auth::AuthContext>, Response> {
+) -> std::result::Result<Option<crate::server::auth::AuthContext>, Response> {
     let server = state.server.lock().await;
     if let Some(auth_provider) = server.get_auth_provider() {
         // Extract Authorization header

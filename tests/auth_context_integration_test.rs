@@ -1,10 +1,10 @@
-//! Integration test for OAuth auth_context pass-through from transport to tools.
+//! Integration test for OAuth `auth_context` pass-through from transport to tools.
 //!
 //! This test verifies the complete data flow:
-//! 1. Transport layer validates OAuth and creates AuthContext
-//! 2. AuthContext is passed to ServerCore.handle_request()
-//! 3. Tool middleware extracts token from AuthContext
-//! 4. Middleware injects token into RequestHandlerExtra metadata
+//! 1. Transport layer validates OAuth and creates `AuthContext`
+//! 2. `AuthContext` is passed to `ServerCore.handle_request()`
+//! 3. Tool middleware extracts token from `AuthContext`
+//! 4. Middleware injects token into `RequestHandlerExtra` metadata
 //! 5. Tools consume token from metadata
 
 use async_trait::async_trait;
@@ -53,7 +53,7 @@ impl AuthProvider for TestOAuthProvider {
     }
 }
 
-/// Test middleware that extracts token from auth_context and tracks execution.
+/// Test middleware that extracts token from `auth_context` and tracks execution.
 #[derive(Clone)]
 struct TestAuthMiddleware {
     extraction_log: Arc<Mutex<Vec<String>>>,
@@ -116,8 +116,7 @@ impl ToolHandler for TestAuthenticatedTool {
 
         let user_id = extra
             .get_metadata("user_id")
-            .map(|s| s.as_str())
-            .unwrap_or("unknown");
+            .map_or("unknown", |s| s.as_str());
 
         // Log execution
         self.execution_log.lock().await.push(format!(
@@ -216,7 +215,7 @@ async fn test_auth_context_flows_from_transport_to_tools() {
                 panic!("Expected text content");
             }
         },
-        _ => panic!("Expected successful result"),
+        pmcp::types::jsonrpc::ResponsePayload::Error(_) => panic!("Expected successful result"),
     }
 
     // Verify middleware extracted token
@@ -278,7 +277,9 @@ async fn test_missing_auth_context_fails_in_tool() {
         pmcp::types::jsonrpc::ResponsePayload::Error(error) => {
             assert!(error.message.contains("No auth token"));
         },
-        _ => panic!("Expected error due to missing auth"),
+        pmcp::types::jsonrpc::ResponsePayload::Result(_) => {
+            panic!("Expected error due to missing auth")
+        },
     }
 }
 
