@@ -637,6 +637,35 @@ async fn handle_post_request(
     handle_post_with_middleware(state, request).await
 }
 
+/// Extract and validate authentication from headers
+async fn extract_and_validate_auth(
+    state: &ServerState,
+    headers: &HeaderMap,
+) -> Result<Option<crate::server::auth::AuthContext>, Response> {
+    let server = state.server.lock().await;
+    if let Some(auth_provider) = server.get_auth_provider() {
+        // Extract Authorization header
+        let auth_header = headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok());
+
+        // Validate the request and get auth context
+        match auth_provider.validate_request(auth_header).await {
+            Ok(ctx) => Ok(ctx),
+            Err(e) => {
+                // Auth validation failed - return 401 Unauthorized
+                Err(create_error_response(
+                    StatusCode::UNAUTHORIZED,
+                    -32003,
+                    &format!("Authentication failed: {}", e),
+                ))
+            },
+        }
+    } else {
+        Ok(None)
+    }
+}
+
 /// Fast path handler without HTTP middleware
 async fn handle_post_fast_path(
     state: ServerState,
@@ -718,29 +747,9 @@ async fn handle_post_fast_path(
     }
 
     // Extract and validate authentication if auth_provider is configured
-    let auth_context = {
-        let server = state.server.lock().await;
-        if let Some(auth_provider) = server.get_auth_provider() {
-            // Extract Authorization header
-            let auth_header = headers
-                .get(http::header::AUTHORIZATION)
-                .and_then(|v| v.to_str().ok());
-
-            // Validate the request and get auth context
-            match auth_provider.validate_request(auth_header).await {
-                Ok(ctx) => ctx,
-                Err(e) => {
-                    // Auth validation failed - return 401 Unauthorized
-                    return create_error_response(
-                        StatusCode::UNAUTHORIZED,
-                        -32003,
-                        &format!("Authentication failed: {}", e),
-                    );
-                },
-            }
-        } else {
-            None
-        }
+    let auth_context = match extract_and_validate_auth(&state, &headers).await {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
     };
 
     // Process the message
