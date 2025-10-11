@@ -377,7 +377,7 @@ async fn diagnose_mcp_protocol(url: &str, timeout: Duration, api_key: Option<&st
     let start = Instant::now();
 
     // Try to initialize MCP connection
-    match crate::tester::ServerTester::new(url, timeout, false, api_key, None) {
+    match crate::tester::ServerTester::new(url, timeout, false, api_key, None, None) {
         Ok(mut tester) => {
             // Try quick test
             match tester.run_quick_test().await {

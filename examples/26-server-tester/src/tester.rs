@@ -70,6 +70,7 @@ impl ServerTester {
         insecure: bool,
         api_key: Option<&str>,
         force_transport: Option<&str>,
+        http_middleware_chain: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
     ) -> Result<Self> {
         // Determine transport type based on force_transport or URL
         let (transport_type, http_config, json_rpc_client) = match force_transport {
@@ -77,9 +78,12 @@ impl ServerTester {
             Some("http") => {
                 let parsed_url = Url::parse(url).context("Invalid URL")?;
                 let mut extra_headers = vec![];
+                // Only add Authorization header if not using OAuth middleware
                 if let Some(key) = api_key {
-                    extra_headers.push(("Authorization".to_string(), format!("Bearer {}", key)));
-                    extra_headers.push(("X-API-Key".to_string(), key.to_string()));
+                    if http_middleware_chain.is_none() {
+                        extra_headers.push(("Authorization".to_string(), format!("Bearer {}", key)));
+                        extra_headers.push(("X-API-Key".to_string(), key.to_string()));
+                    }
                 }
                 let config = StreamableHttpTransportConfig {
                     url: parsed_url,
@@ -88,6 +92,7 @@ impl ServerTester {
                     session_id: None,
                     enable_json_response: true,
                     on_resumption_token: None,
+                    http_middleware_chain: http_middleware_chain.clone(),
                 };
                 (TransportType::Http, Some(config), None)
             },
@@ -125,10 +130,13 @@ impl ServerTester {
                         // Use SDK streamable HTTP transport
                         let parsed_url = Url::parse(url).context("Invalid URL")?;
                         let mut extra_headers = vec![];
+                        // Only add Authorization header if not using OAuth middleware
                         if let Some(key) = api_key {
-                            extra_headers
-                                .push(("Authorization".to_string(), format!("Bearer {}", key)));
-                            extra_headers.push(("X-API-Key".to_string(), key.to_string()));
+                            if http_middleware_chain.is_none() {
+                                extra_headers
+                                    .push(("Authorization".to_string(), format!("Bearer {}", key)));
+                                extra_headers.push(("X-API-Key".to_string(), key.to_string()));
+                            }
                         }
                         let config = StreamableHttpTransportConfig {
                             url: parsed_url,
@@ -137,6 +145,7 @@ impl ServerTester {
                             session_id: None,
                             enable_json_response: true,
                             on_resumption_token: None,
+                            http_middleware_chain: http_middleware_chain.clone(),
                         };
                         (TransportType::Http, Some(config), None)
                     }

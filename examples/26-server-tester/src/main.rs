@@ -4,6 +4,7 @@ use colored::*;
 use std::time::Duration;
 
 mod diagnostics;
+mod oauth;
 mod report;
 mod scenario;
 mod scenario_executor;
@@ -11,6 +12,7 @@ mod scenario_generator;
 mod tester;
 mod validators;
 
+use oauth::{OAuthConfig, OAuthHelper};
 use report::{OutputFormat, TestReport};
 use tester::ServerTester;
 
@@ -58,6 +60,22 @@ struct Cli {
     /// Force specific transport type (http|stdio)
     #[arg(long, global = true)]
     transport: Option<String>,
+
+    /// OAuth issuer URL for device code flow authentication
+    #[arg(long, global = true, env = "MCP_OAUTH_ISSUER")]
+    oauth_issuer: Option<String>,
+
+    /// OAuth client ID
+    #[arg(long, global = true, env = "MCP_OAUTH_CLIENT_ID")]
+    oauth_client_id: Option<String>,
+
+    /// OAuth scopes (comma-separated)
+    #[arg(long, global = true, env = "MCP_OAUTH_SCOPES", value_delimiter = ',')]
+    oauth_scopes: Option<Vec<String>>,
+
+    /// Disable OAuth token caching
+    #[arg(long, global = true)]
+    oauth_no_cache: bool,
 }
 
 #[derive(Subcommand)]
@@ -211,6 +229,15 @@ async fn main() -> Result<()> {
         print_header();
     }
 
+    // Create OAuth middleware if configured
+    let oauth_middleware = create_oauth_middleware(
+        cli.oauth_issuer.clone(),
+        cli.oauth_client_id.clone(),
+        cli.oauth_scopes.clone(),
+        cli.oauth_no_cache,
+    )
+    .await?;
+
     // Execute command
     let result = match cli.command {
         Commands::Test {
@@ -228,6 +255,7 @@ async fn main() -> Result<()> {
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
+                oauth_middleware.clone(),
             )
             .await
         },
@@ -239,6 +267,7 @@ async fn main() -> Result<()> {
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
+                oauth_middleware.clone(),
             )
             .await
         },
@@ -251,6 +280,7 @@ async fn main() -> Result<()> {
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
+                oauth_middleware.clone(),
             )
             .await
         },
@@ -264,6 +294,7 @@ async fn main() -> Result<()> {
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
                 cli.verbose > 0,
+                oauth_middleware.clone(),
             )
             .await
         },
@@ -276,6 +307,7 @@ async fn main() -> Result<()> {
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
                 cli.verbose > 0,
+                oauth_middleware.clone(),
             )
             .await
         },
@@ -288,6 +320,7 @@ async fn main() -> Result<()> {
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
                 cli.verbose > 0,
+                oauth_middleware.clone(),
             )
             .await
         },
@@ -316,6 +349,7 @@ async fn main() -> Result<()> {
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
+                oauth_middleware.clone(),
             )
             .await
         },
@@ -327,6 +361,7 @@ async fn main() -> Result<()> {
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
+                oauth_middleware.clone(),
             )
             .await
         },
@@ -344,6 +379,7 @@ async fn main() -> Result<()> {
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
+                oauth_middleware.clone(),
             )
             .await
         },
@@ -365,6 +401,7 @@ async fn main() -> Result<()> {
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
+                oauth_middleware.clone(),
             )
             .await
         },
@@ -410,6 +447,56 @@ fn print_header() {
     println!();
 }
 
+/// Create OAuth middleware chain from CLI configuration
+async fn create_oauth_middleware(
+    oauth_issuer: Option<String>,
+    oauth_client_id: Option<String>,
+    oauth_scopes: Option<Vec<String>>,
+    no_cache: bool,
+) -> Result<Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>> {
+    // Check if OAuth is configured
+    let (issuer, client_id) = match (oauth_issuer, oauth_client_id) {
+        (Some(i), Some(c)) => (i, c),
+        (Some(_), None) => {
+            eprintln!(
+                "{}",
+                "Warning: --oauth-issuer provided but --oauth-client-id missing. OAuth disabled."
+                    .yellow()
+            );
+            return Ok(None);
+        },
+        (None, Some(_)) => {
+            eprintln!(
+                "{}",
+                "Warning: --oauth-client-id provided but --oauth-issuer missing. OAuth disabled."
+                    .yellow()
+            );
+            return Ok(None);
+        },
+        (None, None) => return Ok(None),
+    };
+
+    let scopes = oauth_scopes.unwrap_or_else(|| vec!["openid".to_string()]);
+
+    let cache_file = if no_cache {
+        None
+    } else {
+        Some(oauth::default_cache_path())
+    };
+
+    let config = OAuthConfig {
+        issuer,
+        client_id,
+        scopes,
+        cache_file,
+    };
+
+    let oauth_helper = OAuthHelper::new(config)?;
+    let middleware_chain = oauth_helper.create_middleware_chain().await?;
+
+    Ok(Some(middleware_chain))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_full_test(
     url: &str,
@@ -420,6 +507,7 @@ async fn run_full_test(
     insecure: bool,
     api_key: Option<&str>,
     transport: Option<&str>,
+    oauth_middleware: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
 ) -> Result<TestReport> {
     let mut tester = ServerTester::new(
         url,
@@ -427,6 +515,7 @@ async fn run_full_test(
         insecure,
         api_key,
         transport,
+        oauth_middleware,
     )?;
 
     println!("{}", "Running full test suite...".green());
@@ -457,6 +546,7 @@ async fn run_quick_test(
     insecure: bool,
     api_key: Option<&str>,
     transport: Option<&str>,
+    oauth_middleware: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
 ) -> Result<TestReport> {
     let mut tester = ServerTester::new(
         url,
@@ -464,6 +554,7 @@ async fn run_quick_test(
         insecure,
         api_key,
         transport,
+        oauth_middleware,
     )?;
 
     println!("{}", "Running quick connectivity test...".green());
@@ -479,6 +570,7 @@ async fn run_compliance_test(
     insecure: bool,
     api_key: Option<&str>,
     transport: Option<&str>,
+    oauth_middleware: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
 ) -> Result<TestReport> {
     let mut tester = ServerTester::new(
         url,
@@ -486,6 +578,7 @@ async fn run_compliance_test(
         insecure,
         api_key,
         transport,
+        oauth_middleware,
     )?;
 
     println!("{}", "Running protocol compliance tests...".green());
@@ -497,6 +590,7 @@ async fn run_compliance_test(
     tester.run_compliance_tests(strict).await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_tools_test(
     url: &str,
     test_all: bool,
@@ -505,6 +599,7 @@ async fn run_tools_test(
     api_key: Option<&str>,
     transport: Option<&str>,
     verbose: bool,
+    oauth_middleware: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
 ) -> Result<TestReport> {
     let mut tester = ServerTester::new(
         url,
@@ -512,6 +607,7 @@ async fn run_tools_test(
         insecure,
         api_key,
         transport,
+        oauth_middleware,
     )?;
 
     println!("{}", "Discovering and testing tools...".green());
@@ -523,6 +619,7 @@ async fn run_tools_test(
         .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_resources_test(
     url: &str,
     timeout: u64,
@@ -530,6 +627,7 @@ async fn run_resources_test(
     api_key: Option<&str>,
     transport: Option<&str>,
     verbose: bool,
+    oauth_middleware: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
 ) -> Result<TestReport> {
     let mut tester = ServerTester::new(
         url,
@@ -537,6 +635,7 @@ async fn run_resources_test(
         insecure,
         api_key,
         transport,
+        oauth_middleware,
     )?;
 
     println!("{}", "Discovering and testing resources...".green());
@@ -549,6 +648,7 @@ async fn run_resources_test(
     tester.run_resources_discovery_with_verbose(verbose).await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_prompts_test(
     url: &str,
     timeout: u64,
@@ -556,6 +656,7 @@ async fn run_prompts_test(
     api_key: Option<&str>,
     transport: Option<&str>,
     verbose: bool,
+    oauth_middleware: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
 ) -> Result<TestReport> {
     let mut tester = ServerTester::new(
         url,
@@ -563,6 +664,7 @@ async fn run_prompts_test(
         insecure,
         api_key,
         transport,
+        oauth_middleware,
     )?;
 
     println!("{}", "Discovering and testing prompts...".green());
@@ -597,6 +699,7 @@ async fn run_diagnostics(
     Ok(report)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_comparison(
     server1: &str,
     server2: &str,
@@ -605,6 +708,7 @@ async fn run_comparison(
     insecure: bool,
     api_key: Option<&str>,
     transport: Option<&str>,
+    oauth_middleware: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
 ) -> Result<TestReport> {
     println!("{}", "Comparing servers...".green());
     println!("  Server 1: {}", server1.cyan());
@@ -617,6 +721,7 @@ async fn run_comparison(
         insecure,
         api_key,
         transport,
+        oauth_middleware.clone(),
     )?;
     let mut tester2 = ServerTester::new(
         server2,
@@ -624,6 +729,7 @@ async fn run_comparison(
         insecure,
         api_key,
         transport,
+        oauth_middleware,
     )?;
 
     let report = tester1.compare_with(&mut tester2, with_perf).await?;
@@ -637,6 +743,7 @@ async fn run_health_check(
     insecure: bool,
     api_key: Option<&str>,
     transport: Option<&str>,
+    oauth_middleware: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
 ) -> Result<TestReport> {
     let mut tester = ServerTester::new(
         url,
@@ -644,6 +751,7 @@ async fn run_health_check(
         insecure,
         api_key,
         transport,
+        oauth_middleware,
     )?;
 
     println!("{}", "Checking server health...".green());
@@ -652,6 +760,7 @@ async fn run_health_check(
     tester.run_health_check().await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn generate_scenario(
     url: &str,
     output: &str,
@@ -662,6 +771,7 @@ async fn generate_scenario(
     insecure: bool,
     api_key: Option<&str>,
     transport: Option<&str>,
+    oauth_middleware: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
 ) -> Result<TestReport> {
     use scenario_generator::ScenarioGenerator;
 
@@ -671,6 +781,7 @@ async fn generate_scenario(
         insecure,
         api_key,
         transport,
+        oauth_middleware,
     )?;
 
     let generator =
@@ -692,6 +803,7 @@ async fn generate_scenario(
     Ok(report)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_scenario(
     url: &str,
     file: &str,
@@ -700,6 +812,7 @@ async fn run_scenario(
     insecure: bool,
     api_key: Option<&str>,
     transport: Option<&str>,
+    oauth_middleware: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
 ) -> Result<TestReport> {
     use scenario::TestScenario;
     use scenario_executor::ScenarioExecutor;
@@ -710,6 +823,7 @@ async fn run_scenario(
         insecure,
         api_key,
         transport,
+        oauth_middleware,
     )?;
 
     // Initialize the server first
