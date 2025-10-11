@@ -12,6 +12,7 @@ use colored::*;
 use pmcp::client::auth::OidcDiscoveryClient;
 use pmcp::client::http_middleware::HttpMiddlewareChain;
 use pmcp::client::oauth_middleware::{BearerToken, OAuthClientMiddleware};
+use pmcp::server::auth::oauth2::OidcDiscoveryMetadata;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -103,8 +104,8 @@ impl OAuthHelper {
         Ok(base)
     }
 
-    /// Discover OAuth issuer from MCP server URL using OIDC discovery
-    async fn discover_issuer(&self, mcp_url: &str) -> Result<String> {
+    /// Discover OAuth metadata from MCP server URL using OIDC discovery
+    async fn discover_metadata(&self, mcp_url: &str) -> Result<OidcDiscoveryMetadata> {
         let base_url = Self::extract_base_url(mcp_url)?;
 
         println!(
@@ -119,7 +120,10 @@ impl OAuthHelper {
             Ok(metadata) => {
                 println!("{}", "✓ OAuth discovery successful!".green());
                 println!("  Issuer: {}", metadata.issuer.dimmed());
-                Ok(metadata.issuer)
+                if let Some(ref device_endpoint) = metadata.device_authorization_endpoint {
+                    println!("  Device endpoint: {}", device_endpoint.dimmed());
+                }
+                Ok(metadata)
             },
             Err(e) => {
                 anyhow::bail!(
@@ -133,12 +137,35 @@ impl OAuthHelper {
         }
     }
 
-    /// Get the OAuth issuer URL (either provided or discovered)
-    async fn get_issuer(&self) -> Result<String> {
-        if let Some(ref issuer) = self.config.issuer {
-            Ok(issuer.clone())
-        } else if let Some(ref mcp_url) = self.config.mcp_server_url {
-            self.discover_issuer(mcp_url).await
+    /// Get OAuth metadata (either by discovering or constructing from issuer)
+    async fn get_metadata(&self) -> Result<OidcDiscoveryMetadata> {
+        if let Some(ref mcp_url) = self.config.mcp_server_url {
+            // Discover from MCP server URL
+            self.discover_metadata(mcp_url).await
+        } else if let Some(ref issuer) = self.config.issuer {
+            // Manually provided issuer - try to discover from it
+            println!(
+                "{}",
+                format!("Discovering OAuth configuration from {}...", issuer)
+                    .cyan()
+            );
+
+            let discovery_client = OidcDiscoveryClient::new();
+            match discovery_client.discover(issuer).await {
+                Ok(metadata) => {
+                    println!("{}", "✓ OAuth discovery successful!".green());
+                    Ok(metadata)
+                },
+                Err(e) => {
+                    anyhow::bail!(
+                        "Failed to discover OAuth configuration from issuer {}: {}\n\
+                         \n\
+                         Please ensure the issuer URL exposes OAuth metadata at\n\
+                         {}/.well-known/openid-configuration",
+                        issuer, e, issuer
+                    )
+                },
+            }
         } else {
             anyhow::bail!(
                 "Either oauth_issuer or mcp_server_url must be provided for OAuth authentication"
@@ -183,16 +210,26 @@ impl OAuthHelper {
         println!("{}", "Starting OAuth device code flow...".cyan().bold());
         println!();
 
-        // Get issuer (either provided or discovered)
-        let issuer = self.get_issuer().await?;
+        // Get OAuth metadata (either provided or discovered)
+        let metadata = self.get_metadata().await?;
 
         // Step 1: Request device code
-        let device_auth_endpoint = format!("{}/oauth/device/code", issuer);
+        let device_auth_endpoint = metadata
+            .device_authorization_endpoint
+            .as_ref()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Device authorization endpoint not found in OAuth metadata.\n\
+                     \n\
+                     The OAuth server does not support device code flow (RFC 8628).\n\
+                     Please use a different authentication method or check server configuration."
+                )
+            })?;
         let scope = self.config.scopes.join(" ");
 
         let response = self
             .client
-            .post(&device_auth_endpoint)
+            .post(device_auth_endpoint)
             .form(&[
                 ("client_id", self.config.client_id.as_str()),
                 ("scope", &scope),
@@ -249,7 +286,7 @@ impl OAuthHelper {
 
         // Step 3: Poll for token
         let poll_interval = Duration::from_secs(device_auth.interval.unwrap_or(5));
-        let token_endpoint = format!("{}/oauth/token", issuer);
+        let token_endpoint = &metadata.token_endpoint;
         let expires_at = SystemTime::now() + Duration::from_secs(device_auth.expires_in);
 
         loop {
@@ -263,7 +300,7 @@ impl OAuthHelper {
 
             let response = self
                 .client
-                .post(&token_endpoint)
+                .post(token_endpoint)
                 .form(&[
                     ("client_id", self.config.client_id.as_str()),
                     ("device_code", &device_auth.device_code),
@@ -317,12 +354,12 @@ impl OAuthHelper {
 
     /// Refresh an existing token
     async fn refresh_token(&self, refresh_token: &str) -> Result<TokenResponse> {
-        let issuer = self.get_issuer().await?;
-        let token_endpoint = format!("{}/oauth/token", issuer);
+        let metadata = self.get_metadata().await?;
+        let token_endpoint = &metadata.token_endpoint;
 
         let response = self
             .client
-            .post(&token_endpoint)
+            .post(token_endpoint)
             .form(&[
                 ("client_id", self.config.client_id.as_str()),
                 ("refresh_token", refresh_token),
