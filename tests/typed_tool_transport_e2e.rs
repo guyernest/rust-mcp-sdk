@@ -203,13 +203,7 @@ mod tests {
         });
 
         // Execute the tool through ToolHandler trait
-        let extra = RequestHandlerExtra {
-            cancellation_token: Default::default(),
-            request_id: "test-1".to_string(),
-            session_id: None,
-            auth_info: None,
-            auth_context: None,
-        };
+        let extra = RequestHandlerExtra::new("test-1".to_string(), Default::default());
         let result = tool
             .handle(args, extra)
             .await
@@ -237,13 +231,7 @@ mod tests {
         });
 
         // This should fail because required_string and metadata are missing
-        let extra = RequestHandlerExtra {
-            cancellation_token: Default::default(),
-            request_id: "test-2".to_string(),
-            session_id: None,
-            auth_info: None,
-            auth_context: None,
-        };
+        let extra = RequestHandlerExtra::new("test-2".to_string(), Default::default());
         let result = tool.handle(invalid_args, extra).await;
 
         // Should get an error

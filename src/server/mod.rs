@@ -41,6 +41,9 @@ pub mod auth;
 pub mod batch;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cancellation;
+/// Dynamic resource provider system for pattern-based resource routing.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod dynamic_resources;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod http_middleware;
 #[cfg(not(target_arch = "wasm32"))]
@@ -54,6 +57,9 @@ pub mod simple_resources;
 /// Simple tool implementations with schema support.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simple_tool;
+/// Tool middleware for cross-cutting concerns in tool execution.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tool_middleware;
 /// Workflow-based prompt system with type-safe handles and ergonomic builders.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod workflow;
@@ -331,6 +337,15 @@ impl Server {
     #[cfg(feature = "streamable-http")]
     pub fn http_middleware(&self) -> Option<Arc<http_middleware::ServerHttpMiddlewareChain>> {
         self.http_middleware.clone()
+    }
+
+    /// Get the authentication provider configured via `ServerBuilder`.
+    ///
+    /// Returns the authentication provider that was set using
+    /// `ServerBuilder::auth_provider()`. This can be used by transport
+    /// layers to validate incoming requests and extract auth context.
+    pub fn get_auth_provider(&self) -> Option<Arc<dyn auth::AuthProvider>> {
+        self.auth_provider.clone()
     }
 
     /// Build tool and resource registries for workflow expansion.
@@ -732,7 +747,7 @@ impl Server {
         id: RequestId,
         request: Request,
     ) -> Result<()> {
-        let response = server.handle_request(id, request).await;
+        let response = server.handle_request(id, request, None).await;
         let mut t = transport.write().await;
         t.send(TransportMessage::Response(response)).await
     }
@@ -759,7 +774,12 @@ impl Server {
         }
     }
 
-    async fn handle_request(&self, id: RequestId, request: Request) -> JSONRPCResponse {
+    async fn handle_request(
+        &self,
+        id: RequestId,
+        request: Request,
+        auth_context: Option<auth::AuthContext>,
+    ) -> JSONRPCResponse {
         match request {
             Request::Client(ref boxed_req)
                 if matches!(**boxed_req, ClientRequest::Initialize(_)) =>
@@ -785,7 +805,10 @@ impl Server {
                     ),
                 }
             },
-            Request::Client(boxed_req) => self.handle_client_request(id, *boxed_req).await,
+            Request::Client(boxed_req) => {
+                self.handle_client_request(id, *boxed_req, auth_context)
+                    .await
+            },
             Request::Server(_) => JSONRPCResponse {
                 jsonrpc: "2.0".to_string(),
                 id,
@@ -804,8 +827,11 @@ impl Server {
         &self,
         id: RequestId,
         request: ClientRequest,
+        auth_context: Option<auth::AuthContext>,
     ) -> JSONRPCResponse {
-        let result = self.process_client_request(id.clone(), request).await;
+        let result = self
+            .process_client_request(id.clone(), request, auth_context)
+            .await;
         Self::create_response(id, result)
     }
 
@@ -814,6 +840,7 @@ impl Server {
         &self,
         request_id: RequestId,
         request: ClientRequest,
+        auth_context: Option<auth::AuthContext>,
     ) -> Result<serde_json::Value> {
         match request {
             ClientRequest::Initialize(_) => {
@@ -821,11 +848,21 @@ impl Server {
                 unreachable!("Initialize should be handled separately")
             },
             ClientRequest::ListTools(req) => self.handle_list_tools(req),
-            ClientRequest::CallTool(req) => self.handle_call_tool(request_id, req).await,
+            ClientRequest::CallTool(req) => {
+                self.handle_call_tool(request_id, req, auth_context).await
+            },
             ClientRequest::ListPrompts(req) => self.handle_list_prompts(req),
-            ClientRequest::GetPrompt(req) => self.handle_get_prompt(request_id, req).await,
-            ClientRequest::ListResources(req) => self.handle_list_resources(request_id, req).await,
-            ClientRequest::ReadResource(req) => self.handle_read_resource(request_id, req).await,
+            ClientRequest::GetPrompt(req) => {
+                self.handle_get_prompt(request_id, req, auth_context).await
+            },
+            ClientRequest::ListResources(req) => {
+                self.handle_list_resources(request_id, req, auth_context)
+                    .await
+            },
+            ClientRequest::ReadResource(req) => {
+                self.handle_read_resource(request_id, req, auth_context)
+                    .await
+            },
             ClientRequest::ListResourceTemplates(req) => {
                 Self::handle_list_resource_templates(self, req)
             },
@@ -892,7 +929,12 @@ impl Server {
         })?)
     }
 
-    async fn handle_call_tool(&self, request_id: RequestId, req: CallToolRequest) -> Result<Value> {
+    async fn handle_call_tool(
+        &self,
+        request_id: RequestId,
+        req: CallToolRequest,
+        auth_context: Option<auth::AuthContext>,
+    ) -> Result<Value> {
         let handler = self
             .tools
             .get(&req.name)
@@ -904,18 +946,23 @@ impl Server {
             .await
             .unwrap_or_else(tokio_util::sync::CancellationToken::new);
 
+        // Auth context now comes from the transport layer
         // Validate authentication if auth provider is configured
-        let auth_context = if let Some(auth_provider) = &self.auth_provider {
-            // For now, we don't have access to HTTP headers in this context
-            // In a real implementation, this would come from the transport layer
-            // For the OAuth example, we'll use NoOpAuthProvider which validates without headers
-            auth_provider.validate_request(None).await?
+        let validated_auth_context = if let Some(auth_provider) = &self.auth_provider {
+            // If auth_context was provided by transport, use it; otherwise validate
+            if auth_context.is_some() {
+                auth_context
+            } else {
+                // Fallback: try to validate without headers (for backward compatibility)
+                auth_provider.validate_request(None).await?
+            }
         } else {
-            None
+            auth_context // No auth provider, just use what was provided
         };
 
         // Check tool authorization if tool authorizer is configured
-        if let (Some(auth_ctx), Some(authorizer)) = (&auth_context, &self.tool_authorizer) {
+        if let (Some(auth_ctx), Some(authorizer)) = (&validated_auth_context, &self.tool_authorizer)
+        {
             if !authorizer.can_access_tool(auth_ctx, &req.name).await? {
                 return Err(Error::protocol(
                     crate::error::ErrorCode::AUTHENTICATION_REQUIRED,
@@ -928,7 +975,7 @@ impl Server {
             request_id.to_string(),
             cancellation_token,
         )
-        .with_auth_context(auth_context);
+        .with_auth_context(validated_auth_context);
 
         let result = handler.handle(req.arguments, extra).await?;
         Ok(serde_json::to_value(CallToolResult {
@@ -969,6 +1016,7 @@ impl Server {
         &self,
         request_id: RequestId,
         req: GetPromptRequest,
+        auth_context: Option<auth::AuthContext>,
     ) -> Result<Value> {
         let handler = self
             .prompts
@@ -983,7 +1031,8 @@ impl Server {
         let extra = crate::server::cancellation::RequestHandlerExtra::new(
             request_id.to_string(),
             cancellation_token,
-        );
+        )
+        .with_auth_context(auth_context);
         let result = handler.handle(req.arguments, extra).await?;
         Ok(serde_json::to_value(result)?)
     }
@@ -992,6 +1041,7 @@ impl Server {
         &self,
         request_id: RequestId,
         req: ListResourcesRequest,
+        auth_context: Option<auth::AuthContext>,
     ) -> Result<Value> {
         if let Some(handler) = &self.resources {
             let cancellation_token = self
@@ -1002,7 +1052,8 @@ impl Server {
             let extra = crate::server::cancellation::RequestHandlerExtra::new(
                 request_id.to_string(),
                 cancellation_token,
-            );
+            )
+            .with_auth_context(auth_context);
             let result = handler.list(req.cursor, extra).await?;
             Ok(serde_json::to_value(result)?)
         } else {
@@ -1017,6 +1068,7 @@ impl Server {
         &self,
         request_id: RequestId,
         req: ReadResourceRequest,
+        auth_context: Option<auth::AuthContext>,
     ) -> Result<Value> {
         let handler = self
             .resources
@@ -1031,7 +1083,8 @@ impl Server {
         let extra = crate::server::cancellation::RequestHandlerExtra::new(
             request_id.to_string(),
             cancellation_token,
-        );
+        )
+        .with_auth_context(auth_context);
         let result = handler.read(&req.uri, extra).await?;
         Ok(serde_json::to_value(result)?)
     }
@@ -2727,7 +2780,9 @@ mod tests {
             },
         })));
 
-        let response = server.handle_request(RequestId::from(1i64), request).await;
+        let response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
 
         assert_eq!(response.id, RequestId::from(1i64));
         match response.payload {
@@ -2750,7 +2805,9 @@ mod tests {
         let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
         })));
-        let response = server.handle_request(RequestId::from(1i64), request).await;
+        let response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
 
         match response.payload {
             ResponsePayload::Result(result) => {
@@ -2776,7 +2833,9 @@ mod tests {
             arguments: json!({"input": "test"}),
         })));
 
-        let response = server.handle_request(RequestId::from(1i64), request).await;
+        let response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
 
         match response.payload {
             ResponsePayload::Result(result) => {
@@ -2801,7 +2860,9 @@ mod tests {
             arguments: json!({}),
         })));
 
-        let response = server.handle_request(RequestId::from(1i64), request).await;
+        let response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
 
         match response.payload {
             ResponsePayload::Error(error) => {
@@ -2828,7 +2889,9 @@ mod tests {
         let request = Request::Client(Box::new(ClientRequest::ListPrompts(ListPromptsRequest {
             cursor: None,
         })));
-        let response = server.handle_request(RequestId::from(1i64), request).await;
+        let response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
 
         match response.payload {
             ResponsePayload::Result(result) => {
@@ -2859,7 +2922,9 @@ mod tests {
             arguments: HashMap::new(),
         })));
 
-        let response = server.handle_request(RequestId::from(1i64), request).await;
+        let response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
 
         match response.payload {
             ResponsePayload::Result(result) => {
@@ -2891,7 +2956,9 @@ mod tests {
         let request = Request::Client(Box::new(ClientRequest::ListResources(
             ListResourcesRequest { cursor: None },
         )));
-        let response = server.handle_request(RequestId::from(1i64), request).await;
+        let response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
 
         match response.payload {
             ResponsePayload::Result(result) => {
@@ -2924,7 +2991,9 @@ mod tests {
             uri: "test://uri".to_string(),
         })));
 
-        let response = server.handle_request(RequestId::from(1i64), request).await;
+        let response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
 
         match response.payload {
             ResponsePayload::Result(result) => {
@@ -2949,7 +3018,9 @@ mod tests {
             uri: "nonexistent://uri".to_string(),
         })));
 
-        let response = server.handle_request(RequestId::from(1i64), request).await;
+        let response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
 
         match response.payload {
             ResponsePayload::Error(error) => {
@@ -2968,7 +3039,9 @@ mod tests {
             .unwrap();
 
         let request = Request::Client(Box::new(ClientRequest::Ping));
-        let response = server.handle_request(RequestId::from(1i64), request).await;
+        let response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
 
         match response.payload {
             ResponsePayload::Result(_) => {
@@ -2998,7 +3071,9 @@ mod tests {
                 metadata: None,
             }),
         )));
-        let response = server.handle_request(RequestId::from(1i64), request).await;
+        let response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
 
         match response.payload {
             ResponsePayload::Error(error) => {

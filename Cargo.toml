@@ -1,6 +1,6 @@
 [package]
 name = "pmcp"
-version = "1.7.0"
+version = "1.8.0"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility"
@@ -354,6 +354,14 @@ required-features = ["schema-generation"]
 name = "55_server_middleware"
 path = "examples/55_server_middleware.rs"
 required-features = ["streamable-http"]
+
+[[example]]
+name = "56_dynamic_resources"
+path = "examples/56_dynamic_resources.rs"
+
+[[example]]
+name = "57_tool_middleware_oauth"
+path = "examples/57_tool_middleware_oauth.rs"
 
 [[bench]]
 name = "comprehensive_benchmarks"

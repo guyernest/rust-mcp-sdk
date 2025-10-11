@@ -4,6 +4,8 @@ use crate::error::{Error, Result};
 use crate::runtime::RwLock;
 use crate::server::auth::{AuthProvider, ToolAuthorizer};
 use crate::server::core::ServerCore;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::server::tool_middleware::{ToolMiddleware, ToolMiddlewareChain};
 use crate::server::{PromptHandler, ResourceHandler, SamplingHandler, ToolHandler};
 use crate::shared::middleware::EnhancedMiddlewareChain;
 use crate::types::{Implementation, ServerCapabilities};
@@ -55,6 +57,8 @@ pub struct ServerCoreBuilder {
     auth_provider: Option<Arc<dyn AuthProvider>>,
     tool_authorizer: Option<Arc<dyn ToolAuthorizer>>,
     protocol_middleware: Arc<RwLock<EnhancedMiddlewareChain>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    tool_middlewares: Vec<Arc<dyn ToolMiddleware>>,
 }
 
 impl Default for ServerCoreBuilder {
@@ -77,6 +81,8 @@ impl ServerCoreBuilder {
             auth_provider: None,
             tool_authorizer: None,
             protocol_middleware: Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
+            #[cfg(not(target_arch = "wasm32"))]
+            tool_middlewares: Vec::new(),
         }
     }
 
@@ -289,6 +295,53 @@ impl ServerCoreBuilder {
         self
     }
 
+    /// Add a tool middleware to the chain.
+    ///
+    /// Tool middleware provides cross-cutting concerns for tool execution,
+    /// such as OAuth token injection, logging, metrics, and authorization.
+    ///
+    /// Middleware is sorted by priority during `build()` - lower priority values
+    /// execute first (e.g., auth: 10, default: 50, logging: 90).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use pmcp::server::builder::ServerCoreBuilder;
+    /// use pmcp::server::tool_middleware::ToolMiddleware;
+    /// use std::sync::Arc;
+    ///
+    /// struct OAuthMiddleware {
+    ///     token: String,
+    /// }
+    ///
+    /// #[async_trait]
+    /// impl ToolMiddleware for OAuthMiddleware {
+    ///     async fn on_request(
+    ///         &self,
+    ///         _tool_name: &str,
+    ///         _args: &mut Value,
+    ///         extra: &mut RequestHandlerExtra,
+    ///         _context: &ToolContext,
+    ///     ) -> Result<()> {
+    ///         extra.set_metadata("oauth_token".to_string(), self.token.clone());
+    ///         Ok(())
+    ///     }
+    /// }
+    ///
+    /// let server = ServerCoreBuilder::new()
+    ///     .name("my-server")
+    ///     .version("1.0.0")
+    ///     .tool_middleware(Arc::new(OAuthMiddleware {
+    ///         token: "my-token".to_string()
+    ///     }))
+    ///     .build()?;
+    /// ```
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn tool_middleware(mut self, middleware: Arc<dyn ToolMiddleware>) -> Self {
+        self.tool_middlewares.push(middleware);
+        self
+    }
+
     /// Build the `ServerCore` instance.
     ///
     /// # Errors
@@ -305,6 +358,16 @@ impl ServerCoreBuilder {
 
         let info = Implementation { name, version };
 
+        // Build tool middleware chain from accumulated middleware
+        #[cfg(not(target_arch = "wasm32"))]
+        let tool_middleware = {
+            let mut tool_middleware_chain = ToolMiddlewareChain::new();
+            for middleware in self.tool_middlewares {
+                tool_middleware_chain.add(middleware);
+            }
+            Arc::new(RwLock::new(tool_middleware_chain))
+        };
+
         Ok(ServerCore::new(
             info,
             self.capabilities,
@@ -315,6 +378,8 @@ impl ServerCoreBuilder {
             self.auth_provider,
             self.tool_authorizer,
             self.protocol_middleware,
+            #[cfg(not(target_arch = "wasm32"))]
+            tool_middleware,
         ))
     }
 }

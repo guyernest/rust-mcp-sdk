@@ -235,13 +235,10 @@ async fn main() -> Result<()> {
     );
     args.insert("language".to_string(), "rust".to_string());
 
-    let extra = pmcp::server::cancellation::RequestHandlerExtra {
-        cancellation_token: Default::default(),
-        request_id: "demo-request".to_string(),
-        session_id: None,
-        auth_info: None,
-        auth_context: None,
-    };
+    let extra = pmcp::server::cancellation::RequestHandlerExtra::new(
+        "demo-request".to_string(),
+        Default::default(),
+    );
 
     // Execute workflow server-side
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -385,13 +382,10 @@ mod tests {
         args.insert("code".to_string(), "fn test() {}".to_string());
         args.insert("language".to_string(), "rust".to_string());
 
-        let extra = pmcp::server::cancellation::RequestHandlerExtra {
-            cancellation_token: Default::default(),
-            request_id: "test".to_string(),
-            session_id: None,
-            auth_info: None,
-            auth_context: None,
-        };
+        let extra = pmcp::server::cancellation::RequestHandlerExtra::new(
+            "test".to_string(),
+            Default::default(),
+        );
 
         let result = prompt_handler
             .handle(args, extra)

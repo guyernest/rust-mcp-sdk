@@ -171,13 +171,10 @@ Best Practices:
     args.insert("project".to_string(), "MCP Tester".to_string());
     args.insert("task".to_string(), "Fix workflow execution bug".to_string());
 
-    let extra = pmcp::server::cancellation::RequestHandlerExtra {
-        cancellation_token: Default::default(),
-        request_id: "demo-request".to_string(),
-        session_id: None,
-        auth_info: None,
-        auth_context: None,
-    };
+    let extra = pmcp::server::cancellation::RequestHandlerExtra::new(
+        "demo-request".to_string(),
+        Default::default(),
+    );
 
     // Execute workflow (hybrid execution)
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

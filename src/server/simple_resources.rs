@@ -9,6 +9,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::cancellation::RequestHandlerExtra;
+use super::dynamic_resources::{DynamicResourceProvider, RequestContext, ResourceRouter};
 use super::ResourceHandler;
 
 /// A static resource that returns fixed content.
@@ -91,14 +92,23 @@ impl StaticResource {
 }
 
 /// A collection of resources that can be managed together.
+///
+/// Supports both static resources (fixed URIs) and dynamic providers (URI templates).
+/// Static resources are checked first for O(1) lookup, then dynamic providers are
+/// tried in priority order.
 pub struct ResourceCollection {
     resources: HashMap<String, Arc<StaticResource>>,
+    router: ResourceRouter,
 }
 
 impl fmt::Debug for ResourceCollection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ResourceCollection")
-            .field("resources", &self.resources.keys().collect::<Vec<_>>())
+            .field(
+                "static_resources",
+                &self.resources.keys().collect::<Vec<_>>(),
+            )
+            .field("dynamic_providers", &self.router.all_templates().len())
             .finish()
     }
 }
@@ -111,20 +121,47 @@ impl Default for ResourceCollection {
 
 impl ResourceCollection {
     /// Create a new empty resource collection.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::server::simple_resources::ResourceCollection;
+    ///
+    /// let collection = ResourceCollection::new();
+    /// ```
     pub fn new() -> Self {
         Self {
             resources: HashMap::new(),
+            router: ResourceRouter::new(),
         }
     }
 
-    /// Add a resource to the collection.
+    /// Add a static resource to the collection.
+    ///
+    /// Static resources are checked first for O(1) lookup performance.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::server::simple_resources::{ResourceCollection, StaticResource};
+    ///
+    /// let collection = ResourceCollection::new()
+    ///     .add_resource(StaticResource::new_text("file://readme.txt", "Hello world"));
+    /// ```
     pub fn add_resource(mut self, resource: StaticResource) -> Self {
         self.resources
             .insert(resource.uri.clone(), Arc::new(resource));
         self
     }
 
-    /// Add multiple resources to the collection.
+    /// Add a static resource by reference (avoids cloning).
+    pub fn add_static(mut self, resource: StaticResource) -> Self {
+        self.resources
+            .insert(resource.uri.clone(), Arc::new(resource));
+        self
+    }
+
+    /// Add multiple static resources to the collection.
     pub fn add_resources(mut self, resources: Vec<StaticResource>) -> Self {
         for resource in resources {
             self.resources
@@ -133,32 +170,104 @@ impl ResourceCollection {
         self
     }
 
-    /// Get a resource by URI.
+    /// Add a dynamic resource provider to the collection.
+    ///
+    /// Dynamic providers handle URI patterns using RFC 6570 templates.
+    /// They are checked after static resources, in priority order.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::server::simple_resources::ResourceCollection;
+    /// use pmcp::server::dynamic_resources::{DynamicResourceProvider, UriParams, RequestContext};
+    /// use pmcp::types::{Content, ReadResourceResult, ResourceTemplate};
+    /// use async_trait::async_trait;
+    /// use std::sync::Arc;
+    ///
+    /// struct DatasetProvider;
+    ///
+    /// #[async_trait]
+    /// impl DynamicResourceProvider for DatasetProvider {
+    ///     fn templates(&self) -> Vec<ResourceTemplate> {
+    ///         vec![ResourceTemplate {
+    ///             uri_template: "datasets://{id}/schema".parse().unwrap(),
+    ///             name: "Dataset Schema".to_string(),
+    ///             description: Some("Schema for a dataset".to_string()),
+    ///             mime_type: Some("application/json".to_string()),
+    ///         }]
+    ///     }
+    ///
+    ///     async fn fetch(
+    ///         &self,
+    ///         _uri: &str,
+    ///         params: UriParams,
+    ///         _context: RequestContext,
+    ///     ) -> pmcp::Result<ReadResourceResult> {
+    ///         let id = params.get("id").unwrap();
+    ///         Ok(ReadResourceResult {
+    ///             contents: vec![Content::Text {
+    ///                 text: format!("Schema for dataset {}", id),
+    ///             }],
+    ///         })
+    ///     }
+    /// }
+    ///
+    /// let collection = ResourceCollection::new()
+    ///     .add_dynamic_provider(Arc::new(DatasetProvider));
+    /// ```
+    pub fn add_dynamic_provider(mut self, provider: Arc<dyn DynamicResourceProvider>) -> Self {
+        self.router.add_provider(provider);
+        self
+    }
+
+    /// Get a static resource by URI.
     pub fn get(&self, uri: &str) -> Option<&Arc<StaticResource>> {
         self.resources.get(uri)
     }
 
-    /// List all resources.
+    /// List all resources (static and dynamic templates).
     pub fn list(&self) -> Vec<ResourceInfo> {
-        self.resources
+        let mut infos: Vec<ResourceInfo> = self
+            .resources
             .values()
             .map(|resource| resource.info())
-            .collect()
+            .collect();
+
+        // Add dynamic templates as resources
+        for template in self.router.all_templates() {
+            infos.push(ResourceInfo {
+                uri: template.uri_template.to_string(),
+                name: template.name,
+                description: template.description,
+                mime_type: template.mime_type,
+            });
+        }
+
+        infos
     }
 }
 
 #[async_trait]
 impl ResourceHandler for ResourceCollection {
-    async fn read(&self, uri: &str, _extra: RequestHandlerExtra) -> Result<ReadResourceResult> {
-        match self.resources.get(uri) {
-            Some(resource) => Ok(ReadResourceResult {
+    async fn read(&self, uri: &str, extra: RequestHandlerExtra) -> Result<ReadResourceResult> {
+        // Try static resources first (fast O(1) lookup)
+        if let Some(resource) = self.resources.get(uri) {
+            return Ok(ReadResourceResult {
                 contents: vec![resource.content.clone()],
-            }),
-            None => Err(crate::Error::protocol(
-                crate::ErrorCode::INVALID_PARAMS,
-                format!("Resource not found: {}", uri),
-            )),
+            });
         }
+
+        // Try dynamic providers (pattern matching)
+        if let Some(matched) = self.router.match_uri(uri) {
+            let context = RequestContext::new(extra);
+            return matched.provider.fetch(uri, matched.params, context).await;
+        }
+
+        // Not found
+        Err(crate::Error::protocol(
+            crate::ErrorCode::INVALID_PARAMS,
+            format!("Resource not found: {}", uri),
+        ))
     }
 
     async fn list(
