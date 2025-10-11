@@ -1,22 +1,29 @@
-//! OAuth Device Code Flow support for CLI authentication
+//! OAuth authentication support for CLI
 //!
-//! This module implements OAuth 2.0 Device Authorization Grant (RFC 8628)
-//! for CLI-friendly authentication without requiring a browser redirect.
+//! This module implements multiple OAuth 2.0 flows for CLI authentication:
+//! - Authorization Code Flow with PKCE (RFC 7636) - browser-based, most compatible
+//! - Device Code Flow (RFC 8628) - fallback for servers that support it
 //!
 //! Supports automatic OAuth discovery via:
 //! - OpenID Connect Discovery (/.well-known/openid-configuration)
 //! - OAuth 2.0 Server Metadata (/.well-known/oauth-authorization-server)
 
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use colored::*;
-use pmcp::client::auth::OidcDiscoveryClient;
+use pmcp::client::auth::{OidcDiscoveryClient, TokenExchangeClient};
 use pmcp::client::http_middleware::HttpMiddlewareChain;
 use pmcp::client::oauth_middleware::{BearerToken, OAuthClientMiddleware};
 use pmcp::server::auth::oauth2::OidcDiscoveryMetadata;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tokio::time::sleep;
 use url::Url;
 
@@ -201,19 +208,186 @@ impl OAuthHelper {
             }
         }
 
-        // No valid cached token, perform device code flow
-        self.device_code_flow().await
+        // No valid cached token, try authorization code flow first
+        println!("{}", "No cached token found. Starting OAuth flow...".cyan());
+
+        // Get metadata to see what flows are supported
+        let metadata = self.get_metadata().await?;
+
+        // Try authorization code flow first (more common, works with MCP Inspector-like servers)
+        match self.authorization_code_flow(&metadata).await {
+            Ok(token) => return Ok(token),
+            Err(e) => {
+                println!("{}", format!("Authorization code flow failed: {}", e).yellow());
+
+                // Fall back to device code flow if available
+                if metadata.device_authorization_endpoint.is_some() {
+                    println!("{}", "Trying device code flow...".cyan());
+                    return self.device_code_flow_with_metadata(&metadata).await;
+                } else {
+                    anyhow::bail!(
+                        "No supported OAuth flow available.\n\
+                         \n\
+                         The server must support either:\n\
+                         - Authorization code flow (authorization_endpoint), or\n\
+                         - Device code flow (device_authorization_endpoint)"
+                    );
+                }
+            },
+        }
     }
 
-    /// Perform OAuth device code flow
-    async fn device_code_flow(&self) -> Result<String> {
+    /// Generate PKCE code verifier (RFC 7636)
+    fn generate_code_verifier() -> String {
+        let random_bytes: [u8; 32] = rand::rng().random();
+        URL_SAFE_NO_PAD.encode(random_bytes)
+    }
+
+    /// Generate PKCE code challenge from verifier (RFC 7636)
+    fn generate_code_challenge(verifier: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(verifier.as_bytes());
+        let hash = hasher.finalize();
+        URL_SAFE_NO_PAD.encode(hash)
+    }
+
+    /// Perform OAuth authorization code flow with PKCE
+    async fn authorization_code_flow(&self, metadata: &OidcDiscoveryMetadata) -> Result<String> {
+        println!("{}", "Starting OAuth authorization code flow...".cyan().bold());
+        println!();
+
+        // Generate PKCE challenge
+        let code_verifier = Self::generate_code_verifier();
+        let code_challenge = Self::generate_code_challenge(&code_verifier);
+
+        // Start local callback server
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let redirect_port = listener.local_addr()?.port();
+        let redirect_uri = format!("http://localhost:{}/callback", redirect_port);
+
+        println!("{}", format!("Local callback server listening on port {}", redirect_port).dimmed());
+
+        // Build authorization URL
+        let mut auth_url = Url::parse(&metadata.authorization_endpoint)
+            .context("Invalid authorization endpoint")?;
+
+        auth_url.query_pairs_mut()
+            .append_pair("client_id", &self.config.client_id)
+            .append_pair("response_type", "code")
+            .append_pair("redirect_uri", &redirect_uri)
+            .append_pair("scope", &self.config.scopes.join(" "))
+            .append_pair("code_challenge", &code_challenge)
+            .append_pair("code_challenge_method", "S256")
+            .append_pair("state", &Self::generate_code_verifier()); // Random state for CSRF protection
+
+        println!();
+        println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan());
+        println!("{}", "  OAuth Authentication Required".cyan().bold());
+        println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan());
+        println!();
+        println!("  {}", "Opening browser for authentication...".bold());
+        println!();
+        println!("  {}", "If the browser doesn't open automatically, visit:".dimmed());
+        println!("  {}", auth_url.as_str().yellow());
+        println!();
+        println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan());
+        println!();
+
+        // Open browser
+        if let Err(e) = webbrowser::open(auth_url.as_str()) {
+            println!("{}", format!("Warning: Failed to open browser: {}", e).yellow());
+            println!("{}", "Please open the URL above manually.".yellow());
+        }
+
+        // Wait for OAuth callback
+        let (tx, rx) = oneshot::channel();
+        let callback_task = tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut reader = BufReader::new(&mut stream);
+                let mut request_line = String::new();
+
+                if reader.read_line(&mut request_line).await.is_ok() {
+                    // Parse the request line to extract the authorization code
+                    if let Some(path) = request_line.split_whitespace().nth(1) {
+                        if let Ok(callback_url) = Url::parse(&format!("http://localhost{}", path)) {
+                            let code = callback_url
+                                .query_pairs()
+                                .find(|(key, _)| key == "code")
+                                .map(|(_, value)| value.to_string());
+
+                            // Send success response to browser
+                            let response = if code.is_some() {
+                                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
+                                 <html><body style='font-family: sans-serif; text-align: center; padding: 50px;'>\
+                                 <h1 style='color: green;'>✓ Authentication Successful!</h1>\
+                                 <p>You can close this window and return to the terminal.</p>\
+                                 </body></html>"
+                            } else {
+                                "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\n\r\n\
+                                 <html><body style='font-family: sans-serif; text-align: center; padding: 50px;'>\
+                                 <h1 style='color: red;'>✗ Authentication Failed</h1>\
+                                 <p>No authorization code received. Please try again.</p>\
+                                 </body></html>"
+                            };
+
+                            let _ = stream.write_all(response.as_bytes()).await;
+                            let _ = stream.flush().await;
+
+                            if let Some(code) = code {
+                                let _ = tx.send(code);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        print!("  Waiting for authorization...");
+        std::io::Write::flush(&mut std::io::stdout()).unwrap();
+
+        // Wait for callback with timeout
+        let authorization_code = tokio::time::timeout(Duration::from_secs(300), rx)
+            .await
+            .context("Timeout waiting for OAuth callback (5 minutes)")??;
+
+        callback_task.abort();
+
+        println!("\r{}", "✓ Authorization code received!        ".green());
+        println!();
+
+        // Exchange authorization code for access token
+        println!("{}", "Exchanging authorization code for access token...".dimmed());
+
+        let token_exchange = TokenExchangeClient::new();
+        let token_response = token_exchange
+            .exchange_code(
+                &metadata.token_endpoint,
+                &authorization_code,
+                &self.config.client_id,
+                None, // No client secret for public clients
+                &redirect_uri,
+                Some(&code_verifier), // PKCE verifier
+            )
+            .await
+            .context("Failed to exchange authorization code for token")?;
+
+        println!("{}", "✓ Authentication successful!".green().bold());
+        println!();
+
+        // Cache the token
+        if let Some(ref cache_file) = self.config.cache_file {
+            self.cache_token_from_response(&token_response, cache_file).await?;
+        }
+
+        Ok(token_response.access_token)
+    }
+
+    /// Perform OAuth device code flow (with pre-fetched metadata)
+    async fn device_code_flow_with_metadata(&self, metadata: &OidcDiscoveryMetadata) -> Result<String> {
         println!("{}", "Starting OAuth device code flow...".cyan().bold());
         println!();
 
-        // Get OAuth metadata (either provided or discovered)
-        let metadata = self.get_metadata().await?;
-
-        // Step 1: Request device code
+        // Check if device flow is supported
         let device_auth_endpoint = metadata
             .device_authorization_endpoint
             .as_ref()
@@ -221,10 +395,21 @@ impl OAuthHelper {
                 anyhow::anyhow!(
                     "Device authorization endpoint not found in OAuth metadata.\n\
                      \n\
-                     The OAuth server does not support device code flow (RFC 8628).\n\
-                     Please use a different authentication method or check server configuration."
+                     The OAuth server does not support device code flow (RFC 8628)."
                 )
             })?;
+
+        // Rest of device code flow implementation...
+        self.device_code_flow_internal(metadata, device_auth_endpoint).await
+    }
+
+    /// Internal implementation of device code flow
+    async fn device_code_flow_internal(
+        &self,
+        metadata: &OidcDiscoveryMetadata,
+        device_auth_endpoint: &str,
+    ) -> Result<String> {
+        // Step 1: Request device code
         let scope = self.config.scopes.join(" ");
 
         let response = self
@@ -426,6 +611,22 @@ impl OAuthHelper {
         );
 
         Ok(())
+    }
+
+    /// Cache token from pmcp::client::auth::TokenResponse
+    async fn cache_token_from_response(
+        &self,
+        token: &pmcp::client::auth::TokenResponse,
+        cache_file: &PathBuf,
+    ) -> Result<()> {
+        // Convert to internal TokenResponse
+        let internal_token = TokenResponse {
+            access_token: token.access_token.clone(),
+            refresh_token: token.refresh_token.clone(),
+            expires_in: token.expires_in,
+            token_type: token.token_type.clone(),
+        };
+        self.cache_token(&internal_token, cache_file).await
     }
 
     /// Create HTTP middleware chain with OAuth
