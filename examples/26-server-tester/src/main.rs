@@ -76,6 +76,10 @@ struct Cli {
     /// Disable OAuth token caching
     #[arg(long, global = true)]
     oauth_no_cache: bool,
+
+    /// OAuth redirect port for localhost callback (default: 8080)
+    #[arg(long, global = true, env = "MCP_OAUTH_REDIRECT_PORT", default_value = "8080")]
+    oauth_redirect_port: u16,
 }
 
 #[derive(Subcommand)]
@@ -235,6 +239,7 @@ async fn main() -> Result<()> {
         cli.oauth_client_id.clone(),
         cli.oauth_scopes.clone(),
         cli.oauth_no_cache,
+        cli.oauth_redirect_port,
     );
 
     // Execute command
@@ -457,14 +462,14 @@ fn print_header() {
 }
 
 /// OAuth configuration tuple type
-type OAuthConfigTuple = (Option<String>, Option<String>, Option<Vec<String>>, bool);
+type OAuthConfigTuple = (Option<String>, Option<String>, Option<Vec<String>>, bool, u16);
 
 /// Helper to create OAuth middleware from config tuple
 async fn create_oauth_from_config(
     url: &str,
     config: &OAuthConfigTuple,
 ) -> Result<Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>> {
-    create_oauth_middleware(url, config.0.clone(), config.1.clone(), config.2.clone(), config.3)
+    create_oauth_middleware(url, config.0.clone(), config.1.clone(), config.2.clone(), config.3, config.4)
         .await
 }
 
@@ -475,6 +480,7 @@ async fn create_oauth_middleware(
     oauth_client_id: Option<String>,
     oauth_scopes: Option<Vec<String>>,
     no_cache: bool,
+    redirect_port: u16,
 ) -> Result<Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>> {
     // Check if OAuth is configured (requires at minimum client_id)
     let client_id = match oauth_client_id {
@@ -506,6 +512,7 @@ async fn create_oauth_middleware(
         client_id,
         scopes,
         cache_file,
+        redirect_port,
     };
 
     let oauth_helper = OAuthHelper::new(config)?;

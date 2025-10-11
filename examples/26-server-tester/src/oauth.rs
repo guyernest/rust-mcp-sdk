@@ -41,6 +41,8 @@ pub struct OAuthConfig {
     pub scopes: Vec<String>,
     /// Cache file path for storing tokens
     pub cache_file: Option<PathBuf>,
+    /// Redirect port for localhost callback (default: 8080)
+    pub redirect_port: u16,
 }
 
 /// Token cache stored on disk
@@ -260,12 +262,27 @@ impl OAuthHelper {
         let code_verifier = Self::generate_code_verifier();
         let code_challenge = Self::generate_code_challenge(&code_verifier);
 
-        // Start local callback server
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let redirect_port = listener.local_addr()?.port();
+        // Start local callback server on configured port
+        let redirect_port = self.config.redirect_port;
         let redirect_uri = format!("http://localhost:{}/callback", redirect_port);
 
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", redirect_port))
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to bind to localhost:{}.\n\
+                     \n\
+                     This port may already be in use. Try a different port with:\n\
+                     --oauth-redirect-port PORT",
+                    redirect_port
+                )
+            })?;
+
         println!("{}", format!("Local callback server listening on port {}", redirect_port).dimmed());
+        println!();
+        println!("{}", format!("IMPORTANT: Ensure the redirect URI is registered in your OAuth provider:").yellow().bold());
+        println!("{}", format!("  {}", redirect_uri).yellow());
+        println!();
 
         // Build authorization URL
         let mut auth_url = Url::parse(&metadata.authorization_endpoint)
