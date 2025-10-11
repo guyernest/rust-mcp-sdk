@@ -198,7 +198,7 @@ impl HttpAdapter {
 
         match message {
             TransportMessage::Request { id, request } => {
-                let response = handler.handle_request(id, request).await;
+                let response = handler.handle_request(id, request, None).await;
                 Ok(serde_json::to_string(&TransportMessage::Response(
                     response,
                 ))?)
