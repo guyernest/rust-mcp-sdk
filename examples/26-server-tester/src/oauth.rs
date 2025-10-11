@@ -650,11 +650,15 @@ impl OAuthHelper {
     pub async fn create_middleware_chain(&self) -> Result<Arc<HttpMiddlewareChain>> {
         let access_token = self.get_access_token().await?;
 
+        println!("{}", format!("Creating OAuth middleware with token: {}...", &access_token[..20]).dimmed());
+
         let bearer_token = BearerToken::new(access_token);
         let oauth_middleware = OAuthClientMiddleware::new(bearer_token);
 
         let mut chain = HttpMiddlewareChain::new();
         chain.add(Arc::new(oauth_middleware));
+
+        println!("{}", "OAuth middleware added to chain".green());
 
         Ok(Arc::new(chain))
     }
