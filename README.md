@@ -78,6 +78,32 @@ The schema is automatically generated and included in the `tools/list` response,
 - **Documentation**: Schema includes descriptions from doc comments
 - **Validation**: Runtime validation against the generated schema
 
+## 🎉 Version 1.8.0 - OAuth Auth Context & Server Middleware Enhancements!
+
+### 🔐 **BREAKING CHANGE: OAuth Auth Context Pass-Through**
+- **🎯 Production-Ready OAuth**: Full token pass-through from transport → middleware → tools
+  - ✅ **New Parameter**: `ProtocolHandler::handle_request()` now accepts `auth_context: Option<AuthContext>`
+  - ✅ **Transport Integration**: `StreamableHttpServer` extracts and validates OAuth from Authorization headers
+  - ✅ **Middleware Pattern**: Tool middleware can inject tokens into `RequestHandlerExtra` metadata
+  - ✅ **DRY Tools**: No repetitive auth code - tools consume tokens from metadata
+
+- **📝 Migration Guide**:
+  ```rust
+  // Update all handle_request calls to pass auth_context:
+  server.handle_request(id, request, None).await  // Add None for no auth
+
+  // In transport layer (e.g., HTTP):
+  let auth_context = auth_provider.validate_request(auth_header).await?;
+  server.handle_request(id, request, auth_context).await
+  ```
+
+- **📚 New Resources**:
+  - Example 58: Complete OAuth flow demonstration
+  - Integration tests: `tests/auth_context_integration_test.rs`
+  - Updated Example 57: OAuth middleware best practices
+
+---
+
 ## 🎉 Version 1.7.0 - ClientCapabilities Schema Fix for MCP Specification Compliance!
 
 ### 🛡️ **BREAKING CHANGE: Fixed ClientCapabilities Schema**

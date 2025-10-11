@@ -268,7 +268,7 @@ async fn test_server_protocol_middleware_integration() {
     })));
 
     let _response = server
-        .handle_request(RequestId::from(1i64), init_request)
+        .handle_request(RequestId::from(1i64), init_request, None)
         .await;
 
     // Verify request order: Auth → Logging → Metrics

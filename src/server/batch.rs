@@ -21,7 +21,7 @@ impl Server {
             async move {
                 // Convert JSONRPCRequest to our internal request type
                 match crate::shared::protocol_helpers::parse_request(req.clone()) {
-                    Ok((id, request)) => server.handle_request(id, request).await,
+                    Ok((id, request)) => server.handle_request(id, request, None).await,
                     Err(e) => {
                         // Return error response for unparseable requests
                         JSONRPCResponse {

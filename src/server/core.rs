@@ -24,7 +24,7 @@ use std::sync::Arc;
 use crate::runtime::RwLock;
 
 #[cfg(not(target_arch = "wasm32"))]
-use super::auth::{AuthProvider, ToolAuthorizer};
+use super::auth::{AuthContext, AuthProvider, ToolAuthorizer};
 #[cfg(not(target_arch = "wasm32"))]
 use super::cancellation::{CancellationManager, RequestHandlerExtra};
 #[cfg(not(target_arch = "wasm32"))]
@@ -47,7 +47,22 @@ pub trait ProtocolHandler: Send + Sync {
     ///
     /// This method processes MCP requests in a stateless manner without
     /// knowledge of the underlying transport mechanism.
-    async fn handle_request(&self, id: RequestId, request: Request) -> JSONRPCResponse;
+    ///
+    /// # Parameters
+    ///
+    /// * `id` - The request ID from the JSON-RPC request
+    /// * `request` - The MCP protocol request to handle
+    /// * `auth_context` - Optional authentication context from the transport layer
+    ///
+    /// The `auth_context` parameter enables OAuth token pass-through from the
+    /// transport layer to tool middleware, allowing tools to authenticate with
+    /// backend services using the user's credentials.
+    async fn handle_request(
+        &self,
+        id: RequestId,
+        request: Request,
+        auth_context: Option<AuthContext>,
+    ) -> JSONRPCResponse;
 
     /// Handle a notification (no response expected).
     ///
@@ -232,23 +247,37 @@ impl ServerCore {
     }
 
     /// Handle call tool request.
-    async fn handle_call_tool(&self, req: &CallToolParams) -> Result<CallToolResult> {
+    async fn handle_call_tool(
+        &self,
+        req: &CallToolParams,
+        auth_context: Option<AuthContext>,
+    ) -> Result<CallToolResult> {
         let handler = self
             .tools
             .get(&req.name)
             .ok_or_else(|| Error::internal(format!("Tool '{}' not found", req.name)))?;
 
-        // Authorization check would occur here when auth context is available from transport layer
-        // Currently, tool_authorizer is stored but awaits transport layer integration
+        // Authorization check with tool_authorizer if available
+        if let Some(authorizer) = &self.tool_authorizer {
+            if let Some(ref auth_ctx) = auth_context {
+                if !authorizer.can_access_tool(auth_ctx, &req.name).await? {
+                    return Err(Error::authentication(format!(
+                        "User not authorized to call tool '{}'",
+                        req.name
+                    )));
+                }
+            }
+        }
 
-        // Create request handler extra data
+        // Create request handler extra data with auth_context
         let request_id = format!("tool_{}", req.name);
         let mut extra = RequestHandlerExtra::new(
             request_id.clone(),
             self.cancellation_manager
                 .create_token(request_id.clone())
                 .await,
-        );
+        )
+        .with_auth_context(auth_context);
 
         // Execute tool with or without middleware depending on platform
         #[cfg(not(target_arch = "wasm32"))]
@@ -365,20 +394,25 @@ impl ServerCore {
     }
 
     /// Handle get prompt request.
-    async fn handle_get_prompt(&self, req: &GetPromptParams) -> Result<GetPromptResult> {
+    async fn handle_get_prompt(
+        &self,
+        req: &GetPromptParams,
+        auth_context: Option<AuthContext>,
+    ) -> Result<GetPromptResult> {
         let handler = self
             .prompts
             .get(&req.name)
             .ok_or_else(|| Error::internal(format!("Prompt '{}' not found", req.name)))?;
 
-        // Create request handler extra data
+        // Create request handler extra data with auth_context
         let request_id = format!("prompt_{}", req.name);
         let extra = RequestHandlerExtra::new(
             request_id.clone(),
             self.cancellation_manager
                 .create_token(request_id.clone())
                 .await,
-        );
+        )
+        .with_auth_context(auth_context);
 
         handler.handle(req.arguments.clone(), extra).await
     }
@@ -387,6 +421,7 @@ impl ServerCore {
     async fn handle_list_resources(
         &self,
         req: &ListResourcesParams,
+        auth_context: Option<AuthContext>,
     ) -> Result<ListResourcesResult> {
         match &self.resources {
             Some(handler) => {
@@ -396,7 +431,8 @@ impl ServerCore {
                     self.cancellation_manager
                         .create_token(request_id.clone())
                         .await,
-                );
+                )
+                .with_auth_context(auth_context);
                 handler.list(req.cursor.clone(), extra).await
             },
             None => Ok(ListResourcesResult {
@@ -407,7 +443,11 @@ impl ServerCore {
     }
 
     /// Handle read resource request.
-    async fn handle_read_resource(&self, req: &ReadResourceParams) -> Result<ReadResourceResult> {
+    async fn handle_read_resource(
+        &self,
+        req: &ReadResourceParams,
+        auth_context: Option<AuthContext>,
+    ) -> Result<ReadResourceResult> {
         let handler = self.resources.as_ref().ok_or_else(|| {
             Error::internal(format!("Resource handler not available for '{}'", req.uri))
         })?;
@@ -418,7 +458,8 @@ impl ServerCore {
             self.cancellation_manager
                 .create_token(request_id.clone())
                 .await,
-        );
+        )
+        .with_auth_context(auth_context);
 
         handler.read(&req.uri, extra).await
     }
@@ -459,7 +500,12 @@ impl ServerCore {
 
 #[async_trait]
 impl ProtocolHandler for ServerCore {
-    async fn handle_request(&self, id: RequestId, request: Request) -> JSONRPCResponse {
+    async fn handle_request(
+        &self,
+        id: RequestId,
+        request: Request,
+        auth_context: Option<AuthContext>,
+    ) -> JSONRPCResponse {
         // Convert Request to JSONRPCRequest for middleware processing
         let mut jsonrpc_request = create_request(id.clone(), request.clone());
 
@@ -479,8 +525,10 @@ impl ProtocolHandler for ServerCore {
             return Self::error_response(id, -32603, e.to_string());
         }
 
-        // Execute the actual request handling
-        let mut response = self.handle_request_internal(id.clone(), request).await;
+        // Execute the actual request handling with auth_context
+        let mut response = self
+            .handle_request_internal(id.clone(), request, auth_context)
+            .await;
 
         // Process response through protocol middleware chain (read-only access)
         if let Err(e) = self
@@ -532,7 +580,12 @@ impl ProtocolHandler for ServerCore {
 
 impl ServerCore {
     /// Internal request handler without middleware processing.
-    async fn handle_request_internal(&self, id: RequestId, request: Request) -> JSONRPCResponse {
+    async fn handle_request_internal(
+        &self,
+        id: RequestId,
+        request: Request,
+        auth_context: Option<AuthContext>,
+    ) -> JSONRPCResponse {
         match request {
             Request::Client(ref boxed_req)
                 if matches!(**boxed_req, ClientRequest::Initialize(_)) =>
@@ -563,11 +616,13 @@ impl ServerCore {
                         },
                         Err(e) => Self::error_response(id, -32603, e.to_string()),
                     },
-                    ClientRequest::CallTool(req) => match self.handle_call_tool(req).await {
-                        Ok(result) => {
-                            Self::success_response(id, serde_json::to_value(result).unwrap())
-                        },
-                        Err(e) => Self::error_response(id, -32603, e.to_string()),
+                    ClientRequest::CallTool(req) => {
+                        match self.handle_call_tool(req, auth_context.clone()).await {
+                            Ok(result) => {
+                                Self::success_response(id, serde_json::to_value(result).unwrap())
+                            },
+                            Err(e) => Self::error_response(id, -32603, e.to_string()),
+                        }
                     },
                     ClientRequest::ListPrompts(req) => match self.handle_list_prompts(req).await {
                         Ok(result) => {
@@ -575,14 +630,16 @@ impl ServerCore {
                         },
                         Err(e) => Self::error_response(id, -32603, e.to_string()),
                     },
-                    ClientRequest::GetPrompt(req) => match self.handle_get_prompt(req).await {
-                        Ok(result) => {
-                            Self::success_response(id, serde_json::to_value(result).unwrap())
-                        },
-                        Err(e) => Self::error_response(id, -32603, e.to_string()),
+                    ClientRequest::GetPrompt(req) => {
+                        match self.handle_get_prompt(req, auth_context.clone()).await {
+                            Ok(result) => {
+                                Self::success_response(id, serde_json::to_value(result).unwrap())
+                            },
+                            Err(e) => Self::error_response(id, -32603, e.to_string()),
+                        }
                     },
                     ClientRequest::ListResources(req) => {
-                        match self.handle_list_resources(req).await {
+                        match self.handle_list_resources(req, auth_context.clone()).await {
                             Ok(result) => {
                                 Self::success_response(id, serde_json::to_value(result).unwrap())
                             },
@@ -590,7 +647,7 @@ impl ServerCore {
                         }
                     },
                     ClientRequest::ReadResource(req) => {
-                        match self.handle_read_resource(req).await {
+                        match self.handle_read_resource(req, auth_context.clone()).await {
                             Ok(result) => {
                                 Self::success_response(id, serde_json::to_value(result).unwrap())
                             },
@@ -672,7 +729,9 @@ mod tests {
             },
         })));
 
-        let response = server.handle_request(RequestId::from(1i64), init_req).await;
+        let response = server
+            .handle_request(RequestId::from(1i64), init_req, None)
+            .await;
 
         match response.payload {
             ResponsePayload::Result(_) => {
@@ -715,13 +774,17 @@ mod tests {
                 version: "1.0.0".to_string(),
             },
         })));
-        server.handle_request(RequestId::from(1i64), init_req).await;
+        server
+            .handle_request(RequestId::from(1i64), init_req, None)
+            .await;
 
         // List tools
         let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsParams {
             cursor: None,
         })));
-        let response = server.handle_request(RequestId::from(2i64), list_req).await;
+        let response = server
+            .handle_request(RequestId::from(2i64), list_req, None)
+            .await;
 
         match response.payload {
             ResponsePayload::Result(result) => {

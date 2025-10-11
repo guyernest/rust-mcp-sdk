@@ -717,11 +717,37 @@ async fn handle_post_fast_path(
         }
     }
 
+    // Extract and validate authentication if auth_provider is configured
+    let auth_context = {
+        let server = state.server.lock().await;
+        if let Some(auth_provider) = server.get_auth_provider() {
+            // Extract Authorization header
+            let auth_header = headers
+                .get(http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok());
+
+            // Validate the request and get auth context
+            match auth_provider.validate_request(auth_header).await {
+                Ok(ctx) => ctx,
+                Err(e) => {
+                    // Auth validation failed - return 401 Unauthorized
+                    return create_error_response(
+                        StatusCode::UNAUTHORIZED,
+                        -32003,
+                        &format!("Authentication failed: {}", e),
+                    );
+                },
+            }
+        } else {
+            None
+        }
+    };
+
     // Process the message
     match message {
         TransportMessage::Request { id, request } => {
             let server = state.server.lock().await;
-            let json_response = server.handle_request(id, request).await;
+            let json_response = server.handle_request(id, request, auth_context).await;
 
             // DEBUG: Log response payload before building TransportMessage
             eprintln!("[DEBUG] StreamableHttpServer: JSON response payload:");
@@ -936,11 +962,41 @@ async fn handle_post_with_middleware(
         }
     }
 
+    // Extract and validate authentication if auth_provider is configured
+    let auth_context = {
+        let server = state.server.lock().await;
+        if let Some(auth_provider) = server.get_auth_provider() {
+            // Extract Authorization header from middleware-processed request
+            let auth_header = server_request.get_header("authorization");
+
+            // Validate the request and get auth context
+            match auth_provider.validate_request(auth_header).await {
+                Ok(ctx) => ctx,
+                Err(e) => {
+                    // Auth validation failed - return 401 Unauthorized
+                    let auth_error =
+                        crate::Error::authentication(format!("Authentication failed: {}", e));
+                    let _ = http_middleware
+                        .handle_error(&auth_error, &http_context)
+                        .await;
+
+                    return create_error_response(
+                        StatusCode::UNAUTHORIZED,
+                        -32003,
+                        &format!("Authentication failed: {}", e),
+                    );
+                },
+            }
+        } else {
+            None
+        }
+    };
+
     // Process the request
     match message {
         TransportMessage::Request { id, request } => {
             let server = state.server.lock().await;
-            let json_response = server.handle_request(id, request).await;
+            let json_response = server.handle_request(id, request, auth_context).await;
 
             let response_msg = TransportMessage::Response(json_response.clone());
 
