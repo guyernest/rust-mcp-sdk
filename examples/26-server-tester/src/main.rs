@@ -61,15 +61,15 @@ struct Cli {
     #[arg(long, global = true)]
     transport: Option<String>,
 
-    /// OAuth issuer URL for device code flow authentication
+    /// OAuth issuer URL (optional - will auto-discover from server if not provided)
     #[arg(long, global = true, env = "MCP_OAUTH_ISSUER")]
     oauth_issuer: Option<String>,
 
-    /// OAuth client ID
+    /// OAuth client ID (required for OAuth authentication)
     #[arg(long, global = true, env = "MCP_OAUTH_CLIENT_ID")]
     oauth_client_id: Option<String>,
 
-    /// OAuth scopes (comma-separated)
+    /// OAuth scopes (comma-separated, default: openid)
     #[arg(long, global = true, env = "MCP_OAUTH_SCOPES", value_delimiter = ',')]
     oauth_scopes: Option<Vec<String>>,
 
@@ -229,14 +229,13 @@ async fn main() -> Result<()> {
         print_header();
     }
 
-    // Create OAuth middleware if configured
-    let oauth_middleware = create_oauth_middleware(
+    // OAuth config will be created per-command with the actual URL
+    let oauth_config = (
         cli.oauth_issuer.clone(),
         cli.oauth_client_id.clone(),
         cli.oauth_scopes.clone(),
         cli.oauth_no_cache,
-    )
-    .await?;
+    );
 
     // Execute command
     let result = match cli.command {
@@ -246,6 +245,7 @@ async fn main() -> Result<()> {
             tool,
             args,
         } => {
+            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
             run_full_test(
                 &url,
                 with_tools,
@@ -255,24 +255,26 @@ async fn main() -> Result<()> {
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
-                oauth_middleware.clone(),
+                oauth_middleware,
             )
             .await
         },
 
         Commands::Quick { url } => {
+            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
             run_quick_test(
                 &url,
                 cli.timeout,
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
-                oauth_middleware.clone(),
+                oauth_middleware,
             )
             .await
         },
 
         Commands::Compliance { url, strict } => {
+            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
             run_compliance_test(
                 &url,
                 strict,
@@ -286,6 +288,7 @@ async fn main() -> Result<()> {
         },
 
         Commands::Tools { url, test_all } => {
+            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
             run_tools_test(
                 &url,
                 test_all,
@@ -300,6 +303,7 @@ async fn main() -> Result<()> {
         },
 
         Commands::Resources { url } => {
+            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
             run_resources_test(
                 &url,
                 cli.timeout,
@@ -313,6 +317,7 @@ async fn main() -> Result<()> {
         },
 
         Commands::Prompts { url } => {
+            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
             run_prompts_test(
                 &url,
                 cli.timeout,
@@ -341,6 +346,7 @@ async fn main() -> Result<()> {
             server2,
             with_perf,
         } => {
+            let oauth_middleware = create_oauth_from_config(&server1, &oauth_config).await?;
             run_comparison(
                 &server1,
                 &server2,
@@ -355,6 +361,7 @@ async fn main() -> Result<()> {
         },
 
         Commands::Health { url } => {
+            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
             run_health_check(
                 &url,
                 cli.timeout,
@@ -371,6 +378,7 @@ async fn main() -> Result<()> {
             file,
             detailed,
         } => {
+            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
             run_scenario(
                 &url,
                 &file,
@@ -391,6 +399,7 @@ async fn main() -> Result<()> {
             with_resources,
             with_prompts,
         } => {
+            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
             generate_scenario(
                 &url,
                 &output,
@@ -447,33 +456,40 @@ fn print_header() {
     println!();
 }
 
+/// OAuth configuration tuple type
+type OAuthConfigTuple = (Option<String>, Option<String>, Option<Vec<String>>, bool);
+
+/// Helper to create OAuth middleware from config tuple
+async fn create_oauth_from_config(
+    url: &str,
+    config: &OAuthConfigTuple,
+) -> Result<Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>> {
+    create_oauth_middleware(url, config.0.clone(), config.1.clone(), config.2.clone(), config.3)
+        .await
+}
+
 /// Create OAuth middleware chain from CLI configuration
 async fn create_oauth_middleware(
+    mcp_server_url: &str,
     oauth_issuer: Option<String>,
     oauth_client_id: Option<String>,
     oauth_scopes: Option<Vec<String>>,
     no_cache: bool,
 ) -> Result<Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>> {
-    // Check if OAuth is configured
-    let (issuer, client_id) = match (oauth_issuer, oauth_client_id) {
-        (Some(i), Some(c)) => (i, c),
-        (Some(_), None) => {
-            eprintln!(
-                "{}",
-                "Warning: --oauth-issuer provided but --oauth-client-id missing. OAuth disabled."
-                    .yellow()
-            );
+    // Check if OAuth is configured (requires at minimum client_id)
+    let client_id = match oauth_client_id {
+        Some(id) => id,
+        None => {
+            // No OAuth configured
+            if oauth_issuer.is_some() {
+                eprintln!(
+                    "{}",
+                    "Warning: --oauth-issuer provided but --oauth-client-id missing. OAuth disabled."
+                        .yellow()
+                );
+            }
             return Ok(None);
         },
-        (None, Some(_)) => {
-            eprintln!(
-                "{}",
-                "Warning: --oauth-client-id provided but --oauth-issuer missing. OAuth disabled."
-                    .yellow()
-            );
-            return Ok(None);
-        },
-        (None, None) => return Ok(None),
     };
 
     let scopes = oauth_scopes.unwrap_or_else(|| vec!["openid".to_string()]);
@@ -485,7 +501,8 @@ async fn create_oauth_middleware(
     };
 
     let config = OAuthConfig {
-        issuer,
+        issuer: oauth_issuer,
+        mcp_server_url: Some(mcp_server_url.to_string()),
         client_id,
         scopes,
         cache_file,
