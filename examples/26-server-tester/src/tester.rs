@@ -61,6 +61,9 @@ pub struct ServerTester {
     // Store the initialized pmcp client for reuse across tests
     pub pmcp_client: Option<pmcp::Client<StreamableHttpTransport>>,
     stdio_client: Option<pmcp::Client<StdioTransport>>,
+    // HTTP middleware chain for JSON-RPC transport (OAuth, logging, etc.)
+    http_middleware_chain:
+        Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
 }
 
 impl ServerTester {
@@ -70,6 +73,9 @@ impl ServerTester {
         insecure: bool,
         api_key: Option<&str>,
         force_transport: Option<&str>,
+        http_middleware_chain: Option<
+            std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>,
+        >,
     ) -> Result<Self> {
         // Determine transport type based on force_transport or URL
         let (transport_type, http_config, json_rpc_client) = match force_transport {
@@ -77,10 +83,22 @@ impl ServerTester {
             Some("http") => {
                 let parsed_url = Url::parse(url).context("Invalid URL")?;
                 let mut extra_headers = vec![];
+                // Only add Authorization header if not using OAuth middleware
                 if let Some(key) = api_key {
-                    extra_headers.push(("Authorization".to_string(), format!("Bearer {}", key)));
-                    extra_headers.push(("X-API-Key".to_string(), key.to_string()));
+                    if http_middleware_chain.is_none() {
+                        extra_headers
+                            .push(("Authorization".to_string(), format!("Bearer {}", key)));
+                        extra_headers.push(("X-API-Key".to_string(), key.to_string()));
+                    }
                 }
+                println!(
+                    "HTTP middleware chain: {}",
+                    if http_middleware_chain.is_some() {
+                        "present"
+                    } else {
+                        "missing"
+                    }
+                );
                 let config = StreamableHttpTransportConfig {
                     url: parsed_url,
                     extra_headers,
@@ -88,6 +106,7 @@ impl ServerTester {
                     session_id: None,
                     enable_json_response: true,
                     on_resumption_token: None,
+                    http_middleware_chain: http_middleware_chain.clone(),
                 };
                 (TransportType::Http, Some(config), None)
             },
@@ -108,9 +127,10 @@ impl ServerTester {
                 if url == "stdio" {
                     (TransportType::Stdio, None, None)
                 } else {
-                    // Auto-detect: API Gateway URLs use JSON-RPC, others use SDK transport
+                    // Auto-detect: API Gateway URLs use JSON-RPC (now supports middleware!)
                     if url.contains("amazonaws.com") || url.contains("api.") {
                         // Create JSON-RPC HTTP client for API Gateway
+                        println!("API Gateway detected - using JSON-RPC transport with middleware support");
                         let mut client_builder = reqwest::ClientBuilder::new().timeout(timeout);
 
                         if insecure {
@@ -125,11 +145,22 @@ impl ServerTester {
                         // Use SDK streamable HTTP transport
                         let parsed_url = Url::parse(url).context("Invalid URL")?;
                         let mut extra_headers = vec![];
+                        // Only add Authorization header if not using OAuth middleware
                         if let Some(key) = api_key {
-                            extra_headers
-                                .push(("Authorization".to_string(), format!("Bearer {}", key)));
-                            extra_headers.push(("X-API-Key".to_string(), key.to_string()));
+                            if http_middleware_chain.is_none() {
+                                extra_headers
+                                    .push(("Authorization".to_string(), format!("Bearer {}", key)));
+                                extra_headers.push(("X-API-Key".to_string(), key.to_string()));
+                            }
                         }
+                        println!(
+                            "HTTP middleware chain (jsonrpc path): {}",
+                            if http_middleware_chain.is_some() {
+                                "present"
+                            } else {
+                                "missing"
+                            }
+                        );
                         let config = StreamableHttpTransportConfig {
                             url: parsed_url,
                             extra_headers,
@@ -137,6 +168,7 @@ impl ServerTester {
                             session_id: None,
                             enable_json_response: true,
                             on_resumption_token: None,
+                            http_middleware_chain: http_middleware_chain.clone(),
                         };
                         (TransportType::Http, Some(config), None)
                     }
@@ -163,24 +195,68 @@ impl ServerTester {
             prompts: None,
             pmcp_client: None,
             stdio_client: None,
+            http_middleware_chain: http_middleware_chain.clone(),
         })
     }
 
     async fn send_json_rpc_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse> {
-        if let Some(client) = &self.json_rpc_client {
-            let mut req = client
-                .post(&self.url)
-                .header("Content-Type", "application/json")
-                // Set Accept header for streamable HTTP servers
-                .header("Accept", "application/json, text/event-stream")
-                .json(&request);
+        use http::{HeaderMap, HeaderValue};
+        use pmcp::client::http_middleware::{HttpMiddlewareContext, HttpRequest};
 
-            // Add API key headers if provided
-            if let Some(api_key) = &self.api_key {
-                req = req
-                    .header("Authorization", format!("Bearer {}", api_key))
-                    .header("X-API-Key", api_key);
+        if let Some(client) = &self.json_rpc_client {
+            // Serialize request body
+            let body_bytes =
+                serde_json::to_vec(&request).context("Failed to serialize JSON-RPC request")?;
+
+            // Apply HTTP middleware if configured
+            let (headers, final_body) = if let Some(chain) = &self.http_middleware_chain {
+                // Create HttpRequest for middleware
+                let mut http_req =
+                    HttpRequest::new("POST".to_string(), self.url.clone(), body_bytes.clone());
+
+                // Add standard headers
+                http_req.add_header("Content-Type", "application/json");
+                http_req.add_header("Accept", "application/json, text/event-stream");
+
+                // Create context
+                let context = HttpMiddlewareContext::new(self.url.clone(), "POST".to_string());
+
+                // Apply middleware (this will inject OAuth token)
+                chain
+                    .process_request(&mut http_req, &context)
+                    .await
+                    .context("Middleware failed to process request")?;
+
+                (http_req.headers, http_req.body)
+            } else {
+                // No middleware - use default headers
+                let mut headers = HeaderMap::new();
+                headers.insert("content-type", HeaderValue::from_static("application/json"));
+                headers.insert(
+                    "accept",
+                    HeaderValue::from_static("application/json, text/event-stream"),
+                );
+
+                // Add API key headers if provided and no middleware
+                if let Some(api_key) = &self.api_key {
+                    headers.insert(
+                        "authorization",
+                        HeaderValue::from_str(&format!("Bearer {}", api_key))?,
+                    );
+                    headers.insert("x-api-key", HeaderValue::from_str(api_key)?);
+                }
+
+                (headers, body_bytes)
+            };
+
+            // Build reqwest with modified headers and body
+            let mut req = client.post(&self.url);
+            for (key, value) in headers.iter() {
+                if let Ok(value_str) = value.to_str() {
+                    req = req.header(key.as_str(), value_str);
+                }
             }
+            req = req.body(final_body);
 
             let response = req
                 .send()

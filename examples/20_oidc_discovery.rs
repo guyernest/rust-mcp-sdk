@@ -26,6 +26,7 @@ impl MockOidcServer {
                 issuer: "https://auth.example.com".to_string(),
                 authorization_endpoint: "https://auth.example.com/authorize".to_string(),
                 token_endpoint: "https://auth.example.com/token".to_string(),
+                device_authorization_endpoint: Some("https://auth.example.com/device".to_string()),
                 jwks_uri: Some("https://auth.example.com/jwks".to_string()),
                 userinfo_endpoint: Some("https://auth.example.com/userinfo".to_string()),
                 registration_endpoint: Some("https://auth.example.com/register".to_string()),
