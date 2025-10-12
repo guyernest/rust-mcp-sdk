@@ -78,7 +78,12 @@ struct Cli {
     oauth_no_cache: bool,
 
     /// OAuth redirect port for localhost callback (default: 8080)
-    #[arg(long, global = true, env = "MCP_OAUTH_REDIRECT_PORT", default_value = "8080")]
+    #[arg(
+        long,
+        global = true,
+        env = "MCP_OAUTH_REDIRECT_PORT",
+        default_value = "8080"
+    )]
     oauth_redirect_port: u16,
 }
 
@@ -462,15 +467,28 @@ fn print_header() {
 }
 
 /// OAuth configuration tuple type
-type OAuthConfigTuple = (Option<String>, Option<String>, Option<Vec<String>>, bool, u16);
+type OAuthConfigTuple = (
+    Option<String>,
+    Option<String>,
+    Option<Vec<String>>,
+    bool,
+    u16,
+);
 
 /// Helper to create OAuth middleware from config tuple
 async fn create_oauth_from_config(
     url: &str,
     config: &OAuthConfigTuple,
 ) -> Result<Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>> {
-    create_oauth_middleware(url, config.0.clone(), config.1.clone(), config.2.clone(), config.3, config.4)
-        .await
+    create_oauth_middleware(
+        url,
+        config.0.clone(),
+        config.1.clone(),
+        config.2.clone(),
+        config.3,
+        config.4,
+    )
+    .await
 }
 
 /// Create OAuth middleware chain from CLI configuration

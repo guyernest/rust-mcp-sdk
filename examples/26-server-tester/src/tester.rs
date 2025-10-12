@@ -62,7 +62,8 @@ pub struct ServerTester {
     pub pmcp_client: Option<pmcp::Client<StreamableHttpTransport>>,
     stdio_client: Option<pmcp::Client<StdioTransport>>,
     // HTTP middleware chain for JSON-RPC transport (OAuth, logging, etc.)
-    http_middleware_chain: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
+    http_middleware_chain:
+        Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
 }
 
 impl ServerTester {
@@ -72,7 +73,9 @@ impl ServerTester {
         insecure: bool,
         api_key: Option<&str>,
         force_transport: Option<&str>,
-        http_middleware_chain: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
+        http_middleware_chain: Option<
+            std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>,
+        >,
     ) -> Result<Self> {
         // Determine transport type based on force_transport or URL
         let (transport_type, http_config, json_rpc_client) = match force_transport {
@@ -83,11 +86,19 @@ impl ServerTester {
                 // Only add Authorization header if not using OAuth middleware
                 if let Some(key) = api_key {
                     if http_middleware_chain.is_none() {
-                        extra_headers.push(("Authorization".to_string(), format!("Bearer {}", key)));
+                        extra_headers
+                            .push(("Authorization".to_string(), format!("Bearer {}", key)));
                         extra_headers.push(("X-API-Key".to_string(), key.to_string()));
                     }
                 }
-                println!("HTTP middleware chain: {}", if http_middleware_chain.is_some() { "present" } else { "missing" });
+                println!(
+                    "HTTP middleware chain: {}",
+                    if http_middleware_chain.is_some() {
+                        "present"
+                    } else {
+                        "missing"
+                    }
+                );
                 let config = StreamableHttpTransportConfig {
                     url: parsed_url,
                     extra_headers,
@@ -142,7 +153,14 @@ impl ServerTester {
                                 extra_headers.push(("X-API-Key".to_string(), key.to_string()));
                             }
                         }
-                        println!("HTTP middleware chain (jsonrpc path): {}", if http_middleware_chain.is_some() { "present" } else { "missing" });
+                        println!(
+                            "HTTP middleware chain (jsonrpc path): {}",
+                            if http_middleware_chain.is_some() {
+                                "present"
+                            } else {
+                                "missing"
+                            }
+                        );
                         let config = StreamableHttpTransportConfig {
                             url: parsed_url,
                             extra_headers,
@@ -182,22 +200,19 @@ impl ServerTester {
     }
 
     async fn send_json_rpc_request(&self, request: JsonRpcRequest) -> Result<JsonRpcResponse> {
-        use pmcp::client::http_middleware::{HttpMiddlewareContext, HttpRequest};
         use http::{HeaderMap, HeaderValue};
+        use pmcp::client::http_middleware::{HttpMiddlewareContext, HttpRequest};
 
         if let Some(client) = &self.json_rpc_client {
             // Serialize request body
-            let body_bytes = serde_json::to_vec(&request)
-                .context("Failed to serialize JSON-RPC request")?;
+            let body_bytes =
+                serde_json::to_vec(&request).context("Failed to serialize JSON-RPC request")?;
 
             // Apply HTTP middleware if configured
             let (headers, final_body) = if let Some(chain) = &self.http_middleware_chain {
                 // Create HttpRequest for middleware
-                let mut http_req = HttpRequest::new(
-                    "POST".to_string(),
-                    self.url.clone(),
-                    body_bytes.clone(),
-                );
+                let mut http_req =
+                    HttpRequest::new("POST".to_string(), self.url.clone(), body_bytes.clone());
 
                 // Add standard headers
                 http_req.add_header("Content-Type", "application/json");
@@ -207,7 +222,8 @@ impl ServerTester {
                 let context = HttpMiddlewareContext::new(self.url.clone(), "POST".to_string());
 
                 // Apply middleware (this will inject OAuth token)
-                chain.process_request(&mut http_req, &context)
+                chain
+                    .process_request(&mut http_req, &context)
                     .await
                     .context("Middleware failed to process request")?;
 
@@ -216,11 +232,17 @@ impl ServerTester {
                 // No middleware - use default headers
                 let mut headers = HeaderMap::new();
                 headers.insert("content-type", HeaderValue::from_static("application/json"));
-                headers.insert("accept", HeaderValue::from_static("application/json, text/event-stream"));
+                headers.insert(
+                    "accept",
+                    HeaderValue::from_static("application/json, text/event-stream"),
+                );
 
                 // Add API key headers if provided and no middleware
                 if let Some(api_key) = &self.api_key {
-                    headers.insert("authorization", HeaderValue::from_str(&format!("Bearer {}", api_key))?);
+                    headers.insert(
+                        "authorization",
+                        HeaderValue::from_str(&format!("Bearer {}", api_key))?,
+                    );
                     headers.insert("x-api-key", HeaderValue::from_str(api_key)?);
                 }
 

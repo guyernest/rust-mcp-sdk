@@ -119,8 +119,7 @@ impl OAuthHelper {
 
         println!(
             "{}",
-            format!("Discovering OAuth configuration from {}...", base_url)
-                .cyan()
+            format!("Discovering OAuth configuration from {}...", base_url).cyan()
         );
 
         let discovery_client = OidcDiscoveryClient::new();
@@ -140,7 +139,9 @@ impl OAuthHelper {
                      \n\
                      Please provide --oauth-issuer explicitly, or ensure the server\n\
                      exposes OAuth metadata at {}/.well-known/openid-configuration",
-                    base_url, e, base_url
+                    base_url,
+                    e,
+                    base_url
                 )
             },
         }
@@ -155,8 +156,7 @@ impl OAuthHelper {
             // Manually provided issuer - try to discover from it
             println!(
                 "{}",
-                format!("Discovering OAuth configuration from {}...", issuer)
-                    .cyan()
+                format!("Discovering OAuth configuration from {}...", issuer).cyan()
             );
 
             let discovery_client = OidcDiscoveryClient::new();
@@ -171,7 +171,9 @@ impl OAuthHelper {
                          \n\
                          Please ensure the issuer URL exposes OAuth metadata at\n\
                          {}/.well-known/openid-configuration",
-                        issuer, e, issuer
+                        issuer,
+                        e,
+                        issuer
                     )
                 },
             }
@@ -220,7 +222,10 @@ impl OAuthHelper {
         match self.authorization_code_flow(&metadata).await {
             Ok(token) => return Ok(token),
             Err(e) => {
-                println!("{}", format!("Authorization code flow failed: {}", e).yellow());
+                println!(
+                    "{}",
+                    format!("Authorization code flow failed: {}", e).yellow()
+                );
 
                 // Fall back to device code flow if available
                 if metadata.device_authorization_endpoint.is_some() {
@@ -255,7 +260,10 @@ impl OAuthHelper {
 
     /// Perform OAuth authorization code flow with PKCE
     async fn authorization_code_flow(&self, metadata: &OidcDiscoveryMetadata) -> Result<String> {
-        println!("{}", "Starting OAuth authorization code flow...".cyan().bold());
+        println!(
+            "{}",
+            "Starting OAuth authorization code flow...".cyan().bold()
+        );
         println!();
 
         // Generate PKCE challenge
@@ -278,9 +286,17 @@ impl OAuthHelper {
                 )
             })?;
 
-        println!("{}", format!("Local callback server listening on port {}", redirect_port).dimmed());
+        println!(
+            "{}",
+            format!("Local callback server listening on port {}", redirect_port).dimmed()
+        );
         println!();
-        println!("{}", format!("IMPORTANT: Ensure the redirect URI is registered in your OAuth provider:").yellow().bold());
+        println!(
+            "{}",
+            format!("IMPORTANT: Ensure the redirect URI is registered in your OAuth provider:")
+                .yellow()
+                .bold()
+        );
         println!("{}", format!("  {}", redirect_uri).yellow());
         println!();
 
@@ -288,7 +304,8 @@ impl OAuthHelper {
         let mut auth_url = Url::parse(&metadata.authorization_endpoint)
             .context("Invalid authorization endpoint")?;
 
-        auth_url.query_pairs_mut()
+        auth_url
+            .query_pairs_mut()
             .append_pair("client_id", &self.config.client_id)
             .append_pair("response_type", "code")
             .append_pair("redirect_uri", &redirect_uri)
@@ -298,21 +315,36 @@ impl OAuthHelper {
             .append_pair("state", &Self::generate_code_verifier()); // Random state for CSRF protection
 
         println!();
-        println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan());
+        println!(
+            "{}",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan()
+        );
         println!("{}", "  OAuth Authentication Required".cyan().bold());
-        println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan());
+        println!(
+            "{}",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan()
+        );
         println!();
         println!("  {}", "Opening browser for authentication...".bold());
         println!();
-        println!("  {}", "If the browser doesn't open automatically, visit:".dimmed());
+        println!(
+            "  {}",
+            "If the browser doesn't open automatically, visit:".dimmed()
+        );
         println!("  {}", auth_url.as_str().yellow());
         println!();
-        println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan());
+        println!(
+            "{}",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan()
+        );
         println!();
 
         // Open browser
         if let Err(e) = webbrowser::open(auth_url.as_str()) {
-            println!("{}", format!("Warning: Failed to open browser: {}", e).yellow());
+            println!(
+                "{}",
+                format!("Warning: Failed to open browser: {}", e).yellow()
+            );
             println!("{}", "Please open the URL above manually.".yellow());
         }
 
@@ -373,7 +405,10 @@ impl OAuthHelper {
         println!();
 
         // Exchange authorization code for access token
-        println!("{}", "Exchanging authorization code for access token...".dimmed());
+        println!(
+            "{}",
+            "Exchanging authorization code for access token...".dimmed()
+        );
 
         let token_exchange = TokenExchangeClient::new();
         let token_response = token_exchange
@@ -393,31 +428,37 @@ impl OAuthHelper {
 
         // Cache the token
         if let Some(ref cache_file) = self.config.cache_file {
-            self.cache_token_from_response(&token_response, cache_file).await?;
+            self.cache_token_from_response(&token_response, cache_file)
+                .await?;
         }
 
         Ok(token_response.access_token)
     }
 
     /// Perform OAuth device code flow (with pre-fetched metadata)
-    async fn device_code_flow_with_metadata(&self, metadata: &OidcDiscoveryMetadata) -> Result<String> {
+    async fn device_code_flow_with_metadata(
+        &self,
+        metadata: &OidcDiscoveryMetadata,
+    ) -> Result<String> {
         println!("{}", "Starting OAuth device code flow...".cyan().bold());
         println!();
 
         // Check if device flow is supported
-        let device_auth_endpoint = metadata
-            .device_authorization_endpoint
-            .as_ref()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Device authorization endpoint not found in OAuth metadata.\n\
+        let device_auth_endpoint =
+            metadata
+                .device_authorization_endpoint
+                .as_ref()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Device authorization endpoint not found in OAuth metadata.\n\
                      \n\
                      The OAuth server does not support device code flow (RFC 8628)."
-                )
-            })?;
+                    )
+                })?;
 
         // Rest of device code flow implementation...
-        self.device_code_flow_internal(metadata, device_auth_endpoint).await
+        self.device_code_flow_internal(metadata, device_auth_endpoint)
+            .await
     }
 
     /// Internal implementation of device code flow
@@ -455,14 +496,12 @@ impl OAuthHelper {
         // Step 2: Display user code and verification URL
         println!(
             "{}",
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                .cyan()
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan()
         );
         println!("{}", "  OAuth Authentication Required".cyan().bold());
         println!(
             "{}",
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                .cyan()
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan()
         );
         println!();
         println!(
@@ -470,7 +509,11 @@ impl OAuthHelper {
             "1. Visit:".bold(),
             device_auth.verification_uri.yellow()
         );
-        println!("  {}  {}", "2. Enter code:".bold(), device_auth.user_code.green().bold());
+        println!(
+            "  {}  {}",
+            "2. Enter code:".bold(),
+            device_auth.user_code.green().bold()
+        );
 
         if let Some(complete_uri) = &device_auth.verification_uri_complete {
             println!();
@@ -481,8 +524,7 @@ impl OAuthHelper {
         println!();
         println!(
             "{}",
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                .cyan()
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan()
         );
         println!();
 
@@ -623,8 +665,7 @@ impl OAuthHelper {
 
         println!(
             "{}",
-            format!("Token cached to: {}", cache_file.display())
-                .dimmed()
+            format!("Token cached to: {}", cache_file.display()).dimmed()
         );
 
         Ok(())
@@ -650,7 +691,14 @@ impl OAuthHelper {
     pub async fn create_middleware_chain(&self) -> Result<Arc<HttpMiddlewareChain>> {
         let access_token = self.get_access_token().await?;
 
-        println!("{}", format!("Creating OAuth middleware with token: {}...", &access_token[..20]).dimmed());
+        println!(
+            "{}",
+            format!(
+                "Creating OAuth middleware with token: {}...",
+                &access_token[..20]
+            )
+            .dimmed()
+        );
 
         let bearer_token = BearerToken::new(access_token);
         let oauth_middleware = OAuthClientMiddleware::new(bearer_token);

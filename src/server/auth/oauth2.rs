@@ -720,7 +720,10 @@ impl OAuthProvider for InMemoryOAuthProvider {
             registration_endpoint: Some(format!("{}/oauth2/register", self.base_url)),
             revocation_endpoint: Some(format!("{}/oauth2/revoke", self.base_url)),
             introspection_endpoint: Some(format!("{}/oauth2/introspect", self.base_url)),
-            device_authorization_endpoint: Some(format!("{}/oauth2/device/authorize", self.base_url)),
+            device_authorization_endpoint: Some(format!(
+                "{}/oauth2/device/authorize",
+                self.base_url
+            )),
             response_types_supported: vec![ResponseType::Code],
             grant_types_supported: vec![GrantType::AuthorizationCode, GrantType::RefreshToken],
             scopes_supported: self.supported_scopes.clone(),
