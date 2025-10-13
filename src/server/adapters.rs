@@ -351,6 +351,7 @@ mod tests {
             Arc::new(RwLock::new(
                 crate::server::tool_middleware::ToolMiddlewareChain::new(),
             )),
+            false,
         );
 
         let handler = Arc::new(server);

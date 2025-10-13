@@ -59,6 +59,8 @@ pub struct ServerCoreBuilder {
     protocol_middleware: Arc<RwLock<EnhancedMiddlewareChain>>,
     #[cfg(not(target_arch = "wasm32"))]
     tool_middlewares: Vec<Arc<dyn ToolMiddleware>>,
+    /// Stateless mode for serverless deployments (None = auto-detect)
+    stateless_mode: Option<bool>,
 }
 
 impl Default for ServerCoreBuilder {
@@ -83,6 +85,7 @@ impl ServerCoreBuilder {
             protocol_middleware: Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             #[cfg(not(target_arch = "wasm32"))]
             tool_middlewares: Vec::new(),
+            stateless_mode: None, // Auto-detect by default
         }
     }
 
@@ -342,6 +345,65 @@ impl ServerCoreBuilder {
         self
     }
 
+    /// Enable or disable stateless mode for serverless deployments.
+    ///
+    /// Stateless mode skips initialization state checking, allowing the server
+    /// to process requests without requiring an `initialize` call first. This is
+    /// essential for stateless environments like AWS Lambda, Cloudflare Workers,
+    /// and other serverless platforms where each request may create a fresh
+    /// server instance.
+    ///
+    /// # Default Behavior
+    ///
+    /// If not explicitly set, stateless mode is automatically detected based on
+    /// environment variables:
+    /// - `AWS_LAMBDA_FUNCTION_NAME` - AWS Lambda
+    /// - `VERCEL` - Vercel Functions
+    /// - `DENO_DEPLOYMENT_ID` - Deno Deploy
+    /// - `CLOUDFLARE_WORKER` - Cloudflare Workers
+    /// - `FUNCTIONS_WORKER_RUNTIME` - Azure Functions
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// // Explicit stateless mode for Lambda
+    /// let server = ServerCoreBuilder::new()
+    ///     .name("lambda-server")
+    ///     .stateless_mode(true)
+    ///     .build()?;
+    ///
+    /// // Auto-detect (works automatically in Lambda)
+    /// let server = ServerCoreBuilder::new()
+    ///     .name("lambda-server")
+    ///     .build()?;  // Detects AWS_LAMBDA_FUNCTION_NAME
+    ///
+    /// // Explicit stateful mode (stdio transport)
+    /// let server = ServerCoreBuilder::new()
+    ///     .name("stdio-server")
+    ///     .stateless_mode(false)
+    ///     .build()?;
+    /// ```
+    pub fn stateless_mode(mut self, enabled: bool) -> Self {
+        self.stateless_mode = Some(enabled);
+        self
+    }
+
+    /// Detect if running in a stateless/serverless environment.
+    ///
+    /// Checks for environment variables that indicate serverless platforms:
+    /// - AWS Lambda
+    /// - Vercel Functions
+    /// - Deno Deploy
+    /// - Cloudflare Workers
+    /// - Azure Functions
+    fn detect_stateless_environment() -> bool {
+        std::env::var("AWS_LAMBDA_FUNCTION_NAME").is_ok()
+            || std::env::var("VERCEL").is_ok()
+            || std::env::var("DENO_DEPLOYMENT_ID").is_ok()
+            || std::env::var("CLOUDFLARE_WORKER").is_ok()
+            || std::env::var("FUNCTIONS_WORKER_RUNTIME").is_ok()
+    }
+
     /// Register a workflow as a prompt with automatic middleware support.
     ///
     /// This method provides the easiest way to register workflows with middleware:
@@ -457,6 +519,11 @@ impl ServerCoreBuilder {
             Arc::new(RwLock::new(tool_middleware_chain))
         };
 
+        // Determine stateless mode: use explicit setting or auto-detect
+        let stateless_mode = self
+            .stateless_mode
+            .unwrap_or_else(Self::detect_stateless_environment);
+
         Ok(ServerCore::new(
             info,
             self.capabilities,
@@ -469,6 +536,7 @@ impl ServerCoreBuilder {
             self.protocol_middleware,
             #[cfg(not(target_arch = "wasm32"))]
             tool_middleware,
+            stateless_mode,
         ))
     }
 }
