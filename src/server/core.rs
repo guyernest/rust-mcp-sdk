@@ -498,6 +498,74 @@ impl ServerCore {
     }
 }
 
+// Implement MiddlewareExecutor for ServerCore to enable workflow tool execution
+// with consistent middleware application
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait]
+impl crate::server::middleware_executor::MiddlewareExecutor for ServerCore {
+    async fn execute_tool_with_middleware(
+        &self,
+        tool_name: &str,
+        mut args: Value,
+        mut extra: RequestHandlerExtra,
+    ) -> Result<Value> {
+        // Get the tool handler
+        let handler = self
+            .tools
+            .get(tool_name)
+            .ok_or_else(|| Error::internal(format!("Tool '{}' not found", tool_name)))?;
+
+        // Authorization check with tool_authorizer if available
+        if let Some(authorizer) = &self.tool_authorizer {
+            if let Some(ref auth_ctx) = extra.auth_context {
+                if !authorizer.can_access_tool(auth_ctx, tool_name).await? {
+                    return Err(Error::authentication(format!(
+                        "User not authorized to call tool '{}'",
+                        tool_name
+                    )));
+                }
+            }
+        }
+
+        // Create tool context for middleware
+        let context = ToolContext::new(tool_name, &extra.request_id);
+
+        // Process request through tool middleware chain
+        // Middleware rejection short-circuits tool execution (on_error already called by chain)
+        self.tool_middleware
+            .read()
+            .await
+            .process_request(tool_name, &mut args, &mut extra, &context)
+            .await?;
+
+        // Execute the tool with potentially modified args and extra
+        let mut result = handler.handle(args, extra).await;
+
+        // Process response through tool middleware chain
+        if let Err(e) = self
+            .tool_middleware
+            .read()
+            .await
+            .process_response(tool_name, &mut result, &context)
+            .await
+        {
+            // Log error but continue with original result
+            tracing::warn!("Tool response middleware processing failed: {}", e);
+        }
+
+        // If tool execution failed, call handle_tool_error
+        if let Err(ref e) = result {
+            self.tool_middleware
+                .read()
+                .await
+                .handle_tool_error(tool_name, e, &context)
+                .await;
+        }
+
+        result
+    }
+}
+
 #[async_trait]
 impl ProtocolHandler for ServerCore {
     async fn handle_request(

@@ -46,6 +46,9 @@ pub mod cancellation;
 pub mod dynamic_resources;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod http_middleware;
+/// Middleware executor abstraction for consistent tool execution.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod middleware_executor;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod preset;
 /// Simple prompt implementations with metadata support.
