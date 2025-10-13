@@ -342,6 +342,95 @@ impl ServerCoreBuilder {
         self
     }
 
+    /// Register a workflow as a prompt with automatic middleware support.
+    ///
+    /// This method provides the easiest way to register workflows with middleware:
+    /// - Validates the workflow
+    /// - Builds tool registry from registered tools
+    /// - Creates workflow handler with middleware executor
+    /// - Ensures OAuth, logging, and other middleware applies to workflow tool calls
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use pmcp::server::builder::ServerCoreBuilder;
+    /// use pmcp::server::workflow::{SequentialWorkflow, WorkflowStep, ToolHandle};
+    /// use pmcp::server::tool_middleware::ToolMiddleware;
+    ///
+    /// let workflow = SequentialWorkflow::new("my_workflow", "Description")
+    ///     .step(WorkflowStep::new("fetch_data", ToolHandle::new("my_tool")));
+    ///
+    /// let server = ServerCoreBuilder::new()
+    ///     .name("my-server")
+    ///     .version("1.0.0")
+    ///     .tool("my_tool", MyTool)
+    ///     .tool_middleware(Arc::new(OAuthMiddleware::new())) // ✅ Applies to workflows!
+    ///     .prompt_workflow(workflow)?  // ✅ Simple one-line registration
+    ///     .build()?;
+    /// ```
+    ///
+    /// # Benefits
+    ///
+    /// - **One-Line Registration**: No manual tool registry building required
+    /// - **Automatic Middleware**: OAuth and other middleware applies automatically
+    /// - **No Boilerplate**: No need to manually create `WorkflowPromptHandler`
+    /// - **Builder Pattern**: Follows the same pattern as `.tool()` and `.prompt()`
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if workflow validation fails.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn prompt_workflow(
+        mut self,
+        workflow: crate::server::workflow::SequentialWorkflow,
+    ) -> Result<Self> {
+        use crate::server::builder_middleware_executor::BuilderMiddlewareExecutor;
+        use crate::server::middleware_executor::MiddlewareExecutor;
+        use crate::server::workflow;
+
+        // Validate workflow
+        workflow
+            .validate()
+            .map_err(|e| Error::validation(format!("Workflow validation failed: {}", e)))?;
+
+        // Build tool registry from registered tools
+        let mut tool_registry = std::collections::HashMap::new();
+        for (name, handler) in &self.tools {
+            if let Some(metadata) = handler.metadata() {
+                tool_registry.insert(
+                    Arc::from(name.as_str()),
+                    workflow::conversion::ToolInfo {
+                        name: metadata.name.clone(),
+                        description: metadata.description.unwrap_or_default(),
+                        input_schema: metadata.input_schema.clone(),
+                    },
+                );
+            }
+        }
+
+        // Create builder-scoped middleware executor
+        let middleware_executor = Arc::new(BuilderMiddlewareExecutor::new(
+            self.tools.clone(),
+            self.tool_middlewares.clone(),
+        )) as Arc<dyn MiddlewareExecutor>;
+
+        // Get workflow name before moving
+        let name = workflow.name().to_string();
+
+        // Create workflow handler with middleware
+        let handler = workflow::WorkflowPromptHandler::with_middleware_executor(
+            workflow,
+            tool_registry,
+            middleware_executor,
+            self.resources.clone(),
+        );
+
+        // Register as prompt
+        self.prompts.insert(name, Arc::new(handler));
+
+        Ok(self)
+    }
+
     /// Build the `ServerCore` instance.
     ///
     /// # Errors
