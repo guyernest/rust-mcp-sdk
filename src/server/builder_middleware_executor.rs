@@ -87,6 +87,14 @@ impl MiddlewareExecutor for BuilderMiddlewareExecutor {
         mut args: Value,
         mut extra: RequestHandlerExtra,
     ) -> Result<Value> {
+        // Debug: Check auth_context at middleware executor entry
+        tracing::debug!(
+            "BuilderMiddlewareExecutor.execute_tool_with_middleware() - Entry: auth_context present: {}, has_token: {}, tool: {}",
+            extra.auth_context.is_some(),
+            extra.auth_context.as_ref().and_then(|ctx| ctx.token.as_ref()).is_some(),
+            tool_name
+        );
+
         // Get the tool handler
         let handler = self
             .tools
@@ -98,9 +106,23 @@ impl MiddlewareExecutor for BuilderMiddlewareExecutor {
 
         // Process request through middleware chain
         for middleware in &self.middlewares {
+            // Debug: Log before middleware processing
+            tracing::debug!(
+                "BuilderMiddlewareExecutor - Before middleware: auth_context present: {}, has_token: {}",
+                extra.auth_context.is_some(),
+                extra.auth_context.as_ref().and_then(|ctx| ctx.token.as_ref()).is_some()
+            );
+
             middleware
                 .on_request(tool_name, &mut args, &mut extra, &context)
                 .await?;
+
+            // Debug: Log after middleware processing
+            tracing::debug!(
+                "BuilderMiddlewareExecutor - After middleware: auth_context present: {}, has_token: {}",
+                extra.auth_context.is_some(),
+                extra.auth_context.as_ref().and_then(|ctx| ctx.token.as_ref()).is_some()
+            );
         }
 
         // Execute the tool
@@ -195,5 +217,83 @@ mod tests {
             result,
             json!({"echo": {"input": "test", "middleware_applied": true}})
         );
+    }
+
+    // Test that auth_context is preserved through clone and middleware execution
+    struct AuthCheckingMiddleware {
+        auth_checked: Arc<std::sync::Mutex<bool>>,
+    }
+
+    #[async_trait]
+    impl ToolMiddleware for AuthCheckingMiddleware {
+        async fn on_request(
+            &self,
+            _tool_name: &str,
+            _args: &mut Value,
+            extra: &mut RequestHandlerExtra,
+            _context: &ToolContext,
+        ) -> Result<()> {
+            // Check if auth_context is present and has token
+            if let Some(auth_ctx) = &extra.auth_context {
+                if let Some(token) = &auth_ctx.token {
+                    if token == "test-token-123" {
+                        *self.auth_checked.lock().unwrap() = true;
+                        // Inject token into metadata (like OAuth middleware would)
+                        extra.set_metadata("oauth_token".to_string(), token.clone());
+                        return Ok(());
+                    }
+                }
+            }
+            Err(crate::Error::authentication(
+                "OAuth authentication required - auth_context missing or invalid".to_string(),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_auth_context_preserved_through_middleware() {
+        let auth_checked = Arc::new(std::sync::Mutex::new(false));
+
+        // Build executor with tool and auth-checking middleware
+        let mut tools = HashMap::new();
+        tools.insert(
+            "mock_tool".to_string(),
+            Arc::new(MockTool) as Arc<dyn ToolHandler>,
+        );
+
+        let middleware = Arc::new(AuthCheckingMiddleware {
+            auth_checked: auth_checked.clone(),
+        }) as Arc<dyn ToolMiddleware>;
+
+        let executor = BuilderMiddlewareExecutor::new(tools, vec![middleware]);
+
+        // Create auth context with token
+        let auth_context = crate::server::auth::AuthContext {
+            subject: "user-123".to_string(),
+            scopes: vec!["openid".to_string()],
+            claims: std::collections::HashMap::new(),
+            token: Some("test-token-123".to_string()),
+            client_id: Some("client-456".to_string()),
+            expires_at: None,
+        };
+
+        // Create extra with auth_context
+        let extra = RequestHandlerExtra::new("test-request".to_string(), CancellationToken::new())
+            .with_auth_context(Some(auth_context));
+
+        // Execute tool through middleware (with clone)
+        let result = executor
+            .execute_tool_with_middleware("mock_tool", json!({"input": "test"}), extra)
+            .await
+            .unwrap();
+
+        // Verify middleware saw the auth_context
+        assert!(
+            *auth_checked.lock().unwrap(),
+            "Middleware should have seen auth_context with token"
+        );
+
+        // Verify tool executed successfully
+        assert_eq!(result, json!({"echo": {"input": "test"}}));
     }
 }

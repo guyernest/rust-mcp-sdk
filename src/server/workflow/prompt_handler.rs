@@ -368,10 +368,26 @@ impl WorkflowPromptHandler {
         // Resolve parameters using bindings and arguments
         let params = self.resolve_tool_parameters(step, args, ctx)?;
 
+        // Debug: Check auth_context before passing to middleware executor
+        tracing::debug!(
+            "WorkflowPromptHandler.execute_tool_step() - Before clone: auth_context present: {}, has_token: {}",
+            extra.auth_context.is_some(),
+            extra.auth_context.as_ref().and_then(|ctx| ctx.token.as_ref()).is_some()
+        );
+
         // Execute through middleware executor if available (production mode)
         if let Some(middleware_executor) = &self.middleware_executor {
+            let cloned_extra = extra.clone();
+
+            // Debug: Check auth_context after clone
+            tracing::debug!(
+                "WorkflowPromptHandler.execute_tool_step() - After clone: auth_context present: {}, has_token: {}",
+                cloned_extra.auth_context.is_some(),
+                cloned_extra.auth_context.as_ref().and_then(|ctx| ctx.token.as_ref()).is_some()
+            );
+
             return middleware_executor
-                .execute_tool_with_middleware(step.tool().name(), params, extra.clone())
+                .execute_tool_with_middleware(step.tool().name(), params, cloned_extra)
                 .await;
         }
 
@@ -469,6 +485,17 @@ impl PromptHandler for WorkflowPromptHandler {
         args: HashMap<String, String>,
         extra: RequestHandlerExtra,
     ) -> Result<GetPromptResult> {
+        // Debug: Check if auth_context is present at handler entry
+        tracing::debug!(
+            "WorkflowPromptHandler.handle() - auth_context present: {}, has_token: {}",
+            extra.auth_context.is_some(),
+            extra
+                .auth_context
+                .as_ref()
+                .and_then(|ctx| ctx.token.as_ref())
+                .is_some()
+        );
+
         let mut messages = Vec::new();
         let mut execution_context = ExecutionContext::new();
 
