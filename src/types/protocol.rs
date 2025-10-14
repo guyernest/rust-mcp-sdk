@@ -120,6 +120,9 @@ pub struct CallToolRequest {
     /// Tool arguments (must match input schema)
     #[serde(default)]
     pub arguments: Value,
+    /// Request metadata (e.g., progress token)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _meta: Option<RequestMeta>,
 }
 
 /// Tool call parameters (legacy name).
@@ -235,6 +238,9 @@ pub struct GetPromptRequest {
     /// Prompt arguments
     #[serde(default)]
     pub arguments: HashMap<String, String>,
+    /// Request metadata (e.g., progress token)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _meta: Option<RequestMeta>,
 }
 
 /// Get prompt params (legacy name).
@@ -328,6 +334,9 @@ pub struct ListResourcesResult {
 pub struct ReadResourceRequest {
     /// Resource URI
     pub uri: String,
+    /// Request metadata (e.g., progress token)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub _meta: Option<RequestMeta>,
 }
 
 /// Read resource params (legacy name).
@@ -544,6 +553,21 @@ pub enum ProgressToken {
     String(String),
     /// Numeric token
     Number(i64),
+}
+
+/// Request metadata that can be attached to any request.
+///
+/// This follows the MCP protocol's `_meta` field specification.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestMeta {
+    /// Progress token for out-of-band progress notifications.
+    ///
+    /// If specified, the caller is requesting progress notifications for this request.
+    /// The value is an opaque token that will be attached to subsequent progress notifications.
+    /// The receiver is not obligated to provide these notifications.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress_token: Option<ProgressToken>,
 }
 
 /// Client request types.

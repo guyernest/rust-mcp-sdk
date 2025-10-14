@@ -363,6 +363,7 @@ mod tests {
                 "a": 5,
                 "b": 3
             }),
+            _meta: None,
         })));
 
         let response = server
@@ -395,6 +396,7 @@ mod tests {
         let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
             name: "nonexistent".to_string(),
             arguments: json!({}),
+            _meta: None,
         })));
 
         let response = server
@@ -429,6 +431,7 @@ mod tests {
         let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
             name: "failing_tool".to_string(),
             arguments: json!({}),
+            _meta: None,
         })));
 
         let response = server
@@ -482,6 +485,7 @@ mod tests {
         let get_request = Request::Client(Box::new(ClientRequest::GetPrompt(GetPromptParams {
             name: "test_prompt".to_string(),
             arguments: HashMap::from([("key".to_string(), "value".to_string())]),
+            _meta: None,
         })));
 
         let get_response = server
@@ -536,6 +540,7 @@ mod tests {
         let read_request =
             Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceParams {
                 uri: "test://resource1".to_string(),
+                _meta: None,
             })));
 
         let read_response = server
@@ -572,6 +577,7 @@ mod tests {
         // Read non-existent resource
         let request = Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceParams {
             uri: "test://nonexistent".to_string(),
+            _meta: None,
         })));
 
         let response = server
@@ -659,6 +665,7 @@ mod tests {
                 let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
                     name: "concurrent_tool".to_string(),
                     arguments: json!({ "id": i }),
+                    _meta: None,
                 })));
                 server_clone
                     .handle_request(RequestId::from(i as i64), request, None)

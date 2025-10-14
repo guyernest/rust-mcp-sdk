@@ -1001,11 +1001,30 @@ impl Server {
             }
         }
 
+        // Create progress reporter if progress token is provided
+        let progress_reporter = req
+            ._meta
+            .as_ref()
+            .and_then(|meta| meta.progress_token.as_ref())
+            .and_then(|token| {
+                self.notification_tx.as_ref().map(|tx| {
+                    let tx = tx.clone();
+                    let reporter = crate::server::progress::ServerProgressReporter::new(
+                        token.clone(),
+                        Arc::new(move |notification| {
+                            let _ = tx.try_send(notification);
+                        }),
+                    );
+                    Arc::new(reporter) as Arc<dyn crate::server::progress::ProgressReporter>
+                })
+            });
+
         let extra = crate::server::cancellation::RequestHandlerExtra::new(
             request_id.to_string(),
             cancellation_token,
         )
-        .with_auth_context(validated_auth_context);
+        .with_auth_context(validated_auth_context)
+        .with_progress_reporter(progress_reporter);
 
         let result = match handler.handle(req.arguments, extra).await {
             Ok(v) => {
@@ -1071,11 +1090,31 @@ impl Server {
             .cancellation_manager
             .create_token(request_id_str.clone())
             .await;
+
+        // Create progress reporter if progress token is provided
+        let progress_reporter = req
+            ._meta
+            .as_ref()
+            .and_then(|meta| meta.progress_token.as_ref())
+            .and_then(|token| {
+                self.notification_tx.as_ref().map(|tx| {
+                    let tx = tx.clone();
+                    let reporter = crate::server::progress::ServerProgressReporter::new(
+                        token.clone(),
+                        Arc::new(move |notification| {
+                            let _ = tx.try_send(notification);
+                        }),
+                    );
+                    Arc::new(reporter) as Arc<dyn crate::server::progress::ProgressReporter>
+                })
+            });
+
         let extra = crate::server::cancellation::RequestHandlerExtra::new(
             request_id_str.clone(),
             cancellation_token,
         )
-        .with_auth_context(auth_context);
+        .with_auth_context(auth_context)
+        .with_progress_reporter(progress_reporter);
         let result = match handler.handle(req.arguments, extra).await {
             Ok(v) => {
                 self.cancellation_manager
@@ -1149,11 +1188,31 @@ impl Server {
             .cancellation_manager
             .create_token(request_id_str.clone())
             .await;
+
+        // Create progress reporter if progress token is provided
+        let progress_reporter = req
+            ._meta
+            .as_ref()
+            .and_then(|meta| meta.progress_token.as_ref())
+            .and_then(|token| {
+                self.notification_tx.as_ref().map(|tx| {
+                    let tx = tx.clone();
+                    let reporter = crate::server::progress::ServerProgressReporter::new(
+                        token.clone(),
+                        Arc::new(move |notification| {
+                            let _ = tx.try_send(notification);
+                        }),
+                    );
+                    Arc::new(reporter) as Arc<dyn crate::server::progress::ProgressReporter>
+                })
+            });
+
         let extra = crate::server::cancellation::RequestHandlerExtra::new(
             request_id_str.clone(),
             cancellation_token,
         )
-        .with_auth_context(auth_context);
+        .with_auth_context(auth_context)
+        .with_progress_reporter(progress_reporter);
         let result = match handler.read(&req.uri, extra).await {
             Ok(v) => {
                 self.cancellation_manager
@@ -2927,6 +2986,7 @@ mod tests {
         let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
             name: "test-tool".to_string(),
             arguments: json!({"input": "test"}),
+            _meta: None,
         })));
 
         let response = server
@@ -2954,6 +3014,7 @@ mod tests {
         let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
             name: "nonexistent-tool".to_string(),
             arguments: json!({}),
+            _meta: None,
         })));
 
         let response = server
@@ -3016,6 +3077,7 @@ mod tests {
         let request = Request::Client(Box::new(ClientRequest::GetPrompt(GetPromptRequest {
             name: "test-prompt".to_string(),
             arguments: HashMap::new(),
+            _meta: None,
         })));
 
         let response = server
@@ -3085,6 +3147,7 @@ mod tests {
 
         let request = Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceRequest {
             uri: "test://uri".to_string(),
+            _meta: None,
         })));
 
         let response = server
@@ -3112,6 +3175,7 @@ mod tests {
 
         let request = Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceRequest {
             uri: "nonexistent://uri".to_string(),
+            _meta: None,
         })));
 
         let response = server

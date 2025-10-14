@@ -412,6 +412,7 @@ impl<T: Transport> Client<T> {
         let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
             name,
             arguments,
+            _meta: None,
         })));
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
@@ -559,6 +560,7 @@ impl<T: Transport> Client<T> {
         let request = Request::Client(Box::new(ClientRequest::GetPrompt(GetPromptRequest {
             name,
             arguments,
+            _meta: None,
         })));
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
@@ -743,6 +745,7 @@ impl<T: Transport> Client<T> {
 
         let request = Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceRequest {
             uri,
+            _meta: None,
         })));
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;

@@ -628,6 +628,7 @@ mod tests {
         let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
             name: "test-tool".to_string(),
             arguments: json!({"input": "test"}),
+            _meta: None,
         })));
 
         let jsonrpc_request = create_request(id.clone(), request);
@@ -760,6 +761,7 @@ mod tests {
                 ClientRequest::GetPrompt(GetPromptRequest {
                     name: "test".to_string(),
                     arguments: std::collections::HashMap::new(),
+                    _meta: None,
                 }),
                 "prompts/get",
             ),
@@ -774,6 +776,7 @@ mod tests {
             (
                 ClientRequest::ReadResource(ReadResourceRequest {
                     uri: "test://uri".to_string(),
+                    _meta: None,
                 }),
                 "resources/read",
             ),

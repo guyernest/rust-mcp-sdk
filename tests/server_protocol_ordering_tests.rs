@@ -324,6 +324,7 @@ async fn test_server_notification_middleware_integration() {
     let notification = Notification::Progress(ProgressNotification {
         progress_token: ProgressToken::String("test-123".to_string()),
         progress: 50.0,
+        total: None,
         message: Some("Test progress".to_string()),
     });
 

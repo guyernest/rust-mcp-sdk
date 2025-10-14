@@ -137,6 +137,7 @@ mod tests {
             request: Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
                 name: tool_name.to_string(),
                 arguments: json!({ "test": "data" }),
+                _meta: None,
             }))),
         }
     }
@@ -466,6 +467,7 @@ mod tests {
                 let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
                     name: "echo".to_string(),
                     arguments: json!({ "id": i }),
+                    _meta: None,
                 })));
                 adapter
                     .add_request(RequestId::from(i as i64), request)
