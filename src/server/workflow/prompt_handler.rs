@@ -28,6 +28,7 @@ use super::{
 };
 use crate::error::Result;
 use crate::server::cancellation::RequestHandlerExtra;
+use crate::server::middleware_executor::MiddlewareExecutor;
 use crate::server::{PromptHandler, ResourceHandler, ToolHandler};
 use crate::types::{
     Content, GetPromptResult, MessageContent, PromptArgument, PromptInfo, PromptMessage, Role,
@@ -93,7 +94,9 @@ pub struct WorkflowPromptHandler {
     workflow: SequentialWorkflow,
     /// Tool registry for handle expansion and metadata
     tools: HashMap<Arc<str>, ToolInfo>,
-    /// Tool handlers for actual execution
+    /// Middleware executor for tool execution with middleware chain (preferred)
+    middleware_executor: Option<Arc<dyn MiddlewareExecutor>>,
+    /// Tool handlers for direct execution (fallback, for testing)
     tool_handlers: HashMap<Arc<str>, Arc<dyn ToolHandler>>,
     /// Resource handler for fetching resource content
     resource_handler: Option<Arc<dyn ResourceHandler>>,
@@ -104,6 +107,7 @@ impl std::fmt::Debug for WorkflowPromptHandler {
         f.debug_struct("WorkflowPromptHandler")
             .field("workflow", &self.workflow.name())
             .field("tools", &self.tools.keys().collect::<Vec<_>>())
+            .field("middleware_executor", &self.middleware_executor.is_some())
             .field(
                 "tool_handlers",
                 &self.tool_handlers.keys().collect::<Vec<_>>(),
@@ -114,13 +118,13 @@ impl std::fmt::Debug for WorkflowPromptHandler {
 }
 
 impl WorkflowPromptHandler {
-    /// Create a new workflow prompt handler
+    /// Create a new workflow prompt handler with tool handlers (for testing/legacy)
     ///
     /// # Arguments
     ///
     /// * `workflow` - The workflow definition (should be validated before passing)
     /// * `tools` - Tool registry for metadata
-    /// * `tool_handlers` - Actual tool handlers for execution
+    /// * `tool_handlers` - Actual tool handlers for execution (bypasses middleware)
     /// * `resource_handler` - Resource handler for fetching resource content
     pub fn new(
         workflow: SequentialWorkflow,
@@ -131,7 +135,34 @@ impl WorkflowPromptHandler {
         Self {
             workflow,
             tools,
+            middleware_executor: None,
             tool_handlers,
+            resource_handler,
+        }
+    }
+
+    /// Create a new workflow prompt handler with middleware executor (production)
+    ///
+    /// This constructor uses the middleware executor, ensuring that all middleware
+    /// (OAuth, logging, authorization, etc.) is applied to tool executions within workflows.
+    ///
+    /// # Arguments
+    ///
+    /// * `workflow` - The workflow definition (should be validated before passing)
+    /// * `tools` - Tool registry for metadata
+    /// * `middleware_executor` - Middleware executor for tool execution with full middleware chain
+    /// * `resource_handler` - Resource handler for fetching resource content
+    pub fn with_middleware_executor(
+        workflow: SequentialWorkflow,
+        tools: HashMap<Arc<str>, ToolInfo>,
+        middleware_executor: Arc<dyn MiddlewareExecutor>,
+        resource_handler: Option<Arc<dyn ResourceHandler>>,
+    ) -> Self {
+        Self {
+            workflow,
+            tools,
+            middleware_executor: Some(middleware_executor),
+            tool_handlers: HashMap::new(),
             resource_handler,
         }
     }
@@ -324,6 +355,9 @@ impl WorkflowPromptHandler {
     }
 
     /// Execute a workflow step by calling the actual tool handler
+    ///
+    /// If a middleware executor is available, routes through it to ensure consistent
+    /// middleware application (OAuth, logging, etc.). Otherwise, calls tool handler directly.
     async fn execute_tool_step(
         &self,
         step: &WorkflowStep,
@@ -331,15 +365,37 @@ impl WorkflowPromptHandler {
         ctx: &ExecutionContext,
         extra: &RequestHandlerExtra,
     ) -> Result<Value> {
-        // Get the tool handler
+        // Resolve parameters using bindings and arguments
+        let params = self.resolve_tool_parameters(step, args, ctx)?;
+
+        // Debug: Check auth_context before passing to middleware executor
+        tracing::debug!(
+            "WorkflowPromptHandler.execute_tool_step() - Before clone: auth_context present: {}, has_token: {}",
+            extra.auth_context.is_some(),
+            extra.auth_context.as_ref().and_then(|ctx| ctx.token.as_ref()).is_some()
+        );
+
+        // Execute through middleware executor if available (production mode)
+        if let Some(middleware_executor) = &self.middleware_executor {
+            let cloned_extra = extra.clone();
+
+            // Debug: Check auth_context after clone
+            tracing::debug!(
+                "WorkflowPromptHandler.execute_tool_step() - After clone: auth_context present: {}, has_token: {}",
+                cloned_extra.auth_context.is_some(),
+                cloned_extra.auth_context.as_ref().and_then(|ctx| ctx.token.as_ref()).is_some()
+            );
+
+            return middleware_executor
+                .execute_tool_with_middleware(step.tool().name(), params, cloned_extra)
+                .await;
+        }
+
+        // Fallback: Direct tool handler execution (testing/legacy mode)
         let handler = self.tool_handlers.get(step.tool().name()).ok_or_else(|| {
             crate::Error::Internal(format!("Tool handler '{}' not found", step.tool().name()))
         })?;
 
-        // Resolve parameters using bindings and arguments
-        let params = self.resolve_tool_parameters(step, args, ctx)?;
-
-        // Execute the tool
         handler.handle(params, extra.clone()).await
     }
 
@@ -429,6 +485,17 @@ impl PromptHandler for WorkflowPromptHandler {
         args: HashMap<String, String>,
         extra: RequestHandlerExtra,
     ) -> Result<GetPromptResult> {
+        // Debug: Check if auth_context is present at handler entry
+        tracing::debug!(
+            "WorkflowPromptHandler.handle() - auth_context present: {}, has_token: {}",
+            extra.auth_context.is_some(),
+            extra
+                .auth_context
+                .as_ref()
+                .and_then(|ctx| ctx.token.as_ref())
+                .is_some()
+        );
+
         let mut messages = Vec::new();
         let mut execution_context = ExecutionContext::new();
 

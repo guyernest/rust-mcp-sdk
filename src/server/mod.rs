@@ -39,6 +39,9 @@ pub mod core;
 pub mod auth;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod batch;
+/// Builder-scoped middleware executor for workflow registration.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod builder_middleware_executor;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cancellation;
 /// Dynamic resource provider system for pattern-based resource routing.
@@ -46,6 +49,9 @@ pub mod cancellation;
 pub mod dynamic_resources;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod http_middleware;
+/// Middleware executor abstraction for consistent tool execution.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod middleware_executor;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod preset;
 /// Simple prompt implementations with metadata support.
@@ -2072,6 +2078,7 @@ impl ServerBuilder {
         let name = workflow.name().to_string();
 
         // Create workflow prompt handler with tool execution and resource fetching capability
+        // Note: ServerBuilder does NOT support middleware - use ServerCoreBuilder for middleware support
         let handler = workflow::WorkflowPromptHandler::new(
             workflow,
             tools,

@@ -150,6 +150,17 @@ pub struct ServerCore {
     /// Tool middleware chain for cross-cutting concerns in tool execution
     #[cfg(not(target_arch = "wasm32"))]
     tool_middleware: Arc<RwLock<ToolMiddlewareChain>>,
+
+    /// Stateless mode flag for serverless deployments
+    ///
+    /// When true, the server skips initialization state checking, allowing
+    /// requests to be processed without requiring an initialize call first.
+    /// This is essential for stateless environments like AWS Lambda, Cloudflare
+    /// Workers, and other serverless platforms where each request may create
+    /// a fresh server instance.
+    ///
+    /// Default: false (maintains backward compatibility)
+    stateless_mode: bool,
 }
 
 impl ServerCore {
@@ -166,6 +177,7 @@ impl ServerCore {
         tool_authorizer: Option<Arc<dyn ToolAuthorizer>>,
         protocol_middleware: Arc<RwLock<EnhancedMiddlewareChain>>,
         #[cfg(not(target_arch = "wasm32"))] tool_middleware: Arc<RwLock<ToolMiddlewareChain>>,
+        stateless_mode: bool,
     ) -> Self {
         Self {
             info,
@@ -184,6 +196,7 @@ impl ServerCore {
             protocol_middleware,
             #[cfg(not(target_arch = "wasm32"))]
             tool_middleware,
+            stateless_mode,
         }
     }
 
@@ -498,6 +511,74 @@ impl ServerCore {
     }
 }
 
+// Implement MiddlewareExecutor for ServerCore to enable workflow tool execution
+// with consistent middleware application
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait]
+impl crate::server::middleware_executor::MiddlewareExecutor for ServerCore {
+    async fn execute_tool_with_middleware(
+        &self,
+        tool_name: &str,
+        mut args: Value,
+        mut extra: RequestHandlerExtra,
+    ) -> Result<Value> {
+        // Get the tool handler
+        let handler = self
+            .tools
+            .get(tool_name)
+            .ok_or_else(|| Error::internal(format!("Tool '{}' not found", tool_name)))?;
+
+        // Authorization check with tool_authorizer if available
+        if let Some(authorizer) = &self.tool_authorizer {
+            if let Some(ref auth_ctx) = extra.auth_context {
+                if !authorizer.can_access_tool(auth_ctx, tool_name).await? {
+                    return Err(Error::authentication(format!(
+                        "User not authorized to call tool '{}'",
+                        tool_name
+                    )));
+                }
+            }
+        }
+
+        // Create tool context for middleware
+        let context = ToolContext::new(tool_name, &extra.request_id);
+
+        // Process request through tool middleware chain
+        // Middleware rejection short-circuits tool execution (on_error already called by chain)
+        self.tool_middleware
+            .read()
+            .await
+            .process_request(tool_name, &mut args, &mut extra, &context)
+            .await?;
+
+        // Execute the tool with potentially modified args and extra
+        let mut result = handler.handle(args, extra).await;
+
+        // Process response through tool middleware chain
+        if let Err(e) = self
+            .tool_middleware
+            .read()
+            .await
+            .process_response(tool_name, &mut result, &context)
+            .await
+        {
+            // Log error but continue with original result
+            tracing::warn!("Tool response middleware processing failed: {}", e);
+        }
+
+        // If tool execution failed, call handle_tool_error
+        if let Err(ref e) = result {
+            self.tool_middleware
+                .read()
+                .await
+                .handle_tool_error(tool_name, e, &context)
+                .await;
+        }
+
+        result
+    }
+}
+
 #[async_trait]
 impl ProtocolHandler for ServerCore {
     async fn handle_request(
@@ -600,8 +681,10 @@ impl ServerCore {
                 }
             },
             Request::Client(ref boxed_req) => {
-                // Check if server is initialized for server requests
-                if !self.is_initialized().await {
+                // Check if server is initialized for server requests (skip in stateless mode)
+                // Stateless mode is for serverless deployments where each request may create
+                // a fresh server instance (AWS Lambda, Cloudflare Workers, etc.)
+                if !self.stateless_mode && !self.is_initialized().await {
                     return Self::error_response(
                         id,
                         -32002,
@@ -716,6 +799,7 @@ mod tests {
             None,
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             Arc::new(RwLock::new(ToolMiddlewareChain::new())),
+            false, // stateless_mode
         );
 
         assert!(!server.is_initialized().await);
@@ -763,6 +847,7 @@ mod tests {
             None,
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             Arc::new(RwLock::new(ToolMiddlewareChain::new())),
+            false, // stateless_mode
         );
 
         // Initialize first
@@ -793,6 +878,100 @@ mod tests {
                 assert_eq!(tools_result.tools[0].name, "test-tool");
             },
             ResponsePayload::Error(e) => panic!("List tools failed: {}", e.message),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_stateless_mode_allows_requests_without_init() {
+        // Create server in stateless mode
+        let mut tools = HashMap::new();
+        tools.insert(
+            "test-tool".to_string(),
+            Arc::new(TestTool) as Arc<dyn ToolHandler>,
+        );
+
+        let server = ServerCore::new(
+            Implementation {
+                name: "test-server".to_string(),
+                version: "1.0.0".to_string(),
+            },
+            ServerCapabilities::tools_only(),
+            tools,
+            HashMap::new(),
+            None,
+            None,
+            None,
+            None,
+            Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
+            Arc::new(RwLock::new(ToolMiddlewareChain::new())),
+            true, // stateless_mode enabled
+        );
+
+        // Try to list tools WITHOUT initializing first
+        let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsParams {
+            cursor: None,
+        })));
+        let response = server
+            .handle_request(RequestId::from(1i64), list_req, None)
+            .await;
+
+        // Should succeed in stateless mode
+        match response.payload {
+            ResponsePayload::Result(result) => {
+                let tools_result: ListToolsResult = serde_json::from_value(result).unwrap();
+                assert_eq!(tools_result.tools.len(), 1);
+                assert_eq!(tools_result.tools[0].name, "test-tool");
+            },
+            ResponsePayload::Error(e) => panic!(
+                "List tools should succeed in stateless mode without init: {}",
+                e.message
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_normal_mode_requires_initialization() {
+        // Create server in normal mode (stateless_mode = false)
+        let mut tools = HashMap::new();
+        tools.insert(
+            "test-tool".to_string(),
+            Arc::new(TestTool) as Arc<dyn ToolHandler>,
+        );
+
+        let server = ServerCore::new(
+            Implementation {
+                name: "test-server".to_string(),
+                version: "1.0.0".to_string(),
+            },
+            ServerCapabilities::tools_only(),
+            tools,
+            HashMap::new(),
+            None,
+            None,
+            None,
+            None,
+            Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
+            Arc::new(RwLock::new(ToolMiddlewareChain::new())),
+            false, // stateless_mode disabled (normal mode)
+        );
+
+        // Try to list tools WITHOUT initializing first
+        let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsParams {
+            cursor: None,
+        })));
+        let response = server
+            .handle_request(RequestId::from(1i64), list_req, None)
+            .await;
+
+        // Should fail in normal mode
+        match response.payload {
+            ResponsePayload::Result(_) => {
+                panic!("List tools should fail in normal mode without initialization")
+            },
+            ResponsePayload::Error(e) => {
+                assert_eq!(e.code, -32002);
+                assert!(e.message.contains("not initialized"));
+            },
         }
     }
 }
