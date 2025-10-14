@@ -205,6 +205,7 @@ mod tests {
             TransportMessage::Notification(Notification::Progress(ProgressNotification {
                 progress_token: ProgressToken::String("test".to_string()),
                 progress: 50.0,
+                total: None,
                 message: Some("Processing".to_string()),
             }));
         transport.add_message_to_receive(notification).await;
@@ -384,6 +385,7 @@ mod tests {
             TransportMessage::Notification(Notification::Progress(ProgressNotification {
                 progress_token: ProgressToken::String("test".to_string()),
                 progress: 50.0,
+                total: None,
                 message: Some("Processing".to_string()),
             }));
         let notification_body = serde_json::to_string(&notification).unwrap();

@@ -1202,6 +1202,7 @@ impl<T: Transport> Client<T> {
     /// let progress = ProgressNotification {
     ///     progress_token: pmcp::ProgressToken::String("file-processing".to_string()),
     ///     progress: 75.0,
+    ///     total: None,
     ///     message: Some("Processing files...".to_string()),
     /// };
     ///
@@ -1864,6 +1865,7 @@ mod tests {
         let progress = ProgressNotification {
             progress_token: ProgressToken::String("test".to_string()),
             progress: 50.0,
+            total: None,
             message: Some("Halfway done".to_string()),
         };
 

@@ -703,6 +703,7 @@ mod tests {
         let progress = ProgressNotification {
             progress_token: ProgressToken::String("test".to_string()),
             progress: 75.0,
+            total: None,
             message: Some("Almost done".to_string()),
         };
         let notification = Notification::Progress(progress);
@@ -818,6 +819,7 @@ mod tests {
         let progress = ProgressNotification {
             progress_token: ProgressToken::String("test".to_string()),
             progress: 50.0,
+            total: None,
             message: None,
         };
 
@@ -846,6 +848,7 @@ mod tests {
         let progress = Progress {
             progress_token: ProgressToken::String("test".to_string()),
             progress: 25.0,
+            total: None,
             message: None,
         };
         let resource_updated = crate::types::protocol::ResourceUpdatedParams {

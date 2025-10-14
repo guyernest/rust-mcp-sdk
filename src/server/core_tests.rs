@@ -621,6 +621,7 @@ mod tests {
         let notification = Notification::Progress(ProgressNotification {
             progress_token: ProgressToken::String("test".to_string()),
             progress: 50.0,
+            total: None,
             message: Some("Processing".to_string()),
         });
 

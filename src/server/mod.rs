@@ -54,6 +54,9 @@ pub mod http_middleware;
 pub mod middleware_executor;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod preset;
+/// Progress reporting support for long-running operations.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod progress;
 /// Simple prompt implementations with metadata support.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simple_prompt;
@@ -448,6 +451,7 @@ impl Server {
     /// let progress = ProgressNotification {
     ///     progress_token: ProgressToken::String("task-123".to_string()),
     ///     progress: 50.0,
+    ///     total: None,
     ///     message: Some("Processing...".to_string()),
     /// };
     ///
@@ -657,6 +661,15 @@ impl Server {
         let (notification_tx, notification_rx) = mpsc::channel(100);
         self.notification_tx = Some(notification_tx);
 
+        // Hook cancellation manager to send notifications via the same channel
+        if let Some(tx) = &self.notification_tx {
+            let tx = tx.clone();
+            self.cancellation_manager
+                .set_notification_sender(Arc::new(move |notification| {
+                    let _ = tx.try_send(notification);
+                }));
+        }
+
         let server = Arc::new(self);
         let transport = Arc::new(RwLock::new(transport));
         let protocol = Arc::new(RwLock::new(Protocol::new(ProtocolOptions::default())));
@@ -739,7 +752,18 @@ impl Server {
                 Self::log_warning("Server received unexpected response message").await;
                 Ok(())
             },
-            TransportMessage::Notification(_) => {
+            TransportMessage::Notification(notification) => {
+                // Handle client cancellation notifications
+                if let Notification::Client(crate::types::ClientNotification::Cancelled(params)) =
+                    &notification
+                {
+                    let request_id = params.request_id.to_string();
+                    server
+                        .cancellation_manager
+                        .cancel_request_silent(request_id)
+                        .await?;
+                }
+
                 Self::log_debug("Server received notification").await;
                 Ok(())
             },
@@ -946,11 +970,11 @@ impl Server {
             .get(&req.name)
             .ok_or_else(|| Error::not_found(format!("Tool '{}' not found", req.name)))?;
 
+        let request_id_str = request_id.to_string();
         let cancellation_token = self
             .cancellation_manager
-            .get_token(&request_id.to_string())
-            .await
-            .unwrap_or_else(tokio_util::sync::CancellationToken::new);
+            .create_token(request_id_str.clone())
+            .await;
 
         // Auth context now comes from the transport layer
         // Validate authentication if auth provider is configured
@@ -983,7 +1007,20 @@ impl Server {
         )
         .with_auth_context(validated_auth_context);
 
-        let result = handler.handle(req.arguments, extra).await?;
+        let result = match handler.handle(req.arguments, extra).await {
+            Ok(v) => {
+                self.cancellation_manager
+                    .remove_token(&request_id_str)
+                    .await;
+                Ok(v)
+            },
+            Err(e) => {
+                self.cancellation_manager
+                    .remove_token(&request_id_str)
+                    .await;
+                Err(e)
+            },
+        }?;
         Ok(serde_json::to_value(CallToolResult {
             content: vec![crate::types::Content::Text {
                 text: result.to_string(),
@@ -1029,17 +1066,30 @@ impl Server {
             .get(&req.name)
             .ok_or_else(|| Error::not_found(format!("Prompt '{}' not found", req.name)))?;
 
+        let request_id_str = request_id.to_string();
         let cancellation_token = self
             .cancellation_manager
-            .get_token(&request_id.to_string())
-            .await
-            .unwrap_or_else(tokio_util::sync::CancellationToken::new);
+            .create_token(request_id_str.clone())
+            .await;
         let extra = crate::server::cancellation::RequestHandlerExtra::new(
-            request_id.to_string(),
+            request_id_str.clone(),
             cancellation_token,
         )
         .with_auth_context(auth_context);
-        let result = handler.handle(req.arguments, extra).await?;
+        let result = match handler.handle(req.arguments, extra).await {
+            Ok(v) => {
+                self.cancellation_manager
+                    .remove_token(&request_id_str)
+                    .await;
+                Ok(v)
+            },
+            Err(e) => {
+                self.cancellation_manager
+                    .remove_token(&request_id_str)
+                    .await;
+                Err(e)
+            },
+        }?;
         Ok(serde_json::to_value(result)?)
     }
 
@@ -1050,17 +1100,30 @@ impl Server {
         auth_context: Option<auth::AuthContext>,
     ) -> Result<Value> {
         if let Some(handler) = &self.resources {
+            let request_id_str = request_id.to_string();
             let cancellation_token = self
                 .cancellation_manager
-                .get_token(&request_id.to_string())
-                .await
-                .unwrap_or_else(tokio_util::sync::CancellationToken::new);
+                .create_token(request_id_str.clone())
+                .await;
             let extra = crate::server::cancellation::RequestHandlerExtra::new(
-                request_id.to_string(),
+                request_id_str.clone(),
                 cancellation_token,
             )
             .with_auth_context(auth_context);
-            let result = handler.list(req.cursor, extra).await?;
+            let result = match handler.list(req.cursor, extra).await {
+                Ok(v) => {
+                    self.cancellation_manager
+                        .remove_token(&request_id_str)
+                        .await;
+                    Ok(v)
+                },
+                Err(e) => {
+                    self.cancellation_manager
+                        .remove_token(&request_id_str)
+                        .await;
+                    Err(e)
+                },
+            }?;
             Ok(serde_json::to_value(result)?)
         } else {
             Ok(serde_json::to_value(ListResourcesResult {
@@ -1081,17 +1144,30 @@ impl Server {
             .as_ref()
             .ok_or_else(|| Error::not_found("No resource handler configured".to_string()))?;
 
+        let request_id_str = request_id.to_string();
         let cancellation_token = self
             .cancellation_manager
-            .get_token(&request_id.to_string())
-            .await
-            .unwrap_or_else(tokio_util::sync::CancellationToken::new);
+            .create_token(request_id_str.clone())
+            .await;
         let extra = crate::server::cancellation::RequestHandlerExtra::new(
-            request_id.to_string(),
+            request_id_str.clone(),
             cancellation_token,
         )
         .with_auth_context(auth_context);
-        let result = handler.read(&req.uri, extra).await?;
+        let result = match handler.read(&req.uri, extra).await {
+            Ok(v) => {
+                self.cancellation_manager
+                    .remove_token(&request_id_str)
+                    .await;
+                Ok(v)
+            },
+            Err(e) => {
+                self.cancellation_manager
+                    .remove_token(&request_id_str)
+                    .await;
+                Err(e)
+            },
+        }?;
         Ok(serde_json::to_value(result)?)
     }
 
@@ -1113,16 +1189,29 @@ impl Server {
             .as_ref()
             .ok_or_else(|| Error::not_found("No sampling handler configured".to_string()))?;
 
+        let request_id_str = request_id.to_string();
         let cancellation_token = self
             .cancellation_manager
-            .get_token(&request_id.to_string())
-            .await
-            .unwrap_or_else(tokio_util::sync::CancellationToken::new);
+            .create_token(request_id_str.clone())
+            .await;
         let extra = crate::server::cancellation::RequestHandlerExtra::new(
-            request_id.to_string(),
+            request_id_str.clone(),
             cancellation_token,
         );
-        let result = handler.create_message(req, extra).await?;
+        let result = match handler.create_message(req, extra).await {
+            Ok(v) => {
+                self.cancellation_manager
+                    .remove_token(&request_id_str)
+                    .await;
+                Ok(v)
+            },
+            Err(e) => {
+                self.cancellation_manager
+                    .remove_token(&request_id_str)
+                    .await;
+                Err(e)
+            },
+        }?;
         Ok(serde_json::to_value(result)?)
     }
 

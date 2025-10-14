@@ -1,6 +1,7 @@
 //! Request cancellation support for MCP server.
 
 use crate::error::Result;
+use crate::server::progress::ProgressReporter;
 use crate::types::protocol::{CancelledNotification, Notification};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -129,6 +130,9 @@ pub struct RequestHandlerExtra {
     /// **Security Note**: Metadata may contain sensitive values like OAuth tokens.
     /// The Debug implementation redacts these values to prevent accidental logging.
     pub metadata: HashMap<String, String>,
+    /// Optional progress reporter for this request
+    #[allow(dead_code)]
+    pub progress_reporter: Option<Arc<dyn ProgressReporter>>,
 }
 
 impl RequestHandlerExtra {
@@ -141,6 +145,7 @@ impl RequestHandlerExtra {
             auth_info: None,
             auth_context: None,
             metadata: HashMap::new(),
+            progress_reporter: None,
         }
     }
 
@@ -162,6 +167,15 @@ impl RequestHandlerExtra {
         auth_context: Option<crate::server::auth::AuthContext>,
     ) -> Self {
         self.auth_context = auth_context;
+        self
+    }
+
+    /// Attach a progress reporter.
+    pub fn with_progress_reporter(
+        mut self,
+        progress_reporter: Option<Arc<dyn ProgressReporter>>,
+    ) -> Self {
+        self.progress_reporter = progress_reporter;
         self
     }
 
@@ -192,6 +206,43 @@ impl RequestHandlerExtra {
     /// Wait for cancellation.
     pub async fn cancelled(&self) {
         self.cancellation_token.cancelled().await;
+    }
+
+    /// Report progress if a reporter is available.
+    pub async fn report_progress(
+        &self,
+        progress: f64,
+        total: Option<f64>,
+        message: Option<String>,
+    ) -> crate::Result<()> {
+        if let Some(rep) = &self.progress_reporter {
+            rep.report_progress(progress, total, message).await
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Report percentage progress (0-100) if available.
+    pub async fn report_percent(&self, percent: f64, message: Option<String>) -> crate::Result<()> {
+        if let Some(rep) = &self.progress_reporter {
+            rep.report_percent(percent, message).await
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Report count-based progress if available.
+    pub async fn report_count(
+        &self,
+        current: usize,
+        total: usize,
+        message: Option<String>,
+    ) -> crate::Result<()> {
+        if let Some(rep) = &self.progress_reporter {
+            rep.report_count(current, total, message).await
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -233,6 +284,20 @@ impl std::fmt::Debug for RequestHandlerExtra {
             .field("auth_context", &self.auth_context)
             .field("metadata", &redacted_metadata)
             .finish()
+    }
+}
+
+impl CancellationManager {
+    /// Cancel a request silently (no notification sent to the client).
+    pub async fn cancel_request_silent(&self, request_id: String) -> Result<()> {
+        let token = {
+            let mut tokens = self.tokens.write().await;
+            tokens.remove(&request_id)
+        };
+        if let Some(token) = token {
+            token.cancel();
+        }
+        Ok(())
     }
 }
 

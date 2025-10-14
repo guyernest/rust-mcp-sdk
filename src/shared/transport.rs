@@ -36,6 +36,7 @@ use std::fmt::Debug;
 /// let notification = Notification::Progress(ProgressNotification {
 ///     progress_token: ProgressToken::String("task-123".to_string()),
 ///     progress: 75.0,
+///     total: None,
 ///     message: Some("Processing nearly complete".to_string()),
 /// });
 /// let notification_msg = TransportMessage::Notification(notification);
@@ -184,6 +185,7 @@ impl Default for MessagePriority {
 ///             pmcp::types::Notification::Progress(pmcp::types::ProgressNotification {
 ///                 progress_token: pmcp::types::ProgressToken::String("example".to_string()),
 ///                 progress: 50.0,
+///                 total: None,
 ///                 message: Some("Processing...".to_string()),
 ///             })
 ///         ))
