@@ -304,6 +304,7 @@ async fn main() -> Result<()> {
             arguments: json!({
                 "endpoint": "/api/users"
             }),
+            _meta: None,
         },
     )));
 
@@ -327,6 +328,7 @@ async fn main() -> Result<()> {
             arguments: json!({
                 "endpoint": "/api/public"
             }),
+            _meta: None,
         },
     )));
 
@@ -350,6 +352,7 @@ async fn main() -> Result<()> {
             arguments: json!({
                 "endpoint": "/api/data"
             }),
+            _meta: None,
         },
     )));
 

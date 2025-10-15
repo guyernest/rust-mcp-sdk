@@ -58,6 +58,7 @@ mod websocket_reliability {
                     pmcp::types::Notification::Progress(pmcp::types::ProgressNotification {
                         progress_token: pmcp::types::ProgressToken::String("test".to_string()),
                         progress: 0.0,
+                        total: None,
                         message: None,
                     })
                 );

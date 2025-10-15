@@ -122,6 +122,7 @@ pub struct CallToolRequest {
     pub arguments: Value,
     /// Request metadata (e.g., progress token)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
     pub _meta: Option<RequestMeta>,
 }
 
@@ -240,6 +241,7 @@ pub struct GetPromptRequest {
     pub arguments: HashMap<String, String>,
     /// Request metadata (e.g., progress token)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
     pub _meta: Option<RequestMeta>,
 }
 
@@ -336,6 +338,7 @@ pub struct ReadResourceRequest {
     pub uri: String,
     /// Request metadata (e.g., progress token)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
     pub _meta: Option<RequestMeta>,
 }
 

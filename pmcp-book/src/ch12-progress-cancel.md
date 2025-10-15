@@ -346,6 +346,155 @@ For earlier versions, see the basic examples:
 - Progress notifications: `examples/10_progress_notifications.rs`
 - Request cancellation: Check existing cancellation examples in the repository
 
+## Complete Example: Prompt Workflow with Progress
+
+**Best Practice**: Long-running prompts should report progress, especially workflow prompts with multiple steps.
+
+Progress reporting works **identically** for prompts as it does for tools - same API, same automatic setup. This is particularly important for workflow prompts where users need to understand which phase is executing.
+
+### When to Use Progress in Prompts
+
+✅ **Use progress reporting for:**
+- Multi-step workflows (analyze → plan → execute → verify)
+- Long-running data processing or generation
+- Prompts with multiple external API calls
+- Complex reasoning chains with distinct phases
+
+❌ **Skip progress reporting for:**
+- Simple single-step prompts
+- Fast operations (< 2 seconds)
+- Prompts where steps aren't clearly defined
+
+### Workflow Prompt Implementation
+
+```rust
+use async_trait::async_trait;
+use pmcp::error::Result;
+use pmcp::server::cancellation::RequestHandlerExtra;
+use pmcp::server::PromptHandler;
+use pmcp::types::{Content, GetPromptResult, PromptMessage, Role};
+use std::collections::HashMap;
+use std::time::Duration;
+
+struct AnalysisWorkflowPrompt;
+
+#[async_trait]
+impl PromptHandler for AnalysisWorkflowPrompt {
+    async fn handle(
+        &self,
+        args: HashMap<String, String>,
+        extra: RequestHandlerExtra,  // ← Same as tools!
+    ) -> Result<GetPromptResult> {
+        let topic = args.get("topic")
+            .cloned()
+            .unwrap_or_else(|| "general analysis".to_string());
+
+        // Define workflow steps
+        let steps = vec![
+            ("gather", "Gathering information and context"),
+            ("analyze", "Analyzing data and patterns"),
+            ("synthesize", "Synthesizing insights"),
+            ("validate", "Validating conclusions"),
+            ("format", "Formatting final report"),
+        ];
+
+        let mut results = Vec::new();
+
+        // Execute each step with progress reporting
+        for (i, (step_name, step_description)) in steps.iter().enumerate() {
+            // Check for cancellation
+            if extra.is_cancelled() {
+                return Err(pmcp::error::Error::internal(
+                    format!("Workflow cancelled during {} step", step_name)
+                ));
+            }
+
+            // Report progress - same API as tools!
+            extra.report_count(
+                i + 1,
+                steps.len(),
+                Some(format!("Step {}/{}: {}", i + 1, steps.len(), step_description))
+            ).await?;
+
+            // Simulate work for this step
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            results.push(format!("✓ {} - {}", step_name, step_description));
+        }
+
+        // Return prompt result
+        Ok(GetPromptResult {
+            description: Some(format!("Multi-step analysis workflow for: {}", topic)),
+            messages: vec![PromptMessage {
+                role: Role::User,
+                content: Content::Text {
+                    text: format!(
+                        "Analysis Workflow Complete\n\nTopic: {}\n\nSteps:\n{}\n\nReady for review.",
+                        topic,
+                        results.join("\n")
+                    ),
+                },
+            }],
+        })
+    }
+}
+```
+
+### Server Setup
+
+```rust
+use pmcp::server::Server;
+
+let server = Server::builder()
+    .name("workflow-server")
+    .version("1.0.0")
+    .prompt("analysis_workflow", AnalysisWorkflowPrompt)
+    .build()?;
+```
+
+### Client Request with Progress Token
+
+```rust
+use pmcp::types::{GetPromptRequest, RequestMeta, ProgressToken};
+use std::collections::HashMap;
+
+let request = GetPromptRequest {
+    name: "analysis_workflow".to_string(),
+    arguments: HashMap::from([
+        ("topic".to_string(), "Machine Learning".to_string())
+    ]),
+    _meta: Some(RequestMeta {
+        progress_token: Some(ProgressToken::String("workflow-1".to_string())),
+    }),
+};
+```
+
+### Expected Progress Updates
+
+```
+INFO Step 1/5: Gathering information and context
+INFO Step 2/5: Analyzing data and patterns
+INFO Step 3/5: Synthesizing insights
+INFO Step 4/5: Validating conclusions
+INFO Step 5/5: Formatting final report
+
+✅ Workflow completed!
+```
+
+Run the full example (available in v1.9+):
+```bash
+cargo run --example 12_prompt_workflow_progress
+```
+
+### Key Benefits
+
+1. **User Visibility**: Users see exactly which phase is executing
+2. **Time Estimation**: Clear progress (3/5 steps) shows time remaining
+3. **Cancellation Points**: Users can cancel between steps if needed
+4. **Same API**: No difference between tool and prompt progress reporting
+
+**Recommendation**: Make progress reporting standard practice for all workflow prompts with 3+ steps or operations longer than 5 seconds.
+
 ## End-to-End Flow
 
 Understanding the complete flow helps debug issues and implement custom solutions.

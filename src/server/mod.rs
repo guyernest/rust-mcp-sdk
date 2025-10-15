@@ -1002,6 +1002,7 @@ impl Server {
         }
 
         // Create progress reporter if progress token is provided
+        #[allow(clippy::used_underscore_binding)] // _meta is part of MCP protocol spec
         let progress_reporter = req
             ._meta
             .as_ref()
@@ -1092,6 +1093,7 @@ impl Server {
             .await;
 
         // Create progress reporter if progress token is provided
+        #[allow(clippy::used_underscore_binding)] // _meta is part of MCP protocol spec
         let progress_reporter = req
             ._meta
             .as_ref()
@@ -1190,6 +1192,7 @@ impl Server {
             .await;
 
         // Create progress reporter if progress token is provided
+        #[allow(clippy::used_underscore_binding)] // _meta is part of MCP protocol spec
         let progress_reporter = req
             ._meta
             .as_ref()

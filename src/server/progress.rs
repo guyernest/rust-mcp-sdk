@@ -123,7 +123,7 @@ impl ServerProgressReporter {
     }
 
     /// Validate progress and total values.
-    fn validate_values(&self, progress: f64, total: Option<f64>) -> Result<()> {
+    fn validate_values(progress: f64, total: Option<f64>) -> Result<()> {
         const EPSILON: f64 = 1e-9;
 
         // Check progress is finite and non-negative
@@ -180,7 +180,7 @@ impl ProgressReporter for ServerProgressReporter {
         const EPSILON: f64 = 1e-9;
 
         // Validate input values
-        self.validate_values(progress, total)?;
+        Self::validate_values(progress, total)?;
 
         // Check if progress increases (or is first report)
         let mut last_progress_guard = self.last_progress.lock().unwrap();

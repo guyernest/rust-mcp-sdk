@@ -54,6 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pmcp::types::ProgressNotification {
             progress_token: pmcp::types::ProgressToken::String("task-001".to_string()),
             progress: 25.0,
+            total: None,
             message: Some("Processing started".to_string()),
         },
     ));
@@ -84,6 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pmcp::types::ProgressNotification {
                 progress_token: pmcp::types::ProgressToken::String(format!("batch-{}", i)),
                 progress: (i as f64 * 10.0),
+                total: None,
                 message: Some(format!("Batch message {}", i)),
             },
         ));
