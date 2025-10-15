@@ -2,6 +2,8 @@
 
 Long-running operations require two critical capabilities: **progress tracking** so users know what's happening, and **cancellation** so users can stop operations that are taking too long or are no longer needed.
 
+This is similar to web applications where you show a progress bar or spinning wheel while the server processes a request - it gives users confidence that work is happening and an estimate of how long to wait.
+
 This chapter covers the PMCP SDK's comprehensive support for both features, following the MCP protocol specifications for progress notifications and request cancellation.
 
 ## Overview
@@ -119,7 +121,16 @@ let request = CallToolRequest {
 };
 ```
 
-The server automatically extracts the progress token and creates a `ServerProgressReporter` that sends notifications with the matching token.
+**Automatic Progress Reporter Creation** (Available in v1.9+):
+
+When a client includes `_meta.progressToken` in a request, the server automatically:
+1. Extracts the token from the request
+2. Creates a `ServerProgressReporter`
+3. Attaches it to `RequestHandlerExtra`
+
+If no token is provided, the progress helper methods simply return `Ok(())` (no-op).
+
+> **Note**: On versions before v1.9, progress helper methods will no-op unless you manually attach a reporter. The automatic wiring described above is available in v1.9 and later.
 
 ## Using Progress in Tools
 
@@ -132,7 +143,7 @@ use async_trait::async_trait;
 use pmcp::error::Result;
 use pmcp::server::cancellation::RequestHandlerExtra;
 use pmcp::server::ToolHandler;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 struct DataProcessor;
 
@@ -326,10 +337,14 @@ INFO Countdown: 0 (progress: 5/5)
 ✅ Countdown completed!
 ```
 
-Run the full example:
+Run the full example (available in v1.9+):
 ```bash
 cargo run --example 11_progress_countdown
 ```
+
+For earlier versions, see the basic examples:
+- Progress notifications: `examples/10_progress_notifications.rs`
+- Request cancellation: Check existing cancellation examples in the repository
 
 ## End-to-End Flow
 
@@ -402,9 +417,13 @@ Understanding the complete flow helps debug issues and implement custom solution
    }
    ```
 
-2. **Server's CancellationManager** cancels the token
+2. **Server cancels the token silently** (no echo back to client)
+
+   When the server receives a client-initiated cancellation, it cancels the token internally without sending a cancellation notification back to the client. The client already knows it cancelled the request, so echoing would be redundant.
+
    ```rust
-   cancellation_manager.cancel_request(request_id, reason).await?;
+   // Server handles client cancellation silently
+   cancellation_manager.cancel_request_silent(request_id).await?;
    ```
 
 3. **Tool checks cancellation** in its loop
@@ -445,12 +464,12 @@ Check at least once per second of work:
 
 ```rust
 // Good: Check in loop
-for item in large_dataset {
+for (i, item) in large_dataset.iter().enumerate() {
     if extra.is_cancelled() {
         return Err(Error::internal("Cancelled"));
     }
     process(item).await?;
-    extra.report_progress(...).await?;
+    extra.report_count(i + 1, large_dataset.len(), None).await?;
 }
 
 // Bad: Never check
@@ -529,6 +548,24 @@ for i in 0..10000 {
 The default rate limit (100ms) means you can report ~10 times per second without throttling.
 
 ## Advanced Patterns
+
+### Rate Limiting and Notification Debouncing
+
+Progress notifications are rate-limited at the `ServerProgressReporter` level (default: max 10 notifications/second). This prevents flooding the client with updates.
+
+**Important**: If you're also using a notification debouncer elsewhere in your system, be aware that you'll have double-throttling. It's recommended to keep progress throttling in one place:
+
+- **Recommended**: Use the reporter's built-in rate limiting (it's already there!)
+- **Advanced**: If you need custom debouncing logic, disable reporter rate limiting and handle it in your notification pipeline
+
+```rust
+// Custom rate limit (20 notifications/second)
+let reporter = ServerProgressReporter::with_rate_limit(
+    token,
+    notification_sender,
+    Duration::from_millis(50), // 50ms = 20/sec
+);
+```
 
 ### Progress with Nested Operations
 
@@ -625,11 +662,14 @@ A no-op implementation that discards all progress reports. Most developers won't
 
 1. **Testing code that takes ProgressReporter directly**:
 ```rust
+use pmcp::server::progress::{ProgressReporter, NoopProgressReporter};
+use std::sync::Arc;
+
 async fn process_with_reporter(reporter: Arc<dyn ProgressReporter>) {
     reporter.report_progress(50.0, Some(100.0), None).await.unwrap();
 }
 
-#[test]
+#[tokio::test]
 async fn test_processing() {
     let reporter = Arc::new(NoopProgressReporter);
     process_with_reporter(reporter).await; // No notifications sent
@@ -645,6 +685,12 @@ async fn test_processing() {
 ### Testing Progress Reporting
 
 ```rust
+use pmcp::server::progress::{ProgressReporter, ServerProgressReporter};
+use pmcp::types::ProgressToken;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
 #[tokio::test]
 async fn test_progress_reporting() {
     let counter = Arc::new(AtomicUsize::new(0));
@@ -671,6 +717,9 @@ async fn test_progress_reporting() {
 ### Testing Cancellation
 
 ```rust
+use pmcp::server::cancellation::RequestHandlerExtra;
+use tokio_util::sync::CancellationToken;
+
 #[tokio::test]
 async fn test_cancellation() {
     let token = CancellationToken::new();
@@ -694,10 +743,11 @@ async fn test_cancellation() {
 **Symptom**: No progress notifications received by client
 
 **Checks**:
-1. Client sent `_meta.progressToken` in request?
-2. Server has `notification_tx` channel configured?
-3. Progress values are valid (finite, non-negative)?
-4. Rate limiting not too aggressive? (check interval)
+1. **Version check**: Are you using v1.9 or later? Automatic reporter wiring is only available in v1.9+. On earlier versions, progress helper methods will no-op unless you manually attach a reporter.
+2. Client sent `_meta.progressToken` in request?
+3. Server has `notification_tx` channel configured?
+4. Progress values are valid (finite, non-negative)?
+5. Rate limiting not too aggressive? (check interval)
 
 ### Cancellation Not Working
 
@@ -726,16 +776,19 @@ let reporter = ServerProgressReporter::with_rate_limit(
 
 The PMCP SDK provides production-ready progress reporting and cancellation:
 
-**Progress Features**:
+**Progress Features** (v1.9+):
 - ✅ Trait-based abstraction
-- ✅ Automatic rate limiting (configurable)
+- ✅ Automatic progress reporter creation from `_meta.progressToken`
+- ✅ Automatic rate limiting (configurable, default 10 notifications/second)
 - ✅ Float validation and epsilon comparisons
-- ✅ Multiple convenience methods
+- ✅ Multiple convenience methods (progress/percent/count)
 - ✅ Thread-safe and clone-able
+- ✅ Graceful no-op when no reporter attached
 
 **Cancellation Features**:
-- ✅ Async-safe tokens
+- ✅ Async-safe tokens (`tokio_util::sync::CancellationToken`)
 - ✅ Easy integration with `RequestHandlerExtra`
+- ✅ Silent cancellation (no echo back to client)
 - ✅ Support for cleanup on cancellation
 - ✅ Works with `tokio::select!` for advanced patterns
 
@@ -743,7 +796,14 @@ The PMCP SDK provides production-ready progress reporting and cancellation:
 - Always report final progress (bypasses rate limits)
 - Check cancellation regularly (at least once per second)
 - Provide meaningful progress messages
-- Choose appropriate progress scales
+- Choose appropriate progress scales (count/percent/custom)
 - Clean up resources on cancellation
+- Use built-in rate limiting (avoid double-throttling)
 
-See `examples/11_progress_countdown.rs` for a complete working example.
+**Examples**:
+- Complete countdown example (v1.9+): `examples/11_progress_countdown.rs`
+- Basic progress: `examples/10_progress_notifications.rs`
+
+**Version Notes**:
+- Automatic reporter wiring requires v1.9 or later
+- On earlier versions, progress helpers no-op unless manually attached
