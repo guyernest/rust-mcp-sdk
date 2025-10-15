@@ -505,8 +505,31 @@ impl PromptHandler for WorkflowPromptHandler {
         // 2️⃣ Assistant Plan Message (list all workflow steps)
         messages.push(self.create_assistant_plan()?);
 
-        // 3️⃣ Execute workflow steps sequentially
-        for step in self.workflow.steps() {
+        // 3️⃣ Execute workflow steps sequentially with progress reporting
+        let total_steps = self.workflow.steps().len();
+
+        for (step_index, step) in self.workflow.steps().iter().enumerate() {
+            // Check for cancellation before each step
+            if extra.is_cancelled() {
+                tracing::warn!("Workflow cancelled at step: {}", step.name());
+                return Err(crate::Error::internal(format!(
+                    "Workflow '{}' cancelled at step {}",
+                    self.workflow.name(),
+                    step.name()
+                )));
+            }
+
+            // Report progress at the start of each step
+            // Use the step name for a more descriptive message
+            let progress_message = format!("Step {}/{}: {}", step_index + 1, total_steps, step.name());
+            if let Err(e) = extra.report_count(
+                step_index + 1,
+                total_steps,
+                Some(progress_message)
+            ).await {
+                tracing::warn!("Failed to report workflow progress: {}", e);
+                // Continue execution - progress reporting is non-critical
+            }
             // Add guidance message (if present) - BEFORE attempting execution
             // Guidance helps LLM understand the step's intent, especially for hybrid execution
             if let Some(guidance_template) = step.guidance() {
@@ -620,6 +643,14 @@ impl PromptHandler for WorkflowPromptHandler {
                 },
             }
         }
+
+        // Report final workflow completion
+        // This bypasses rate limiting and confirms the workflow finished
+        let _ = extra.report_count(
+            total_steps,
+            total_steps,
+            Some("Workflow execution complete".to_string())
+        ).await;
 
         Ok(GetPromptResult {
             description: Some(self.workflow.description().to_string()),
