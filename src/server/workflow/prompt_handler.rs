@@ -521,12 +521,12 @@ impl PromptHandler for WorkflowPromptHandler {
 
             // Report progress at the start of each step
             // Use the step name for a more descriptive message
-            let progress_message = format!("Step {}/{}: {}", step_index + 1, total_steps, step.name());
-            if let Err(e) = extra.report_count(
-                step_index + 1,
-                total_steps,
-                Some(progress_message)
-            ).await {
+            let progress_message =
+                format!("Step {}/{}: {}", step_index + 1, total_steps, step.name());
+            if let Err(e) = extra
+                .report_count(step_index + 1, total_steps, Some(progress_message))
+                .await
+            {
                 tracing::warn!("Failed to report workflow progress: {}", e);
                 // Continue execution - progress reporting is non-critical
             }
@@ -646,11 +646,13 @@ impl PromptHandler for WorkflowPromptHandler {
 
         // Report final workflow completion
         // This bypasses rate limiting and confirms the workflow finished
-        let _ = extra.report_count(
-            total_steps,
-            total_steps,
-            Some("Workflow execution complete".to_string())
-        ).await;
+        let _ = extra
+            .report_count(
+                total_steps,
+                total_steps,
+                Some("Workflow execution complete".to_string()),
+            )
+            .await;
 
         Ok(GetPromptResult {
             description: Some(self.workflow.description().to_string()),
