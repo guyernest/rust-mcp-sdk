@@ -48,7 +48,7 @@ impl PromptHandler for AnalysisWorkflowPrompt {
         tracing::info!("Starting analysis workflow for topic: {}", topic);
 
         // Define workflow steps
-        let steps = vec![
+        let steps = [
             ("gather", "Gathering information and context"),
             ("analyze", "Analyzing data and patterns"),
             ("synthesize", "Synthesizing insights"),
