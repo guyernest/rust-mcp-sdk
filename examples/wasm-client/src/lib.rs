@@ -248,6 +248,7 @@ impl WasmClient {
                         pmcp::types::ClientRequest::CallTool(pmcp::types::CallToolRequest {
                             name,
                             arguments,
+                            _meta: None,
                         }),
                     )),
                 };

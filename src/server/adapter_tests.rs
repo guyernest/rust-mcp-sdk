@@ -137,6 +137,7 @@ mod tests {
             request: Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
                 name: tool_name.to_string(),
                 arguments: json!({ "test": "data" }),
+                _meta: None,
             }))),
         }
     }
@@ -205,6 +206,7 @@ mod tests {
             TransportMessage::Notification(Notification::Progress(ProgressNotification {
                 progress_token: ProgressToken::String("test".to_string()),
                 progress: 50.0,
+                total: None,
                 message: Some("Processing".to_string()),
             }));
         transport.add_message_to_receive(notification).await;
@@ -384,6 +386,7 @@ mod tests {
             TransportMessage::Notification(Notification::Progress(ProgressNotification {
                 progress_token: ProgressToken::String("test".to_string()),
                 progress: 50.0,
+                total: None,
                 message: Some("Processing".to_string()),
             }));
         let notification_body = serde_json::to_string(&notification).unwrap();
@@ -464,6 +467,7 @@ mod tests {
                 let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
                     name: "echo".to_string(),
                     arguments: json!({ "id": i }),
+                    _meta: None,
                 })));
                 adapter
                     .add_request(RequestId::from(i as i64), request)

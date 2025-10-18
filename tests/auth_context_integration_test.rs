@@ -193,6 +193,7 @@ async fn test_auth_context_flows_from_transport_to_tools() {
     let tool_request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
         name: "test_tool".to_string(),
         arguments: json!({"action": "query"}),
+        _meta: None,
     })));
 
     let response = server
@@ -266,6 +267,7 @@ async fn test_missing_auth_context_fails_in_tool() {
     let tool_request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
         name: "secure_tool".to_string(),
         arguments: json!({}),
+        _meta: None,
     })));
 
     let response = server

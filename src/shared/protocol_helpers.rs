@@ -628,6 +628,7 @@ mod tests {
         let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
             name: "test-tool".to_string(),
             arguments: json!({"input": "test"}),
+            _meta: None,
         })));
 
         let jsonrpc_request = create_request(id.clone(), request);
@@ -703,6 +704,7 @@ mod tests {
         let progress = ProgressNotification {
             progress_token: ProgressToken::String("test".to_string()),
             progress: 75.0,
+            total: None,
             message: Some("Almost done".to_string()),
         };
         let notification = Notification::Progress(progress);
@@ -759,6 +761,7 @@ mod tests {
                 ClientRequest::GetPrompt(GetPromptRequest {
                     name: "test".to_string(),
                     arguments: std::collections::HashMap::new(),
+                    _meta: None,
                 }),
                 "prompts/get",
             ),
@@ -773,6 +776,7 @@ mod tests {
             (
                 ClientRequest::ReadResource(ReadResourceRequest {
                     uri: "test://uri".to_string(),
+                    _meta: None,
                 }),
                 "resources/read",
             ),
@@ -818,6 +822,7 @@ mod tests {
         let progress = ProgressNotification {
             progress_token: ProgressToken::String("test".to_string()),
             progress: 50.0,
+            total: None,
             message: None,
         };
 
@@ -846,6 +851,7 @@ mod tests {
         let progress = Progress {
             progress_token: ProgressToken::String("test".to_string()),
             progress: 25.0,
+            total: None,
             message: None,
         };
         let resource_updated = crate::types::protocol::ResourceUpdatedParams {
