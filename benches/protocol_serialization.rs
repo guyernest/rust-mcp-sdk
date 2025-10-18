@@ -49,6 +49,7 @@ fn bench_request_serialization(c: &mut Criterion) {
                 "format": "markdown"
             }
         }),
+        _meta: None,
     });
 
     group.bench_function("call_tool_request", |b| {
