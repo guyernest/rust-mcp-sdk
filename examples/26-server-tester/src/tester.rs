@@ -91,13 +91,9 @@ impl ServerTester {
                         extra_headers.push(("X-API-Key".to_string(), key.to_string()));
                     }
                 }
-                println!(
-                    "HTTP middleware chain: {}",
-                    if http_middleware_chain.is_some() {
-                        "present"
-                    } else {
-                        "missing"
-                    }
+                debug!(
+                    "HTTP middleware chain present: {}",
+                    http_middleware_chain.is_some()
                 );
                 let config = StreamableHttpTransportConfig {
                     url: parsed_url,
@@ -130,7 +126,9 @@ impl ServerTester {
                     // Auto-detect: API Gateway URLs use JSON-RPC (now supports middleware!)
                     if url.contains("amazonaws.com") || url.contains("api.") {
                         // Create JSON-RPC HTTP client for API Gateway
-                        println!("API Gateway detected - using JSON-RPC transport with middleware support");
+                        debug!(
+                            "API Gateway detected - using JSON-RPC transport with middleware support"
+                        );
                         let mut client_builder = reqwest::ClientBuilder::new().timeout(timeout);
 
                         if insecure {
@@ -153,13 +151,9 @@ impl ServerTester {
                                 extra_headers.push(("X-API-Key".to_string(), key.to_string()));
                             }
                         }
-                        println!(
-                            "HTTP middleware chain (jsonrpc path): {}",
-                            if http_middleware_chain.is_some() {
-                                "present"
-                            } else {
-                                "missing"
-                            }
+                        debug!(
+                            "HTTP middleware chain (jsonrpc path) present: {}",
+                            http_middleware_chain.is_some()
                         );
                         let config = StreamableHttpTransportConfig {
                             url: parsed_url,
