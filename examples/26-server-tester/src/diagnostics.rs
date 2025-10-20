@@ -49,7 +49,9 @@ async fn run_diagnostics_internal(
     // Parse URL
     let url_result = diagnose_url(url);
     report.add_test(url_result.clone());
-    if !quiet { print_diagnostic_result(&url_result); }
+    if !quiet {
+        print_diagnostic_result(&url_result);
+    }
 
     if url_result.status != TestStatus::Passed {
         report.duration = start.elapsed();
@@ -67,7 +69,9 @@ async fn run_diagnostics_internal(
             details: Some("Stdio transport ready for use".to_string()),
         };
         report.add_test(stdio_result.clone());
-        if !quiet { print_diagnostic_result(&stdio_result); }
+        if !quiet {
+            print_diagnostic_result(&stdio_result);
+        }
         report.duration = start.elapsed();
         return Ok(report);
     }
@@ -79,10 +83,14 @@ async fn run_diagnostics_internal(
         // DNS resolution
         let dns_result = diagnose_dns(&parsed_url).await;
         report.add_test(dns_result.clone());
-        if !quiet { print_diagnostic_result(&dns_result); }
+        if !quiet {
+            print_diagnostic_result(&dns_result);
+        }
 
         if dns_result.status != TestStatus::Passed {
-            if !quiet { print_suggestions_for_dns(); }
+            if !quiet {
+                print_suggestions_for_dns();
+            }
             report.duration = start.elapsed();
             return Ok(report);
         }
@@ -90,10 +98,14 @@ async fn run_diagnostics_internal(
         // TCP connectivity
         let tcp_result = diagnose_tcp(&parsed_url, timeout).await;
         report.add_test(tcp_result.clone());
-        if !quiet { print_diagnostic_result(&tcp_result); }
+        if !quiet {
+            print_diagnostic_result(&tcp_result);
+        }
 
         if tcp_result.status != TestStatus::Passed {
-            if !quiet { print_suggestions_for_tcp(&parsed_url); }
+            if !quiet {
+                print_suggestions_for_tcp(&parsed_url);
+            }
             report.duration = start.elapsed();
             return Ok(report);
         }
@@ -102,10 +114,14 @@ async fn run_diagnostics_internal(
         if parsed_url.scheme() == "https" {
             let tls_result = diagnose_tls(&parsed_url).await;
             report.add_test(tls_result.clone());
-            if !quiet { print_diagnostic_result(&tls_result); }
+            if !quiet {
+                print_diagnostic_result(&tls_result);
+            }
 
             if tls_result.status == TestStatus::Failed {
-                if !quiet { print_suggestions_for_tls(); }
+                if !quiet {
+                    print_suggestions_for_tls();
+                }
             }
         }
     }
@@ -113,16 +129,22 @@ async fn run_diagnostics_internal(
     // HTTP specific tests
     let http_result = diagnose_http(url, timeout).await;
     report.add_test(http_result.clone());
-    if !quiet { print_diagnostic_result(&http_result); }
+    if !quiet {
+        print_diagnostic_result(&http_result);
+    }
 
     if http_result.status != TestStatus::Passed {
-        if !quiet { print_suggestions_for_http(url); }
+        if !quiet {
+            print_suggestions_for_http(url);
+        }
     }
 
     // MCP protocol test
     let mcp_result = diagnose_mcp_protocol(url, timeout, api_key).await;
     report.add_test(mcp_result.clone());
-    if !quiet { print_diagnostic_result(&mcp_result); }
+    if !quiet {
+        print_diagnostic_result(&mcp_result);
+    }
 
     if mcp_result.status != TestStatus::Passed {
         print_suggestions_for_mcp(&mcp_result);
