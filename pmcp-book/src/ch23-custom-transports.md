@@ -20,7 +20,6 @@ Consider custom transports when:
 - Standard HTTP/HTTPS servers → Use built-in `HttpTransport`
 - Local processes → Use built-in `StdioTransport`
 - Real-time WebSocket → Use built-in `WebSocketTransport`
-- Exposing GraphQL APIs → Build MCP server with GraphQL tools (not transport)
 
 ### Client vs Server Reality
 
@@ -108,7 +107,7 @@ pub struct InMemoryTransport {
     /// Channel for receiving messages
     rx: Arc<Mutex<mpsc::Receiver<TransportMessage>>>,
     /// Connected state
-    connected: Arc<tokio::sync::RwLock<bool>>,
+    connected: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl InMemoryTransport {
@@ -120,13 +119,13 @@ impl InMemoryTransport {
         let transport1 = Self {
             tx: tx1,
             rx: Arc::new(Mutex::new(rx2)),
-            connected: Arc::new(tokio::sync::RwLock::new(true)),
+            connected: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         };
 
         let transport2 = Self {
             tx: tx2,
             rx: Arc::new(Mutex::new(rx1)),
-            connected: Arc::new(tokio::sync::RwLock::new(true)),
+            connected: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         };
 
         (transport1, transport2)
@@ -136,7 +135,9 @@ impl InMemoryTransport {
 #[async_trait]
 impl Transport for InMemoryTransport {
     async fn send(&mut self, message: TransportMessage) -> Result<()> {
-        if !*self.connected.read().await {
+        use std::sync::atomic::Ordering;
+
+        if !self.connected.load(Ordering::Relaxed) {
             return Err(pmcp::error::Error::Transport(
                 pmcp::error::TransportError::ConnectionClosed
             ));
@@ -160,14 +161,14 @@ impl Transport for InMemoryTransport {
     }
 
     async fn close(&mut self) -> Result<()> {
-        *self.connected.write().await = false;
+        use std::sync::atomic::Ordering;
+        self.connected.store(false, Ordering::Relaxed);
         Ok(())
     }
 
     fn is_connected(&self) -> bool {
-        futures::executor::block_on(async {
-            *self.connected.read().await
-        })
+        use std::sync::atomic::Ordering;
+        self.connected.load(Ordering::Relaxed)
     }
 
     fn transport_type(&self) -> &'static str {
@@ -223,6 +224,7 @@ use pmcp::shared::{Transport, TransportMessage};
 use pmcp::error::Result;
 use async_trait::async_trait;
 use aws_sdk_sqs::Client as SqsClient;
+use aws_config;  // For load_from_env
 use tokio::sync::mpsc;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -499,8 +501,8 @@ pub struct KafkaTransport {
     /// Response topic name (client-specific)
     response_topic: String,
     /// Local message buffer
-    message_rx: Arc<Mutex<mpcp::Receiver<TransportMessage>>>,
-    message_tx: mpcp::Sender<TransportMessage>,
+    message_rx: Arc<Mutex<mpsc::Receiver<TransportMessage>>>,
+    message_tx: mpsc::Sender<TransportMessage>,
 }
 
 impl KafkaTransport {
@@ -641,6 +643,15 @@ impl KafkaTransport {
         server_id: String,
         capabilities: Vec<String>,  // ["tool-analysis", "data-proc"]
     ) -> Result<Self> {
+        use rdkafka::config::ClientConfig;
+
+        // Create producer for server discovery
+        let producer: FutureProducer = ClientConfig::new()
+            .set("bootstrap.servers", brokers)
+            .set("message.timeout.ms", "5000")
+            .create()?;
+
+        // Create consumer
         let consumer: StreamConsumer = ClientConfig::new()
             .set("group.id", &format!("mcp-server-{}", server_id))
             .set("bootstrap.servers", brokers)
@@ -648,7 +659,7 @@ impl KafkaTransport {
 
         // Subscribe to relevant request topics
         let mut topics = vec!["mcp.requests.global".to_string()];
-        for cap in capabilities {
+        for cap in &capabilities {
             topics.push(format!("mcp.requests.{}", cap));
         }
 
@@ -661,7 +672,21 @@ impl KafkaTransport {
             &capabilities,
         ).await?;
 
-        // ... rest of initialization
+        // ... rest of initialization (similar to new_client)
+        let (tx, rx) = mpsc::channel(100);
+
+        let mut transport = Self {
+            producer,
+            consumer,
+            instance_id: server_id,
+            request_topic: "mcp.requests.global".to_string(),
+            response_topic: String::new(), // Server doesn't have response topic
+            message_rx: Arc::new(Mutex::new(rx)),
+            message_tx: tx,
+        };
+
+        transport.start_consumer().await?;
+        Ok(transport)
     }
 
     async fn publish_discovery(
@@ -865,6 +890,10 @@ async fn receive(&mut self) -> Result<TransportMessage> {
 ### 6. Message Encryption (End-to-End Security)
 
 For high-security environments (defense, healthcare, finance), encrypt messages at the transport layer:
+
+> **⚠️ Important Caveat**: This example wraps messages in a custom `Notification` envelope. Both client and server MUST use `EncryptedTransport` - this is **not interoperable** with standard MCP clients/servers. For transparent encryption, use **TLS/mTLS at the transport layer** instead (e.g., `wss://` for WebSocket, HTTPS for HTTP).
+>
+> This pattern is appropriate when you control both ends and need application-layer encryption with custom key management.
 
 ```rust
 use aes_gcm::{
@@ -1458,6 +1487,352 @@ Edge Device (Ship)         Satellite Link       Cloud
 **Decision Criteria:**
 - ✅ Build custom transport if: Regulatory requirements, legacy constraints, or operational patterns prevent standard transports
 - ❌ Avoid if: Standard HTTP/WebSocket/stdio meets needs (99% of cases)
+
+## Gateway/Proxy Pattern (Recommended)
+
+**The Right Way to Use Custom Transports**: Instead of requiring all clients to implement custom transports, use a **gateway** that translates between standard and custom transports.
+
+### Architecture
+
+```
+Standard MCP Clients          Gateway              Custom Backend
+┌──────────┐                                       ┌──────────┐
+│ Claude   │    WebSocket     ┌──────────┐  Kafka │  MCP     │
+│ Desktop  │◄────────────────►│          │◄──────►│  Server  │
+└──────────┘                  │          │        │  Pool    │
+                              │  MCP     │        └──────────┘
+┌──────────┐                  │ Gateway  │        ┌──────────┐
+│ Custom   │     HTTP         │          │  SQS   │  Lambda  │
+│ Client   │◄────────────────►│  Bridge  │◄──────►│  Workers │
+└──────────┘                  │          │        └──────────┘
+                              │  Policy  │        ┌──────────┐
+┌──────────┐                  │  Layer   │  HTTP  │  Legacy  │
+│  IDE     │    stdio/HTTP    │          │◄──────►│  Backend │
+│  Plugin  │◄────────────────►│          │        └──────────┘
+└──────────┘                  └──────────┘
+```
+
+### Benefits
+
+**✅ Client Compatibility:**
+- Standard MCP clients work unchanged (Claude Desktop, IDEs)
+- No client-side custom transport implementation needed
+- One gateway serves all clients
+
+**✅ Control Point:**
+- **Authorization**: Check permissions before routing
+- **DLP**: Redact PII, filter sensitive data
+- **Rate Limiting**: Per-client quotas
+- **Schema Validation**: Reject malformed requests
+- **Audit**: Centralized logging of all MCP traffic
+
+**✅ Backend Flexibility:**
+- Route to different backends based on capability
+- Load balancing across server pool
+- Circuit breakers for failing backends
+- Automatic retries with backoff
+- Protocol translation (JSON-RPC ↔ XML/SOAP)
+
+**✅ Observability:**
+- Centralized metrics (latency, throughput, errors)
+- Distributed tracing across transports
+- Real-time monitoring dashboards
+
+### Implementation
+
+**Minimal Bridge (Bidirectional Forwarder):**
+
+```rust
+use pmcp::shared::{Transport, TransportMessage};
+use pmcp::error::Result;
+use async_trait::async_trait;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+/// Bridge that forwards messages between two transports
+pub async fn bridge_transports(
+    mut client_side: Box<dyn Transport + Send>,
+    mut backend_side: Box<dyn Transport + Send>,
+) -> Result<()> {
+    // Client -> Backend
+    let c2b = tokio::spawn(async move {
+        loop {
+            match client_side.receive().await {
+                Ok(msg) => {
+                    if let Err(e) = backend_side.send(msg).await {
+                        tracing::error!("Failed to forward to backend: {}", e);
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::info!("Client disconnected: {}", e);
+                    break;
+                }
+            }
+        }
+        Result::<()>::Ok(())
+    });
+
+    // Backend -> Client
+    let b2c = tokio::spawn(async move {
+        loop {
+            match backend_side.receive().await {
+                Ok(msg) => {
+                    if let Err(e) = client_side.send(msg).await {
+                        tracing::error!("Failed to forward to client: {}", e);
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::info!("Backend disconnected: {}", e);
+                    break;
+                }
+            }
+        }
+        Result::<()>::Ok(())
+    });
+
+    // If either side exits, close the other
+    tokio::select! {
+        r = c2b => { let _ = r?; }
+        r = b2c => { let _ = r?; }
+    }
+
+    Ok(())
+}
+
+// Usage
+let client_transport = WebSocketTransport::new(config)?;
+let backend_transport = KafkaTransport::new_client(brokers, client_id).await?;
+
+tokio::spawn(bridge_transports(
+    Box::new(client_transport),
+    Box::new(backend_transport),
+));
+```
+
+**Policy-Enforcing Gateway:**
+
+```rust
+/// Transport wrapper that enforces policies
+pub struct PolicyTransport<T: Transport> {
+    inner: T,
+    policy: Arc<PolicyEngine>,
+}
+
+#[async_trait]
+impl<T: Transport + Send + Sync> Transport for PolicyTransport<T> {
+    async fn send(&mut self, msg: TransportMessage) -> Result<()> {
+        // Enforce outbound policies (rate limits, quotas)
+        self.policy.check_send(&msg).await?;
+
+        // Log for audit
+        tracing::info!("Sending: {:?}", msg);
+
+        self.inner.send(msg).await
+    }
+
+    async fn receive(&mut self) -> Result<TransportMessage> {
+        let msg = self.inner.receive().await?;
+
+        // Enforce inbound policies (schema validation, PII redaction)
+        let sanitized = self.policy.sanitize(msg).await?;
+
+        // Log for audit
+        tracing::info!("Received: {:?}", sanitized);
+
+        Ok(sanitized)
+    }
+
+    async fn close(&mut self) -> Result<()> {
+        self.inner.close().await
+    }
+
+    fn is_connected(&self) -> bool {
+        self.inner.is_connected()
+    }
+
+    fn transport_type(&self) -> &'static str {
+        "policy"
+    }
+}
+
+// Usage
+let base = KafkaTransport::new_client(brokers, client_id).await?;
+let policy_engine = Arc::new(PolicyEngine::new());
+let policy_transport = PolicyTransport {
+    inner: base,
+    policy: policy_engine,
+};
+```
+
+**Full Gateway Service:**
+
+```rust
+use pmcp::shared::{Transport, WebSocketTransport, WebSocketConfig};
+use tokio::net::TcpListener;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Listen for WebSocket connections from clients
+    let listener = TcpListener::bind("0.0.0.0:8080").await?;
+    tracing::info!("Gateway listening on port 8080");
+
+    loop {
+        let (stream, addr) = listener.accept().await?;
+        tracing::info!("New client connection from {}", addr);
+
+        tokio::spawn(async move {
+            // Create client-facing transport (WebSocket)
+            let ws_config = WebSocketConfig { /* ... */ };
+            let client_transport = WebSocketTransport::from_stream(stream, ws_config);
+
+            // Create backend transport (Kafka/SQS based on routing logic)
+            let backend_transport = select_backend_transport(addr).await?;
+
+            // Wrap in policy layer
+            let policy_transport = PolicyTransport {
+                inner: backend_transport,
+                policy: Arc::new(PolicyEngine::new()),
+            };
+
+            // Bridge the two transports
+            bridge_transports(
+                Box::new(client_transport),
+                Box::new(policy_transport),
+            ).await
+        });
+    }
+}
+
+async fn select_backend_transport(client_addr: SocketAddr) -> Result<Box<dyn Transport>> {
+    // Route based on client, capability, tenant, etc.
+    if client_addr.ip().is_loopback() {
+        // Local clients -> direct HTTP
+        Ok(Box::new(HttpTransport::new(/* ... */)))
+    } else {
+        // External clients -> Kafka
+        let client_id = format!("gateway-{}", uuid::Uuid::new_v4());
+        Ok(Box::new(KafkaTransport::new_client(KAFKA_BROKERS, client_id).await?))
+    }
+}
+```
+
+### Routing Strategies
+
+**1. Capability-Based:**
+```rust
+async fn route_by_capability(request: &TransportMessage) -> String {
+    match request {
+        TransportMessage::Request { request, .. } => {
+            match request {
+                Request::Client(ClientRequest::CallTool(params)) => {
+                    // Route to Kafka topic based on tool name
+                    if params.name.starts_with("ml_") {
+                        "mcp.requests.ml-tools".to_string()
+                    } else if params.name.starts_with("data_") {
+                        "mcp.requests.data-tools".to_string()
+                    } else {
+                        "mcp.requests.global".to_string()
+                    }
+                }
+                _ => "mcp.requests.global".to_string(),
+            }
+        }
+        _ => "mcp.requests.global".to_string(),
+    }
+}
+```
+
+**2. Load Balancing:**
+```rust
+struct BackendPool {
+    backends: Vec<Box<dyn Transport>>,
+    current_index: AtomicUsize,
+}
+
+impl BackendPool {
+    fn get_next(&self) -> &Box<dyn Transport> {
+        let idx = self.current_index.fetch_add(1, Ordering::Relaxed);
+        &self.backends[idx % self.backends.len()]
+    }
+}
+```
+
+**3. Circuit Breaker:**
+```rust
+struct CircuitBreakerTransport<T: Transport> {
+    inner: T,
+    state: Arc<Mutex<CircuitState>>,
+}
+
+enum CircuitState {
+    Closed { failures: u32 },
+    Open { until: Instant },
+    HalfOpen,
+}
+
+impl<T: Transport> Transport for CircuitBreakerTransport<T> {
+    async fn send(&mut self, msg: TransportMessage) -> Result<()> {
+        let state = self.state.lock().await;
+        match *state {
+            CircuitState::Open { until } if Instant::now() < until => {
+                return Err(Error::Transport(TransportError::ConnectionClosed));
+            }
+            _ => {}
+        }
+        drop(state);
+
+        match self.inner.send(msg).await {
+            Ok(()) => {
+                // Success - reset failures
+                let mut state = self.state.lock().await;
+                *state = CircuitState::Closed { failures: 0 };
+                Ok(())
+            }
+            Err(e) => {
+                // Failure - increment counter
+                let mut state = self.state.lock().await;
+                if let CircuitState::Closed { failures } = *state {
+                    if failures + 1 >= 5 {
+                        // Trip circuit breaker
+                        *state = CircuitState::Open {
+                            until: Instant::now() + Duration::from_secs(30),
+                        };
+                    } else {
+                        *state = CircuitState::Closed { failures: failures + 1 };
+                    }
+                }
+                Err(e)
+            }
+        }
+    }
+    // ... rest of implementation
+}
+```
+
+### Testing with Gateway
+
+**Integration Testing:**
+
+```bash
+# Start gateway
+cargo run --bin mcp-gateway
+
+# Test with mcp-tester against gateway (WebSocket)
+mcp-tester test ws://localhost:8080 \
+  --with-tools \
+  --format json > results.json
+
+# Gateway exercises custom backend transport (Kafka/SQS)
+# under realistic conditions
+```
+
+**Key Advantages:**
+- ✅ **Client compatibility**: Standard clients work without modification
+- ✅ **Flexibility**: Change backend transport without client changes
+- ✅ **Testability**: `mcp-tester` validates end-to-end flow
+- ✅ **Incremental migration**: Gradually move backends to custom transports
 
 ## Advanced Topics
 
