@@ -69,8 +69,12 @@ The MCP Tester now supports **interactive OAuth 2.0 authentication** with automa
 
 For servers that require OAuth authentication, the tester provides a seamless authentication experience:
 
+> **Auto-Discovery vs Explicit Issuer**: If `--oauth-issuer` is omitted, the tester attempts
+> OIDC discovery from the MCP server base URL. Providing `--oauth-issuer` explicitly is
+> **recommended for reliability**, especially when the OAuth provider and MCP server are on different domains.
+
 ```bash
-# Interactive OAuth with automatic browser login (OIDC discovery)
+# Interactive OAuth with automatic browser login (OIDC discovery - explicit issuer recommended)
 mcp-tester test https://your-oauth-server.com/mcp \
   --oauth-client-id "your-client-id" \
   --oauth-issuer "https://auth.example.com" \

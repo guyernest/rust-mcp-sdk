@@ -359,8 +359,13 @@ The `mcp-tester` supports **interactive OAuth 2.0 authentication** with automati
 
 #### Interactive OAuth Flow (OIDC discovery)
 
+> **Auto-Discovery vs Explicit Issuer**: If `--oauth-issuer` is omitted, the tester attempts
+> OIDC discovery from the MCP server base URL (e.g., `https://api.example.com/.well-known/openid-configuration`).
+> Providing `--oauth-issuer` explicitly is **recommended for reliability**, especially when the OAuth
+> provider and MCP server are hosted on different domains.
+
 ```bash
-# Interactive OAuth with automatic browser login
+# Interactive OAuth with automatic browser login (explicit issuer - recommended)
 mcp-tester test https://your-oauth-server.com/mcp \
   --oauth-issuer "https://auth.example.com" \
   --oauth-client-id "your-client-id" \
@@ -657,13 +662,29 @@ assertions:
     # OR less_than_or_equal: 20
     # OR between: {min: 5, max: 15}
 
-**JSONPath:**
+**Path Expressions (JSONPath-style):**
 ```yaml
 assertions:
   - type: jsonpath
     expression: "result.items[0].id"
     expected: "abc-123"   # Optional: if omitted, only checks presence
+
+  - type: jsonpath
+    expression: "data.user.profile.email"  # Dot notation
+    expected: "test@example.com"
+
+  - type: jsonpath
+    expression: "results[0]"  # Array index
 ```
+
+> **Note**: The `jsonpath` assertion type uses **simple path expressions** with dot notation
+> and array indexing (e.g., `user.items[0].name`), not full JSONPath query language.
+> For full JSONPath support with wildcards, filters, and recursive descent, consider
+> using dedicated assertion tools in your CI pipeline.
+
+**Numeric Comparisons:**
+```yaml
+assertions:
   - type: numeric
     path: result.count
     greater_than_or_equal: 100
@@ -933,9 +954,14 @@ test-mcp-server:
   artifacts:
     paths:
       - test-results.json
-    reports:
-      junit: test-results.json
+    when: always
 ```
+
+> **Note**: The `mcp-tester` outputs JSON format (via `--format json`), not JUnit XML.
+> If your CI system requires JUnit XML reports, you can convert the JSON output using
+> tools like `jq` or write a custom converter script.
+
+
 
 ### Jenkins
 

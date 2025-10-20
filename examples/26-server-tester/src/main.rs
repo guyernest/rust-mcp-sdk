@@ -57,7 +57,7 @@ struct Cli {
     #[arg(long, global = true, env = "MCP_API_KEY")]
     api_key: Option<String>,
 
-    /// Force specific transport type (http|stdio)
+    /// Force specific transport type (http|stdio|jsonrpc)
     #[arg(long, global = true)]
     transport: Option<String>,
 
@@ -183,7 +183,7 @@ enum Commands {
         file: String,
 
         /// Show detailed output for scenario execution
-        #[arg(long)]
+        #[arg(long, alias = "verbose")]
         detailed: bool,
     },
 
@@ -341,14 +341,28 @@ async fn main() -> Result<()> {
         },
 
         Commands::Diagnose { url, network } => {
-            run_diagnostics(
-                &url,
-                network,
-                cli.timeout,
-                cli.insecure,
-                cli.api_key.as_deref(),
-            )
-            .await
+            // Keep JSON/minimal outputs clean by running diagnostics in quiet mode
+            let use_quiet = !matches!(cli.format, OutputFormat::Pretty | OutputFormat::Verbose);
+            let report = if use_quiet {
+                diagnostics::run_diagnostics_quiet(
+                    &url,
+                    network,
+                    Duration::from_secs(cli.timeout),
+                    cli.insecure,
+                    cli.api_key.as_deref(),
+                )
+                .await?
+            } else {
+                diagnostics::run_diagnostics(
+                    &url,
+                    network,
+                    Duration::from_secs(cli.timeout),
+                    cli.insecure,
+                    cli.api_key.as_deref(),
+                )
+                .await?
+            };
+            Ok(report)
         },
 
         Commands::Compare {

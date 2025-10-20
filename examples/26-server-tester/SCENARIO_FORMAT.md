@@ -12,11 +12,11 @@ The MCP Server Tester supports defining test scenarios in YAML or JSON format. T
 
 ```bash
 # Run a scenario file
-mcp-tester scenario <SERVER_URL> <SCENARIO_FILE> [--verbose]
+mcp-tester scenario <SERVER_URL> <SCENARIO_FILE> [--detailed]
 
 # Examples
 mcp-tester scenario http://localhost:8080 scenarios/basic-test.yaml
-mcp-tester scenario stdio scenarios/tool-validation.yaml --verbose
+mcp-tester scenario stdio scenarios/tool-validation.yaml --detailed
 ```
 
 ## Scenario File Structure
@@ -254,15 +254,35 @@ assertions:
     # Same comparison options as array_length
 ```
 
-### 8. JSONPath
-Use JSONPath expressions for complex assertions:
+### 8. Path Expressions (JSONPath-style)
+Use simple path expressions to navigate JSON responses:
 
 ```yaml
 assertions:
   - type: jsonpath
-    expression: "$.items[?(@.status == 'active')]"
-    expected: [...]  # Optional: expected value
+    expression: "result.items[0].id"
+    expected: "abc-123"  # Optional: if omitted, only checks presence
+
+  - type: jsonpath
+    expression: "data.user.profile.email"  # Dot notation
+    expected: "test@example.com"
+
+  - type: jsonpath
+    expression: "results[0]"  # Array indexing
 ```
+
+**Note**: The `jsonpath` type uses **simple path expressions** with:
+- Dot notation: `user.profile.name`
+- Array indexing: `items[0]` or `data.users[5].email`
+- Combined: `result.items[0].metadata.tags[2]`
+
+**Not supported** (use other assertion types instead):
+- `$` root notation
+- `..` recursive descent
+- `*` wildcards
+- `@` current object
+- Filter expressions: `[?(@.price < 10)]`
+- Array slicing: `[0:5]`
 
 ## Variables and Substitution
 
