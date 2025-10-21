@@ -61,7 +61,7 @@ mcp-tester quick http://localhost:8080
 mcp-tester test https://api.example.com/mcp --api-key YOUR_ACCESS_TOKEN
 ```
 
-### Testing OAuth-Protected MCP Servers (NEW: Interactive Flow!)
+### Testing OAuth-Protected MCP Servers (Interactive OAuth)
 
 The MCP Tester now supports **interactive OAuth 2.0 authentication** with automatic browser-based login and token management.
 
@@ -69,12 +69,16 @@ The MCP Tester now supports **interactive OAuth 2.0 authentication** with automa
 
 For servers that require OAuth authentication, the tester provides a seamless authentication experience:
 
+> **Auto-Discovery vs Explicit Issuer**: If `--oauth-issuer` is omitted, the tester attempts
+> OIDC discovery from the MCP server base URL. Providing `--oauth-issuer` explicitly is
+> **recommended for reliability**, especially when the OAuth provider and MCP server are on different domains.
+
 ```bash
-# Interactive OAuth with automatic browser login
+# Interactive OAuth with automatic browser login (OIDC discovery - explicit issuer recommended)
 mcp-tester test https://your-oauth-server.com/mcp \
-  --oauth-authorize-url "https://auth.example.com/oauth2/authorize" \
-  --oauth-token-url "https://auth.example.com/oauth2/token" \
-  --oauth-client-id "your-client-id"
+  --oauth-client-id "your-client-id" \
+  --oauth-issuer "https://auth.example.com" \
+  --oauth-scopes openid,email,profile
 ```
 
 **What happens:**
@@ -94,16 +98,16 @@ Tokens are cached in `~/.mcp-tester/tokens.json`:
 - Tokens are stored securely with expiration timestamps
 - Manual refresh is handled automatically when tokens expire
 
-#### AWS Cognito Example
+#### AWS Cognito Example (OIDC discovery)
 
 Testing an MCP server protected by AWS Cognito:
 
 ```bash
 mcp-tester test https://your-api.execute-api.us-west-2.amazonaws.com/mcp \
-  --oauth-authorize-url "https://your-pool.auth.us-west-2.amazoncognito.com/oauth2/authorize" \
-  --oauth-token-url "https://your-pool.auth.us-west-2.amazoncognito.com/oauth2/token" \
+  --oauth-issuer "https://your-pool.auth.us-west-2.amazoncognito.com" \
   --oauth-client-id "your-cognito-client-id" \
-  --oauth-redirect-uri "http://localhost:8765/callback"
+  --oauth-scopes openid \
+  --oauth-redirect-port 8080
 ```
 
 **Important for AWS Cognito:**
@@ -151,12 +155,13 @@ Options:
   --timeout <SECONDS>         Connection timeout (default: 30)
   --insecure                  Skip TLS certificate verification
 
-  # OAuth 2.0 Authentication (NEW!)
-  --oauth-authorize-url <URL> OAuth authorization endpoint
-  --oauth-token-url <URL>     OAuth token endpoint
+  # OAuth 2.0 Authentication (OIDC discovery)
+  --oauth-issuer <URL>        OAuth/OIDC issuer URL (for discovery)
   --oauth-client-id <ID>      OAuth client ID
-  --oauth-redirect-uri <URI>  OAuth redirect URI (default: http://localhost:8765/callback)
-  --api-key <TOKEN>           Manual bearer token (alternative to OAuth flow)
+  --oauth-scopes <SCOPES>     Comma-separated scopes (default: openid)
+  --oauth-redirect-port <N>   Local redirect port (default: 8080)
+  --oauth-no-cache            Disable token cache (~/.mcp-tester/tokens.json)
+  --api-key <TOKEN>           Manual bearer token (alternative)
 ```
 
 #### `compliance` - Protocol Compliance Validation
@@ -399,8 +404,7 @@ mcp-tester test http://localhost:8080 \
 
 # Test AWS Lambda MCP server with interactive OAuth (recommended)
 mcp-tester test https://your-api.execute-api.us-west-2.amazonaws.com/mcp \
-  --oauth-authorize-url "https://your-pool.auth.us-west-2.amazoncognito.com/oauth2/authorize" \
-  --oauth-token-url "https://your-pool.auth.us-west-2.amazoncognito.com/oauth2/token" \
+  --oauth-issuer "https://your-pool.auth.us-west-2.amazoncognito.com" \
   --oauth-client-id "your-cognito-client-id" \
   --with-tools
 

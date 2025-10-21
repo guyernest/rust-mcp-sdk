@@ -117,7 +117,7 @@ impl OAuthHelper {
     async fn discover_metadata(&self, mcp_url: &str) -> Result<OidcDiscoveryMetadata> {
         let base_url = Self::extract_base_url(mcp_url)?;
 
-        println!(
+        eprintln!(
             "{}",
             format!("Discovering OAuth configuration from {}...", base_url).cyan()
         );
@@ -126,10 +126,10 @@ impl OAuthHelper {
 
         match discovery_client.discover(&base_url).await {
             Ok(metadata) => {
-                println!("{}", "✓ OAuth discovery successful!".green());
-                println!("  Issuer: {}", metadata.issuer.dimmed());
+                eprintln!("{}", "✓ OAuth discovery successful!".green());
+                eprintln!("  Issuer: {}", metadata.issuer.dimmed());
                 if let Some(ref device_endpoint) = metadata.device_authorization_endpoint {
-                    println!("  Device endpoint: {}", device_endpoint.dimmed());
+                    eprintln!("  Device endpoint: {}", device_endpoint.dimmed());
                 }
                 Ok(metadata)
             },
@@ -154,7 +154,7 @@ impl OAuthHelper {
             self.discover_metadata(mcp_url).await
         } else if let Some(ref issuer) = self.config.issuer {
             // Manually provided issuer - try to discover from it
-            println!(
+            eprintln!(
                 "{}",
                 format!("Discovering OAuth configuration from {}...", issuer).cyan()
             );
@@ -162,7 +162,7 @@ impl OAuthHelper {
             let discovery_client = OidcDiscoveryClient::new();
             match discovery_client.discover(issuer).await {
                 Ok(metadata) => {
-                    println!("{}", "✓ OAuth discovery successful!".green());
+                    eprintln!("{}", "✓ OAuth discovery successful!".green());
                     Ok(metadata)
                 },
                 Err(e) => {
@@ -196,14 +196,14 @@ impl OAuthHelper {
                         .unwrap()
                         .as_secs();
                     if now < expires_at {
-                        println!("{}", "✓ Using cached OAuth token".green());
+                        eprintln!("{}", "✓ Using cached OAuth token".green());
                         return Ok(cached.access_token);
                     }
                 }
 
                 // Try to refresh if we have a refresh token
                 if let Some(refresh_token) = cached.refresh_token {
-                    println!("{}", "Refreshing OAuth token...".yellow());
+                    eprintln!("{}", "Refreshing OAuth token...".yellow());
                     if let Ok(new_token) = self.refresh_token(&refresh_token).await {
                         self.cache_token(&new_token, cache_file).await?;
                         return Ok(new_token.access_token);
@@ -213,7 +213,7 @@ impl OAuthHelper {
         }
 
         // No valid cached token, try authorization code flow first
-        println!("{}", "No cached token found. Starting OAuth flow...".cyan());
+        eprintln!("{}", "No cached token found. Starting OAuth flow...".cyan());
 
         // Get metadata to see what flows are supported
         let metadata = self.get_metadata().await?;
@@ -222,14 +222,14 @@ impl OAuthHelper {
         match self.authorization_code_flow(&metadata).await {
             Ok(token) => return Ok(token),
             Err(e) => {
-                println!(
+                eprintln!(
                     "{}",
                     format!("Authorization code flow failed: {}", e).yellow()
                 );
 
                 // Fall back to device code flow if available
                 if metadata.device_authorization_endpoint.is_some() {
-                    println!("{}", "Trying device code flow...".cyan());
+                    eprintln!("{}", "Trying device code flow...".cyan());
                     return self.device_code_flow_with_metadata(&metadata).await;
                 } else {
                     anyhow::bail!(
@@ -260,11 +260,11 @@ impl OAuthHelper {
 
     /// Perform OAuth authorization code flow with PKCE
     async fn authorization_code_flow(&self, metadata: &OidcDiscoveryMetadata) -> Result<String> {
-        println!(
+        eprintln!(
             "{}",
             "Starting OAuth authorization code flow...".cyan().bold()
         );
-        println!();
+        eprintln!();
 
         // Generate PKCE challenge
         let code_verifier = Self::generate_code_verifier();
@@ -286,19 +286,19 @@ impl OAuthHelper {
                 )
             })?;
 
-        println!(
+        eprintln!(
             "{}",
             format!("Local callback server listening on port {}", redirect_port).dimmed()
         );
-        println!();
-        println!(
+        eprintln!();
+        eprintln!(
             "{}",
             format!("IMPORTANT: Ensure the redirect URI is registered in your OAuth provider:")
                 .yellow()
                 .bold()
         );
-        println!("{}", format!("  {}", redirect_uri).yellow());
-        println!();
+        eprintln!("{}", format!("  {}", redirect_uri).yellow());
+        eprintln!();
 
         // Build authorization URL
         let mut auth_url = Url::parse(&metadata.authorization_endpoint)
@@ -314,38 +314,38 @@ impl OAuthHelper {
             .append_pair("code_challenge_method", "S256")
             .append_pair("state", &Self::generate_code_verifier()); // Random state for CSRF protection
 
-        println!();
-        println!(
+        eprintln!();
+        eprintln!(
             "{}",
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan()
         );
-        println!("{}", "  OAuth Authentication Required".cyan().bold());
-        println!(
+        eprintln!("{}", "  OAuth Authentication Required".cyan().bold());
+        eprintln!(
             "{}",
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan()
         );
-        println!();
-        println!("  {}", "Opening browser for authentication...".bold());
-        println!();
-        println!(
+        eprintln!();
+        eprintln!("  {}", "Opening browser for authentication...".bold());
+        eprintln!();
+        eprintln!(
             "  {}",
             "If the browser doesn't open automatically, visit:".dimmed()
         );
-        println!("  {}", auth_url.as_str().yellow());
-        println!();
-        println!(
+        eprintln!("  {}", auth_url.as_str().yellow());
+        eprintln!();
+        eprintln!(
             "{}",
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan()
         );
-        println!();
+        eprintln!();
 
         // Open browser
         if let Err(e) = webbrowser::open(auth_url.as_str()) {
-            println!(
+            eprintln!(
                 "{}",
                 format!("Warning: Failed to open browser: {}", e).yellow()
             );
-            println!("{}", "Please open the URL above manually.".yellow());
+            eprintln!("{}", "Please open the URL above manually.".yellow());
         }
 
         // Wait for OAuth callback
@@ -401,11 +401,11 @@ impl OAuthHelper {
 
         callback_task.abort();
 
-        println!("\r{}", "✓ Authorization code received!        ".green());
-        println!();
+        eprintln!("\r{}", "✓ Authorization code received!        ".green());
+        eprintln!();
 
         // Exchange authorization code for access token
-        println!(
+        eprintln!(
             "{}",
             "Exchanging authorization code for access token...".dimmed()
         );
@@ -423,8 +423,8 @@ impl OAuthHelper {
             .await
             .context("Failed to exchange authorization code for token")?;
 
-        println!("{}", "✓ Authentication successful!".green().bold());
-        println!();
+        eprintln!("{}", "✓ Authentication successful!".green().bold());
+        eprintln!();
 
         // Cache the token
         if let Some(ref cache_file) = self.config.cache_file {
@@ -440,8 +440,8 @@ impl OAuthHelper {
         &self,
         metadata: &OidcDiscoveryMetadata,
     ) -> Result<String> {
-        println!("{}", "Starting OAuth device code flow...".cyan().bold());
-        println!();
+        eprintln!("{}", "Starting OAuth device code flow...".cyan().bold());
+        eprintln!();
 
         // Check if device flow is supported
         let device_auth_endpoint =
@@ -494,39 +494,39 @@ impl OAuthHelper {
             .context("Failed to parse device authorization response")?;
 
         // Step 2: Display user code and verification URL
-        println!(
+        eprintln!(
             "{}",
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan()
         );
-        println!("{}", "  OAuth Authentication Required".cyan().bold());
-        println!(
+        eprintln!("{}", "  OAuth Authentication Required".cyan().bold());
+        eprintln!(
             "{}",
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan()
         );
-        println!();
-        println!(
+        eprintln!();
+        eprintln!(
             "  {}  {}",
             "1. Visit:".bold(),
             device_auth.verification_uri.yellow()
         );
-        println!(
+        eprintln!(
             "  {}  {}",
             "2. Enter code:".bold(),
             device_auth.user_code.green().bold()
         );
 
         if let Some(complete_uri) = &device_auth.verification_uri_complete {
-            println!();
-            println!("  {} Or scan this URL:", "Shortcut:".bold());
-            println!("  {}", complete_uri.yellow());
+            eprintln!();
+            eprintln!("  {} Or scan this URL:", "Shortcut:".bold());
+            eprintln!("  {}", complete_uri.yellow());
         }
 
-        println!();
-        println!(
+        eprintln!();
+        eprintln!(
             "{}",
             "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".cyan()
         );
-        println!();
+        eprintln!();
 
         // Step 3: Poll for token
         let poll_interval = Duration::from_secs(device_auth.interval.unwrap_or(5));
@@ -561,8 +561,8 @@ impl OAuthHelper {
                 let token_response: TokenResponse =
                     serde_json::from_str(&body).context("Failed to parse token response")?;
 
-                println!("{}", "✓ Authentication successful!".green().bold());
-                println!();
+                eprintln!("{}", "✓ Authentication successful!".green().bold());
+                eprintln!();
 
                 // Cache the token
                 if let Some(ref cache_file) = self.config.cache_file {
@@ -663,7 +663,7 @@ impl OAuthHelper {
             .await
             .context("Failed to write token cache")?;
 
-        println!(
+        eprintln!(
             "{}",
             format!("Token cached to: {}", cache_file.display()).dimmed()
         );
@@ -691,7 +691,7 @@ impl OAuthHelper {
     pub async fn create_middleware_chain(&self) -> Result<Arc<HttpMiddlewareChain>> {
         let access_token = self.get_access_token().await?;
 
-        println!(
+        eprintln!(
             "{}",
             format!(
                 "Creating OAuth middleware with token: {}...",
@@ -706,7 +706,7 @@ impl OAuthHelper {
         let mut chain = HttpMiddlewareChain::new();
         chain.add(Arc::new(oauth_middleware));
 
-        println!("{}", "OAuth middleware added to chain".green());
+        eprintln!("{}", "OAuth middleware added to chain".green());
 
         Ok(Arc::new(chain))
     }

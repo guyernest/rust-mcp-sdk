@@ -57,7 +57,7 @@ struct Cli {
     #[arg(long, global = true, env = "MCP_API_KEY")]
     api_key: Option<String>,
 
-    /// Force specific transport type (http|stdio)
+    /// Force specific transport type (http|stdio|jsonrpc)
     #[arg(long, global = true)]
     transport: Option<String>,
 
@@ -183,7 +183,7 @@ enum Commands {
         file: String,
 
         /// Show detailed output for scenario execution
-        #[arg(long)]
+        #[arg(long, alias = "verbose")]
         detailed: bool,
     },
 
@@ -341,14 +341,28 @@ async fn main() -> Result<()> {
         },
 
         Commands::Diagnose { url, network } => {
-            run_diagnostics(
-                &url,
-                network,
-                cli.timeout,
-                cli.insecure,
-                cli.api_key.as_deref(),
-            )
-            .await
+            // Keep JSON/minimal outputs clean by running diagnostics in quiet mode
+            let use_quiet = !matches!(cli.format, OutputFormat::Pretty | OutputFormat::Verbose);
+            let report = if use_quiet {
+                diagnostics::run_diagnostics_quiet(
+                    &url,
+                    network,
+                    Duration::from_secs(cli.timeout),
+                    cli.insecure,
+                    cli.api_key.as_deref(),
+                )
+                .await?
+            } else {
+                diagnostics::run_diagnostics(
+                    &url,
+                    network,
+                    Duration::from_secs(cli.timeout),
+                    cli.insecure,
+                    cli.api_key.as_deref(),
+                )
+                .await?
+            };
+            Ok(report)
         },
 
         Commands::Compare {
@@ -430,7 +444,8 @@ async fn main() -> Result<()> {
     match result {
         Ok(report) => {
             report.print(cli.format);
-            if report.has_failures() && cli.format == OutputFormat::Pretty {
+            // Always use non-zero exit code on failures for all formats (CI-friendly)
+            if report.has_failures() {
                 std::process::exit(1);
             }
         },
@@ -560,15 +575,14 @@ async fn run_full_test(
         oauth_middleware,
     )?;
 
-    println!("{}", "Running full test suite...".green());
-    println!();
+    // Intentionally no unconditional prints here to keep JSON/minimal output clean
 
     // Run all test categories
     let mut report = tester.run_full_suite(with_tools).await?;
 
     // Test specific tool if requested
     if let Some(tool_name) = tool {
-        println!("{} {}", "Testing specific tool:".yellow(), tool_name);
+        // Optional: testing a specific tool (no unconditional prints)
         let tool_args = if let Some(args_str) = args {
             serde_json::from_str(&args_str).context("Invalid JSON arguments")?
         } else {
@@ -599,8 +613,7 @@ async fn run_quick_test(
         oauth_middleware,
     )?;
 
-    println!("{}", "Running quick connectivity test...".green());
-    println!();
+    // Intentionally no unconditional prints here to keep JSON/minimal output clean
 
     tester.run_quick_test().await
 }
@@ -623,11 +636,7 @@ async fn run_compliance_test(
         oauth_middleware,
     )?;
 
-    println!("{}", "Running protocol compliance tests...".green());
-    if strict {
-        println!("{}", "Mode: STRICT (warnings will fail)".yellow());
-    }
-    println!();
+    // Intentionally no unconditional prints here to keep JSON/minimal output clean
 
     tester.run_compliance_tests(strict).await
 }
@@ -652,7 +661,7 @@ async fn run_tools_test(
         oauth_middleware,
     )?;
 
-    println!("{}", "Discovering and testing tools...".green());
+    // Intentionally no unconditional prints here to keep JSON/minimal output clean
     println!();
 
     // Pass verbose flag to the tester for detailed output
@@ -680,10 +689,9 @@ async fn run_resources_test(
         oauth_middleware,
     )?;
 
-    println!("{}", "Discovering and testing resources...".green());
-    println!();
-
     if verbose {
+        println!("{}", "Discovering and testing resources...".green());
+        println!();
         println!("Connecting to {}...", url);
     }
 
@@ -709,10 +717,9 @@ async fn run_prompts_test(
         oauth_middleware,
     )?;
 
-    println!("{}", "Discovering and testing prompts...".green());
-    println!();
-
     if verbose {
+        println!("{}", "Discovering and testing prompts...".green());
+        println!();
         println!("Connecting to {}...", url);
     }
 
@@ -726,8 +733,7 @@ async fn run_diagnostics(
     insecure: bool,
     api_key: Option<&str>,
 ) -> Result<TestReport> {
-    println!("{}", "Running connection diagnostics...".green());
-    println!();
+    // No unconditional prints to keep JSON/minimal output clean
 
     let report = diagnostics::run_diagnostics(
         url,
@@ -752,10 +758,7 @@ async fn run_comparison(
     transport: Option<&str>,
     oauth_middleware: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
 ) -> Result<TestReport> {
-    println!("{}", "Comparing servers...".green());
-    println!("  Server 1: {}", server1.cyan());
-    println!("  Server 2: {}", server2.cyan());
-    println!();
+    // No unconditional prints to keep JSON/minimal output clean
 
     let mut tester1 = ServerTester::new(
         server1,
@@ -796,8 +799,7 @@ async fn run_health_check(
         oauth_middleware,
     )?;
 
-    println!("{}", "Checking server health...".green());
-    println!();
+    // No unconditional prints to keep JSON/minimal output clean
 
     tester.run_health_check().await
 }
@@ -868,15 +870,14 @@ async fn run_scenario(
         oauth_middleware,
     )?;
 
-    // Initialize the server first
-    println!("{}", "Initializing server connection...".green());
+    // Initialize the server first (no unconditional prints)
     let init_report = tester.run_quick_test().await?;
     if init_report.has_failures() {
         return Ok(init_report);
     }
 
     // Load the scenario file
-    println!("{}", format!("Loading scenario from: {}", file).cyan());
+    // No unconditional prints to keep JSON/minimal output clean
     let scenario = TestScenario::from_file(file).context("Failed to load scenario file")?;
 
     // Execute the scenario
