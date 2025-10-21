@@ -3568,12 +3568,7 @@ mod tests {
             }
         }
 
-        let middleware_called = Arc::new(AtomicBool::new(false));
-        let middleware = Arc::new(OAuthMiddleware {
-            called: Arc::clone(&middleware_called),
-        });
-
-        // Build server with middleware and typed tool
+        // Tool that verifies OAuth token was injected
         struct OAuthVerifyTool;
 
         #[async_trait]
@@ -3590,6 +3585,11 @@ mod tests {
                 Ok(json!({"success": true}))
             }
         }
+
+        let middleware_called = Arc::new(AtomicBool::new(false));
+        let middleware = Arc::new(OAuthMiddleware {
+            called: Arc::clone(&middleware_called),
+        });
 
         let server = Server::builder()
             .name("test-server")
