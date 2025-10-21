@@ -277,6 +277,9 @@ pub struct Server {
     auth_provider: Option<Arc<dyn auth::AuthProvider>>,
     /// Tool authorizer for fine-grained access control
     tool_authorizer: Option<Arc<dyn auth::ToolAuthorizer>>,
+    /// Tool middleware chain for cross-cutting concerns in tool execution
+    #[cfg(not(target_arch = "wasm32"))]
+    tool_middleware_chain: Arc<RwLock<tool_middleware::ToolMiddlewareChain>>,
     /// HTTP middleware chain for `StreamableHttpServer` (configured via `ServerBuilder`)
     #[cfg(feature = "streamable-http")]
     http_middleware: Option<Arc<http_middleware::ServerHttpMiddlewareChain>>,
@@ -959,6 +962,7 @@ impl Server {
         })?)
     }
 
+    #[allow(clippy::cognitive_complexity)]
     async fn handle_call_tool(
         &self,
         request_id: RequestId,
@@ -1020,14 +1024,62 @@ impl Server {
                 })
             });
 
-        let extra = crate::server::cancellation::RequestHandlerExtra::new(
+        let mut extra = crate::server::cancellation::RequestHandlerExtra::new(
             request_id.to_string(),
             cancellation_token,
         )
         .with_auth_context(validated_auth_context)
         .with_progress_reporter(progress_reporter);
 
-        let result = match handler.handle(req.arguments, extra).await {
+        // Execute tool with middleware (native-only)
+        #[cfg(not(target_arch = "wasm32"))]
+        let result = {
+            // Create tool context for middleware
+            let context = tool_middleware::ToolContext::new(&req.name, &request_id_str);
+
+            // Clone arguments for middleware processing
+            let mut args = req.arguments;
+
+            // Process request through tool middleware chain
+            // Middleware rejection short-circuits tool execution
+            self.tool_middleware_chain
+                .read()
+                .await
+                .process_request(&req.name, &mut args, &mut extra, &context)
+                .await?;
+
+            // Execute the tool with potentially modified args and extra
+            let mut result = handler.handle(args, extra).await;
+
+            // Process response through tool middleware chain
+            if let Err(e) = self
+                .tool_middleware_chain
+                .read()
+                .await
+                .process_response(&req.name, &mut result, &context)
+                .await
+            {
+                // Log error but continue with original result
+                tracing::warn!("Tool response middleware processing failed: {}", e);
+            }
+
+            // If tool execution failed, call handle_tool_error
+            if let Err(ref e) = result {
+                self.tool_middleware_chain
+                    .read()
+                    .await
+                    .handle_tool_error(&req.name, e, &context)
+                    .await;
+            }
+
+            result
+        };
+
+        // On WASM, execute tool directly without middleware
+        #[cfg(target_arch = "wasm32")]
+        let result = handler.handle(req.arguments, extra).await;
+
+        let result = match result {
             Ok(v) => {
                 self.cancellation_manager
                     .remove_token(&request_id_str)
@@ -1536,6 +1588,9 @@ pub struct ServerBuilder {
     tool_authorizer: Option<Arc<dyn auth::ToolAuthorizer>>,
     /// Tool protection requirements to be applied at build time
     tool_protections: HashMap<String, Vec<String>>,
+    /// Tool middleware chain for cross-cutting concerns
+    #[cfg(not(target_arch = "wasm32"))]
+    tool_middlewares: Vec<Arc<dyn tool_middleware::ToolMiddleware>>,
     /// HTTP middleware chain for `StreamableHttpServer`
     #[cfg(feature = "streamable-http")]
     http_middleware: Option<Arc<http_middleware::ServerHttpMiddlewareChain>>,
@@ -1592,6 +1647,8 @@ impl ServerBuilder {
             auth_provider: None,
             tool_authorizer: None,
             tool_protections: HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            tool_middlewares: Vec::new(),
             #[cfg(feature = "streamable-http")]
             http_middleware: None,
         }
@@ -2229,7 +2286,8 @@ impl ServerBuilder {
         let name = workflow.name().to_string();
 
         // Create workflow prompt handler with tool execution and resource fetching capability
-        // Note: ServerBuilder does NOT support middleware - use ServerCoreBuilder for middleware support
+        // Note: Workflow prompts in ServerBuilder do not currently execute tool middleware.
+        // For middleware support in workflow tool execution, use ServerCoreBuilder.
         let handler = workflow::WorkflowPromptHandler::new(
             workflow,
             tools,
@@ -2471,6 +2529,110 @@ impl ServerBuilder {
         self
     }
 
+    /// Add tool middleware for cross-cutting concerns.
+    ///
+    /// Tool middleware allows you to inject cross-cutting concerns into tool execution,
+    /// such as OAuth token injection, logging, metrics, or request transformation.
+    /// Middleware is executed in the order it's added, both for request processing
+    /// (before tool execution) and response processing (after tool execution).
+    ///
+    /// This method brings middleware support to the high-level `ServerBuilder` API,
+    /// enabling developers to use both typed tool registration AND middleware without
+    /// dropping down to the lower-level `ServerCoreBuilder` API.
+    ///
+    /// # Arguments
+    ///
+    /// * `middleware` - The middleware implementation to add to the chain
+    ///
+    /// # Examples
+    ///
+    /// ## OAuth Token Injection Middleware
+    ///
+    /// ```rust,no_run
+    /// use pmcp::server::tool_middleware::{ToolMiddleware, ToolContext};
+    /// use pmcp::server::cancellation::RequestHandlerExtra;
+    /// use pmcp::Server;
+    /// use std::sync::Arc;
+    /// use async_trait::async_trait;
+    /// use serde_json::Value;
+    ///
+    /// struct OAuthInjectionMiddleware;
+    ///
+    /// #[async_trait]
+    /// impl ToolMiddleware for OAuthInjectionMiddleware {
+    ///     async fn on_request(
+    ///         &self,
+    ///         _tool_name: &str,
+    ///         _args: &mut Value,
+    ///         extra: &mut RequestHandlerExtra,
+    ///         _context: &ToolContext,
+    ///     ) -> pmcp::Result<()> {
+    ///         // Extract OAuth token from auth_context and inject into metadata
+    ///         if let Some(auth_ctx) = extra.auth_context() {
+    ///             if let Some(token) = &auth_ctx.token {
+    ///                 extra.set_metadata("oauth_token".to_string(), token.clone());
+    ///             }
+    ///         }
+    ///         Ok(())
+    ///     }
+    /// }
+    ///
+    /// let server = Server::builder()
+    ///     .name("oauth-server")
+    ///     .version("1.0.0")
+    ///     .tool_middleware(Arc::new(OAuthInjectionMiddleware))
+    ///     .build()?;
+    /// # Ok::<(), pmcp::Error>(())
+    /// ```
+    ///
+    /// ## Combining with Typed Tools
+    ///
+    /// ```rust,no_run
+    /// # #[cfg(feature = "schema-generation")]
+    /// # {
+    /// use pmcp::Server;
+    /// use schemars::JsonSchema;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+    /// struct ListGamesArgs {
+    ///     filter: Option<String>,
+    /// }
+    ///
+    /// let server = Server::builder()
+    ///     .name("game-server")
+    ///     .version("1.0.0")
+    ///     .tool_typed_with_description(
+    ///         "list_games",
+    ///         "List all available games",
+    ///         |args: ListGamesArgs, extra| {
+    ///             Box::pin(async move {
+    ///                 // Access OAuth token injected by middleware
+    ///                 let _token = extra.get_metadata("oauth_token");
+    ///                 Ok(serde_json::json!({"games": []}))
+    ///             })
+    ///         }
+    ///     )
+    ///     // .tool_middleware(Arc::new(oauth_middleware))  // Works with typed tools!
+    ///     .build()?;
+    /// # }
+    /// # Ok::<(), pmcp::Error>(())
+    /// ```
+    ///
+    /// # Middleware Execution Order
+    ///
+    /// Multiple middleware are executed in FIFO order for requests and FIFO for responses:
+    ///
+    /// ```text
+    /// Request:  Middleware1 → Middleware2 → Tool Handler
+    /// Response: Tool Handler → Middleware1 → Middleware2
+    /// ```
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn tool_middleware(mut self, middleware: Arc<dyn tool_middleware::ToolMiddleware>) -> Self {
+        self.tool_middlewares.push(middleware);
+        self
+    }
+
     /// Add a description to a tool (Note: Limited support).
     ///
     /// **Important**: Due to the immutable design of tool handlers, this method
@@ -2615,6 +2777,16 @@ impl ServerBuilder {
             self.tool_authorizer
         };
 
+        // Initialize tool middleware chain
+        #[cfg(not(target_arch = "wasm32"))]
+        let tool_middleware_chain = {
+            let mut chain = tool_middleware::ToolMiddlewareChain::new();
+            for middleware in self.tool_middlewares {
+                chain.add(middleware);
+            }
+            Arc::new(RwLock::new(chain))
+        };
+
         Ok(Server {
             info: Implementation { name, version },
             capabilities: self.capabilities,
@@ -2631,6 +2803,8 @@ impl ServerBuilder {
             elicitation_manager: None,
             auth_provider: self.auth_provider,
             tool_authorizer,
+            #[cfg(not(target_arch = "wasm32"))]
+            tool_middleware_chain,
             #[cfg(feature = "streamable-http")]
             http_middleware: self.http_middleware,
         })
@@ -3244,6 +3418,251 @@ mod tests {
                 assert!(error.message.contains("not supported"));
             },
             ResponsePayload::Result(_) => panic!("Expected error response"),
+        }
+    }
+
+    // Tests for tool middleware support in ServerBuilder
+    #[tokio::test]
+    async fn test_server_builder_with_tool_middleware() {
+        use crate::server::tool_middleware::{ToolContext, ToolMiddleware};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        // Create a simple middleware that sets a flag when called
+        struct TestMiddleware {
+            called: Arc<AtomicBool>,
+        }
+
+        #[async_trait]
+        impl ToolMiddleware for TestMiddleware {
+            async fn on_request(
+                &self,
+                _tool_name: &str,
+                _args: &mut Value,
+                extra: &mut crate::server::cancellation::RequestHandlerExtra,
+                _context: &ToolContext,
+            ) -> Result<()> {
+                self.called.store(true, Ordering::SeqCst);
+                extra.set_metadata("middleware_executed".to_string(), "true".to_string());
+                Ok(())
+            }
+        }
+
+        let middleware_called = Arc::new(AtomicBool::new(false));
+        let middleware = Arc::new(TestMiddleware {
+            called: Arc::clone(&middleware_called),
+        });
+
+        // Build server with middleware
+        let server = Server::builder()
+            .name("test-server")
+            .version("1.0.0")
+            .tool("test_tool", MockTool::new(json!({"result": "success"})))
+            .tool_middleware(middleware)
+            .build()
+            .unwrap();
+
+        // Call the tool
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
+            name: "test_tool".to_string(),
+            arguments: json!({}),
+            _meta: None,
+        })));
+
+        let response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
+
+        // Verify middleware was called
+        assert!(middleware_called.load(Ordering::SeqCst));
+
+        // Verify tool executed successfully
+        match response.payload {
+            ResponsePayload::Result(_) => {}, // Success
+            ResponsePayload::Error(e) => panic!("Expected success, got error: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_server_builder_multiple_middlewares() {
+        use crate::server::tool_middleware::{ToolContext, ToolMiddleware};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Middleware that increments a counter
+        struct CounterMiddleware {
+            counter: Arc<AtomicUsize>,
+            id: usize,
+        }
+
+        #[async_trait]
+        impl ToolMiddleware for CounterMiddleware {
+            async fn on_request(
+                &self,
+                _tool_name: &str,
+                _args: &mut Value,
+                extra: &mut crate::server::cancellation::RequestHandlerExtra,
+                _context: &ToolContext,
+            ) -> Result<()> {
+                let count = self.counter.fetch_add(1, Ordering::SeqCst);
+                extra.set_metadata(format!("middleware_{}_order", self.id), count.to_string());
+                Ok(())
+            }
+        }
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let middleware1 = Arc::new(CounterMiddleware {
+            counter: Arc::clone(&counter),
+            id: 1,
+        });
+        let middleware2 = Arc::new(CounterMiddleware {
+            counter: Arc::clone(&counter),
+            id: 2,
+        });
+
+        // Build server with multiple middlewares
+        let server = Server::builder()
+            .name("test-server")
+            .version("1.0.0")
+            .tool("test_tool", MockTool::new(json!({"result": "success"})))
+            .tool_middleware(middleware1)
+            .tool_middleware(middleware2)
+            .build()
+            .unwrap();
+
+        // Call the tool
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
+            name: "test_tool".to_string(),
+            arguments: json!({}),
+            _meta: None,
+        })));
+
+        let _response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
+
+        // Verify both middlewares were called in order
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_server_builder_middleware_with_typed_tools() {
+        use crate::server::tool_middleware::{ToolContext, ToolMiddleware};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        // Middleware that injects OAuth token
+        struct OAuthMiddleware {
+            called: Arc<AtomicBool>,
+        }
+
+        #[async_trait]
+        impl ToolMiddleware for OAuthMiddleware {
+            async fn on_request(
+                &self,
+                _tool_name: &str,
+                _args: &mut Value,
+                extra: &mut crate::server::cancellation::RequestHandlerExtra,
+                _context: &ToolContext,
+            ) -> Result<()> {
+                self.called.store(true, Ordering::SeqCst);
+                extra.set_metadata("oauth_token".to_string(), "test-token-123".to_string());
+                Ok(())
+            }
+        }
+
+        let middleware_called = Arc::new(AtomicBool::new(false));
+        let middleware = Arc::new(OAuthMiddleware {
+            called: Arc::clone(&middleware_called),
+        });
+
+        // Build server with middleware and typed tool
+        let server = Server::builder()
+            .name("test-server")
+            .version("1.0.0")
+            .tool(
+                "typed_tool",
+                crate::server::typed_tool::TypedTool::new(
+                    "typed_tool",
+                    |_args: Value, extra: crate::server::cancellation::RequestHandlerExtra| {
+                        Box::pin(async move {
+                            // Verify OAuth token was injected by middleware
+                            let token = extra.get_metadata("oauth_token");
+                            assert!(token.is_some());
+                            assert_eq!(token.unwrap(), "test-token-123");
+                            Ok(json!({"success": true}))
+                        })
+                    },
+                ),
+            )
+            .tool_middleware(middleware)
+            .build()
+            .unwrap();
+
+        // Call the typed tool
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
+            name: "typed_tool".to_string(),
+            arguments: json!({}),
+            _meta: None,
+        })));
+
+        let response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
+
+        // Verify middleware was called
+        assert!(middleware_called.load(Ordering::SeqCst));
+
+        // Verify tool executed successfully
+        match response.payload {
+            ResponsePayload::Result(_) => {}, // Success
+            ResponsePayload::Error(e) => panic!("Expected success, got error: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_server_builder_middleware_error_handling() {
+        use crate::server::tool_middleware::{ToolContext, ToolMiddleware};
+
+        // Middleware that rejects requests
+        struct RejectMiddleware;
+
+        #[async_trait]
+        impl ToolMiddleware for RejectMiddleware {
+            async fn on_request(
+                &self,
+                _tool_name: &str,
+                _args: &mut Value,
+                _extra: &mut crate::server::cancellation::RequestHandlerExtra,
+                _context: &ToolContext,
+            ) -> Result<()> {
+                Err(Error::validation("Middleware rejected request"))
+            }
+        }
+
+        // Build server with rejecting middleware
+        let server = Server::builder()
+            .name("test-server")
+            .version("1.0.0")
+            .tool("test_tool", MockTool::new(json!({"result": "success"})))
+            .tool_middleware(Arc::new(RejectMiddleware))
+            .build()
+            .unwrap();
+
+        // Call the tool
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
+            name: "test_tool".to_string(),
+            arguments: json!({}),
+            _meta: None,
+        })));
+
+        let response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
+
+        // Verify request was rejected by middleware
+        match response.payload {
+            ResponsePayload::Error(e) => {
+                assert!(e.message.contains("Middleware rejected request"));
+            },
+            ResponsePayload::Result(_) => panic!("Expected error from middleware"),
         }
     }
 }
