@@ -3574,24 +3574,27 @@ mod tests {
         });
 
         // Build server with middleware and typed tool
+        struct OAuthVerifyTool;
+
+        #[async_trait]
+        impl ToolHandler for OAuthVerifyTool {
+            async fn handle(
+                &self,
+                _args: Value,
+                extra: crate::server::cancellation::RequestHandlerExtra,
+            ) -> Result<Value> {
+                // Verify OAuth token was injected by middleware
+                let token = extra.get_metadata("oauth_token");
+                assert!(token.is_some());
+                assert_eq!(token.unwrap(), "test-token-123");
+                Ok(json!({"success": true}))
+            }
+        }
+
         let server = Server::builder()
             .name("test-server")
             .version("1.0.0")
-            .tool(
-                "typed_tool",
-                crate::server::typed_tool::TypedTool::new(
-                    "typed_tool",
-                    |_args: Value, extra: crate::server::cancellation::RequestHandlerExtra| {
-                        Box::pin(async move {
-                            // Verify OAuth token was injected by middleware
-                            let token = extra.get_metadata("oauth_token");
-                            assert!(token.is_some());
-                            assert_eq!(token.unwrap(), "test-token-123");
-                            Ok(json!({"success": true}))
-                        })
-                    },
-                ),
-            )
+            .tool("typed_tool", OAuthVerifyTool)
             .tool_middleware(middleware)
             .build()
             .unwrap();
