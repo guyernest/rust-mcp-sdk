@@ -51,6 +51,37 @@ pub fn server(name: String, template: String) -> Result<()> {
         println!("    ✓ Resources        - Providing static knowledge/documentation");
         println!("    ✓ Workflows        - Multi-step mathematical operations");
         println!();
+    } else if template == "sqlite-explorer" {
+        println!(
+            "\n{}",
+            "🗄️  SQLite Explorer Template Includes:".bright_white().bold()
+        );
+        println!();
+        println!("  {} Tools (3):", "🔧".bright_cyan());
+        println!("    • execute_query      - Run SELECT queries (read-only, validated)");
+        println!("    • list_tables        - Show all tables with row counts");
+        println!("    • get_sample_rows    - Preview table data");
+        println!();
+        println!("  {} Workflow Prompts (3):", "💬".bright_cyan());
+        println!("    • monthly_sales_report              - Sales metrics for a month");
+        println!("    • analyze_customer                  - Customer purchase history & LTV");
+        println!("    • customers_who_bought_top_tracks   - Multi-step workflow");
+        println!("                                          (demonstrates step bindings!)");
+        println!();
+        println!("  {} Resources (2):", "📖".bright_cyan());
+        println!("    • sqlite://schema                   - Complete database schema");
+        println!("    • sqlite://table/{{name}}/schema      - Per-table schema details");
+        println!();
+        println!("  {} What You'll Learn:", "🎓".bright_cyan());
+        println!("    ✓ Workflow prompts  - Multi-step orchestration with bindings");
+        println!("    ✓ SQL safety        - Prepared statements, read-only validation");
+        println!("    ✓ Schema discovery  - Resources for context-aware queries");
+        println!("    ✓ Step composition  - Output from step 1 → input to step 2");
+        println!("    ✓ Real database     - Chinook sample DB (music store)");
+        println!();
+        println!("  {} Database Setup:", "📋".bright_cyan());
+        println!("    See DATABASE.md for chinook.db download instructions");
+        println!();
     }
 
     println!("{}", "🚀 Quick Start (2 minutes):".bright_white().bold());
@@ -88,6 +119,15 @@ pub fn server(name: String, template: String) -> Result<()> {
             "       {}",
             "\"Show me the quadratic formula guide\"".bright_green()
         );
+    } else if template == "sqlite-explorer" {
+        println!("     In Claude Code (using /prompts):");
+        println!("       {}", "\"/monthly_sales_report month: 3 year: 2009\"".bright_green());
+        println!("       {}", "\"/analyze_customer customer_id: 5\"".bright_green());
+        println!("       {}", "\"/customers_who_bought_top_tracks limit: 10\"".bright_green());
+        println!();
+        println!("     Or ask Claude:");
+        println!("       {}", "\"Show me all tables in the database\"".bright_green());
+        println!("       {}", "\"Get sample rows from the customers table\"".bright_green());
     } else {
         println!("     In Claude Code: {}", "\"Add 5 and 3\"".bright_green());
     }

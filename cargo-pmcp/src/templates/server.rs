@@ -12,8 +12,9 @@ pub fn generate(name: &str, template: &str) -> Result<()> {
     match template {
         "minimal" => generate_minimal(name),
         "complete" => generate_complete(name),
+        "sqlite-explorer" => generate_sqlite_explorer(name),
         _ => anyhow::bail!(
-            "Unknown template: {}. Available templates: minimal, complete",
+            "Unknown template: {}. Available templates: minimal, complete, sqlite-explorer",
             template
         ),
     }
@@ -67,6 +68,38 @@ fn generate_complete(name: &str) -> Result<()> {
     // Update workspace Cargo.toml
     update_workspace_members(&core_name, &server_name)?;
     println!("  {} Updated workspace members", "✓".green());
+
+    Ok(())
+}
+
+fn generate_sqlite_explorer(name: &str) -> Result<()> {
+    let crates_dir = Path::new("crates");
+    let core_name = format!("mcp-{}-core", name);
+    let server_name = format!("{}-server", name);
+
+    // Create core crate with sqlite-explorer template
+    generate_core_crate_sqlite(&crates_dir.join(&core_name), name)?;
+    println!(
+        "  {} Created {} (sqlite-explorer template)",
+        "✓".green(),
+        core_name.bright_yellow()
+    );
+
+    // Create server binary crate (same as minimal)
+    generate_server_crate(&crates_dir.join(&server_name), name)?;
+    println!("  {} Created {}", "✓".green(), server_name.bright_yellow());
+
+    // Create scenarios
+    generate_scenarios(name)?;
+    println!("  {} Created test scenarios", "✓".green());
+
+    // Update workspace Cargo.toml
+    update_workspace_members(&core_name, &server_name)?;
+    println!("  {} Updated workspace members", "✓".green());
+
+    // Create chinook.db placeholder or instructions
+    create_chinook_placeholder()?;
+    println!("  {} Created database placeholder", "✓".green());
 
     Ok(())
 }
@@ -344,6 +377,84 @@ tokio = { workspace = true }
         super::complete_calculator::COMPLETE_CALCULATOR_LIB,
     )
     .context("Failed to create complete calculator lib.rs")?;
+
+    Ok(())
+}
+
+fn generate_core_crate_sqlite(core_dir: &Path, name: &str) -> Result<()> {
+    fs::create_dir_all(core_dir).context("Failed to create core directory")?;
+    fs::create_dir_all(core_dir.join("src")).context("Failed to create core src directory")?;
+
+    // Generate Cargo.toml with rusqlite dependency
+    let cargo_toml = format!(
+        r#"[package]
+name = "mcp-{}-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+pmcp = {{ workspace = true }}
+serde = {{ workspace = true }}
+serde_json = {{ workspace = true }}
+schemars = {{ workspace = true }}
+anyhow = {{ workspace = true }}
+thiserror = {{ workspace = true }}
+rusqlite = {{ version = "0.32", features = ["bundled"] }}
+
+[dev-dependencies]
+tokio = {{ workspace = true }}
+"#,
+        name
+    );
+
+    fs::write(core_dir.join("Cargo.toml"), cargo_toml)
+        .context("Failed to create core Cargo.toml")?;
+
+    // Use the sqlite explorer template with parameterized server name
+    let template = super::sqlite_explorer::SQLITE_EXPLORER_LIB
+        .replace("build_sqlite_server", &format!("build_{}_server", name));
+
+    fs::write(
+        core_dir.join("src/lib.rs"),
+        template,
+    )
+    .context("Failed to create sqlite explorer lib.rs")?;
+
+    Ok(())
+}
+
+fn create_chinook_placeholder() -> Result<()> {
+    let readme = r#"# Database Setup
+
+This server requires the Chinook sample database.
+
+## Quick Setup
+
+Download the chinook database:
+
+```bash
+curl -L https://github.com/lerocha/chinook-database/raw/master/ChinookDatabase/DataSources/Chinook_Sqlite.sqlite -o chinook.db
+```
+
+Or manually:
+1. Visit https://github.com/lerocha/chinook-database
+2. Download `Chinook_Sqlite.sqlite`
+3. Rename to `chinook.db` and place in workspace root
+
+## About Chinook Database
+
+Chinook is a sample database representing a digital media store:
+- 11 tables (customers, invoices, tracks, albums, artists, etc.)
+- 59 customers across 24 countries
+- 3,503 tracks by 275 artists
+- Real-world data for testing MCP servers
+
+License: MIT (included with Chinook)
+"#;
+
+    fs::write("DATABASE.md", readme).context("Failed to create DATABASE.md")?;
 
     Ok(())
 }
