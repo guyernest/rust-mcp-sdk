@@ -1,0 +1,59 @@
+name: Prompts Testing Scenario
+description: Test prompt discovery and retrieval functionality
+timeout: 60
+stop_on_failure: false
+
+variables:
+  test_arg1: "value1"
+  test_arg2: "value2"
+
+steps:
+  - name: List available prompts
+    operation:
+      type: list_prompts
+    store_result: available_prompts
+    assertions:
+      - type: success
+      - type: exists
+        path: prompts
+
+  - name: Get first prompt (if available)
+    operation:
+      type: get_prompt
+      name: "${available_prompts.prompts[0].name}"
+      arguments: {}
+    continue_on_failure: true
+    assertions:
+      - type: success
+      - type: exists
+        path: messages
+
+  - name: Get prompt with arguments
+    operation:
+      type: get_prompt
+      name: "${available_prompts.prompts[0].name}"
+      arguments:
+        arg1: "${test_arg1}"
+        arg2: "${test_arg2}"
+    continue_on_failure: true
+    assertions:
+      - type: success
+
+  - name: Test prompt metadata validation
+    operation:
+      type: custom
+      method: prompts/list
+      params: {}
+    assertions:
+      - type: jsonpath
+        expression: "$.prompts[*].name"
+        expected: null  # Just check existence
+      - type: jsonpath
+        expression: "$.prompts[*].description"
+        expected: null  # Optional field
+
+  - name: Validate prompt argument schemas
+    operation:
+      type: list_prompts
+    assertions:
+      - type: success

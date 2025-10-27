@@ -1,0 +1,61 @@
+name: Logseq MCP Server Test
+description: Tests Logseq MCP server functionality
+timeout: 30
+
+steps:
+  - name: List available tools
+    operation:
+      type: list_tools
+    store_result: tools_list
+    assertions:
+      - type: exists
+        path: tools
+      - type: array_length
+        path: tools
+        equals: 12
+        
+  - name: Search for content
+    operation:
+      type: tool_call
+      tool: search
+      arguments:
+        query: "test"
+    continue_on_failure: true
+    assertions:
+      - type: equals
+        path: success
+        value: true
+        
+  - name: List pages
+    operation:
+      type: tool_call
+      tool: list_pages
+      arguments: {}
+    continue_on_failure: true
+    assertions:
+      - type: equals
+        path: success
+        value: true
+        
+  - name: Get journal entries
+    operation:
+      type: tool_call
+      tool: get_journal_entries
+      arguments:
+        limit: 5
+    continue_on_failure: true
+    assertions:
+      - type: equals
+        path: success
+        value: true
+        
+  - name: Find orphan pages
+    operation:
+      type: tool_call
+      tool: find_orphan_pages
+      arguments: {}
+    continue_on_failure: true
+    assertions:
+      - type: equals
+        path: success
+        value: true
