@@ -142,20 +142,15 @@ pub struct MessageMetadata {
 /// assert_eq!(messages[1].0, "msg3"); // Normal priority second
 /// assert_eq!(messages[2].0, "msg1"); // Low priority last
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum MessagePriority {
     /// Low priority
     Low,
     /// Normal priority (default)
+    #[default]
     Normal,
     /// High priority
     High,
-}
-
-impl Default for MessagePriority {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 /// Core transport trait for MCP communication.

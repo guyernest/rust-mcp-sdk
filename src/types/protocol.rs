@@ -713,21 +713,16 @@ pub struct SamplingMessage {
 }
 
 /// Context to include in sampling.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum IncludeContext {
     /// Include all context
     All,
     /// Include no context
+    #[default]
     None,
     /// Include specific context types
     ThisServerOnly,
-}
-
-impl Default for IncludeContext {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// Client notification types.
