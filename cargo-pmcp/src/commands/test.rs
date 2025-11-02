@@ -1,12 +1,9 @@
 //! Test MCP servers using mcp-tester library
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use colored::Colorize;
 use mcp_tester::{generate_scenarios, run_scenario, GenerateOptions};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::Duration;
 
 pub fn execute(
     server: String,
@@ -22,47 +19,20 @@ pub fn execute(
         anyhow::bail!("Not in a workspace directory. Run 'cargo-pmcp new <name>' first.");
     }
 
-    // Verify server exists
-    let server_binary = format!("{}-server", server);
     let scenarios_dir = PathBuf::from("scenarios").join(&server);
+    let url = format!("http://0.0.0.0:{}", port);
 
-    println!("\n{}", "Step 1: Building server".bright_white().bold());
-    let build_status = Command::new("cargo")
-        .args(["build", "--bin", &server_binary])
-        .status()
-        .context("Failed to build server")?;
-
-    if !build_status.success() {
-        anyhow::bail!("Server build failed");
-    }
-    println!("  {} Server built successfully", "✓".green());
+    println!("\n{}", "Prerequisites:".bright_white().bold());
+    println!("  {} Server must be running on port {}", "→".blue(), port);
+    println!("  {} Run in another terminal: {}", "→".blue(),
+        format!("cargo pmcp dev --server {}", server).bright_cyan());
 
     // Generate scenarios if requested
     if do_generate_scenarios {
-        println!(
-            "\n{}",
-            "Step 2: Generating test scenarios".bright_white().bold()
-        );
+        println!("\n{}", "Generating test scenarios".bright_white().bold());
 
-        // Start server in background
-        println!("  {} Starting server on port {}...", "→".blue(), port);
-        let mut server_process = Command::new("cargo")
-            .args(["run", "--bin", &server_binary])
-            .env("MCP_HTTP_PORT", port.to_string())
-            .env("RUST_LOG", "error") // Quiet logs during scenario generation
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .context("Failed to start server")?;
-
-        // Wait for server to be ready
-        thread::sleep(Duration::from_secs(5));
-
-        // Generate scenarios
-        let url = format!("http://0.0.0.0:{}", port);
         let output_path = scenarios_dir.join("generated.yaml");
-
-        println!("  {} Generating scenarios...", "→".blue());
+        println!("  {} Connecting to server at {}...", "→".blue(), url);
 
         let options = GenerateOptions {
             all_tools: true,
@@ -75,10 +45,6 @@ pub fn execute(
             generate_scenarios(&url, output_path.to_str().unwrap(), options).await
         });
 
-        // Stop the server
-        server_process.kill().ok();
-        server_process.wait().ok();
-
         match generation_result {
             Ok(_) => {
                 println!(
@@ -86,34 +52,19 @@ pub fn execute(
                     "✓".green(),
                     output_path.display()
                 );
+                println!("  {} Edit the file to customize test values and assertions", "→".blue());
             },
             Err(e) => {
-                println!("  {} Failed to generate scenarios: {}", "⚠".yellow(), e);
-                println!("    Continuing with existing scenarios...");
+                anyhow::bail!("Failed to generate scenarios: {}\n\n  Make sure the server is running in another terminal:\n  {}",
+                    e,
+                    format!("cargo pmcp dev --server {}", server).bright_cyan());
             },
         }
     }
 
     // Run tests
-    println!("\n{}", "Step 3: Running tests".bright_white().bold());
-
-    // Start server in background
-    println!("  {} Starting server on port {}...", "→".blue(), port);
-    let mut server_process = Command::new("cargo")
-        .args(["run", "--bin", &server_binary])
-        .env("MCP_HTTP_PORT", port.to_string())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("Failed to start server")?;
-
-    // Wait for server to be ready
-    thread::sleep(Duration::from_secs(5));
-
-    let url = format!("http://0.0.0.0:{}", port);
-
-    // Run mcp-tester
-    println!("  {} Running mcp-tester...\n", "→".blue());
+    println!("\n{}", "Running tests".bright_white().bold());
+    println!("  {} Connecting to server at {}...", "→".blue(), url);
 
     // Try scenario-based testing first if scenarios exist
     let test_result = if scenarios_dir.exists() && scenarios_dir.read_dir()?.next().is_some() {
@@ -170,10 +121,6 @@ pub fn execute(
         println!("    Run with --generate-scenarios to create test scenarios");
         Ok(true)
     };
-
-    // Stop the server
-    server_process.kill().ok();
-    server_process.wait().ok();
 
     println!();
     println!("{}", "═════════════════════════════════════".bright_cyan());

@@ -341,7 +341,7 @@ impl ScenarioGenerator {
                 "100 ÷ 4 = 25".to_string(),
             )),
             "power" => Some((
-                json!({"a": 2, "b": 10}),
+                json!({"base": 2, "exponent": 10}),
                 vec![
                     Assertion::Success,
                     Assertion::Equals {

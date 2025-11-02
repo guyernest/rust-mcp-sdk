@@ -574,48 +574,62 @@ fn generate_scenarios(name: &str) -> Result<()> {
     let scenarios_dir = Path::new("scenarios").join(name);
     fs::create_dir_all(&scenarios_dir).context("Failed to create scenarios directory")?;
 
-    let basic_yaml = r#"# Basic add operation test
-name: "add_basic"
-description: "Test basic addition"
+    // Create a simple README explaining how to use scenarios
+    let readme = r#"# Test Scenarios
 
-steps:
-  - tool_call:
-      name: "add"
-      arguments:
-        a: 5
-        b: 3
-      expect:
-        result: 8
+This directory contains test scenarios for your MCP server.
 
-  - tool_call:
-      name: "add"
-      arguments:
-        a: -10
-        b: 20
-      expect:
-        result: 10
+## Generating Scenarios
+
+Run the following command to generate test scenarios from your server's schema:
+
+```bash
+cargo pmcp test --server NAME --generate-scenarios
+```
+
+This will:
+1. Discover all tools, prompts, and resources from your running server
+2. Generate smart test cases with meaningful values (e.g., add(123, 234) = 357)
+3. Create assertions to verify expected results
+4. Save scenarios to `generated.yaml`
+
+## Running Tests
+
+```bash
+# Run all scenarios
+cargo pmcp test --server NAME
+
+# Run with detailed output
+cargo pmcp test --server NAME --detailed
+```
+
+## Customizing Scenarios
+
+Edit the generated `generated.yaml` file to:
+- Add more test cases
+- Customize test values
+- Add additional assertions
+- Test edge cases and error conditions
+
+### Tool Response Format
+
+MCP tool responses are wrapped in a content array. To assert on tool results:
+
+```yaml
+assertions:
+  - type: success
+  - type: contains
+    path: "content[0].text"
+    value: "357"  # For add(123, 234)
+```
+
+## Scenario Format
+
+See https://docs.example.com/mcp-tester for full documentation on scenario format.
 "#;
 
-    fs::write(scenarios_dir.join("basic.yaml"), basic_yaml)
-        .context("Failed to create basic scenario")?;
-
-    let validation_yaml = r#"# Validation test
-name: "add_validation"
-description: "Test input validation"
-
-steps:
-  - tool_call:
-      name: "add"
-      arguments:
-        a: 2000000  # Out of range
-        b: 3
-      expect_error:
-        type: "validation"
-        message: "range"
-"#;
-
-    fs::write(scenarios_dir.join("validation.yaml"), validation_yaml)
-        .context("Failed to create validation scenario")?;
+    fs::write(scenarios_dir.join("README.md"), readme)
+        .context("Failed to create README")?;
 
     Ok(())
 }
