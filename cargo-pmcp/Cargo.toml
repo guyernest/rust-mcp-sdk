@@ -1,0 +1,25 @@
+[package]
+name = "cargo-pmcp"
+version = "0.1.0"
+edition = "2021"
+authors = ["PMCP SDK Contributors"]
+description = "Production-grade MCP server development toolkit"
+license = "MIT"
+repository = "https://github.com/paiml/rust-mcp-sdk"
+readme = "README.md"
+keywords = ["mcp", "scaffold", "cli", "tools", "development"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+walkdir = "2"
+colored = "2"
+indicatif = "0.17"
+dirs = "5"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+mcp-tester = { path = "../crates/mcp-tester" }
+urlencoding = "2"

@@ -28,12 +28,15 @@ jobs:
     
     steps:
       - uses: actions/checkout@v4
-      
+
+      - name: Remove rust-toolchain.toml to allow nightly
+        run: rm -f rust-toolchain.toml
+
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: llvm-tools-preview
-      
+
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz
       
@@ -75,10 +78,13 @@ jobs:
     name: Fuzzing Coverage
     runs-on: ubuntu-latest
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
+      - name: Remove rust-toolchain.toml to allow nightly
+        run: rm -f rust-toolchain.toml
+
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
         with:
@@ -130,10 +136,13 @@ jobs:
     name: 24-Hour Fuzzing
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
+      - name: Remove rust-toolchain.toml to allow nightly
+        run: rm -f rust-toolchain.toml
+
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
       

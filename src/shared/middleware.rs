@@ -144,24 +144,19 @@ impl PerformanceMetrics {
 }
 
 /// Middleware execution priority for ordering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum MiddlewarePriority {
     /// Highest priority - executed first in chain
     Critical = 0,
     /// High priority - authentication, security
     High = 1,
     /// Normal priority - business logic
+    #[default]
     Normal = 2,
     /// Low priority - logging, metrics
     Low = 3,
     /// Lowest priority - cleanup, finalization
     Lowest = 4,
-}
-
-impl Default for MiddlewarePriority {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 /// Enhanced middleware trait with context support and priority.

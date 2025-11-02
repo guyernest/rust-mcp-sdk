@@ -367,8 +367,8 @@ path = "examples/57_tool_middleware_oauth.rs"
 name = "comprehensive_benchmarks"
 harness = false
 [workspace]
-members = ["pmcp-macros", "examples/wasm-client", "examples/25-oauth-basic", "examples/test-basic", "examples/26-server-tester"]
-exclude = ["fuzz", "examples/cloudflare-worker-mcp"]
+members = ["pmcp-macros", "crates/mcp-tester", "examples/wasm-client", "examples/25-oauth-basic", "examples/test-basic", "cargo-pmcp"]
+exclude = ["fuzz", "examples/cloudflare-worker-mcp", "examples/26-server-tester"]
 
 [package.metadata.docs.rs]
 all-features = true

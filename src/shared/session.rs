@@ -321,7 +321,7 @@ pub fn extract_session_id(headers: &std::collections::HashMap<String, String>) -
     headers
         .get("X-Session-ID")
         .or_else(|| headers.get("x-session-id"))
-        .map(|s| s.to_string())
+        .cloned()
 }
 
 /// Session middleware for HTTP requests.

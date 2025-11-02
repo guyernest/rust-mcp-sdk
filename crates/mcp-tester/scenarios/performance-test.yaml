@@ -1,0 +1,103 @@
+name: Performance and Load Test
+description: Tests server performance with rapid sequential and concurrent-like requests
+timeout: 120
+stop_on_failure: false
+
+variables:
+  iterations: 10
+  test_data: "Performance test data"
+
+setup:
+  - name: Warm up connection
+    operation:
+      type: list_tools
+    assertions:
+      - type: success
+
+steps:
+  # Rapid sequential calls
+  - name: Sequential call 1
+    operation:
+      type: tool_call
+      tool: echo
+      arguments:
+        message: "Call 1"
+    continue_on_failure: true
+    assertions:
+      - type: success
+      
+  - name: Sequential call 2
+    operation:
+      type: tool_call
+      tool: echo
+      arguments:
+        message: "Call 2"
+    continue_on_failure: true
+    assertions:
+      - type: success
+      
+  - name: Sequential call 3
+    operation:
+      type: tool_call
+      tool: echo
+      arguments:
+        message: "Call 3"
+    continue_on_failure: true
+    assertions:
+      - type: success
+      
+  # Test with larger payloads
+  - name: Large payload test
+    operation:
+      type: tool_call
+      tool: echo
+      arguments:
+        message: "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. This is a longer message to test how the server handles larger payloads in the tool calls."
+    continue_on_failure: true
+    timeout: 10
+    assertions:
+      - type: success
+      
+  # Rapid fire requests
+  - name: Rapid request 1
+    operation:
+      type: list_tools
+    continue_on_failure: true
+    
+  - name: Rapid request 2
+    operation:
+      type: list_tools
+    continue_on_failure: true
+    
+  - name: Rapid request 3
+    operation:
+      type: list_tools
+    continue_on_failure: true
+    
+  - name: Rapid request 4
+    operation:
+      type: list_tools
+    continue_on_failure: true
+    
+  - name: Rapid request 5
+    operation:
+      type: list_tools
+    continue_on_failure: true
+    assertions:
+      - type: success
+      
+  # Test timeout handling
+  - name: Test with short timeout
+    operation:
+      type: wait
+      seconds: 0.5
+    timeout: 1  # Should succeed
+    assertions:
+      - type: success
+      
+cleanup:
+  - name: Final health check
+    operation:
+      type: list_tools
+    assertions:
+      - type: success

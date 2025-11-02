@@ -1,0 +1,50 @@
+name: Basic MCP Server Test
+description: Tests basic MCP server functionality including tool listing and invocation
+timeout: 30
+stop_on_failure: false
+
+variables:
+  test_message: "Hello from test scenario"
+  
+steps:
+  - name: List available tools
+    operation:
+      type: list_tools
+    store_result: available_tools
+    assertions:
+      - type: success
+      - type: exists
+        path: tools
+      - type: array_length
+        path: tools
+        greater_than: 0
+        
+  - name: Test echo tool (if available)
+    operation:
+      type: tool_call
+      tool: echo
+      arguments:
+        message: "${test_message}"
+    continue_on_failure: true  # Continue even if echo tool doesn't exist
+    assertions:
+      - type: success
+      
+  - name: List resources
+    operation:
+      type: list_resources
+    store_result: available_resources
+    continue_on_failure: true
+    assertions:
+      - type: success
+      - type: exists
+        path: resources
+        
+  - name: List prompts
+    operation:
+      type: list_prompts
+    store_result: available_prompts
+    continue_on_failure: true
+    assertions:
+      - type: success
+      - type: exists
+        path: prompts

@@ -24,10 +24,11 @@ pub struct AuthInfo {
 }
 
 /// Authentication scheme types.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum AuthScheme {
     /// No authentication
+    #[default]
     None,
     /// Bearer token authentication
     Bearer,
@@ -154,12 +155,6 @@ pub enum PkceMethod {
     /// The code challenge is `BASE64URL(SHA256(code_verifier))`.
     #[serde(rename = "S256")]
     S256,
-}
-
-impl Default for AuthScheme {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 impl AuthInfo {

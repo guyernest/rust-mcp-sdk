@@ -1,0 +1,122 @@
+name: Logseq Basic Functionality Test
+description: Tests basic Logseq MCP server operations including page management and search
+timeout: 60
+stop_on_failure: false
+
+variables:
+  test_page_name: "MCP Test Page ${timestamp}"
+  test_content: "This is a test page created by MCP server tester"
+  test_tag: "#mcp-test"
+
+steps:
+  - name: List available tools
+    operation:
+      type: list_tools
+    store_result: available_tools
+    assertions:
+      - type: success
+      - type: array_length
+        path: tools
+        equals: 10  # Logseq server has exactly 10 tools
+      
+  - name: Verify tool names
+    operation:
+      type: list_tools
+    assertions:
+      - type: success
+      - type: jsonpath
+        expression: "$.tools[?(@.name == 'list_pages')]"
+        expected: 
+          - name: "list_pages"
+      - type: jsonpath
+        expression: "$.tools[?(@.name == 'add_journal_entry')]"
+        expected:
+          - name: "add_journal_entry"
+          
+  - name: List all pages
+    operation:
+      type: tool_call
+      tool: list_pages
+      arguments: {}
+    store_result: initial_pages
+    assertions:
+      - type: success
+      - type: exists
+        path: result
+        
+  - name: Create a new test page
+    operation:
+      type: tool_call
+      tool: create_page
+      arguments:
+        name: "${test_page_name}"
+        content: "${test_content}"
+        properties:
+          type: "test"
+          created_by: "mcp-tester"
+    store_result: created_page
+    assertions:
+      - type: success
+      - type: contains
+        path: result.message
+        value: "successfully created"
+        
+  - name: Get the created page
+    operation:
+      type: tool_call
+      tool: get_page
+      arguments:
+        name: "${test_page_name}"
+    store_result: retrieved_page
+    assertions:
+      - type: success
+      - type: exists
+        path: result.content
+      
+  - name: Add content to the page
+    operation:
+      type: tool_call
+      tool: add_content
+      arguments:
+        page_name: "${test_page_name}"
+        content: "\n- Additional test content\n- ${test_tag}"
+    assertions:
+      - type: success
+      - type: contains
+        path: result.message
+        value: "Content added successfully"
+        
+  - name: Search for test page
+    operation:
+      type: tool_call
+      tool: search
+      arguments:
+        query: "mcp-test"
+    store_result: search_results
+    assertions:
+      - type: success
+      - type: array_length
+        path: result
+        greater_than_or_equal: 1
+        
+  - name: Find orphan pages
+    operation:
+      type: tool_call
+      tool: find_orphan_pages
+      arguments: {}
+    store_result: orphan_pages
+    continue_on_failure: true  # May not have orphan pages
+    assertions:
+      - type: success
+      - type: exists
+        path: result
+
+cleanup:
+  - name: Delete test page
+    operation:
+      type: tool_call
+      tool: delete_page
+      arguments:
+        name: "${test_page_name}"
+        confirm: true
+    continue_on_failure: true  # Ensure cleanup runs even if page doesn't exist

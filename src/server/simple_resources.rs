@@ -236,7 +236,7 @@ impl ResourceCollection {
         // Add dynamic templates as resources
         for template in self.router.all_templates() {
             infos.push(ResourceInfo {
-                uri: template.uri_template.to_string(),
+                uri: template.uri_template.clone(),
                 name: template.name,
                 description: template.description,
                 mime_type: template.mime_type,
