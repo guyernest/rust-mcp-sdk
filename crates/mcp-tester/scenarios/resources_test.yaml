@@ -1,0 +1,43 @@
+name: Resource Testing Scenario
+description: Test resource discovery and reading functionality
+timeout: 60
+stop_on_failure: false
+
+steps:
+  - name: List available resources
+    operation:
+      type: list_resources
+    assertions:
+      - type: success
+      - type: exists
+        path: resources
+
+  - name: Read first resource (if available)
+    operation:
+      type: read_resource
+      uri: "${resources[0].uri}"
+    continue_on_failure: true
+    assertions:
+      - type: success
+      - type: exists
+        path: contents
+
+  - name: Test resource with pagination
+    operation:
+      type: list_resources
+    store_result: paginated_resources
+    assertions:
+      - type: success
+
+  - name: Validate resource metadata
+    operation:
+      type: custom
+      method: resources/list
+      params: {}
+    assertions:
+      - type: jsonpath
+        expression: "$.resources[*].uri"
+        expected: null  # Just check existence
+      - type: jsonpath
+        expression: "$.resources[*].name"
+        expected: null  # Just check existence

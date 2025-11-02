@@ -1,0 +1,255 @@
+{
+  "name": "Logseq Knowledge Graph Workflow",
+  "description": "Tests a complete workflow for building and querying a knowledge graph",
+  "timeout": 90,
+  "stop_on_failure": false,
+  
+  "variables": {
+    "project_name": "MCP Integration Project",
+    "task_page": "MCP Tasks",
+    "notes_page": "MCP Implementation Notes",
+    "timestamp": "${timestamp}"
+  },
+  
+  "setup": [
+    {
+      "name": "Clean up any existing test pages",
+      "operation": {
+        "type": "tool_call",
+        "tool": "delete_page",
+        "arguments": {
+          "name": "${project_name}",
+          "confirm": true
+        }
+      },
+      "continue_on_failure": true
+    },
+    {
+      "name": "Clean up task page",
+      "operation": {
+        "type": "tool_call",
+        "tool": "delete_page",
+        "arguments": {
+          "name": "${task_page}",
+          "confirm": true
+        }
+      },
+      "continue_on_failure": true
+    },
+    {
+      "name": "Clean up notes page",
+      "operation": {
+        "type": "tool_call",
+        "tool": "delete_page",
+        "arguments": {
+          "name": "${notes_page}",
+          "confirm": true
+        }
+      },
+      "continue_on_failure": true
+    }
+  ],
+  
+  "steps": [
+    {
+      "name": "Create project page",
+      "operation": {
+        "type": "tool_call",
+        "tool": "create_page",
+        "arguments": {
+          "name": "${project_name}",
+          "content": "# MCP Integration Project\n\n## Overview\nThis project integrates Logseq with the Model Context Protocol.\n\n## Status\n- Status:: #in-progress\n- Started:: [[${timestamp}]]\n- Team:: [[Engineering]]\n\n## Related Pages\n- [[${task_page}]]\n- [[${notes_page}]]",
+          "properties": {
+            "type": "project",
+            "status": "active",
+            "priority": "high"
+          }
+        }
+      },
+      "store_result": "project_created",
+      "assertions": [
+        {"type": "success"},
+        {"type": "contains", "path": "result.message", "value": "created"}
+      ]
+    },
+    
+    {
+      "name": "Create tasks page with links",
+      "operation": {
+        "type": "tool_call",
+        "tool": "create_page",
+        "arguments": {
+          "name": "${task_page}",
+          "content": "# MCP Tasks\n\nTasks for [[${project_name}]]\n\n## TODO\n- [ ] Implement core MCP server\n- [ ] Add journal integration\n- [ ] Create test scenarios\n- [ ] Write documentation\n\n## In Progress\n- [ ] Testing date formatting\n\n## Completed\n- [x] Setup project structure\n- [x] Configure pmcp SDK",
+          "properties": {
+            "type": "task-list",
+            "project": "${project_name}"
+          }
+        }
+      },
+      "assertions": [
+        {"type": "success"}
+      ]
+    },
+    
+    {
+      "name": "Create implementation notes",
+      "operation": {
+        "type": "tool_call",
+        "tool": "create_page",
+        "arguments": {
+          "name": "${notes_page}",
+          "content": "# Implementation Notes\n\nNotes for [[${project_name}]]\n\n## Key Learnings\n- Date format must be 'MMM DDth, YYYY' (e.g., sep 15th, 2025)\n- Use serde_json::Value for flexible JSON fields\n- HTTP mode is more reliable than stdio\n\n## Architecture\n- Built with Rust and pmcp SDK\n- Supports both stdio and HTTP modes\n- Clean separation of concerns\n\n## References\n- [[${task_page}]] - Current tasks\n- #mcp #rust #logseq",
+          "properties": {
+            "type": "documentation"
+          }
+        }
+      },
+      "assertions": [
+        {"type": "success"}
+      ]
+    },
+    
+    {
+      "name": "Add journal entry linking to project",
+      "operation": {
+        "type": "tool_call",
+        "tool": "add_journal_entry",
+        "arguments": {
+          "content": "Working on [[${project_name}]] today. See [[${task_page}]] for current status.",
+          "date": "2025-09-15"
+        }
+      },
+      "assertions": [
+        {"type": "success"}
+      ]
+    },
+    
+    {
+      "name": "Find backlinks to project page",
+      "operation": {
+        "type": "tool_call",
+        "tool": "find_backlinks",
+        "arguments": {
+          "page_name": "${project_name}"
+        }
+      },
+      "store_result": "project_backlinks",
+      "assertions": [
+        {"type": "success"},
+        {"type": "array_length", "path": "result", "greater_than_or_equal": 2}
+      ]
+    },
+    
+    {
+      "name": "Search for MCP references",
+      "operation": {
+        "type": "tool_call",
+        "tool": "search",
+        "arguments": {
+          "query": "MCP"
+        }
+      },
+      "store_result": "mcp_search",
+      "assertions": [
+        {"type": "success"},
+        {"type": "array_length", "path": "result", "greater_than_or_equal": 3}
+      ]
+    },
+    
+    {
+      "name": "Add more content to notes",
+      "operation": {
+        "type": "tool_call",
+        "tool": "add_content",
+        "arguments": {
+          "page_name": "${notes_page}",
+          "content": "\n\n## Testing Results\n- All scenarios passing\n- Date formatting verified\n- [[${project_name}]] integration complete"
+        }
+      },
+      "assertions": [
+        {"type": "success"}
+      ]
+    },
+    
+    {
+      "name": "Find backlinks to notes page",
+      "operation": {
+        "type": "tool_call",
+        "tool": "find_backlinks",
+        "arguments": {
+          "page_name": "${notes_page}"
+        }
+      },
+      "store_result": "notes_backlinks",
+      "assertions": [
+        {"type": "success"},
+        {"type": "array_length", "path": "result", "greater_than_or_equal": 1}
+      ]
+    },
+    
+    {
+      "name": "Get all pages to verify creation",
+      "operation": {
+        "type": "tool_call",
+        "tool": "list_pages",
+        "arguments": {}
+      },
+      "store_result": "final_pages",
+      "assertions": [
+        {"type": "success"}
+      ]
+    },
+    
+    {
+      "name": "Verify project page exists in list",
+      "operation": {
+        "type": "set_variable",
+        "name": "pages_check",
+        "value": "${final_pages}"
+      },
+      "assertions": [
+        {"type": "jsonpath", "expression": "$.result[?(@.name == '${project_name}')]"}
+      ]
+    }
+  ],
+  
+  "cleanup": [
+    {
+      "name": "Delete project page",
+      "operation": {
+        "type": "tool_call",
+        "tool": "delete_page",
+        "arguments": {
+          "name": "${project_name}",
+          "confirm": true
+        }
+      },
+      "continue_on_failure": true
+    },
+    {
+      "name": "Delete task page",
+      "operation": {
+        "type": "tool_call",
+        "tool": "delete_page",
+        "arguments": {
+          "name": "${task_page}",
+          "confirm": true
+        }
+      },
+      "continue_on_failure": true
+    },
+    {
+      "name": "Delete notes page",
+      "operation": {
+        "type": "tool_call",
+        "tool": "delete_page",
+        "arguments": {
+          "name": "${notes_page}",
+          "confirm": true
+        }
+      },
+      "continue_on_failure": true
+    }
+  ]
+}

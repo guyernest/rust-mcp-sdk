@@ -115,7 +115,7 @@ fn benchmark_batch_parsing(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(feature = "simd")]
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
 fn benchmark_utf8_validation(c: &mut Criterion) {
     use pmcp::simd::json;
 
@@ -147,7 +147,7 @@ fn benchmark_utf8_validation(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(feature = "simd")]
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
 fn benchmark_websocket_masking(c: &mut Criterion) {
     use pmcp::simd::serialization;
 
@@ -187,10 +187,10 @@ fn benchmark_websocket_masking(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(not(feature = "simd"))]
+#[cfg(not(all(feature = "simd", target_arch = "x86_64")))]
 criterion_group!(benches, benchmark_json_parsing, benchmark_batch_parsing);
 
-#[cfg(feature = "simd")]
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
 criterion_group!(
     benches,
     benchmark_json_parsing,

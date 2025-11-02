@@ -1,0 +1,172 @@
+{
+  "name": "Complex Workflow Test",
+  "description": "Tests a complex multi-step workflow with data dependencies",
+  "timeout": 90,
+  "stop_on_failure": true,
+  "variables": {
+    "user_id": "test_user_123",
+    "project_name": "Test Project",
+    "initial_state": "pending"
+  },
+  "setup": [
+    {
+      "name": "Initialize test environment",
+      "operation": {
+        "type": "set_variable",
+        "name": "timestamp",
+        "value": "2024-01-01T00:00:00Z"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "name": "Create project",
+      "operation": {
+        "type": "tool_call",
+        "tool": "create_project",
+        "arguments": {
+          "name": "${project_name}",
+          "owner": "${user_id}",
+          "status": "${initial_state}"
+        }
+      },
+      "store_result": "project_result",
+      "assertions": [
+        {
+          "type": "success"
+        },
+        {
+          "type": "exists",
+          "path": "result.id"
+        }
+      ]
+    },
+    {
+      "name": "Verify project creation",
+      "operation": {
+        "type": "tool_call",
+        "tool": "get_project",
+        "arguments": {
+          "id": "${project_result.result.id}"
+        }
+      },
+      "assertions": [
+        {
+          "type": "success"
+        },
+        {
+          "type": "equals",
+          "path": "result.name",
+          "value": "Test Project"
+        },
+        {
+          "type": "equals",
+          "path": "result.owner",
+          "value": "test_user_123"
+        }
+      ]
+    },
+    {
+      "name": "Update project status",
+      "operation": {
+        "type": "tool_call",
+        "tool": "update_project",
+        "arguments": {
+          "id": "${project_result.result.id}",
+          "status": "active"
+        }
+      },
+      "assertions": [
+        {
+          "type": "success"
+        },
+        {
+          "type": "equals",
+          "path": "result.status",
+          "value": "active"
+        }
+      ]
+    },
+    {
+      "name": "Add project metadata",
+      "operation": {
+        "type": "tool_call",
+        "tool": "add_metadata",
+        "arguments": {
+          "project_id": "${project_result.result.id}",
+          "metadata": {
+            "created_by": "test_scenario",
+            "timestamp": "${timestamp}",
+            "tags": ["test", "automated", "scenario"]
+          }
+        }
+      },
+      "continue_on_failure": true,
+      "assertions": [
+        {
+          "type": "success"
+        }
+      ]
+    },
+    {
+      "name": "List all projects",
+      "operation": {
+        "type": "tool_call",
+        "tool": "list_projects",
+        "arguments": {
+          "owner": "${user_id}"
+        }
+      },
+      "store_result": "all_projects",
+      "assertions": [
+        {
+          "type": "success"
+        },
+        {
+          "type": "array_length",
+          "path": "result.projects",
+          "greater_than_or_equal": 1
+        },
+        {
+          "type": "contains",
+          "path": "result.projects[0].name",
+          "value": "Test Project"
+        }
+      ]
+    },
+    {
+      "name": "Validate workflow completion",
+      "operation": {
+        "type": "custom",
+        "method": "validate_workflow",
+        "params": {
+          "workflow_id": "complex_test",
+          "expected_state": "completed"
+        }
+      },
+      "continue_on_failure": true,
+      "timeout": 5
+    }
+  ],
+  "cleanup": [
+    {
+      "name": "Delete test project",
+      "operation": {
+        "type": "tool_call",
+        "tool": "delete_project",
+        "arguments": {
+          "id": "${project_result.result.id}"
+        }
+      },
+      "continue_on_failure": true
+    },
+    {
+      "name": "Log cleanup completion",
+      "operation": {
+        "type": "set_variable",
+        "name": "cleanup_completed",
+        "value": true
+      }
+    }
+  ]
+}

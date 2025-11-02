@@ -1,0 +1,159 @@
+name: Logseq Journal Operations Test
+description: Tests journal-specific operations including entries, tasks, and date formatting
+timeout: 60
+stop_on_failure: false
+
+variables:
+  today_date: "2025-09-15"  # Must be in YYYY-MM-DD format
+  tomorrow_date: "2025-09-16"
+  test_entry: "Test journal entry from MCP server tester"
+  test_task: "Review MCP implementation"
+
+setup:
+  - name: Get current date info
+    operation:
+      type: set_variable
+      name: test_timestamp
+      value: "${timestamp}"
+
+steps:
+  - name: Add journal entry for today
+    operation:
+      type: tool_call
+      tool: add_journal_entry
+      arguments:
+        content: "${test_entry} - ${test_timestamp}"
+        date: "${today_date}"
+    store_result: journal_entry
+    assertions:
+      - type: success
+      - type: contains
+        path: result.message
+        value: "added to journal"
+        ignore_case: true
+        
+  - name: Add a task to tomorrow's journal
+    operation:
+      type: tool_call
+      tool: add_journal_task
+      arguments:
+        task: "${test_task}"
+        date: "${tomorrow_date}"
+        priority: "A"
+        scheduled: true
+    store_result: journal_task
+    assertions:
+      - type: success
+      - type: contains
+        path: result.message
+        value: "Task added"
+        ignore_case: true
+        
+  - name: Add another task with deadline
+    operation:
+      type: tool_call
+      tool: add_journal_task
+      arguments:
+        task: "Complete scenario testing"
+        date: "${today_date}"
+        priority: "B"
+        deadline: "${tomorrow_date}"
+    assertions:
+      - type: success
+      
+  - name: Get journal entries for date range
+    operation:
+      type: tool_call
+      tool: get_journal_entries
+      arguments:
+        start_date: "${today_date}"
+        end_date: "${tomorrow_date}"
+    store_result: journal_entries
+    assertions:
+      - type: success
+      - type: exists
+        path: result
+      - type: array_length
+        path: result
+        greater_than_or_equal: 1
+        
+  - name: Get journal summary
+    operation:
+      type: tool_call
+      tool: journal_summary
+      arguments:
+        start_date: "${today_date}"
+        end_date: "${tomorrow_date}"
+    store_result: summary
+    assertions:
+      - type: success
+      - type: exists
+        path: result.entry_count
+      - type: numeric
+        path: result.entry_count
+        greater_than_or_equal: 1
+        
+  - name: Test date format edge cases
+    operation:
+      type: tool_call
+      tool: add_journal_entry
+      arguments:
+        content: "Testing date format for 11th"
+        date: "2025-09-11"
+    assertions:
+      - type: success
+      - type: contains
+        path: result.message
+        value: "sep 11th, 2025"
+        
+  - name: Test date format for 21st
+    operation:
+      type: tool_call
+      tool: add_journal_entry
+      arguments:
+        content: "Testing date format for 21st"
+        date: "2025-09-21"
+    assertions:
+      - type: success
+      - type: contains
+        path: result.message
+        value: "sep 21st, 2025"
+        
+  - name: Test date format for 22nd
+    operation:
+      type: tool_call
+      tool: add_journal_entry
+      arguments:
+        content: "Testing date format for 22nd"
+        date: "2025-09-22"
+    assertions:
+      - type: success
+      - type: contains
+        path: result.message
+        value: "sep 22nd, 2025"
+        
+  - name: Test date format for 23rd
+    operation:
+      type: tool_call
+      tool: add_journal_entry
+      arguments:
+        content: "Testing date format for 23rd"
+        date: "2025-09-23"
+    assertions:
+      - type: success
+      - type: contains
+        path: result.message
+        value: "sep 23rd, 2025"
+        
+  - name: Test date format for 30th
+    operation:
+      type: tool_call
+      tool: add_journal_entry
+      arguments:
+        content: "Testing date format for 30th"
+        date: "2025-09-30"
+    assertions:
+      - type: success
+      - type: contains
+        path: result.message
+        value: "sep 30th, 2025"

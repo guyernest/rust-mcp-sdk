@@ -1,0 +1,132 @@
+name: wikipedia-mcp-server Test Scenario
+description: Automated test scenario for https://scjjh2dx4l.execute-api.us-west-2.amazonaws.com/mcp server. Please customize values and assertions.
+timeout: 60
+stop_on_failure: false
+variables:
+  test_value: sample_value
+  test_id: test_123
+setup: []
+steps:
+- name: List available capabilities
+  operation:
+    type: list_tools
+  timeout: null
+  continue_on_failure: false
+  store_result: available_tools
+  assertions:
+  - type: success
+  - type: exists
+    path: tools
+- name: 'Test tool: search_wikipedia (Search for Wikipedia articles by query)'
+  operation:
+    type: tool_call
+    tool: search_wikipedia
+    arguments:
+      query: 'TODO: query'
+  timeout: 30
+  continue_on_failure: true
+  store_result: search_wikipedia_result
+  assertions:
+  - type: success
+- name: 'Test tool: get_article (Retrieve full Wikipedia article content)'
+  operation:
+    type: tool_call
+    tool: get_article
+    arguments:
+      title: 'TODO: title'
+  timeout: 30
+  continue_on_failure: true
+  store_result: get_article_result
+  assertions:
+  - type: success
+- name: 'Test tool: get_summary (Get a summary of a Wikipedia article)'
+  operation:
+    type: tool_call
+    tool: get_summary
+    arguments:
+      title: 'TODO: title'
+  timeout: 30
+  continue_on_failure: true
+  store_result: get_summary_result
+  assertions:
+  - type: success
+- name: 'Test tool: summarize_article_for_query (Get a query-specific summary of an article)'
+  operation:
+    type: tool_call
+    tool: summarize_article_for_query
+    arguments:
+      title: 'TODO: title'
+      query: 'TODO: query'
+  timeout: 30
+  continue_on_failure: true
+  store_result: summarize_article_for_query_result
+  assertions:
+  - type: success
+- name: 'Test tool: summarize_article_section (Summarize a specific section of an article)'
+  operation:
+    type: tool_call
+    tool: summarize_article_section
+    arguments:
+      title: 'TODO: title'
+      section: 'TODO: section'
+  timeout: 30
+  continue_on_failure: true
+  store_result: summarize_article_section_result
+  assertions:
+  - type: success
+- name: 'Test tool: extract_key_facts (Extract key facts from a Wikipedia article)'
+  operation:
+    type: tool_call
+    tool: extract_key_facts
+    arguments:
+      title: 'TODO: title'
+  timeout: 30
+  continue_on_failure: true
+  store_result: extract_key_facts_result
+  assertions:
+  - type: success
+- name: 'Test tool: get_related_topics (Find topics related to a Wikipedia article)'
+  operation:
+    type: tool_call
+    tool: get_related_topics
+    arguments:
+      title: 'TODO: title'
+  timeout: 30
+  continue_on_failure: true
+  store_result: get_related_topics_result
+  assertions:
+  - type: success
+- name: 'Test tool: get_sections (Get the section structure of a Wikipedia article)'
+  operation:
+    type: tool_call
+    tool: get_sections
+    arguments:
+      title: 'TODO: title'
+  timeout: 30
+  continue_on_failure: true
+  store_result: get_sections_result
+  assertions:
+  - type: success
+- name: 'Test tool: get_links (Get links from a Wikipedia article)'
+  operation:
+    type: tool_call
+    tool: get_links
+    arguments:
+      title: 'TODO: title'
+  timeout: 30
+  continue_on_failure: true
+  store_result: get_links_result
+  assertions:
+  - type: success
+- name: 'Test tool: get_wikipedia_page (Get basic Wikipedia page information)'
+  operation:
+    type: tool_call
+    tool: get_wikipedia_page
+    arguments:
+      title: 'TODO: title'
+  timeout: 30
+  continue_on_failure: true
+  store_result: get_wikipedia_page_result
+  assertions:
+  - type: success
+cleanup: []

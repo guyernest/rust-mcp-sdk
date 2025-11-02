@@ -1,0 +1,85 @@
+name: Wikipedia MCP Server Test
+description: Tests Wikipedia MCP server functionality
+timeout: 30
+
+steps:
+  - name: List available tools
+    operation:
+      type: list_tools
+    store_result: tools_list
+    assertions:
+      - type: exists
+        path: tools
+      - type: array_length
+        path: tools
+        equals: 10
+        
+  - name: Search for Einstein articles
+    operation:
+      type: tool_call
+      tool: search_wikipedia
+      arguments:
+        query: "Albert Einstein"
+    store_result: search_results
+    assertions:
+      - type: equals
+        path: success
+        value: true
+      
+  - name: Get Einstein article summary
+    operation:
+      type: tool_call
+      tool: get_summary
+      arguments:
+        title: "Albert Einstein"
+    assertions:
+      - type: equals
+        path: success
+        value: true
+      - type: exists
+        path: result
+        
+  - name: Get article sections
+    operation:
+      type: tool_call
+      tool: get_sections
+      arguments:
+        title: "Albert Einstein"
+    assertions:
+      - type: equals
+        path: success
+        value: true
+      
+  - name: Extract key facts about Einstein
+    operation:
+      type: tool_call
+      tool: extract_key_facts
+      arguments:
+        title: "Albert Einstein"
+    assertions:
+      - type: equals
+        path: success
+        value: true
+      
+  - name: Get related topics
+    operation:
+      type: tool_call
+      tool: get_related_topics
+      arguments:
+        title: "Albert Einstein"
+    assertions:
+      - type: equals
+        path: success
+        value: true
+      
+  - name: Test query-specific summary
+    operation:
+      type: tool_call
+      tool: summarize_article_for_query
+      arguments:
+        title: "Albert Einstein"
+        query: "theory of relativity"
+    assertions:
+      - type: equals
+        path: success
+        value: true

@@ -379,7 +379,17 @@ impl WorkflowPromptHandler {
                     }
                 },
 
-                DataSource::Constant(val) => val.clone(),
+                DataSource::Constant(val) => {
+                    // Apply template substitution to constant strings
+                    // This allows SQL queries and other constant strings to use {placeholder} syntax
+                    match val {
+                        Value::String(s) => {
+                            let substituted = Self::substitute_arguments(s, args);
+                            Value::String(substituted)
+                        },
+                        _ => val.clone(),
+                    }
+                },
 
                 DataSource::StepOutput {
                     step: binding_name,

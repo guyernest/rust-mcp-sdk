@@ -1,0 +1,20 @@
+name: wikipedia-mcp-server Test Scenario
+description: Automated test scenario for https://scjjh2dx4l.execute-api.us-west-2.amazonaws.com/mcp server. Please customize values and assertions.
+timeout: 60
+stop_on_failure: false
+variables:
+  test_id: test_123
+  test_value: sample_value
+setup: []
+steps:
+- name: List available capabilities
+  operation:
+    type: list_tools
+  timeout: null
+  continue_on_failure: false
+  store_result: available_tools
+  assertions:
+  - type: success
+  - type: exists
+    path: tools
+cleanup: []

@@ -1,0 +1,80 @@
+name: Tool Validation Test
+description: Validates tool behavior with various input scenarios
+timeout: 60
+stop_on_failure: true
+
+setup:
+  - name: Get available tools
+    operation:
+      type: list_tools
+    store_result: tools_list
+    assertions:
+      - type: success
+
+steps:
+  # Test with valid inputs
+  - name: Call tool with valid arguments
+    operation:
+      type: tool_call
+      tool: your_tool_name  # Replace with actual tool name
+      arguments:
+        param1: "valid_value"
+        param2: 123
+    assertions:
+      - type: success
+      - type: exists
+        path: result
+        
+  # Test with missing required parameters
+  - name: Call tool with missing parameters
+    operation:
+      type: tool_call
+      tool: your_tool_name
+      arguments: {}
+    continue_on_failure: true
+    assertions:
+      - type: failure  # Expecting failure due to missing params
+      - type: exists
+        path: error
+        
+  # Test with invalid parameter types
+  - name: Call tool with wrong parameter types
+    operation:
+      type: tool_call
+      tool: your_tool_name
+      arguments:
+        param1: 123  # Wrong type if expecting string
+        param2: "not_a_number"  # Wrong type if expecting number
+    continue_on_failure: true
+    assertions:
+      - type: failure
+      
+  # Test edge cases
+  - name: Call tool with edge case values
+    operation:
+      type: tool_call
+      tool: your_tool_name
+      arguments:
+        param1: ""  # Empty string
+        param2: 0   # Zero value
+    continue_on_failure: true
+    store_result: edge_case_result
+    
+  # Test with special characters
+  - name: Call tool with special characters
+    operation:
+      type: tool_call
+      tool: your_tool_name
+      arguments:
+        param1: "Test with 特殊文字 and émojis 🎉"
+        param2: -1
+    continue_on_failure: true
+    assertions:
+      - type: success
+
+cleanup:
+  - name: Log test completion
+    operation:
+      type: set_variable
+      name: test_completed
+      value: true
