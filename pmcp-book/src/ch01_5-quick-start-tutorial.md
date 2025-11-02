@@ -497,18 +497,270 @@ You've experienced:
 - Client-side orchestration
 - Server composition
 
+## Phase 4: Automated Testing (10 min)
+
+You've built two MCP servers manually and tested them with Claude Code. But production servers need **automated tests**. Let's see how `cargo-pmcp` makes testing effortless.
+
+### Test the Calculator
+
+Stop any running servers (Ctrl+C), then let's test the calculator:
+
+```bash
+cargo pmcp test --server calculator --generate-scenarios
+```
+
+**What happens:**
+
+```
+Testing MCP server
+─────────────────────────────────────
+
+Step 1: Building server
+  ✓ Server built successfully
+
+Step 2: Generating test scenarios
+  → Starting server on port 3000...
+  → Generating scenarios...
+  ✓ Scenarios generated at scenarios/calculator/generated.yaml
+
+Step 3: Running tests
+  → Starting server on port 3000...
+  → Running mcp-tester...
+
+  Testing: scenarios/calculator/generated.yaml
+
+Step 1: List available capabilities
+  ✓ PASSED
+
+Step 2: Test tool: add (123 + 234 = 357)
+  ✓ PASSED - Result: 357
+
+Step 3: Test tool: multiply (12 × 3 = 36)
+  ✓ PASSED - Result: 36
+
+Step 4: Test tool: divide (100 ÷ 4 = 25)
+  ✓ PASSED - Result: 25
+
+═════════════════════════════════════
+✓ All tests passed!
+═════════════════════════════════════
+```
+
+### What Just Happened?
+
+The `--generate-scenarios` flag told cargo-pmcp to:
+
+1. **Discover** all tools from the running server
+2. **Generate smart test cases** with meaningful values:
+   - `add(123, 234)` expects `357`
+   - `multiply(12, 3)` expects `36`
+   - `divide(100, 4)` expects `25`
+3. **Create assertions** to verify the results
+4. **Run the tests** automatically
+
+### Inspect the Generated Scenarios
+
+Open `scenarios/calculator/generated.yaml`:
+
+```yaml
+name: calculator Test Scenario
+description: Automated test scenario for http://0.0.0.0:3000 server
+timeout: 60
+stop_on_failure: false
+
+variables:
+  test_id: "test_123"
+  test_value: "sample_value"
+
+steps:
+  - name: List available capabilities
+    operation:
+      type: list_tools
+    assertions:
+      - type: success
+      - type: exists
+        path: tools
+
+  - name: Test tool: add (123 + 234 = 357)
+    operation:
+      type: tool_call
+      tool: add
+      arguments:
+        a: 123
+        b: 234
+    timeout: 30
+    continue_on_failure: true
+    store_result: add_result
+    assertions:
+      - type: success
+      - type: equals
+        path: result
+        value: 357
+
+  - name: Test tool: multiply (12 × 3 = 36)
+    operation:
+      type: tool_call
+      tool: multiply
+      arguments:
+        a: 12
+        b: 3
+    timeout: 30
+    continue_on_failure: true
+    store_result: multiply_result
+    assertions:
+      - type: success
+      - type: equals
+        path: result
+        value: 36
+```
+
+**Notice:**
+- Smart test values: `123 + 234 = 357` (not just `1 + 1 = 2`)
+- Correct expected results calculated automatically
+- Assertions verify both success and correctness
+- Human-readable YAML format
+
+### Customize and Re-Run
+
+You can edit the scenario file to add more tests:
+
+```yaml
+  - name: Test division by zero (should fail)
+    operation:
+      type: tool_call
+      tool: divide
+      arguments:
+        a: 10
+        b: 0
+    assertions:
+      - type: failure  # We expect this to fail!
+```
+
+Then run tests again (without regenerating):
+
+```bash
+cargo pmcp test --server calculator
+```
+
+### Test the Database Explorer
+
+Now let's test the SQLite explorer:
+
+```bash
+cargo pmcp test --server explorer --generate-scenarios
+```
+
+The test generator will:
+- Discover the `execute_query`, `list_tables`, and `get_sample_rows` tools
+- Generate safe test queries
+- Verify the database operations work correctly
+
+### Detailed Test Output
+
+Want to see every request/response?
+
+```bash
+cargo pmcp test --server calculator --detailed
+```
+
+This shows:
+- Full JSON-RPC requests
+- Server responses
+- Assertion evaluation details
+- Timing information
+
+### Integration with CI/CD
+
+These tests are perfect for CI/CD pipelines:
+
+```yaml
+# .github/workflows/test.yml
+name: Test MCP Servers
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Test Calculator
+        run: cargo pmcp test --server calculator
+
+      - name: Test Explorer
+        run: cargo pmcp test --server explorer
+```
+
+### Why Automated Testing Matters
+
+**Before automated tests:**
+- ❌ Manual testing with Claude Code every time
+- ❌ Easy to miss edge cases
+- ❌ No regression protection
+- ❌ Can't validate in CI/CD
+
+**With automated tests:**
+- ✅ One command tests everything
+- ✅ Smart test generation with correct values
+- ✅ Regression protection on every commit
+- ✅ CI/CD ready
+- ✅ Confidence in changes
+
+### Test Scenario Format
+
+The YAML format supports:
+
+**Operations:**
+- `list_tools` - Discover capabilities
+- `tool_call` - Call a tool with arguments
+- `list_resources` - List available resources
+- `read_resource` - Read resource content
+- `list_prompts` - List available prompts
+- `get_prompt` - Get a prompt template
+
+**Assertions:**
+- `success` - Response has no error
+- `failure` - Response has an error
+- `equals` - Field equals exact value
+- `contains` - Field contains substring
+- `exists` - Field exists
+- `matches` - Field matches regex
+- `numeric` - Numeric comparisons (>, <, between)
+- `array_length` - Array has specific length
+
+**Advanced Features:**
+- `variables` - Store and reuse values
+- `setup`/`cleanup` - Pre/post test steps
+- `store_result` - Save results for later steps
+- `continue_on_failure` - Don't stop on failure
+
+### Phase 4 Complete! ✓
+
+You've experienced:
+- Automated test generation
+- Smart test value generation (123+234=357)
+- Protocol compliance testing
+- Scenario-based testing
+- YAML test format
+- CI/CD integration
+- Regression protection
+
 ## What You've Learned
 
-In 30 minutes, you've progressed from zero to advanced:
+In 40 minutes, you've progressed from zero to production-ready:
 
-| Concept | Phase 1 | Phase 2 | Phase 3 |
-|---------|---------|---------|---------|
-| **Tools** | 1 | 6 | 3 |
-| **Validation** | None | Yes | SQL safety |
-| **Prompts** | No | 1 | 3 |
-| **Resources** | No | 1 | 2 |
-| **Workflows** | No | Simple | Multi-step + bindings |
-| **Servers** | 1 | 1 | 2 |
+| Concept | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
+|---------|---------|---------|---------|---------|
+| **Tools** | 1 | 6 | 3 | Same |
+| **Validation** | None | Yes | SQL safety | Same |
+| **Prompts** | No | 1 | 3 | Same |
+| **Resources** | No | 1 | 2 | Same |
+| **Workflows** | No | Simple | Multi-step + bindings | Same |
+| **Servers** | 1 | 1 | 2 | Same |
+| **Testing** | Manual | Manual | Manual | **Automated!** |
+| **CI/CD Ready** | No | No | No | **Yes!** |
 
 ### Key Concepts Experienced
 
@@ -518,6 +770,8 @@ In 30 minutes, you've progressed from zero to advanced:
 4. **Workflows** - Orchestrated sequences with data bindings
 5. **Validation** - Type-safe inputs with automatic error handling
 6. **Composition** - Multiple servers working together
+7. **Automated Testing** - Smart test generation with meaningful values (123+234=357)
+8. **CI/CD Integration** - Production-ready testing infrastructure
 
 ### What Makes PMCP Different
 
@@ -529,6 +783,8 @@ Through this tutorial, you experienced:
 ✅ **Progressive Complexity**: Start simple, add features incrementally
 ✅ **Production Ready**: Middleware, auth, monitoring built-in
 ✅ **Composition**: Multiple servers, automatic port management
+✅ **Smart Testing**: Automated test generation with meaningful values (123+234=357)
+✅ **CI/CD Ready**: One command tests everything, perfect for automation
 
 ## Next Steps
 

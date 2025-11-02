@@ -247,6 +247,22 @@ impl ScenarioGenerator {
     }
 
     fn create_tool_step(&self, tool: &ToolInfo) -> TestStep {
+        // Try smart generation for known tool patterns
+        if let Some((arguments, assertions, description)) = self.generate_smart_test(&tool.name) {
+            return TestStep {
+                name: format!("Test tool: {} ({})", tool.name, description),
+                operation: Operation::ToolCall {
+                    tool: tool.name.clone(),
+                    arguments,
+                },
+                timeout: Some(30),
+                continue_on_failure: true,
+                store_result: Some(format!("{}_result", tool.name.replace('-', "_"))),
+                assertions,
+            };
+        }
+
+        // Fall back to schema-based generation
         let arguments = self.generate_arguments_from_schema(&tool.input_schema);
 
         TestStep {
@@ -270,6 +286,85 @@ impl ScenarioGenerator {
                 Assertion::Success,
                 // Add more assertions based on expected output
             ],
+        }
+    }
+
+    /// Generate smart test cases for known tool patterns (calculator, etc.)
+    fn generate_smart_test(&self, tool_name: &str) -> Option<(Value, Vec<Assertion>, String)> {
+        match tool_name {
+            "add" => Some((
+                json!({"a": 123, "b": 234}),
+                vec![
+                    Assertion::Success,
+                    Assertion::Equals {
+                        path: "result".to_string(),
+                        value: json!(357),
+                        ignore_case: false,
+                    },
+                ],
+                "123 + 234 = 357".to_string(),
+            )),
+            "subtract" => Some((
+                json!({"a": 100, "b": 42}),
+                vec![
+                    Assertion::Success,
+                    Assertion::Equals {
+                        path: "result".to_string(),
+                        value: json!(58),
+                        ignore_case: false,
+                    },
+                ],
+                "100 - 42 = 58".to_string(),
+            )),
+            "multiply" => Some((
+                json!({"a": 12, "b": 3}),
+                vec![
+                    Assertion::Success,
+                    Assertion::Equals {
+                        path: "result".to_string(),
+                        value: json!(36),
+                        ignore_case: false,
+                    },
+                ],
+                "12 × 3 = 36".to_string(),
+            )),
+            "divide" => Some((
+                json!({"a": 100, "b": 4}),
+                vec![
+                    Assertion::Success,
+                    Assertion::Equals {
+                        path: "result".to_string(),
+                        value: json!(25.0),
+                        ignore_case: false,
+                    },
+                ],
+                "100 ÷ 4 = 25".to_string(),
+            )),
+            "power" => Some((
+                json!({"a": 2, "b": 10}),
+                vec![
+                    Assertion::Success,
+                    Assertion::Equals {
+                        path: "result".to_string(),
+                        value: json!(1024.0),
+                        ignore_case: false,
+                    },
+                ],
+                "2^10 = 1024".to_string(),
+            )),
+            "sqrt" => Some((
+                json!({"a": 144}),
+                vec![
+                    Assertion::Success,
+                    Assertion::Equals {
+                        path: "result".to_string(),
+                        value: json!(12.0),
+                        ignore_case: false,
+                    },
+                ],
+                "√144 = 12".to_string(),
+            )),
+            _ => None,
         }
     }
 
