@@ -45,6 +45,7 @@ prop_compose! {
         ProgressNotification {
             progress_token: token,
             progress,
+            total: None,
             message: if has_message { Some(message) } else { None },
         }
     }
@@ -142,6 +143,7 @@ proptest! {
         let notification = ProgressNotification {
             progress_token: token,
             progress,
+            total: None,
             message: if include_message { Some(message.clone()) } else { None },
         };
 
@@ -260,6 +262,7 @@ proptest! {
             notifications.push(ProgressNotification {
                 progress_token: token.clone(),
                 progress,
+                total: None,
                 message: Some(format!("Progress: {:.1}%", progress)),
             });
         }

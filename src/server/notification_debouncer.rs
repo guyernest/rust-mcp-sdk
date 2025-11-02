@@ -425,6 +425,7 @@ mod tests {
                 .submit(ServerNotification::Progress(ProgressNotification {
                     progress_token: crate::types::ProgressToken::String("test-token".to_string()),
                     progress: i as f64 * 20.0,
+                    total: None,
                     message: Some(format!("Progress {}", i)),
                 }))
                 .await
@@ -471,6 +472,7 @@ mod tests {
                 .add(ServerNotification::Progress(ProgressNotification {
                     progress_token: crate::types::ProgressToken::String("batch-token".to_string()),
                     progress: i as f64 * 20.0,
+                    total: None,
                     message: Some(format!("Progress {}", i)),
                 }))
                 .await

@@ -146,6 +146,7 @@ fn bench_protocol_helpers(c: &mut Criterion) {
                     "input": "test data",
                     "options": {"format": "json"}
                 }),
+                _meta: None,
             }));
             black_box(request)
         })
@@ -157,6 +158,7 @@ fn bench_protocol_helpers(c: &mut Criterion) {
             let notification = black_box(ProgressNotification {
                 progress_token: ProgressToken::String("task_123".to_string()),
                 progress: 75.0,
+                total: None,
                 message: Some("Processing...".to_string()),
             });
             black_box(notification)
@@ -228,6 +230,7 @@ fn bench_concurrent_processing(c: &mut Criterion) {
                     "id": i,
                     "data": format!("Message data for request {}", i)
                 }),
+                _meta: None,
             }))
             .unwrap()
         })
@@ -248,6 +251,7 @@ fn bench_concurrent_processing(c: &mut Criterion) {
             ClientRequest::CallTool(CallToolParams {
                 name: format!("tool_{}", i),
                 arguments: serde_json::json!({"id": i}),
+                _meta: None,
             })
         })
         .collect();

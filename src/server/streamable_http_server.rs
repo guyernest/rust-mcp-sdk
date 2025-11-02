@@ -1,5 +1,9 @@
 //! Streamable HTTP server implementation for MCP.
 use crate::error::Result;
+use crate::server::http_middleware::{
+    adapters::{from_axum, into_axum},
+    ServerHttpContext, ServerHttpMiddlewareChain, ServerHttpResponse,
+};
 use crate::server::Server;
 use crate::shared::http_constants::{
     APPLICATION_JSON, LAST_EVENT_ID, MCP_PROTOCOL_VERSION, MCP_SESSION_ID, TEXT_EVENT_STREAM,
@@ -8,6 +12,7 @@ use crate::shared::TransportMessage;
 use crate::types::{ClientRequest, Request};
 use async_trait::async_trait;
 use axum::{
+    body::Body,
     extract::State,
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{sse::Event, IntoResponse, Response, Sse},
@@ -141,6 +146,7 @@ type SessionCallback = Box<dyn Fn(&str) + Send + Sync>;
 ///     event_store: None,
 ///     on_session_initialized: None,
 ///     on_session_closed: None,
+///     http_middleware: None,
 /// };
 ///
 /// // Stateful configuration with custom session IDs
@@ -156,6 +162,7 @@ type SessionCallback = Box<dyn Fn(&str) + Send + Sync>;
 ///     on_session_closed: Some(Box::new(|session_id| {
 ///         println!("Session ended: {}", session_id);
 ///     })),
+///     http_middleware: None,
 /// };
 /// ```
 pub struct StreamableHttpServerConfig {
@@ -169,6 +176,8 @@ pub struct StreamableHttpServerConfig {
     pub on_session_initialized: Option<SessionCallback>,
     /// Callback when session is closed
     pub on_session_closed: Option<SessionCallback>,
+    /// HTTP middleware chain for request/response processing
+    pub http_middleware: Option<Arc<ServerHttpMiddlewareChain>>,
 }
 
 impl std::fmt::Debug for StreamableHttpServerConfig {
@@ -182,6 +191,7 @@ impl std::fmt::Debug for StreamableHttpServerConfig {
                 &self.on_session_initialized.is_some(),
             )
             .field("on_session_closed", &self.on_session_closed.is_some())
+            .field("http_middleware", &self.http_middleware.is_some())
             .finish()
     }
 }
@@ -194,6 +204,7 @@ impl Default for StreamableHttpServerConfig {
             event_store: Some(Arc::new(InMemoryEventStore::default())),
             on_session_initialized: None,
             on_session_closed: None,
+            http_middleware: None,
         }
     }
 }
@@ -615,9 +626,67 @@ fn validate_protocol_version(
 /// Handle POST requests
 async fn handle_post_request(
     State(state): State<ServerState>,
-    headers: HeaderMap,
-    body: String,
+    request: axum::extract::Request<Body>,
 ) -> impl IntoResponse {
+    // Fast path: No HTTP middleware chain
+    if state.config.http_middleware.is_none() {
+        return handle_post_fast_path(state, request).await;
+    }
+
+    // Middleware path: Process through HTTP middleware chain
+    handle_post_with_middleware(state, request).await
+}
+
+/// Extract and validate authentication from headers
+async fn extract_and_validate_auth(
+    state: &ServerState,
+    headers: &HeaderMap,
+) -> std::result::Result<Option<crate::server::auth::AuthContext>, Response> {
+    let server = state.server.lock().await;
+    if let Some(auth_provider) = server.get_auth_provider() {
+        // Extract Authorization header
+        let auth_header = headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok());
+
+        // Validate the request and get auth context
+        match auth_provider.validate_request(auth_header).await {
+            Ok(ctx) => Ok(ctx),
+            Err(e) => {
+                // Auth validation failed - return 401 Unauthorized
+                Err(create_error_response(
+                    StatusCode::UNAUTHORIZED,
+                    -32003,
+                    &format!("Authentication failed: {}", e),
+                ))
+            },
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+/// Fast path handler without HTTP middleware
+async fn handle_post_fast_path(
+    state: ServerState,
+    request: axum::extract::Request<Body>,
+) -> Response {
+    let (parts, body) = request.into_parts();
+    let headers = parts.headers;
+
+    // Read body to string
+    let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
+        Ok(b) => b,
+        Err(e) => {
+            return create_error_response(
+                StatusCode::BAD_REQUEST,
+                -32700,
+                &format!("Failed to read body: {}", e),
+            );
+        },
+    };
+    let body = String::from_utf8_lossy(&body_bytes).to_string();
+
     // Validate headers
     if let Err(error_response) = validate_headers(&headers, "POST") {
         return error_response;
@@ -677,11 +746,17 @@ async fn handle_post_request(
         }
     }
 
+    // Extract and validate authentication if auth_provider is configured
+    let auth_context = match extract_and_validate_auth(&state, &headers).await {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
+
     // Process the message
     match message {
         TransportMessage::Request { id, request } => {
             let server = state.server.lock().await;
-            let json_response = server.handle_request(id, request).await;
+            let json_response = server.handle_request(id, request, auth_context).await;
 
             // DEBUG: Log response payload before building TransportMessage
             eprintln!("[DEBUG] StreamableHttpServer: JSON response payload:");
@@ -747,6 +822,271 @@ async fn handle_post_request(
         },
         TransportMessage::Notification { .. } => {
             // Notifications get 202 Accepted
+            let mut resp = StatusCode::ACCEPTED.into_response();
+            add_cors_headers(resp.headers_mut());
+            resp
+        },
+        TransportMessage::Response(_) => {
+            let mut resp = StatusCode::ACCEPTED.into_response();
+            add_cors_headers(resp.headers_mut());
+            resp
+        },
+    }
+}
+
+/// Handler with HTTP middleware integration
+#[allow(clippy::cognitive_complexity)]
+async fn handle_post_with_middleware(
+    state: ServerState,
+    request: axum::extract::Request<Body>,
+) -> Response {
+    let http_middleware = state
+        .config
+        .http_middleware
+        .as_ref()
+        .expect("Middleware chain must exist");
+
+    // Convert from axum request
+    let (parts, body) = request.into_parts();
+    let mut server_request = match from_axum(parts, body).await {
+        Ok(req) => req,
+        Err(e) => {
+            return create_error_response(
+                StatusCode::BAD_REQUEST,
+                -32700,
+                &format!("Failed to parse request: {}", e),
+            );
+        },
+    };
+
+    // Extract session ID from headers
+    let session_id = server_request
+        .get_header(MCP_SESSION_ID)
+        .map(|s| s.to_string());
+
+    // Generate or extract request ID
+    let request_id = server_request
+        .get_header("x-request-id")
+        .map_or_else(|| Uuid::new_v4().to_string(), |s| s.to_string());
+
+    // Create HTTP middleware context
+    let http_context = ServerHttpContext {
+        request_id: request_id.clone(),
+        start_time: std::time::Instant::now(),
+        session_id: session_id.clone(),
+    };
+
+    // Process request through HTTP middleware chain
+    if let Err(e) = http_middleware
+        .process_request(&mut server_request, &http_context)
+        .await
+    {
+        // Call error hooks before returning
+        let _ = http_middleware.handle_error(&e, &http_context).await;
+        return create_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            -32603,
+            &format!("Middleware rejected request: {}", e),
+        );
+    }
+
+    // Validate headers (consistent with fast path)
+    if let Err(error_response) = validate_headers(&server_request.headers, "POST") {
+        // Call error hooks for validation failures
+        let validation_error = crate::Error::protocol_msg("Header validation failed");
+        let _ = http_middleware
+            .handle_error(&validation_error, &http_context)
+            .await;
+        return error_response;
+    }
+
+    // Parse JSON-RPC from body
+    let body_str = String::from_utf8_lossy(&server_request.body);
+    let message: TransportMessage =
+        match crate::shared::StdioTransport::parse_message(body_str.as_bytes()) {
+            Ok(msg) => msg,
+            Err(e) => {
+                let mut error_response = ServerHttpResponse::new(
+                    StatusCode::BAD_REQUEST,
+                    HeaderMap::new(),
+                    format!("{{\"error\":\"Invalid JSON: {}\"}}", e).into_bytes(),
+                );
+                let _ = http_middleware
+                    .process_response(&mut error_response, &http_context)
+                    .await;
+                return into_axum(error_response);
+            },
+        };
+
+    // Extract protocol version
+    let protocol_version = server_request
+        .get_header(MCP_PROTOCOL_VERSION)
+        .map(|s| s.to_string());
+
+    // Check if this is an initialization request
+    let is_init_request = matches!(
+        &message,
+        TransportMessage::Request { request: Request::Client(boxed), .. }
+            if matches!(**boxed, ClientRequest::Initialize(_))
+    );
+
+    // Handle session logic
+    let (response_session_id, _) = if is_init_request {
+        match process_init_session(&state, session_id.clone(), protocol_version.clone()) {
+            Ok(result) => result,
+            Err(error_response) => {
+                // Call error hooks for session initialization failures
+                let session_error = crate::Error::protocol_msg("Session initialization failed");
+                let _ = http_middleware
+                    .handle_error(&session_error, &http_context)
+                    .await;
+                return error_response;
+            },
+        }
+    } else {
+        match validate_non_init_session(&state, session_id.clone()) {
+            Ok(sid) => (sid, false),
+            Err(error_response) => {
+                // Call error hooks for session validation failures
+                let session_error = crate::Error::protocol_msg("Session validation failed");
+                let _ = http_middleware
+                    .handle_error(&session_error, &http_context)
+                    .await;
+                return error_response;
+            },
+        }
+    };
+
+    // Validate protocol version for non-init requests
+    if !is_init_request {
+        if let Err(error_response) =
+            validate_protocol_version(&state, session_id.as_ref(), protocol_version.as_ref())
+        {
+            // Call error hooks for protocol version validation failures
+            let version_error = crate::Error::protocol_msg("Protocol version validation failed");
+            let _ = http_middleware
+                .handle_error(&version_error, &http_context)
+                .await;
+            return error_response;
+        }
+    }
+
+    // Extract and validate authentication if auth_provider is configured
+    let auth_context = {
+        let server = state.server.lock().await;
+        if let Some(auth_provider) = server.get_auth_provider() {
+            // Extract Authorization header from middleware-processed request
+            let auth_header = server_request.get_header("authorization");
+
+            // Validate the request and get auth context
+            match auth_provider.validate_request(auth_header).await {
+                Ok(ctx) => ctx,
+                Err(e) => {
+                    // Auth validation failed - return 401 Unauthorized
+                    let auth_error =
+                        crate::Error::authentication(format!("Authentication failed: {}", e));
+                    let _ = http_middleware
+                        .handle_error(&auth_error, &http_context)
+                        .await;
+
+                    return create_error_response(
+                        StatusCode::UNAUTHORIZED,
+                        -32003,
+                        &format!("Authentication failed: {}", e),
+                    );
+                },
+            }
+        } else {
+            None
+        }
+    };
+
+    // Process the request
+    match message {
+        TransportMessage::Request { id, request } => {
+            let server = state.server.lock().await;
+            let json_response = server.handle_request(id, request, auth_context).await;
+
+            let response_msg = TransportMessage::Response(json_response.clone());
+
+            // Handle initialization response
+            let negotiated_version = if is_init_request {
+                let version = extract_negotiated_version(&response_msg);
+                update_session_after_init(&state, response_session_id.as_ref(), version.clone());
+                version
+            } else {
+                None
+            };
+
+            // Store event if needed
+            if let Some(event_store) = &state.config.event_store {
+                if let Some(sid) = &response_session_id {
+                    let event_id = Uuid::new_v4().to_string();
+                    let _ = event_store.store_event(sid, &event_id, &response_msg).await;
+                }
+            }
+
+            // Build response with proper headers
+            let response_body = match serde_json::to_vec(&response_msg) {
+                Ok(b) => b,
+                Err(e) => {
+                    // Call error hooks for serialization failures
+                    let serialization_error =
+                        crate::Error::internal(format!("Failed to serialize response: {}", e));
+                    let _ = http_middleware
+                        .handle_error(&serialization_error, &http_context)
+                        .await;
+                    return create_error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        -32603,
+                        &format!("Failed to serialize response: {}", e),
+                    );
+                },
+            };
+
+            let mut response_headers = HeaderMap::new();
+            response_headers.insert(header::CONTENT_TYPE, APPLICATION_JSON.parse().unwrap());
+
+            // Add session header if present
+            if let Some(sid) = &response_session_id {
+                response_headers.insert(MCP_SESSION_ID, sid.parse().unwrap());
+            }
+
+            // Add protocol version header
+            let version_to_send = if is_init_request {
+                negotiated_version.unwrap_or_else(|| crate::DEFAULT_PROTOCOL_VERSION.to_string())
+            } else if let Some(ref sid) = response_session_id {
+                if let Some(session_info) = state.sessions.read().get(sid) {
+                    session_info
+                        .protocol_version
+                        .clone()
+                        .unwrap_or_else(|| crate::DEFAULT_PROTOCOL_VERSION.to_string())
+                } else {
+                    crate::DEFAULT_PROTOCOL_VERSION.to_string()
+                }
+            } else {
+                crate::DEFAULT_PROTOCOL_VERSION.to_string()
+            };
+
+            response_headers.insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
+            add_cors_headers(&mut response_headers);
+
+            // Create ServerHttpResponse
+            let mut server_response =
+                ServerHttpResponse::new(StatusCode::OK, response_headers, response_body);
+
+            // Process response through HTTP middleware chain
+            if let Err(e) = http_middleware
+                .process_response(&mut server_response, &http_context)
+                .await
+            {
+                tracing::warn!("Response middleware processing failed: {}", e);
+            }
+
+            // Convert back to axum response
+            into_axum(server_response)
+        },
+        TransportMessage::Notification { .. } => {
             let mut resp = StatusCode::ACCEPTED.into_response();
             add_cors_headers(resp.headers_mut());
             resp

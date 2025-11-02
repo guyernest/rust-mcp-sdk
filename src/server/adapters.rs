@@ -89,7 +89,7 @@ impl<T: TransportTrait> GenericTransportAdapter<T> {
             // Process the message
             match message {
                 TransportMessage::Request { id, request } => {
-                    let response = handler.handle_request(id, request).await;
+                    let response = handler.handle_request(id, request, None).await;
                     let mut t = transport.write().await;
                     t.send(TransportMessage::Response(response)).await?;
                 },
@@ -198,7 +198,7 @@ impl HttpAdapter {
 
         match message {
             TransportMessage::Request { id, request } => {
-                let response = handler.handle_request(id, request).await;
+                let response = handler.handle_request(id, request, None).await;
                 Ok(serde_json::to_string(&TransportMessage::Response(
                     response,
                 ))?)
@@ -312,7 +312,7 @@ impl TransportAdapter for MockAdapter {
     async fn serve(&self, handler: Arc<dyn ProtocolHandler>) -> Result<()> {
         let requests = self.requests.read().await.clone();
         for (id, request) in requests {
-            let response = handler.handle_request(id, request).await;
+            let response = handler.handle_request(id, request, None).await;
             self.responses.write().await.push(response);
         }
         Ok(())
@@ -332,6 +332,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_adapter() {
+        use crate::runtime::RwLock;
+        use crate::shared::middleware::EnhancedMiddlewareChain;
+
         let server = ServerCore::new(
             Implementation {
                 name: "test-server".to_string(),
@@ -344,6 +347,11 @@ mod tests {
             None,
             None,
             None,
+            Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
+            Arc::new(RwLock::new(
+                crate::server::tool_middleware::ToolMiddlewareChain::new(),
+            )),
+            false,
         );
 
         let handler = Arc::new(server);

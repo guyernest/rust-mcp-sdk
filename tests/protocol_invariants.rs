@@ -222,14 +222,16 @@ proptest! {
             2 => ClientRequest::CallTool(CallToolParams {
                 name: tool_name,
                 arguments: args,
+                _meta: None,
             }),
             3 => ClientRequest::ListPrompts(ListPromptsParams { cursor: cursor.clone() }),
             4 => ClientRequest::GetPrompt(GetPromptParams {
                 name: prompt_name,
                 arguments: Default::default(),
+                _meta: None,
             }),
             5 => ClientRequest::ListResources(ListResourcesParams { cursor }),
-            _ => ClientRequest::ReadResource(ReadResourceParams { uri: resource_uri }),
+            _ => ClientRequest::ReadResource(ReadResourceParams { uri: resource_uri, _meta: None }),
         };
 
         let json = serde_json::to_value(&request).unwrap();

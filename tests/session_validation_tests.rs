@@ -45,6 +45,7 @@ mod session_validation_tests {
             session_id: None,
             enable_json_response: false,
             on_resumption_token: None,
+            http_middleware_chain: None,
         };
         let mut client1 = StreamableHttpTransport::new(client_config);
 
@@ -84,6 +85,7 @@ mod session_validation_tests {
             session_id: Some(session_id),
             enable_json_response: false,
             on_resumption_token: None,
+            http_middleware_chain: None,
         };
         let mut client2 = StreamableHttpTransport::new(client_config2);
 
@@ -110,6 +112,7 @@ mod session_validation_tests {
             session_id: Some("invalid-session-id".to_string()),
             enable_json_response: false,
             on_resumption_token: None,
+            http_middleware_chain: None,
         };
         let mut client = StreamableHttpTransport::new(client_config);
 
@@ -141,6 +144,7 @@ mod session_validation_tests {
             session_id: None,
             enable_json_response: false,
             on_resumption_token: None,
+            http_middleware_chain: None,
         };
         let mut client = StreamableHttpTransport::new(client_config);
 
@@ -172,6 +176,7 @@ mod session_validation_tests {
             session_id: None,
             enable_json_response: false,
             on_resumption_token: None,
+            http_middleware_chain: None,
         };
         let mut client = StreamableHttpTransport::new(client_config);
 
@@ -279,6 +284,7 @@ mod session_validation_tests {
             session_id: None,
             enable_json_response: false,
             on_resumption_token: None,
+            http_middleware_chain: None,
         };
         let mut client = StreamableHttpTransport::new(client_config);
 
@@ -358,6 +364,7 @@ mod session_validation_tests {
             session_id: None,
             enable_json_response: false,
             on_resumption_token: None,
+            http_middleware_chain: None,
         };
         let mut client = StreamableHttpTransport::new(client_config);
 
@@ -467,6 +474,7 @@ mod session_validation_tests {
             session_id: None,
             enable_json_response: false,
             on_resumption_token: None,
+            http_middleware_chain: None,
         };
         let mut init_client = StreamableHttpTransport::new(init_config);
 
@@ -502,6 +510,7 @@ mod session_validation_tests {
             session_id: None, // No session ID
             enable_json_response: false,
             on_resumption_token: None,
+            http_middleware_chain: None,
         };
         let mut client = StreamableHttpTransport::new(client_config);
 
@@ -525,6 +534,7 @@ mod session_validation_tests {
             session_id: Some("non-existent-session".to_string()),
             enable_json_response: false,
             on_resumption_token: None,
+            http_middleware_chain: None,
         };
         let mut client2 = StreamableHttpTransport::new(client_config2);
 
@@ -555,6 +565,7 @@ mod session_validation_tests {
             session_id: None,
             enable_json_response: false,
             on_resumption_token: None,
+            http_middleware_chain: None,
         };
         let mut client = StreamableHttpTransport::new(client_config);
 
@@ -623,6 +634,7 @@ mod session_validation_tests {
             session_id: Some(session_id),
             enable_json_response: false,
             on_resumption_token: None,
+            http_middleware_chain: None,
         };
         let mut client2 = StreamableHttpTransport::new(client_config2);
 

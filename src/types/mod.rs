@@ -35,6 +35,7 @@ pub use protocol::{
     ListToolsParams, ListToolsRequest, ListToolsResult, LoggingLevel, MessageContent, ModelHint,
     ModelPreferences, Notification, Progress, ProgressNotification, ProgressToken, PromptArgument,
     PromptInfo, PromptMessage, ProtocolVersion, ReadResourceParams, ReadResourceRequest,
-    ReadResourceResult, Request, ResourceInfo, ResourceTemplate, Role, SamplingMessage,
-    ServerNotification, ServerRequest, SubscribeRequest, TokenUsage, ToolInfo, UnsubscribeRequest,
+    ReadResourceResult, Request, RequestMeta, ResourceInfo, ResourceTemplate, Role,
+    SamplingMessage, ServerNotification, ServerRequest, SubscribeRequest, TokenUsage, ToolInfo,
+    UnsubscribeRequest,
 };

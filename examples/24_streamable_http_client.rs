@@ -56,6 +56,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         session_id: None,           // Will be set by stateful server if applicable
         enable_json_response: true, // Use simple JSON responses
         on_resumption_token: None,
+        http_middleware_chain: None,
     };
 
     // Create the transport - it's already Clone so we can share it

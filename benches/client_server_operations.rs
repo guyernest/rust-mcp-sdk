@@ -130,6 +130,7 @@ fn bench_request_processing(c: &mut Criterion) {
             ClientRequest::CallTool(CallToolParams {
                 name: "simple_tool".to_string(),
                 arguments: json!({"input": "test"}),
+                _meta: None,
             }),
         ),
         (
@@ -140,6 +141,7 @@ fn bench_request_processing(c: &mut Criterion) {
                     "data": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
                     "operation": "average"
                 }),
+                _meta: None,
             }),
         ),
         (
@@ -332,6 +334,7 @@ fn bench_notifications(c: &mut Criterion) {
             Notification::Progress(ProgressNotification {
                 progress_token: ProgressToken::String("task_123".to_string()),
                 progress: 75.0,
+                total: None,
                 message: Some("Processing data...".to_string()),
             }),
         ),
@@ -382,6 +385,7 @@ fn bench_batch_operations(c: &mut Criterion) {
                     "data": format!("Batch item {}", i),
                     "index": i
                 }),
+                _meta: None,
             })
         })
         .collect();

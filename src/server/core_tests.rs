@@ -177,7 +177,7 @@ mod tests {
 
         // Send initialization request
         let response = server
-            .handle_request(RequestId::from(1i64), create_init_request())
+            .handle_request(RequestId::from(1i64), create_init_request(), None)
             .await;
 
         // Verify successful response
@@ -208,7 +208,9 @@ mod tests {
             cursor: None,
         })));
 
-        let response = server.handle_request(RequestId::from(1i64), request).await;
+        let response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
 
         // Should get an error
         match response.payload {
@@ -235,7 +237,7 @@ mod tests {
 
         // Initialize server
         server
-            .handle_request(RequestId::from(1i64), create_init_request())
+            .handle_request(RequestId::from(1i64), create_init_request(), None)
             .await;
 
         // List tools
@@ -243,7 +245,9 @@ mod tests {
             cursor: None,
         })));
 
-        let response = server.handle_request(RequestId::from(2i64), request).await;
+        let response = server
+            .handle_request(RequestId::from(2i64), request, None)
+            .await;
 
         match response.payload {
             crate::types::jsonrpc::ResponsePayload::Result(result) => {
@@ -288,7 +292,7 @@ mod tests {
 
         // Initialize
         server
-            .handle_request(RequestId::from(1i64), create_init_request())
+            .handle_request(RequestId::from(1i64), create_init_request(), None)
             .await;
 
         // List tools
@@ -296,7 +300,9 @@ mod tests {
             cursor: None,
         })));
 
-        let response = server.handle_request(RequestId::from(2i64), request).await;
+        let response = server
+            .handle_request(RequestId::from(2i64), request, None)
+            .await;
 
         match response.payload {
             crate::types::jsonrpc::ResponsePayload::Result(result) => {
@@ -346,7 +352,7 @@ mod tests {
 
         // Initialize server
         server
-            .handle_request(RequestId::from(1i64), create_init_request())
+            .handle_request(RequestId::from(1i64), create_init_request(), None)
             .await;
 
         // Call the tool
@@ -357,9 +363,12 @@ mod tests {
                 "a": 5,
                 "b": 3
             }),
+            _meta: None,
         })));
 
-        let response = server.handle_request(RequestId::from(2i64), request).await;
+        let response = server
+            .handle_request(RequestId::from(2i64), request, None)
+            .await;
 
         match response.payload {
             crate::types::jsonrpc::ResponsePayload::Result(result) => {
@@ -380,16 +389,19 @@ mod tests {
 
         // Initialize server
         server
-            .handle_request(RequestId::from(1i64), create_init_request())
+            .handle_request(RequestId::from(1i64), create_init_request(), None)
             .await;
 
         // Call non-existent tool
         let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
             name: "nonexistent".to_string(),
             arguments: json!({}),
+            _meta: None,
         })));
 
-        let response = server.handle_request(RequestId::from(2i64), request).await;
+        let response = server
+            .handle_request(RequestId::from(2i64), request, None)
+            .await;
 
         match response.payload {
             crate::types::jsonrpc::ResponsePayload::Error(error) => {
@@ -412,16 +424,19 @@ mod tests {
 
         // Initialize server
         server
-            .handle_request(RequestId::from(1i64), create_init_request())
+            .handle_request(RequestId::from(1i64), create_init_request(), None)
             .await;
 
         // Call the failing tool
         let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
             name: "failing_tool".to_string(),
             arguments: json!({}),
+            _meta: None,
         })));
 
-        let response = server.handle_request(RequestId::from(2i64), request).await;
+        let response = server
+            .handle_request(RequestId::from(2i64), request, None)
+            .await;
 
         match response.payload {
             crate::types::jsonrpc::ResponsePayload::Error(error) => {
@@ -444,7 +459,7 @@ mod tests {
 
         // Initialize server
         server
-            .handle_request(RequestId::from(1i64), create_init_request())
+            .handle_request(RequestId::from(1i64), create_init_request(), None)
             .await;
 
         // List prompts
@@ -454,7 +469,7 @@ mod tests {
             })));
 
         let list_response = server
-            .handle_request(RequestId::from(2i64), list_request)
+            .handle_request(RequestId::from(2i64), list_request, None)
             .await;
 
         match list_response.payload {
@@ -470,10 +485,11 @@ mod tests {
         let get_request = Request::Client(Box::new(ClientRequest::GetPrompt(GetPromptParams {
             name: "test_prompt".to_string(),
             arguments: HashMap::from([("key".to_string(), "value".to_string())]),
+            _meta: None,
         })));
 
         let get_response = server
-            .handle_request(RequestId::from(3i64), get_request)
+            .handle_request(RequestId::from(3i64), get_request, None)
             .await;
 
         match get_response.payload {
@@ -499,7 +515,7 @@ mod tests {
 
         // Initialize server
         server
-            .handle_request(RequestId::from(1i64), create_init_request())
+            .handle_request(RequestId::from(1i64), create_init_request(), None)
             .await;
 
         // List resources
@@ -508,7 +524,7 @@ mod tests {
         )));
 
         let list_response = server
-            .handle_request(RequestId::from(2i64), list_request)
+            .handle_request(RequestId::from(2i64), list_request, None)
             .await;
 
         match list_response.payload {
@@ -524,10 +540,11 @@ mod tests {
         let read_request =
             Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceParams {
                 uri: "test://resource1".to_string(),
+                _meta: None,
             })));
 
         let read_response = server
-            .handle_request(RequestId::from(3i64), read_request)
+            .handle_request(RequestId::from(3i64), read_request, None)
             .await;
 
         match read_response.payload {
@@ -554,15 +571,18 @@ mod tests {
 
         // Initialize server
         server
-            .handle_request(RequestId::from(1i64), create_init_request())
+            .handle_request(RequestId::from(1i64), create_init_request(), None)
             .await;
 
         // Read non-existent resource
         let request = Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceParams {
             uri: "test://nonexistent".to_string(),
+            _meta: None,
         })));
 
-        let response = server.handle_request(RequestId::from(2i64), request).await;
+        let response = server
+            .handle_request(RequestId::from(2i64), request, None)
+            .await;
 
         match response.payload {
             crate::types::jsonrpc::ResponsePayload::Error(error) => {
@@ -607,6 +627,7 @@ mod tests {
         let notification = Notification::Progress(ProgressNotification {
             progress_token: ProgressToken::String("test".to_string()),
             progress: 50.0,
+            total: None,
             message: Some("Processing".to_string()),
         });
 
@@ -633,7 +654,7 @@ mod tests {
 
         // Initialize server
         server
-            .handle_request(RequestId::from(0i64), create_init_request())
+            .handle_request(RequestId::from(0i64), create_init_request(), None)
             .await;
 
         // Create multiple concurrent requests
@@ -644,9 +665,10 @@ mod tests {
                 let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
                     name: "concurrent_tool".to_string(),
                     arguments: json!({ "id": i }),
+                    _meta: None,
                 })));
                 server_clone
-                    .handle_request(RequestId::from(i as i64), request)
+                    .handle_request(RequestId::from(i as i64), request, None)
                     .await
             };
             futures.push(future);

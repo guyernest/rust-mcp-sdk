@@ -10,7 +10,7 @@
 
 use crate::error::Result;
 use crate::shared::TransportMessage;
-use crate::types::{JSONRPCRequest, JSONRPCResponse};
+use crate::types::{JSONRPCNotification, JSONRPCRequest, JSONRPCResponse};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use parking_lot::RwLock;
@@ -222,6 +222,20 @@ pub trait AdvancedMiddleware: Send + Sync {
         Ok(())
     }
 
+    /// Called when an unsolicited notification is received with context.
+    ///
+    /// This enables middleware to process server-initiated notifications
+    /// (e.g., progress updates, resource changes) that arrive without
+    /// a corresponding request.
+    async fn on_notification_with_context(
+        &self,
+        notification: &mut JSONRPCNotification,
+        context: &MiddlewareContext,
+    ) -> Result<()> {
+        let _ = (notification, context);
+        Ok(())
+    }
+
     /// Called when middleware chain starts
     async fn on_chain_start(&self, _context: &MiddlewareContext) -> Result<()> {
         Ok(())
@@ -318,6 +332,16 @@ pub trait Middleware: Send + Sync {
     /// Called when a message is received (any type).
     async fn on_receive(&self, message: &TransportMessage) -> Result<()> {
         let _ = message;
+        Ok(())
+    }
+
+    /// Called when an unsolicited notification is received.
+    ///
+    /// This enables middleware to process server-initiated notifications
+    /// (e.g., progress updates, resource changes) that arrive without
+    /// a corresponding request.
+    async fn on_notification(&self, notification: &mut JSONRPCNotification) -> Result<()> {
+        let _ = notification;
         Ok(())
     }
 }
@@ -535,6 +559,66 @@ impl EnhancedMiddlewareChain {
         Ok(())
     }
 
+    /// Process an unsolicited notification through all applicable middleware.
+    ///
+    /// This enables middleware to intercept and process server-initiated
+    /// notifications (e.g., progress updates, resource changes, SSE events)
+    /// that arrive without a corresponding request.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::shared::{EnhancedMiddlewareChain, MiddlewareContext};
+    /// use pmcp::types::JSONRPCNotification;
+    ///
+    /// # async fn example() -> pmcp::Result<()> {
+    /// let chain = EnhancedMiddlewareChain::new();
+    /// let context = MiddlewareContext::default();
+    ///
+    /// let mut notification = JSONRPCNotification::new(
+    ///     "notifications/progress",
+    ///     Some(serde_json::json!({
+    ///         "progressToken": "token-123",
+    ///         "progress": 50,
+    ///         "total": 100
+    ///     }))
+    /// );
+    ///
+    /// // Process notification through middleware chain
+    /// chain.process_notification_with_context(&mut notification, &context).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn process_notification_with_context(
+        &self,
+        notification: &mut JSONRPCNotification,
+        context: &MiddlewareContext,
+    ) -> Result<()> {
+        let start_time = Instant::now();
+
+        // Process through middleware in order
+        for middleware in &self.middlewares {
+            if middleware.should_execute(context).await {
+                if let Err(e) = middleware
+                    .on_notification_with_context(notification, context)
+                    .await
+                {
+                    context.metrics.inc_errors();
+                    // Notify error to all middleware
+                    for m in &self.middlewares {
+                        if m.should_execute(context).await {
+                            let _ = m.on_error(&e, context).await;
+                        }
+                    }
+                    return Err(e);
+                }
+            }
+        }
+
+        context.metrics.add_time(start_time.elapsed());
+        Ok(())
+    }
+
     /// Get performance metrics for the chain.
     pub fn get_metrics(&self) -> Vec<Arc<PerformanceMetrics>> {
         // This would collect metrics from all contexts that have been processed
@@ -654,6 +738,18 @@ impl MiddlewareChain {
     pub async fn process_receive(&self, message: &TransportMessage) -> Result<()> {
         for middleware in &self.middlewares {
             middleware.on_receive(message).await?;
+        }
+        Ok(())
+    }
+
+    /// Process an unsolicited notification through all middleware.
+    ///
+    /// This enables middleware to intercept and process server-initiated
+    /// notifications (e.g., progress updates, resource changes) that arrive
+    /// without a corresponding request.
+    pub async fn process_notification(&self, notification: &mut JSONRPCNotification) -> Result<()> {
+        for middleware in &self.middlewares {
+            middleware.on_notification(notification).await?;
         }
         Ok(())
     }
@@ -1368,5 +1464,156 @@ mod tests {
         };
 
         assert!(middleware.on_request(&mut request).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_notification_middleware_legacy() {
+        let mut chain = MiddlewareChain::new();
+        chain.add(Arc::new(LoggingMiddleware::default()));
+
+        let mut notification = JSONRPCNotification::new(
+            "notifications/progress",
+            Some(serde_json::json!({
+                "progressToken": "test-123",
+                "progress": 50,
+                "total": 100
+            })),
+        );
+
+        // Should process without error
+        assert!(chain.process_notification(&mut notification).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_notification_middleware_enhanced() {
+        let mut chain = EnhancedMiddlewareChain::new();
+        chain.add(Arc::new(MetricsMiddleware::new("test-service".to_string())));
+
+        let context = MiddlewareContext::with_request_id("notif-001".to_string());
+
+        let mut notification = JSONRPCNotification::new(
+            "notifications/resourceUpdated",
+            Some(serde_json::json!({
+                "uri": "file:///test.txt",
+                "type": "modified"
+            })),
+        );
+
+        // Should process notification through enhanced middleware
+        assert!(chain
+            .process_notification_with_context(&mut notification, &context)
+            .await
+            .is_ok());
+
+        // Verify metrics were not incremented for notifications (they're not requests)
+        let stats = context.metrics;
+        assert_eq!(stats.request_count(), 0);
+    }
+
+    /// Test middleware that appends metadata to notifications
+    struct NotificationMetadataMiddleware {
+        tag: String,
+    }
+
+    #[async_trait::async_trait]
+    impl AdvancedMiddleware for NotificationMetadataMiddleware {
+        fn name(&self) -> &'static str {
+            "notification_metadata"
+        }
+
+        async fn on_notification_with_context(
+            &self,
+            notification: &mut JSONRPCNotification,
+            context: &MiddlewareContext,
+        ) -> Result<()> {
+            // Store notification method in context metadata
+            context.set_metadata(
+                "notification_method".to_string(),
+                notification.method.clone(),
+            );
+            context.set_metadata("middleware_tag".to_string(), self.tag.clone());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_notification_metadata_middleware() {
+        let mut chain = EnhancedMiddlewareChain::new();
+        chain.add(Arc::new(NotificationMetadataMiddleware {
+            tag: "test-tag".to_string(),
+        }));
+
+        let context = MiddlewareContext::with_request_id("notif-002".to_string());
+
+        let mut notification = JSONRPCNotification::new(
+            "notifications/cancelled",
+            Some(serde_json::json!({
+                "requestId": "req-123",
+                "reason": "user cancelled"
+            })),
+        );
+
+        chain
+            .process_notification_with_context(&mut notification, &context)
+            .await
+            .unwrap();
+
+        // Verify metadata was set by middleware
+        assert_eq!(
+            context.get_metadata("notification_method"),
+            Some("notifications/cancelled".to_string())
+        );
+        assert_eq!(
+            context.get_metadata("middleware_tag"),
+            Some("test-tag".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_notification_error_handling() {
+        /// Test middleware that fails on specific notification
+        struct FailingNotificationMiddleware;
+
+        #[async_trait::async_trait]
+        impl AdvancedMiddleware for FailingNotificationMiddleware {
+            fn name(&self) -> &'static str {
+                "failing_notification"
+            }
+
+            async fn on_notification_with_context(
+                &self,
+                notification: &mut JSONRPCNotification,
+                _context: &MiddlewareContext,
+            ) -> Result<()> {
+                if notification.method == "notifications/error" {
+                    return Err(crate::Error::internal("notification processing failed"));
+                }
+                Ok(())
+            }
+        }
+
+        let mut chain = EnhancedMiddlewareChain::new();
+        chain.add(Arc::new(FailingNotificationMiddleware));
+
+        let context = MiddlewareContext::default();
+
+        // Success case
+        let mut ok_notification =
+            JSONRPCNotification::new("notifications/ok", None::<serde_json::Value>);
+        assert!(chain
+            .process_notification_with_context(&mut ok_notification, &context)
+            .await
+            .is_ok());
+
+        // Error case
+        let mut error_notification =
+            JSONRPCNotification::new("notifications/error", None::<serde_json::Value>);
+        let result = chain
+            .process_notification_with_context(&mut error_notification, &context)
+            .await;
+        assert!(result.is_err());
+
+        // Verify error was counted
+        assert_eq!(context.metrics.error_count(), 1);
     }
 }

@@ -1,7 +1,9 @@
 //! MCP client implementation.
 
 use crate::error::{Error, Result};
-use crate::shared::{Protocol, ProtocolOptions, Transport};
+use crate::shared::{
+    EnhancedMiddlewareChain, MiddlewareContext, Protocol, ProtocolOptions, Transport,
+};
 use crate::types::{
     CallToolRequest, CallToolResult, CancelledNotification, ClientCapabilities, ClientNotification,
     ClientRequest, CompleteRequest, CompleteResult, CreateMessageRequest, CreateMessageResult,
@@ -26,12 +28,16 @@ use futures_locks::RwLock;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod auth;
+pub mod http_logging_middleware;
+pub mod http_middleware;
+pub mod oauth_middleware;
 pub mod transport;
 
 /// MCP client for connecting to servers.
 pub struct Client<T: Transport> {
     transport: Arc<RwLock<T>>,
     protocol: Arc<RwLock<Protocol>>,
+    middleware_chain: Arc<RwLock<EnhancedMiddlewareChain>>,
     capabilities: Option<ClientCapabilities>,
     server_capabilities: Option<ServerCapabilities>,
     server_version: Option<Implementation>,
@@ -100,6 +106,7 @@ impl<T: Transport> Client<T> {
         Self {
             transport: Arc::new(RwLock::new(transport)),
             protocol: Arc::new(RwLock::new(Protocol::new(ProtocolOptions::default()))),
+            middleware_chain: Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             capabilities: None,
             server_capabilities: None,
             server_version: None,
@@ -144,6 +151,7 @@ impl<T: Transport> Client<T> {
         Self {
             transport: Arc::new(RwLock::new(transport)),
             protocol: Arc::new(RwLock::new(Protocol::new(options))),
+            middleware_chain: Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             capabilities: None,
             server_capabilities: None,
             server_version: None,
@@ -404,6 +412,7 @@ impl<T: Transport> Client<T> {
         let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
             name,
             arguments,
+            _meta: None,
         })));
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
@@ -551,6 +560,7 @@ impl<T: Transport> Client<T> {
         let request = Request::Client(Box::new(ClientRequest::GetPrompt(GetPromptRequest {
             name,
             arguments,
+            _meta: None,
         })));
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
@@ -735,6 +745,7 @@ impl<T: Transport> Client<T> {
 
         let request = Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceRequest {
             uri,
+            _meta: None,
         })));
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
@@ -1194,6 +1205,7 @@ impl<T: Transport> Client<T> {
     /// let progress = ProgressNotification {
     ///     progress_token: pmcp::ProgressToken::String("file-processing".to_string()),
     ///     progress: 75.0,
+    ///     total: None,
     ///     message: Some("Processing files...".to_string()),
     /// };
     ///
@@ -1257,17 +1269,33 @@ impl<T: Transport> Client<T> {
     }
 
     /// Send a request and wait for response.
+    #[allow(clippy::cognitive_complexity)]
     async fn send_request(
         &self,
         request_id: RequestId,
         request: Request,
     ) -> Result<crate::types::JSONRPCResponse> {
+        use crate::shared::protocol_helpers::create_request;
+
         // Track request for cancellation
         let (cancel_tx, _cancel_rx) = oneshot::channel();
         self.active_requests
             .write()
             .await
             .insert(request_id.clone(), cancel_tx);
+
+        // Create middleware context
+        let context = MiddlewareContext::with_request_id(request_id.to_string());
+
+        // Convert to JSONRPC request
+        let mut jsonrpc_request = create_request(request_id.clone(), request.clone());
+
+        // Process request through middleware chain (read-only access)
+        self.middleware_chain
+            .read()
+            .await
+            .process_request_with_context(&mut jsonrpc_request, &context)
+            .await?;
 
         // Send request through transport
         let message = crate::types::TransportMessage::Request {
@@ -1277,18 +1305,67 @@ impl<T: Transport> Client<T> {
 
         self.transport.write().await.send(message).await?;
 
-        // Wait for response (this would be implemented with proper response routing)
-        // For now, receive next message and assume it's our response
-        let response_message = self.transport.write().await.receive().await?;
+        // Wait for response, dispatching any unsolicited notifications along the way
+        loop {
+            let response_message = self.transport.write().await.receive().await?;
 
-        // Remove from active requests
-        self.active_requests.write().await.remove(&request_id);
+            match response_message {
+                crate::types::TransportMessage::Response(mut response) => {
+                    // Remove from active requests
+                    self.active_requests.write().await.remove(&request_id);
 
-        match response_message {
-            crate::types::TransportMessage::Response(response) => Ok(response),
-            _ => Err(Error::protocol_msg(
-                "Expected response, got different message type",
-            )),
+                    // Process response through middleware chain (read-only access)
+                    self.middleware_chain
+                        .read()
+                        .await
+                        .process_response_with_context(&mut response, &context)
+                        .await?;
+                    return Ok(response);
+                },
+                crate::types::TransportMessage::Notification(notification) => {
+                    // Unsolicited notification (e.g., progress, resource changes, SSE events)
+                    // Convert to JSONRPC notification for middleware processing
+                    use crate::shared::protocol_helpers::create_notification;
+                    let mut jsonrpc_notification = create_notification(notification.clone());
+
+                    // Process through protocol middleware chain
+                    let notif_context = MiddlewareContext::default();
+
+                    if let Err(e) = self
+                        .middleware_chain
+                        .write()
+                        .await
+                        .process_notification_with_context(
+                            &mut jsonrpc_notification,
+                            &notif_context,
+                        )
+                        .await
+                    {
+                        // Log error but don't terminate dispatcher - continue processing
+                        tracing::warn!(
+                            "Notification middleware processing failed for {}: {}",
+                            jsonrpc_notification.method,
+                            e
+                        );
+                    }
+
+                    // Forward to notification handler if registered
+                    if let Some(tx) = &self.notification_tx {
+                        if let Err(e) = tx.send(notification).await {
+                            tracing::debug!("Notification channel closed: {}", e);
+                        }
+                    }
+
+                    // Continue loop to wait for the actual response
+                },
+                crate::types::TransportMessage::Request { .. } => {
+                    // Unexpected message type
+                    self.active_requests.write().await.remove(&request_id);
+                    return Err(Error::protocol_msg(
+                        "Unexpected message type while waiting for response",
+                    ));
+                },
+            }
         }
     }
 
@@ -1335,6 +1412,7 @@ impl<T: Transport> Client<T> {
 pub struct ClientBuilder<T: Transport> {
     transport: T,
     options: ProtocolOptions,
+    middleware_chain: EnhancedMiddlewareChain,
 }
 
 impl<T: Transport> std::fmt::Debug for ClientBuilder<T> {
@@ -1352,6 +1430,7 @@ impl<T: Transport> ClientBuilder<T> {
         Self {
             transport,
             options: ProtocolOptions::default(),
+            middleware_chain: EnhancedMiddlewareChain::new(),
         }
     }
 
@@ -1367,16 +1446,104 @@ impl<T: Transport> ClientBuilder<T> {
         self
     }
 
+    /// Add middleware to the client.
+    ///
+    /// Middleware are executed in priority order (Critical → High → Normal → Low → Lowest).
+    /// Multiple middleware with the same priority are executed in the order they were added.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::{ClientBuilder, StdioTransport};
+    /// use pmcp::shared::MetricsMiddleware;
+    /// use std::sync::Arc;
+    ///
+    /// # async fn example() -> Result<(), pmcp::Error> {
+    /// let transport = StdioTransport::new();
+    /// let client = ClientBuilder::new(transport)
+    ///     .with_middleware(Arc::new(MetricsMiddleware::new("my-service".to_string())))
+    ///     .build();
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_middleware(
+        mut self,
+        middleware: Arc<dyn crate::shared::AdvancedMiddleware>,
+    ) -> Self {
+        self.middleware_chain.add(middleware);
+        self
+    }
+
+    /// Add protocol-level middleware to the client.
+    ///
+    /// This is an alias for `with_middleware()` that provides explicit naming to distinguish
+    /// protocol middleware (operates on JSON-RPC messages) from HTTP middleware
+    /// (operates on HTTP requests/responses via `StreamableHttpTransportConfigBuilder`).
+    ///
+    /// Middleware are executed in priority order (Critical → High → Normal → Low → Lowest).
+    /// Multiple middleware with the same priority are executed in the order they were added.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::{ClientBuilder, StdioTransport};
+    /// use pmcp::shared::MetricsMiddleware;
+    /// use std::sync::Arc;
+    ///
+    /// # async fn example() -> Result<(), pmcp::Error> {
+    /// let transport = StdioTransport::new();
+    /// let client = ClientBuilder::new(transport)
+    ///     .with_protocol_middleware(Arc::new(MetricsMiddleware::new("my-service".to_string())))
+    ///     .build();
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_protocol_middleware(
+        self,
+        middleware: Arc<dyn crate::shared::AdvancedMiddleware>,
+    ) -> Self {
+        self.with_middleware(middleware)
+    }
+
+    /// Set the entire middleware chain.
+    ///
+    /// This replaces any previously configured middleware.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::{ClientBuilder, StdioTransport};
+    /// use pmcp::shared::EnhancedMiddlewareChain;
+    ///
+    /// # async fn example() -> Result<(), pmcp::Error> {
+    /// let mut chain = EnhancedMiddlewareChain::new();
+    /// // Add middleware to chain...
+    ///
+    /// let transport = StdioTransport::new();
+    /// let client = ClientBuilder::new(transport)
+    ///     .middleware_chain(chain)
+    ///     .build();
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn middleware_chain(mut self, chain: EnhancedMiddlewareChain) -> Self {
+        self.middleware_chain = chain;
+        self
+    }
+
     /// Build the client.
     pub fn build(self) -> Client<T> {
-        Client::with_options(
+        let mut client = Client::with_options(
             self.transport,
             Implementation {
                 name: "pmcp-client".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
             self.options,
-        )
+        );
+        // Replace the default middleware chain with the configured one
+        client.middleware_chain = Arc::new(RwLock::new(self.middleware_chain));
+        client
     }
 }
 
@@ -1385,6 +1552,7 @@ impl<T: Transport> Clone for Client<T> {
         Self {
             transport: self.transport.clone(),
             protocol: self.protocol.clone(),
+            middleware_chain: self.middleware_chain.clone(),
             capabilities: self.capabilities.clone(),
             server_capabilities: self.server_capabilities.clone(),
             server_version: self.server_version.clone(),
@@ -1700,6 +1868,7 @@ mod tests {
         let progress = ProgressNotification {
             progress_token: ProgressToken::String("test".to_string()),
             progress: 50.0,
+            total: None,
             message: Some("Halfway done".to_string()),
         };
 

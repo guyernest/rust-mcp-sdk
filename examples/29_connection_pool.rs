@@ -37,6 +37,7 @@ impl pmcp::shared::Transport for MockTransport {
             pmcp::types::Notification::Progress(pmcp::types::ProgressNotification {
                 progress_token: pmcp::types::ProgressToken::String(format!("mock-{}", self.id)),
                 progress: 50.0,
+                total: None,
                 message: Some(format!("Mock message from transport {}", self.id)),
             }),
         ))
@@ -146,6 +147,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 pmcp::types::ProgressNotification {
                     progress_token: pmcp::types::ProgressToken::String(format!("test-{}", i)),
                     progress: (i as f64 * 20.0),
+                    total: None,
                     message: Some(format!("Load balancing test {}", i)),
                 },
             ));
@@ -179,6 +181,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             pmcp::types::ProgressNotification {
                 progress_token: pmcp::types::ProgressToken::String(format!("load-test-{}", i)),
                 progress: (i as f64 * 10.0),
+                total: None,
                 message: Some(format!("Load test message {}", i)),
             },
         ));

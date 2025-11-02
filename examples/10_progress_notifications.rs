@@ -22,21 +22,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ProgressNotification {
             progress_token: ProgressToken::String("task-1".to_string()),
             progress: 10.0,
+            total: None,
             message: Some("Starting task...".to_string()),
         },
         ProgressNotification {
             progress_token: ProgressToken::String("task-1".to_string()),
             progress: 25.0,
+            total: None,
             message: Some("Processing data...".to_string()),
         },
         ProgressNotification {
             progress_token: ProgressToken::String("task-1".to_string()),
             progress: 50.0,
+            total: None,
             message: Some("Halfway there...".to_string()),
         },
         ProgressNotification {
             progress_token: ProgressToken::String("task-1".to_string()),
             progress: 100.0,
+            total: None,
             message: Some("Task completed!".to_string()),
         },
     ];

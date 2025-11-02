@@ -42,6 +42,7 @@ mod streamable_http_server_tests {
             session_id: None,
             enable_json_response: false,
             on_resumption_token: None,
+            http_middleware_chain: None,
         };
         let mut client = StreamableHttpTransport::new(client_config);
 
@@ -105,6 +106,7 @@ mod streamable_http_server_tests {
             session_id: None, // No session ID
             enable_json_response: false,
             on_resumption_token: None,
+            http_middleware_chain: None,
         };
         let mut client = StreamableHttpTransport::new(client_config);
 
@@ -142,6 +144,7 @@ mod streamable_http_server_tests {
             event_store: None,
             on_session_initialized: None,
             on_session_closed: None,
+            http_middleware: None,
         };
 
         let http_server = StreamableHttpServer::with_config(addr, server, config);
@@ -161,6 +164,7 @@ mod streamable_http_server_tests {
             session_id: None,
             enable_json_response: false,
             on_resumption_token: None,
+            http_middleware_chain: None,
         };
         let mut client = StreamableHttpTransport::new(client_config);
 
@@ -239,6 +243,7 @@ mod streamable_http_server_tests {
             session_id: None,
             enable_json_response: false,
             on_resumption_token: None,
+            http_middleware_chain: None,
         };
         let mut client = StreamableHttpTransport::new(client_config);
 

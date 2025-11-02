@@ -53,6 +53,7 @@ fn test_streamable_http_config_creation() {
         on_resumption_token: Some(Arc::new(|token| {
             println!("Resumption token: {}", token);
         })),
+        http_middleware_chain: None,
     };
 
     assert_eq!(config.url.as_str(), "http://localhost:8080/");
@@ -72,6 +73,7 @@ fn test_streamable_http_transport_creation() {
         session_id: None,
         enable_json_response: false,
         on_resumption_token: None,
+        http_middleware_chain: None,
     };
 
     let transport = StreamableHttpTransport::new(config);
@@ -90,6 +92,7 @@ fn test_streamable_http_transport_session_management() {
         session_id: Some("initial-session".to_string()),
         enable_json_response: false,
         on_resumption_token: None,
+        http_middleware_chain: None,
     };
 
     let transport = StreamableHttpTransport::new(config);
@@ -113,6 +116,7 @@ fn test_streamable_http_transport_protocol_version() {
         session_id: None,
         enable_json_response: false,
         on_resumption_token: None,
+        http_middleware_chain: None,
     };
 
     let transport = StreamableHttpTransport::new(config);
@@ -132,6 +136,7 @@ fn test_streamable_http_config_debug() {
         session_id: None,
         enable_json_response: false,
         on_resumption_token: None,
+        http_middleware_chain: None,
     };
 
     let debug_str = format!("{:?}", config);
@@ -149,6 +154,7 @@ fn test_streamable_http_transport_debug() {
         session_id: None,
         enable_json_response: false,
         on_resumption_token: None,
+        http_middleware_chain: None,
     };
 
     let transport = StreamableHttpTransport::new(config);
@@ -166,6 +172,7 @@ fn test_streamable_http_config_clone() {
         session_id: Some("session-123".to_string()),
         enable_json_response: true,
         on_resumption_token: None,
+        http_middleware_chain: None,
     };
 
     let cloned = config.clone();
@@ -184,6 +191,7 @@ fn test_streamable_http_transport_clone() {
         session_id: Some("session-123".to_string()),
         enable_json_response: false,
         on_resumption_token: None,
+        http_middleware_chain: None,
     };
 
     let transport = StreamableHttpTransport::new(config);
@@ -200,6 +208,7 @@ async fn test_streamable_http_transport_close() {
         session_id: None,
         enable_json_response: false,
         on_resumption_token: None,
+        http_middleware_chain: None,
     };
 
     let mut transport = StreamableHttpTransport::new(config);
@@ -220,6 +229,7 @@ async fn test_streamable_http_send_with_auth_provider() {
         session_id: None,
         enable_json_response: false,
         on_resumption_token: None,
+        http_middleware_chain: None,
     };
 
     let mut transport = StreamableHttpTransport::new(config);

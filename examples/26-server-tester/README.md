@@ -7,6 +7,7 @@ A comprehensive testing tool for Model Context Protocol (MCP) servers, providing
 ### Core Testing
 - **Protocol Compliance Testing**: Validates JSON-RPC 2.0 and MCP protocol compliance
 - **Multi-Transport Support**: Tests HTTP, HTTPS, WebSocket, and stdio transports
+- **OAuth 2.0 Authentication (NEW!)**: Interactive browser-based OAuth flow with PKCE, token caching, and automatic middleware injection across all transport types
 - **Comprehensive Diagnostics**: Layer-by-layer connection troubleshooting
 - **Server Comparison**: Compare capabilities and performance between servers
 - **CI/CD Ready**: JSON output for automated testing pipelines
@@ -60,22 +61,84 @@ mcp-tester quick http://localhost:8080
 mcp-tester test https://api.example.com/mcp --api-key YOUR_ACCESS_TOKEN
 ```
 
-### Testing OAuth-Protected MCP Servers
+### Testing OAuth-Protected MCP Servers (Interactive OAuth)
 
-For servers that require OAuth authentication:
+The MCP Tester now supports **interactive OAuth 2.0 authentication** with automatic browser-based login and token management.
 
-1. **Obtain an access token** from the MCP Inspector or your OAuth provider
-2. **Use the `--api-key` parameter** to pass the token:
-   ```bash
-   mcp-tester test https://your-oauth-server.com/mcp --api-key "YOUR_ACCESS_TOKEN"
-   ```
-3. The tester will automatically add the `Authorization: Bearer YOUR_ACCESS_TOKEN` header to all requests
+#### Interactive OAuth Flow
 
-**Note**: You can also set the token via environment variable:
+For servers that require OAuth authentication, the tester provides a seamless authentication experience:
+
+> **Auto-Discovery vs Explicit Issuer**: If `--oauth-issuer` is omitted, the tester attempts
+> OIDC discovery from the MCP server base URL. Providing `--oauth-issuer` explicitly is
+> **recommended for reliability**, especially when the OAuth provider and MCP server are on different domains.
+
 ```bash
+# Interactive OAuth with automatic browser login (OIDC discovery - explicit issuer recommended)
+mcp-tester test https://your-oauth-server.com/mcp \
+  --oauth-client-id "your-client-id" \
+  --oauth-issuer "https://auth.example.com" \
+  --oauth-scopes openid,email,profile
+```
+
+**What happens:**
+1. ✅ Tester generates secure PKCE challenge
+2. 🌐 Opens your browser to the OAuth provider login page
+3. 🔐 You authenticate with your credentials
+4. ✅ Tester receives the authorization code via local callback server
+5. 🎫 Exchanges code for access token
+6. 💾 **Caches token locally** for future requests
+7. 🚀 Automatically injects `Authorization: Bearer` header into all MCP requests
+
+#### Token Caching
+
+Tokens are cached in `~/.mcp-tester/tokens.json`:
+- Cached tokens are automatically reused until expiration
+- No need to re-authenticate for every test run
+- Tokens are stored securely with expiration timestamps
+- Manual refresh is handled automatically when tokens expire
+
+#### AWS Cognito Example (OIDC discovery)
+
+Testing an MCP server protected by AWS Cognito:
+
+```bash
+mcp-tester test https://your-api.execute-api.us-west-2.amazonaws.com/mcp \
+  --oauth-issuer "https://your-pool.auth.us-west-2.amazoncognito.com" \
+  --oauth-client-id "your-cognito-client-id" \
+  --oauth-scopes openid \
+  --oauth-redirect-port 8080
+```
+
+**Important for AWS Cognito:**
+- Add `http://localhost:8765/callback` to your Cognito App Client's allowed callback URLs
+- Ensure your App Client has "Authorization code grant" enabled
+- The tester automatically handles PKCE (no client secret needed)
+
+#### Multi-Transport OAuth Support
+
+OAuth middleware now works seamlessly across **all transport types**:
+
+- ✅ **JSON-RPC HTTP** (AWS Lambda, API Gateway, standard HTTP servers)
+- ✅ **StreamableHTTP** (SSE-based streaming servers)
+- ✅ **Automatic Transport Detection** - OAuth works regardless of transport
+
+The tester automatically detects the correct transport and applies OAuth middleware appropriately.
+
+#### Manual Token Usage (Alternative)
+
+If you already have an access token from another source:
+
+```bash
+# Pass token directly
+mcp-tester test https://your-oauth-server.com/mcp --api-key "YOUR_ACCESS_TOKEN"
+
+# Or via environment variable
 export MCP_API_KEY="YOUR_ACCESS_TOKEN"
 mcp-tester test https://your-oauth-server.com/mcp
 ```
+
+The tester will automatically add the `Authorization: Bearer YOUR_ACCESS_TOKEN` header to all requests.
 
 ### Commands
 
@@ -85,12 +148,20 @@ mcp-tester test https://your-oauth-server.com/mcp
 mcp-tester test <URL> [OPTIONS]
 
 Options:
-  --with-tools           Test all discovered tools
-  --tool <NAME>          Test specific tool
-  --args <JSON>          Tool arguments as JSON
-  --format <FORMAT>      Output format (pretty|json|minimal|verbose)
-  --timeout <SECONDS>    Connection timeout (default: 30)
-  --insecure            Skip TLS certificate verification
+  --with-tools                Test all discovered tools
+  --tool <NAME>               Test specific tool
+  --args <JSON>               Tool arguments as JSON
+  --format <FORMAT>           Output format (pretty|json|minimal|verbose)
+  --timeout <SECONDS>         Connection timeout (default: 30)
+  --insecure                  Skip TLS certificate verification
+
+  # OAuth 2.0 Authentication (OIDC discovery)
+  --oauth-issuer <URL>        OAuth/OIDC issuer URL (for discovery)
+  --oauth-client-id <ID>      OAuth client ID
+  --oauth-scopes <SCOPES>     Comma-separated scopes (default: openid)
+  --oauth-redirect-port <N>   Local redirect port (default: 8080)
+  --oauth-no-cache            Disable token cache (~/.mcp-tester/tokens.json)
+  --api-key <TOKEN>           Manual bearer token (alternative)
 ```
 
 #### `compliance` - Protocol Compliance Validation
@@ -319,11 +390,11 @@ The scenario generator creates appropriate placeholder values based on JSON sche
 ### Testing an OAuth-enabled Server
 
 ```bash
-# Test the OAuth example server
+# Test the OAuth example server (local development)
 cd ../25-oauth-basic
 make run-http &  # Start server in background
 
-# Run tests
+# Run tests with OAuth middleware
 mcp-tester test http://localhost:8080 --with-tools
 
 # Test specific tool with arguments
@@ -331,14 +402,20 @@ mcp-tester test http://localhost:8080 \
   --tool admin_action \
   --args '{"action": "test"}'
 
-# Test AI-evals MCP server with OAuth token
-# First, get the access token from MCP Inspector after OAuth login
-mcp-tester test https://9nq2m33mi0.execute-api.us-west-2.amazonaws.com/mcp \
-  --api-key "YOUR_ACCESS_TOKEN_FROM_MCP_INSPECTOR"
+# Test AWS Lambda MCP server with interactive OAuth (recommended)
+mcp-tester test https://your-api.execute-api.us-west-2.amazonaws.com/mcp \
+  --oauth-issuer "https://your-pool.auth.us-west-2.amazoncognito.com" \
+  --oauth-client-id "your-cognito-client-id" \
+  --with-tools
 
-# Test with tools
-mcp-tester test https://9nq2m33mi0.execute-api.us-west-2.amazonaws.com/mcp \
+# Or with manual token (if you already have one)
+mcp-tester test https://your-api.execute-api.us-west-2.amazonaws.com/mcp \
   --api-key "YOUR_ACCESS_TOKEN" \
+  --with-tools
+
+# Subsequent runs will use cached token (no re-authentication needed!)
+mcp-tester test https://your-api.execute-api.us-west-2.amazonaws.com/mcp \
+  --oauth-client-id "your-cognito-client-id" \
   --with-tools
 ```
 

@@ -57,17 +57,23 @@ fuzz_target!(|data: &[u8]| {
         // Check if it looks like a JSON-RPC request
         if let Some(obj) = json.as_object() {
             // Validate JSON-RPC structure
+            // Note: We don't assert on version because fuzz testing should handle
+            // invalid JSON-RPC versions gracefully rather than panicking
             if let Some(Value::String(version)) = obj.get("jsonrpc") {
-                assert!(version == "2.0" || version == "1.0");
+                let _is_valid_version = version == "2.0" || version == "1.0";
             }
             
             // Check for required fields
+            // Note: We don't assert here because fuzz testing should handle invalid
+            // JSON-RPC gracefully rather than panicking
             if obj.contains_key("method") {
                 // It's a request or notification
-                assert!(obj.get("method").map(|v| v.is_string()).unwrap_or(false));
+                // Valid JSON-RPC requires method to be a string, but we don't panic
+                let _is_valid = obj.get("method").map(|v| v.is_string()).unwrap_or(false);
             } else if obj.contains_key("result") || obj.contains_key("error") {
                 // It's a response
-                assert!(!(obj.contains_key("result") && obj.contains_key("error")));
+                // Valid JSON-RPC requires exactly one of result or error
+                let _is_valid = !(obj.contains_key("result") && obj.contains_key("error"));
             }
         }
     }

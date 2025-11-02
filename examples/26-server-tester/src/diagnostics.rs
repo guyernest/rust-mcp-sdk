@@ -12,21 +12,46 @@ pub async fn run_diagnostics(
     _insecure: bool,
     api_key: Option<&str>,
 ) -> Result<TestReport> {
+    run_diagnostics_internal(url, network, timeout, _insecure, api_key, false).await
+}
+
+pub async fn run_diagnostics_quiet(
+    url: &str,
+    network: bool,
+    timeout: Duration,
+    _insecure: bool,
+    api_key: Option<&str>,
+) -> Result<TestReport> {
+    run_diagnostics_internal(url, network, timeout, _insecure, api_key, true).await
+}
+
+async fn run_diagnostics_internal(
+    url: &str,
+    network: bool,
+    timeout: Duration,
+    _insecure: bool,
+    api_key: Option<&str>,
+    quiet: bool,
+) -> Result<TestReport> {
     let mut report = TestReport::new();
     let start = Instant::now();
 
-    println!("{}", "═══════════════════════════════════════════".cyan());
-    println!("{}", "CONNECTION DIAGNOSTICS".cyan().bold());
-    println!("{}", "═══════════════════════════════════════════".cyan());
-    if let Some(key) = api_key {
-        println!("Using API key: {}***", &key[..key.len().min(4)]);
+    if !quiet {
+        println!("{}", "═══════════════════════════════════════════".cyan());
+        println!("{}", "CONNECTION DIAGNOSTICS".cyan().bold());
+        println!("{}", "═══════════════════════════════════════════".cyan());
+        if api_key.is_some() {
+            println!("Using API key: [REDACTED]");
+        }
+        println!();
     }
-    println!();
 
     // Parse URL
     let url_result = diagnose_url(url);
     report.add_test(url_result.clone());
-    print_diagnostic_result(&url_result);
+    if !quiet {
+        print_diagnostic_result(&url_result);
+    }
 
     if url_result.status != TestStatus::Passed {
         report.duration = start.elapsed();
@@ -44,7 +69,9 @@ pub async fn run_diagnostics(
             details: Some("Stdio transport ready for use".to_string()),
         };
         report.add_test(stdio_result.clone());
-        print_diagnostic_result(&stdio_result);
+        if !quiet {
+            print_diagnostic_result(&stdio_result);
+        }
         report.duration = start.elapsed();
         return Ok(report);
     }
@@ -56,10 +83,14 @@ pub async fn run_diagnostics(
         // DNS resolution
         let dns_result = diagnose_dns(&parsed_url).await;
         report.add_test(dns_result.clone());
-        print_diagnostic_result(&dns_result);
+        if !quiet {
+            print_diagnostic_result(&dns_result);
+        }
 
         if dns_result.status != TestStatus::Passed {
-            print_suggestions_for_dns();
+            if !quiet {
+                print_suggestions_for_dns();
+            }
             report.duration = start.elapsed();
             return Ok(report);
         }
@@ -67,10 +98,14 @@ pub async fn run_diagnostics(
         // TCP connectivity
         let tcp_result = diagnose_tcp(&parsed_url, timeout).await;
         report.add_test(tcp_result.clone());
-        print_diagnostic_result(&tcp_result);
+        if !quiet {
+            print_diagnostic_result(&tcp_result);
+        }
 
         if tcp_result.status != TestStatus::Passed {
-            print_suggestions_for_tcp(&parsed_url);
+            if !quiet {
+                print_suggestions_for_tcp(&parsed_url);
+            }
             report.duration = start.elapsed();
             return Ok(report);
         }
@@ -79,10 +114,14 @@ pub async fn run_diagnostics(
         if parsed_url.scheme() == "https" {
             let tls_result = diagnose_tls(&parsed_url).await;
             report.add_test(tls_result.clone());
-            print_diagnostic_result(&tls_result);
+            if !quiet {
+                print_diagnostic_result(&tls_result);
+            }
 
             if tls_result.status == TestStatus::Failed {
-                print_suggestions_for_tls();
+                if !quiet {
+                    print_suggestions_for_tls();
+                }
             }
         }
     }
@@ -90,16 +129,22 @@ pub async fn run_diagnostics(
     // HTTP specific tests
     let http_result = diagnose_http(url, timeout).await;
     report.add_test(http_result.clone());
-    print_diagnostic_result(&http_result);
+    if !quiet {
+        print_diagnostic_result(&http_result);
+    }
 
     if http_result.status != TestStatus::Passed {
-        print_suggestions_for_http(url);
+        if !quiet {
+            print_suggestions_for_http(url);
+        }
     }
 
     // MCP protocol test
     let mcp_result = diagnose_mcp_protocol(url, timeout, api_key).await;
     report.add_test(mcp_result.clone());
-    print_diagnostic_result(&mcp_result);
+    if !quiet {
+        print_diagnostic_result(&mcp_result);
+    }
 
     if mcp_result.status != TestStatus::Passed {
         print_suggestions_for_mcp(&mcp_result);
@@ -108,10 +153,12 @@ pub async fn run_diagnostics(
     report.duration = start.elapsed();
 
     // Print summary
-    println!();
-    println!("{}", "═══════════════════════════════════════════".cyan());
-    println!("{}", "DIAGNOSTIC SUMMARY".cyan().bold());
-    println!("{}", "═══════════════════════════════════════════".cyan());
+    if !quiet {
+        println!();
+        println!("{}", "═══════════════════════════════════════════".cyan());
+        println!("{}", "DIAGNOSTIC SUMMARY".cyan().bold());
+        println!("{}", "═══════════════════════════════════════════".cyan());
+    }
 
     let passed = report
         .tests
@@ -129,17 +176,19 @@ pub async fn run_diagnostics(
         .filter(|t| t.status == TestStatus::Warning)
         .count();
 
-    println!(
-        "  {} {} Passed  {} {} Failed  {} {} Warnings",
-        "✓".green().bold(),
-        passed.to_string().green(),
-        "✗".red().bold(),
-        failed.to_string().red(),
-        "⚠".yellow().bold(),
-        warnings.to_string().yellow()
-    );
+    if !quiet {
+        println!(
+            "  {} {} Passed  {} {} Failed  {} {} Warnings",
+            "✓".green().bold(),
+            passed.to_string().green(),
+            "✗".red().bold(),
+            failed.to_string().red(),
+            "⚠".yellow().bold(),
+            warnings.to_string().yellow()
+        );
+    }
 
-    if failed > 0 {
+    if !quiet && failed > 0 {
         println!();
         println!("{}", "RECOMMENDATIONS:".yellow().bold());
         print_overall_recommendations(&report);
@@ -377,7 +426,7 @@ async fn diagnose_mcp_protocol(url: &str, timeout: Duration, api_key: Option<&st
     let start = Instant::now();
 
     // Try to initialize MCP connection
-    match crate::tester::ServerTester::new(url, timeout, false, api_key, None) {
+    match crate::tester::ServerTester::new(url, timeout, false, api_key, None, None) {
         Ok(mut tester) => {
             // Try quick test
             match tester.run_quick_test().await {

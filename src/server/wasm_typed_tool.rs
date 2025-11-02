@@ -197,7 +197,7 @@ where
 impl WasmMcpServerBuilder {
     /// Add a typed tool with automatic schema generation.
     #[cfg(feature = "schema-generation")]
-    pub fn tool_typed<T, F>(self, name: impl Into<String>, handler: F) -> Self
+    pub fn tool_typed<T, F>(self, name: impl Into<String> + Clone, handler: F) -> Self
     where
         T: DeserializeOwned + JsonSchema + Send + Sync + 'static,
         F: Fn(T) -> Result<Value> + Send + Sync + 'static,
@@ -209,7 +209,7 @@ impl WasmMcpServerBuilder {
     /// Add a typed tool with a custom schema.
     pub fn tool_typed_with_schema<T, F>(
         self,
-        name: impl Into<String>,
+        name: impl Into<String> + Clone,
         schema: Value,
         handler: F,
     ) -> Self
@@ -223,7 +223,7 @@ impl WasmMcpServerBuilder {
 
     /// Add a simple typed tool (input and output are the same type).
     #[cfg(feature = "schema-generation")]
-    pub fn tool_typed_simple<T, F>(self, name: impl Into<String>, handler: F) -> Self
+    pub fn tool_typed_simple<T, F>(self, name: impl Into<String> + Clone, handler: F) -> Self
     where
         T: DeserializeOwned + Serialize + JsonSchema + Send + Sync + 'static,
         F: Fn(T) -> Result<T> + Send + Sync + 'static,
@@ -233,10 +233,13 @@ impl WasmMcpServerBuilder {
     }
 }
 
-// Re-export for convenience
+// Re-export for convenience (only available on non-WASM targets)
+#[cfg(not(target_arch = "wasm32"))]
 pub use crate::server::error_codes::{ValidationError, ValidationErrorCode};
 
 /// WASM-safe validation helpers (no filesystem operations).
+/// Note: This module requires error_codes which is not available on WASM targets.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod validation {
     use crate::server::error_codes::{ValidationError, ValidationErrorCode};
     use crate::{Error, Result};
@@ -388,6 +391,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn test_wasm_validation() {
         use validation::*;
 

@@ -120,6 +120,10 @@ pub struct CallToolRequest {
     /// Tool arguments (must match input schema)
     #[serde(default)]
     pub arguments: Value,
+    /// Request metadata (e.g., progress token)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
+    pub _meta: Option<RequestMeta>,
 }
 
 /// Tool call parameters (legacy name).
@@ -235,6 +239,10 @@ pub struct GetPromptRequest {
     /// Prompt arguments
     #[serde(default)]
     pub arguments: HashMap<String, String>,
+    /// Request metadata (e.g., progress token)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
+    pub _meta: Option<RequestMeta>,
 }
 
 /// Get prompt params (legacy name).
@@ -328,6 +336,10 @@ pub struct ListResourcesResult {
 pub struct ReadResourceRequest {
     /// Resource URI
     pub uri: String,
+    /// Request metadata (e.g., progress token)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
+    pub _meta: Option<RequestMeta>,
 }
 
 /// Read resource params (legacy name).
@@ -502,11 +514,35 @@ pub struct ModelHint {
 pub struct ProgressNotification {
     /// Progress token from the original request
     pub progress_token: ProgressToken,
-    /// Progress percentage (0-100)
+    /// Current progress value (must increase with each notification)
+    ///
+    /// This can represent percentage (0-100), count, or any increasing metric.
     pub progress: f64,
-    /// Optional progress message
+    /// Optional total value for the operation
+    ///
+    /// When combined with `progress`, allows expressing "5 of 10 items processed".
+    /// Both `progress` and `total` may be floating point values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<f64>,
+    /// Optional human-readable progress message
+    ///
+    /// Should provide relevant context about the current operation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+}
+
+impl ProgressNotification {
+    /// Create a new progress notification with no total value.
+    ///
+    /// Convenience constructor to reduce boilerplate when the total is unknown.
+    pub fn new(progress_token: ProgressToken, progress: f64, message: Option<String>) -> Self {
+        Self {
+            progress_token,
+            progress,
+            total: None,
+            message,
+        }
+    }
 }
 
 /// Progress (legacy alias).
@@ -520,6 +556,21 @@ pub enum ProgressToken {
     String(String),
     /// Numeric token
     Number(i64),
+}
+
+/// Request metadata that can be attached to any request.
+///
+/// This follows the MCP protocol's `_meta` field specification.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestMeta {
+    /// Progress token for out-of-band progress notifications.
+    ///
+    /// If specified, the caller is requesting progress notifications for this request.
+    /// The value is an opaque token that will be attached to subsequent progress notifications.
+    /// The receiver is not obligated to provide these notifications.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress_token: Option<ProgressToken>,
 }
 
 /// Client request types.
@@ -850,6 +901,7 @@ mod tests {
         let progress = ServerNotification::Progress(ProgressNotification {
             progress_token: ProgressToken::String("token123".to_string()),
             progress: 50.0,
+            total: None,
             message: Some("Processing...".to_string()),
         });
         let json = serde_json::to_value(&progress).unwrap();

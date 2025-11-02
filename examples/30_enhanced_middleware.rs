@@ -110,6 +110,7 @@ impl Transport for MockTransport {
             ProgressNotification {
                 progress_token: ProgressToken::String(format!("mock-{}", self.id)),
                 progress: 50.0,
+                total: None,
                 message: Some(format!("Mock message from transport {}", self.id)),
             },
         )))
@@ -248,6 +249,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             TransportMessage::Notification(Notification::Progress(ProgressNotification {
                 progress_token: ProgressToken::String(format!("progress-{}", i + 1)),
                 progress: 25.0 * (i + 1) as f64,
+                total: None,
                 message: Some(format!("Processing request {}", i + 1)),
             }));
 

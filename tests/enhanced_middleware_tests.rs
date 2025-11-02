@@ -4,9 +4,10 @@
 //! - Basic middleware functionality verification
 //! - Circuit breaker, rate limiting, metrics, and compression
 //! - Error handling and performance validation
+//! - Notification middleware processing
 
 use pmcp::shared::middleware::*;
-use pmcp::types::jsonrpc::{JSONRPCRequest, RequestId};
+use pmcp::types::jsonrpc::{JSONRPCNotification, JSONRPCRequest, RequestId};
 use pmcp::{Error, Result};
 use serde_json::json;
 use std::sync::Arc;
@@ -301,4 +302,283 @@ async fn test_middleware_error_handling() {
 
     // The chain itself should not fail, individual middlewares handle their own errors
     // Basic smoke test that everything compiles and runs - no explicit assert needed
+}
+
+// ============================================================================
+// Notification Middleware Tests (Week 2-3: Protocol Inbound Coverage)
+// ============================================================================
+
+/// Test middleware that tracks notification processing
+struct NotificationTrackingMiddleware {
+    name: String,
+}
+
+#[async_trait::async_trait]
+impl AdvancedMiddleware for NotificationTrackingMiddleware {
+    fn name(&self) -> &'static str {
+        "notification_tracking"
+    }
+
+    async fn on_notification_with_context(
+        &self,
+        notification: &mut JSONRPCNotification,
+        context: &MiddlewareContext,
+    ) -> Result<()> {
+        // Track notification method in context
+        context.set_metadata(
+            "notification_method".to_string(),
+            notification.method.clone(),
+        );
+        context.set_metadata("middleware_name".to_string(), self.name.clone());
+
+        // Mark as processed
+        context.set_metadata("processed".to_string(), "true".to_string());
+
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn test_notification_middleware_processing() {
+    let mut chain = EnhancedMiddlewareChain::new();
+    chain.add(Arc::new(NotificationTrackingMiddleware {
+        name: "test-tracker".to_string(),
+    }));
+
+    let context = MiddlewareContext::default();
+    let mut notification = JSONRPCNotification::new(
+        "notifications/progress",
+        Some(json!({
+            "progressToken": "test-123",
+            "progress": 50,
+            "total": 100
+        })),
+    );
+
+    // Process notification through middleware chain
+    let result = chain
+        .process_notification_with_context(&mut notification, &context)
+        .await;
+
+    assert!(result.is_ok());
+
+    // Verify metadata was set by middleware
+    assert_eq!(
+        context.get_metadata("notification_method"),
+        Some("notifications/progress".to_string())
+    );
+    assert_eq!(
+        context.get_metadata("middleware_name"),
+        Some("test-tracker".to_string())
+    );
+    assert_eq!(context.get_metadata("processed"), Some("true".to_string()));
+}
+
+#[tokio::test]
+async fn test_notification_middleware_priority_ordering() {
+    /// Middleware that appends to a list
+    struct OrderingMiddleware {
+        id: u8,
+        priority: MiddlewarePriority,
+    }
+
+    #[async_trait::async_trait]
+    impl AdvancedMiddleware for OrderingMiddleware {
+        fn name(&self) -> &'static str {
+            "ordering"
+        }
+
+        fn priority(&self) -> MiddlewarePriority {
+            self.priority
+        }
+
+        async fn on_notification_with_context(
+            &self,
+            _notification: &mut JSONRPCNotification,
+            context: &MiddlewareContext,
+        ) -> Result<()> {
+            let mut order = context.get_metadata("order").unwrap_or_default();
+            if !order.is_empty() {
+                order.push(',');
+            }
+            order.push_str(&self.id.to_string());
+            context.set_metadata("order".to_string(), order);
+            Ok(())
+        }
+    }
+
+    let mut chain = EnhancedMiddlewareChain::new();
+
+    // Add in non-priority order
+    chain.add(Arc::new(OrderingMiddleware {
+        id: 3,
+        priority: MiddlewarePriority::Low,
+    }));
+    chain.add(Arc::new(OrderingMiddleware {
+        id: 1,
+        priority: MiddlewarePriority::High,
+    }));
+    chain.add(Arc::new(OrderingMiddleware {
+        id: 2,
+        priority: MiddlewarePriority::Normal,
+    }));
+
+    let context = MiddlewareContext::default();
+    let mut notification =
+        JSONRPCNotification::new("notifications/test", None::<serde_json::Value>);
+
+    chain
+        .process_notification_with_context(&mut notification, &context)
+        .await
+        .unwrap();
+
+    // Verify execution order matches priority (High -> Normal -> Low)
+    assert_eq!(context.get_metadata("order"), Some("1,2,3".to_string()));
+}
+
+#[tokio::test]
+async fn test_notification_middleware_error_handling() {
+    /// Middleware that fails on specific notifications
+    struct FailingNotificationMiddleware;
+
+    #[async_trait::async_trait]
+    impl AdvancedMiddleware for FailingNotificationMiddleware {
+        fn name(&self) -> &'static str {
+            "failing_notification"
+        }
+
+        async fn on_notification_with_context(
+            &self,
+            notification: &mut JSONRPCNotification,
+            _context: &MiddlewareContext,
+        ) -> Result<()> {
+            if notification.method == "notifications/error" {
+                return Err(Error::internal("notification processing failed"));
+            }
+            Ok(())
+        }
+    }
+
+    let mut chain = EnhancedMiddlewareChain::new();
+    chain.add(Arc::new(FailingNotificationMiddleware));
+
+    let context = MiddlewareContext::default();
+
+    // Success case
+    let mut ok_notification =
+        JSONRPCNotification::new("notifications/ok", None::<serde_json::Value>);
+    assert!(chain
+        .process_notification_with_context(&mut ok_notification, &context)
+        .await
+        .is_ok());
+
+    // Error case
+    let mut error_notification =
+        JSONRPCNotification::new("notifications/error", None::<serde_json::Value>);
+    let result = chain
+        .process_notification_with_context(&mut error_notification, &context)
+        .await;
+    assert!(result.is_err());
+
+    // Verify error was counted in metrics
+    assert_eq!(context.metrics.error_count(), 1);
+}
+
+#[tokio::test]
+async fn test_notification_middleware_with_metrics() {
+    let mut chain = EnhancedMiddlewareChain::new();
+    chain.add(Arc::new(MetricsMiddleware::new(
+        "test-notification-service".to_string(),
+    )));
+
+    let context = MiddlewareContext::default();
+
+    // Process multiple notifications
+    for i in 0..5 {
+        let mut notification = JSONRPCNotification::new(
+            "notifications/progress",
+            Some(json!({
+                "progressToken": format!("token-{}", i),
+                "progress": i * 20,
+                "total": 100
+            })),
+        );
+
+        chain
+            .process_notification_with_context(&mut notification, &context)
+            .await
+            .unwrap();
+    }
+
+    // Metrics should track that operations occurred (even though notifications don't increment request_count)
+    let stats = context.metrics;
+    assert_eq!(stats.error_count(), 0);
+}
+
+#[tokio::test]
+async fn test_sse_notification_simulation() {
+    /// Simulates how SSE notifications flow through the dispatcher
+    struct SSENotificationMiddleware {
+        event_type: String,
+    }
+
+    #[async_trait::async_trait]
+    impl AdvancedMiddleware for SSENotificationMiddleware {
+        fn name(&self) -> &'static str {
+            "sse_notification"
+        }
+
+        async fn on_notification_with_context(
+            &self,
+            notification: &mut JSONRPCNotification,
+            context: &MiddlewareContext,
+        ) -> Result<()> {
+            // SSE events can be tracked/logged/transformed by middleware
+            context.set_metadata("event_type".to_string(), self.event_type.clone());
+            context.set_metadata("sse_method".to_string(), notification.method.clone());
+
+            // Simulate adding SSE-specific metadata
+            if notification.method.starts_with("notifications/") {
+                context.set_metadata("is_sse_event".to_string(), "true".to_string());
+            }
+
+            Ok(())
+        }
+    }
+
+    let mut chain = EnhancedMiddlewareChain::new();
+    chain.add(Arc::new(SSENotificationMiddleware {
+        event_type: "progress".to_string(),
+    }));
+
+    let context = MiddlewareContext::default();
+
+    // Simulate SSE notification (as would come from StreamableHttpTransport)
+    let mut notification = JSONRPCNotification::new(
+        "notifications/progress",
+        Some(json!({
+            "progressToken": "sse-token-123",
+            "progress": 75,
+            "total": 100,
+        })),
+    );
+
+    chain
+        .process_notification_with_context(&mut notification, &context)
+        .await
+        .unwrap();
+
+    // Verify SSE-specific metadata was set
+    assert_eq!(
+        context.get_metadata("event_type"),
+        Some("progress".to_string())
+    );
+    assert_eq!(
+        context.get_metadata("sse_method"),
+        Some("notifications/progress".to_string())
+    );
+    assert_eq!(
+        context.get_metadata("is_sse_event"),
+        Some("true".to_string())
+    );
 }

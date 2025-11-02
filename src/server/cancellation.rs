@@ -1,6 +1,7 @@
 //! Request cancellation support for MCP server.
 
 use crate::error::Result;
+use crate::server::progress::ProgressReporter;
 use crate::types::protocol::{CancelledNotification, Notification};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -112,7 +113,7 @@ impl std::fmt::Debug for CancellationManager {
 }
 
 /// Extra context passed to request handlers.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RequestHandlerExtra {
     /// Cancellation token for the request
     pub cancellation_token: CancellationToken,
@@ -124,6 +125,14 @@ pub struct RequestHandlerExtra {
     pub auth_info: Option<crate::types::auth::AuthInfo>,
     /// Validated authentication context (if auth is enabled)
     pub auth_context: Option<crate::server::auth::AuthContext>,
+    /// Custom metadata for middleware (e.g., OAuth tokens, session data)
+    ///
+    /// **Security Note**: Metadata may contain sensitive values like OAuth tokens.
+    /// The Debug implementation redacts these values to prevent accidental logging.
+    pub metadata: HashMap<String, String>,
+    /// Optional progress reporter for this request
+    #[allow(dead_code)]
+    pub progress_reporter: Option<Arc<dyn ProgressReporter>>,
 }
 
 impl RequestHandlerExtra {
@@ -135,6 +144,8 @@ impl RequestHandlerExtra {
             session_id: None,
             auth_info: None,
             auth_context: None,
+            metadata: HashMap::new(),
+            progress_reporter: None,
         }
     }
 
@@ -159,9 +170,32 @@ impl RequestHandlerExtra {
         self
     }
 
+    /// Attach a progress reporter.
+    pub fn with_progress_reporter(
+        mut self,
+        progress_reporter: Option<Arc<dyn ProgressReporter>>,
+    ) -> Self {
+        self.progress_reporter = progress_reporter;
+        self
+    }
+
     /// Get the auth context if available.
     pub fn auth_context(&self) -> Option<&crate::server::auth::AuthContext> {
         self.auth_context.as_ref()
+    }
+
+    /// Get metadata value by key.
+    ///
+    /// Metadata is typically set by middleware (e.g., OAuth token injection).
+    pub fn get_metadata(&self, key: &str) -> Option<&String> {
+        self.metadata.get(key)
+    }
+
+    /// Set metadata value.
+    ///
+    /// This is typically used by middleware to inject data for tools to consume.
+    pub fn set_metadata(&mut self, key: String, value: String) {
+        self.metadata.insert(key, value);
     }
 
     /// Check if the request has been cancelled.
@@ -172,6 +206,98 @@ impl RequestHandlerExtra {
     /// Wait for cancellation.
     pub async fn cancelled(&self) {
         self.cancellation_token.cancelled().await;
+    }
+
+    /// Report progress if a reporter is available.
+    pub async fn report_progress(
+        &self,
+        progress: f64,
+        total: Option<f64>,
+        message: Option<String>,
+    ) -> crate::Result<()> {
+        if let Some(rep) = &self.progress_reporter {
+            rep.report_progress(progress, total, message).await
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Report percentage progress (0-100) if available.
+    pub async fn report_percent(&self, percent: f64, message: Option<String>) -> crate::Result<()> {
+        if let Some(rep) = &self.progress_reporter {
+            rep.report_percent(percent, message).await
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Report count-based progress if available.
+    pub async fn report_count(
+        &self,
+        current: usize,
+        total: usize,
+        message: Option<String>,
+    ) -> crate::Result<()> {
+        if let Some(rep) = &self.progress_reporter {
+            rep.report_count(current, total, message).await
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl std::fmt::Debug for RequestHandlerExtra {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // List of sensitive metadata keys that should be redacted
+        const SENSITIVE_KEYS: &[&str] = &[
+            "oauth_token",
+            "access_token",
+            "refresh_token",
+            "api_key",
+            "secret",
+            "password",
+            "bearer_token",
+            "auth_token",
+        ];
+
+        // Create a redacted version of metadata
+        let redacted_metadata: HashMap<String, String> = self
+            .metadata
+            .iter()
+            .map(|(k, v)| {
+                let is_sensitive = SENSITIVE_KEYS
+                    .iter()
+                    .any(|sensitive| k.to_lowercase().contains(sensitive));
+                if is_sensitive {
+                    (k.clone(), "[REDACTED]".to_string())
+                } else {
+                    (k.clone(), v.clone())
+                }
+            })
+            .collect();
+
+        f.debug_struct("RequestHandlerExtra")
+            .field("cancellation_token", &self.cancellation_token)
+            .field("request_id", &self.request_id)
+            .field("session_id", &self.session_id)
+            .field("auth_info", &self.auth_info)
+            .field("auth_context", &self.auth_context)
+            .field("metadata", &redacted_metadata)
+            .finish()
+    }
+}
+
+impl CancellationManager {
+    /// Cancel a request silently (no notification sent to the client).
+    pub async fn cancel_request_silent(&self, request_id: String) -> Result<()> {
+        let token = {
+            let mut tokens = self.tokens.write().await;
+            tokens.remove(&request_id)
+        };
+        if let Some(token) = token {
+            token.cancel();
+        }
+        Ok(())
     }
 }
 
@@ -295,5 +421,49 @@ mod tests {
         // Cancel the token
         token.cancel();
         assert!(extra.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn test_metadata_redaction_in_debug() {
+        let token = CancellationToken::new();
+        let mut extra = RequestHandlerExtra::new("test-req".to_string(), token);
+
+        // Add sensitive and non-sensitive metadata
+        extra.set_metadata("oauth_token".to_string(), "secret-token-123".to_string());
+        extra.set_metadata("access_token".to_string(), "bearer-xyz".to_string());
+        extra.set_metadata("user_id".to_string(), "user-456".to_string());
+        extra.set_metadata("request_count".to_string(), "42".to_string());
+
+        // Get debug representation
+        let debug_output = format!("{:?}", extra);
+
+        // Verify sensitive values are redacted
+        assert!(
+            debug_output.contains("[REDACTED]"),
+            "Expected redacted values in: {}",
+            debug_output
+        );
+        assert!(
+            !debug_output.contains("secret-token-123"),
+            "OAuth token should be redacted: {}",
+            debug_output
+        );
+        assert!(
+            !debug_output.contains("bearer-xyz"),
+            "Access token should be redacted: {}",
+            debug_output
+        );
+
+        // Verify non-sensitive values are not redacted
+        assert!(
+            debug_output.contains("user-456"),
+            "Non-sensitive metadata should not be redacted: {}",
+            debug_output
+        );
+        assert!(
+            debug_output.contains("42"),
+            "Non-sensitive metadata should not be redacted: {}",
+            debug_output
+        );
     }
 }
