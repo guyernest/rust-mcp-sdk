@@ -102,7 +102,7 @@ impl AuthMiddleware for BearerTokenMiddleware {
             subject: token_info.user_id,
             scopes: token_info.scopes,
             claims: HashMap::new(),
-            token: Some(token.to_string()),
+            token: Some(token.clone()),
             client_id: Some(token_info.client_id),
             expires_at: Some(token_info.expires_at),
         })
