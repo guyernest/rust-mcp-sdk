@@ -6,6 +6,7 @@ authors = ["PMCP SDK Contributors"]
 description = "Production-grade MCP server development toolkit"
 license = "MIT"
 repository = "https://github.com/paiml/rust-mcp-sdk"
+readme = "README.md"
 keywords = ["mcp", "scaffold", "cli", "tools", "development"]
 categories = ["command-line-utilities", "development-tools"]
 
