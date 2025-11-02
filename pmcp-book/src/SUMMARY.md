@@ -9,6 +9,7 @@
 ## Part I: Getting Started
 
 - [Chapter 1: Installation & Setup](ch01-installation.md)
+- [Chapter 1.5: Quick Start Tutorial](ch01_5-quick-start-tutorial.md)
 - [Chapter 2: Your First MCP Server](ch02-first-server.md)
 - [Chapter 3: Your First MCP Client](ch03-first-client.md)
 - [Chapter 4: Understanding the Protocol](ch04-protocol-basics.md)
