@@ -480,11 +480,8 @@ tokio = {{ workspace = true }}
     let template = super::sqlite_explorer::SQLITE_EXPLORER_LIB
         .replace("build_sqlite_server", &format!("build_{}_server", name));
 
-    fs::write(
-        core_dir.join("src/lib.rs"),
-        template,
-    )
-    .context("Failed to create sqlite explorer lib.rs")?;
+    fs::write(core_dir.join("src/lib.rs"), template)
+        .context("Failed to create sqlite explorer lib.rs")?;
 
     Ok(())
 }

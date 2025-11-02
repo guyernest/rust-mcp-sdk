@@ -141,7 +141,9 @@ pub fn server(name: String, template: String, port: Option<u16>, replace: bool) 
     } else if template == "sqlite-explorer" {
         println!(
             "\n{}",
-            "🗄️  SQLite Explorer Template Includes:".bright_white().bold()
+            "🗄️  SQLite Explorer Template Includes:"
+                .bright_white()
+                .bold()
         );
         println!();
         println!("  {} Tools (3):", "🔧".bright_cyan());
@@ -208,13 +210,28 @@ pub fn server(name: String, template: String, port: Option<u16>, replace: bool) 
         );
     } else if template == "sqlite-explorer" {
         println!("     In Claude Code (using /prompts):");
-        println!("       {}", "\"/monthly_sales_report month: 3 year: 2009\"".bright_green());
-        println!("       {}", "\"/analyze_customer customer_id: 5\"".bright_green());
-        println!("       {}", "\"/customers_who_bought_top_tracks limit: 10\"".bright_green());
+        println!(
+            "       {}",
+            "\"/monthly_sales_report month: 3 year: 2009\"".bright_green()
+        );
+        println!(
+            "       {}",
+            "\"/analyze_customer customer_id: 5\"".bright_green()
+        );
+        println!(
+            "       {}",
+            "\"/customers_who_bought_top_tracks limit: 10\"".bright_green()
+        );
         println!();
         println!("     Or ask Claude:");
-        println!("       {}", "\"Show me all tables in the database\"".bright_green());
-        println!("       {}", "\"Get sample rows from the customers table\"".bright_green());
+        println!(
+            "       {}",
+            "\"Show me all tables in the database\"".bright_green()
+        );
+        println!(
+            "       {}",
+            "\"Get sample rows from the customers table\"".bright_green()
+        );
     } else {
         println!("     In Claude Code: {}", "\"Add 5 and 3\"".bright_green());
     }

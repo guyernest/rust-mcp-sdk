@@ -56,12 +56,12 @@ pub mod tester;
 pub mod validators;
 
 // Re-export commonly used types
+pub use oauth::{OAuthConfig, OAuthHelper};
 pub use report::{OutputFormat, TestReport, TestResult, TestStatus};
-pub use tester::ServerTester;
 pub use scenario::TestScenario;
 pub use scenario_executor::ScenarioExecutor;
 pub use scenario_generator::ScenarioGenerator;
-pub use oauth::{OAuthConfig, OAuthHelper};
+pub use tester::ServerTester;
 
 use anyhow::{Context, Result};
 use std::time::Duration;
@@ -161,11 +161,7 @@ pub async fn generate_scenarios(
 /// # Ok(())
 /// # }
 /// ```
-pub async fn run_scenario(
-    scenario_path: &str,
-    server_url: &str,
-    detailed: bool,
-) -> Result<()> {
+pub async fn run_scenario(scenario_path: &str, server_url: &str, detailed: bool) -> Result<()> {
     use colored::*;
 
     // Load scenario
@@ -192,7 +188,12 @@ pub async fn run_scenario(
     let mut executor = ScenarioExecutor::new(&mut tester, detailed);
 
     if detailed {
-        println!("\n{}", "Running scenario with detailed output...".bright_cyan().bold());
+        println!(
+            "\n{}",
+            "Running scenario with detailed output..."
+                .bright_cyan()
+                .bold()
+        );
     }
 
     let result = executor.execute(scenario).await?;
