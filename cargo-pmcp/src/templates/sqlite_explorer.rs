@@ -17,15 +17,14 @@ use pmcp::{
     Error, ResourceCollection, Result, Server, StaticResource, TypedTool,
 };
 use pmcp::server::workflow::{
-    dsl::{constant, field, from_step, prompt_arg},
+    dsl::constant,
     SequentialWorkflow, ToolHandle, WorkflowStep,
 };
 use pmcp::types::{ServerCapabilities, ToolCapabilities, PromptCapabilities, ResourceCapabilities};
-use rusqlite::{Connection, params_from_iter, OpenFlags};
+use rusqlite::{Connection, OpenFlags};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::Path;
 
 // ============================================================================
 // CONFIGURATION
@@ -44,6 +43,12 @@ pub struct ExecuteQueryInput {
     /// SQL query to execute (SELECT only)
     #[schemars(description = "SQL SELECT query to execute")]
     pub sql: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ListTablesInput {
+    // No parameters required
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -71,7 +76,13 @@ fn open_db() -> Result<Connection> {
     Connection::open_with_flags(
         DATABASE_PATH,
         OpenFlags::SQLITE_OPEN_READ_ONLY,
-    ).map_err(|e| Error::internal(format!("Failed to open database: {}", e)))
+    ).map_err(|e| Error::internal(format!(
+        "Failed to open database: {}
+
+Please download the Chinook database:
+  curl -L https://github.com/lerocha/chinook-database/raw/master/ChinookDatabase/DataSources/Chinook_Sqlite.sqlite -o chinook.db
+
+Or see DATABASE.md for more information.", e)))
 }
 
 fn validate_sql(sql: &str) -> Result<()> {
@@ -166,7 +177,7 @@ async fn execute_query_tool(input: ExecuteQueryInput, _extra: pmcp::RequestHandl
     }))
 }
 
-async fn list_tables_tool(_extra: pmcp::RequestHandlerExtra) -> Result<Value> {
+async fn list_tables_tool(_input: ListTablesInput, _extra: pmcp::RequestHandlerExtra) -> Result<Value> {
     let conn = open_db()?;
 
     let mut stmt = conn.prepare(
@@ -291,83 +302,10 @@ fn get_database_schema() -> Result<String> {
     Ok(schema_md)
 }
 
-fn get_table_schema(table_name: &str) -> Result<String> {
-    let conn = open_db()?;
-
-    // Validate table exists
-    validate_table_name(&conn, table_name)?;
-
-    // Get CREATE statement
-    let create_sql: String = conn.query_row(
-        r#"SELECT sql FROM sqlite_master WHERE type="table" AND name=?"#,
-        [table_name],
-        |row| row.get(0)
-    ).map_err(|e| Error::internal(format!("Failed to get table schema: {}", e)))?;
-
-    // Get column info
-    let query = format!("PRAGMA table_info({})", table_name);
-    let mut stmt = conn.prepare(&query)
-        .map_err(|e| Error::internal(format!("Failed to get column info: {}", e)))?;
-
-    let columns: Vec<Value> = stmt.query_map([], |row| {
-        Ok(json!({
-            "name": row.get::<_, String>(1)?,
-            "type": row.get::<_, String>(2)?,
-            "not_null": row.get::<_, i64>(3)? == 1,
-            "default_value": row.get::<_, Option<String>>(4)?,
-            "primary_key": row.get::<_, i64>(5)? == 1
-        }))
-    })
-    .map_err(|e| Error::internal(format!("Failed to query columns: {}", e)))?
-    .collect::<rusqlite::Result<Vec<_>>>()
-    .map_err(|e| Error::internal(format!("Failed to collect columns: {}", e)))?;
-
-    // Get row count
-    let count_query = format!("SELECT COUNT(*) FROM [{}]", table_name);
-    let count: i64 = conn.query_row(
-        &count_query,
-        [],
-        |row| row.get(0)
-    ).unwrap_or(0);
-
-    let mut schema_md = format!("# Table: {}
-
-", table_name);
-    schema_md.push_str(&format!("**Row count:** {}
-
-", count));
-    schema_md.push_str("## Schema
-
-```sql
-");
-    schema_md.push_str(&create_sql);
-    schema_md.push_str("
-```
-
-## Columns
-
-");
-
-    for col in &columns {
-        if let Some(obj) = col.as_object() {
-            let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let type_name = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            let not_null = obj.get("not_null").and_then(|v| v.as_bool()).unwrap_or(false);
-            let pk = obj.get("primary_key").and_then(|v| v.as_bool()).unwrap_or(false);
-
-            schema_md.push_str(&format!("- **{}** ({})", name, type_name));
-            if pk {
-                schema_md.push_str(" [PRIMARY KEY]");
-            }
-            if not_null {
-                schema_md.push_str(" [NOT NULL]");
-            }
-            schema_md.push('\n');
-        }
-    }
-
-    Ok(schema_md)
-}
+// Note: get_table_schema() function would go here for dynamic per-table resources
+// This template focuses on the overall schema resource to keep it simple
+// In a production implementation, you could add dynamic resource providers
+// that generate per-table schema resources using sqlite://table/{name}/schema URIs
 
 // ============================================================================
 // WORKFLOW PROMPTS
@@ -376,7 +314,7 @@ fn get_table_schema(table_name: &str) -> Result<String> {
 fn create_monthly_sales_workflow() -> SequentialWorkflow {
     SequentialWorkflow::new(
         "monthly_sales_report",
-        "Generate sales report for a specific month with revenue and transaction metrics "
+        "Generate sales report for a specific month with revenue and transaction metrics"
     )
     .argument("month", "Month number (1-12)", true)
     .argument("year", "Year (e.g., 2009)", true)
@@ -390,10 +328,10 @@ fn create_monthly_sales_workflow() -> SequentialWorkflow {
                     ROUND(AVG(Total), 2) as AvgInvoiceValue,
                     MIN(Total) as MinInvoice,
                     MAX(Total) as MaxInvoice
-                 FROM invoices
-                 WHERE CAST(strftime("%m", InvoiceDate) AS INTEGER) = CAST(? AS INTEGER)
-                   AND CAST(strftime("%Y", InvoiceDate) AS INTEGER) = CAST(? AS INTEGER)
-                 GROUP BY Month "#
+                 FROM Invoice
+                 WHERE CAST(strftime("%m", InvoiceDate) AS INTEGER) = {month}
+                   AND CAST(strftime("%Y", InvoiceDate) AS INTEGER) = {year}
+                 GROUP BY Month"#
             )))
             .bind("sales_data")
     )
@@ -402,15 +340,15 @@ fn create_monthly_sales_workflow() -> SequentialWorkflow {
 fn create_analyze_customer_workflow() -> SequentialWorkflow {
     SequentialWorkflow::new(
         "analyze_customer",
-        "Comprehensive customer analysis with purchase history and preferences "
+        "Comprehensive customer analysis with purchase history and preferences"
     )
-    .argument("customer_id", "Customer ID to analyze ", true)
+    .argument("customer_id", "Customer ID to analyze", true)
     .step(
         WorkflowStep::new("get_customer", ToolHandle::new("execute_query"))
             .arg("sql", constant(json!(
                 "SELECT CustomerId, FirstName, LastName, Email, Country, City
-                 FROM customers
-                 WHERE CustomerId = ?"
+                 FROM Customer
+                 WHERE CustomerId = {customer_id}"
             )))
             .bind("customer_info")
     )
@@ -420,11 +358,11 @@ fn create_analyze_customer_workflow() -> SequentialWorkflow {
                 "SELECT
                     i.InvoiceId,
                     i.InvoiceDate,
-                    COUNT(ii.InvoiceLineId) as ItemCount,
-                    ROUND(SUM(ii.UnitPrice * ii.Quantity), 2) as Total
-                 FROM invoices i
-                 JOIN invoice_items ii ON i.InvoiceId = ii.InvoiceId
-                 WHERE i.CustomerId = ?
+                    COUNT(il.InvoiceLineId) as ItemCount,
+                    ROUND(SUM(il.UnitPrice * il.Quantity), 2) as Total
+                 FROM Invoice i
+                 JOIN InvoiceLine il ON i.InvoiceId = il.InvoiceId
+                 WHERE i.CustomerId = {customer_id}
                  GROUP BY i.InvoiceId
                  ORDER BY i.InvoiceDate DESC
                  LIMIT 10"
@@ -436,11 +374,11 @@ fn create_analyze_customer_workflow() -> SequentialWorkflow {
             .arg("sql", constant(json!(
                 "SELECT
                     COUNT(DISTINCT i.InvoiceId) as TotalOrders,
-                    ROUND(SUM(ii.UnitPrice * ii.Quantity), 2) as LifetimeValue,
-                    ROUND(AVG(ii.UnitPrice * ii.Quantity), 2) as AvgOrderValue
-                 FROM invoices i
-                 JOIN invoice_items ii ON i.InvoiceId = ii.InvoiceId
-                 WHERE i.CustomerId = ?"
+                    ROUND(SUM(il.UnitPrice * il.Quantity), 2) as LifetimeValue,
+                    ROUND(AVG(il.UnitPrice * il.Quantity), 2) as AvgOrderValue
+                 FROM Invoice i
+                 JOIN InvoiceLine il ON i.InvoiceId = il.InvoiceId
+                 WHERE i.CustomerId = {customer_id}"
             )))
             .bind("lifetime_metrics")
     )
@@ -460,15 +398,15 @@ fn create_top_tracks_customers_workflow() -> SequentialWorkflow {
                     t.Name as TrackName,
                     ar.Name as ArtistName,
                     al.Title as AlbumName,
-                    COUNT(ii.InvoiceLineId) as TimesPurchased,
-                    ROUND(SUM(ii.UnitPrice * ii.Quantity), 2) as TotalRevenue
-                 FROM tracks t
-                 JOIN invoice_items ii ON t.TrackId = ii.TrackId
-                 JOIN albums al ON t.AlbumId = al.AlbumId
-                 JOIN artists ar ON al.ArtistId = ar.ArtistId
+                    COUNT(il.InvoiceLineId) as TimesPurchased,
+                    ROUND(SUM(il.UnitPrice * il.Quantity), 2) as TotalRevenue
+                 FROM Track t
+                 JOIN InvoiceLine il ON t.TrackId = il.TrackId
+                 JOIN Album al ON t.AlbumId = al.AlbumId
+                 JOIN Artist ar ON al.ArtistId = ar.ArtistId
                  GROUP BY t.TrackId
                  ORDER BY TimesPurchased DESC
-                 LIMIT COALESCE(?, 5)"
+                 LIMIT COALESCE({limit}, 5)"
             )))
             .bind("top_tracks")
     )
@@ -518,8 +456,8 @@ pub fn build_sqlite_server() -> Result<Server> {
         )
         .tool(
             "list_tables",
-            TypedTool::new("list_tables", |_input: (), extra| {
-                Box::pin(list_tables_tool(extra))
+            TypedTool::new("list_tables", |input: ListTablesInput, extra| {
+                Box::pin(list_tables_tool(input, extra))
             })
             .with_description("List all tables in the database with row counts")
         )
@@ -546,15 +484,15 @@ mod tests {
     #[test]
     fn test_sql_validation() {
         // Valid queries
-        assert!(validate_sql("SELECT * FROM customers").is_ok());
-        assert!(validate_sql("  SELECT id FROM users WHERE active = 1").is_ok());
+        assert!(validate_sql("SELECT * FROM Customer").is_ok());
+        assert!(validate_sql("  SELECT CustomerId FROM Customer WHERE Country = 'USA'").is_ok());
 
         // Invalid queries
-        assert!(validate_sql("INSERT INTO customers VALUES (1)").is_err());
-        assert!(validate_sql("UPDATE customers SET name = 'x'").is_err());
-        assert!(validate_sql("DELETE FROM customers").is_err());
-        assert!(validate_sql("DROP TABLE customers").is_err());
-        assert!(validate_sql("SELECT * FROM customers; DROP TABLE users").is_err());
+        assert!(validate_sql("INSERT INTO Customer VALUES (1)").is_err());
+        assert!(validate_sql("UPDATE Customer SET FirstName = 'x'").is_err());
+        assert!(validate_sql("DELETE FROM Customer").is_err());
+        assert!(validate_sql("DROP TABLE Customer").is_err());
+        assert!(validate_sql("SELECT * FROM Customer; DROP TABLE Invoice").is_err());
     }
 
     #[tokio::test]

@@ -31,8 +31,8 @@ license = "MIT OR Apache-2.0"
 authors = ["Your Name <you@example.com>"]
 
 [workspace.dependencies]
-# MCP SDK
-pmcp = { git = "https://github.com/paiml/rust-mcp-sdk", branch = "main", features = ["streamable-http", "schema-generation"] }
+# MCP SDK (using local path for development - change to git for production)
+pmcp = { path = "/Users/guy/Development/mcp/sdk/rust-mcp-sdk", features = ["streamable-http", "schema-generation"] }
 
 # HTTP transport
 axum = "0.7"
