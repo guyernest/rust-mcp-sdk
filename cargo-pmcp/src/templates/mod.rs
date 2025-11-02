@@ -1,3 +1,4 @@
+pub mod calculator;
 pub mod complete_calculator;
 pub mod server;
 pub mod server_common;

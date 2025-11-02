@@ -10,14 +10,43 @@ use std::path::Path;
 /// Generate server crates (mcp-{name}-core and {name}-server)
 pub fn generate(name: &str, template: &str) -> Result<()> {
     match template {
+        "calculator" => generate_calculator(name),
         "minimal" => generate_minimal(name),
-        "complete" => generate_complete(name),
+        "complete" | "complete-calculator" => generate_complete(name),
         "sqlite-explorer" => generate_sqlite_explorer(name),
         _ => anyhow::bail!(
-            "Unknown template: {}. Available templates: minimal, complete, sqlite-explorer",
+            "Unknown template: {}. Available templates: calculator, minimal, complete-calculator, sqlite-explorer",
             template
         ),
     }
+}
+
+fn generate_calculator(name: &str) -> Result<()> {
+    let crates_dir = Path::new("crates");
+    let core_name = format!("mcp-{}-core", name);
+    let server_name = format!("{}-server", name);
+
+    // Create core crate with calculator template
+    generate_core_crate_calculator(&crates_dir.join(&core_name), name)?;
+    println!(
+        "  {} Created {} (calculator template)",
+        "✓".green(),
+        core_name.bright_yellow()
+    );
+
+    // Create server binary crate
+    generate_server_crate(&crates_dir.join(&server_name), name)?;
+    println!("  {} Created {}", "✓".green(), server_name.bright_yellow());
+
+    // Create scenarios
+    generate_scenarios(name)?;
+    println!("  {} Created test scenarios", "✓".green());
+
+    // Update workspace Cargo.toml
+    update_workspace_members(&core_name, &server_name)?;
+    println!("  {} Updated workspace members", "✓".green());
+
+    Ok(())
 }
 
 fn generate_minimal(name: &str) -> Result<()> {
@@ -339,6 +368,41 @@ The server returns structured errors:
     );
 
     fs::write(resources_dir.join("guide.md"), guide_md).context("Failed to create guide.md")?;
+
+    Ok(())
+}
+
+fn generate_core_crate_calculator(core_dir: &Path, _name: &str) -> Result<()> {
+    fs::create_dir_all(core_dir).context("Failed to create core directory")?;
+    fs::create_dir_all(core_dir.join("src")).context("Failed to create core src directory")?;
+
+    // Generate Cargo.toml
+    let cargo_toml = r#"[package]
+name = "mcp-calculator-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+pmcp = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+"#;
+
+    fs::write(core_dir.join("Cargo.toml"), cargo_toml)
+        .context("Failed to create core Cargo.toml")?;
+
+    // Use the calculator template
+    fs::write(
+        core_dir.join("src/lib.rs"),
+        super::calculator::CALCULATOR_LIB,
+    )
+    .context("Failed to create calculator lib.rs")?;
 
     Ok(())
 }
