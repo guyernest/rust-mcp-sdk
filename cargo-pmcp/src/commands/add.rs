@@ -1,12 +1,15 @@
 //! Add components to workspace
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use colored::Colorize;
+use std::fs;
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 use crate::templates;
+use crate::utils::config::WorkspaceConfig;
 
-pub fn server(name: String, template: String) -> Result<()> {
+pub fn server(name: String, template: String, port: Option<u16>, replace: bool) -> Result<()> {
     println!("\n{}", "Adding MCP server".bright_cyan().bold());
     println!("{}", "─────────────────────────".bright_cyan());
 
@@ -15,8 +18,92 @@ pub fn server(name: String, template: String) -> Result<()> {
         anyhow::bail!("Not in a workspace directory. Run 'cargo-pmcp new <name>' first.");
     }
 
+    // Load workspace config
+    let mut config = WorkspaceConfig::load()?;
+
+    // Check if server already exists
+    if config.has_server(&name) && !replace {
+        anyhow::bail!(
+            "Server '{}' already exists. Use --replace to upgrade it.",
+            name
+        );
+    }
+
+    // Handle replacement
+    if replace && config.has_server(&name) {
+        let existing = config.get_server(&name).unwrap();
+        println!(
+            "\n{} Server '{}' already exists:",
+            "⚠".yellow().bold(),
+            name.bright_yellow()
+        );
+        println!("  Current template: {}", existing.template.bright_cyan());
+        println!(
+            "  Current port:     {}",
+            existing.port.to_string().bright_cyan()
+        );
+        println!("  New template:     {}", template.bright_cyan());
+
+        print!(
+            "\n{} This will delete the existing server crates. Continue? [y/N]: ",
+            "⚠".yellow().bold()
+        );
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("{} Cancelled", "✗".red());
+            return Ok(());
+        }
+
+        // Delete existing crate directories
+        let core_dir = PathBuf::from(format!("crates/mcp-{}-core", name));
+        let server_dir = PathBuf::from(format!("crates/{}-server", name));
+
+        if core_dir.exists() {
+            fs::remove_dir_all(&core_dir).context("Failed to remove old core crate")?;
+            println!("  {} Removed {}", "✓".green(), core_dir.display());
+        }
+
+        if server_dir.exists() {
+            fs::remove_dir_all(&server_dir).context("Failed to remove old server crate")?;
+            println!("  {} Removed {}", "✓".green(), server_dir.display());
+        }
+
+        println!();
+    }
+
+    // Determine port
+    let assigned_port = if let Some(p) = port {
+        // User specified port - check if it's available (unless replacing)
+        if config.is_port_used(p)
+            && !(replace && config.get_server(&name).map(|s| s.port) == Some(p))
+        {
+            anyhow::bail!("Port {} is already in use by another server", p);
+        }
+        p
+    } else if replace && config.has_server(&name) {
+        // Keep existing port when replacing
+        config.get_server(&name).unwrap().port
+    } else {
+        // Auto-assign next available port
+        config.next_available_port()
+    };
+
     // Generate server crates
     templates::server::generate(&name, &template)?;
+
+    // Update config
+    config.add_server(name.clone(), assigned_port, template.clone());
+    config.save().context("Failed to save workspace config")?;
+
+    println!(
+        "  {} Assigned port {}",
+        "✓".green(),
+        assigned_port.to_string().bright_yellow()
+    );
 
     println!(
         "\n{} Server '{}' added successfully!",

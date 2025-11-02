@@ -111,6 +111,14 @@ enum AddCommands {
         /// Server template to use
         #[arg(long, default_value = "minimal")]
         template: String,
+
+        /// Port to assign to this server (auto-increments if not specified)
+        #[arg(long)]
+        port: Option<u16>,
+
+        /// Replace existing server with same name (requires confirmation)
+        #[arg(long)]
+        replace: bool,
     },
 
     /// Add a tool to an existing server
@@ -161,8 +169,13 @@ fn execute_command(command: Commands) -> Result<()> {
             commands::new::execute(name, path)?;
         },
         Commands::Add { component } => match component {
-            AddCommands::Server { name, template } => {
-                commands::add::server(name, template)?;
+            AddCommands::Server {
+                name,
+                template,
+                port,
+                replace,
+            } => {
+                commands::add::server(name, template, port, replace)?;
             },
             AddCommands::Tool { name, server } => {
                 commands::add::tool(name, server)?;

@@ -5,14 +5,31 @@ use colored::Colorize;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::utils::config::WorkspaceConfig;
+
 /// Start development server
-pub fn execute(server: String, port: u16, connect_client: Option<String>) -> Result<()> {
+pub fn execute(server: String, mut port: u16, connect_client: Option<String>) -> Result<()> {
     println!("\n{}", "Starting development server".bright_cyan().bold());
     println!("{}", "────────────────────────────────────".bright_cyan());
 
     // Verify we're in a workspace
     if !PathBuf::from("Cargo.toml").exists() {
         anyhow::bail!("Not in a workspace directory. Run 'cargo pmcp new <name>' first.");
+    }
+
+    // Load workspace config and use configured port if available
+    let config = WorkspaceConfig::load()?;
+    if let Some(server_config) = config.get_server(&server) {
+        // Use configured port (overrides CLI --port unless explicitly set)
+        if port == 3000 {
+            // Default port, use configured one
+            port = server_config.port;
+            println!(
+                "  {} Using configured port {}",
+                "→".blue(),
+                port.to_string().bright_yellow()
+            );
+        }
     }
 
     // Verify server exists
