@@ -628,8 +628,7 @@ assertions:
 See https://docs.example.com/mcp-tester for full documentation on scenario format.
 "#;
 
-    fs::write(scenarios_dir.join("README.md"), readme)
-        .context("Failed to create README")?;
+    fs::write(scenarios_dir.join("README.md"), readme).context("Failed to create README")?;
 
     Ok(())
 }

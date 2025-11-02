@@ -24,8 +24,11 @@ pub fn execute(
 
     println!("\n{}", "Prerequisites:".bright_white().bold());
     println!("  {} Server must be running on port {}", "→".blue(), port);
-    println!("  {} Run in another terminal: {}", "→".blue(),
-        format!("cargo pmcp dev --server {}", server).bright_cyan());
+    println!(
+        "  {} Run in another terminal: {}",
+        "→".blue(),
+        format!("cargo pmcp dev --server {}", server).bright_cyan()
+    );
 
     // Generate scenarios if requested
     if do_generate_scenarios {
@@ -52,7 +55,10 @@ pub fn execute(
                     "✓".green(),
                     output_path.display()
                 );
-                println!("  {} Edit the file to customize test values and assertions", "→".blue());
+                println!(
+                    "  {} Edit the file to customize test values and assertions",
+                    "→".blue()
+                );
             },
             Err(e) => {
                 anyhow::bail!("Failed to generate scenarios: {}\n\n  Make sure the server is running in another terminal:\n  {}",
