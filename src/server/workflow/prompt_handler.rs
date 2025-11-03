@@ -187,6 +187,95 @@ impl WorkflowPromptHandler {
         result
     }
 
+    /// Resolve template bindings from execution context
+    ///
+    /// Takes template variables and their DataSource definitions,
+    /// resolves them to actual values from the execution context.
+    fn resolve_template_bindings(
+        &self,
+        bindings: &HashMap<String, DataSource>,
+        args: &HashMap<String, String>,
+        ctx: &ExecutionContext,
+    ) -> Result<HashMap<String, String>> {
+        let mut resolved = HashMap::new();
+
+        for (var_name, data_source) in bindings {
+            let value = self.resolve_data_source_to_string(data_source, args, ctx)?;
+            resolved.insert(var_name.clone(), value);
+        }
+
+        Ok(resolved)
+    }
+
+    /// Resolve a DataSource to a string value
+    ///
+    /// Handles all DataSource variants and converts them to strings suitable
+    /// for template interpolation.
+    fn resolve_data_source_to_string(
+        &self,
+        source: &DataSource,
+        args: &HashMap<String, String>,
+        ctx: &ExecutionContext,
+    ) -> Result<String> {
+        match source {
+            DataSource::PromptArg(arg_name) => {
+                args.get(arg_name.as_str()).cloned().ok_or_else(|| {
+                    crate::Error::validation(format!("Missing prompt argument: {}", arg_name))
+                })
+            },
+
+            DataSource::StepOutput { step, field } => {
+                let step_result = ctx.get_binding(step).ok_or_else(|| {
+                    crate::Error::validation(format!("Step binding not found: {}", step))
+                })?;
+
+                if let Some(field_name) = field {
+                    // Extract field from step result
+                    self.extract_field_as_string(step_result, field_name)
+                } else {
+                    // Use entire step result
+                    Ok(Self::value_to_string(step_result))
+                }
+            },
+
+            DataSource::Constant(value) => Ok(Self::value_to_string(value)),
+        }
+    }
+
+    /// Extract a field from a JSON value and convert to string
+    ///
+    /// Supports dot notation for nested fields: "user.profile.id"
+    fn extract_field_as_string(&self, value: &Value, field_path: &str) -> Result<String> {
+        // Support dot notation for nested fields
+        let parts: Vec<&str> = field_path.split('.').collect();
+        let mut current = value;
+
+        for part in parts {
+            current = current.get(part).ok_or_else(|| {
+                crate::Error::validation(format!(
+                    "Field '{}' not found in path '{}'",
+                    part, field_path
+                ))
+            })?;
+        }
+
+        Ok(Self::value_to_string(current))
+    }
+
+    /// Convert a JSON value to a string representation
+    ///
+    /// Handles different JSON types appropriately for template substitution.
+    fn value_to_string(value: &Value) -> String {
+        match value {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Null => "null".to_string(),
+            // For arrays and objects, serialize as JSON
+            _ => serde_json::to_string(value).unwrap_or_else(|_| format!("{:?}", value)),
+        }
+    }
+
     /// Create user intent message from workflow description and arguments
     fn create_user_intent(&self, args: &HashMap<String, String>) -> PromptMessage {
         let description = self.workflow.description();
@@ -554,15 +643,53 @@ impl PromptHandler for WorkflowPromptHandler {
 
             // Fetch and embed resources (if any) - BEFORE attempting tool execution
             // Resources provide context (documentation, schemas, examples) for the LLM
+
+            // Resolve template bindings for resource URI interpolation
+            let template_vars = if !step.template_bindings().is_empty() {
+                match self.resolve_template_bindings(
+                    step.template_bindings(),
+                    &args,
+                    &execution_context,
+                ) {
+                    Ok(vars) => vars,
+                    Err(e) => {
+                        // Template resolution failed - add error and stop
+                        messages.push(PromptMessage {
+                            role: Role::User,
+                            content: MessageContent::Text {
+                                text: format!("Error resolving template bindings: {}", e),
+                            },
+                        });
+                        return Ok(GetPromptResult {
+                            description: Some(self.workflow.description().to_string()),
+                            messages,
+                        });
+                    },
+                }
+            } else {
+                HashMap::new()
+            };
+
             for resource_handle in step.resources() {
                 let uri = resource_handle.uri();
-                match self.fetch_resource_content(uri, &extra).await {
+
+                // Apply template substitution if needed
+                let interpolated_uri = if !template_vars.is_empty() {
+                    Self::substitute_arguments(uri, &template_vars)
+                } else {
+                    uri.to_string()
+                };
+
+                match self.fetch_resource_content(&interpolated_uri, &extra).await {
                     Ok(content) => {
                         // Embed resource content as user message
                         messages.push(PromptMessage {
                             role: Role::User,
                             content: MessageContent::Text {
-                                text: format!("Resource content from {}:\n{}", uri, content),
+                                text: format!(
+                                    "Resource content from {}:\n{}",
+                                    interpolated_uri, content
+                                ),
                             },
                         });
                     },
@@ -571,7 +698,10 @@ impl PromptHandler for WorkflowPromptHandler {
                         messages.push(PromptMessage {
                             role: Role::User,
                             content: MessageContent::Text {
-                                text: format!("Error fetching resource {}: {}", uri, e),
+                                text: format!(
+                                    "Error fetching resource {}: {}",
+                                    interpolated_uri, e
+                                ),
                             },
                         });
                         // Don't continue - resource might be critical for this step
