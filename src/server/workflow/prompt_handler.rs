@@ -187,6 +187,163 @@ impl WorkflowPromptHandler {
         result
     }
 
+    /// Resolve template bindings from execution context
+    ///
+    /// Takes template variables and their `DataSource` definitions,
+    /// resolves them to actual values from the execution context.
+    fn resolve_template_bindings(
+        bindings: &HashMap<String, DataSource>,
+        args: &HashMap<String, String>,
+        ctx: &ExecutionContext,
+    ) -> Result<HashMap<String, String>> {
+        let mut resolved = HashMap::new();
+
+        for (var_name, data_source) in bindings {
+            let value = Self::resolve_data_source_to_string(data_source, args, ctx)?;
+            resolved.insert(var_name.clone(), value);
+        }
+
+        Ok(resolved)
+    }
+
+    /// Resolve a `DataSource` to a string value
+    ///
+    /// Handles all `DataSource` variants and converts them to strings suitable
+    /// for template interpolation.
+    fn resolve_data_source_to_string(
+        source: &DataSource,
+        args: &HashMap<String, String>,
+        ctx: &ExecutionContext,
+    ) -> Result<String> {
+        match source {
+            DataSource::PromptArg(arg_name) => {
+                args.get(arg_name.as_str()).cloned().ok_or_else(|| {
+                    crate::Error::validation(format!("Missing prompt argument: {}", arg_name))
+                })
+            },
+
+            DataSource::StepOutput { step, field } => {
+                let step_result = ctx.get_binding(step).ok_or_else(|| {
+                    crate::Error::validation(format!("Step binding not found: {}", step))
+                })?;
+
+                if let Some(field_name) = field {
+                    // Extract field from step result
+                    Self::extract_field_as_string(step_result, field_name)
+                } else {
+                    // Use entire step result
+                    Ok(Self::value_to_string(step_result))
+                }
+            },
+
+            DataSource::Constant(value) => Ok(Self::value_to_string(value)),
+        }
+    }
+
+    /// Extract a field from a JSON value and convert to string
+    ///
+    /// Supports dot notation for nested fields: "user.profile.id"
+    fn extract_field_as_string(value: &Value, field_path: &str) -> Result<String> {
+        // Support dot notation for nested fields
+        let parts: Vec<&str> = field_path.split('.').collect();
+        let mut current = value;
+
+        for part in parts {
+            current = current.get(part).ok_or_else(|| {
+                crate::Error::validation(format!(
+                    "Field '{}' not found in path '{}'",
+                    part, field_path
+                ))
+            })?;
+        }
+
+        Ok(Self::value_to_string(current))
+    }
+
+    /// Convert a JSON value to a string representation
+    ///
+    /// Handles different JSON types appropriately for template substitution.
+    fn value_to_string(value: &Value) -> String {
+        match value {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Null => "null".to_string(),
+            // For arrays and objects, serialize as JSON
+            _ => serde_json::to_string(value).unwrap_or_else(|_| format!("{:?}", value)),
+        }
+    }
+
+    /// Check if template bindings reference any step outputs
+    ///
+    /// Returns true if any binding uses `DataSource::StepOutput`, meaning the
+    /// resource must be fetched AFTER tool execution.
+    fn template_bindings_use_step_outputs(bindings: &HashMap<String, DataSource>) -> bool {
+        bindings
+            .values()
+            .any(|source| matches!(source, DataSource::StepOutput { .. }))
+    }
+
+    /// Fetch and embed resources for a workflow step
+    ///
+    /// Resolves template bindings, interpolates URIs, fetches resource content,
+    /// and adds resource messages to the message list.
+    ///
+    /// Returns `Ok(())` if all resources fetched successfully, or `Err` if any fetch failed.
+    async fn fetch_step_resources(
+        &self,
+        step: &WorkflowStep,
+        args: &HashMap<String, String>,
+        ctx: &ExecutionContext,
+        extra: &RequestHandlerExtra,
+        messages: &mut Vec<PromptMessage>,
+    ) -> Result<()> {
+        // Resolve template bindings for resource URI interpolation
+        let template_vars = if !step.template_bindings().is_empty() {
+            Self::resolve_template_bindings(step.template_bindings(), args, ctx)?
+        } else {
+            HashMap::new()
+        };
+
+        for resource_handle in step.resources() {
+            let uri = resource_handle.uri();
+
+            // Apply template substitution if needed
+            let interpolated_uri = if !template_vars.is_empty() {
+                Self::substitute_arguments(uri, &template_vars)
+            } else {
+                uri.to_string()
+            };
+
+            match self.fetch_resource_content(&interpolated_uri, extra).await {
+                Ok(content) => {
+                    // Embed resource content as user message
+                    messages.push(PromptMessage {
+                        role: Role::User,
+                        content: MessageContent::Text {
+                            text: format!(
+                                "Resource content from {}:\n{}",
+                                interpolated_uri, content
+                            ),
+                        },
+                    });
+                },
+                Err(e) => {
+                    // Resource fetch failed - add error message
+                    messages.push(PromptMessage {
+                        role: Role::User,
+                        content: MessageContent::Text {
+                            text: format!("Error fetching resource {}: {}", interpolated_uri, e),
+                        },
+                    });
+                    return Err(e);
+                },
+            }
+        }
+
+        Ok(())
+    }
+
     /// Create user intent message from workflow description and arguments
     fn create_user_intent(&self, args: &HashMap<String, String>) -> PromptMessage {
         let description = self.workflow.description();
@@ -552,34 +709,23 @@ impl PromptHandler for WorkflowPromptHandler {
                 });
             }
 
-            // Fetch and embed resources (if any) - BEFORE attempting tool execution
-            // Resources provide context (documentation, schemas, examples) for the LLM
-            for resource_handle in step.resources() {
-                let uri = resource_handle.uri();
-                match self.fetch_resource_content(uri, &extra).await {
-                    Ok(content) => {
-                        // Embed resource content as user message
-                        messages.push(PromptMessage {
-                            role: Role::User,
-                            content: MessageContent::Text {
-                                text: format!("Resource content from {}:\n{}", uri, content),
-                            },
-                        });
-                    },
-                    Err(e) => {
-                        // Resource fetch failed - add error message and stop
-                        messages.push(PromptMessage {
-                            role: Role::User,
-                            content: MessageContent::Text {
-                                text: format!("Error fetching resource {}: {}", uri, e),
-                            },
-                        });
-                        // Don't continue - resource might be critical for this step
-                        return Ok(GetPromptResult {
-                            description: Some(self.workflow.description().to_string()),
-                            messages,
-                        });
-                    },
+            // Fetch resources that DON'T depend on step outputs (pre-tool phase)
+            // Resources that depend on step outputs will be fetched after tool execution
+            let fetch_resources_after_tool =
+                Self::template_bindings_use_step_outputs(step.template_bindings());
+
+            if !fetch_resources_after_tool && !step.resources().is_empty() {
+                // Fetch resources now (before tool execution)
+                if self
+                    .fetch_step_resources(step, &args, &execution_context, &extra, &mut messages)
+                    .await
+                    .is_err()
+                {
+                    // Resource fetch failed - stop execution
+                    return Ok(GetPromptResult {
+                        description: Some(self.workflow.description().to_string()),
+                        messages,
+                    });
                 }
             }
 
@@ -630,6 +776,24 @@ impl PromptHandler for WorkflowPromptHandler {
                             // Store binding for next steps
                             if let Some(binding) = step.binding() {
                                 execution_context.store_binding(binding.clone(), result);
+                            }
+
+                            // Fetch resources that depend on step outputs (post-tool phase)
+                            // These resources can now access the tool's result via template bindings
+                            if fetch_resources_after_tool
+                                && self
+                                    .fetch_step_resources(
+                                        step,
+                                        &args,
+                                        &execution_context,
+                                        &extra,
+                                        &mut messages,
+                                    )
+                                    .await
+                                    .is_err()
+                            {
+                                // Resource fetch failed - stop execution
+                                break;
                             }
                         },
                         Err(e) => {

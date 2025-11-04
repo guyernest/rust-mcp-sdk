@@ -9,6 +9,7 @@ use super::{
     newtypes::{ArgName, BindingName, StepName},
 };
 use indexmap::IndexMap;
+use std::collections::HashMap;
 
 /// A single step in a workflow
 #[derive(Clone, Debug)]
@@ -38,6 +39,17 @@ pub struct WorkflowStep {
     /// the server provides all necessary context (tool results + resource content)
     /// before the client LLM continues.
     resources: Vec<ResourceHandle>,
+    /// Template variable bindings for resource URI interpolation
+    ///
+    /// Maps template variable names to data sources. Template variables in resource
+    /// URIs (using `{var_name}` syntax) are resolved from these bindings at execution time.
+    ///
+    /// # Example
+    /// ```ignore
+    /// WorkflowStep::new("read", ResourceHandle::new("docs://{doc_id}"))
+    ///     .with_template_binding("doc_id", field("query_result", "document_id"))
+    /// ```
+    template_bindings: HashMap<String, DataSource>,
 }
 
 impl WorkflowStep {
@@ -58,6 +70,7 @@ impl WorkflowStep {
             binding: None,
             guidance: None,
             resources: Vec::new(),
+            template_bindings: HashMap::new(),
         }
     }
 
@@ -155,6 +168,52 @@ impl WorkflowStep {
         Ok(self)
     }
 
+    /// Bind a template variable for resource URI interpolation (chainable)
+    ///
+    /// Template variables in resource URIs (using `{var_name}` syntax) are resolved
+    /// from these bindings at execution time. This enables dynamic resource fetching
+    /// based on values from previous workflow steps or prompt arguments.
+    ///
+    /// # Example
+    /// ```
+    /// use pmcp::server::workflow::{WorkflowStep, ToolHandle, DataSource};
+    ///
+    /// // Dynamic resource URI based on previous step's result
+    /// let step = WorkflowStep::new("read_guide", ToolHandle::new("read"))
+    ///     .with_resource("docs://{doc_id}")
+    ///     .expect("Valid resource URI")
+    ///     .with_template_binding("doc_id", DataSource::from_step_field("query", "id"));
+    ///
+    /// // Multiple template variables
+    /// let step2 = WorkflowStep::new("read_project", ToolHandle::new("read"))
+    ///     .with_resource("project://{org}/{repo}/config")
+    ///     .expect("Valid resource URI")
+    ///     .with_template_binding("org", DataSource::from_step_field("project", "organization"))
+    ///     .with_template_binding("repo", DataSource::from_step_field("project", "repository"));
+    /// ```
+    ///
+    /// # Use Cases
+    ///
+    /// Use template bindings when:
+    /// - Resource URIs depend on values from previous workflow steps
+    /// - Resource URIs are constructed from user-provided prompt arguments
+    /// - You need to fetch different resources based on workflow state
+    ///
+    /// # Template Syntax
+    ///
+    /// Template variables use `{var_name}` syntax, matching the format used in guidance messages.
+    /// At execution time, each `{var_name}` is replaced with the value resolved from the corresponding
+    /// `DataSource`.
+    #[must_use]
+    pub fn with_template_binding(
+        mut self,
+        var_name: impl Into<String>,
+        source: DataSource,
+    ) -> Self {
+        self.template_bindings.insert(var_name.into(), source);
+        self
+    }
+
     /// Get step name
     pub fn name(&self) -> &StepName {
         &self.name
@@ -185,12 +244,31 @@ impl WorkflowStep {
         &self.resources
     }
 
+    /// Get template bindings for resource URI interpolation
+    pub fn template_bindings(&self) -> &HashMap<String, DataSource> {
+        &self.template_bindings
+    }
+
     /// Validate the step
     ///
     /// Checks that all referenced bindings are available
     pub fn validate(&self, available_bindings: &[BindingName]) -> Result<(), WorkflowError> {
-        // Check that all step output references exist
+        // Check that all step output references exist in arguments
         for (_arg_name, source) in &self.arguments {
+            if let DataSource::StepOutput { step, .. } = source {
+                // Convert step name to binding name for lookup
+                let binding = BindingName::new(step.as_str());
+                if !available_bindings.contains(&binding) {
+                    return Err(WorkflowError::UnknownBinding {
+                        step: self.name.to_string(),
+                        binding: binding.to_string(),
+                    });
+                }
+            }
+        }
+
+        // Check that all step output references exist in template bindings
+        for source in self.template_bindings.values() {
             if let DataSource::StepOutput { step, .. } = source {
                 // Convert step name to binding name for lookup
                 let binding = BindingName::new(step.as_str());
@@ -320,5 +398,120 @@ mod tests {
             },
             _ => panic!("Expected StepOutput"),
         }
+    }
+
+    // Tests for template bindings
+
+    #[test]
+    fn test_workflow_step_with_template_binding() {
+        let step = WorkflowStep::new("read", ToolHandle::new("read"))
+            .with_resource("docs://{doc_id}")
+            .expect("Valid resource URI")
+            .with_template_binding("doc_id", DataSource::from_step_field("query", "id"));
+
+        assert_eq!(step.template_bindings().len(), 1);
+        assert!(step.template_bindings().contains_key("doc_id"));
+
+        let binding = step.template_bindings().get("doc_id").unwrap();
+        match binding {
+            DataSource::StepOutput { step, field } => {
+                assert_eq!(step.as_str(), "query");
+                assert_eq!(field.as_deref(), Some("id"));
+            },
+            _ => panic!("Expected StepOutput"),
+        }
+    }
+
+    #[test]
+    fn test_workflow_step_with_multiple_template_bindings() {
+        let step = WorkflowStep::new("read", ToolHandle::new("read"))
+            .with_resource("project://{org}/{repo}/config")
+            .expect("Valid resource URI")
+            .with_template_binding(
+                "org",
+                DataSource::from_step_field("project", "organization"),
+            )
+            .with_template_binding("repo", DataSource::from_step_field("project", "repository"));
+
+        assert_eq!(step.template_bindings().len(), 2);
+        assert!(step.template_bindings().contains_key("org"));
+        assert!(step.template_bindings().contains_key("repo"));
+    }
+
+    #[test]
+    fn test_workflow_step_template_binding_from_prompt_arg() {
+        let step = WorkflowStep::new("read", ToolHandle::new("read"))
+            .with_resource("dataset://{dataset_id}")
+            .expect("Valid resource URI")
+            .with_template_binding("dataset_id", DataSource::prompt_arg("dataset"));
+
+        let binding = step.template_bindings().get("dataset_id").unwrap();
+        match binding {
+            DataSource::PromptArg(arg_name) => {
+                assert_eq!(arg_name.as_str(), "dataset");
+            },
+            _ => panic!("Expected PromptArg"),
+        }
+    }
+
+    #[test]
+    fn test_workflow_step_template_binding_from_constant() {
+        let step = WorkflowStep::new("read", ToolHandle::new("read"))
+            .with_resource("api://{version}/endpoint")
+            .expect("Valid resource URI")
+            .with_template_binding("version", DataSource::constant(json!("v1")));
+
+        let binding = step.template_bindings().get("version").unwrap();
+        match binding {
+            DataSource::Constant(val) => {
+                assert_eq!(val, &json!("v1"));
+            },
+            _ => panic!("Expected Constant"),
+        }
+    }
+
+    #[test]
+    fn test_workflow_step_validation_with_template_bindings() {
+        let step = WorkflowStep::new("read", ToolHandle::new("read"))
+            .with_resource("docs://{doc_id}")
+            .expect("Valid resource URI")
+            .with_template_binding("doc_id", DataSource::from_step_field("query", "id"));
+
+        // Validation should pass when binding is available
+        let available = vec![BindingName::new("query")];
+        assert!(step.validate(&available).is_ok());
+
+        // Validation should fail when binding is not available
+        let empty: Vec<BindingName> = vec![];
+        let result = step.validate(&empty);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_workflow_step_empty_template_bindings() {
+        let step = WorkflowStep::new("read", ToolHandle::new("read"))
+            .with_resource("docs://static-page")
+            .expect("Valid resource URI");
+
+        assert_eq!(step.template_bindings().len(), 0);
+        assert!(step.template_bindings().is_empty());
+    }
+
+    #[test]
+    fn test_workflow_step_chainable_with_template_bindings() {
+        let step = WorkflowStep::new("complex", ToolHandle::new("tool"))
+            .arg("input", DataSource::prompt_arg("data"))
+            .with_resource("guide://{guide_id}")
+            .expect("Valid resource URI")
+            .with_template_binding("guide_id", DataSource::from_step_field("config", "guide"))
+            .with_guidance("Follow the guide carefully")
+            .bind("result");
+
+        assert_eq!(step.name().as_str(), "complex");
+        assert_eq!(step.arguments().len(), 1);
+        assert_eq!(step.resources().len(), 1);
+        assert_eq!(step.template_bindings().len(), 1);
+        assert!(step.guidance().is_some());
+        assert!(step.binding().is_some());
     }
 }

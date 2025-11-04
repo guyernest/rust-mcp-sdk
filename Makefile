@@ -155,7 +155,8 @@ lint:
 		-A clippy::manual_string_new \
 		-A clippy::default_trait_access \
 		-A clippy::format_push_string \
-		-A clippy::too_many_lines
+		-A clippy::too_many_lines \
+		-A clippy::cargo_common_metadata
 	@echo "$(BLUE)Checking examples...$(NC)"
 	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO) check --features "full" --examples
 	@echo "$(GREEN)✓ No lint issues$(NC)"
