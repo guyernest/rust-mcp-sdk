@@ -29,12 +29,14 @@ impl StaticResource {
         let name = uri.rsplit('/').next().unwrap_or(&uri).to_string();
 
         Self {
-            uri,
+            uri: uri.clone(),
             name,
             description: None,
             mime_type: Some("text/plain".to_string()),
-            content: Content::Text {
-                text: content.into(),
+            content: Content::Resource {
+                uri,
+                text: Some(content.into()),
+                mime_type: Some("text/plain".to_string()),
             },
         }
     }
@@ -46,13 +48,14 @@ impl StaticResource {
         let mime_type = mime_type.into();
 
         Self {
-            uri,
+            uri: uri.clone(),
             name,
             description: None,
             mime_type: Some(mime_type.clone()),
-            content: Content::Image {
-                data: base64::prelude::BASE64_STANDARD.encode(data),
-                mime_type,
+            content: Content::Resource {
+                uri,
+                text: Some(base64::prelude::BASE64_STANDARD.encode(data)),
+                mime_type: Some(mime_type),
             },
         }
     }
@@ -383,5 +386,160 @@ where
         extra: RequestHandlerExtra,
     ) -> Result<ListResourcesResult> {
         (self.list_handler)(cursor, extra).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_static_resource_new_text_returns_resource_content() {
+        let resource = StaticResource::new_text("test://doc", "Hello world");
+
+        // Verify content is Content::Resource, not Content::Text
+        match &resource.content {
+            Content::Resource {
+                uri,
+                text,
+                mime_type,
+            } => {
+                assert_eq!(uri, "test://doc");
+                assert_eq!(text.as_ref().unwrap(), "Hello world");
+                assert_eq!(mime_type.as_ref().unwrap(), "text/plain");
+            },
+            _ => panic!("Expected Content::Resource, got {:?}", resource.content),
+        }
+
+        assert_eq!(resource.uri(), "test://doc");
+    }
+
+    #[test]
+    fn test_static_resource_new_image_returns_resource_content() {
+        let image_data = b"fake image data";
+        let resource = StaticResource::new_image("test://image.png", image_data, "image/png");
+
+        // Verify content is Content::Resource with base64 encoded data
+        match &resource.content {
+            Content::Resource {
+                uri,
+                text,
+                mime_type,
+            } => {
+                assert_eq!(uri, "test://image.png");
+
+                // Verify base64 encoding
+                let expected_base64 = base64::prelude::BASE64_STANDARD.encode(image_data);
+                assert_eq!(text.as_ref().unwrap(), &expected_base64);
+                assert_eq!(mime_type.as_ref().unwrap(), "image/png");
+            },
+            _ => panic!("Expected Content::Resource, got {:?}", resource.content),
+        }
+    }
+
+    #[test]
+    fn test_static_resource_with_custom_mime_type() {
+        let resource = StaticResource::new_text("test://data", "{ \"key\": \"value\" }")
+            .with_mime_type("application/json");
+
+        match &resource.content {
+            Content::Resource {
+                uri,
+                text,
+                mime_type,
+            } => {
+                assert_eq!(uri, "test://data");
+                assert_eq!(text.as_ref().unwrap(), "{ \"key\": \"value\" }");
+                // Note: mime_type in struct is updated, but content still has original
+                assert_eq!(mime_type.as_ref().unwrap(), "text/plain");
+            },
+            _ => panic!("Expected Content::Resource"),
+        }
+
+        // Verify the struct's mime_type field was updated
+        assert_eq!(resource.mime_type.as_ref().unwrap(), "application/json");
+    }
+
+    #[tokio::test]
+    async fn test_resource_collection_read_returns_resource_content() {
+        use tokio_util::sync::CancellationToken;
+
+        let collection = ResourceCollection::new().add_resource(StaticResource::new_text(
+            "maps://instructions",
+            "Game instructions",
+        ));
+
+        let extra = RequestHandlerExtra::new("test-req".to_string(), CancellationToken::new());
+        let result = collection.read("maps://instructions", extra).await.unwrap();
+
+        assert_eq!(result.contents.len(), 1);
+
+        // Verify the returned content has URI (MCP protocol compliance)
+        match &result.contents[0] {
+            Content::Resource {
+                uri,
+                text,
+                mime_type,
+            } => {
+                assert_eq!(uri, "maps://instructions");
+                assert_eq!(text.as_ref().unwrap(), "Game instructions");
+                assert_eq!(mime_type.as_ref().unwrap(), "text/plain");
+            },
+            _ => panic!("Expected Content::Resource with URI field"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resource_collection_read_image_returns_resource_content() {
+        use tokio_util::sync::CancellationToken;
+
+        let image_data = b"\x89PNG\r\n\x1a\n";
+        let collection = ResourceCollection::new().add_resource(StaticResource::new_image(
+            "test://logo.png",
+            image_data,
+            "image/png",
+        ));
+
+        let extra = RequestHandlerExtra::new("test-req".to_string(), CancellationToken::new());
+        let result = collection.read("test://logo.png", extra).await.unwrap();
+
+        assert_eq!(result.contents.len(), 1);
+
+        match &result.contents[0] {
+            Content::Resource {
+                uri,
+                text,
+                mime_type,
+            } => {
+                assert_eq!(uri, "test://logo.png");
+                let expected_base64 = base64::prelude::BASE64_STANDARD.encode(image_data);
+                assert_eq!(text.as_ref().unwrap(), &expected_base64);
+                assert_eq!(mime_type.as_ref().unwrap(), "image/png");
+            },
+            _ => panic!("Expected Content::Resource with URI field"),
+        }
+    }
+
+    #[test]
+    fn test_static_resource_builder_pattern() {
+        let resource = StaticResource::new_text("test://readme", "README content")
+            .with_name("Project README")
+            .with_description("Main documentation file")
+            .with_mime_type("text/markdown");
+
+        assert_eq!(resource.name, "Project README");
+        assert_eq!(
+            resource.description.as_ref().unwrap(),
+            "Main documentation file"
+        );
+        assert_eq!(resource.mime_type.as_ref().unwrap(), "text/markdown");
+
+        // Content should still have Resource type with URI
+        match &resource.content {
+            Content::Resource { uri, .. } => {
+                assert_eq!(uri, "test://readme");
+            },
+            _ => panic!("Expected Content::Resource"),
+        }
     }
 }
