@@ -240,24 +240,87 @@ impl WorkflowPromptHandler {
         }
     }
 
-    /// Extract a field from a JSON value and convert to string
+    /// Get the type name of a JSON value for error messages
+    fn value_type_name(v: &Value) -> &'static str {
+        match v {
+            Value::Null => "null",
+            Value::Bool(_) => "boolean",
+            Value::Number(_) => "number",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Object(_) => "object",
+        }
+    }
+
+    /// Navigate a JSON value using dot-notation path with array indexing support.
     ///
-    /// Supports dot notation for nested fields: "user.profile.id"
-    fn extract_field_as_string(value: &Value, field_path: &str) -> Result<String> {
-        // Support dot notation for nested fields
+    /// Supports:
+    /// - Object fields: `"user.name"`
+    /// - Array indices: `"games.0.id"`
+    /// - Nested paths: `"data.items.0.field.1.value"`
+    ///
+    /// Precedence: Object fields take priority over array indices for ambiguous
+    /// numeric keys like `{"0": "value"}`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let data = json!({"users": [{"name": "Alice"}, {"name": "Bob"}]});
+    /// let result = navigate_json_path(&data, "users.1.name")?;
+    /// assert_eq!(result, &json!("Bob"));
+    /// ```
+    fn navigate_json_path<'a>(value: &'a Value, field_path: &str) -> Result<&'a Value> {
         let parts: Vec<&str> = field_path.split('.').collect();
         let mut current = value;
 
-        for part in parts {
-            current = current.get(part).ok_or_else(|| {
-                crate::Error::validation(format!(
-                    "Field '{}' not found in path '{}'",
-                    part, field_path
-                ))
-            })?;
+        for (idx, part) in parts.iter().enumerate() {
+            let path_so_far = parts[..=idx].join(".");
+
+            current = if let Some(val) = current.get(part) {
+                // Object field access (handles {"0": "value"})
+                val
+            } else if let Ok(index) = part.parse::<usize>() {
+                // Array index access
+                current
+                    .as_array()
+                    .ok_or_else(|| {
+                        crate::Error::validation(format!(
+                            "Cannot index into non-array at '{}' in path '{}'. Found: {}",
+                            part,
+                            field_path,
+                            Self::value_type_name(current)
+                        ))
+                    })?
+                    .get(index)
+                    .ok_or_else(|| {
+                        let len = current.as_array().unwrap().len();
+                        crate::Error::validation(format!(
+                            "Array index {} out of bounds at '{}' in path '{}'. Array has {} element{}",
+                            index,
+                            path_so_far,
+                            field_path,
+                            len,
+                            if len == 1 { "" } else { "s" }
+                        ))
+                    })?
+            } else {
+                return Err(crate::Error::validation(format!(
+                    "Field '{}' not found at '{}' in path '{}'",
+                    part, path_so_far, field_path
+                )));
+            };
         }
 
-        Ok(Self::value_to_string(current))
+        Ok(current)
+    }
+
+    /// Extract a field from a JSON value and convert to string
+    ///
+    /// Supports dot notation for nested fields: "user.profile.id"
+    /// Supports array indexing: "items.0.name", "data.users.1.email"
+    fn extract_field_as_string(value: &Value, field_path: &str) -> Result<String> {
+        let extracted = Self::navigate_json_path(value, field_path)?;
+        Ok(Self::value_to_string(extracted))
     }
 
     /// Convert a JSON value to a string representation
@@ -656,19 +719,12 @@ impl WorkflowPromptHandler {
                     field: Some(field_name),
                 } => {
                     // Extract specific field from previous step output
+                    // Supports dot notation with array indexing: "games.0.id"
                     let binding_value = ctx.get_binding(binding_name).ok_or_else(|| {
                         crate::Error::validation(format!("Binding '{}' not found", binding_name))
                     })?;
 
-                    binding_value
-                        .get(field_name.as_str())
-                        .cloned()
-                        .ok_or_else(|| {
-                            crate::Error::validation(format!(
-                                "Field '{}' not found in binding '{}'",
-                                field_name, binding_name
-                            ))
-                        })?
+                    Self::navigate_json_path(binding_value, field_name.as_str())?.clone()
                 },
             };
 
@@ -2300,5 +2356,179 @@ mod tests {
         } else {
             panic!("Expected error message");
         }
+    }
+
+    #[test]
+    fn test_navigate_json_path_basic_array_access() {
+        let data = json!({
+            "games": [
+                {"id": "game1", "score": 10},
+                {"id": "game2", "score": 5}
+            ]
+        });
+
+        // Test basic array access
+        let result = WorkflowPromptHandler::navigate_json_path(&data, "games.0.id").unwrap();
+        assert_eq!(result, &json!("game1"));
+
+        let result = WorkflowPromptHandler::navigate_json_path(&data, "games.1.score").unwrap();
+        assert_eq!(result, &json!(5));
+    }
+
+    #[test]
+    fn test_navigate_json_path_nested_arrays() {
+        let data = json!({
+            "matrix": [
+                [{"value": 1}, {"value": 2}],
+                [{"value": 3}, {"value": 4}]
+            ]
+        });
+
+        // Test nested array access
+        let result = WorkflowPromptHandler::navigate_json_path(&data, "matrix.0.1.value").unwrap();
+        assert_eq!(result, &json!(2));
+
+        let result = WorkflowPromptHandler::navigate_json_path(&data, "matrix.1.0.value").unwrap();
+        assert_eq!(result, &json!(3));
+    }
+
+    #[test]
+    fn test_navigate_json_path_mixed_structures() {
+        let data = json!({
+            "data": {
+                "users": [
+                    {
+                        "name": "Alice",
+                        "games": [
+                            {"id": "a1", "score": 100},
+                            {"id": "a2", "score": 200}
+                        ]
+                    },
+                    {
+                        "name": "Bob",
+                        "games": [
+                            {"id": "b1", "score": 50}
+                        ]
+                    }
+                ]
+            }
+        });
+
+        // Deep nested access
+        let result =
+            WorkflowPromptHandler::navigate_json_path(&data, "data.users.0.games.1.score").unwrap();
+        assert_eq!(result, &json!(200));
+
+        let result = WorkflowPromptHandler::navigate_json_path(&data, "data.users.1.name").unwrap();
+        assert_eq!(result, &json!("Bob"));
+    }
+
+    #[test]
+    fn test_navigate_json_path_numeric_object_keys() {
+        // Edge case: numeric object keys (object field should win)
+        let data = json!({
+            "0": "object_value",
+            "items": [1, 2, 3]
+        });
+
+        // Numeric key as object field
+        let result = WorkflowPromptHandler::navigate_json_path(&data, "0").unwrap();
+        assert_eq!(result, &json!("object_value"));
+
+        // Array indexing still works
+        let result = WorkflowPromptHandler::navigate_json_path(&data, "items.0").unwrap();
+        assert_eq!(result, &json!(1));
+
+        let result = WorkflowPromptHandler::navigate_json_path(&data, "items.2").unwrap();
+        assert_eq!(result, &json!(3));
+    }
+
+    #[test]
+    fn test_navigate_json_path_errors() {
+        let data = json!({
+            "items": [1, 2, 3],
+            "obj": {"field": "value"}
+        });
+
+        // Out of bounds
+        let result = WorkflowPromptHandler::navigate_json_path(&data, "items.5");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("out of bounds"));
+        assert!(err_msg.contains("Array has 3 elements"));
+
+        // Index into non-array
+        let result = WorkflowPromptHandler::navigate_json_path(&data, "obj.0");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Cannot index into non-array"));
+
+        // Non-existent field
+        let result = WorkflowPromptHandler::navigate_json_path(&data, "missing");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_extract_field_as_string_with_arrays() {
+        let data = json!({
+            "users": [
+                {"name": "Alice", "age": 30},
+                {"name": "Bob", "age": 25}
+            ],
+            "count": 2
+        });
+
+        // Extract from array
+        let result = WorkflowPromptHandler::extract_field_as_string(&data, "users.0.name").unwrap();
+        assert_eq!(result, "Alice");
+
+        let result = WorkflowPromptHandler::extract_field_as_string(&data, "users.1.age").unwrap();
+        assert_eq!(result, "25");
+
+        // Extract non-array field
+        let result = WorkflowPromptHandler::extract_field_as_string(&data, "count").unwrap();
+        assert_eq!(result, "2");
+    }
+
+    #[test]
+    fn test_extract_field_as_string_array_to_json() {
+        let data = json!({
+            "items": [1, 2, 3],
+            "nested": {
+                "arrays": [[1, 2], [3, 4]]
+            }
+        });
+
+        // Extract entire array (should serialize as JSON)
+        let result = WorkflowPromptHandler::extract_field_as_string(&data, "items").unwrap();
+        assert_eq!(result, "[1,2,3]");
+
+        // Extract nested array
+        let result =
+            WorkflowPromptHandler::extract_field_as_string(&data, "nested.arrays.0").unwrap();
+        assert_eq!(result, "[1,2]");
+    }
+
+    #[test]
+    fn test_value_type_name() {
+        assert_eq!(WorkflowPromptHandler::value_type_name(&json!(null)), "null");
+        assert_eq!(
+            WorkflowPromptHandler::value_type_name(&json!(true)),
+            "boolean"
+        );
+        assert_eq!(WorkflowPromptHandler::value_type_name(&json!(42)), "number");
+        assert_eq!(
+            WorkflowPromptHandler::value_type_name(&json!("text")),
+            "string"
+        );
+        assert_eq!(
+            WorkflowPromptHandler::value_type_name(&json!([1, 2, 3])),
+            "array"
+        );
+        assert_eq!(
+            WorkflowPromptHandler::value_type_name(&json!({"key": "value"})),
+            "object"
+        );
     }
 }
