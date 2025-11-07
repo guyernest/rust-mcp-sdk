@@ -374,19 +374,32 @@ impl WorkflowPromptHandler {
         let mut plan = String::from("Here's my plan:\n");
 
         for (idx, step) in self.workflow.steps().iter().enumerate() {
-            let tool_info = self.tools.get(step.tool().name()).ok_or_else(|| {
-                crate::Error::Internal(format!(
-                    "Tool '{}' not found in registry",
-                    step.tool().name()
-                ))
-            })?;
+            if let Some(tool_handle) = step.tool() {
+                // Tool execution step
+                let tool_info = self.tools.get(tool_handle.name()).ok_or_else(|| {
+                    crate::Error::Internal(format!(
+                        "Tool '{}' not found in registry",
+                        tool_handle.name()
+                    ))
+                })?;
 
-            plan.push_str(&format!(
-                "{}. {} - {}\n",
-                idx + 1,
-                step.tool().name(),
-                tool_info.description
-            ));
+                plan.push_str(&format!(
+                    "{}. {} - {}\n",
+                    idx + 1,
+                    tool_handle.name(),
+                    tool_info.description
+                ));
+            } else {
+                // Resource-only step
+                let resource_count = step.resources().len();
+                plan.push_str(&format!(
+                    "{}. {} - Fetch {} resource{}\n",
+                    idx + 1,
+                    step.name(),
+                    resource_count,
+                    if resource_count == 1 { "" } else { "s" }
+                ));
+            }
         }
 
         Ok(PromptMessage {
@@ -402,6 +415,13 @@ impl WorkflowPromptHandler {
         args: &HashMap<String, String>,
         ctx: &ExecutionContext,
     ) -> Result<PromptMessage> {
+        let tool_handle = step.tool().ok_or_else(|| {
+            crate::Error::Internal(format!(
+                "Cannot create tool call announcement for resource-only step '{}'",
+                step.name()
+            ))
+        })?;
+
         let params = self.resolve_tool_parameters(step, args, ctx)?;
 
         Ok(PromptMessage {
@@ -409,7 +429,7 @@ impl WorkflowPromptHandler {
             content: MessageContent::Text {
                 text: format!(
                     "Calling tool '{}' with parameters:\n{}",
-                    step.tool().name(),
+                    tool_handle.name(),
                     serde_json::to_string_pretty(&params)
                         .unwrap_or_else(|_| format!("{:?}", params))
                 ),
@@ -479,11 +499,18 @@ impl WorkflowPromptHandler {
     /// Returns true if the params object contains all required fields defined in the tool's schema.
     /// This prevents attempting to execute tools with incomplete parameters.
     fn params_satisfy_tool_schema(&self, step: &WorkflowStep, params: &Value) -> Result<bool> {
+        let tool_handle = step.tool().ok_or_else(|| {
+            crate::Error::Internal(format!(
+                "Cannot check schema for resource-only step '{}'",
+                step.name()
+            ))
+        })?;
+
         // Get the tool info (includes schema)
-        let tool_info = self.tools.get(step.tool().name()).ok_or_else(|| {
+        let tool_info = self.tools.get(tool_handle.name()).ok_or_else(|| {
             crate::Error::Internal(format!(
                 "Tool '{}' not found in registry",
-                step.tool().name()
+                tool_handle.name()
             ))
         })?;
 
@@ -522,6 +549,13 @@ impl WorkflowPromptHandler {
         ctx: &ExecutionContext,
         extra: &RequestHandlerExtra,
     ) -> Result<Value> {
+        let tool_handle = step.tool().ok_or_else(|| {
+            crate::Error::Internal(format!(
+                "Cannot execute tool for resource-only step '{}'",
+                step.name()
+            ))
+        })?;
+
         // Resolve parameters using bindings and arguments
         let params = self.resolve_tool_parameters(step, args, ctx)?;
 
@@ -544,13 +578,13 @@ impl WorkflowPromptHandler {
             );
 
             return middleware_executor
-                .execute_tool_with_middleware(step.tool().name(), params, cloned_extra)
+                .execute_tool_with_middleware(tool_handle.name(), params, cloned_extra)
                 .await;
         }
 
         // Fallback: Direct tool handler execution (testing/legacy mode)
-        let handler = self.tool_handlers.get(step.tool().name()).ok_or_else(|| {
-            crate::Error::Internal(format!("Tool handler '{}' not found", step.tool().name()))
+        let handler = self.tool_handlers.get(tool_handle.name()).ok_or_else(|| {
+            crate::Error::Internal(format!("Tool handler '{}' not found", tool_handle.name()))
         })?;
 
         handler.handle(params, extra.clone()).await
@@ -729,7 +763,42 @@ impl PromptHandler for WorkflowPromptHandler {
                 }
             }
 
-            // Try to resolve parameters and announce tool call
+            // Handle resource-only steps (no tool execution)
+            if step.is_resource_only() {
+                // For resource-only steps, just fetch resources (already done above or will be done below)
+                // Add an assistant message to explain what we're doing
+                messages.push(PromptMessage {
+                    role: Role::Assistant,
+                    content: MessageContent::Text {
+                        text: format!("I'll fetch the required resources for {}...", step.name()),
+                    },
+                });
+
+                // If resources depend on step outputs, fetch them now
+                if fetch_resources_after_tool
+                    && self
+                        .fetch_step_resources(
+                            step,
+                            &args,
+                            &execution_context,
+                            &extra,
+                            &mut messages,
+                        )
+                        .await
+                        .is_err()
+                {
+                    // Resource fetch failed - stop execution
+                    return Ok(GetPromptResult {
+                        description: Some(self.workflow.description().to_string()),
+                        messages,
+                    });
+                }
+
+                // Continue to next step
+                continue;
+            }
+
+            // Tool execution step - Try to resolve parameters and announce tool call
             match self.create_tool_call_announcement(step, &args, &execution_context) {
                 Ok(announcement) => {
                     // Parameters resolved - but do they satisfy the tool's schema?

@@ -99,12 +99,8 @@ fn main() {
 
             println!("\n🔗 Workflow Steps:");
             for (i, step) in workflow.steps().iter().enumerate() {
-                println!(
-                    "  {}. {} → tool: {}",
-                    i + 1,
-                    step.name(),
-                    step.tool().name()
-                );
+                let tool_name = step.tool().map(|t| t.name()).unwrap_or("[resource-only]");
+                println!("  {}. {} → tool: {}", i + 1, step.name(), tool_name);
 
                 // Show arguments
                 for (arg_name, source) in step.arguments() {
