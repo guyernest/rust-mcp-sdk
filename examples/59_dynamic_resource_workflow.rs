@@ -129,15 +129,15 @@ async fn main() -> Result<()> {
                         )
                         .bind("user_progress"),
                 )
-                // Step 2: Dynamically fetch walkthrough based on game_id
+                // Step 2: Dynamically fetch walkthrough based on game_id using resource-only step
                 //
                 // This is the KEY feature being demonstrated:
                 // - Resource URI contains template variable: {game_id}
                 // - Template binding maps {game_id} to field from previous step
                 // - At execution time, the actual game_id is interpolated into the URI
-                // - Note: We reuse get_my_progress tool but the key is the resource URI interpolation
+                // - Using WorkflowStep::fetch_resources() - no redundant tool calls!
                 .step(
-                    WorkflowStep::new("fetch_walkthrough", ToolHandle::new("get_my_progress"))
+                    WorkflowStep::fetch_resources("fetch_walkthrough")
                         .with_resource("if://walkthrough/{game_id}")
                         .expect("Valid resource URI")
                         .with_template_binding("game_id", field("user_progress", "game_id"))

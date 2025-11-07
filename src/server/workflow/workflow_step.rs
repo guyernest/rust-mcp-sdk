@@ -12,12 +12,31 @@ use indexmap::IndexMap;
 use std::collections::HashMap;
 
 /// A single step in a workflow
+///
+/// A workflow step can either:
+/// - Execute a tool (with optional resources for context)
+/// - Fetch resources only (no tool execution)
+///
+/// # Examples
+///
+/// Tool execution step:
+/// ```ignore
+/// WorkflowStep::new("get_data", ToolHandle::new("fetch_user"))
+///     .bind("user")
+/// ```
+///
+/// Resource-only step:
+/// ```ignore
+/// WorkflowStep::fetch_resources("fetch_guide")
+///     .with_resource("docs://guide/{topic}")
+///     .with_template_binding("topic", prompt_arg("topic"))
+/// ```
 #[derive(Clone, Debug)]
 pub struct WorkflowStep {
     /// Step identifier
     name: StepName,
-    /// Tool to invoke
-    tool: ToolHandle,
+    /// Tool to invoke (None for resource-only steps)
+    tool: Option<ToolHandle>,
     /// Argument mappings (tool arg name -> data source)
     /// `IndexMap` for deterministic iteration
     arguments: IndexMap<ArgName, DataSource>,
@@ -53,7 +72,9 @@ pub struct WorkflowStep {
 }
 
 impl WorkflowStep {
-    /// Create a new workflow step
+    /// Create a new workflow step that executes a tool
+    ///
+    /// For resource-only steps (no tool execution), use [`WorkflowStep::fetch_resources`] instead.
     ///
     /// # Example
     /// ```
@@ -65,7 +86,50 @@ impl WorkflowStep {
     pub fn new(name: impl Into<StepName>, tool: ToolHandle) -> Self {
         Self {
             name: name.into(),
-            tool,
+            tool: Some(tool),
+            arguments: IndexMap::new(),
+            binding: None,
+            guidance: None,
+            resources: Vec::new(),
+            template_bindings: HashMap::new(),
+        }
+    }
+
+    /// Create a new resource-only workflow step (no tool execution)
+    ///
+    /// Resource-only steps fetch resources and embed their content in the conversation
+    /// without executing any tools. This is useful when you need to provide context
+    /// from resources based on previous step results.
+    ///
+    /// # Example
+    /// ```
+    /// use pmcp::server::workflow::{WorkflowStep, DataSource};
+    ///
+    /// let step = WorkflowStep::fetch_resources("fetch_guide")
+    ///     .with_resource("docs://guide/intro")
+    ///     .expect("Valid resource URI");
+    /// ```
+    ///
+    /// # With Dynamic Resource URIs
+    /// ```
+    /// use pmcp::server::workflow::{WorkflowStep, DataSource};
+    ///
+    /// let step = WorkflowStep::fetch_resources("fetch_walkthrough")
+    ///     .with_resource("game://walkthrough/{game_id}")
+    ///     .expect("Valid resource URI")
+    ///     .with_template_binding("game_id", DataSource::from_step_field("progress", "game_id"));
+    /// ```
+    ///
+    /// # Validation
+    ///
+    /// Resource-only steps must have at least one resource URI. Validation will fail if:
+    /// - No resources are specified
+    /// - Tool arguments are provided (use `.arg()` only with tool steps)
+    #[must_use]
+    pub fn fetch_resources(name: impl Into<StepName>) -> Self {
+        Self {
+            name: name.into(),
+            tool: None,
             arguments: IndexMap::new(),
             binding: None,
             guidance: None,
@@ -219,9 +283,14 @@ impl WorkflowStep {
         &self.name
     }
 
-    /// Get tool handle
-    pub fn tool(&self) -> &ToolHandle {
-        &self.tool
+    /// Get tool handle (None for resource-only steps)
+    pub fn tool(&self) -> Option<&ToolHandle> {
+        self.tool.as_ref()
+    }
+
+    /// Check if this is a resource-only step
+    pub fn is_resource_only(&self) -> bool {
+        self.tool.is_none()
     }
 
     /// Get arguments
@@ -251,8 +320,39 @@ impl WorkflowStep {
 
     /// Validate the step
     ///
-    /// Checks that all referenced bindings are available
+    /// Checks that:
+    /// - All referenced bindings are available
+    /// - Resource-only steps have at least one resource
+    /// - Resource-only steps don't have tool arguments
     pub fn validate(&self, available_bindings: &[BindingName]) -> Result<(), WorkflowError> {
+        // Validate resource-only steps
+        if self.is_resource_only() {
+            // Must have at least one resource
+            if self.resources.is_empty() {
+                return Err(WorkflowError::InvalidMapping {
+                    step: self.name.to_string(),
+                    reason: "Resource-only steps must have at least one resource. Use .with_resource() to add resources.".to_string(),
+                });
+            }
+
+            // Resource-only steps cannot have tool arguments
+            if !self.arguments.is_empty() {
+                return Err(WorkflowError::InvalidMapping {
+                    step: self.name.to_string(),
+                    reason: "Resource-only steps cannot have tool arguments. Remove .arg() calls or use WorkflowStep::new() instead.".to_string(),
+                });
+            }
+
+            // Resource-only steps cannot have bindings (no tool output to bind)
+            if self.binding.is_some() {
+                return Err(WorkflowError::InvalidMapping {
+                    step: self.name.to_string(),
+                    reason: "Resource-only steps cannot have output bindings. Remove .bind() call."
+                        .to_string(),
+                });
+            }
+        }
+
         // Check that all step output references exist in arguments
         for (_arg_name, source) in &self.arguments {
             if let DataSource::StepOutput { step, .. } = source {
@@ -294,9 +394,10 @@ mod tests {
     fn test_workflow_step_creation() {
         let step = WorkflowStep::new("step1", ToolHandle::new("greet"));
         assert_eq!(step.name().as_str(), "step1");
-        assert_eq!(step.tool().name(), "greet");
+        assert_eq!(step.tool().unwrap().name(), "greet");
         assert!(step.arguments().is_empty());
         assert!(step.binding().is_none());
+        assert!(!step.is_resource_only());
     }
 
     #[test]
@@ -513,5 +614,124 @@ mod tests {
         assert_eq!(step.template_bindings().len(), 1);
         assert!(step.guidance().is_some());
         assert!(step.binding().is_some());
+    }
+
+    // Tests for resource-only steps
+
+    #[test]
+    fn test_resource_only_step_creation() {
+        let step = WorkflowStep::fetch_resources("fetch_guide")
+            .with_resource("docs://guide/intro")
+            .expect("Valid resource URI");
+
+        assert_eq!(step.name().as_str(), "fetch_guide");
+        assert!(step.tool().is_none());
+        assert!(step.is_resource_only());
+        assert_eq!(step.resources().len(), 1);
+        assert!(step.arguments().is_empty());
+        assert!(step.binding().is_none());
+    }
+
+    #[test]
+    fn test_resource_only_step_with_template_bindings() {
+        let step = WorkflowStep::fetch_resources("fetch_walkthrough")
+            .with_resource("game://walkthrough/{game_id}")
+            .expect("Valid resource URI")
+            .with_template_binding(
+                "game_id",
+                DataSource::from_step_field("progress", "game_id"),
+            );
+
+        assert!(step.is_resource_only());
+        assert_eq!(step.template_bindings().len(), 1);
+        assert!(step.template_bindings().contains_key("game_id"));
+
+        // Validation should pass when binding is available
+        let available = vec![BindingName::new("progress")];
+        assert!(step.validate(&available).is_ok());
+    }
+
+    #[test]
+    fn test_resource_only_step_with_multiple_resources() {
+        let step = WorkflowStep::fetch_resources("fetch_docs")
+            .with_resource("docs://guide/intro")
+            .expect("Valid resource URI")
+            .with_resource("docs://guide/advanced")
+            .expect("Valid resource URI");
+
+        assert!(step.is_resource_only());
+        assert_eq!(step.resources().len(), 2);
+    }
+
+    #[test]
+    fn test_resource_only_step_validation_requires_resource() {
+        let step = WorkflowStep::fetch_resources("fetch_nothing");
+
+        let result = step.validate(&[]);
+        assert!(result.is_err());
+        match result {
+            Err(WorkflowError::InvalidMapping { step: s, reason }) => {
+                assert_eq!(s, "fetch_nothing");
+                assert!(reason.contains("at least one resource"));
+            },
+            _ => panic!("Expected InvalidMapping error"),
+        }
+    }
+
+    #[test]
+    fn test_resource_only_step_validation_rejects_tool_arguments() {
+        let step = WorkflowStep::fetch_resources("bad_step")
+            .with_resource("docs://guide")
+            .expect("Valid resource URI")
+            .arg("invalid", DataSource::prompt_arg("arg"));
+
+        let result = step.validate(&[]);
+        assert!(result.is_err());
+        match result {
+            Err(WorkflowError::InvalidMapping { step: s, reason }) => {
+                assert_eq!(s, "bad_step");
+                assert!(reason.contains("cannot have tool arguments"));
+            },
+            _ => panic!("Expected InvalidMapping error"),
+        }
+    }
+
+    #[test]
+    fn test_resource_only_step_validation_rejects_binding() {
+        let step = WorkflowStep::fetch_resources("bad_step")
+            .with_resource("docs://guide")
+            .expect("Valid resource URI")
+            .bind("output");
+
+        let result = step.validate(&[]);
+        assert!(result.is_err());
+        match result {
+            Err(WorkflowError::InvalidMapping { step: s, reason }) => {
+                assert_eq!(s, "bad_step");
+                assert!(reason.contains("cannot have output bindings"));
+            },
+            _ => panic!("Expected InvalidMapping error"),
+        }
+    }
+
+    #[test]
+    fn test_resource_only_step_with_guidance() {
+        let step = WorkflowStep::fetch_resources("fetch_guide")
+            .with_resource("docs://guide/intro")
+            .expect("Valid resource URI")
+            .with_guidance("I'll fetch the introductory guide for you...");
+
+        assert!(step.is_resource_only());
+        assert!(step.guidance().is_some());
+        assert_eq!(
+            step.guidance().unwrap(),
+            "I'll fetch the introductory guide for you..."
+        );
+    }
+
+    #[test]
+    fn test_workflow_step_is_send_sync_with_optional_tool() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<WorkflowStep>();
     }
 }
