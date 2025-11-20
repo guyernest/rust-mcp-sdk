@@ -1,0 +1,274 @@
+{
+  "name": "mcp-developer",
+  "version": "1.1.0",
+  "displayName": "MCP Developer Power",
+  "description": "Build production-grade Model Context Protocol (MCP) servers with deep AI assistance using pmcp SDK and cargo-pmcp toolkit",
+  "author": "PMCP Team",
+  "homepage": "https://github.com/paiml/rust-mcp-sdk",
+  "repository": "https://github.com/paiml/rust-mcp-sdk",
+  "license": "MIT",
+  "icon": "mcp-logo.png",
+
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "rust",
+    "pmcp",
+    "code-generation",
+    "scaffolding",
+    "ai-development",
+    "developer-tools",
+    "testing",
+    "quality"
+  ],
+
+  "categories": [
+    "Developer Tools",
+    "Code Generation",
+    "Testing",
+    "Education"
+  ],
+
+  "capabilities": {
+    "steering": {
+      "enabled": true,
+      "path": "steering/",
+      "files": {
+        "always": [
+          "mcp-product.md",
+          "mcp-tech.md",
+          "mcp-structure.md",
+          "mcp-workflow.md"
+        ],
+        "conditional": [
+          {
+            "file": "mcp-tool-patterns.md",
+            "pattern": "**/tools/**/*.rs",
+            "description": "Tool implementation patterns"
+          },
+          {
+            "file": "mcp-resource-patterns.md",
+            "pattern": "**/resources/**/*.rs",
+            "description": "Resource implementation patterns",
+            "status": "planned"
+          },
+          {
+            "file": "mcp-workflow-patterns.md",
+            "pattern": "**/workflows/**/*.rs",
+            "description": "Workflow orchestration patterns",
+            "status": "planned"
+          },
+          {
+            "file": "mcp-prompt-patterns.md",
+            "pattern": "**/prompts/**/*.rs",
+            "description": "Prompt template patterns",
+            "status": "planned"
+          }
+        ],
+        "manual": [
+          {
+            "file": "mcp-testing.md",
+            "trigger": "#mcp-testing",
+            "description": "Comprehensive testing strategies (unit, integration, property, fuzz)",
+            "status": "released"
+          },
+          {
+            "file": "mcp-observability.md",
+            "trigger": "#mcp-observability",
+            "description": "Logging, metrics, and monitoring for production",
+            "status": "released"
+          },
+          {
+            "file": "mcp-examples.md",
+            "trigger": "#mcp-examples",
+            "description": "Complete working examples",
+            "status": "planned"
+          },
+          {
+            "file": "mcp-troubleshooting.md",
+            "trigger": "#mcp-troubleshooting",
+            "description": "Common issues and solutions",
+            "status": "planned"
+          }
+        ]
+      }
+    },
+    "hooks": {
+      "enabled": false,
+      "path": "hooks/",
+      "note": "Future enhancement - pre-save formatting, pre-commit quality gates",
+      "status": "planned"
+    },
+    "mcpServers": {
+      "enabled": false,
+      "path": "mcp-servers/",
+      "note": "Future enhancement - cargo-pmcp as MCP server for programmatic access",
+      "status": "planned"
+    }
+  },
+
+  "requirements": {
+    "rust": ">=1.70.0",
+    "cargo": "*",
+    "cargo-pmcp": ">=0.1.0"
+  },
+
+  "installation": {
+    "type": "manual",
+    "steps": [
+      "Clone or download the mcp-developer-power directory",
+      "Copy to ~/.kiro/powers/mcp-developer or symlink for development",
+      "Enable in Kiro settings under Powers",
+      "Install prerequisites: Rust 1.70+, cargo-pmcp",
+      "Verify by asking Kiro: 'How do I build an MCP server?'"
+    ],
+    "note": "Automatic installation via Kiro marketplace coming soon"
+  },
+
+  "documentation": {
+    "readme": "README.md",
+    "design": "docs/DESIGN.md",
+    "quickstart": "docs/QUICKSTART.md",
+    "testing": "docs/TESTING.md",
+    "patterns": "docs/PATTERNS.md"
+  },
+
+  "content": {
+    "steering_files": 7,
+    "steering_lines": 10876,
+    "documentation": 2,
+    "examples": 0,
+    "hooks": 0,
+    "mcp_servers": 0
+  },
+
+  "quality": {
+    "principles": "Toyota Way (Jidoka, Kaizen, Genchi Genbutsu)",
+    "standards": {
+      "complexity": "<=25 per function",
+      "technical_debt": "0 SATD comments",
+      "test_coverage": ">=80%",
+      "clippy_warnings": "0",
+      "formatting": "100% cargo fmt compliant"
+    },
+    "source": "Patterns extracted from 6 production servers"
+  },
+
+  "roadmap": {
+    "v1.0.0": {
+      "status": "released",
+      "date": "2025-11-13",
+      "features": [
+        "Foundation steering files (product, tech, structure)",
+        "Tool patterns steering file",
+        "Design documentation",
+        "cargo-pmcp integration"
+      ]
+    },
+    "v1.1.0": {
+      "status": "released",
+      "date": "2025-11-20",
+      "features": [
+        "Testing steering file (mcp-testing.md, 3,389 lines)",
+        "Observability steering file (mcp-observability.md, 3,000 lines)",
+        "Updated Claude Code subagent with testing and observability",
+        "Enhanced AI agent ecosystem vision in README",
+        "pmcp-book chapter on AI-assisted development"
+      ]
+    },
+    "v1.2.0": {
+      "status": "planned",
+      "features": [
+        "Resource patterns",
+        "Workflow patterns",
+        "Prompt patterns",
+        "Examples library",
+        "Troubleshooting guide",
+        "Quick start documentation"
+      ]
+    },
+    "v1.3.0": {
+      "status": "planned",
+      "features": [
+        "Quality enforcement via cargo-pmcp",
+        "Pre-commit quality gates in cargo-pmcp",
+        "Post-generate test scenarios",
+        "Continuous validation"
+      ]
+    },
+    "v2.0.0": {
+      "status": "planned",
+      "features": [
+        "cargo-pmcp as MCP server",
+        "Programmatic scaffolding tools",
+        "Quality validation tools",
+        "Template access resources"
+      ]
+    }
+  },
+
+  "metrics": {
+    "phase1_goals": {
+      "response_time": "<30 seconds for 'How do I build an MCP server?'",
+      "pattern_accuracy": ">90%",
+      "scenario_coverage": ">90%",
+      "autonomy": "Build simple server without human intervention"
+    },
+    "future_goals": {
+      "scaffolding_time": "<2 minutes for complete workspace",
+      "quality_pass_rate": "100% for generated code",
+      "test_coverage": ">80% from generation",
+      "human_intervention": "0% for standard patterns"
+    }
+  },
+
+  "support": {
+    "documentation": [
+      "https://modelcontextprotocol.io",
+      "https://docs.rs/pmcp",
+      "https://github.com/paiml/rust-mcp-sdk/tree/main/cargo-pmcp",
+      "https://github.com/paiml/rust-mcp-sdk/tree/main/pmcp-book"
+    ],
+    "community": [
+      "https://github.com/paiml/rust-mcp-sdk/issues",
+      "https://github.com/paiml/rust-mcp-sdk/discussions"
+    ]
+  },
+
+  "changelog": [
+    {
+      "version": "1.1.0",
+      "date": "2025-11-20",
+      "changes": [
+        "Added mcp-testing.md (3,389 lines) - Comprehensive testing guide",
+        "Added mcp-observability.md (3,000 lines) - Production logging and metrics",
+        "Updated Claude Code subagent with testing and observability sections",
+        "Enhanced ai-agents/README.md with ecosystem vision and multi-agent support",
+        "Created docs/ai-assisted-development.md - pmcp-book chapter",
+        "Total content: 10,876 lines across 7 steering files"
+      ]
+    },
+    {
+      "version": "1.0.1",
+      "date": "2025-11-13",
+      "changes": [
+        "Added mcp-workflow.md (757 lines) - CRITICAL workflow guide",
+        "Explicitly teaches cargo-pmcp commands (NEVER manual file creation)",
+        "Complete decision trees and workflow examples",
+        "Interactive testing integration with Kiro",
+        "Updated mcp-product.md to reference workflow guide"
+      ]
+    },
+    {
+      "version": "1.0.0",
+      "date": "2025-11-13",
+      "changes": [
+        "Initial release",
+        "Foundation steering files (3,730 lines)",
+        "Tool patterns with 5 complete examples",
+        "Comprehensive design document",
+        "cargo-pmcp integration guide"
+      ]
+    }
+  ]
+}

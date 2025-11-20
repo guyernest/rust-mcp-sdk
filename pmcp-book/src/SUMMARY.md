@@ -59,6 +59,7 @@
 - [Chapter 24: Protocol Extensions](ch24-extensions.md)
 - [Chapter 25: Performance Analysis](ch25-analysis.md)
 - [Chapter 26: Contributing to PMCP](ch26-contributing.md)
+- [Chapter 27: AI-Assisted Development](ch27-ai-assisted-development.md)
 
 ## Appendices
 
