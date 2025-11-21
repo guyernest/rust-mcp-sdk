@@ -9,6 +9,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Override .cargo/config.toml target-cpu=native to avoid SIGILL on CI runners
+  RUSTFLAGS: ""
 
 jobs:
   test:
@@ -169,7 +171,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
+
+    - name: Free Disk Space
+      uses: jlumbroso/free-disk-space@main
+      with:
+        # Remove large packages we don't need
+        tool-cache: false
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: true
+        docker-images: true
+        swap-storage: true
+
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
@@ -183,9 +197,8 @@ jobs:
           ~/.cargo/registry/index/
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
-          target/
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-    
+        key: ${{ runner.os }}-cargo-quality-${{ hashFiles('**/Cargo.lock') }}
+
     - name: Install quality tools
       run: |
         if ! command -v cargo-llvm-cov &> /dev/null; then
@@ -197,9 +210,15 @@ jobs:
         if ! command -v cargo-audit &> /dev/null; then
           cargo install cargo-audit
         fi
-    
+
+    - name: Check disk space before quality gate
+      run: df -h
+
     - name: Run quality gate
       run: make quality-gate
+
+    - name: Check disk space after quality gate
+      run: df -h
 
   benchmarks:
     name: Benchmarks
