@@ -7,6 +7,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod commands;
+mod deployment;
 mod templates;
 mod utils;
 
@@ -99,6 +100,11 @@ enum Commands {
         #[arg(long, default_value = "http://0.0.0.0:3000")]
         url: String,
     },
+
+    /// Deploy MCP server to cloud platforms
+    ///
+    /// Deploy to AWS Lambda, Azure Container Apps, Google Cloud Run, etc.
+    Deploy(commands::deploy::DeployCommand),
 }
 
 #[derive(Subcommand)]
@@ -205,6 +211,9 @@ fn execute_command(command: Commands) -> Result<()> {
             url,
         } => {
             commands::connect::execute(server, client, url)?;
+        },
+        Commands::Deploy(deploy_cmd) => {
+            deploy_cmd.execute()?;
         },
     }
     Ok(())
