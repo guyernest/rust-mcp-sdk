@@ -1,5 +1,5 @@
-mod init;
 mod deploy;
+mod init;
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
@@ -159,8 +159,7 @@ impl DeploymentTarget for AwsLambdaTarget {
             // Remove deployment config
             let config_file = config.project_root.join(".pmcp/deploy.toml");
             if config_file.exists() {
-                std::fs::remove_file(&config_file)
-                    .context("Failed to remove .pmcp/deploy.toml")?;
+                std::fs::remove_file(&config_file).context("Failed to remove .pmcp/deploy.toml")?;
                 println!("   ✓ Removed .pmcp/deploy.toml");
             }
 
@@ -173,11 +172,7 @@ impl DeploymentTarget for AwsLambdaTarget {
 
     async fn outputs(&self, config: &DeployConfig) -> Result<DeploymentOutputs> {
         let stack_name = format!("{}-stack", config.server.name);
-        crate::deployment::load_cdk_outputs(
-            &config.project_root,
-            &config.aws.region,
-            &stack_name,
-        )
+        crate::deployment::load_cdk_outputs(&config.project_root, &config.aws.region, &stack_name)
     }
 
     async fn logs(&self, _config: &DeployConfig, _tail: bool, _lines: usize) -> Result<()> {

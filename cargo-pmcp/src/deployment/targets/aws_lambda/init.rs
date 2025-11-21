@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::deployment::DeployConfig;
+use anyhow::Result;
 
 /// Initialize AWS Lambda deployment (calls the original InitCommand)
 pub async fn init_aws_lambda(config: &DeployConfig) -> Result<()> {

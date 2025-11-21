@@ -24,7 +24,11 @@ struct CdkStackOutputs {
 }
 
 /// Load CDK deployment outputs and convert to standard format
-pub fn load_cdk_outputs(project_root: &Path, region: &str, stack_name: &str) -> Result<DeploymentOutputs> {
+pub fn load_cdk_outputs(
+    project_root: &Path,
+    region: &str,
+    stack_name: &str,
+) -> Result<DeploymentOutputs> {
     let outputs_path = project_root.join("deploy/outputs.json");
 
     if !outputs_path.exists() {
@@ -51,7 +55,10 @@ pub fn load_cdk_outputs(project_root: &Path, region: &str, stack_name: &str) -> 
     let mut custom = std::collections::HashMap::new();
 
     if let Some(oauth_url) = &cdk_outputs.oauth_discovery_url {
-        custom.insert("oauth_discovery_url".to_string(), serde_json::json!(oauth_url));
+        custom.insert(
+            "oauth_discovery_url".to_string(),
+            serde_json::json!(oauth_url),
+        );
     }
     if let Some(client_id) = &cdk_outputs.client_id {
         custom.insert("client_id".to_string(), serde_json::json!(client_id));

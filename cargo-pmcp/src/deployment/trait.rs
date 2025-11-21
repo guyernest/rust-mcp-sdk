@@ -13,7 +13,10 @@ pub enum BuildArtifact {
     /// WebAssembly module
     Wasm { path: PathBuf, size: u64 },
     /// Custom artifact type
-    Custom { path: PathBuf, artifact_type: String },
+    Custom {
+        path: PathBuf,
+        artifact_type: String,
+    },
 }
 
 /// Deployment outputs from a successful deployment

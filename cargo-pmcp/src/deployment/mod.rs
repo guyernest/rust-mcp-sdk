@@ -1,9 +1,9 @@
 pub mod builder;
 pub mod config;
 pub mod outputs;
-pub mod r#trait;
 pub mod registry;
 pub mod targets;
+pub mod r#trait;
 
 pub use builder::BinaryBuilder;
 pub use config::DeployConfig;
