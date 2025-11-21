@@ -2,100 +2,73 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+use super::DeploymentOutputs;
+
+/// CDK Stack outputs format (from deploy/outputs.json)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeploymentOutputs {
+struct CdkStackOutputs {
     #[serde(rename = "ApiUrl")]
     pub api_url: String,
 
-    #[serde(rename = "OAuthDiscoveryUrl")]
-    pub oauth_discovery_url: String,
+    #[serde(rename = "OAuthDiscoveryUrl", skip_serializing_if = "Option::is_none")]
+    pub oauth_discovery_url: Option<String>,
 
-    #[serde(rename = "ClientId")]
-    pub client_id: String,
+    #[serde(rename = "ClientId", skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
 
-    #[serde(rename = "DashboardUrl")]
-    pub dashboard_url: String,
+    #[serde(rename = "DashboardUrl", skip_serializing_if = "Option::is_none")]
+    pub dashboard_url: Option<String>,
 
-    #[serde(rename = "UserPoolId")]
-    pub user_pool_id: String,
+    #[serde(rename = "UserPoolId", skip_serializing_if = "Option::is_none")]
+    pub user_pool_id: Option<String>,
 }
 
-impl DeploymentOutputs {
-    pub fn load(project_root: &Path) -> Result<Self> {
-        let outputs_path = project_root.join("deploy/outputs.json");
+/// Load CDK deployment outputs and convert to standard format
+pub fn load_cdk_outputs(project_root: &Path, region: &str, stack_name: &str) -> Result<DeploymentOutputs> {
+    let outputs_path = project_root.join("deploy/outputs.json");
 
-        if !outputs_path.exists() {
-            anyhow::bail!("No deployment found. Run: cargo pmcp deploy");
-        }
-
-        let outputs_str =
-            std::fs::read_to_string(&outputs_path).context("Failed to read deploy/outputs.json")?;
-
-        let outputs_json: serde_json::Value =
-            serde_json::from_str(&outputs_str).context("Failed to parse deploy/outputs.json")?;
-
-        // CDK outputs are nested under stack name
-        // Find the first (and only) stack
-        let stack_outputs = outputs_json
-            .as_object()
-            .and_then(|obj| obj.values().next())
-            .ok_or_else(|| anyhow::anyhow!("No stack outputs found"))?;
-
-        serde_json::from_value(stack_outputs.clone()).context("Failed to parse stack outputs")
+    if !outputs_path.exists() {
+        anyhow::bail!("No deployment found. Run: cargo pmcp deploy");
     }
 
-    pub fn display(&self) {
-        println!("╔════════════════════════════════════════════════════════════╗");
-        println!("║ 🎉 MCP Server Deployed Successfully!                       ║");
-        println!("╠════════════════════════════════════════════════════════════╣");
-        println!("║                                                            ║");
-        println!("║ 🌐 API URL:                                                ║");
-        println!(
-            "║ {}                              ║",
-            truncate(&self.api_url, 56)
-        );
-        println!("║                                                            ║");
-        println!("║ 🔐 OAuth:                                                  ║");
-        println!(
-            "║ Discovery: {}  ║",
-            truncate(&self.oauth_discovery_url, 44)
-        );
-        println!(
-            "║ Client ID: {}                                     ║",
-            truncate(&self.client_id, 44)
-        );
-        println!("║                                                            ║");
-        println!("║ 📊 Dashboard:                                              ║");
-        println!("║ {}  ║", truncate(&self.dashboard_url, 56));
-        println!("║                                                            ║");
-        println!("╚════════════════════════════════════════════════════════════╝");
-        println!();
-        println!("💡 Connect from Claude Desktop:");
-        println!("Add to ~/.config/Claude/claude_desktop_config.json:");
-        println!();
-        println!("{{");
-        println!("  \"mcpServers\": {{");
-        println!("    \"my-server\": {{");
-        println!("      \"url\": \"{}\",", self.api_url);
-        println!("      \"transport\": \"streamable-http\",");
-        println!("      \"auth\": {{");
-        println!("        \"type\": \"oauth\",");
-        println!(
-            "        \"discovery_url\": \"{}\",",
-            self.oauth_discovery_url
-        );
-        println!("        \"client_id\": \"{}\"", self.client_id);
-        println!("      }}");
-        println!("    }}");
-        println!("  }}");
-        println!("}}");
-    }
-}
+    let outputs_str =
+        std::fs::read_to_string(&outputs_path).context("Failed to read deploy/outputs.json")?;
 
-fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len - 3])
+    let outputs_json: serde_json::Value =
+        serde_json::from_str(&outputs_str).context("Failed to parse deploy/outputs.json")?;
+
+    // CDK outputs are nested under stack name
+    // Find the first (and only) stack
+    let stack_outputs = outputs_json
+        .as_object()
+        .and_then(|obj| obj.values().next())
+        .ok_or_else(|| anyhow::anyhow!("No stack outputs found"))?;
+
+    let cdk_outputs: CdkStackOutputs =
+        serde_json::from_value(stack_outputs.clone()).context("Failed to parse stack outputs")?;
+
+    // Convert to standard DeploymentOutputs
+    let mut custom = std::collections::HashMap::new();
+
+    if let Some(oauth_url) = &cdk_outputs.oauth_discovery_url {
+        custom.insert("oauth_discovery_url".to_string(), serde_json::json!(oauth_url));
     }
+    if let Some(client_id) = &cdk_outputs.client_id {
+        custom.insert("client_id".to_string(), serde_json::json!(client_id));
+    }
+    if let Some(dashboard) = &cdk_outputs.dashboard_url {
+        custom.insert("dashboard_url".to_string(), serde_json::json!(dashboard));
+    }
+    if let Some(pool_id) = &cdk_outputs.user_pool_id {
+        custom.insert("user_pool_id".to_string(), serde_json::json!(pool_id));
+    }
+
+    Ok(DeploymentOutputs {
+        url: Some(cdk_outputs.api_url),
+        regions: vec![region.to_string()],
+        stack_name: Some(stack_name.to_string()),
+        version: None,
+        additional_urls: vec![],
+        custom,
+    })
 }

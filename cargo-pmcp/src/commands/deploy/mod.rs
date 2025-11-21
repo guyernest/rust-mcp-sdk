@@ -2,8 +2,8 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
 
-mod deploy;
-mod init;
+pub mod deploy;
+pub mod init;
 mod logs;
 mod metrics;
 mod secrets;
@@ -332,7 +332,9 @@ impl DeployCommand {
     }
 
     fn show_outputs(&self, project_root: &PathBuf, format: &str) -> Result<()> {
-        let outputs = crate::deployment::outputs::DeploymentOutputs::load(project_root)?;
+        let config = crate::deployment::config::DeployConfig::load(project_root)?;
+        let stack_name = format!("{}-stack", config.server.name);
+        let outputs = crate::deployment::load_cdk_outputs(project_root, &config.aws.region, &stack_name)?;
 
         match format {
             "json" => {

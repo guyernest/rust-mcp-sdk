@@ -15,6 +15,10 @@ pub struct DeployConfig {
     pub observability: ObservabilityConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_gateway: Option<ApiGatewayConfig>,
+
+    /// Project root directory (not serialized)
+    #[serde(skip)]
+    pub project_root: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,7 +88,13 @@ impl DeployConfig {
         let config_str =
             std::fs::read_to_string(&config_path).context("Failed to read .pmcp/deploy.toml")?;
 
-        toml::from_str(&config_str).context("Failed to parse .pmcp/deploy.toml")
+        let mut config: Self =
+            toml::from_str(&config_str).context("Failed to parse .pmcp/deploy.toml")?;
+
+        // Set the project root
+        config.project_root = project_root.to_path_buf();
+
+        Ok(config)
     }
 
     pub fn save(&self, project_root: &Path) -> Result<()> {
@@ -99,7 +109,7 @@ impl DeployConfig {
         Ok(())
     }
 
-    pub fn default_for_server(server_name: String, region: String) -> Self {
+    pub fn default_for_server(server_name: String, region: String, project_root: PathBuf) -> Self {
         let mut environment = HashMap::new();
         environment.insert("RUST_LOG".to_string(), "info".to_string());
 
@@ -136,6 +146,7 @@ impl DeployConfig {
                 }),
             },
             api_gateway: None,
+            project_root,
         }
     }
 }

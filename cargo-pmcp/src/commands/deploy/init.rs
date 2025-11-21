@@ -142,6 +142,7 @@ impl InitCommand {
         let config = crate::deployment::config::DeployConfig::default_for_server(
             server_name.to_string(),
             self.region.clone(),
+            self.project_root.clone(),
         );
 
         config.save(&self.project_root)?;
