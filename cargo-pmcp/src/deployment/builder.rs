@@ -19,11 +19,11 @@ impl BinaryBuilder {
     pub fn build(&self) -> Result<BuildResult> {
         println!("🔨 Building Rust binary for AWS Lambda...");
 
-        // 1. Ensure musl target is installed
-        self.ensure_musl_target()?;
+        // 1. Check for cargo-lambda
+        self.ensure_cargo_lambda()?;
 
-        // 2. Build release binary with musl target
-        self.build_musl_binary()?;
+        // 2. Build release binary with cargo-lambda
+        self.build_lambda_binary()?;
 
         // 3. Copy to deploy/.build/bootstrap
         let binary_path = self.copy_to_bootstrap()?;
@@ -43,61 +43,63 @@ impl BinaryBuilder {
         })
     }
 
-    fn ensure_musl_target(&self) -> Result<()> {
-        print!("   Checking musl target...");
+    fn ensure_cargo_lambda(&self) -> Result<()> {
+        print!("   Checking cargo-lambda...");
         std::io::Write::flush(&mut std::io::stdout())?;
 
-        let output = Command::new("rustup")
-            .args(&["target", "list", "--installed"])
-            .output()
-            .context("Failed to run rustup")?;
+        let output = Command::new("cargo")
+            .args(&["lambda", "--version"])
+            .output();
 
-        let installed = String::from_utf8_lossy(&output.stdout);
-
-        if !installed.contains("x86_64-unknown-linux-musl") {
-            print!(" installing...");
-            std::io::Write::flush(&mut std::io::stdout())?;
-
-            let status = Command::new("rustup")
-                .args(&["target", "add", "x86_64-unknown-linux-musl"])
-                .status()
-                .context("Failed to add musl target")?;
-
-            if !status.success() {
+        match output {
+            Ok(output) if output.status.success() => {
+                println!(" ✅");
+                Ok(())
+            },
+            _ => {
                 println!(" ❌");
-                bail!("Failed to install musl target");
-            }
+                println!();
+                println!("cargo-lambda is required for building Lambda binaries.");
+                println!("Install with:");
+                println!("  cargo install cargo-lambda");
+                println!();
+                bail!("cargo-lambda not installed");
+            },
         }
-
-        println!(" ✅");
-        Ok(())
     }
 
-    fn build_musl_binary(&self) -> Result<()> {
-        print!("   Building release binary...");
+    fn build_lambda_binary(&self) -> Result<()> {
+        print!("   Building Lambda binary (this may take a few minutes)...");
         std::io::Write::flush(&mut std::io::stdout())?;
 
         // Load config to get server name
         let config = crate::deployment::config::DeployConfig::load(&self.project_root)?;
         let server_binary = format!("{}-server", config.server.name);
+        let lambda_package = format!("{}-lambda", config.server.name);
 
+        // Use cargo lambda build - it handles all cross-compilation
+        // ARM64 is cheaper and faster on Lambda than x86_64
         let status = Command::new("cargo")
             .args(&[
+                "lambda",
                 "build",
                 "--release",
-                "--target",
-                "x86_64-unknown-linux-musl",
+                "--package",
+                &lambda_package,
                 "--bin",
                 &server_binary,
+                "--output-format",
+                "binary",
+                "--target",
+                "aarch64-unknown-linux-gnu",
             ])
             .current_dir(&self.project_root)
-            .stdout(std::process::Stdio::null())
             .status()
-            .context("Failed to run cargo build")?;
+            .context("Failed to run cargo lambda build")?;
 
         if !status.success() {
             println!(" ❌");
-            bail!("Failed to build binary");
+            bail!("Failed to build Lambda binary");
         }
 
         println!(" ✅");
@@ -108,21 +110,20 @@ impl BinaryBuilder {
         print!("   Copying to Lambda bootstrap...");
         std::io::Write::flush(&mut std::io::stdout())?;
 
-        // Get package name from Cargo.toml
+        // Get package name from config
         let package_name = self.get_package_name()?;
 
-        // Source binary path
-        let src = self.project_root.join(format!(
-            "target/x86_64-unknown-linux-musl/release/{}",
-            package_name
-        ));
+        // cargo-lambda outputs to target/lambda/{binary-name}/bootstrap
+        let src = self
+            .project_root
+            .join(format!("target/lambda/{}/bootstrap", package_name));
 
         if !src.exists() {
             println!(" ❌");
             bail!("Binary not found at: {}", src.display());
         }
 
-        // Destination path
+        // Destination path for CDK
         let deploy_build_dir = self.project_root.join("deploy/.build");
         std::fs::create_dir_all(&deploy_build_dir)
             .context("Failed to create deploy/.build directory")?;

@@ -31,6 +31,16 @@
 - mcp-tester integration
 - Rollback functionality
 
+## Prerequisites
+
+Before deploying, install cargo-lambda:
+
+```bash
+cargo install cargo-lambda
+```
+
+cargo-lambda handles cross-compilation for AWS Lambda (ARM64).
+
 ## Quick Start
 
 ```bash
@@ -104,13 +114,16 @@ cargo-pmcp/src/
 ## Testing the MVP
 
 ```bash
+# Install prerequisites
+cargo install cargo-lambda
+
 # Build cargo-pmcp
 cd cargo-pmcp
 cargo build --release
 
 # Create a test MCP server
 cd ..
-cargo pmcp new workspace test-deploy
+cargo pmcp new test-deploy
 cd test-deploy
 cargo pmcp add server hello --template minimal
 
@@ -120,7 +133,7 @@ cargo pmcp deploy init --region us-east-1
 # Review configuration
 cat .pmcp/deploy.toml
 
-# Deploy (requires AWS credentials)
+# Deploy (requires AWS credentials and CDK bootstrap)
 cargo pmcp deploy
 
 # Test the API endpoint
@@ -164,10 +177,11 @@ cargo pmcp deploy destroy
 - Easier to extend for complex patterns
 - Active AWS investment
 
-### Why musl over glibc?
-- Static linking (no runtime dependencies)
-- Smaller binary size
-- Compatible with AWS Lambda AL2023
+### Why cargo-lambda?
+- Handles cross-compilation automatically (macOS → Linux ARM64)
+- No need for musl toolchain or Docker
+- Optimized for AWS Lambda deployment
+- Used by production Rust Lambda projects
 
 ### Why Single Config File?
 - Simplicity for MVP

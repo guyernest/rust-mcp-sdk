@@ -165,6 +165,9 @@ impl InitCommand {
         self.create_stack_ts(&deploy_dir, server_name)?;
         self.create_constructs(&deploy_dir)?;
 
+        // Create Lambda wrapper binary
+        self.create_lambda_wrapper(server_name)?;
+
         println!(" ✅");
         Ok(())
     }
@@ -320,12 +323,13 @@ export class McpServerStack extends cdk.Stack {{
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {{
     super(scope, id, props);
 
-    // Lambda function
+    // Lambda function (ARM64 for better price/performance)
     const mcpFunction = new lambda.Function(this, 'McpFunction', {{
       functionName: '{}',
       runtime: lambda.Runtime.PROVIDED_AL2023,
       handler: 'bootstrap',
       code: lambda.Code.fromAsset('.build'),
+      architecture: lambda.Architecture.ARM_64,
       memorySize: 512,
       timeout: cdk.Duration.seconds(30),
       environment: {{
@@ -381,10 +385,8 @@ export class McpServerStack extends cdk.Stack {{
     new cdk.CfnOutput(this, 'ApiUrl', {{
       value: httpApi.apiEndpoint || '',
       description: 'MCP Server API URL',
-      exportName: `${{}}-api-url`,
     }});
 
-    // Temporary outputs (will add real OAuth in next phase)
     new cdk.CfnOutput(this, 'OAuthDiscoveryUrl', {{
       value: 'https://oauth-coming-soon',
       description: 'OAuth Discovery URL (coming in next phase)',
@@ -421,6 +423,286 @@ export class McpServerStack extends cdk.Stack {{
 
         // Placeholder files for future constructs
         std::fs::write(constructs_dir.join(".gitkeep"), "")?;
+
+        Ok(())
+    }
+
+    fn create_lambda_wrapper(&self, server_name: &str) -> Result<()> {
+        // Create a Lambda-specific binary wrapper
+        let lambda_server_dir = self.project_root.join(format!("{}-lambda", server_name));
+        std::fs::create_dir_all(lambda_server_dir.join("src"))?;
+
+        // Read workspace Cargo.toml to get pmcp dependency
+        let workspace_cargo = self.project_root.join("Cargo.toml");
+        let workspace_toml_str = std::fs::read_to_string(&workspace_cargo)?;
+        let workspace_toml: toml::Value = toml::from_str(&workspace_toml_str)?;
+
+        // Extract pmcp dependency from workspace.dependencies
+        let pmcp_dep = workspace_toml
+            .get("workspace")
+            .and_then(|w| w.get("dependencies"))
+            .and_then(|d| d.get("pmcp"))
+            .ok_or_else(|| anyhow::anyhow!("pmcp dependency not found in workspace"))?;
+
+        // Convert to TOML string
+        let pmcp_dep_str = toml::to_string(&pmcp_dep)?.trim().to_string();
+
+        // Create Cargo.toml for Lambda wrapper
+        let cargo_toml = format!(
+            r#"[package]
+name = "{}-lambda"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "{}-server"
+path = "src/main.rs"
+
+[dependencies]
+mcp-{}-core = {{ path = "../crates/mcp-{}-core" }}
+server-common = {{ path = "../crates/server-common" }}
+pmcp = {{ workspace = true }}
+
+# Lambda runtime
+lambda_http = "0.13"
+tokio = {{ version = "1", features = ["full"] }}
+reqwest = {{ version = "0.12", default-features = false, features = ["json", "rustls-tls"] }}
+once_cell = "1.19"
+
+# Serialization
+serde = {{ version = "1", features = ["derive"] }}
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = {{ version = "0.3", features = ["env-filter"] }}
+
+# Error handling
+anyhow = "1"
+"#,
+            server_name, server_name, server_name, server_name
+        );
+
+        std::fs::write(lambda_server_dir.join("Cargo.toml"), cargo_toml)?;
+
+        // Create main.rs with Lambda runtime wrapper
+        let main_rs = format!(
+            r#"//! Lambda wrapper for {server_name} MCP Server
+//!
+//! This binary wraps the MCP server for AWS Lambda deployment.
+//! It uses the lambda_http runtime and runs the MCP HTTP server as a background task,
+//! proxying Lambda requests to it.
+
+use lambda_http::{{run, service_fn, Body, Error, Request, Response}};
+use once_cell::sync::OnceCell;
+use reqwest::Client;
+use tracing_subscriber::EnvFilter;
+use std::net::SocketAddr;
+
+static BASE_URL: OnceCell<String> = OnceCell::new();
+static HTTP: OnceCell<Client> = OnceCell::new();
+
+/// Build the MCP server
+async fn build_server() -> pmcp::Result<pmcp::Server> {{
+    mcp_{server_name_underscore}_core::build_{server_name_underscore}_server()
+}}
+
+/// Start the HTTP server in the background and return the bound address
+async fn start_http_in_background(default_port: u16, server_name: &str) -> pmcp::Result<SocketAddr> {{
+    let server = build_server().await?;
+    let server = std::sync::Arc::new(tokio::sync::Mutex::new(server));
+
+    // Resolve bind host and port
+    let port = std::env::var("PORT")
+        .ok()
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(default_port);
+
+    let host = std::env::var("MCP_HTTP_HOST")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| "127.0.0.1".parse().unwrap());
+
+    let addr = SocketAddr::new(host, port);
+
+    // Create and start HTTP server
+    let config = pmcp::server::streamable_http_server::StreamableHttpServerConfig {{
+        session_id_generator: None,
+        enable_json_response: true,
+        event_store: None,
+        on_session_initialized: None,
+        on_session_closed: None,
+        http_middleware: None,
+    }};
+
+    let http_server = pmcp::server::streamable_http_server::StreamableHttpServer::with_config(
+        addr,
+        server,
+        config,
+    );
+
+    let (bound, handle) = http_server.start().await?;
+    tracing::info!("{{}}: MCP Server started on {{}}", server_name, bound);
+
+    // Spawn server task
+    tokio::spawn(async move {{
+        if let Err(e) = handle.await {{
+            tracing::error!("HTTP server error: {{}}", e);
+        }}
+    }});
+
+    Ok(bound)
+}}
+
+/// Ensure the background server is started once
+async fn ensure_server_started() -> Result<String, Error> {{
+    if let Some(url) = BASE_URL.get() {{
+        return Ok(url.clone());
+    }}
+
+    // Prefer 127.0.0.1 binding for Lambda runtime
+    std::env::set_var("MCP_HTTP_HOST", std::env::var("MCP_HTTP_HOST").unwrap_or_else(|_| "127.0.0.1".into()));
+
+    // Default port for Lambda sidecar
+    let bound = start_http_in_background(8080, "{server_name}")
+        .await
+        .map_err(|e| lambda_http::Error::from(e.to_string()))?;
+
+    let base = format!("http://{{}}", bound);
+    let _ = BASE_URL.set(base.clone());
+    let _ = HTTP.set(Client::builder().build().unwrap());
+    Ok(base)
+}}
+
+/// Lambda handler that proxies to background HTTP server
+async fn handler(event: Request) -> Result<Response<Body>, Error> {{
+    let method = event.method().clone();
+    let path_q = event.uri().path_and_query().map(|pq| pq.as_str().to_string()).unwrap_or("/".to_string());
+
+    let internal_path = if path_q.is_empty() {{ "/" }} else {{ path_q.as_str() }};
+
+    // Health check for GET requests
+    if method.as_str() == "GET" {{
+        let body = serde_json::json!({{
+            "ok": true,
+            "server": "{server_name}",
+            "message": "{server_name} MCP Server. POST JSON-RPC to '/' for MCP requests."
+        }}).to_string();
+        return Ok(
+            Response::builder()
+                .status(200)
+                .header("content-type", "application/json")
+                .header("access-control-allow-origin", "*")
+                .body(Body::Text(body))
+                .unwrap(),
+        );
+    }}
+
+    // CORS preflight
+    if method.as_str() == "OPTIONS" {{
+        return Ok(
+            Response::builder()
+                .status(200)
+                .header("access-control-allow-origin", "*")
+                .header("access-control-allow-methods", "POST, OPTIONS, GET")
+                .header("access-control-allow-headers", "content-type, authorization")
+                .body(Body::Empty)
+                .unwrap(),
+        );
+    }}
+
+    let base = ensure_server_started().await?;
+    let client = HTTP.get().expect("client");
+
+    // Map Lambda request to local HTTP request
+    let url = format!("{{}}{{}}", base, internal_path);
+
+    // Convert lambda_http Method to reqwest Method
+    let reqwest_method = reqwest::Method::from_bytes(method.as_str().as_bytes())
+        .map_err(|e| lambda_http::Error::from(e.to_string()))?;
+
+    let mut req = client.request(reqwest_method, &url);
+
+    // Copy headers
+    for (name, value) in event.headers() {{
+        if let Ok(val) = value.to_str() {{
+            if name.as_str().eq_ignore_ascii_case("host") {{ continue; }}
+            req = req.header(name.as_str(), val);
+        }}
+    }}
+
+    // Copy body
+    let body_bytes = match event.body() {{
+        Body::Empty => Vec::new(),
+        Body::Text(s) => s.as_bytes().to_vec(),
+        Body::Binary(b) => b.clone(),
+    }};
+
+    req = req.body(body_bytes);
+
+    // Forward request
+    let resp = req.send().await.map_err(|e| lambda_http::Error::from(e.to_string()))?;
+    let status = resp.status();
+    let headers = resp.headers().clone();
+    let bytes = resp.bytes().await.map_err(|e| lambda_http::Error::from(e.to_string()))?;
+
+    // Build response
+    let mut builder = Response::builder().status(status.as_u16());
+    builder = builder.header("access-control-allow-origin", "*");
+
+    for (name, value) in headers.iter() {{
+        if let Ok(val) = value.to_str() {{
+            if name.as_str().eq_ignore_ascii_case("transfer-encoding") ||
+               name.as_str().eq_ignore_ascii_case("content-length") {{ continue; }}
+            builder = builder.header(name.as_str(), val);
+        }}
+    }}
+
+    Ok(builder.body(Body::Binary(bytes.to_vec())).unwrap())
+}}
+
+#[tokio::main]
+async fn main() -> Result<(), Error> {{
+    // Initialize logging for Lambda
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_ansi(false)  // Clean CloudWatch logs
+        .try_init();
+
+    run(service_fn(handler)).await
+}}
+"#,
+            server_name = server_name,
+            server_name_underscore = server_name.replace("-", "_")
+        );
+
+        std::fs::write(lambda_server_dir.join("src/main.rs"), main_rs)?;
+
+        // Add to workspace members
+        self.add_to_workspace(format!("{}-lambda", server_name))?;
+
+        Ok(())
+    }
+
+    fn add_to_workspace(&self, member: String) -> Result<()> {
+        let cargo_toml_path = self.project_root.join("Cargo.toml");
+        let cargo_toml_str = std::fs::read_to_string(&cargo_toml_path)?;
+
+        // Check if already a member
+        if cargo_toml_str.contains(&format!("\"{}\"", member)) {
+            return Ok(());
+        }
+
+        let mut cargo_toml: toml::Value = toml::from_str(&cargo_toml_str)?;
+
+        if let Some(workspace) = cargo_toml.get_mut("workspace") {
+            if let Some(members) = workspace.get_mut("members").and_then(|m| m.as_array_mut()) {
+                members.push(toml::Value::String(member));
+            }
+        }
+
+        let new_content = toml::to_string(&cargo_toml)?;
+        std::fs::write(&cargo_toml_path, new_content)?;
 
         Ok(())
     }
