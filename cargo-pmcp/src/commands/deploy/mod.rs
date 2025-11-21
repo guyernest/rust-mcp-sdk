@@ -75,6 +75,10 @@ pub enum DeployAction {
         /// Skip confirmation prompt
         #[clap(long)]
         yes: bool,
+
+        /// Remove all deployment files (CDK project, Lambda wrapper, config)
+        #[clap(long)]
+        clean: bool,
     },
 
     /// Manage secrets
@@ -143,7 +147,7 @@ impl DeployCommand {
                 DeployAction::Rollback { version, yes } => {
                     self.rollback(&project_root, version.as_deref(), *yes)
                 },
-                DeployAction::Destroy { yes } => self.destroy(&project_root, *yes),
+                DeployAction::Destroy { yes, clean } => self.destroy(&project_root, *yes, *clean),
                 DeployAction::Secrets { action } => {
                     let secrets_action = match action {
                         SecretsAction::Set { key, from_env } => secrets::SecretsAction::Set {
@@ -197,18 +201,30 @@ impl DeployCommand {
         Ok(())
     }
 
-    fn destroy(&self, project_root: &PathBuf, skip_confirm: bool) -> Result<()> {
+    fn destroy(&self, project_root: &PathBuf, skip_confirm: bool, clean: bool) -> Result<()> {
         let config = crate::deployment::config::DeployConfig::load(project_root)?;
 
         if !skip_confirm {
             println!("⚠️  This will destroy deployment '{}':", config.server.name);
             println!("   - Lambda function");
             println!("   - API Gateway");
-            println!("   - CloudWatch logs and dashboards");
-            println!("   - Secrets (with 30-day recovery period)");
+            println!("   - CloudWatch logs");
             println!();
-            println!("   Cognito User Pool will be retained (contains user data)");
-            println!();
+
+            if clean {
+                println!("⚠️  --clean flag: Will also remove local files:");
+                println!("   - Deployment configuration (.pmcp/deploy.toml)");
+                println!("   - CDK project (deploy/)");
+                println!("   - Lambda wrapper code ({}-lambda/)", config.server.name);
+                println!();
+            } else {
+                println!("The following will be preserved:");
+                println!("   - Deployment configuration (.pmcp/deploy.toml)");
+                println!("   - CDK project (deploy/)");
+                println!("   - Lambda wrapper code ({}-lambda/)", config.server.name);
+                println!();
+            }
+
             print!("Type '{}' to confirm: ", config.server.name);
 
             use std::io::{self, Write};
@@ -223,22 +239,94 @@ impl DeployCommand {
             }
         }
 
-        println!("🗑️  Destroying deployment...");
+        println!("🗑️  Destroying AWS resources...");
+        println!();
 
         let deploy_dir = project_root.join("deploy");
 
-        let status = std::process::Command::new("npx")
-            .args(&["cdk", "destroy", "--force"])
-            .current_dir(&deploy_dir)
-            .status()
-            .context("Failed to run CDK destroy")?;
+        // Check if deploy directory exists
+        if deploy_dir.exists() {
+            // Build the stack name (must match what's in app.ts)
+            let stack_name = format!("{}-stack", config.server.name);
 
-        if !status.success() {
-            bail!("CDK destroy failed");
+            // Run CDK destroy with explicit stack name
+            let status = std::process::Command::new("npx")
+                .args(&["cdk", "destroy", &stack_name, "--force"])
+                .current_dir(&deploy_dir)
+                .status()
+                .context("Failed to run CDK destroy")?;
+
+            if !status.success() {
+                bail!("CDK destroy failed");
+            }
+
+            println!();
+            println!("✅ AWS resources destroyed successfully");
+        } else {
+            println!("⚠️  No deployment found (deploy/ directory missing)");
+            println!("   Skipping AWS resource cleanup.");
         }
 
-        println!("✅ Deployment destroyed");
-        println!("📁 Configuration preserved in .pmcp/deploy.toml");
+        // Clean up local files if requested
+        if clean {
+            println!();
+            println!("🧹 Cleaning up local deployment files...");
+
+            // Remove deploy directory
+            if deploy_dir.exists() {
+                std::fs::remove_dir_all(&deploy_dir)
+                    .context("Failed to remove deploy/ directory")?;
+                println!("   ✓ Removed deploy/");
+            }
+
+            // Remove Lambda wrapper directory
+            let lambda_dir = project_root.join(format!("{}-lambda", config.server.name));
+            if lambda_dir.exists() {
+                std::fs::remove_dir_all(&lambda_dir)
+                    .context("Failed to remove Lambda wrapper directory")?;
+                println!("   ✓ Removed {}-lambda/", config.server.name);
+            }
+
+            // Remove deployment config
+            let config_file = project_root.join(".pmcp/deploy.toml");
+            if config_file.exists() {
+                std::fs::remove_file(&config_file).context("Failed to remove .pmcp/deploy.toml")?;
+                println!("   ✓ Removed .pmcp/deploy.toml");
+            }
+
+            // Remove from workspace members
+            self.remove_from_workspace(format!("{}-lambda", config.server.name), project_root)?;
+
+            println!();
+            println!("✅ All deployment files removed");
+        } else {
+            println!();
+            println!("Preserved files:");
+            println!("   📁 .pmcp/deploy.toml - Deployment configuration");
+            println!("   📁 deploy/ - CDK project (can redeploy with 'cargo pmcp deploy')");
+            println!("   📁 {}-lambda/ - Lambda wrapper code", config.server.name);
+            println!();
+            println!("To completely remove deployment files:");
+            println!("   cargo pmcp deploy destroy --clean");
+        }
+
+        Ok(())
+    }
+
+    fn remove_from_workspace(&self, member: String, project_root: &PathBuf) -> Result<()> {
+        let cargo_toml_path = project_root.join("Cargo.toml");
+        let cargo_toml_str = std::fs::read_to_string(&cargo_toml_path)?;
+
+        let mut cargo_toml: toml::Value = toml::from_str(&cargo_toml_str)?;
+
+        if let Some(workspace) = cargo_toml.get_mut("workspace") {
+            if let Some(members) = workspace.get_mut("members").and_then(|m| m.as_array_mut()) {
+                members.retain(|m| m.as_str() != Some(&member));
+            }
+        }
+
+        let new_content = toml::to_string(&cargo_toml)?;
+        std::fs::write(&cargo_toml_path, new_content)?;
 
         Ok(())
     }

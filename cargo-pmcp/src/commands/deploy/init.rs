@@ -161,7 +161,7 @@ impl InitCommand {
         self.create_cdk_json(&deploy_dir)?;
         self.create_package_json(&deploy_dir, server_name)?;
         self.create_tsconfig(&deploy_dir)?;
-        self.create_app_ts(&deploy_dir)?;
+        self.create_app_ts(&deploy_dir, server_name)?;
         self.create_stack_ts(&deploy_dir, server_name)?;
         self.create_constructs(&deploy_dir)?;
 
@@ -267,39 +267,33 @@ impl InitCommand {
         Ok(())
     }
 
-    fn create_app_ts(&self, deploy_dir: &PathBuf) -> Result<()> {
+    fn create_app_ts(&self, deploy_dir: &PathBuf, server_name: &str) -> Result<()> {
         let bin_dir = deploy_dir.join("bin");
         std::fs::create_dir_all(&bin_dir)?;
 
-        let app_ts = r#"#!/usr/bin/env node
+        let app_ts = format!(
+            r#"#!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib';
-import { McpServerStack } from '../lib/stack';
-import * as fs from 'fs';
+import {{ McpServerStack }} from '../lib/stack';
 
 const app = new cdk.App();
 
-// Load configuration from .pmcp/deploy.toml
-const configPath = '../.pmcp/deploy.toml';
-
-if (!fs.existsSync(configPath)) {
-  throw new Error('Configuration not found: .pmcp/deploy.toml');
-}
-
-// For now, we'll read basic config from env or use defaults
-// In the future, we can add a TOML parser for TypeScript
-const serverName = process.env.SERVER_NAME || 'mcp-server';
+// Stack name is hardcoded from config
+const serverName = '{}';
 const region = process.env.AWS_REGION || process.env.CDK_DEFAULT_REGION || 'us-east-1';
 
-new McpServerStack(app, `${serverName}-stack`, {
-  env: {
+new McpServerStack(app, `${{serverName}}-stack`, {{
+  env: {{
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region: region,
-  },
-  description: `MCP Server: ${serverName}`,
-});
+  }},
+  description: `MCP Server: ${{serverName}}`,
+}});
 
 app.synth();
-"#;
+"#,
+            server_name
+        );
 
         std::fs::write(bin_dir.join("app.ts"), app_ts)?;
 

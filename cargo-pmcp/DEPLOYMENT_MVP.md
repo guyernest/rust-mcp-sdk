@@ -56,8 +56,11 @@ cargo pmcp deploy
 # 4. View outputs
 cargo pmcp deploy outputs
 
-# 5. Destroy when done
+# 5. Destroy when done (removes AWS resources, preserves local files)
 cargo pmcp deploy destroy
+
+# Or completely remove everything (AWS resources + local files)
+cargo pmcp deploy destroy --clean
 ```
 
 ## Files Created
@@ -140,9 +143,49 @@ cargo pmcp deploy
 # (Get URL from outputs)
 curl -X POST https://YOUR-API-URL/tools/list
 
-# Clean up
+# Clean up AWS resources (preserves local deployment files)
+cargo pmcp deploy destroy
+
+# Or clean up everything (AWS + local files)
+cargo pmcp deploy destroy --clean
+```
+
+## Cleanup Options
+
+The destroy command provides two modes for cleaning up your deployment:
+
+### Default Mode (Preserves Local Files)
+```bash
 cargo pmcp deploy destroy
 ```
+
+This will:
+- ✅ Destroy AWS resources (Lambda, API Gateway, CloudWatch logs)
+- ✅ Preserve local deployment files for easy redeployment
+- ✅ Keep `.pmcp/deploy.toml` configuration
+- ✅ Keep `deploy/` CDK project
+- ✅ Keep `{server-name}-lambda/` wrapper code
+
+**Use this when**: You want to tear down AWS resources but might redeploy later.
+
+### Clean Mode (Complete Removal)
+```bash
+cargo pmcp deploy destroy --clean
+```
+
+This will:
+- ✅ Destroy AWS resources (Lambda, API Gateway, CloudWatch logs)
+- ✅ Remove `.pmcp/deploy.toml` configuration
+- ✅ Remove `deploy/` CDK project directory
+- ✅ Remove `{server-name}-lambda/` wrapper code
+- ✅ Remove Lambda package from `Cargo.toml` workspace
+
+**Use this when**: You're done experimenting and want a completely clean slate.
+
+### Safety Features
+- Both modes require confirmation (type the server name to confirm)
+- Use `--yes` flag to skip confirmation (use with caution!)
+- Example: `cargo pmcp deploy destroy --clean --yes`
 
 ## Known Issues
 
@@ -152,7 +195,7 @@ cargo pmcp deploy destroy
 2. **Error Messages**: Some errors could be more helpful
    - Will improve in Phase 2 with better error handling
 
-3. **Build Time**: First build with musl can be slow
+3. **Build Time**: First build with cargo-lambda can take a few minutes
    - This is expected; subsequent builds are faster
 
 ## Next Steps (Phase 2)
@@ -194,6 +237,8 @@ cargo pmcp deploy destroy
 - [x] `cargo pmcp deploy` deploys to Lambda
 - [x] Binary builds and runs on Lambda
 - [x] API Gateway routes to Lambda
+- [x] `cargo pmcp deploy destroy` correctly destroys the right stack
+- [x] `cargo pmcp deploy destroy --clean` removes all local files
 - [x] End-to-end time < 5 minutes
 - [ ] OAuth authentication (Phase 2)
 - [ ] Production-ready observability (Phase 2)
