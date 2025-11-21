@@ -9,6 +9,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Override .cargo/config.toml target-cpu=native to avoid SIGILL on CI runners
+  RUSTFLAGS: ""
 
 jobs:
   test:
