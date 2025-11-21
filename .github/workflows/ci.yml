@@ -16,7 +16,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
+
+    - name: Free Disk Space
+      uses: jlumbroso/free-disk-space@main
+      with:
+        # Remove large packages we don't need
+        tool-cache: false
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: true
+        docker-images: true
+        swap-storage: true
+
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
@@ -139,7 +151,16 @@ jobs:
             cargo check --example "$example_name" --features http
           fi
         done
-    
+
+    - name: Clean up before coverage
+      run: |
+        echo "Disk usage before cleanup:"
+        df -h
+        echo "Cleaning cargo build artifacts..."
+        cargo clean
+        echo "Disk usage after cleanup:"
+        df -h
+
     - name: Run coverage
       run: cargo llvm-cov --all-features --lcov --output-path lcov.info
 
