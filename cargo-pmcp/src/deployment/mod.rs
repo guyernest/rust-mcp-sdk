@@ -8,8 +8,5 @@ pub mod r#trait;
 pub use builder::BinaryBuilder;
 pub use config::DeployConfig;
 pub use outputs::load_cdk_outputs;
-pub use r#trait::{
-    BuildArtifact, DeploymentOutputs, DeploymentTarget, MetricsData, SecretsAction, TestFailure,
-    TestResults,
-};
+pub use r#trait::{DeploymentOutputs, SecretsAction};
 pub use registry::TargetRegistry;

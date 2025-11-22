@@ -65,12 +65,7 @@ mod metrics;
 mod secrets;
 mod test;
 
-use deploy::DeployExecutor;
 use init::InitCommand;
-use logs::LogsCommand;
-use metrics::MetricsCommand;
-use secrets::SecretsCommand;
-use test::TestCommand;
 
 #[derive(Debug, Parser)]
 pub struct DeployCommand {
@@ -153,6 +148,12 @@ pub enum DeployAction {
         #[clap(long, default_value = "text")]
         format: String,
     },
+
+    /// Login to deployment target (pmcp-run, cloudflare, etc.)
+    Login,
+
+    /// Logout from deployment target
+    Logout,
 }
 
 #[derive(Debug, Parser)]
@@ -247,7 +248,7 @@ impl DeployCommand {
                     }
                     Ok(())
                 },
-                DeployAction::Rollback { version, yes } => {
+                DeployAction::Rollback { version, yes: _ } => {
                     let config = crate::deployment::DeployConfig::load(&project_root)?;
                     target.rollback(&config, version.as_deref()).await
                 },
@@ -304,6 +305,28 @@ impl DeployCommand {
                         _ => bail!("Unknown format: {}", format),
                     }
                     Ok(())
+                },
+                DeployAction::Login => {
+                    // Login is target-specific
+                    match target_id.as_str() {
+                        "pmcp-run" => {
+                            crate::deployment::targets::pmcp_run::login().await
+                        },
+                        _ => {
+                            bail!("Login is not supported for target: {}", target_id);
+                        },
+                    }
+                },
+                DeployAction::Logout => {
+                    // Logout is target-specific
+                    match target_id.as_str() {
+                        "pmcp-run" => {
+                            crate::deployment::targets::pmcp_run::logout()
+                        },
+                        _ => {
+                            bail!("Logout is not supported for target: {}", target_id);
+                        },
+                    }
                 },
             },
             None => {

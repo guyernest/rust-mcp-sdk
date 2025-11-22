@@ -25,3 +25,11 @@ mcp-tester = { path = "../crates/mcp-tester" }
 urlencoding = "2"
 async-trait = "0.1.89"
 pathdiff = "0.2.3"
+
+# For pmcp-run target
+oauth2 = "4.4"                          # OAuth 2.0 authentication
+reqwest = { version = "0.12", features = ["json"] }
+tiny_http = "0.12"                      # OAuth callback server
+open = "5.0"                            # Browser launch
+chrono = "0.4"                          # Token expiry handling
+rpassword = "7.3"                       # Secret input (for other features)
