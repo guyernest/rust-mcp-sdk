@@ -33,8 +33,13 @@ impl DeployExecutor {
         self.run_cdk_deploy(&config)?;
         println!();
 
-        // 4. Parse and display outputs
-        let outputs = crate::deployment::outputs::DeploymentOutputs::load(&self.project_root)?;
+        // 4. Load and display outputs
+        let stack_name = format!("{}-stack", config.server.name);
+        let outputs = crate::deployment::load_cdk_outputs(
+            &self.project_root,
+            &config.aws.region,
+            &stack_name,
+        )?;
 
         let elapsed = start.elapsed();
         println!("✅ Deployment complete in {:.1}s", elapsed.as_secs_f64());

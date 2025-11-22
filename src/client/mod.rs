@@ -1351,7 +1351,9 @@ impl<T: Transport> Client<T> {
 
                     // Forward to notification handler if registered
                     if let Some(tx) = &self.notification_tx {
-                        if let Err(e) = tx.send(notification).await {
+                        // Clone the sender because send() requires &mut self
+                        let tx_clone = tx.clone();
+                        if let Err(e) = tx_clone.send(notification).await {
                             tracing::debug!("Notification channel closed: {}", e);
                         }
                     }

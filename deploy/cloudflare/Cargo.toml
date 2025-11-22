@@ -1,0 +1,37 @@
+[package]
+name = "mcp-server-cloudflare-adapter"
+version = "0.1.0"
+edition = "2021"
+
+# Metadata for wasm-pack
+[package.metadata.wasm-pack]
+wasm-opt = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Import the parent MCP server package
+pmcp-fuzz = { path = "../../fuzz" }
+
+# Cloudflare Workers runtime
+worker = "0.4"
+
+# PMCP SDK with WASM support
+pmcp = { path = "../..", default-features = false, features = ["wasm"] }
+
+# JSON support
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Better panic messages in WASM
+console_error_panic_hook = "0.1"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+opt-level = "z"
+
+# Exclude from parent workspace (this is a separate build)
+[workspace]

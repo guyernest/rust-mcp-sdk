@@ -233,7 +233,8 @@ Scaffolding and development toolkit for MCP servers.
 - **Hot-reload dev server** for rapid iteration
 - **Generate test scenarios** automatically
 - **Validate quality gates** (fmt, clippy, tests)
-- **Build for production** with one command
+- **Deploy to production** - AWS Lambda or Cloudflare Workers
+- **Manage deployments** - logs, metrics, secrets, rollback
 
 **Commands:**
 ```bash
@@ -241,6 +242,9 @@ cargo pmcp new <workspace>              # Create workspace
 cargo pmcp add server <name>            # Add server
 cargo pmcp dev --server <name>          # Start dev server
 cargo pmcp test --server <name>         # Run tests
+cargo pmcp deploy --target <target>     # Deploy to production
+cargo pmcp deploy logs --tail           # Stream logs
+cargo pmcp deploy destroy --clean       # Remove deployment
 ```
 
 **Why use it?**

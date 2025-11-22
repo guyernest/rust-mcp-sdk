@@ -13,6 +13,10 @@ Production-grade MCP server development toolkit.
 - **Development Mode**: Hot-reload MCP servers with HTTP transport for rapid development
 - **Automated Testing**: Generate and run comprehensive test scenarios for your MCP servers
 - **Smart Test Generation**: Automatically creates meaningful test cases with realistic values
+- **Multi-Target Deployment**: Deploy to AWS Lambda or Cloudflare Workers with one command
+- **WASM Support**: Automatic WASM compilation for edge deployments
+- **Infrastructure as Code**: CDK-based AWS deployment with complete stack management
+- **Deployment Management**: Logs, metrics, secrets, rollback, and destroy capabilities
 
 ## Installation
 
@@ -127,6 +131,56 @@ cargo pmcp test --server calculator --generate-scenarios
 cargo pmcp test --server calculator --detailed
 ```
 
+### `deploy`
+
+Deploy your MCP server to production environments.
+
+**Supported Targets:**
+- `aws-lambda` - Deploy to AWS Lambda with API Gateway
+- `cloudflare-workers` - Deploy to Cloudflare Workers edge network
+
+**Subcommands:**
+- `deploy init` - Initialize deployment configuration
+- `deploy` - Build and deploy to the configured target
+- `deploy logs` - View deployment logs
+- `deploy destroy` - Remove deployment (with optional --clean)
+
+**AWS Lambda Example:**
+```bash
+# Initialize (one-time setup)
+cargo pmcp deploy init --target aws-lambda --region us-east-1
+
+# Deploy
+cargo pmcp deploy --target aws-lambda
+
+# View logs
+cargo pmcp deploy logs --tail --target aws-lambda
+
+# Destroy
+cargo pmcp deploy destroy --target aws-lambda --clean
+```
+
+**Cloudflare Workers Example:**
+```bash
+# Initialize (one-time setup)
+cargo pmcp deploy init --target cloudflare-workers
+
+# Deploy
+cargo pmcp deploy --target cloudflare-workers
+
+# View logs
+cargo pmcp deploy logs --tail --target cloudflare-workers
+
+# Destroy
+cargo pmcp deploy destroy --target cloudflare-workers --clean
+```
+
+**Additional Commands:**
+- `deploy metrics --period 24h` - View deployment metrics
+- `deploy secrets set KEY --from-env ENV_VAR` - Manage secrets
+- `deploy test --verbose` - Test the deployment
+- `deploy outputs --format json` - Show deployment outputs
+
 ## Test Scenarios
 
 Test scenarios are YAML files that define test steps and assertions for your MCP server.
@@ -195,7 +249,11 @@ The typical development workflow:
 5. **Generate tests**: `cargo pmcp test --server myserver --generate-scenarios`
 6. **Customize tests**: Edit `scenarios/myserver/generated.yaml`
 7. **Run tests**: `cargo pmcp test --server myserver`
-8. **Iterate**: Make changes and repeat from step 4
+8. **Deploy**:
+   - AWS Lambda: `cargo pmcp deploy init --target aws-lambda && cargo pmcp deploy`
+   - Cloudflare Workers: `cargo pmcp deploy init --target cloudflare-workers && cargo pmcp deploy`
+9. **Monitor**: `cargo pmcp deploy logs --tail` and `cargo pmcp deploy metrics`
+10. **Iterate**: Make changes and repeat from step 4
 
 ## Architecture
 

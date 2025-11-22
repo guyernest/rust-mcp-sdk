@@ -40,7 +40,7 @@ bytes = { version = "1.10", optional = true }
 futures = "0.3"
 futures-util = { version = "0.3", optional = true }
 futures-channel = { version = "0.3", optional = true }
-futures-locks = { version = "0.7", optional = true }
+futures-locks = { version = "0.7", optional = true, default-features = false }
 pin-project = "1.1"
 http-body-util = "0.1"
 
@@ -68,7 +68,7 @@ wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["console", "Window", "Document", "WebSocket", "MessageEvent", "CloseEvent", "ErrorEvent", "BinaryType", "Headers", "Request", "RequestInit", "Response"] }
 js-sys = "0.3"
 futures-channel = "0.3"
-futures-locks = "0.7"
+futures-locks = { version = "0.7", default-features = false }
 getrandom = { version = "0.2", features = ["js"] }
 
 # Transport dependencies
@@ -120,6 +120,7 @@ schema-generation = ["dep:schemars"]
 wasm = ["websocket-wasm", "uuid/js", "dep:futures-channel", "dep:futures-locks"]
 websocket-wasm = []
 wasm-tokio = []
+wasi-http = []  # Future: WASI HTTP support (not yet implemented)
 
 # Example features
 authentication_example = []
