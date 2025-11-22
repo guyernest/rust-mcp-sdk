@@ -99,6 +99,18 @@ pub use server::{
     typed_tool::{SimpleToolExt, SyncToolExt, TypedSyncTool, TypedTool, TypedToolWithOutput},
     PromptHandler, ResourceHandler, SamplingHandler, Server, ServerBuilder, ToolHandler,
 };
+#[cfg(target_arch = "wasm32")]
+pub use server::{
+    wasm_server::{
+        SimpleTool, WasmMcpServer, WasmMcpServerBuilder, WasmPrompt, WasmResource, WasmTool,
+    },
+    wasm_typed_tool::WasmTypedTool,
+};
+// Re-export WASM server types under their native names for compatibility
+#[cfg(target_arch = "wasm32")]
+pub use server::wasm_server::{WasmMcpServer as Server, WasmMcpServerBuilder as ServerBuilder};
+#[cfg(target_arch = "wasm32")]
+pub use server::wasm_typed_tool::WasmTypedTool as TypedTool;
 #[cfg(not(target_arch = "wasm32"))]
 pub use shared::StdioTransport;
 pub use shared::{

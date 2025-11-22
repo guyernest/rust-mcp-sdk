@@ -1,0 +1,12 @@
+# Build outputs
+/target
+/build
+/pkg
+*.wasm
+
+# Worker build artifacts
+/.wrangler
+/worker
+
+# Logs
+*.log

@@ -266,7 +266,7 @@ To deploy to a new WASM platform:
 
 ## 📚 Documentation
 
-- [Cloudflare Deployment Guide](deployments/cloudflare/DEPLOYMENT.md)
+- [**Production Deployment Guide**](DEPLOYMENT.md) - Cloudflare configuration, security best practices, and layered architecture
 - [Fermyon Spin Deployment Guide](deployments/fermyon-spin/README.md)
 - [Architecture Overview](deployments/cloudflare/ARCHITECTURE.md)
 - [MCP Protocol Specification](https://modelcontextprotocol.io/)

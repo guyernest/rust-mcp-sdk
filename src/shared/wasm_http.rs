@@ -123,7 +123,7 @@ impl WasmHttpTransport {
         // Body is already serialized
 
         // Create request init
-        let mut request_init = RequestInit::new();
+        let request_init = RequestInit::new();
         request_init.set_method("POST");
         request_init.set_headers(&headers);
         request_init.set_body(&JsValue::from_str(body));

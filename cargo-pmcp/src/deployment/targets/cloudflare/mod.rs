@@ -100,36 +100,80 @@ impl DeploymentTarget for CloudflareTarget {
     }
 
     async fn build(&self, config: &DeployConfig) -> Result<BuildArtifact> {
-        println!("🔨 Building WASM module for Cloudflare Workers...");
+        println!("🔨 Building Cloudflare Workers adapter...");
 
-        // Build with wasm-pack targeting web
-        let status = Command::new("wasm-pack")
-            .args(&[
-                "build",
-                "--target",
-                "web",
-                "--out-dir",
-                "deploy/cloudflare/pkg",
-                "--release",
-            ])
-            .current_dir(&config.project_root)
-            .status()
-            .context("Failed to run wasm-pack build")?;
+        // Build the adapter project in deploy/cloudflare/
+        let adapter_dir = config.project_root.join("deploy/cloudflare");
 
-        if !status.success() {
-            bail!("wasm-pack build failed");
+        if !adapter_dir.exists() {
+            bail!(
+                "Cloudflare deployment not initialized.\n\
+                 Run: cargo pmcp deploy init --target cloudflare-workers"
+            );
         }
 
-        let wasm_path = config
-            .project_root
-            .join("deploy/cloudflare/pkg")
-            .join(format!("{}_bg.wasm", config.server.name.replace("-", "_")));
+        println!("📦 Building adapter: {}", adapter_dir.display());
 
-        let wasm_size = std::fs::metadata(&wasm_path)
-            .context("Failed to get WASM size")?
-            .len();
+        // Install worker-build if needed (quiet mode)
+        println!("   Installing worker-build (if needed)...");
+        let install_status = Command::new("cargo")
+            .args(&["install", "-q", "worker-build"])
+            .status()
+            .context("Failed to install worker-build")?;
 
-        println!("✅ WASM built: {:.2} KB", wasm_size as f64 / 1024.0);
+        if !install_status.success() {
+            println!("   ⚠️  worker-build install failed, may already be installed");
+        }
+
+        // Build with worker-build
+        println!("   Running worker-build...");
+        let status = Command::new("worker-build")
+            .arg("--release")
+            .current_dir(&adapter_dir)
+            .status()
+            .context("Failed to run worker-build")?;
+
+        if !status.success() {
+            bail!(
+                "worker-build failed.\n\n\
+                 Make sure your MCP server package:\n\
+                 1. Exports: pub fn create_server() -> pmcp::McpServer\n\
+                 2. Is referenced in deploy/cloudflare/Cargo.toml\n\n\
+                 Check the build output above for details."
+            );
+        }
+
+        // The build output is in build/worker/
+        let build_output = adapter_dir.join("build/worker");
+
+        // Find the wasm file (it will be in the build output)
+        let wasm_files: Vec<_> = std::fs::read_dir(&build_output)
+            .context("Failed to read build output directory")?
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .map(|ext| ext == "wasm")
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        let wasm_path = if let Some(wasm_file) = wasm_files.first() {
+            wasm_file.path()
+        } else {
+            // Fallback: use expected name based on project
+            build_output.join("index.wasm")
+        };
+
+        let wasm_size = if wasm_path.exists() {
+            std::fs::metadata(&wasm_path)
+                .context("Failed to get WASM size")?
+                .len()
+        } else {
+            0 // worker-build packages everything, size doesn't matter
+        };
+
+        println!("✅ Cloudflare Workers adapter built");
 
         Ok(BuildArtifact::Wasm {
             path: wasm_path,

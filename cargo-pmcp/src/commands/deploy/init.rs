@@ -440,11 +440,32 @@ export class McpServerStack extends cdk.Stack {{
             .ok_or_else(|| anyhow::anyhow!("pmcp dependency not found in workspace"))?;
 
         // Convert to TOML string
-        let pmcp_dep_str = toml::to_string(&pmcp_dep)?.trim().to_string();
+        let _pmcp_dep_str = toml::to_string(&pmcp_dep)?.trim().to_string();
+
+        // Auto-detect workspace directory structure (core-workspace vs crates)
+        let core_workspace_dir = if self.project_root.join("core-workspace").exists() {
+            "core-workspace"
+        } else {
+            "crates"
+        };
+
+        let server_common_path = if self.project_root.join("crates/server-common").exists() {
+            "../crates/server-common"
+        } else if self
+            .project_root
+            .join("core-workspace/server-common")
+            .exists()
+        {
+            "../core-workspace/server-common"
+        } else {
+            // server-common might not exist in new projects
+            ""
+        };
 
         // Create Cargo.toml for Lambda wrapper
-        let cargo_toml = format!(
-            r#"[package]
+        let cargo_toml = if !server_common_path.is_empty() {
+            format!(
+                r#"[package]
 name = "{}-lambda"
 version = "0.1.0"
 edition = "2021"
@@ -454,8 +475,8 @@ name = "{}-server"
 path = "src/main.rs"
 
 [dependencies]
-mcp-{}-core = {{ path = "../crates/mcp-{}-core" }}
-server-common = {{ path = "../crates/server-common" }}
+mcp-{}-core = {{ path = "../{}/mcp-{}-core" }}
+server-common = {{ path = "{}" }}
 pmcp = {{ workspace = true }}
 
 # Lambda runtime
@@ -475,8 +496,49 @@ tracing-subscriber = {{ version = "0.3", features = ["env-filter"] }}
 # Error handling
 anyhow = "1"
 "#,
-            server_name, server_name, server_name, server_name
-        );
+                server_name,
+                server_name,
+                server_name,
+                core_workspace_dir,
+                server_name,
+                server_common_path
+            )
+        } else {
+            // No server-common dependency
+            format!(
+                r#"[package]
+name = "{}-lambda"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "{}-server"
+path = "src/main.rs"
+
+[dependencies]
+mcp-{}-core = {{ path = "../{}/mcp-{}-core" }}
+pmcp = {{ workspace = true }}
+
+# Lambda runtime
+lambda_http = "0.13"
+tokio = {{ version = "1", features = ["full"] }}
+reqwest = {{ version = "0.12", default-features = false, features = ["json", "rustls-tls"] }}
+once_cell = "1.19"
+
+# Serialization
+serde = {{ version = "1", features = ["derive"] }}
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = {{ version = "0.3", features = ["env-filter"] }}
+
+# Error handling
+anyhow = "1"
+"#,
+                server_name, server_name, server_name, core_workspace_dir, server_name
+            )
+        };
 
         std::fs::write(lambda_server_dir.join("Cargo.toml"), cargo_toml)?;
 

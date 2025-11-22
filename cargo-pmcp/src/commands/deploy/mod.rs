@@ -1,6 +1,62 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Detect server name from Cargo.toml in the project root or core workspace
+fn detect_server_name(project_root: &Path) -> Result<String> {
+    // Try to read the main Cargo.toml
+    let cargo_toml_path = project_root.join("Cargo.toml");
+    if cargo_toml_path.exists() {
+        let cargo_toml_content = std::fs::read_to_string(&cargo_toml_path)?;
+        if let Ok(cargo_toml) = toml::from_str::<toml::Value>(&cargo_toml_content) {
+            // Check if it's a workspace
+            if cargo_toml.get("workspace").is_some() {
+                // Look for core-workspace or similar
+                let core_workspace_dir = project_root.join("core-workspace");
+                if core_workspace_dir.exists() {
+                    if let Ok(entries) = std::fs::read_dir(&core_workspace_dir) {
+                        for entry in entries.flatten() {
+                            let cargo_path = entry.path().join("Cargo.toml");
+                            if let Ok(content) = std::fs::read_to_string(&cargo_path) {
+                                if let Ok(core_cargo) = toml::from_str::<toml::Value>(&content) {
+                                    if let Some(name) = core_cargo
+                                        .get("package")
+                                        .and_then(|p| p.get("name"))
+                                        .and_then(|n| n.as_str())
+                                    {
+                                        // Remove "mcp-" prefix and "-core" suffix to get clean name
+                                        let clean_name = name
+                                            .strip_prefix("mcp-")
+                                            .unwrap_or(name)
+                                            .strip_suffix("-core")
+                                            .unwrap_or(name);
+                                        return Ok(clean_name.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Not a workspace, use the package name directly
+            if let Some(name) = cargo_toml
+                .get("package")
+                .and_then(|p| p.get("name"))
+                .and_then(|n| n.as_str())
+            {
+                return Ok(name.to_string());
+            }
+        }
+    }
+
+    // Fallback to directory name
+    Ok(project_root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("mcp-server")
+        .to_string())
+}
 
 pub mod deploy;
 pub mod init;
@@ -155,8 +211,10 @@ impl DeployCommand {
                             .execute()
                     } else {
                         // For other targets, use the new modular approach
+                        // Auto-detect server name from workspace or use package name
+                        let server_name = detect_server_name(&project_root)?;
                         let config = crate::deployment::DeployConfig::default_for_server(
-                            "mcp-server".to_string(),
+                            server_name,
                             region.clone(),
                             project_root.clone(),
                         );
