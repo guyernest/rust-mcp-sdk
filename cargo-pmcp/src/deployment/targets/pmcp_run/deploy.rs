@@ -77,8 +77,7 @@ pub async fn deploy_to_pmcp_run(
     // Step 4: Read files
     let template = std::fs::read_to_string(&template_path)
         .context("Failed to read CloudFormation template")?;
-    let bootstrap = std::fs::read(&bootstrap_path)
-        .context("Failed to read bootstrap binary")?;
+    let bootstrap = std::fs::read(&bootstrap_path).context("Failed to read bootstrap binary")?;
 
     println!("📦 Template size: {} KB", template.len() / 1024);
     println!("📦 Bootstrap size: {} KB", bootstrap.len() / 1024);
@@ -123,13 +122,10 @@ pub async fn deploy_to_pmcp_run(
 
     // Step 7: Create deployment via GraphQL
     println!("🚀 Creating deployment...");
-    let deployment = graphql::create_deployment_from_s3(
-        &credentials.access_token,
-        &urls,
-        &config.server.name,
-    )
-    .await
-    .context("Failed to create deployment")?;
+    let deployment =
+        graphql::create_deployment_from_s3(&credentials.access_token, &urls, &config.server.name)
+            .await
+            .context("Failed to create deployment")?;
 
     println!("   Deployment ID: {}", deployment.deployment_id);
     println!();
@@ -180,7 +176,7 @@ async fn poll_deployment_status(
                 }
                 std::io::Write::flush(&mut std::io::stdout())?;
                 tokio::time::sleep(Duration::from_secs(2)).await;
-            }
+            },
             "success" => {
                 if dots > 0 {
                     println!();
@@ -196,19 +192,21 @@ async fn poll_deployment_status(
                     version: None,
                     custom: std::collections::HashMap::new(),
                 });
-            }
+            },
             "failed" => {
                 if dots > 0 {
                     println!();
                 }
                 bail!(
                     "Deployment failed: {}",
-                    status.error_message.unwrap_or_else(|| "Unknown error".to_string())
+                    status
+                        .error_message
+                        .unwrap_or_else(|| "Unknown error".to_string())
                 );
-            }
+            },
             _ => {
                 bail!("Unknown deployment status: {}", status.status);
-            }
+            },
         }
     }
 }

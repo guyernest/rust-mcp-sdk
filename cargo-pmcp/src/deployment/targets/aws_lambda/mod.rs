@@ -7,8 +7,7 @@ use std::process::Command;
 
 use crate::deployment::{
     r#trait::{
-        BuildArtifact, DeploymentOutputs, DeploymentTarget, MetricsData, SecretsAction,
-        TestResults,
+        BuildArtifact, DeploymentOutputs, DeploymentTarget, MetricsData, SecretsAction, TestResults,
     },
     BinaryBuilder, DeployConfig,
 };

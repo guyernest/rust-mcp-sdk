@@ -7,8 +7,7 @@ use async_trait::async_trait;
 
 use crate::deployment::{
     r#trait::{
-        BuildArtifact, DeploymentOutputs, DeploymentTarget, MetricsData, SecretsAction,
-        TestResults,
+        BuildArtifact, DeploymentOutputs, DeploymentTarget, MetricsData, SecretsAction, TestResults,
     },
     DeployConfig,
 };
@@ -161,8 +160,7 @@ impl DeploymentTarget for PmcpRunTarget {
             // Remove config if this is the only target
             let config_file = config.project_root.join(".pmcp/deploy.toml");
             if config_file.exists() {
-                std::fs::remove_file(&config_file)
-                    .context("Failed to remove .pmcp/deploy.toml")?;
+                std::fs::remove_file(&config_file).context("Failed to remove .pmcp/deploy.toml")?;
                 println!("   ✓ Removed .pmcp/deploy.toml");
             }
 

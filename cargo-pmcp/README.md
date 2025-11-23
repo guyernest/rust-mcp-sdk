@@ -13,7 +13,7 @@ Production-grade MCP server development toolkit.
 - **Development Mode**: Hot-reload MCP servers with HTTP transport for rapid development
 - **Automated Testing**: Generate and run comprehensive test scenarios for your MCP servers
 - **Smart Test Generation**: Automatically creates meaningful test cases with realistic values
-- **Multi-Target Deployment**: Deploy to AWS Lambda or Cloudflare Workers with one command
+- **Multi-Target Deployment**: Deploy to AWS Lambda, Google Cloud Run, or Cloudflare Workers with one command
 - **WASM Support**: Automatic WASM compilation for edge deployments
 - **Infrastructure as Code**: CDK-based AWS deployment with complete stack management
 - **Deployment Management**: Logs, metrics, secrets, rollback, and destroy capabilities
@@ -137,6 +137,7 @@ Deploy your MCP server to production environments.
 
 **Supported Targets:**
 - `aws-lambda` - Deploy to AWS Lambda with API Gateway
+- `google-cloud-run` - Deploy to Google Cloud Run serverless containers
 - `cloudflare-workers` - Deploy to Cloudflare Workers edge network
 
 **Subcommands:**
@@ -174,6 +175,32 @@ cargo pmcp deploy logs --tail --target cloudflare-workers
 # Destroy
 cargo pmcp deploy destroy --target cloudflare-workers --clean
 ```
+
+**Google Cloud Run Example:**
+```bash
+# Prerequisites: gcloud CLI installed and authenticated
+# gcloud auth login
+# gcloud config set project PROJECT_ID
+
+# Initialize (one-time setup - generates Dockerfile)
+cargo pmcp deploy init --target google-cloud-run
+
+# Deploy (builds Docker image and deploys to Cloud Run)
+cargo pmcp deploy --target google-cloud-run
+
+# View logs
+cargo pmcp deploy logs --tail --target google-cloud-run
+
+# Destroy
+cargo pmcp deploy destroy --target google-cloud-run --clean
+```
+
+**Configuration Options (Google Cloud Run):**
+- `CLOUD_RUN_REGION` - Deployment region (default: us-central1)
+- `CLOUD_RUN_MEMORY` - Memory limit (default: 512Mi)
+- `CLOUD_RUN_CPU` - CPU allocation (default: 1)
+- `CLOUD_RUN_MAX_INSTANCES` - Max instances (default: 10)
+- `CLOUD_RUN_ALLOW_UNAUTHENTICATED` - Allow public access (default: true)
 
 **Additional Commands:**
 - `deploy metrics --period 24h` - View deployment metrics
@@ -251,6 +278,7 @@ The typical development workflow:
 7. **Run tests**: `cargo pmcp test --server myserver`
 8. **Deploy**:
    - AWS Lambda: `cargo pmcp deploy init --target aws-lambda && cargo pmcp deploy`
+   - Google Cloud Run: `cargo pmcp deploy init --target google-cloud-run && cargo pmcp deploy`
    - Cloudflare Workers: `cargo pmcp deploy init --target cloudflare-workers && cargo pmcp deploy`
 9. **Monitor**: `cargo pmcp deploy logs --tail` and `cargo pmcp deploy metrics`
 10. **Iterate**: Make changes and repeat from step 4

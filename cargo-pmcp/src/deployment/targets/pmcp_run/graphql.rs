@@ -4,8 +4,9 @@ use std::time::Duration;
 
 // GraphQL URL - reads from environment variable or uses default
 fn get_graphql_url() -> String {
-    std::env::var("PMCP_RUN_GRAPHQL_URL")
-        .unwrap_or_else(|_| "https://noet4bfxcfdptmhw6tmirhtycm.appsync-api.us-west-2.amazonaws.com/graphql".to_string())
+    std::env::var("PMCP_RUN_GRAPHQL_URL").unwrap_or_else(|_| {
+        "https://noet4bfxcfdptmhw6tmirhtycm.appsync-api.us-west-2.amazonaws.com/graphql".to_string()
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -103,18 +104,13 @@ pub async fn get_upload_urls(
         get_upload_urls: UploadUrls,
     }
 
-    let response: GetUploadUrlsResponse =
-        execute_graphql(access_token, query, variables).await?;
+    let response: GetUploadUrlsResponse = execute_graphql(access_token, query, variables).await?;
 
     Ok(response.get_upload_urls)
 }
 
 /// Upload file directly to S3 using presigned URL
-pub async fn upload_to_s3(
-    url: &str,
-    content: Vec<u8>,
-    content_type: &str,
-) -> Result<()> {
+pub async fn upload_to_s3(url: &str, content: Vec<u8>, content_type: &str) -> Result<()> {
     let client = reqwest::Client::new();
 
     // Retry with exponential backoff for network failures
@@ -129,7 +125,7 @@ pub async fn upload_to_s3(
         match response {
             Ok(resp) if resp.status().is_success() => {
                 return Ok(());
-            }
+            },
             Ok(resp) => {
                 let status = resp.status();
                 let error_text = resp.text().await.unwrap_or_default();
@@ -141,19 +137,23 @@ pub async fn upload_to_s3(
                     );
                     tokio::time::sleep(Duration::from_secs(2u64.pow(attempt))).await;
                 } else {
-                    bail!("S3 upload failed after 3 attempts: {} - {}", status, error_text);
+                    bail!(
+                        "S3 upload failed after 3 attempts: {} - {}",
+                        status,
+                        error_text
+                    );
                 }
-            }
+            },
             Err(e) if attempt < 3 => {
                 eprintln!(
                     "⚠️  S3 upload failed (attempt {}/3): {}. Retrying...",
                     attempt, e
                 );
                 tokio::time::sleep(Duration::from_secs(2u64.pow(attempt))).await;
-            }
+            },
             Err(e) => {
                 bail!("S3 upload failed after 3 attempts: {}", e);
-            }
+            },
         }
     }
 
@@ -212,10 +212,7 @@ pub async fn create_deployment_from_s3(
 }
 
 /// Get deployment status
-pub async fn get_deployment(
-    access_token: &str,
-    deployment_id: &str,
-) -> Result<DeploymentStatus> {
+pub async fn get_deployment(access_token: &str, deployment_id: &str) -> Result<DeploymentStatus> {
     let query = r#"
         query GetDeployment($id: ID!) {
             getDeployment(id: $id) {
@@ -239,12 +236,9 @@ pub async fn get_deployment(
         get_deployment: Option<DeploymentStatus>,
     }
 
-    let response: GetDeploymentResponse =
-        execute_graphql(access_token, query, variables).await?;
+    let response: GetDeploymentResponse = execute_graphql(access_token, query, variables).await?;
 
-    response
-        .get_deployment
-        .context("Deployment not found")
+    response.get_deployment.context("Deployment not found")
 }
 
 /// Execute GraphQL query
@@ -288,16 +282,11 @@ where
         bail!("GraphQL errors: {}", error_messages.join(", "));
     }
 
-    graphql_response
-        .data
-        .context("No data in GraphQL response")
+    graphql_response.data.context("No data in GraphQL response")
 }
 
 /// Delete deployment
-pub async fn delete_deployment(
-    access_token: &str,
-    project_name: &str,
-) -> Result<()> {
+pub async fn delete_deployment(access_token: &str, project_name: &str) -> Result<()> {
     let query = r#"
         mutation DeleteDeployment($projectName: String!) {
             deleteDeployment(projectName: $projectName) {
@@ -377,8 +366,7 @@ pub async fn get_deployment_outputs(
         url: Option<String>,
     }
 
-    let response: ListDeploymentsResponse =
-        execute_graphql(access_token, query, variables).await?;
+    let response: ListDeploymentsResponse = execute_graphql(access_token, query, variables).await?;
 
     // Find deployment by project name
     let deployment = response

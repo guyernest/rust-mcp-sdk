@@ -309,9 +309,7 @@ impl DeployCommand {
                 DeployAction::Login => {
                     // Login is target-specific
                     match target_id.as_str() {
-                        "pmcp-run" => {
-                            crate::deployment::targets::pmcp_run::login().await
-                        },
+                        "pmcp-run" => crate::deployment::targets::pmcp_run::login().await,
                         _ => {
                             bail!("Login is not supported for target: {}", target_id);
                         },
@@ -320,9 +318,7 @@ impl DeployCommand {
                 DeployAction::Logout => {
                     // Logout is target-specific
                     match target_id.as_str() {
-                        "pmcp-run" => {
-                            crate::deployment::targets::pmcp_run::logout()
-                        },
+                        "pmcp-run" => crate::deployment::targets::pmcp_run::logout(),
                         _ => {
                             bail!("Logout is not supported for target: {}", target_id);
                         },

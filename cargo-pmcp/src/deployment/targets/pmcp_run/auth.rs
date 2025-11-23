@@ -1,10 +1,10 @@
 use anyhow::{bail, Context, Result};
-use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge,
-    RedirectUrl, RefreshToken, Scope, TokenResponse, TokenUrl,
-    StandardTokenResponse, Client, basic::BasicTokenType,
-};
 use oauth2::reqwest::async_http_client;
+use oauth2::{
+    basic::BasicTokenType, AuthUrl, AuthorizationCode, Client, ClientId, CsrfToken,
+    PkceCodeChallenge, RedirectUrl, RefreshToken, Scope, StandardTokenResponse, TokenResponse,
+    TokenUrl,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -25,7 +25,7 @@ type CognitoClient = Client<
     BasicTokenType,
     oauth2::StandardTokenIntrospectionResponse<CognitoTokenFields, BasicTokenType>,
     oauth2::StandardRevocableToken,
-    oauth2::StandardErrorResponse<oauth2::RevocationErrorResponseType>
+    oauth2::StandardErrorResponse<oauth2::RevocationErrorResponseType>,
 >;
 
 type CognitoTokenResponse = StandardTokenResponse<CognitoTokenFields, BasicTokenType>;
@@ -69,9 +69,7 @@ pub fn get_credentials() -> Result<Credentials> {
     let path = credentials_path()?;
 
     if !path.exists() {
-        bail!(
-            "Not authenticated with pmcp.run.\nRun: cargo pmcp deploy login --target pmcp-run"
-        );
+        bail!("Not authenticated with pmcp.run.\nRun: cargo pmcp deploy login --target pmcp-run");
     }
 
     let content = std::fs::read_to_string(&path)?;
@@ -185,8 +183,7 @@ fn start_callback_server() -> Result<String> {
     );
 
     std::thread::spawn(move || {
-        let server =
-            tiny_http::Server::http(format!("127.0.0.1:{}", CALLBACK_PORT)).unwrap();
+        let server = tiny_http::Server::http(format!("127.0.0.1:{}", CALLBACK_PORT)).unwrap();
 
         for request in server.incoming_requests() {
             let url = request.url().to_string();
@@ -212,8 +209,7 @@ fn start_callback_server() -> Result<String> {
                     </body></html>",
                 )
                 .with_header(
-                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..])
-                        .unwrap(),
+                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..]).unwrap(),
                 );
 
                 let _ = request.respond(response);
