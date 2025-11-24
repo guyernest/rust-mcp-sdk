@@ -17,7 +17,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
     - name: Free Disk Space
       uses: jlumbroso/free-disk-space@main
@@ -172,7 +172,7 @@ jobs:
     name: Quality Gate
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
     - name: Free Disk Space
       uses: jlumbroso/free-disk-space@main
@@ -226,7 +226,7 @@ jobs:
     name: Benchmarks
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -249,7 +249,7 @@ jobs:
     name: Minimum Supported Rust Version (1.82)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     
     - name: Install Rust 1.82
       uses: dtolnay/rust-toolchain@1.82
