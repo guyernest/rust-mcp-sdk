@@ -259,13 +259,13 @@ impl ToolHandler for DatabaseQueryTool {
     }
 
     fn metadata(&self) -> Option<pmcp::types::ToolInfo> {
-        Some(pmcp::types::ToolInfo {
-            name: "query_database".to_string(),
-            description: Some(format!(
+        Some(pmcp::types::ToolInfo::new(
+            "query_database",
+            Some(format!(
                 "Query the {} database using OAuth authentication",
                 self.database_name
             )),
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "properties": {
                     "query": {
@@ -275,7 +275,7 @@ impl ToolHandler for DatabaseQueryTool {
                 },
                 "required": ["query"]
             }),
-        })
+        ))
     }
 }
 
@@ -335,13 +335,13 @@ impl ToolHandler for ApiCallTool {
     }
 
     fn metadata(&self) -> Option<pmcp::types::ToolInfo> {
-        Some(pmcp::types::ToolInfo {
-            name: "call_api".to_string(),
-            description: Some(format!(
+        Some(pmcp::types::ToolInfo::new(
+            "call_api",
+            Some(format!(
                 "Call the {} API using OAuth authentication",
                 self.api_name
             )),
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "properties": {
                     "endpoint": {
@@ -351,7 +351,7 @@ impl ToolHandler for ApiCallTool {
                 },
                 "required": ["endpoint"]
             }),
-        })
+        ))
     }
 }
 

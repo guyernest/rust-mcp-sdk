@@ -133,7 +133,9 @@ jobs:
                [[ "$example_name" == "35_wasm_typed_tools" ]] || \
                [[ "$example_name" == "36_typed_tool_v2_example" ]] || \
                [[ "$example_name" == "37_description_variants_example" ]] || \
-               [[ "$example_name" == "53_typed_tools_workflow_integration" ]]; then
+               [[ "$example_name" == "53_typed_tools_workflow_integration" ]] || \
+               [[ "$example_name" == "conference_venue_map" ]] || \
+               [[ "$example_name" == "hotel_gallery" ]]; then
               echo "Skipping example: $example_name (requires schema-generation feature)"
               continue
             fi

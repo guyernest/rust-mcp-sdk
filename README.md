@@ -233,7 +233,7 @@ Scaffolding and development toolkit for MCP servers.
 - **Hot-reload dev server** for rapid iteration
 - **Generate test scenarios** automatically
 - **Validate quality gates** (fmt, clippy, tests)
-- **Deploy to production** - AWS Lambda or Cloudflare Workers
+- **Deploy to production** - AWS Lambda, Google Cloud Run, or Cloudflare Workers
 - **Manage deployments** - logs, metrics, secrets, rollback
 
 **Commands:**

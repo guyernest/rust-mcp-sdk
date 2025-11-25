@@ -134,10 +134,10 @@ mod tests {
     #[tokio::test]
     async fn test_tool_info_schema_validation() {
         // Test that the tool schema is properly defined
-        let tool_info = ToolInfo {
-            name: "summarize".to_string(),
-            description: Some("Summarize any text using an LLM".to_string()),
-            input_schema: json!({
+        let tool_info = ToolInfo::new(
+            "summarize",
+            Some("Summarize any text using an LLM".to_string()),
+            json!({
                 "type": "object",
                 "properties": {
                     "text": {
@@ -147,7 +147,7 @@ mod tests {
                 },
                 "required": ["text"]
             }),
-        };
+        );
 
         assert_eq!(tool_info.name, "summarize");
         assert!(tool_info.description.as_ref().unwrap().contains("LLM"));
@@ -221,10 +221,10 @@ mod property_tests {
             name in "[a-zA-Z_][a-zA-Z0-9_]*",
             description in any::<String>()
         ) {
-            let tool_info = ToolInfo {
-                name: name.clone(),
-                description: Some(description.clone()),
-                input_schema: json!({
+            let tool_info = ToolInfo::new(
+                name.clone(),
+                Some(description.clone()),
+                json!({
                     "type": "object",
                     "properties": {
                         "text": {
@@ -234,7 +234,7 @@ mod property_tests {
                     },
                     "required": ["text"]
                 }),
-            };
+            );
 
             // Property: Tool info should maintain its structure
             prop_assert_eq!(tool_info.name, name);

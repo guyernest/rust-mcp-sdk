@@ -103,10 +103,10 @@ impl ToolHandler for CalculatorTool {
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
-        Some(ToolInfo {
-            name: "calculate".to_string(),
-            description: Some("Perform basic arithmetic operations".to_string()),
-            input_schema: json!({
+        Some(ToolInfo::new(
+            "calculate",
+            Some("Perform basic arithmetic operations".to_string()),
+            json!({
                 "type": "object",
                 "properties": {
                     "operation": {
@@ -125,7 +125,7 @@ impl ToolHandler for CalculatorTool {
                 },
                 "required": ["operation", "a", "b"]
             }),
-        })
+        ))
     }
 }
 

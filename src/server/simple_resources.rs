@@ -1,6 +1,8 @@
 //! Simple resource implementations with builder pattern support.
 
-use crate::types::{Content, ListResourcesResult, ReadResourceResult, ResourceInfo};
+use crate::types::{
+    Content, ListResourcesResult, ReadResourceResult, ResourceInfo, UIResource, UIResourceContents,
+};
 use crate::Result;
 use async_trait::async_trait;
 use base64::Engine;
@@ -96,12 +98,13 @@ impl StaticResource {
 
 /// A collection of resources that can be managed together.
 ///
-/// Supports both static resources (fixed URIs) and dynamic providers (URI templates).
-/// Static resources are checked first for O(1) lookup, then dynamic providers are
-/// tried in priority order.
+/// Supports both static resources (fixed URIs), UI resources (MCP Apps Extension),
+/// and dynamic providers (URI templates). Static and UI resources are checked first
+/// for O(1) lookup, then dynamic providers are tried in priority order.
 pub struct ResourceCollection {
     resources: HashMap<String, Arc<StaticResource>>,
     router: ResourceRouter,
+    ui_resources: HashMap<String, (UIResource, UIResourceContents)>,
 }
 
 impl fmt::Debug for ResourceCollection {
@@ -136,6 +139,7 @@ impl ResourceCollection {
         Self {
             resources: HashMap::new(),
             router: ResourceRouter::new(),
+            ui_resources: HashMap::new(),
         }
     }
 
@@ -170,6 +174,37 @@ impl ResourceCollection {
             self.resources
                 .insert(resource.uri.clone(), Arc::new(resource));
         }
+        self
+    }
+
+    /// Add a UI resource to the collection (MCP Apps Extension).
+    ///
+    /// UI resources use the `ui://` URI scheme and provide HTML-based interactive
+    /// interfaces for tools. They are part of the MCP Apps Extension (SEP-1865).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use pmcp::server::simple_resources::ResourceCollection;
+    /// use pmcp::server::ui::UIResourceBuilder;
+    ///
+    /// # fn main() -> pmcp::Result<()> {
+    /// let (ui_resource, ui_contents) = UIResourceBuilder::new(
+    ///     "ui://charts/sales",
+    ///     "Sales Chart",
+    /// )
+    /// .description("Interactive sales data visualization")
+    /// .html_template("<html><body>Chart goes here</body></html>")
+    /// .build_with_contents()?;
+    ///
+    /// let collection = ResourceCollection::new()
+    ///     .add_ui_resource(ui_resource, ui_contents);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn add_ui_resource(mut self, resource: UIResource, contents: UIResourceContents) -> Self {
+        self.ui_resources
+            .insert(resource.uri.clone(), (resource, contents));
         self
     }
 
@@ -236,6 +271,16 @@ impl ResourceCollection {
             .map(|resource| resource.info())
             .collect();
 
+        // Add UI resources
+        for (ui_resource, _contents) in self.ui_resources.values() {
+            infos.push(ResourceInfo {
+                uri: ui_resource.uri.clone(),
+                name: ui_resource.name.clone(),
+                description: ui_resource.description.clone(),
+                mime_type: Some(ui_resource.mime_type.clone()),
+            });
+        }
+
         // Add dynamic templates as resources
         for template in self.router.all_templates() {
             infos.push(ResourceInfo {
@@ -257,6 +302,17 @@ impl ResourceHandler for ResourceCollection {
         if let Some(resource) = self.resources.get(uri) {
             return Ok(ReadResourceResult {
                 contents: vec![resource.content.clone()],
+            });
+        }
+
+        // Try UI resources (ui:// scheme)
+        if let Some((_resource, contents)) = self.ui_resources.get(uri) {
+            return Ok(ReadResourceResult {
+                contents: vec![Content::Resource {
+                    uri: contents.uri.clone(),
+                    text: contents.text.clone(),
+                    mime_type: Some(contents.mime_type.clone()),
+                }],
             });
         }
 

@@ -364,6 +364,16 @@ path = "examples/56_dynamic_resources.rs"
 name = "57_tool_middleware_oauth"
 path = "examples/57_tool_middleware_oauth.rs"
 
+[[example]]
+name = "conference_venue_map"
+path = "examples/conference_venue_map.rs"
+required-features = ["schema-generation"]
+
+[[example]]
+name = "hotel_gallery"
+path = "examples/hotel_gallery.rs"
+required-features = ["schema-generation"]
+
 [[bench]]
 name = "comprehensive_benchmarks"
 harness = false

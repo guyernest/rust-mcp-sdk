@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -19,6 +19,8 @@ impl TargetRegistry {
         // Register built-in targets
         registry.register(Arc::new(super::targets::AwsLambdaTarget::new()));
         registry.register(Arc::new(super::targets::CloudflareTarget::new()));
+        registry.register(Arc::new(super::targets::GoogleCloudRunTarget::new()));
+        registry.register(Arc::new(super::targets::PmcpRunTarget::new()));
 
         registry
     }

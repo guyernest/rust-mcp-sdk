@@ -1,15 +1,13 @@
 mod deploy;
-mod init;
+pub mod init;
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
-use std::path::PathBuf;
 use std::process::Command;
 
 use crate::deployment::{
     r#trait::{
-        BuildArtifact, DeploymentOutputs, DeploymentTarget, MetricsData, SecretsAction,
-        TestFailure, TestResults,
+        BuildArtifact, DeploymentOutputs, DeploymentTarget, MetricsData, SecretsAction, TestResults,
     },
     BinaryBuilder, DeployConfig,
 };
@@ -20,6 +18,19 @@ impl AwsLambdaTarget {
     pub fn new() -> Self {
         Self
     }
+}
+
+/// Build Lambda binary - can be reused by other targets
+pub async fn build_lambda_binary(config: &DeployConfig) -> Result<BuildArtifact> {
+    println!("🔨 Building Rust binary for AWS Lambda...");
+
+    let builder = BinaryBuilder::new(config.project_root.clone());
+    let result = builder.build()?;
+
+    Ok(BuildArtifact::Binary {
+        path: result.binary_path,
+        size: result.binary_size,
+    })
 }
 
 impl Default for AwsLambdaTarget {
@@ -90,15 +101,7 @@ impl DeploymentTarget for AwsLambdaTarget {
     }
 
     async fn build(&self, config: &DeployConfig) -> Result<BuildArtifact> {
-        println!("🔨 Building Rust binary for AWS Lambda...");
-
-        let builder = BinaryBuilder::new(config.project_root.clone());
-        let result = builder.build()?;
-
-        Ok(BuildArtifact::Binary {
-            path: result.binary_path,
-            size: result.binary_size,
-        })
+        build_lambda_binary(config).await
     }
 
     async fn deploy(

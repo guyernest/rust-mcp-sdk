@@ -88,7 +88,8 @@ pub struct ListToolsRequest {
 pub type ListToolsParams = ListToolsRequest;
 
 /// Tool information.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct ToolInfo {
     /// Tool name (unique identifier)
@@ -98,6 +99,43 @@ pub struct ToolInfo {
     pub description: Option<String>,
     /// JSON Schema for tool parameters
     pub input_schema: Value,
+    /// Optional metadata (e.g., for UI resource association in MCP Apps Extension)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
+    pub _meta: Option<serde_json::Map<String, Value>>,
+}
+
+impl ToolInfo {
+    /// Create a new `ToolInfo` without metadata.
+    pub fn new(name: impl Into<String>, description: Option<String>, input_schema: Value) -> Self {
+        Self {
+            name: name.into(),
+            description,
+            input_schema,
+            _meta: None,
+        }
+    }
+
+    /// Create a new `ToolInfo` with UI resource metadata.
+    pub fn with_ui(
+        name: impl Into<String>,
+        description: Option<String>,
+        input_schema: Value,
+        ui_resource_uri: impl Into<String>,
+    ) -> Self {
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "ui/resourceUri".to_string(),
+            Value::String(ui_resource_uri.into()),
+        );
+
+        Self {
+            name: name.into(),
+            description,
+            input_schema,
+            _meta: Some(meta),
+        }
+    }
 }
 
 /// List tools response.
@@ -874,16 +912,16 @@ mod tests {
 
     #[test]
     fn tool_info_serialization() {
-        let tool = ToolInfo {
-            name: "test-tool".to_string(),
-            description: Some("A test tool".to_string()),
-            input_schema: json!({
+        let tool = ToolInfo::new(
+            "test-tool",
+            Some("A test tool".to_string()),
+            json!({
                 "type": "object",
                 "properties": {
                     "param": {"type": "string"}
                 }
             }),
-        };
+        );
 
         let json = serde_json::to_value(&tool).unwrap();
         assert_eq!(json["name"], "test-tool");

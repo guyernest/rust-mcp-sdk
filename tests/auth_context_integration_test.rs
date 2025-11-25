@@ -133,11 +133,11 @@ impl ToolHandler for TestAuthenticatedTool {
     }
 
     fn metadata(&self) -> Option<pmcp::types::ToolInfo> {
-        Some(pmcp::types::ToolInfo {
-            name: self.tool_name.clone(),
-            description: Some("Test authenticated tool".to_string()),
-            input_schema: json!({}),
-        })
+        Some(pmcp::types::ToolInfo::new(
+            self.tool_name.clone(),
+            Some("Test authenticated tool".to_string()),
+            json!({}),
+        ))
     }
 }
 

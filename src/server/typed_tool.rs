@@ -31,6 +31,7 @@ where
     name: String,
     description: Option<String>,
     input_schema: Value,
+    ui_resource_uri: Option<String>,
     handler: F,
     _phantom: PhantomData<T>,
 }
@@ -69,6 +70,7 @@ where
             name: name.into(),
             description: None,
             input_schema: schema,
+            ui_resource_uri: None,
             handler,
             _phantom: PhantomData,
         }
@@ -80,6 +82,7 @@ where
             name: name.into(),
             description: None,
             input_schema: schema,
+            ui_resource_uri: None,
             handler,
             _phantom: PhantomData,
         }
@@ -88,6 +91,38 @@ where
     /// Set the description for this tool.
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    /// Associate this tool with a UI resource (MCP Apps Extension).
+    ///
+    /// This sets the `ui/resourceUri` field in the tool's `_meta` field,
+    /// allowing MCP hosts to display an interactive UI when this tool is invoked.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # #[cfg(feature = "schema-generation")] {
+    /// use pmcp::server::typed_tool::TypedTool;
+    /// use serde::Deserialize;
+    /// use schemars::JsonSchema;
+    ///
+    /// #[derive(Debug, Deserialize, JsonSchema)]
+    /// struct AnalyzeArgs {
+    ///     query: String,
+    /// }
+    ///
+    /// let tool = TypedTool::new("analyze_sales", |args: AnalyzeArgs, _extra| {
+    ///     Box::pin(async move {
+    ///         Ok(serde_json::json!({"result": "data"}))
+    ///     })
+    /// })
+    /// .with_description("Analyze sales data")
+    /// .with_ui("ui://charts/sales");  // Associate with UI resource
+    /// # }
+    /// ```
+    pub fn with_ui(mut self, ui_resource_uri: impl Into<String>) -> Self {
+        self.ui_resource_uri = Some(ui_resource_uri.into());
         self
     }
 }
@@ -111,10 +146,19 @@ where
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
-        Some(ToolInfo {
-            name: self.name.clone(),
-            description: self.description.clone(),
-            input_schema: self.input_schema.clone(),
+        Some(if let Some(uri) = &self.ui_resource_uri {
+            ToolInfo::with_ui(
+                self.name.clone(),
+                self.description.clone(),
+                self.input_schema.clone(),
+                uri.clone(),
+            )
+        } else {
+            ToolInfo::new(
+                self.name.clone(),
+                self.description.clone(),
+                self.input_schema.clone(),
+            )
         })
     }
 }
@@ -206,6 +250,7 @@ where
             name: self.name.clone(),
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
+            _meta: None,
         })
     }
 }
@@ -411,6 +456,7 @@ where
             name: self.name.clone(),
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
+            _meta: None,
         })
     }
 }

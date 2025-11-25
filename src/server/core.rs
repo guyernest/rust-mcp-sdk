@@ -244,11 +244,7 @@ impl ServerCore {
                     info.name.clone_from(name);
                     info
                 } else {
-                    ToolInfo {
-                        name: name.clone(),
-                        description: None,
-                        input_schema: serde_json::json!({}),
-                    }
+                    ToolInfo::new(name.clone(), None, serde_json::json!({}))
                 }
             })
             .collect();
