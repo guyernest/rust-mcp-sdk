@@ -83,9 +83,10 @@ impl DeploymentTarget for PmcpRunTarget {
         }
 
         // Check authentication
-        if auth::get_credentials().is_err() {
+        if auth::get_credentials().await.is_err() {
             missing.push(
-                "pmcp.run authentication (run: cargo pmcp login --target pmcp-run)".to_string(),
+                "pmcp.run authentication (run: cargo pmcp deploy login --target pmcp-run)"
+                    .to_string(),
             );
         }
 
@@ -141,7 +142,7 @@ impl DeploymentTarget for PmcpRunTarget {
         println!();
 
         // Call pmcp.run API to delete deployment
-        let credentials = auth::get_credentials()?;
+        let credentials = auth::get_credentials().await?;
         graphql::delete_deployment(&credentials.access_token, &config.server.name).await?;
 
         println!("✅ pmcp.run deployment destroyed successfully");
@@ -172,7 +173,7 @@ impl DeploymentTarget for PmcpRunTarget {
     }
 
     async fn outputs(&self, config: &DeployConfig) -> Result<DeploymentOutputs> {
-        let credentials = auth::get_credentials()?;
+        let credentials = auth::get_credentials().await?;
         graphql::get_deployment_outputs(&credentials.access_token, &config.server.name).await
     }
 

@@ -522,11 +522,11 @@ mod tests {
         let manager = DynamicServerManager::new(server);
 
         // Add a tool
-        let tool_info = ToolInfo {
-            name: "dynamic_test".to_string(),
-            description: Some("Dynamic test tool".to_string()),
-            input_schema: json!({}),
-        };
+        let tool_info = ToolInfo::new(
+            "dynamic_test",
+            Some("Dynamic test tool".to_string()),
+            json!({}),
+        );
 
         manager
             .add_tool("dynamic_test", Arc::new(TestTool), tool_info.clone())
@@ -558,11 +558,7 @@ mod tests {
             .tool(
                 "tool1",
                 Arc::new(TestTool),
-                ToolInfo {
-                    name: "tool1".to_string(),
-                    description: Some("Tool 1".to_string()),
-                    input_schema: json!({}),
-                },
+                ToolInfo::new("tool1", Some("Tool 1".to_string()), json!({})),
             )
             .prompt(
                 "prompt1",

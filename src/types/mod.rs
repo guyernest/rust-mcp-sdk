@@ -10,6 +10,9 @@ pub mod elicitation;
 pub mod jsonrpc;
 pub mod protocol;
 
+/// UI resources for MCP Apps Extension (SEP-1865)
+pub mod ui;
+
 // Re-export transport message type
 pub use crate::shared::transport::TransportMessage;
 
@@ -39,3 +42,4 @@ pub use protocol::{
     SamplingMessage, ServerNotification, ServerRequest, SubscribeRequest, TokenUsage, ToolInfo,
     UnsubscribeRequest,
 };
+pub use ui::{ToolUIMetadata, UIMimeType, UIResource, UIResourceContents};

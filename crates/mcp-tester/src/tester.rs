@@ -18,6 +18,14 @@ use url::Url;
 
 use crate::report::{TestCategory, TestReport, TestResult, TestStatus};
 use crate::validators::Validator;
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct ToolUIInfo {
+    pub tool_name: String,
+    pub ui_resource_uri: String,
+    pub html_content: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
@@ -64,6 +72,8 @@ pub struct ServerTester {
     // HTTP middleware chain for JSON-RPC transport (OAuth, logging, etc.)
     http_middleware_chain:
         Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
+    // UI information for tools with associated UIs
+    tool_uis: HashMap<String, ToolUIInfo>,
 }
 
 impl ServerTester {
@@ -190,6 +200,7 @@ impl ServerTester {
             pmcp_client: None,
             stdio_client: None,
             http_middleware_chain: http_middleware_chain.clone(),
+            tool_uis: HashMap::new(),
         })
     }
 
@@ -2700,5 +2711,333 @@ impl ServerTester {
                 Ok(json!({ "error": "Custom requests not supported for this transport" }))
             },
         }
+    }
+
+    /// Detect tools with UI metadata and extract UI resource URIs
+    pub async fn discover_tool_uis(&mut self) -> Result<Vec<ToolUIInfo>> {
+        let mut ui_tools = Vec::new();
+
+        if let Some(ref tools) = self.tools {
+            for tool in tools {
+                // Check for UI metadata in _meta field
+                if let Some(ref meta) = tool._meta {
+                    if let Some(Value::String(ui_uri)) = meta.get("ui/resourceUri") {
+                        ui_tools.push(ToolUIInfo {
+                            tool_name: tool.name.clone(),
+                            ui_resource_uri: ui_uri.clone(),
+                            html_content: None,
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(ui_tools)
+    }
+
+    /// Fetch UI resource content for a given URI
+    pub async fn fetch_ui_resource(&mut self, uri: &str) -> Result<String> {
+        use pmcp::types::Content;
+
+        // Use the existing read_resource method
+        let result = self.read_resource(uri).await?;
+
+        // Extract text content from the resource
+        for content in &result.contents {
+            match content {
+                Content::Text { text } => {
+                    return Ok(text.clone());
+                },
+                Content::Resource {
+                    text: Some(text), ..
+                } => {
+                    return Ok(text.clone());
+                },
+                _ => continue,
+            }
+        }
+
+        Err(anyhow::anyhow!(
+            "No text content found in UI resource: {}",
+            uri
+        ))
+    }
+
+    /// Discover and fetch all tool UIs
+    pub async fn load_all_tool_uis(&mut self) -> Result<()> {
+        let ui_tools = self.discover_tool_uis().await?;
+
+        for mut ui_info in ui_tools {
+            match self.fetch_ui_resource(&ui_info.ui_resource_uri).await {
+                Ok(html) => {
+                    ui_info.html_content = Some(html);
+                    self.tool_uis.insert(ui_info.tool_name.clone(), ui_info);
+                },
+                Err(e) => {
+                    eprintln!(
+                        "⚠️  Failed to fetch UI for tool '{}': {}",
+                        ui_info.tool_name, e
+                    );
+                },
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Get UI information for all tools
+    pub fn get_tool_uis(&self) -> &HashMap<String, ToolUIInfo> {
+        &self.tool_uis
+    }
+
+    /// Render a tool's UI to an HTML file
+    pub fn render_tool_ui(&self, tool_name: &str, output_path: &str) -> Result<()> {
+        let ui_info = self
+            .tool_uis
+            .get(tool_name)
+            .ok_or_else(|| anyhow::anyhow!("No UI found for tool '{}'", tool_name))?;
+
+        let html_content = ui_info
+            .html_content
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No HTML content for tool '{}'", tool_name))?;
+
+        // Wrap the HTML with postMessage bridge
+        let wrapped_html = self.wrap_with_postmessage_bridge(html_content);
+
+        std::fs::write(output_path, wrapped_html)?;
+
+        println!(
+            "✅ Rendered UI for tool '{}' to: {}",
+            tool_name, output_path
+        );
+        println!(
+            "   Open in browser: file://{}",
+            std::fs::canonicalize(output_path)?.display()
+        );
+
+        Ok(())
+    }
+
+    /// Wrap HTML with postMessage bridge for MCP communication
+    fn wrap_with_postmessage_bridge(&self, original_html: &str) -> String {
+        let html_base64 = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            original_html.as_bytes(),
+        );
+
+        format!(
+            r#"<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP UI Viewer</title>
+    <style>
+        body {{
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }}
+        #debug-panel {{
+            position: fixed;
+            top: 0;
+            right: 0;
+            width: 350px;
+            height: 100vh;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+            overflow-y: auto;
+            font-size: 13px;
+            border-left: 1px solid #333;
+            z-index: 10000;
+            box-shadow: -2px 0 8px rgba(0,0,0,0.3);
+        }}
+        #debug-panel h3 {{
+            margin: 0 0 16px 0;
+            font-size: 16px;
+            color: #4fc3f7;
+            font-weight: 600;
+        }}
+        #status {{
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            background: #4caf50;
+            color: white;
+            font-size: 11px;
+            font-weight: 600;
+        }}
+        #debug-log {{
+            background: #252526;
+            padding: 12px;
+            border-radius: 6px;
+            max-height: 500px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            margin-top: 16px;
+        }}
+        .log-entry {{
+            margin-bottom: 10px;
+            padding: 6px;
+            border-left: 3px solid #4fc3f7;
+            padding-left: 10px;
+            background: rgba(79, 195, 247, 0.05);
+            border-radius: 0 4px 4px 0;
+        }}
+        .log-entry.error {{
+            border-left-color: #f44336;
+            background: rgba(244, 67, 54, 0.05);
+            color: #ff8a80;
+        }}
+        .log-entry.success {{
+            border-left-color: #4caf50;
+            background: rgba(76, 175, 80, 0.05);
+            color: #69f0ae;
+        }}
+        .log-entry.warning {{
+            border-left-color: #ff9800;
+            background: rgba(255, 152, 0, 0.05);
+            color: #ffab40;
+        }}
+        #ui-iframe {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: calc(100% - 350px);
+            height: 100vh;
+            border: none;
+        }}
+        #toggle-debug {{
+            position: fixed;
+            top: 12px;
+            right: 366px;
+            background: #4fc3f7;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            z-index: 10001;
+            font-size: 13px;
+            font-weight: 600;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            transition: all 0.2s;
+        }}
+        #toggle-debug:hover {{
+            background: #039be5;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }}
+        .hidden {{
+            display: none !important;
+        }}
+    </style>
+</head>
+<body>
+    <button id="toggle-debug" onclick="toggleDebug()">📊 Toggle Debug</button>
+    <div id="debug-panel">
+        <h3>🔍 MCP UI Debug Panel</h3>
+        <div>
+            <strong>Status:</strong> <span id="status">Ready</span>
+        </div>
+        <div style="margin-top: 12px; font-size: 11px; color: #888;">
+            <strong>Mode:</strong> Static Viewer<br>
+            <strong>Note:</strong> Tool calls are logged but not executed
+        </div>
+        <div>
+            <h4 style="margin: 16px 0 8px 0; font-size: 14px; color: #4fc3f7;">Tool Calls Log:</h4>
+            <div id="debug-log"></div>
+        </div>
+    </div>
+    <iframe id="ui-iframe" sandbox="allow-scripts allow-same-origin"></iframe>
+
+    <script>
+        const debugLog = document.getElementById('debug-log');
+        const status = document.getElementById('status');
+        const iframe = document.getElementById('ui-iframe');
+
+        function log(message, type = 'info') {{
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${{type}}`;
+            const timestamp = new Date().toLocaleTimeString();
+            entry.innerHTML = `<strong>[${{timestamp}}]</strong> ${{message}}`;
+            debugLog.appendChild(entry);
+            debugLog.scrollTop = debugLog.scrollHeight;
+        }}
+
+        function toggleDebug() {{
+            const panel = document.getElementById('debug-panel');
+            const button = document.getElementById('toggle-debug');
+            const iframe = document.getElementById('ui-iframe');
+
+            if (panel.classList.contains('hidden')) {{
+                panel.classList.remove('hidden');
+                iframe.style.width = 'calc(100% - 350px)';
+                button.style.right = '366px';
+                button.textContent = '📊 Toggle Debug';
+            }} else {{
+                panel.classList.add('hidden');
+                iframe.style.width = '100%';
+                button.style.right = '12px';
+                button.textContent = '📊 Show Debug';
+            }}
+        }}
+
+        // Load the UI HTML into the iframe
+        const uiHtml = atob('{html_base64}');
+        const blob = new Blob([uiHtml], {{ type: 'text/html' }});
+        const blobUrl = URL.createObjectURL(blob);
+        iframe.src = blobUrl;
+
+        log('✅ UI loaded successfully into sandboxed iframe', 'success');
+
+        // Listen for postMessage from iframe (tool calls)
+        window.addEventListener('message', async (event) => {{
+            const data = event.data;
+
+            if (data.jsonrpc === '2.0' && data.method === 'tools/call') {{
+                const toolName = data.params?.name || 'unknown';
+                const args = data.params?.arguments || {{}};
+
+                log(`🔧 Tool call: <strong>${{toolName}}</strong>`, 'info');
+                log(`📝 Arguments: ${{JSON.stringify(args, null, 2)}}`, 'info');
+
+                // NOTE: In this static viewer, we can't actually call the MCP server
+                log('⚠️  Static UI mode - tool calls are logged but not executed', 'warning');
+                log('💡 For interactive testing, use <code>cargo pmcp test</code> with <code>--serve-ui</code> flag', 'info');
+
+                // Send mock error response to UI
+                iframe.contentWindow.postMessage({{
+                    type: 'mcp-tool-result',
+                    id: data.id,
+                    error: {{
+                        code: -1,
+                        message: 'Static UI mode - tool call not executed. Use --serve-ui for interactive testing.'
+                    }}
+                }}, '*');
+            }} else if (data.type === 'mcp-ui-ready') {{
+                log('✅ UI framework initialized and ready', 'success');
+            }}
+        }});
+
+        log('🌉 PostMessage bridge initialized', 'success');
+        log('👁️  Monitoring tool calls from UI...', 'info');
+
+        // Optional: Send initial ready message to UI
+        setTimeout(() => {{
+            iframe.contentWindow.postMessage({{
+                type: 'mcp-host-ready',
+                timestamp: Date.now()
+            }}, '*');
+        }}, 100);
+    </script>
+</body>
+</html>"#,
+            html_base64 = html_base64
+        )
     }
 }

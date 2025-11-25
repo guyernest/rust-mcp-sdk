@@ -83,11 +83,11 @@ where
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
-        Some(ToolInfo {
-            name: self.name.clone(),
-            description: self.description.clone(),
-            input_schema: self.input_schema.clone(),
-        })
+        Some(ToolInfo::new(
+            self.name.clone(),
+            self.description.clone(),
+            self.input_schema.clone(),
+        ))
     }
 }
 
@@ -156,10 +156,10 @@ where
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
-        Some(ToolInfo {
-            name: self.name.clone(),
-            description: self.description.clone(),
-            input_schema: self.input_schema.clone(),
-        })
+        Some(ToolInfo::new(
+            self.name.clone(),
+            self.description.clone(),
+            self.input_schema.clone(),
+        ))
     }
 }

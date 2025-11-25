@@ -25,6 +25,7 @@ mcp-tester = { path = "../crates/mcp-tester" }
 urlencoding = "2"
 async-trait = "0.1.89"
 pathdiff = "0.2.3"
+cargo_metadata = "0.18"
 
 # For pmcp-run target
 oauth2 = "4.4"                          # OAuth 2.0 authentication

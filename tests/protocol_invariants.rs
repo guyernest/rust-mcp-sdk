@@ -92,11 +92,11 @@ prop_compose! {
         description in prop::string::string_regex("[a-zA-Z0-9 .,!?]{0,200}").unwrap(),
         schema in arb_json_value(2),
     ) -> ToolInfo {
-        ToolInfo {
+        ToolInfo::new(
             name,
-            description: if has_desc { Some(description) } else { None },
-            input_schema: schema,
-        }
+            if has_desc { Some(description) } else { None },
+            schema,
+        )
     }
 }
 

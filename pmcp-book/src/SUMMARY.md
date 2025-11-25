@@ -30,6 +30,7 @@
   - [Streamable HTTP](ch10-03-streamable-http.md)
 - [Chapter 11: Middleware & Composition](ch11-middleware.md)
 - [Chapter 12: Progress Tracking & Cancellation](ch12-progress-cancel.md)
+- [Chapter 12.5: MCP Apps Extension — Interactive UIs](ch12-5-mcp-apps.md)
 
 ## Part IV: Real-World Applications
 

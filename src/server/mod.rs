@@ -77,6 +77,10 @@ pub mod workflow;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod typed_tool;
 
+/// UI resource implementations for MCP Apps Extension (SEP-1865).
+#[cfg(not(target_arch = "wasm32"))]
+pub mod ui;
+
 /// Validation helpers for typed tools.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod validation;
@@ -943,16 +947,16 @@ impl Server {
             .iter()
             .map(|(name, handler)| {
                 // Try to get metadata from the handler, otherwise use defaults
-                handler
-                    .metadata()
-                    .unwrap_or_else(|| crate::types::ToolInfo {
-                        name: name.clone(),
-                        description: None,
-                        input_schema: serde_json::json!({
+                handler.metadata().unwrap_or_else(|| {
+                    crate::types::ToolInfo::new(
+                        name.clone(),
+                        None,
+                        serde_json::json!({
                             "type": "object",
                             "properties": {}
                         }),
-                    })
+                    )
+                })
             })
             .collect::<Vec<_>>();
 

@@ -140,39 +140,39 @@ fn bench_response_serialization(c: &mut Criterion) {
     // List tools response with multiple tools
     let tools_response = ListToolsResult {
         tools: vec![
-            ToolInfo {
-                name: "search".to_string(),
-                description: Some("Search for information".to_string()),
-                input_schema: json!({
+            ToolInfo::new(
+                "search",
+                Some("Search for information".to_string()),
+                json!({
                     "type": "object",
                     "properties": {
                         "query": {"type": "string"},
                         "limit": {"type": "number"}
                     }
                 }),
-            },
-            ToolInfo {
-                name: "analyze".to_string(),
-                description: Some("Analyze data".to_string()),
-                input_schema: json!({
+            ),
+            ToolInfo::new(
+                "analyze",
+                Some("Analyze data".to_string()),
+                json!({
                     "type": "object",
                     "properties": {
                         "data": {"type": "array"},
                         "method": {"type": "string"}
                     }
                 }),
-            },
-            ToolInfo {
-                name: "generate".to_string(),
-                description: Some("Generate content".to_string()),
-                input_schema: json!({
+            ),
+            ToolInfo::new(
+                "generate",
+                Some("Generate content".to_string()),
+                json!({
                     "type": "object",
                     "properties": {
                         "template": {"type": "string"},
                         "variables": {"type": "object"}
                     }
                 }),
-            },
+            ),
         ],
         next_cursor: None,
     };
@@ -283,10 +283,10 @@ fn bench_large_messages(c: &mut Criterion) {
 
     // Create a large list of tools
     let many_tools: Vec<ToolInfo> = (0..100)
-        .map(|i| ToolInfo {
-            name: format!("tool_{}", i),
-            description: Some(format!("Description for tool number {} with comprehensive details about its functionality and usage patterns.", i)),
-            input_schema: json!({
+        .map(|i| ToolInfo::new(
+            format!("tool_{}", i),
+            Some(format!("Description for tool number {} with comprehensive details about its functionality and usage patterns.", i)),
+            json!({
                 "type": "object",
                 "properties": {
                     "input": {"type": "string", "description": format!("Input parameter for tool {}", i)},
@@ -300,7 +300,7 @@ fn bench_large_messages(c: &mut Criterion) {
                     }
                 }
             }),
-        })
+        ))
         .collect();
 
     let large_tools_response = ListToolsResult {

@@ -65,11 +65,15 @@ fn credentials_path() -> Result<PathBuf> {
 }
 
 /// Load credentials from file
-pub fn get_credentials() -> Result<Credentials> {
+pub async fn get_credentials() -> Result<Credentials> {
     let path = credentials_path()?;
 
     if !path.exists() {
-        bail!("Not authenticated with pmcp.run.\nRun: cargo pmcp deploy login --target pmcp-run");
+        bail!(
+            "❌ Not authenticated with pmcp.run\n\n\
+             💡 Please login first:\n\
+             cargo pmcp deploy login --target pmcp-run\n"
+        );
     }
 
     let content = std::fs::read_to_string(&path)?;
@@ -87,8 +91,7 @@ pub fn get_credentials() -> Result<Credentials> {
 
     if expires_at < chrono::Utc::now() {
         // Try to refresh
-        return tokio::runtime::Runtime::new()?
-            .block_on(refresh_credentials(&credentials.refresh_token));
+        return refresh_credentials(&credentials.refresh_token).await;
     }
 
     Ok(credentials)
@@ -104,7 +107,15 @@ async fn refresh_credentials(refresh_token: &str) -> Result<Credentials> {
         .exchange_refresh_token(&RefreshToken::new(refresh_token.to_string()))
         .request_async(async_http_client)
         .await
-        .context("Failed to refresh token")?;
+        .map_err(|e| {
+            eprintln!("❌ Token refresh failed: {}", e);
+            eprintln!();
+            eprintln!("💡 Your refresh token may have expired or become invalid.");
+            eprintln!("   Please login again:");
+            eprintln!("   cargo pmcp deploy login --target pmcp-run");
+            eprintln!();
+            anyhow::anyhow!("Failed to refresh token: {}", e)
+        })?;
 
     let credentials = Credentials {
         access_token: token_result.access_token().secret().clone(),

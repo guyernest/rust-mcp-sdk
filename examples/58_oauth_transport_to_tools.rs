@@ -185,13 +185,13 @@ impl ToolHandler for BackendApiTool {
     }
 
     fn metadata(&self) -> Option<pmcp::types::ToolInfo> {
-        Some(pmcp::types::ToolInfo {
-            name: "call_backend_api".to_string(),
-            description: Some(format!(
+        Some(pmcp::types::ToolInfo::new(
+            "call_backend_api",
+            Some(format!(
                 "Call {} API with OAuth authentication",
                 self.api_name
             )),
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "properties": {
                     "endpoint": {
@@ -201,7 +201,7 @@ impl ToolHandler for BackendApiTool {
                 },
                 "required": ["endpoint"]
             }),
-        })
+        ))
     }
 }
 

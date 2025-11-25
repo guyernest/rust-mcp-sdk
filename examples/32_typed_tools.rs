@@ -257,16 +257,16 @@ impl ToolHandler for CustomValidatedTool {
         // Generate schema for the custom tool
         let schema = schemars::schema_for!(CustomArgs);
 
-        Some(pmcp::types::ToolInfo {
-            name: "custom_validated".to_string(),
-            description: Some("Custom tool with validation".to_string()),
-            input_schema: serde_json::to_value(&schema).unwrap_or_else(|_| {
+        Some(pmcp::types::ToolInfo::new(
+            "custom_validated",
+            Some("Custom tool with validation".to_string()),
+            serde_json::to_value(&schema).unwrap_or_else(|_| {
                 json!({
                     "type": "object",
                     "properties": {}
                 })
             }),
-        })
+        ))
     }
 }
 

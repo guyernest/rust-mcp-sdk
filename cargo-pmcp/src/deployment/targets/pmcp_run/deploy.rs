@@ -21,7 +21,7 @@ pub async fn deploy_to_pmcp_run(
     println!();
 
     // Get credentials (OAuth tokens)
-    let credentials = auth::get_credentials()?;
+    let credentials = auth::get_credentials().await?;
 
     // Paths
     let deploy_dir = config.project_root.join("deploy");

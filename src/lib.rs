@@ -97,6 +97,7 @@ pub use server::{
     simple_resources::{DynamicResourceHandler, ResourceCollection, StaticResource},
     simple_tool::{SimpleTool, SyncTool},
     typed_tool::{SimpleToolExt, SyncToolExt, TypedSyncTool, TypedTool, TypedToolWithOutput},
+    ui::UIResourceBuilder,
     PromptHandler, ResourceHandler, SamplingHandler, Server, ServerBuilder, ToolHandler,
 };
 #[cfg(target_arch = "wasm32")]
@@ -138,7 +139,7 @@ pub use types::{
     MessageContent, ModelPreferences, ProgressNotification, ProgressToken, PromptMessage,
     ProtocolVersion, ReadResourceResult, RequestId, ResourceInfo, Role, RootsCapabilities,
     SamplingCapabilities, SamplingMessage, ServerCapabilities, ServerNotification, ServerRequest,
-    TokenUsage, ToolCapabilities, ToolInfo,
+    TokenUsage, ToolCapabilities, ToolInfo, UIMimeType, UIResource, UIResourceContents,
 };
 
 /// Type alias for [`CallToolResult`] - provides convenient access to tool execution results
