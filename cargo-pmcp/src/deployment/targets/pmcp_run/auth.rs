@@ -44,17 +44,206 @@ type CognitoClient<
     HasTokenUrl,
 >;
 
-// Cognito configuration - reads from environment variables or uses defaults
+// OAuth callback port for local server
 const CALLBACK_PORT: u16 = 8787;
 
-fn get_cognito_domain() -> String {
-    std::env::var("PMCP_RUN_COGNITO_DOMAIN")
-        .unwrap_or_else(|_| "4f40d547593aca2fc5dd.auth.us-west-2.amazoncognito.com".to_string())
+// Production defaults for pmcp.run
+const DEFAULT_API_URL: &str = "https://api.pmcp.run";
+const DEFAULT_AUTH_DOMAIN: &str = "auth.pmcp.run";
+
+// Cache duration for discovered config (1 hour)
+const CONFIG_CACHE_DURATION_SECS: u64 = 3600;
+
+/// pmcp.run service configuration discovered from well-known endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PmcpRunConfig {
+    /// OAuth client ID for authentication
+    pub cognito_client_id: String,
+    /// Cognito domain for OAuth flows
+    pub cognito_domain: String,
+    /// GraphQL API URL
+    #[serde(default)]
+    pub graphql_url: Option<String>,
+    /// Config version for compatibility checking
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
-fn get_cognito_client_id() -> String {
-    std::env::var("PMCP_RUN_COGNITO_CLIENT_ID")
-        .unwrap_or_else(|_| "3nbmeos20h8o3vsj0demc191et".to_string())
+/// Cached configuration with timestamp
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedConfig {
+    config: PmcpRunConfig,
+    cached_at: String,
+}
+
+/// Get the base API URL from environment or use default
+fn get_api_base_url() -> String {
+    std::env::var("PMCP_RUN_API_URL").unwrap_or_else(|_| DEFAULT_API_URL.to_string())
+}
+
+/// Get the config cache file path
+fn config_cache_path() -> Result<PathBuf> {
+    let home = dirs::home_dir().context("Could not determine home directory")?;
+    let pmcp_dir = home.join(".pmcp");
+    if !pmcp_dir.exists() {
+        std::fs::create_dir_all(&pmcp_dir)?;
+    }
+    Ok(pmcp_dir.join("pmcp-run-config.json"))
+}
+
+/// Load cached config if valid
+fn load_cached_config() -> Option<PmcpRunConfig> {
+    let path = config_cache_path().ok()?;
+    if !path.exists() {
+        return None;
+    }
+
+    let content = std::fs::read_to_string(&path).ok()?;
+    let cached: CachedConfig = serde_json::from_str(&content).ok()?;
+
+    // Check if cache is still valid
+    let cached_at = chrono::DateTime::parse_from_rfc3339(&cached.cached_at).ok()?;
+    let age = chrono::Utc::now()
+        .signed_duration_since(cached_at)
+        .num_seconds();
+
+    if age < CONFIG_CACHE_DURATION_SECS as i64 {
+        Some(cached.config)
+    } else {
+        None
+    }
+}
+
+/// Save config to cache
+fn save_config_cache(config: &PmcpRunConfig) -> Result<()> {
+    let path = config_cache_path()?;
+    let cached = CachedConfig {
+        config: config.clone(),
+        cached_at: chrono::Utc::now().to_rfc3339(),
+    };
+    std::fs::write(&path, serde_json::to_string_pretty(&cached)?)?;
+    Ok(())
+}
+
+/// Fetch configuration from pmcp.run discovery endpoint
+async fn fetch_pmcp_config() -> Result<PmcpRunConfig> {
+    let api_url = get_api_base_url();
+    let discovery_url = format!("{}/.well-known/pmcp-config", api_url);
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&discovery_url)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .context("Failed to fetch pmcp.run configuration")?;
+
+    if !response.status().is_success() {
+        bail!(
+            "Discovery endpoint returned status {}: {}",
+            response.status(),
+            discovery_url
+        );
+    }
+
+    let config: PmcpRunConfig = response
+        .json()
+        .await
+        .context("Failed to parse pmcp.run configuration")?;
+
+    // Cache the fetched config
+    if let Err(e) = save_config_cache(&config) {
+        eprintln!("⚠️  Warning: Could not cache config: {}", e);
+    }
+
+    Ok(config)
+}
+
+/// Get pmcp.run configuration with fallback chain:
+/// 1. Environment variables (highest priority)
+/// 2. Cached config from previous discovery
+/// 3. Discovery endpoint fetch
+/// 4. Default values (fallback)
+pub async fn get_pmcp_config() -> Result<PmcpRunConfig> {
+    // Check for environment variable overrides first
+    let env_client_id = std::env::var("PMCP_RUN_COGNITO_CLIENT_ID").ok();
+    let env_domain = std::env::var("PMCP_RUN_COGNITO_DOMAIN").ok();
+
+    // If both env vars are set, use them directly
+    if let (Some(client_id), Some(domain)) = (env_client_id.clone(), env_domain.clone()) {
+        return Ok(PmcpRunConfig {
+            cognito_client_id: client_id,
+            cognito_domain: domain,
+            graphql_url: std::env::var("PMCP_RUN_GRAPHQL_URL").ok(),
+            version: None,
+        });
+    }
+
+    // Try cached config
+    if let Some(cached) = load_cached_config() {
+        // Apply any env var overrides to cached config
+        return Ok(PmcpRunConfig {
+            cognito_client_id: env_client_id.unwrap_or(cached.cognito_client_id),
+            cognito_domain: env_domain.unwrap_or(cached.cognito_domain),
+            graphql_url: std::env::var("PMCP_RUN_GRAPHQL_URL")
+                .ok()
+                .or(cached.graphql_url),
+            version: cached.version,
+        });
+    }
+
+    // Try discovery endpoint
+    match fetch_pmcp_config().await {
+        Ok(config) => {
+            // Apply any env var overrides
+            Ok(PmcpRunConfig {
+                cognito_client_id: env_client_id.unwrap_or(config.cognito_client_id),
+                cognito_domain: env_domain.unwrap_or(config.cognito_domain),
+                graphql_url: std::env::var("PMCP_RUN_GRAPHQL_URL")
+                    .ok()
+                    .or(config.graphql_url),
+                version: config.version,
+            })
+        },
+        Err(e) => {
+            // Discovery failed - check if we have partial env vars
+            if env_client_id.is_some() || env_domain.is_some() {
+                eprintln!(
+                    "⚠️  Discovery failed, using partial environment config: {}",
+                    e
+                );
+                Ok(PmcpRunConfig {
+                    cognito_client_id: env_client_id.unwrap_or_default(),
+                    cognito_domain: env_domain.unwrap_or_else(|| DEFAULT_AUTH_DOMAIN.to_string()),
+                    graphql_url: std::env::var("PMCP_RUN_GRAPHQL_URL").ok(),
+                    version: None,
+                })
+            } else {
+                // No env vars, no cache, discovery failed
+                bail!(
+                    "❌ Could not retrieve pmcp.run configuration\n\n\
+                     Discovery endpoint failed: {}\n\n\
+                     💡 Options:\n\
+                     1. Check your internet connection\n\
+                     2. Set environment variables manually:\n\
+                        PMCP_RUN_COGNITO_CLIENT_ID=<client_id>\n\
+                        PMCP_RUN_COGNITO_DOMAIN=<domain>\n\
+                     3. Visit https://pmcp.run/settings for configuration values\n",
+                    e
+                )
+            }
+        },
+    }
+}
+
+/// Get Cognito domain (legacy function for compatibility)
+fn get_cognito_domain_from_config(config: &PmcpRunConfig) -> String {
+    config.cognito_domain.clone()
+}
+
+/// Get Cognito client ID (legacy function for compatibility)
+fn get_cognito_client_id_from_config(config: &PmcpRunConfig) -> String {
+    config.cognito_client_id.clone()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,7 +304,8 @@ pub async fn get_credentials() -> Result<Credentials> {
 async fn refresh_credentials(refresh_token: &str) -> Result<Credentials> {
     println!("🔄 Refreshing access token...");
 
-    let client = create_oauth_client()?;
+    let config = get_pmcp_config().await?;
+    let client = create_oauth_client_from_config(&config)?;
     let http_client = reqwest::Client::new();
 
     let token_result = client
@@ -181,8 +371,10 @@ fn save_credentials(credentials: &Credentials) -> Result<()> {
     Ok(())
 }
 
-/// Create OAuth 2.0 client
-fn create_oauth_client() -> Result<
+/// Create OAuth 2.0 client from config
+fn create_oauth_client_from_config(
+    config: &PmcpRunConfig,
+) -> Result<
     CognitoClient<
         oauth2::EndpointSet,
         oauth2::EndpointNotSet,
@@ -191,8 +383,8 @@ fn create_oauth_client() -> Result<
         oauth2::EndpointSet,
     >,
 > {
-    let cognito_domain = get_cognito_domain();
-    let cognito_client_id = get_cognito_client_id();
+    let cognito_domain = get_cognito_domain_from_config(config);
+    let cognito_client_id = get_cognito_client_id_from_config(config);
 
     let auth_url = AuthUrl::new(format!("https://{}/oauth2/authorize", cognito_domain))
         .context("Invalid auth URL")?;
@@ -267,7 +459,13 @@ pub async fn login() -> Result<()> {
     println!("🔐 Authenticating with pmcp.run...");
     println!();
 
-    let client = create_oauth_client()?;
+    // Fetch configuration (from discovery endpoint or env vars)
+    println!("📡 Fetching pmcp.run configuration...");
+    let config = get_pmcp_config().await?;
+    println!("   Using auth domain: {}", config.cognito_domain);
+    println!();
+
+    let client = create_oauth_client_from_config(&config)?;
 
     // Generate PKCE challenge for enhanced security
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
