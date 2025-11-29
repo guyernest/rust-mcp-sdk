@@ -3,14 +3,18 @@
 pub const COMPLETE_CALCULATOR_LIB: &str = r##"//! Complete calculator MCP server
 //!
 //! Demonstrates all three MCP capabilities:
-//! - Tools: Basic arithmetic operations (add, subtract, multiply, divide, power)
-//! - Prompts: Quadratic equation solver (orchestrates multiple tools)
+//! - Tools: Basic arithmetic operations (add, subtract, multiply, divide, power, sqrt)
+//! - Prompts: Two approaches to quadratic equation solving:
+//!   - `solve_quadratic` - SequentialWorkflow that chains tools + fetches resources
+//!   - `quadratic_simple` - SimplePrompt for comparison (self-contained calculation)
 //! - Resources: Educational content about quadratic formulas
 
 use pmcp::{Error, Result, Server, TypedTool, SimplePrompt, ResourceCollection, StaticResource};
+use pmcp::server::workflow::{SequentialWorkflow, WorkflowStep, ToolHandle, InternalPromptMessage};
+use pmcp::server::workflow::dsl::{prompt_arg, field, constant};
 use pmcp::types::{
     ServerCapabilities, GetPromptResult, PromptMessage, Role, MessageContent,
-    ToolCapabilities, PromptCapabilities, ResourceCapabilities,
+    ToolCapabilities, PromptCapabilities, ResourceCapabilities, PromptArgumentType,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -92,31 +96,143 @@ pub struct PowerInput {
     pub exponent: f64,
 }
 
-// ============================================================================
-// PROMPT INPUT TYPES
-// ============================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Validate)]
 #[schemars(deny_unknown_fields)]
-pub struct QuadraticInput {
-    /// Coefficient of x² term
-    #[schemars(description = "Coefficient a in ax² + bx + c = 0")]
-    pub a: f64,
-
-    /// Coefficient of x term
-    #[schemars(description = "Coefficient b in ax² + bx + c = 0")]
-    pub b: f64,
-
-    /// Constant term
-    #[schemars(description = "Constant c in ax² + bx + c = 0")]
-    pub c: f64,
+pub struct SqrtInput {
+    /// Number to calculate square root of
+    #[validate(range(min = 0.0, max = 1000000.0))]
+    #[schemars(description = "Number to calculate square root of (must be non-negative)")]
+    pub n: f64,
 }
 
 /// Build the calculator server with all capabilities
 pub fn build_calculator_server() -> Result<Server> {
-    // Create quadratic prompt
-    let quadratic_prompt = SimplePrompt::new(
-        "quadratic",
+    // ========================================================================
+    // WORKFLOW PROMPT: solve_quadratic
+    // Demonstrates SequentialWorkflow with ACTUAL TOOL EXECUTION
+    //
+    // This workflow executes calculator tools server-side during prompts/get,
+    // demonstrating the power of computational workflows in MCP. The server
+    // performs all calculations deterministically and returns the complete
+    // execution trace to the client.
+    //
+    // Formula: x = (-b ± √(b² - 4ac)) / 2a
+    // ========================================================================
+    let quadratic_workflow = SequentialWorkflow::new(
+        "solve_quadratic",
+        "Solve quadratic equations (ax² + bx + c = 0) using tool-chained computation"
+    )
+    // Define the prompt arguments with type hints for proper type conversion
+    .typed_argument("a", "Coefficient of x² term (must be non-zero)", true, PromptArgumentType::Number)
+    .typed_argument("b", "Coefficient of x term", true, PromptArgumentType::Number)
+    .typed_argument("c", "Constant term", true, PromptArgumentType::Number)
+    // System instruction explaining the workflow
+    .instruction(InternalPromptMessage::system(
+        "This workflow solves quadratic equations ax² + bx + c = 0 using the quadratic formula.\n\
+         The server executes all calculation steps automatically using the calculator tools.\n\
+         Watch as each step is computed and the results flow into subsequent calculations."
+    ))
+    // Step 1: Fetch the educational resource (context for the LLM)
+    .step(
+        WorkflowStep::fetch_resources("fetch_guide")
+            .with_resource("calculator://help/quadratic-formula")
+            .expect("Valid resource URI")
+            .with_guidance("First, let me show you the quadratic formula reference:")
+    )
+    // Step 2: Calculate b² using power tool
+    .step(
+        WorkflowStep::new("calc_b_squared", ToolHandle::new("power"))
+            .with_guidance("Step 1: Calculate b² (b squared)")
+            .arg("base", prompt_arg("b"))
+            .arg("exponent", constant(json!(2.0)))
+            .bind("b_squared")
+    )
+    // Step 3: Calculate 4 * a
+    .step(
+        WorkflowStep::new("calc_4a", ToolHandle::new("multiply"))
+            .with_guidance("Step 2: Calculate 4 × a")
+            .arg("a", constant(json!(4.0)))
+            .arg("b", prompt_arg("a"))
+            .bind("four_a")
+    )
+    // Step 4: Calculate 4ac (using result from step 3)
+    .step(
+        WorkflowStep::new("calc_4ac", ToolHandle::new("multiply"))
+            .with_guidance("Step 3: Calculate 4ac (4a × c)")
+            .arg("a", field("four_a", "result"))
+            .arg("b", prompt_arg("c"))
+            .bind("four_ac")
+    )
+    // Step 5: Calculate discriminant: b² - 4ac
+    .step(
+        WorkflowStep::new("calc_discriminant", ToolHandle::new("subtract"))
+            .with_guidance("Step 4: Calculate discriminant Δ = b² - 4ac")
+            .arg("a", field("b_squared", "result"))
+            .arg("b", field("four_ac", "result"))
+            .bind("discriminant")
+    )
+    // Step 6: Calculate √discriminant (only works if discriminant >= 0)
+    .step(
+        WorkflowStep::new("calc_sqrt_discriminant", ToolHandle::new("sqrt"))
+            .with_guidance("Step 5: Calculate √Δ (square root of discriminant)")
+            .arg("n", field("discriminant", "result"))
+            .bind("sqrt_discriminant")
+    )
+    // Step 7: Calculate 2a (denominator)
+    .step(
+        WorkflowStep::new("calc_2a", ToolHandle::new("multiply"))
+            .with_guidance("Step 6: Calculate 2a (denominator for the formula)")
+            .arg("a", constant(json!(2.0)))
+            .arg("b", prompt_arg("a"))
+            .bind("two_a")
+    )
+    // Step 8: Calculate -b (negate b)
+    .step(
+        WorkflowStep::new("calc_neg_b", ToolHandle::new("multiply"))
+            .with_guidance("Step 7: Calculate -b")
+            .arg("a", constant(json!(-1.0)))
+            .arg("b", prompt_arg("b"))
+            .bind("neg_b")
+    )
+    // Step 9: Calculate -b + √Δ (numerator for x₁)
+    .step(
+        WorkflowStep::new("calc_x1_numerator", ToolHandle::new("add"))
+            .with_guidance("Step 8: Calculate -b + √Δ (numerator for first root)")
+            .arg("a", field("neg_b", "result"))
+            .arg("b", field("sqrt_discriminant", "result"))
+            .bind("x1_numerator")
+    )
+    // Step 10: Calculate x₁ = (-b + √Δ) / 2a
+    .step(
+        WorkflowStep::new("calc_x1", ToolHandle::new("divide"))
+            .with_guidance("Step 9: Calculate x₁ = (-b + √Δ) / 2a")
+            .arg("a", field("x1_numerator", "result"))
+            .arg("b", field("two_a", "result"))
+            .bind("x1")
+    )
+    // Step 11: Calculate -b - √Δ (numerator for x₂)
+    .step(
+        WorkflowStep::new("calc_x2_numerator", ToolHandle::new("subtract"))
+            .with_guidance("Step 10: Calculate -b - √Δ (numerator for second root)")
+            .arg("a", field("neg_b", "result"))
+            .arg("b", field("sqrt_discriminant", "result"))
+            .bind("x2_numerator")
+    )
+    // Step 12: Calculate x₂ = (-b - √Δ) / 2a
+    .step(
+        WorkflowStep::new("calc_x2", ToolHandle::new("divide"))
+            .with_guidance("Step 11: Calculate x₂ = (-b - √Δ) / 2a")
+            .arg("a", field("x2_numerator", "result"))
+            .arg("b", field("two_a", "result"))
+            .bind("x2")
+    );
+
+    // ========================================================================
+    // SIMPLE PROMPT: quadratic_simple
+    // Demonstrates SimplePrompt for comparison (self-contained calculation)
+    // ========================================================================
+    let quadratic_simple = SimplePrompt::new(
+        "quadratic_simple",
         Box::new(|args: HashMap<String, String>, _extra| {
             Box::pin(async move {
                 // Parse arguments
@@ -153,7 +269,6 @@ pub fn build_calculator_server() -> Result<Server> {
                 ];
 
                 if discriminant < 0.0 {
-                    // No real roots
                     messages.push(PromptMessage {
                         role: Role::Assistant,
                         content: MessageContent::Text {
@@ -166,7 +281,6 @@ pub fn build_calculator_server() -> Result<Server> {
                         },
                     });
                 } else if discriminant == 0.0 {
-                    // One repeated root
                     let x = -b / (2.0 * a);
                     messages.push(PromptMessage {
                         role: Role::Assistant,
@@ -181,7 +295,6 @@ pub fn build_calculator_server() -> Result<Server> {
                         },
                     });
                 } else {
-                    // Two distinct real roots
                     let sqrt_discriminant = discriminant.sqrt();
                     let x1 = (-b + sqrt_discriminant) / (2.0 * a);
                     let x2 = (-b - sqrt_discriminant) / (2.0 * a);
@@ -215,12 +328,14 @@ pub fn build_calculator_server() -> Result<Server> {
             }) as std::pin::Pin<Box<dyn std::future::Future<Output = Result<GetPromptResult>> + Send>>
         })
     )
-    .with_description("Solve quadratic equations using the quadratic formula")
+    .with_description("Solve quadratic equations (SimplePrompt version - self-contained calculation)")
     .with_argument("a", "Coefficient of x² term (a in ax² + bx + c = 0)", true)
     .with_argument("b", "Coefficient of x term (b in ax² + bx + c = 0)", true)
     .with_argument("c", "Constant term (c in ax² + bx + c = 0)", true);
 
-    // Create resource collection
+    // ========================================================================
+    // RESOURCES
+    // ========================================================================
     let resources = ResourceCollection::new()
         .add_resource(
             StaticResource::new_text(
@@ -282,22 +397,6 @@ Solve: **x² + 2x + 5 = 0**
 - Δ = 2² - 4(1)(5) = 4 - 20 = -16
 
 **Result:** No real solutions (Δ < 0)
-
-## Try It Yourself!
-
-Use the **quadratic** prompt in this calculator to solve any quadratic equation.
-The prompt will show you step-by-step solutions with explanations.
-
-### Available Tools
-
-This calculator also provides individual operation tools:
-- `add` - Add two numbers
-- `subtract` - Subtract numbers
-- `multiply` - Multiply numbers
-- `divide` - Divide numbers (with zero-check)
-- `power` - Raise to a power
-
-The quadratic prompt uses these tools internally to perform calculations!
 "#,
             )
             .with_name("Quadratic Formula Guide")
@@ -305,7 +404,9 @@ The quadratic prompt uses these tools internally to perform calculations!
             .with_mime_type("text/markdown"),
         );
 
-    // Build server with all capabilities
+    // ========================================================================
+    // BUILD SERVER
+    // ========================================================================
     Server::builder()
         .name("calculator")
         .version("1.0.0")
@@ -371,7 +472,6 @@ The quadratic prompt uses these tools internally to perform calculations!
                     input.validate()
                         .map_err(|e| Error::validation(format!("Validation failed: {}", e)))?;
 
-                    // Check for division by zero
                     if input.b == 0.0 {
                         return Err(Error::validation("Cannot divide by zero"));
                     }
@@ -400,10 +500,27 @@ The quadratic prompt uses these tools internally to perform calculations!
             })
             .with_description("Raise a number to a power (exponentiation)"),
         )
-        // Add prompt
-        .prompt("quadratic", quadratic_prompt)
-        // Add resources
+        .tool(
+            "sqrt",
+            TypedTool::new("sqrt", |input: SqrtInput, _extra| {
+                Box::pin(async move {
+                    input.validate()
+                        .map_err(|e| Error::validation(format!("Validation failed: {}", e)))?;
+                    let result = input.n.sqrt();
+                    Ok(json!({
+                        "result": result,
+                        "operation": format!("√{} = {}", input.n, result)
+                    }))
+                })
+            })
+            .with_description("Calculate square root of a non-negative number"),
+        )
+        // IMPORTANT: Register resources BEFORE workflow prompt (workflow needs access to resources)
         .resources(resources)
+        // Add workflow prompt (chains tools + fetches resources)
+        .prompt_workflow(quadratic_workflow)?
+        // Add simple prompt (self-contained calculation)
+        .prompt("quadratic_simple", quadratic_simple)
         .build()
 }
 
@@ -428,37 +545,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_add_logic() {
-        let input = AddInput { a: 5.0, b: 3.0 };
-        assert_eq!(input.a + input.b, 8.0);
-
-        let input = AddInput { a: -5.0, b: 3.0 };
-        assert_eq!(input.a + input.b, -2.0);
-    }
-
-    #[tokio::test]
-    async fn test_divide_by_zero_validation() {
-        let input = DivideInput { a: 10.0, b: 0.0 };
-        // Validation passes (b is within range)
+    async fn test_sqrt_validation() {
+        let input = SqrtInput { n: 16.0 };
         assert!(input.validate().is_ok());
-        // Zero check happens in handler
+
+        // Test negative (invalid)
+        let input = SqrtInput { n: -1.0 };
+        assert!(input.validate().is_err());
     }
 
     #[tokio::test]
     async fn test_quadratic_discriminant() {
         // Two roots: x² - 5x + 6 = 0
-        let input = QuadraticInput { a: 1.0, b: -5.0, c: 6.0 };
-        let discriminant = input.b * input.b - 4.0 * input.a * input.c;
+        let (a, b, c) = (1.0_f64, -5.0_f64, 6.0_f64);
+        let discriminant = b * b - 4.0 * a * c;
         assert_eq!(discriminant, 1.0);
 
         // One root: x² - 6x + 9 = 0
-        let input = QuadraticInput { a: 1.0, b: -6.0, c: 9.0 };
-        let discriminant = input.b * input.b - 4.0 * input.a * input.c;
+        let (a, b, c) = (1.0_f64, -6.0_f64, 9.0_f64);
+        let discriminant = b * b - 4.0 * a * c;
         assert_eq!(discriminant, 0.0);
 
         // No real roots: x² + 2x + 5 = 0
-        let input = QuadraticInput { a: 1.0, b: 2.0, c: 5.0 };
-        let discriminant = input.b * input.b - 4.0 * input.a * input.c;
+        let (a, b, c) = (1.0_f64, 2.0_f64, 5.0_f64);
+        let discriminant = b * b - 4.0 * a * c;
         assert!(discriminant < 0.0);
     }
 }

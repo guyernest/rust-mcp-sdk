@@ -187,6 +187,7 @@ fn create_database_prompt_info() -> pmcp::types::protocol::PromptInfo {
                         .completion
                         .unwrap(),
                 ),
+                arg_type: None,
             },
             PromptArgument {
                 name: "table".to_string(),
@@ -204,6 +205,7 @@ fn create_database_prompt_info() -> pmcp::types::protocol::PromptInfo {
                         .completion
                         .unwrap(),
                 ),
+                arg_type: None,
             },
             PromptArgument {
                 name: "operation".to_string(),
@@ -220,6 +222,7 @@ fn create_database_prompt_info() -> pmcp::types::protocol::PromptInfo {
                         .completion
                         .unwrap(),
                 ),
+                arg_type: None,
             },
         ]),
     }

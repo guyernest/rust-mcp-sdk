@@ -1,0 +1,937 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>cargo-pmcp: MCP Servers in Rust</title>
+        <link
+            rel="stylesheet"
+            href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.6.1/reveal.min.css"
+        />
+        <link
+            rel="stylesheet"
+            href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.6.1/theme/black.min.css"
+        />
+        <link
+            rel="stylesheet"
+            href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/monokai.min.css"
+        />
+        <style>
+            :root {
+                --r-background-color: #1a1a2e;
+                --r-main-color: #eee;
+                --r-heading-color: #00d4ff;
+                --r-link-color: #ff6b6b;
+            }
+            .reveal {
+                font-family:
+                    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                    sans-serif;
+            }
+            .reveal h1,
+            .reveal h2,
+            .reveal h3 {
+                text-transform: none;
+                font-weight: 700;
+            }
+            .reveal h1 {
+                font-size: 2.5em;
+            }
+            .reveal h2 {
+                font-size: 1.8em;
+            }
+            .reveal h3 {
+                font-size: 1.4em;
+                color: #ff6b6b;
+            }
+
+            .myth-busted {
+                background: linear-gradient(135deg, #ff6b6b 0%, #ffa500 100%);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
+                font-size: 3em !important;
+                font-weight: 900;
+            }
+
+            .demo-slide {
+                background: linear-gradient(
+                    135deg,
+                    #0f0f23 0%,
+                    #1a1a3e 100%
+                ) !important;
+            }
+            .demo-badge {
+                background: #ff6b6b;
+                color: white;
+                padding: 0.3em 1em;
+                border-radius: 2em;
+                font-size: 0.5em;
+                vertical-align: middle;
+                margin-left: 0.5em;
+                animation: pulse 2s infinite;
+            }
+            @keyframes pulse {
+                0%,
+                100% {
+                    opacity: 1;
+                }
+                50% {
+                    opacity: 0.7;
+                }
+            }
+
+            .emoji-large {
+                font-size: 4em;
+            }
+            .emoji-medium {
+                font-size: 2em;
+            }
+
+            .highlight-box {
+                background: rgba(0, 212, 255, 0.1);
+                border-left: 4px solid #00d4ff;
+                padding: 1em;
+                margin: 1em 0;
+                text-align: left;
+            }
+
+            .command-box {
+                background: #2d2d2d;
+                border-radius: 10px;
+                padding: 1em;
+                font-family: "Monaco", "Menlo", monospace;
+                font-size: 0.8em;
+                text-align: left;
+            }
+            .command-box .prompt {
+                color: #50fa7b;
+            }
+            .command-box .command {
+                color: #f8f8f2;
+            }
+
+            .two-column {
+                display: flex;
+                gap: 2em;
+                align-items: center;
+            }
+            .two-column > * {
+                flex: 1;
+            }
+
+            .icon-grid {
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 1.5em;
+                margin: 1em 0;
+            }
+            .icon-item {
+                text-align: center;
+            }
+            .icon-item .emoji {
+                font-size: 2.5em;
+            }
+            .icon-item p {
+                margin: 0.3em 0 0 0;
+                font-size: 0.9em;
+            }
+
+            .agenda-item {
+                display: flex;
+                align-items: center;
+                gap: 0.5em;
+                margin: 0.4em 0;
+                font-size: 0.85em;
+            }
+            .agenda-item .number {
+                background: #00d4ff;
+                color: #1a1a2e;
+                width: 1.5em;
+                height: 1.5em;
+                border-radius: 50%;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                font-weight: bold;
+                font-size: 0.8em;
+            }
+
+            .banner-img {
+                max-width: 80%;
+                border-radius: 15px;
+                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            }
+
+            .rust-orange {
+                color: #ff6b6b;
+            }
+            .cyan {
+                color: #00d4ff;
+            }
+            .green {
+                color: #50fa7b;
+            }
+
+            .fragment.strike {
+                text-decoration: none;
+            }
+            .fragment.strike.visible {
+                text-decoration: line-through;
+                opacity: 0.5;
+            }
+
+            .small {
+                font-size: 0.7em;
+                color: #888;
+            }
+
+            .oauth-flow {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 1em;
+                font-size: 1.2em;
+            }
+            .oauth-flow .arrow {
+                color: #00d4ff;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="reveal">
+            <div class="slides">
+                <!-- Title Slide -->
+                <section>
+                    <h1><span class="rust-orange">cargo</span> pmcp</h1>
+                    <h3>Build, Test & Deploy MCP Servers</h3>
+                    <p class="emoji-medium">🦀 + 🤖 = ❤️</p>
+                    <p class="small">
+                        Press <kbd>Space</kbd> to navigate | <kbd>S</kbd> for
+                        speaker notes
+                    </p>
+                    <aside class="notes">
+                        Welcome! Today we'll see how Rust makes MCP servers
+                        production-ready. Lots of live demos ahead!
+                    </aside>
+                </section>
+
+                <!-- Agenda -->
+                <section>
+                    <h2>Today's Journey</h2>
+                    <div
+                        style="
+                            text-align: left;
+                            max-width: 700px;
+                            margin: 0 auto;
+                        "
+                    >
+                        <div class="agenda-item">
+                            <span class="number">1</span> Myth Busting: MCP
+                            Beyond Local Dev
+                        </div>
+                        <div class="agenda-item">
+                            <span class="number">2</span>
+                            <span class="demo-badge">DEMO</span> Chess MCP
+                            Server
+                        </div>
+                        <div class="agenda-item">
+                            <span class="number">3</span> Why Rust? Security ·
+                            Performance · Cost
+                        </div>
+                        <div class="agenda-item">
+                            <span class="number">4</span> Myth Busting:
+                            Resources & Prompts
+                        </div>
+                        <div class="agenda-item">
+                            <span class="number">5</span>
+                            <span class="demo-badge">DEMO</span> re:Invent
+                            Agenda Helper
+                        </div>
+                        <div class="agenda-item">
+                            <span class="number">6</span>
+                            <span class="demo-badge">DEMO</span> Build Your
+                            First MCP Server
+                        </div>
+                        <div class="agenda-item">
+                            <span class="number">7</span>
+                            <span class="demo-badge">DEMO</span> Deploy to AWS
+                            Lambda
+                        </div>
+                        <div class="agenda-item">
+                            <span class="number">8</span> Security: OAuth is the
+                            Standard
+                        </div>
+                        <div class="agenda-item">
+                            <span class="number">9</span>
+                            <span class="demo-badge">DEMO</span> Interactive
+                            Fiction with OAuth
+                        </div>
+                    </div>
+                    <aside class="notes">
+                        5 demos today! We'll bust some myths and write real
+                        code.
+                    </aside>
+                </section>
+
+                <!-- Myth #1 -->
+                <section>
+                    <section>
+                        <h2>Myth #1</h2>
+                        <p class="emoji-large">🤔</p>
+                        <blockquote style="font-size: 1.3em">
+                            "MCP servers are for
+                            <span class="fragment strike"
+                                >local development</span
+                            ><br />
+                            and
+                            <span class="fragment strike"
+                                >software developers only</span
+                            >"
+                        </blockquote>
+                    </section>
+                    <section>
+                        <p class="myth-busted">BUSTED!</p>
+                        <div class="icon-grid" style="margin-top: 1em">
+                            <div class="icon-item fragment">
+                                <div class="emoji">☁️</div>
+                                <p>Cloud-Native</p>
+                            </div>
+                            <div class="icon-item fragment">
+                                <div class="emoji">🏢</div>
+                                <p>Enterprise Ready</p>
+                            </div>
+                            <div class="icon-item fragment">
+                                <div class="emoji">👨‍⚕️</div>
+                                <p>Any Domain</p>
+                            </div>
+                            <div class="icon-item fragment">
+                                <div class="emoji">🔒</div>
+                                <p>OAuth Security</p>
+                            </div>
+                            <div class="icon-item fragment">
+                                <div class="emoji">📱</div>
+                                <p>Any Client</p>
+                            </div>
+                            <div class="icon-item fragment">
+                                <div class="emoji">🌍</div>
+                                <p>Global Scale</p>
+                            </div>
+                        </div>
+                        <aside class="notes">
+                            MCP servers can run anywhere - Lambda, containers,
+                            edge. They're for doctors, lawyers, analysts -
+                            anyone who needs AI augmentation.
+                        </aside>
+                    </section>
+                </section>
+
+                <!-- Chess Demo -->
+                <section data-state="demo-slide">
+                    <section>
+                        <h2>
+                            Chess MCP Server
+                            <span class="demo-badge">DEMO</span>
+                        </h2>
+                        <img
+                            src="assets/chess-banner.png"
+                            alt="Chess MCP Server"
+                            class="banner-img"
+                        />
+                        <aside class="notes">
+                            Show the chess server running. Play a game against
+                            the AI. Point out: this is a GAME, not a dev tool!
+                        </aside>
+                    </section>
+                    <section>
+                        <h3>What Just Happened?</h3>
+                        <div class="highlight-box">
+                            <p>
+                                🎮 A <strong>game</strong> - not a developer
+                                tool
+                            </p>
+                            <p>
+                                ☁️ Running on <strong>AWS Lambda</strong> - not
+                                locally
+                            </p>
+                            <p>
+                                🌐 Accessible via <strong>HTTP</strong> - any
+                                client can connect
+                            </p>
+                            <p>
+                                🦀 Built with <strong>cargo-pmcp</strong> in
+                                minutes
+                            </p>
+                        </div>
+                    </section>
+                </section>
+
+                <!-- Why Rust -->
+                <section>
+                    <section>
+                        <h2>Why <span class="rust-orange">Rust</span>?</h2>
+                        <p class="emoji-large">🦀</p>
+                    </section>
+                    <section>
+                        <h3>🔒 Security</h3>
+                        <div class="two-column">
+                            <div>
+                                <p
+                                    class="fragment"
+                                    style="
+                                        text-decoration: line-through;
+                                        color: #ff6b6b;
+                                    "
+                                >
+                                    SQL Injection
+                                </p>
+                                <p
+                                    class="fragment"
+                                    style="
+                                        text-decoration: line-through;
+                                        color: #ff6b6b;
+                                    "
+                                >
+                                    Buffer Overflow
+                                </p>
+                                <p
+                                    class="fragment"
+                                    style="
+                                        text-decoration: line-through;
+                                        color: #ff6b6b;
+                                    "
+                                >
+                                    Use After Free
+                                </p>
+                                <p
+                                    class="fragment"
+                                    style="
+                                        text-decoration: line-through;
+                                        color: #ff6b6b;
+                                    "
+                                >
+                                    Null Pointer
+                                </p>
+                            </div>
+                            <div class="fragment">
+                                <p class="green" style="font-size: 1.5em">
+                                    Compile-time guarantees
+                                </p>
+                                <p class="small">If it compiles, it's safe</p>
+                            </div>
+                        </div>
+                        <aside class="notes">
+                            Rust's ownership system prevents entire classes of
+                            vulnerabilities. No garbage collector surprises, no
+                            runtime errors.
+                        </aside>
+                    </section>
+                    <section>
+                        <h3>⚡ Performance</h3>
+                        <div style="font-size: 3em; margin: 0.5em 0">
+                            <span class="fragment">~2ms</span>
+                            <span
+                                class="fragment"
+                                style="color: #888; font-size: 0.5em"
+                            >
+                                cold start</span
+                            >
+                        </div>
+                        <p class="fragment">vs 200-500ms for Python/Node.js</p>
+                        <aside class="notes">
+                            Lambda cold starts are nearly instant with Rust. No
+                            interpreter startup, no JIT warmup.
+                        </aside>
+                    </section>
+                    <section>
+                        <h3>💰 Cost</h3>
+                        <div class="icon-grid">
+                            <div class="icon-item fragment">
+                                <div class="emoji">📦</div>
+                                <p>~3MB binary</p>
+                                <p class="small">No runtime needed</p>
+                            </div>
+                            <div class="icon-item fragment">
+                                <div class="emoji">🧠</div>
+                                <p>Minimal RAM</p>
+                                <p class="small">128MB is plenty</p>
+                            </div>
+                            <div class="icon-item fragment">
+                                <div class="emoji">⏱️</div>
+                                <p>Fast execution</p>
+                                <p class="small">Lower Lambda bills</p>
+                            </div>
+                        </div>
+                    </section>
+                </section>
+
+                <!-- Myth #2 -->
+                <section>
+                    <section>
+                        <h2>Myth #2</h2>
+                        <p class="emoji-large">🔧</p>
+                        <blockquote style="font-size: 1.3em">
+                            "MCP is just about
+                            <span class="fragment strike">Tools</span>"
+                        </blockquote>
+                    </section>
+                    <section>
+                        <p class="myth-busted">BUSTED!</p>
+                        <h3 style="margin-top: 1em">The MCP Trinity</h3>
+                        <div
+                            class="icon-grid"
+                            style="grid-template-columns: repeat(3, 1fr)"
+                        >
+                            <div class="icon-item fragment">
+                                <div class="emoji">🔧</div>
+                                <p><strong>Tools</strong></p>
+                                <p class="small">Actions the AI can take</p>
+                            </div>
+                            <div class="icon-item fragment">
+                                <div class="emoji">📚</div>
+                                <p><strong>Resources</strong></p>
+                                <p class="small">Data the AI can read</p>
+                            </div>
+                            <div class="icon-item fragment">
+                                <div class="emoji">💬</div>
+                                <p><strong>Prompts</strong></p>
+                                <p class="small">Templates for complex tasks</p>
+                            </div>
+                        </div>
+                        <p
+                            class="fragment highlight-box"
+                            style="margin-top: 1em"
+                        >
+                            💡 <strong>Prompts</strong> = Help your AI client
+                            use your server correctly!
+                        </p>
+                    </section>
+                </section>
+
+                <!-- pmcp-book Resource -->
+                <section>
+                    <h2>
+                        📖 Learn More:
+                        <a
+                            href="https://github.com/paiml/rust-mcp-sdk/tree/main/pmcp-book"
+                            style="color: #00d4ff"
+                            >pmcp-book</a
+                        >
+                    </h2>
+                    <div
+                        class="icon-grid"
+                        style="
+                            margin-top: 1em;
+                            grid-template-columns: repeat(3, 1fr);
+                            gap: 1em;
+                        "
+                    >
+                        <div
+                            class="icon-item fragment"
+                            style="font-size: 0.8em"
+                        >
+                            <div style="font-size: 1.8em">📡</div>
+                            <p>Protocol</p>
+                        </div>
+                        <div
+                            class="icon-item fragment"
+                            style="font-size: 0.8em"
+                        >
+                            <div style="font-size: 1.8em">🔔</div>
+                            <p>Notifications</p>
+                        </div>
+                        <div
+                            class="icon-item fragment"
+                            style="font-size: 0.8em"
+                        >
+                            <div style="font-size: 1.8em">🚫</div>
+                            <p>Cancellations</p>
+                        </div>
+                        <div
+                            class="icon-item fragment"
+                            style="font-size: 0.8em"
+                        >
+                            <div style="font-size: 1.8em">🔗</div>
+                            <p>Middleware</p>
+                        </div>
+                        <div
+                            class="icon-item fragment"
+                            style="font-size: 0.8em"
+                        >
+                            <div style="font-size: 1.8em">📊</div>
+                            <p>Metrics</p>
+                        </div>
+                        <div
+                            class="icon-item fragment"
+                            style="font-size: 0.8em"
+                        >
+                            <div style="font-size: 1.8em">🎓</div>
+                            <p>Advanced</p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- re:Invent Demo -->
+                <section data-state="demo-slide">
+                    <section>
+                        <h2>
+                            re:Invent Agenda
+                            <span class="demo-badge">DEMO</span>
+                        </h2>
+                        <p class="emoji-large">📅</p>
+                        <p>
+                            Using <strong>Prompts</strong> to build a full day
+                            agenda
+                        </p>
+                    </section>
+                    <section>
+                        <h3>The Prompt</h3>
+                        <div class="command-box">
+                            <pre><code class="language-text" style="font-size: 0.9em;">Plan my re:Invent day on {topic}
+
+Include:
+- Sessions matching my interests
+- Travel time between venues
+- Lunch and break suggestions
+- Networking opportunities</code></pre>
+                        </div>
+                        <p class="fragment">
+                            One prompt. Complete day planned. ✨
+                        </p>
+                        <aside class="notes">
+                            Show the reinvent server prompt in action. The AI
+                            knows how to use resources + tools together.
+                        </aside>
+                    </section>
+                </section>
+
+                <!-- Build Your First Server -->
+                <section data-state="demo-slide">
+                    <section>
+                        <h2>
+                            Let's Build! <span class="demo-badge">DEMO</span>
+                        </h2>
+                        <p class="emoji-large">🛠️</p>
+                        <p>
+                            Advanced Calculator with Quadratic Equation Solver
+                        </p>
+                    </section>
+                    <section>
+                        <h3>Step 1: Create Workspace</h3>
+                        <div class="command-box">
+                            <p>
+                                <span class="prompt">$</span>
+                                <span class="command"
+                                    >cargo pmcp new my-mcp-servers</span
+                                >
+                            </p>
+                            <p>
+                                <span class="prompt">$</span>
+                                <span class="command">cd my-mcp-servers</span>
+                            </p>
+                        </div>
+                        <p class="fragment">
+                            Workspace created with shared components 📁
+                        </p>
+                    </section>
+                    <section>
+                        <h3>Step 2: Add Calculator Server</h3>
+                        <div class="command-box">
+                            <p>
+                                <span class="prompt">$</span>
+                                <span class="command"
+                                    >cargo pmcp add server calculator --template
+                                    complete</span
+                                >
+                            </p>
+                        </div>
+                        <p class="fragment">
+                            Full calculator with tools + prompts! 🧮
+                        </p>
+                        <div
+                            class="fragment highlight-box"
+                            style="margin-top: 1em; font-size: 0.8em"
+                        >
+                            <p>
+                                Templates: <code>minimal</code> |
+                                <code>calculator</code> | <code>complete</code>
+                            </p>
+                        </div>
+                    </section>
+                    <section>
+                        <h3>What You Get: SequentialWorkflow</h3>
+                        <div class="command-box">
+                            <pre><code class="language-rust" style="font-size: 0.65em;">SequentialWorkflow::new("solve_quadratic", "Solve ax² + bx + c = 0")
+  .argument("a", "Coefficient of x²", true)
+  .argument("b", "Coefficient of x", true)
+  .argument("c", "Constant term", true)
+  // Guide the AI with instructions
+  .instruction(InternalPromptMessage::system(
+      "Use calculator tools: power, multiply, subtract, sqrt...
+       Show your work step by step. Coefficients: a={a}, b={b}, c={c}"
+  ))
+  // Fetch educational resource
+  .step(WorkflowStep::fetch_resources("fetch_guide")
+      .with_resource("calculator://help/quadratic-formula")?)</code></pre>
+                        </div>
+                        <p class="fragment">
+                            Resources + Instructions =
+                            <span class="cyan">Guided AI</span>
+                        </p>
+                    </section>
+                    <section>
+                        <h3>Two Prompts, Same Goal</h3>
+                        <div class="two-column" style="font-size: 0.85em">
+                            <div class="highlight-box">
+                                <p><strong>solve_quadratic</strong></p>
+                                <p class="small">SequentialWorkflow</p>
+                                <p>✅ Fetches resources</p>
+                                <p>✅ Guides AI with instructions</p>
+                                <p>✅ Declarative</p>
+                            </div>
+                            <div class="highlight-box">
+                                <p><strong>quadratic_simple</strong></p>
+                                <p class="small">SimplePrompt</p>
+                                <p>✅ Self-contained</p>
+                                <p>✅ Pre-computed answer</p>
+                                <p>✅ Custom logic</p>
+                            </div>
+                        </div>
+                        <p class="fragment">
+                            Same user experience. Different implementation. 🎯
+                        </p>
+                    </section>
+                </section>
+
+                <!-- Test with Claude Code -->
+                <section data-state="demo-slide">
+                    <section>
+                        <h2>
+                            Test Locally <span class="demo-badge">DEMO</span>
+                        </h2>
+                        <div class="command-box">
+                            <p>
+                                <span class="prompt">$</span>
+                                <span class="command">cargo pmcp dev</span>
+                            </p>
+                        </div>
+                        <p class="fragment">
+                            Server running. Claude Code connected. 🔌
+                        </p>
+                        <aside class="notes">
+                            Run cargo pmcp dev, then use Claude Code to solve x²
+                            - 5x + 6 = 0
+                        </aside>
+                    </section>
+                    <section>
+                        <h3>Try it!</h3>
+                        <div class="highlight-box">
+                            <p style="font-size: 1.3em">
+                                Solve x² - 5x + 6 = 0
+                            </p>
+                        </div>
+                        <p class="fragment">Answer: x = 2 or x = 3 ✓</p>
+                    </section>
+                </section>
+
+                <!-- Deploy to Lambda -->
+                <section data-state="demo-slide">
+                    <section>
+                        <h2>
+                            Deploy to AWS <span class="demo-badge">DEMO</span>
+                        </h2>
+                        <div class="command-box">
+                            <p>
+                                <span class="prompt">$</span>
+                                <span class="command"
+                                    >cargo pmcp deploy --target aws-lambda</span
+                                >
+                            </p>
+                        </div>
+                        <p class="fragment emoji-medium">☁️</p>
+                        <p class="fragment">One command. Production ready.</p>
+                    </section>
+                    <section>
+                        <h3>What Just Happened?</h3>
+                        <div class="highlight-box">
+                            <p>✅ Cross-compiled for AWS Lambda</p>
+                            <p>✅ Created CloudFormation stack</p>
+                            <p>✅ Deployed Lambda function</p>
+                            <p>✅ Set up API Gateway</p>
+                            <p>✅ Got public HTTPS endpoint</p>
+                        </div>
+                        <p class="fragment" style="font-size: 1.5em">
+                            All in <span class="cyan">~30 seconds</span>
+                        </p>
+                    </section>
+                </section>
+
+                <!-- Test Remotely -->
+                <section data-state="demo-slide">
+                    <h2>Test Remotely <span class="demo-badge">DEMO</span></h2>
+                    <p>Same Claude Code. Same experience.</p>
+                    <p class="fragment" style="font-size: 1.5em">
+                        Now running on <span class="cyan">AWS Lambda</span> 🌍
+                    </p>
+                    <div class="fragment highlight-box">
+                        <p>
+                            💡 Your users don't install anything.<br />
+                            They just connect to your endpoint.
+                        </p>
+                    </div>
+                </section>
+
+                <!-- OAuth Security -->
+                <section>
+                    <section>
+                        <h2>What About Security?</h2>
+                        <p class="emoji-large">🔐</p>
+                    </section>
+                    <section>
+                        <h3>OAuth 2.0 is the Standard</h3>
+                        <div class="oauth-flow">
+                            <span>User</span>
+                            <span class="arrow">→</span>
+                            <span>MCP Client</span>
+                            <span class="arrow">→</span>
+                            <span>OAuth Provider</span>
+                            <span class="arrow">→</span>
+                            <span>MCP Server</span>
+                        </div>
+                        <div
+                            class="fragment highlight-box"
+                            style="margin-top: 1em"
+                        >
+                            <p>✅ Industry standard authentication</p>
+                            <p>✅ No passwords in your server</p>
+                            <p>✅ Works with any OAuth provider</p>
+                            <p>✅ Built into cargo-pmcp</p>
+                        </div>
+                    </section>
+                </section>
+
+                <!-- IF Games Demo -->
+                <section data-state="demo-slide">
+                    <section>
+                        <h2>
+                            Interactive Fiction
+                            <span class="demo-badge">DEMO</span>
+                        </h2>
+                        <p class="emoji-large">🎮</p>
+                        <p>OAuth-protected text adventures</p>
+                    </section>
+                    <section>
+                        <h3>The Flow</h3>
+                        <div
+                            style="
+                                text-align: left;
+                                max-width: 600px;
+                                margin: 0 auto;
+                            "
+                        >
+                            <p class="fragment">
+                                1️⃣ Connect to IF Games server
+                            </p>
+                            <p class="fragment">2️⃣ OAuth redirect → Login</p>
+                            <p class="fragment">
+                                3️⃣ Token received → Authenticated
+                            </p>
+                            <p class="fragment">4️⃣ Play your adventure! 🗡️</p>
+                        </div>
+                        <aside class="notes">
+                            Show the OAuth flow in action. Player's game state
+                            is tied to their identity.
+                        </aside>
+                    </section>
+                </section>
+
+                <!-- Summary -->
+                <section>
+                    <h2>What We Learned</h2>
+                    <div
+                        style="
+                            text-align: left;
+                            max-width: 700px;
+                            margin: 0 auto;
+                        "
+                    >
+                        <p class="fragment">
+                            🚀 MCP servers are <strong>production-ready</strong>
+                        </p>
+                        <p class="fragment">
+                            🦀 Rust =
+                            <strong>Security + Performance + Low Cost</strong>
+                        </p>
+                        <p class="fragment">
+                            💬 <strong>Prompts & Resources</strong> are
+                            powerful, not just tools
+                        </p>
+                        <p class="fragment">
+                            ☁️ <strong>One command</strong> from code to cloud
+                        </p>
+                        <p class="fragment">
+                            🔐 <strong>OAuth</strong> built in for enterprise
+                            security
+                        </p>
+                    </div>
+                </section>
+
+                <!-- Get Started -->
+                <section>
+                    <h2>Get Started Today</h2>
+                    <div class="command-box" style="font-size: 1em">
+                        <p>
+                            <span class="prompt">$</span>
+                            <span class="command"
+                                >cargo install cargo-pmcp</span
+                            >
+                        </p>
+                        <p>
+                            <span class="prompt">$</span>
+                            <span class="command"
+                                >cargo pmcp new my-server</span
+                            >
+                        </p>
+                        <p>
+                            <span class="prompt">$</span>
+                            <span class="command">cargo pmcp dev</span>
+                        </p>
+                    </div>
+                    <p style="margin-top: 1em">
+                        <a
+                            href="https://github.com/paiml/rust-mcp-sdk"
+                            style="color: #00d4ff"
+                        >
+                            github.com/paiml/rust-mcp-sdk
+                        </a>
+                    </p>
+                </section>
+
+                <!-- Q&A -->
+                <section>
+                    <h1>Questions?</h1>
+                    <p class="emoji-large">🦀 🤖 ❤️</p>
+                    <p class="small">Thank you!</p>
+                </section>
+            </div>
+        </div>
+
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.6.1/reveal.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.6.1/plugin/highlight/highlight.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.6.1/plugin/notes/notes.min.js"></script>
+        <script>
+            Reveal.initialize({
+                hash: true,
+                slideNumber: "c/t",
+                showSlideNumber: "speaker",
+                transition: "slide",
+                transitionSpeed: "fast",
+                plugins: [RevealHighlight, RevealNotes],
+                // Keyboard shortcuts
+                keyboard: {
+                    // Custom shortcuts if needed
+                },
+            });
+        </script>
+    </body>
+</html>

@@ -98,7 +98,7 @@ enum Commands {
         client: String,
 
         /// Server URL
-        #[arg(long, default_value = "http://0.0.0.0:3000")]
+        #[arg(long, default_value = "http://localhost:3000")]
         url: String,
     },
 

@@ -22,9 +22,9 @@ pub fn execute(server: String, client: String, url: String) -> Result<()> {
 fn connect_claude_code(server: &str, url: &str) -> Result<()> {
     println!("  {} Connecting to Claude Code...", "→".blue());
 
-    // Try to run claude mcp add command
+    // Try to run claude mcp add command with -t http for streamable HTTP transport
     let status = Command::new("claude")
-        .args(["mcp", "add", server, url])
+        .args(["mcp", "add", "-t", "http", server, url])
         .status();
 
     match status {
@@ -39,7 +39,7 @@ fn connect_claude_code(server: &str, url: &str) -> Result<()> {
             println!("\n{}", "Manual setup:".bright_white().bold());
             println!(
                 "  Run: {}",
-                format!("claude mcp add {} {}", server, url).bright_cyan()
+                format!("claude mcp add -t http {} {}", server, url).bright_cyan()
             );
         },
         Err(_) => {
@@ -51,7 +51,7 @@ fn connect_claude_code(server: &str, url: &str) -> Result<()> {
             );
             println!(
                 "  2. Run: {}",
-                format!("claude mcp add {} {}", server, url).bright_cyan()
+                format!("claude mcp add -t http {} {}", server, url).bright_cyan()
             );
         },
     }
