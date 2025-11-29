@@ -46,16 +46,22 @@ pub async fn deploy_landing_page(
 
     let config = LandingConfig::load(&config_path)?;
 
-    // Determine server ID with helpful fallback chain
+    // Load deployment info from .pmcp/deployment.toml (created by `cargo pmcp deploy`)
+    // This has the CURRENT deployment info, which takes precedence over stale config
+    let deployment_info = crate::landing::config::load_deployment_info(&project_root);
+
+    // Determine server ID with helpful fallback chain:
+    // 1. CLI flag (highest priority)
+    // 2. .pmcp/deployment.toml (current deployment)
+    // 3. pmcp-landing.toml config (may be stale)
     let server_id = server_id
         .or_else(|| {
-            // Try pmcp-landing.toml first
-            config.deployment.server_id.clone()
+            // Try .pmcp/deployment.toml first (current deployment)
+            deployment_info.as_ref().map(|(id, _)| id.clone())
         })
         .or_else(|| {
-            // Try .pmcp/deployment.toml as fallback
-            crate::landing::config::load_deployment_info(&project_root)
-                .map(|(id, _)| id)
+            // Fall back to pmcp-landing.toml
+            config.deployment.server_id.clone()
         })
         .ok_or_else(|| {
             anyhow::anyhow!(
@@ -77,9 +83,20 @@ pub async fn deploy_landing_page(
             )
         })?;
 
+    // Determine endpoint with fallback chain:
+    // 1. .pmcp/deployment.toml (current deployment - highest priority)
+    // 2. pmcp-landing.toml config (may be stale)
+    // 3. Default constructed from server_id
+    let endpoint = deployment_info
+        .as_ref()
+        .map(|(_, ep)| ep.clone())
+        .or_else(|| config.deployment.endpoint.clone())
+        .unwrap_or_else(|| format!("https://pmcp.run/{}", server_id));
+
     println!("📝 Configuration:");
     println!("   Server: {}", config.display_title());
     println!("   Server ID: {}", server_id);
+    println!("   Endpoint: {}", endpoint);
     println!("   Target: {}", target);
     println!();
 
@@ -100,7 +117,7 @@ pub async fn deploy_landing_page(
 
     // Build the landing page with environment variables
     println!("🔨 Building landing page...");
-    run_npm_build(&dir, &server_id, &config)?;
+    run_npm_build(&dir, &endpoint, &config)?;
     println!("   ✅ Build completed");
     println!();
 
@@ -342,16 +359,8 @@ fn run_npm_install(dir: &PathBuf) -> Result<()> {
 }
 
 /// Run npm build with environment variables
-fn run_npm_build(dir: &PathBuf, server_id: &str, config: &LandingConfig) -> Result<()> {
+fn run_npm_build(dir: &PathBuf, endpoint: &str, config: &LandingConfig) -> Result<()> {
     use std::io::Write;
-
-    // Get endpoint from config or construct default from server_id
-    let default_endpoint = format!("https://pmcp.run/{}", server_id);
-    let endpoint = config
-        .deployment
-        .endpoint
-        .as_deref()
-        .unwrap_or(&default_endpoint);
 
     println!("   Server: {}", config.landing.server_name);
     println!("   Endpoint: {}", endpoint);

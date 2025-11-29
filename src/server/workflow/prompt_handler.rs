@@ -667,7 +667,24 @@ impl WorkflowPromptHandler {
                 DataSource::PromptArg(arg_name) => {
                     // Get from prompt arguments
                     if let Some(value) = args.get(arg_name.as_str()) {
-                        Value::String(value.clone())
+                        // Check if this argument has a type hint
+                        if let Some(spec) = self.workflow.arguments().get(arg_name) {
+                            if let Some(arg_type) = &spec.arg_type {
+                                // Convert string to typed value
+                                arg_type.parse_value(value).map_err(|e| {
+                                    crate::Error::validation(format!(
+                                        "Invalid value for argument '{}': {}",
+                                        arg_name, e
+                                    ))
+                                })?
+                            } else {
+                                // No type hint - use as string
+                                Value::String(value.clone())
+                            }
+                        } else {
+                            // Argument not in workflow spec - use as string
+                            Value::String(value.clone())
+                        }
                     } else {
                         // Check if this argument is optional in the workflow
                         let is_required = self
@@ -973,6 +990,7 @@ impl PromptHandler for WorkflowPromptHandler {
                         description: Some(spec.description.clone()),
                         required: spec.required,
                         completion: None,
+                        arg_type: spec.arg_type,
                     })
                     .collect(),
             )

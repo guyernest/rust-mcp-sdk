@@ -240,6 +240,50 @@ pub struct PromptInfo {
     pub arguments: Option<Vec<PromptArgument>>,
 }
 
+/// Type hint for prompt arguments.
+///
+/// This is a PMCP extension to the MCP protocol that helps:
+/// - MCP clients display appropriate input widgets (number spinner vs text field)
+/// - Validate user input before sending to the server
+/// - Enable workflow tool chaining with properly typed parameters
+/// - Future-proof for when the MCP protocol adds native type support
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PromptArgumentType {
+    /// String value (default)
+    #[default]
+    String,
+    /// Floating-point number
+    Number,
+    /// Integer number
+    Integer,
+    /// Boolean true/false
+    Boolean,
+}
+
+impl PromptArgumentType {
+    /// Parse a string value according to this type hint.
+    /// Returns a properly typed `serde_json::Value`.
+    pub fn parse_value(&self, s: &str) -> Result<serde_json::Value, String> {
+        match self {
+            Self::String => Ok(serde_json::Value::String(s.to_string())),
+            Self::Number => s
+                .parse::<f64>()
+                .map(|n| serde_json::json!(n))
+                .map_err(|_| format!("'{}' is not a valid number", s)),
+            Self::Integer => s
+                .parse::<i64>()
+                .map(|n| serde_json::json!(n))
+                .map_err(|_| format!("'{}' is not a valid integer", s)),
+            Self::Boolean => match s.to_lowercase().as_str() {
+                "true" | "1" | "yes" => Ok(serde_json::json!(true)),
+                "false" | "0" | "no" => Ok(serde_json::json!(false)),
+                _ => Err(format!("'{}' is not a valid boolean (use true/false)", s)),
+            },
+        }
+    }
+}
+
 /// Prompt argument definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -255,6 +299,16 @@ pub struct PromptArgument {
     /// Completion configuration for this argument
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion: Option<crate::types::completable::CompletionConfig>,
+    /// Type hint for the argument value (PMCP extension).
+    ///
+    /// When set, the SDK will:
+    /// - Validate that string arguments can be parsed to this type
+    /// - Convert string arguments to the appropriate JSON type for tool calls
+    ///
+    /// This field is optional and defaults to "string" behavior if not specified.
+    /// MCP clients that don't understand this field will safely ignore it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arg_type: Option<PromptArgumentType>,
 }
 
 /// List prompts response.
@@ -998,6 +1052,7 @@ mod tests {
                 description: Some("First argument".to_string()),
                 required: true,
                 completion: None,
+                arg_type: None,
             }]),
         };
 

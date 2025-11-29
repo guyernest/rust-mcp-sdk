@@ -37,9 +37,9 @@ pub use protocol::{
     ListResourceTemplatesResult, ListResourcesParams, ListResourcesRequest, ListResourcesResult,
     ListToolsParams, ListToolsRequest, ListToolsResult, LoggingLevel, MessageContent, ModelHint,
     ModelPreferences, Notification, Progress, ProgressNotification, ProgressToken, PromptArgument,
-    PromptInfo, PromptMessage, ProtocolVersion, ReadResourceParams, ReadResourceRequest,
-    ReadResourceResult, Request, RequestMeta, ResourceInfo, ResourceTemplate, Role,
-    SamplingMessage, ServerNotification, ServerRequest, SubscribeRequest, TokenUsage, ToolInfo,
-    UnsubscribeRequest,
+    PromptArgumentType, PromptInfo, PromptMessage, ProtocolVersion, ReadResourceParams,
+    ReadResourceRequest, ReadResourceResult, Request, RequestMeta, ResourceInfo, ResourceTemplate,
+    Role, SamplingMessage, ServerNotification, ServerRequest, SubscribeRequest, TokenUsage,
+    ToolInfo, UnsubscribeRequest,
 };
 pub use ui::{ToolUIMetadata, UIMimeType, UIResource, UIResourceContents};

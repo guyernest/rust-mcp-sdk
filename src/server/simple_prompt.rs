@@ -82,6 +82,7 @@ where
             description: Some(description.into()),
             required,
             completion: None,
+            arg_type: None,
         });
         self
     }
@@ -190,6 +191,7 @@ where
             description: Some(description.into()),
             required,
             completion: None,
+            arg_type: None,
         });
         self
     }

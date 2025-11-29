@@ -13,6 +13,7 @@ fn test_prompt_info_serializes_all_fields() {
             description: Some("First argument".to_string()),
             required: true,
             completion: None,
+            arg_type: None,
         }]),
     };
 

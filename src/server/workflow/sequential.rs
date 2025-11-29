@@ -8,6 +8,7 @@ use super::{
     prompt_content::InternalPromptMessage,
     workflow_step::WorkflowStep,
 };
+use crate::types::PromptArgumentType;
 use indexmap::IndexMap;
 use smallvec::SmallVec;
 
@@ -36,6 +37,11 @@ pub struct ArgumentSpec {
     pub description: String,
     /// Whether the argument is required
     pub required: bool,
+    /// Type hint for the argument (PMCP extension)
+    ///
+    /// When set, string arguments will be validated and converted to the
+    /// appropriate type before being passed to tool calls.
+    pub arg_type: Option<PromptArgumentType>,
 }
 
 impl SequentialWorkflow {
@@ -63,6 +69,9 @@ impl SequentialWorkflow {
 
     /// Add a prompt argument (chainable)
     ///
+    /// This adds a string-typed argument. For numeric or boolean arguments,
+    /// use [`typed_argument`](Self::typed_argument) instead.
+    ///
     /// # Example
     /// ```
     /// use pmcp::server::workflow::SequentialWorkflow;
@@ -82,6 +91,43 @@ impl SequentialWorkflow {
             ArgumentSpec {
                 description: description.into(),
                 required,
+                arg_type: None, // Default to string (no type hint)
+            },
+        );
+        self
+    }
+
+    /// Add a typed prompt argument (chainable)
+    ///
+    /// This adds an argument with a type hint. The type hint enables:
+    /// - Validation of string arguments before processing
+    /// - Automatic conversion to the correct JSON type for tool calls
+    /// - Better UX in MCP clients (appropriate input widgets)
+    ///
+    /// # Example
+    /// ```
+    /// use pmcp::server::workflow::SequentialWorkflow;
+    /// use pmcp::types::PromptArgumentType;
+    ///
+    /// let workflow = SequentialWorkflow::new("calculator", "Calculate something")
+    ///     .typed_argument("x", "First number", true, PromptArgumentType::Number)
+    ///     .typed_argument("y", "Second number", true, PromptArgumentType::Number)
+    ///     .typed_argument("verbose", "Show steps", false, PromptArgumentType::Boolean);
+    /// ```
+    #[must_use]
+    pub fn typed_argument(
+        mut self,
+        name: impl Into<ArgName>,
+        description: impl Into<String>,
+        required: bool,
+        arg_type: PromptArgumentType,
+    ) -> Self {
+        self.arguments.insert(
+            name.into(),
+            ArgumentSpec {
+                description: description.into(),
+                required,
+                arg_type: Some(arg_type),
             },
         );
         self
@@ -355,6 +401,7 @@ mod tests {
         let spec = ArgumentSpec {
             description: "Test arg".to_string(),
             required: true,
+            arg_type: None,
         };
         assert!(spec.required);
     }
@@ -364,6 +411,7 @@ mod tests {
         let spec = ArgumentSpec {
             description: "Test arg".to_string(),
             required: false,
+            arg_type: None,
         };
         assert!(!spec.required);
     }

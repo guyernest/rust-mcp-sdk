@@ -74,8 +74,9 @@ impl BinaryBuilder {
 
         // Load config to get server name
         let config = crate::deployment::config::DeployConfig::load(&self.project_root)?;
-        let server_binary = format!("{}-server", config.server.name);
         let lambda_package = format!("{}-lambda", config.server.name);
+        // AWS Lambda Custom Runtime requires the binary to be named "bootstrap"
+        let lambda_binary = "bootstrap";
 
         // Use cargo lambda build - it handles all cross-compilation
         // ARM64 is cheaper and faster on Lambda than x86_64
@@ -87,7 +88,7 @@ impl BinaryBuilder {
                 "--package",
                 &lambda_package,
                 "--bin",
-                &server_binary,
+                lambda_binary,
                 "--output-format",
                 "binary",
                 "--target",
@@ -147,8 +148,8 @@ impl BinaryBuilder {
     }
 
     fn get_package_name(&self) -> Result<String> {
-        // Load config to get server name
-        let config = crate::deployment::config::DeployConfig::load(&self.project_root)?;
-        Ok(format!("{}-server", config.server.name))
+        // cargo-lambda outputs to target/lambda/{binary-name}/bootstrap
+        // Since AWS Lambda requires binary name "bootstrap", the output is in target/lambda/bootstrap/
+        Ok("bootstrap".to_string())
     }
 }

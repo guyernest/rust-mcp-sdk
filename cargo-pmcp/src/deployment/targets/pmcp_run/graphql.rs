@@ -2,11 +2,12 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+// Production default for GraphQL API
+const DEFAULT_GRAPHQL_URL: &str = "https://api.pmcp.run/graphql";
+
 // GraphQL URL - reads from environment variable or uses default
 fn get_graphql_url() -> String {
-    std::env::var("PMCP_RUN_GRAPHQL_URL").unwrap_or_else(|_| {
-        "https://noet4bfxcfdptmhw6tmirhtycm.appsync-api.us-west-2.amazonaws.com/graphql".to_string()
-    })
+    std::env::var("PMCP_RUN_GRAPHQL_URL").unwrap_or_else(|_| DEFAULT_GRAPHQL_URL.to_string())
 }
 
 #[derive(Debug, Serialize)]
