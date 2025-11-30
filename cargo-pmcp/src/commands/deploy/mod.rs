@@ -81,8 +81,8 @@ pub struct DeployCommand {
 pub enum DeployAction {
     /// Initialize deployment configuration
     Init {
-        /// AWS region (for AWS Lambda target, default: us-east-1)
-        #[clap(long, default_value = "us-east-1")]
+        /// AWS region for deployment (uses AWS_REGION or AWS_DEFAULT_REGION env vars if set)
+        #[clap(long, env = "AWS_REGION", default_value = "us-east-1")]
         region: String,
 
         /// Skip credentials check

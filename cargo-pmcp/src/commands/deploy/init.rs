@@ -12,7 +12,9 @@ impl InitCommand {
     pub fn new(project_root: PathBuf) -> Self {
         Self {
             project_root,
-            region: "us-east-1".to_string(),
+            region: std::env::var("AWS_REGION")
+                .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+                .unwrap_or_else(|_| "us-east-1".to_string()),
             check_credentials: true,
         }
     }
