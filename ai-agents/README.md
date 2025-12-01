@@ -49,10 +49,11 @@ cd .. && rm -rf temp
 
 **Prerequisites**: [Install Claude Code](https://claude.ai/code) first
 
-**Install the MCP Developer Subagent**:
+**Install the MCP Developer Agent**:
 
 ```bash
 # User-level (available across all projects) - RECOMMENDED
+mkdir -p ~/.claude/agents
 curl -fsSL https://raw.githubusercontent.com/paiml/rust-mcp-sdk/main/ai-agents/claude-code/mcp-developer.md \
   -o ~/.claude/agents/mcp-developer.md
 
@@ -65,6 +66,8 @@ curl -fsSL https://raw.githubusercontent.com/paiml/rust-mcp-sdk/main/ai-agents/c
 ```
 
 **Verify**: Run `/agents` and look for "mcp-developer"
+
+**Learn more**: [claude-code/README.md](claude-code/README.md)
 
 ## What You Get
 
@@ -155,27 +158,27 @@ cargo pmcp --version
 
 **Learn more**: [kiro/mcp-developer-power/README.md](kiro/mcp-developer-power/README.md)
 
-### Claude Code MCP Developer Subagent
+### Claude Code MCP Developer Agent
 
 **Location**: `claude-code/mcp-developer.md`
 
-**Type**: Subagent (invoked on-demand)
+**Type**: Agent (invoked on-demand)
 
 **Size**: ~600 lines (self-contained)
 
-**How it works**: Claude Code invokes this specialist when MCP development tasks are detected.
+**How it works**: Claude Code invokes this specialist agent when MCP development tasks are detected.
 
 **Learn more**: [claude-code/README.md](claude-code/README.md)
 
 ## Key Differences
 
 | Aspect | Kiro Power | Claude Code Subagent |
-|--------|------------|---------------------|
+|--------|------------|----------------------|
 | **Activation** | Always active (steering) | On-demand (subagent) |
-| **Context** | Persistent across conversations | Task-specific context |
-| **Size** | 4,487 lines (deep knowledge) | ~600 lines (focused) |
+| **Context** | Persistent across conversations | Separate context window |
+| **Size** | 10,000+ lines (deep knowledge) | ~600 lines (focused) |
 | **Format** | Multiple markdown files | Single markdown file |
-| **Best for** | Learning + Building | Quick scaffolding |
+| **Best for** | Deep learning + Building | Quick scaffolding |
 
 Both enforce the same workflow and quality standards.
 
@@ -386,6 +389,6 @@ Found cases where your AI assistant doesn't follow best practices?
 
 ---
 
-**Version**: 1.0.1 (Kiro Power) / 1.0.0 (Claude Code Subagent)
-**Last Updated**: 2025-11-13
+**Version**: 1.1.0 (Kiro Power) / 1.1.0 (Claude Code Subagent)
+**Last Updated**: 2025-11-30
 **Maintained by**: PMCP Team

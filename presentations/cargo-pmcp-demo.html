@@ -196,10 +196,30 @@
             .oauth-flow .arrow {
                 color: #00d4ff;
             }
+
+            /* Footer styling */
+            .reveal .footer {
+                position: fixed;
+                bottom: 1em;
+                left: 1em;
+                font-size: 0.7em;
+                color: #888;
+                z-index: 100;
+            }
+            .reveal .footer a {
+                color: #888;
+                text-decoration: none;
+            }
+            .reveal .footer a:hover {
+                color: #00d4ff;
+            }
         </style>
     </head>
     <body>
         <div class="reveal">
+            <div class="footer">
+                Guy Ernest | <a href="mailto:guy.ernest@ai-on-cloud.com">guy.ernest@ai-on-cloud.com</a>
+            </div>
             <div class="slides">
                 <!-- Title Slide -->
                 <section>
@@ -462,6 +482,38 @@
                                 <p class="small">Lower Lambda bills</p>
                             </div>
                         </div>
+                    </section>
+                    <section>
+                        <h3>🤖 Best Compiler for AI</h3>
+                        <div class="two-column">
+                            <div>
+                                <p class="fragment">
+                                    <span class="green">✓</span> Detailed error messages
+                                </p>
+                                <p class="fragment">
+                                    <span class="green">✓</span> Suggests exact fixes
+                                </p>
+                                <p class="fragment">
+                                    <span class="green">✓</span> Catches bugs at compile time
+                                </p>
+                                <p class="fragment">
+                                    <span class="green">✓</span> Strict type checking
+                                </p>
+                            </div>
+                            <div class="fragment">
+                                <p class="cyan" style="font-size: 1.3em">
+                                    AI + Rust Compiler
+                                </p>
+                                <p class="small">= Fewer iterations to working code</p>
+                            </div>
+                        </div>
+                        <p class="fragment highlight-box" style="margin-top: 0.5em; font-size: 0.85em;">
+                            💡 The compiler tells the AI <strong>exactly</strong> what's wrong and how to fix it
+                        </p>
+                        <aside class="notes">
+                            Rust's compiler is famous for helpful error messages. When AI generates code,
+                            the compiler gives precise feedback that helps the AI iterate quickly to correct solutions.
+                        </aside>
                     </section>
                 </section>
 
