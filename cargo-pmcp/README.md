@@ -17,6 +17,7 @@ Production-grade MCP server development toolkit.
 - **WASM Support**: Automatic WASM compilation for edge deployments
 - **Infrastructure as Code**: CDK-based AWS deployment with complete stack management
 - **Deployment Management**: Logs, metrics, secrets, rollback, and destroy capabilities
+- **OAuth Authentication**: Production-ready OAuth 2.0 with AWS Cognito, supporting Dynamic Client Registration (DCR)
 
 ## Installation
 
@@ -208,6 +209,48 @@ cargo pmcp deploy destroy --target google-cloud-run --clean
 - `deploy test --verbose` - Test the deployment
 - `deploy outputs --format json` - Show deployment outputs
 
+### OAuth Authentication
+
+Enable OAuth 2.0 authentication for your MCP server with AWS Cognito. MCP clients (like Claude Desktop, ChatGPT, Cursor) automatically discover and use OAuth via the standard OpenID Connect discovery endpoint.
+
+**Initialize with OAuth:**
+```bash
+# Create deployment with OAuth enabled
+cargo pmcp deploy init --target aws-lambda --oauth cognito
+
+# This creates:
+# - Cognito User Pool with optional social logins
+# - OAuth Proxy Lambda (handles DCR, authorize, token endpoints)
+# - Token Validator Lambda Authorizer (stateless JWT validation)
+# - ClientRegistrationTable in DynamoDB
+```
+
+**OAuth Options:**
+- `--oauth cognito` - Use AWS Cognito (recommended for AWS deployments)
+- `--oauth oidc` - Use external OIDC provider (future)
+- `--oauth shared:<name>` - Use organization's shared OAuth infrastructure
+
+**How It Works:**
+1. MCP clients discover OAuth endpoints via `/.well-known/openid-configuration`
+2. Clients self-register using Dynamic Client Registration (RFC 7591)
+3. Users authenticate via Cognito Hosted UI (supports social logins, MFA)
+4. Clients send Bearer tokens on every MCP request
+5. API Gateway validates tokens using Lambda Authorizer (stateless JWT)
+6. Your MCP server code requires zero OAuth logic
+
+**View Registered Clients:**
+```bash
+cargo pmcp oauth clients
+```
+
+**Test with OAuth:**
+```bash
+# Opens browser for authentication, then runs tests
+cargo pmcp test --server myserver
+```
+
+For detailed OAuth architecture and configuration, see [docs/oauth-design.md](docs/oauth-design.md).
+
 ## Test Scenarios
 
 Test scenarios are YAML files that define test steps and assertions for your MCP server.
@@ -276,8 +319,8 @@ The typical development workflow:
 5. **Generate tests**: `cargo pmcp test --server myserver --generate-scenarios`
 6. **Customize tests**: Edit `scenarios/myserver/generated.yaml`
 7. **Run tests**: `cargo pmcp test --server myserver`
-8. **Deploy**:
-   - AWS Lambda: `cargo pmcp deploy init --target aws-lambda && cargo pmcp deploy`
+8. **Deploy with OAuth**:
+   - AWS Lambda: `cargo pmcp deploy init --target aws-lambda --oauth cognito && cargo pmcp deploy`
    - Google Cloud Run: `cargo pmcp deploy init --target google-cloud-run && cargo pmcp deploy`
    - Cloudflare Workers: `cargo pmcp deploy init --target cloudflare-workers && cargo pmcp deploy`
 9. **Monitor**: `cargo pmcp deploy logs --tail` and `cargo pmcp deploy metrics`

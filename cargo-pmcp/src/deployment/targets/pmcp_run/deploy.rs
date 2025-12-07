@@ -130,20 +130,122 @@ pub async fn deploy_to_pmcp_run(
     println!("   Deployment ID: {}", deployment.deployment_id);
     println!();
 
-    // Step 8: Poll deployment status
-    let outputs = poll_deployment_status(&credentials.access_token, &deployment.deployment_id)
+    // Step 8: Poll deployment status (wait for completion)
+    let deployment_outputs =
+        poll_deployment_status(&credentials.access_token, &deployment.deployment_id)
+            .await
+            .context("Deployment failed")?;
+
+    // Step 9: Configure OAuth if enabled in local config
+    let oauth_config = if config.auth.enabled {
+        println!("🔐 Configuring OAuth for MCP server...");
+
+        let scopes = if config.auth.dcr.default_scopes.is_empty() {
+            None
+        } else {
+            Some(config.auth.dcr.default_scopes.clone())
+        };
+
+        let public_patterns = if config.auth.dcr.public_client_patterns.is_empty() {
+            None
+        } else {
+            Some(config.auth.dcr.public_client_patterns.clone())
+        };
+
+        match graphql::configure_server_oauth(
+            &credentials.access_token,
+            &deployment.deployment_id,
+            true,
+            scopes,
+            Some(config.auth.dcr.enabled),
+            public_patterns,
+            None, // shared_pool_name - not supported in local config yet
+        )
         .await
-        .context("Deployment failed")?;
+        {
+            Ok(oauth) => {
+                println!("✅ OAuth configured successfully");
+                println!();
+                Some(oauth)
+            },
+            Err(e) => {
+                eprintln!("⚠️  Failed to configure OAuth: {}", e);
+                eprintln!("   You can manually enable OAuth with:");
+                eprintln!(
+                    "   cargo pmcp oauth enable --server {}",
+                    deployment.deployment_id
+                );
+                println!();
+                None
+            },
+        }
+    } else {
+        None
+    };
+
+    // Use URL from server response (contains stable serverId-based URL)
+    // Fallback to constructing from deployment ID if not provided
+    let mcp_url = deployment_outputs
+        .url
+        .clone()
+        .unwrap_or_else(|| format!("https://api.pmcp.run/{}/mcp", deployment.deployment_id));
+    let health_url = mcp_url.replace("/mcp", "/health");
+
+    // Extract serverId from URL (pattern: https://api.pmcp.run/{serverId}/mcp)
+    let server_id = mcp_url
+        .strip_suffix("/mcp")
+        .and_then(|s| s.rsplit('/').next())
+        .unwrap_or(&config.server.name);
 
     // Display deployment information
     println!("🎉 Deployment successful!");
     println!();
     println!("📊 Deployment Details:");
     println!("   Name: {}", config.server.name);
-    println!("   ID: {}", deployment.deployment_id);
-    if let Some(url) = &outputs.url {
-        println!("   URL: {}", url);
+    println!("   Server ID: {}", server_id);
+    println!("   Deployment ID: {}", deployment.deployment_id);
+
+    // Display endpoints based on OAuth status
+    if let Some(ref oauth) = oauth_config {
+        // OAuth-protected deployment
+        println!();
+        println!("🔐 MCP Endpoint (OAuth Protected):");
+        println!("   URL: {}", mcp_url);
+        println!();
+        println!("🔑 OAuth Configuration:");
+        if let Some(ref discovery) = oauth.discovery_url {
+            println!("   Discovery:     {}", discovery);
+        }
+        if let Some(ref register) = oauth.registration_endpoint {
+            println!("   Registration:  {}", register);
+        }
+        if let Some(ref authorize) = oauth.authorization_endpoint {
+            println!("   Authorization: {}", authorize);
+        }
+        if let Some(ref token) = oauth.token_endpoint {
+            println!("   Token:         {}", token);
+        }
+        println!();
+        println!("🏥 Health Check:");
+        println!("   URL: {}", health_url);
+        println!();
+        println!("Clients must authenticate via OAuth to access this server.");
+    } else {
+        // No OAuth - open access
+        println!();
+        println!("🔌 MCP Endpoint:");
+        println!("   URL: {}", mcp_url);
+        println!();
+        println!("🏥 Health Check:");
+        println!("   URL: {}", health_url);
+        println!();
+        println!("No authentication required. Anyone can access this server.");
+        println!(
+            "To enable OAuth: cargo pmcp oauth enable {}",
+            deployment.deployment_id
+        );
     }
+
     println!();
     println!("💡 Next steps:");
     println!("   • View logs: cargo pmcp deploy logs --target pmcp-run");
@@ -151,12 +253,56 @@ pub async fn deploy_to_pmcp_run(
     println!("   • View dashboard: https://pmcp.run/dashboard");
     println!();
 
-    // Add deployment_id to custom outputs so it can be saved
-    let mut outputs_with_id = outputs;
+    // Build outputs with shared API Gateway URL pattern
+    let mut outputs_with_id = DeploymentOutputs {
+        // Primary URL is always the shared API Gateway
+        url: Some(mcp_url.clone()),
+        additional_urls: vec![health_url.clone()],
+        regions: vec![],
+        stack_name: None,
+        version: None,
+        custom: std::collections::HashMap::new(),
+    };
+
+    outputs_with_id.custom.insert(
+        "server_id".to_string(),
+        serde_json::Value::String(server_id.to_string()),
+    );
     outputs_with_id.custom.insert(
         "deployment_id".to_string(),
         serde_json::Value::String(deployment.deployment_id.clone()),
     );
+    outputs_with_id.custom.insert(
+        "mcp_endpoint".to_string(),
+        serde_json::Value::String(mcp_url),
+    );
+    outputs_with_id.custom.insert(
+        "health_endpoint".to_string(),
+        serde_json::Value::String(health_url),
+    );
+
+    if let Some(oauth) = oauth_config {
+        outputs_with_id.custom.insert(
+            "oauth_enabled".to_string(),
+            serde_json::Value::Bool(oauth.oauth_enabled),
+        );
+        if let Some(discovery) = oauth.discovery_url {
+            outputs_with_id.custom.insert(
+                "oauth_discovery_url".to_string(),
+                serde_json::Value::String(discovery),
+            );
+        }
+        if let Some(pool_id) = oauth.user_pool_id {
+            outputs_with_id.custom.insert(
+                "cognito_user_pool_id".to_string(),
+                serde_json::Value::String(pool_id),
+            );
+        }
+    } else {
+        outputs_with_id
+            .custom
+            .insert("oauth_enabled".to_string(), serde_json::Value::Bool(false));
+    }
 
     Ok(outputs_with_id)
 }
@@ -189,6 +335,13 @@ async fn poll_deployment_status(
                     println!();
                 }
                 println!("✅ Deployment completed successfully!");
+
+                // Debug: Log the URL from server response
+                if let Some(ref url) = status.url {
+                    println!("   Server URL: {}", url);
+                } else {
+                    println!("   ⚠️  Server did not return URL");
+                }
                 println!();
 
                 return Ok(DeploymentOutputs {

@@ -4,16 +4,35 @@ use std::process::Command;
 
 pub struct BinaryBuilder {
     project_root: PathBuf,
+    oauth_enabled: bool,
+    /// Whether to build local OAuth lambdas (false for pmcp-run which uses shared OAuth)
+    build_oauth_lambdas: bool,
 }
 
 pub struct BuildResult {
     pub binary_path: PathBuf,
     pub binary_size: u64,
+    pub oauth_proxy_path: Option<PathBuf>,
+    pub authorizer_path: Option<PathBuf>,
 }
 
 impl BinaryBuilder {
     pub fn new(project_root: PathBuf) -> Self {
-        Self { project_root }
+        // Check if OAuth is enabled in config and if we should build local OAuth lambdas
+        let config = crate::deployment::config::DeployConfig::load(&project_root);
+        let oauth_enabled = config.as_ref().is_ok_and(|c| c.auth.enabled);
+
+        // For pmcp-run target, OAuth lambdas are shared on the service side
+        // Only build local OAuth lambdas for aws-lambda target
+        let build_oauth_lambdas = config
+            .as_ref()
+            .is_ok_and(|c| c.auth.enabled && c.target.target_type == "aws-lambda");
+
+        Self {
+            project_root,
+            oauth_enabled,
+            build_oauth_lambdas,
+        }
     }
 
     pub fn build(&self) -> Result<BuildResult> {
@@ -37,9 +56,22 @@ impl BinaryBuilder {
             binary_size as f64 / 1_048_576.0
         );
 
+        // 4. Build OAuth Lambdas if enabled AND target requires local OAuth lambdas
+        // (pmcp-run uses shared OAuth infrastructure, so we skip building local OAuth lambdas)
+        let (oauth_proxy_path, authorizer_path) = if self.build_oauth_lambdas {
+            println!("🔐 Building OAuth Lambdas...");
+            let proxy_path = self.build_and_copy_oauth_lambda("oauth-proxy")?;
+            let authorizer_path = self.build_and_copy_oauth_lambda("authorizer")?;
+            (Some(proxy_path), Some(authorizer_path))
+        } else {
+            (None, None)
+        };
+
         Ok(BuildResult {
             binary_path,
             binary_size,
+            oauth_proxy_path,
+            authorizer_path,
         })
     }
 
@@ -151,5 +183,81 @@ impl BinaryBuilder {
         // cargo-lambda outputs to target/lambda/{binary-name}/bootstrap
         // Since AWS Lambda requires binary name "bootstrap", the output is in target/lambda/bootstrap/
         Ok("bootstrap".to_string())
+    }
+
+    /// Build and copy an OAuth Lambda (proxy or authorizer)
+    fn build_and_copy_oauth_lambda(&self, lambda_type: &str) -> Result<PathBuf> {
+        let config = crate::deployment::config::DeployConfig::load(&self.project_root)?;
+        let package_name = format!("{}-{}", config.server.name, lambda_type);
+        let output_dir = format!(".build-{}", lambda_type);
+
+        print!("   Building {} Lambda...", lambda_type);
+        std::io::Write::flush(&mut std::io::stdout())?;
+
+        // Build with cargo-lambda
+        let status = Command::new("cargo")
+            .args([
+                "lambda",
+                "build",
+                "--release",
+                "--package",
+                &package_name,
+                "--output-format",
+                "binary",
+                "--target",
+                "aarch64-unknown-linux-gnu",
+            ])
+            .current_dir(&self.project_root)
+            .status()
+            .context(format!(
+                "Failed to run cargo lambda build for {}",
+                lambda_type
+            ))?;
+
+        if !status.success() {
+            println!(" ❌");
+            bail!("Failed to build {} Lambda binary", lambda_type);
+        }
+
+        // Copy to deploy/{output_dir}/bootstrap
+        let src = self.project_root.join("target/lambda/bootstrap/bootstrap");
+
+        if !src.exists() {
+            // Try alternative path
+            let alt_src = self
+                .project_root
+                .join(format!("target/lambda/{}/bootstrap", package_name));
+            if !alt_src.exists() {
+                println!(" ❌");
+                bail!(
+                    "{} binary not found at {} or {}",
+                    lambda_type,
+                    src.display(),
+                    alt_src.display()
+                );
+            }
+        }
+
+        let deploy_build_dir = self.project_root.join(format!("deploy/{}", output_dir));
+        std::fs::create_dir_all(&deploy_build_dir)
+            .context(format!("Failed to create deploy/{} directory", output_dir))?;
+
+        let dst = deploy_build_dir.join("bootstrap");
+        std::fs::copy(&src, &dst).context(format!(
+            "Failed to copy {} binary to deploy/{}/bootstrap",
+            lambda_type, output_dir
+        ))?;
+
+        // Make executable (Unix only)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&dst)?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&dst, perms)?;
+        }
+
+        println!(" ✅");
+        Ok(dst)
     }
 }

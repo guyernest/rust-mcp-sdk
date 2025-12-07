@@ -88,6 +88,26 @@ pub enum DeployAction {
         /// Skip credentials check
         #[clap(long)]
         skip_credentials_check: bool,
+
+        /// OAuth provider (cognito, oidc, none)
+        #[clap(long, value_name = "PROVIDER")]
+        oauth: Option<String>,
+
+        /// Use shared OAuth infrastructure (format: shared:<name>)
+        #[clap(long, value_name = "NAME")]
+        oauth_shared: Option<String>,
+
+        /// Existing Cognito User Pool ID (skip creation)
+        #[clap(long, value_name = "POOL_ID")]
+        cognito_user_pool_id: Option<String>,
+
+        /// Cognito User Pool name (when creating new)
+        #[clap(long, value_name = "NAME")]
+        cognito_pool_name: Option<String>,
+
+        /// Enable social login providers (comma-separated: github,google,apple)
+        #[clap(long, value_name = "PROVIDERS", value_delimiter = ',')]
+        social_providers: Option<Vec<String>>,
     },
 
     /// View deployment logs
@@ -154,6 +174,12 @@ pub enum DeployAction {
 
     /// Logout from deployment target
     Logout,
+
+    /// Manage OAuth configuration for pmcp.run servers
+    Oauth {
+        #[clap(subcommand)]
+        action: OAuthAction,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -182,6 +208,46 @@ pub enum SecretsAction {
     },
 }
 
+#[derive(Debug, Parser)]
+pub enum OAuthAction {
+    /// Enable OAuth for an MCP server on pmcp.run
+    Enable {
+        /// Server ID (deployment ID) to enable OAuth for
+        #[clap(long)]
+        server: String,
+
+        /// OAuth scopes (comma-separated)
+        #[clap(long, value_delimiter = ',')]
+        scopes: Option<Vec<String>>,
+
+        /// Enable Dynamic Client Registration
+        #[clap(long, default_value = "true")]
+        dcr: bool,
+
+        /// Public client patterns (comma-separated, e.g., claude,cursor)
+        #[clap(long, value_delimiter = ',')]
+        public_clients: Option<Vec<String>>,
+
+        /// Use a shared User Pool instead of per-server pool
+        #[clap(long)]
+        shared_pool: Option<String>,
+    },
+
+    /// Disable OAuth for an MCP server
+    Disable {
+        /// Server ID (deployment ID)
+        #[clap(long)]
+        server: String,
+    },
+
+    /// Show OAuth status and endpoints for an MCP server
+    Status {
+        /// Server ID (deployment ID)
+        #[clap(long)]
+        server: String,
+    },
+}
+
 impl DeployCommand {
     pub fn execute(&self) -> Result<()> {
         // Run async code in tokio runtime
@@ -203,22 +269,67 @@ impl DeployCommand {
                 DeployAction::Init {
                     region,
                     skip_credentials_check,
+                    oauth,
+                    oauth_shared,
+                    cognito_user_pool_id,
+                    cognito_pool_name,
+                    social_providers,
                 } => {
                     // For init, we can use the old approach or new depending on target
                     if target_id == "aws-lambda" {
-                        InitCommand::new(project_root)
+                        let mut cmd = InitCommand::new(project_root)
                             .with_region(region)
-                            .with_credentials_check(!skip_credentials_check)
-                            .execute()
+                            .with_credentials_check(!skip_credentials_check);
+
+                        // Configure OAuth if specified
+                        if let Some(provider) = oauth {
+                            cmd = cmd.with_oauth_provider(provider);
+                        }
+                        if let Some(shared_name) = oauth_shared {
+                            cmd = cmd.with_oauth_shared(&shared_name);
+                        }
+                        if let Some(pool_id) = cognito_user_pool_id {
+                            cmd = cmd.with_cognito_user_pool_id(&pool_id);
+                        }
+                        if let Some(pool_name) = cognito_pool_name {
+                            cmd = cmd.with_cognito_pool_name(&pool_name);
+                        }
+                        if let Some(providers) = social_providers {
+                            cmd = cmd.with_social_providers(providers.clone());
+                        }
+
+                        cmd.execute()
                     } else {
-                        // For other targets, use the new modular approach
+                        // For other targets (pmcp-run, etc.), use the new modular approach
                         // Auto-detect server name from workspace or use package name
                         let server_name = detect_server_name(&project_root)?;
-                        let config = crate::deployment::DeployConfig::default_for_server(
+                        let mut config = crate::deployment::DeployConfig::default_for_server(
                             server_name,
                             region.clone(),
                             project_root.clone(),
                         );
+
+                        // Update target type to match the actual target
+                        config.target.target_type = target_id.clone();
+
+                        // Configure OAuth if specified (for pmcp-run target)
+                        if let Some(provider) = oauth {
+                            if provider == "cognito" || provider == "oidc" {
+                                config.auth.enabled = true;
+                                config.auth.provider = provider.clone();
+
+                                // Set default scopes if not specified
+                                if config.auth.dcr.default_scopes.is_empty() {
+                                    config.auth.dcr.default_scopes = vec![
+                                        "openid".to_string(),
+                                        "email".to_string(),
+                                        "mcp/read".to_string(),
+                                        "mcp/write".to_string(),
+                                    ];
+                                }
+                            }
+                        }
+
                         target.init(&config).await
                     }
                 },
@@ -324,6 +435,13 @@ impl DeployCommand {
                         },
                     }
                 },
+                DeployAction::Oauth { action } => {
+                    // OAuth is only supported for pmcp-run target
+                    if target_id != "pmcp-run" {
+                        bail!("OAuth management is only supported for pmcp-run target");
+                    }
+                    handle_oauth_action(action).await
+                },
             },
             None => {
                 // No subcommand = deploy
@@ -417,5 +535,135 @@ endpoint = "{}"
         file.write_all(content.as_bytes())?;
 
         Ok(())
+    }
+}
+
+/// Handle OAuth subcommands for pmcp.run
+async fn handle_oauth_action(action: &OAuthAction) -> Result<()> {
+    use crate::deployment::targets::pmcp_run::{auth, graphql};
+
+    // Get credentials
+    let credentials = auth::get_credentials().await?;
+
+    match action {
+        OAuthAction::Enable {
+            server,
+            scopes,
+            dcr,
+            public_clients,
+            shared_pool,
+        } => {
+            println!("🔐 Enabling OAuth for server: {}", server);
+            println!();
+
+            let oauth_config = graphql::configure_server_oauth(
+                &credentials.access_token,
+                server,
+                true,
+                scopes.clone(),
+                Some(*dcr),
+                public_clients.clone(),
+                shared_pool.clone(),
+            )
+            .await
+            .context("Failed to configure OAuth")?;
+
+            println!("✅ OAuth enabled successfully!");
+            println!();
+            println!("🔐 OAuth Endpoints:");
+            if let Some(ref discovery) = oauth_config.discovery_url {
+                println!("   Discovery:     {}", discovery);
+            }
+            if let Some(ref register) = oauth_config.registration_endpoint {
+                println!("   Registration:  {}", register);
+            }
+            if let Some(ref authorize) = oauth_config.authorization_endpoint {
+                println!("   Authorization: {}", authorize);
+            }
+            if let Some(ref token) = oauth_config.token_endpoint {
+                println!("   Token:         {}", token);
+            }
+            if let Some(ref pool_id) = oauth_config.user_pool_id {
+                println!();
+                println!("   User Pool ID:  {}", pool_id);
+            }
+            if let Some(ref region) = oauth_config.user_pool_region {
+                println!("   Region:        {}", region);
+            }
+
+            Ok(())
+        },
+        OAuthAction::Disable { server } => {
+            println!("🔐 Disabling OAuth for server: {}", server);
+            println!();
+
+            graphql::disable_server_oauth(&credentials.access_token, server)
+                .await
+                .context("Failed to disable OAuth")?;
+
+            println!("✅ OAuth disabled successfully!");
+            println!();
+            println!("⚠️  Note: The Cognito User Pool was NOT deleted.");
+            println!("   You can re-enable OAuth at any time with:");
+            println!("   cargo pmcp deploy oauth enable --server {}", server);
+
+            Ok(())
+        },
+        OAuthAction::Status { server } => {
+            println!("🔐 OAuth Status for server: {}", server);
+            println!();
+
+            match graphql::fetch_server_oauth_endpoints(&credentials.access_token, server).await {
+                Ok(endpoints) => {
+                    if endpoints.oauth_enabled {
+                        println!("   Status: ✅ Enabled");
+                        if let Some(provider) = endpoints.provider {
+                            println!("   Provider: {}", provider);
+                        }
+                        if let Some(dcr) = endpoints.dcr_enabled {
+                            println!("   DCR: {}", if dcr { "enabled" } else { "disabled" });
+                        }
+                        if let Some(scopes) = endpoints.scopes {
+                            println!("   Scopes: {}", scopes.join(", "));
+                        }
+                        println!();
+                        println!("🔐 OAuth Endpoints:");
+                        if let Some(ref discovery) = endpoints.discovery_url {
+                            println!("   Discovery:     {}", discovery);
+                        }
+                        if let Some(ref register) = endpoints.registration_endpoint {
+                            println!("   Registration:  {}", register);
+                        }
+                        if let Some(ref authorize) = endpoints.authorization_endpoint {
+                            println!("   Authorization: {}", authorize);
+                        }
+                        if let Some(ref token) = endpoints.token_endpoint {
+                            println!("   Token:         {}", token);
+                        }
+                        println!();
+                        println!("📋 Cognito Details:");
+                        if let Some(ref pool_id) = endpoints.user_pool_id {
+                            println!("   User Pool ID:  {}", pool_id);
+                        }
+                        if let Some(ref region) = endpoints.user_pool_region {
+                            println!("   Region:        {}", region);
+                        }
+                    } else {
+                        println!("   Status: ❌ Disabled");
+                        println!();
+                        println!("💡 Enable OAuth with:");
+                        println!("   cargo pmcp deploy oauth enable --server {}", server);
+                    }
+                },
+                Err(_) => {
+                    println!("   Status: ❌ Not configured");
+                    println!();
+                    println!("💡 Enable OAuth with:");
+                    println!("   cargo pmcp deploy oauth enable --server {}", server);
+                },
+            }
+
+            Ok(())
+        },
     }
 }

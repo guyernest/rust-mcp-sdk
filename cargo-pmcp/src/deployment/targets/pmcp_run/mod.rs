@@ -143,7 +143,16 @@ impl DeploymentTarget for PmcpRunTarget {
 
         // Call pmcp.run API to delete deployment
         let credentials = auth::get_credentials().await?;
-        graphql::delete_deployment(&credentials.access_token, &config.server.name).await?;
+
+        // First, find the deployment ID by project name
+        let deployment_id =
+            graphql::find_deployment_id_by_name(&credentials.access_token, &config.server.name)
+                .await?;
+
+        println!("   Found deployment: {}", deployment_id);
+
+        // Destroy the deployment (complete cleanup including CloudFormation stack)
+        graphql::destroy_deployment(&credentials.access_token, &deployment_id).await?;
 
         println!("✅ pmcp.run deployment destroyed successfully");
 
