@@ -72,26 +72,16 @@ pub fn expand_tool_router(args: TokenStream, mut input: ItemImpl) -> syn::Result
     // Generate handle_tool method
     let handle_tool_method = generate_handle_tool_method(&tool_methods, &vis);
 
-    // Generate router initialization method
-    let router_init = generate_router_init(&router_field, &vis);
-
     // Add generated methods to the impl block
+    // Note: init_tool_router is not generated as the router field management is left to the user
     input.items.push(ImplItem::Fn(tools_method));
     input.items.push(ImplItem::Fn(handle_tool_method));
-    input.items.push(ImplItem::Fn(router_init));
 
     // Add router field to the struct (this would need to be done separately)
     // For now, we'll document that the user needs to add it manually
 
-    let expanded = quote! {
-        #input
-
-        impl ToolRouterInfo for Self {
-            const ROUTER_FIELD: &'static str = stringify!(#router_field);
-        }
-    };
-
-    Ok(expanded)
+    // Just output the modified impl block with the generated methods
+    Ok(quote! { #input })
 }
 
 /// Collect all methods marked with #[tool] from the impl block
@@ -173,21 +163,21 @@ fn generate_tools_method(methods: &[ToolMethod], vis: &Visibility) -> ImplItemFn
             let name = &method.tool_name;
             let description = &method.description;
             quote! {
-                pmcp::types::Tool {
-                    name: #name.to_string(),
-                    description: Some(#description.to_string()),
-                    input_schema: Some(serde_json::json!({
+                pmcp::types::ToolInfo::new(
+                    #name,
+                    Some(#description.to_string()),
+                    serde_json::json!({
                         "type": "object",
                         "properties": {},
                         "required": []
-                    })),
-                }
+                    }),
+                )
             }
         })
         .collect();
 
     parse_quote! {
-        #vis fn tools(&self) -> Vec<pmcp::types::Tool> {
+        #vis fn tools(&self) -> Vec<pmcp::types::ToolInfo> {
             vec![
                 #(#tool_definitions),*
             ]
@@ -213,7 +203,7 @@ fn generate_handle_tool_method(methods: &[ToolMethod], vis: &Visibility) -> Impl
                     let result = self.#method_name(args.clone())#await_token;
                     match result {
                         Ok(value) => Ok(serde_json::to_value(value)?),
-                        Err(e) => Err(pmcp::Error::ToolError(e.to_string())),
+                        Err(e) => Err(pmcp::Error::internal(format!("Tool error: {}", e))),
                     }
                 }
             }
@@ -225,23 +215,12 @@ fn generate_handle_tool_method(methods: &[ToolMethod], vis: &Visibility) -> Impl
             &self,
             name: &str,
             args: serde_json::Value,
-            extra: pmcp::RequestHandlerExtra,
+            _extra: pmcp::RequestHandlerExtra,
         ) -> pmcp::Result<serde_json::Value> {
             match name {
                 #(#match_arms)*
-                _ => Err(pmcp::Error::MethodNotFound(format!("Unknown tool: {}", name))),
+                _ => Err(pmcp::Error::method_not_found(format!("Unknown tool: {}", name))),
             }
-        }
-    }
-}
-
-/// Generate router initialization method
-fn generate_router_init(router_field: &Ident, vis: &Visibility) -> ImplItemFn {
-    parse_quote! {
-        #vis fn init_tool_router(&mut self) {
-            // Initialize the tool router
-            // This is a placeholder - actual implementation would depend on the router type
-            self.#router_field = Default::default();
         }
     }
 }
@@ -259,11 +238,6 @@ fn parse_visibility(vis_str: &Option<String>) -> syn::Result<Visibility> {
             format!("Invalid visibility: {}", s),
         )),
     }
-}
-
-/// Trait to mark types that have a tool router
-trait ToolRouterInfo {
-    const ROUTER_FIELD: &'static str;
 }
 
 #[cfg(test)]

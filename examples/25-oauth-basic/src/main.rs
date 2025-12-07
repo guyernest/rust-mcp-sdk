@@ -101,7 +101,7 @@ async fn main() -> Result<()> {
     // Create a scope-based authorizer that defines access rules
     let authorizer = ScopeBasedAuthorizer::new()
         // Public tool - no scopes required (anyone can access)
-        .require_scopes("public_info", vec![])
+        .require_scopes("public_info", Vec::<String>::new())
         // Protected tool - requires basic read scope
         .require_scopes("protected_data", vec!["read".to_string()])
         // Admin tool - requires admin scope

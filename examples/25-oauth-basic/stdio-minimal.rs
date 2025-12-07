@@ -67,8 +67,8 @@ impl ToolHandler for AdminTool {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create scope-based authorizer
     let authorizer = ScopeBasedAuthorizer::new()
-        .require_scopes("public_info", vec![])  // No scopes required
-        .require_scopes("protected_data", vec!["read".to_string()])  // Read scope required  
+        .require_scopes("public_info", Vec::<String>::new())  // No scopes required
+        .require_scopes("protected_data", vec!["read".to_string()])  // Read scope required
         .require_scopes("admin_action", vec!["admin".to_string()])   // Admin scope required
         .default_scopes(vec!["mcp:tools:use".to_string()]); // Default for other tools
 

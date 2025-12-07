@@ -175,7 +175,7 @@ pub fn generate_error_conversion(error_type: &Type) -> TokenStream {
     if is_pmcp_error(error_type) {
         quote! { e }
     } else {
-        quote! { pmcp::Error::ToolError(e.to_string()) }
+        quote! { pmcp::Error::internal(format!("Tool error: {}", e)) }
     }
 }
 
