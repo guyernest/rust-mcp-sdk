@@ -187,7 +187,10 @@ mod tests {
 
     #[test]
     fn test_registry_register_and_get() {
-        let mut registry = TargetRegistry::new();
+        // Use empty registry for isolated test (not new() which pre-populates)
+        let mut registry = TargetRegistry {
+            targets: std::collections::HashMap::new(),
+        };
         let target = Arc::new(MockTarget {
             id: "test".to_string(),
             name: "Test Target".to_string(),

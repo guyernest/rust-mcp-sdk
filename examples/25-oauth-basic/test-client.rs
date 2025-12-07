@@ -28,6 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         session_id: None,
         enable_json_response: true,
         on_resumption_token: None,
+        http_middleware_chain: None,
     };
 
     // Create the transport

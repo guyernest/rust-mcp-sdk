@@ -109,12 +109,12 @@ pub fn expand_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStream>
 
         impl #wrapper_name {
             /// Get tool definition
-            pub fn definition() -> pmcp::types::Tool {
-                pmcp::types::Tool {
-                    name: #tool_name.to_string(),
-                    description: Some(#description.to_string()),
-                    input_schema: Some(Self::input_schema()),
-                }
+            pub fn definition() -> pmcp::types::ToolInfo {
+                pmcp::types::ToolInfo::new(
+                    #tool_name,
+                    Some(#description.to_string()),
+                    Self::input_schema(),
+                )
             }
 
             /// Generate input schema
@@ -192,7 +192,7 @@ fn generate_param_extraction(params: &[ParamInfo]) -> syn::Result<TokenStream> {
             extractions.push(quote! {
                 let #name: #ty = args.get(#name_str)
                     .and_then(|v| serde_json::from_value(v.clone()).ok())
-                    .ok_or_else(|| pmcp::Error::InvalidParams(
+                    .ok_or_else(|| pmcp::Error::invalid_params(
                         format!("Missing required parameter: {}", #name_str)
                     ))?;
             });
@@ -212,16 +212,16 @@ fn generate_result_conversion(return_type: &Type) -> syn::Result<TokenStream> {
             match result {
                 Ok(value) => {
                     let json_value = serde_json::to_value(value)
-                        .map_err(|e| pmcp::Error::InternalError(e.to_string()))?;
+                        .map_err(|e| pmcp::Error::internal(e.to_string()))?;
                     Ok(json_value)
                 }
-                Err(e) => Err(pmcp::Error::ToolError(e.to_string()))
+                Err(e) => Err(pmcp::Error::internal(format!("Tool error: {}", e)))
             }
         })
     } else {
         Ok(quote! {
             let json_value = serde_json::to_value(result)
-                .map_err(|e| pmcp::Error::InternalError(e.to_string()))?;
+                .map_err(|e| pmcp::Error::internal(e.to_string()))?;
             Ok(json_value)
         })
     }

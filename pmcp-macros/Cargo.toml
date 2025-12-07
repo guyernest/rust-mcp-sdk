@@ -32,7 +32,10 @@ tokio = { version = "1.46", features = ["full"] }
 trybuild = "1.0"
 pretty_assertions = "1.4"
 insta = { version = "1.43", features = ["json"] }
+async-trait = "0.1"
+proptest = "1.6"
 
 [features]
 default = []
 debug = []  # Enable debug output in macros
+tool_router_dev = []  # Enable WIP tool_router tests
