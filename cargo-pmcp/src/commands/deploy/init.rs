@@ -2,10 +2,30 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::deployment::config::CognitoConfig;
+use crate::templates::oauth::{authorizer, proxy};
+
+/// OAuth provider configuration
+#[derive(Debug, Clone, Default)]
+pub struct OAuthOptions {
+    /// OAuth provider type (cognito, oidc, none)
+    pub provider: Option<String>,
+    /// Shared OAuth infrastructure name
+    pub shared: Option<String>,
+    /// Existing Cognito User Pool ID
+    pub cognito_user_pool_id: Option<String>,
+    /// Cognito User Pool name (when creating new)
+    pub cognito_pool_name: Option<String>,
+    /// Social login providers
+    pub social_providers: Vec<String>,
+}
+
 pub struct InitCommand {
     project_root: PathBuf,
     region: String,
     check_credentials: bool,
+    oauth_options: OAuthOptions,
+    target_type: String,
 }
 
 impl InitCommand {
@@ -16,6 +36,8 @@ impl InitCommand {
                 .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
                 .unwrap_or_else(|_| "us-east-1".to_string()),
             check_credentials: true,
+            oauth_options: OAuthOptions::default(),
+            target_type: "aws-lambda".to_string(),
         }
     }
 
@@ -26,6 +48,36 @@ impl InitCommand {
 
     pub fn with_credentials_check(mut self, check: bool) -> Self {
         self.check_credentials = check;
+        self
+    }
+
+    pub fn with_oauth_provider(mut self, provider: &str) -> Self {
+        self.oauth_options.provider = Some(provider.to_string());
+        self
+    }
+
+    pub fn with_oauth_shared(mut self, name: &str) -> Self {
+        self.oauth_options.shared = Some(name.to_string());
+        self
+    }
+
+    pub fn with_cognito_user_pool_id(mut self, pool_id: &str) -> Self {
+        self.oauth_options.cognito_user_pool_id = Some(pool_id.to_string());
+        self
+    }
+
+    pub fn with_cognito_pool_name(mut self, name: &str) -> Self {
+        self.oauth_options.cognito_pool_name = Some(name.to_string());
+        self
+    }
+
+    pub fn with_social_providers(mut self, providers: Vec<String>) -> Self {
+        self.oauth_options.social_providers = providers;
+        self
+    }
+
+    pub fn with_target_type(mut self, target_type: &str) -> Self {
+        self.target_type = target_type.to_string();
         self
     }
 
@@ -41,21 +93,60 @@ impl InitCommand {
         // 2. Get server name from Cargo.toml
         let server_name = self.get_server_name()?;
 
-        // 3. Create .pmcp/deploy.toml
+        // 3. Determine OAuth configuration
+        let oauth_enabled = self.oauth_options.provider.as_deref() == Some("cognito")
+            || self.oauth_options.shared.is_some();
+
+        if oauth_enabled {
+            println!("🔐 OAuth authentication enabled");
+        }
+
+        // 4. Create .pmcp/deploy.toml
         self.create_config(&server_name)?;
 
-        // 4. Create deploy/ directory with CDK templates
+        // 5. Create deploy/ directory with CDK templates
         self.create_cdk_project(&server_name)?;
 
-        // 5. Install CDK dependencies
+        // 6. Install CDK dependencies
         self.install_cdk_deps()?;
 
         println!();
         println!("✅ AWS Lambda deployment initialized!");
         println!();
+
+        if oauth_enabled {
+            println!("OAuth Configuration:");
+            if let Some(ref provider) = self.oauth_options.provider {
+                println!("  Provider: {}", provider);
+            }
+            if let Some(ref pool_id) = self.oauth_options.cognito_user_pool_id {
+                println!("  User Pool: {} (existing)", pool_id);
+            } else if let Some(ref pool_name) = self.oauth_options.cognito_pool_name {
+                println!("  User Pool: {} (will be created)", pool_name);
+            } else {
+                println!("  User Pool: {}-users (will be created)", server_name);
+            }
+            if !self.oauth_options.social_providers.is_empty() {
+                println!(
+                    "  Social Providers: {}",
+                    self.oauth_options.social_providers.join(", ")
+                );
+            }
+            println!();
+        }
+
         println!("Next steps:");
         println!("1. (Optional) Edit .pmcp/deploy.toml to customize deployment");
         println!("2. Deploy: cargo pmcp deploy");
+
+        if oauth_enabled {
+            println!();
+            println!("OAuth endpoints will be available after deployment:");
+            println!("  Discovery:     <api-url>/.well-known/openid-configuration");
+            println!("  Registration:  <api-url>/oauth2/register");
+            println!("  Authorization: <api-url>/oauth2/authorize");
+            println!("  Token:         <api-url>/oauth2/token");
+        }
 
         Ok(())
     }
@@ -141,11 +232,42 @@ impl InitCommand {
         print!("📝 Creating deployment configuration...");
         std::io::Write::flush(&mut std::io::stdout())?;
 
-        let config = crate::deployment::config::DeployConfig::default_for_server(
-            server_name.to_string(),
-            self.region.clone(),
-            self.project_root.clone(),
-        );
+        let oauth_enabled = self.oauth_options.provider.as_deref() == Some("cognito")
+            || self.oauth_options.shared.is_some();
+
+        let mut config = if oauth_enabled {
+            // Create config with Cognito OAuth
+            let cognito_config = CognitoConfig {
+                user_pool_id: self.oauth_options.cognito_user_pool_id.clone(),
+                user_pool_name: self
+                    .oauth_options
+                    .cognito_pool_name
+                    .clone()
+                    .or_else(|| Some(format!("{}-users", server_name))),
+                resource_server_id: "mcp".to_string(),
+                social_providers: self.oauth_options.social_providers.clone(),
+                mfa: "optional".to_string(),
+                access_token_ttl: "1h".to_string(),
+                refresh_token_ttl: "30d".to_string(),
+                domain: None,
+            };
+
+            crate::deployment::config::DeployConfig::with_cognito_oauth(
+                server_name.to_string(),
+                self.region.clone(),
+                self.project_root.clone(),
+                cognito_config,
+            )
+        } else {
+            crate::deployment::config::DeployConfig::default_for_server(
+                server_name.to_string(),
+                self.region.clone(),
+                self.project_root.clone(),
+            )
+        };
+
+        // Override target type if specified (e.g., "pmcp-run" vs "aws-lambda")
+        config.target.target_type = self.target_type.clone();
 
         config.save(&self.project_root)?;
 
@@ -160,16 +282,34 @@ impl InitCommand {
         let deploy_dir = self.project_root.join("deploy");
         std::fs::create_dir_all(&deploy_dir).context("Failed to create deploy directory")?;
 
+        let oauth_enabled = self.oauth_options.provider.as_deref() == Some("cognito")
+            || self.oauth_options.shared.is_some();
+
+        // For pmcp-run target, OAuth is handled by the shared pmcp.run infrastructure
+        // So we always use the simple stack (no local OAuth lambdas)
+        let use_local_oauth = oauth_enabled && self.target_type == "aws-lambda";
+
         // Create CDK files
         self.create_cdk_json(&deploy_dir)?;
         self.create_package_json(&deploy_dir, server_name)?;
         self.create_tsconfig(&deploy_dir)?;
         self.create_app_ts(&deploy_dir, server_name)?;
-        self.create_stack_ts(&deploy_dir, server_name)?;
+
+        if use_local_oauth {
+            self.create_oauth_stack_ts(&deploy_dir, server_name)?;
+        } else {
+            self.create_stack_ts(&deploy_dir, server_name)?;
+        }
+
         self.create_constructs(&deploy_dir)?;
 
         // Create Lambda wrapper binary
         self.create_lambda_wrapper(server_name)?;
+
+        // Create OAuth Lambda projects only for aws-lambda target with OAuth enabled
+        if use_local_oauth {
+            self.create_oauth_lambdas(server_name)?;
+        }
 
         println!(" ✅");
         Ok(())
@@ -307,8 +447,81 @@ app.synth();
         let lib_dir = deploy_dir.join("lib");
         std::fs::create_dir_all(&lib_dir)?;
 
-        // This is a minimal stack for MVP
-        // We'll expand this with constructs in the next phase
+        // For pmcp-run target: Lambda-only stack (no API Gateway)
+        // The shared pmcp.run API Gateway handles all routing
+        if self.target_type == "pmcp-run" {
+            let stack_ts = format!(
+                r#"import * as cdk from 'aws-cdk-lib';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as logs from 'aws-cdk-lib/aws-logs';
+import {{ Construct }} from 'constructs';
+
+/**
+ * MCP Server Stack for pmcp.run deployment
+ *
+ * This stack deploys only the Lambda function. The API Gateway is managed
+ * by the shared pmcp.run infrastructure at https://api.pmcp.run/{{serverId}}/mcp
+ */
+export class McpServerStack extends cdk.Stack {{
+  constructor(scope: Construct, id: string, props?: cdk.StackProps) {{
+    super(scope, id, props);
+
+    // Lambda function (ARM64 for better price/performance)
+    const mcpFunction = new lambda.Function(this, 'McpFunction', {{
+      functionName: '{}',
+      runtime: lambda.Runtime.PROVIDED_AL2023,
+      handler: 'bootstrap',
+      code: lambda.Code.fromAsset('.build'),
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(30),
+      environment: {{
+        RUST_LOG: 'info',
+      }},
+      tracing: lambda.Tracing.ACTIVE,
+    }});
+
+    // Log group with 7-day retention (cost optimization)
+    new logs.LogGroup(this, 'LogGroup', {{
+      logGroupName: `/aws/lambda/${{mcpFunction.functionName}}`,
+      retention: logs.RetentionDays.ONE_WEEK,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    }});
+
+    // Outputs
+    new cdk.CfnOutput(this, 'LambdaArn', {{
+      value: mcpFunction.functionArn,
+      description: 'MCP Server Lambda ARN',
+    }});
+
+    new cdk.CfnOutput(this, 'LambdaName', {{
+      value: mcpFunction.functionName,
+      description: 'MCP Server Lambda Name',
+    }});
+
+    // ApiUrl output for backward compatibility with pmcp.run workflow
+    // The actual URL is constructed from serverId: https://api.pmcp.run/{{serverId}}/mcp
+    // This placeholder is used until pmcp.run workflow is updated to use LambdaArn
+    new cdk.CfnOutput(this, 'ApiUrl', {{
+      value: 'https://api.pmcp.run/{{use-deployment-id}}/mcp',
+      description: 'MCP endpoint (construct from deployment ID)',
+    }});
+
+    new cdk.CfnOutput(this, 'DashboardUrl', {{
+      value: `https://console.aws.amazon.com/cloudwatch/home?region=${{this.region}}`,
+      description: 'CloudWatch Console',
+    }});
+  }}
+}}
+"#,
+                server_name
+            );
+
+            std::fs::write(lib_dir.join("stack.ts"), stack_ts)?;
+            return Ok(());
+        }
+
+        // For aws-lambda target: Full stack with API Gateway
         let stack_ts = format!(
             r#"import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
@@ -336,13 +549,13 @@ export class McpServerStack extends cdk.Stack {{
     }});
 
     // Log group
-    const logGroup = new logs.LogGroup(this, 'LogGroup', {{
+    new logs.LogGroup(this, 'LogGroup', {{
       logGroupName: `/aws/lambda/${{mcpFunction.functionName}}`,
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     }});
 
-    // HTTP API (will add auth in next phase)
+    // HTTP API
     const httpApi = new apigatewayv2.HttpApi(this, 'HttpApi', {{
       apiName: '{}',
       description: 'MCP Server HTTP API',
@@ -384,24 +597,14 @@ export class McpServerStack extends cdk.Stack {{
       description: 'MCP Server API URL',
     }});
 
-    new cdk.CfnOutput(this, 'OAuthDiscoveryUrl', {{
-      value: 'https://oauth-coming-soon',
-      description: 'OAuth Discovery URL (coming in next phase)',
-    }});
-
-    new cdk.CfnOutput(this, 'ClientId', {{
-      value: 'client-id-coming-soon',
-      description: 'OAuth Client ID (coming in next phase)',
+    new cdk.CfnOutput(this, 'LambdaArn', {{
+      value: mcpFunction.functionArn,
+      description: 'MCP Server Lambda ARN',
     }});
 
     new cdk.CfnOutput(this, 'DashboardUrl', {{
       value: `https://console.aws.amazon.com/cloudwatch/home?region=${{this.region}}`,
       description: 'CloudWatch Console',
-    }});
-
-    new cdk.CfnOutput(this, 'UserPoolId', {{
-      value: 'user-pool-coming-soon',
-      description: 'Cognito User Pool ID (coming in next phase)',
     }});
   }}
 }}
@@ -920,6 +1123,331 @@ Cold starts can take a few seconds. Consider:
         Ok(())
     }
 
+    /// Create CDK stack with OAuth (Cognito + Lambda Authorizer)
+    fn create_oauth_stack_ts(&self, deploy_dir: &PathBuf, server_name: &str) -> Result<()> {
+        let lib_dir = deploy_dir.join("lib");
+        std::fs::create_dir_all(&lib_dir)?;
+
+        let user_pool_name = self
+            .oauth_options
+            .cognito_pool_name
+            .clone()
+            .unwrap_or_else(|| format!("{}-users", server_name));
+
+        // CDK stack with Cognito OAuth support
+        let stack_ts = format!(
+            r#"import * as cdk from 'aws-cdk-lib';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
+import * as logs from 'aws-cdk-lib/aws-logs';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import {{ Construct }} from 'constructs';
+
+export class McpServerStack extends cdk.Stack {{
+  constructor(scope: Construct, id: string, props?: cdk.StackProps) {{
+    super(scope, id, props);
+
+    const serverName = '{server_name}';
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Cognito User Pool for OAuth
+    // ═══════════════════════════════════════════════════════════════════════
+    const userPool = new cognito.UserPool(this, 'UserPool', {{
+      userPoolName: '{user_pool_name}',
+      selfSignUpEnabled: true,
+      signInAliases: {{ email: true }},
+      autoVerify: {{ email: true }},
+      passwordPolicy: {{
+        minLength: 8,
+        requireDigits: true,
+        requireLowercase: true,
+        requireUppercase: false,
+        requireSymbols: false,
+      }},
+      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    }});
+
+    // Resource Server for MCP scopes
+    const resourceServer = new cognito.UserPoolResourceServer(this, 'ResourceServer', {{
+      userPool,
+      identifier: 'mcp',
+      scopes: [
+        {{ scopeName: 'read', scopeDescription: 'Read access to MCP tools and resources' }},
+        {{ scopeName: 'write', scopeDescription: 'Write access to MCP tools' }},
+      ],
+    }});
+
+    // User Pool Domain (for hosted UI)
+    // Cognito domain requirements: 1-63 chars, lowercase alphanumeric + hyphens, no leading/trailing hyphens
+    // Domains must be globally unique across ALL AWS accounts
+    const domainPrefix = `${{serverName}}-${{this.account.slice(-8)}}`;
+    const userPoolDomain = new cognito.CfnUserPoolDomain(this, 'UserPoolDomain', {{
+      domain: domainPrefix,
+      userPoolId: userPool.userPoolId,
+    }});
+    // Ensure domain is created after user pool
+    userPoolDomain.node.addDependency(userPool);
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // DynamoDB table for Dynamic Client Registration
+    // ═══════════════════════════════════════════════════════════════════════
+    const clientsTable = new dynamodb.Table(this, 'ClientsTable', {{
+      tableName: `${{serverName}}-oauth-clients`,
+      partitionKey: {{ name: 'client_id', type: dynamodb.AttributeType.STRING }},
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      pointInTimeRecoverySpecification: {{ pointInTimeRecoveryEnabled: true }},
+    }});
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // MCP Server Lambda
+    // ═══════════════════════════════════════════════════════════════════════
+    const mcpFunction = new lambda.Function(this, 'McpFunction', {{
+      functionName: serverName,
+      runtime: lambda.Runtime.PROVIDED_AL2023,
+      handler: 'bootstrap',
+      code: lambda.Code.fromAsset('.build'),
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(30),
+      environment: {{
+        RUST_LOG: 'info',
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        COGNITO_REGION: this.region,
+      }},
+      tracing: lambda.Tracing.ACTIVE,
+    }});
+
+    // Log group for MCP server
+    new logs.LogGroup(this, 'McpLogGroup', {{
+      logGroupName: `/aws/lambda/${{mcpFunction.functionName}}`,
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    }});
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // OAuth Proxy Lambda (handles /oauth2/* endpoints)
+    // ═══════════════════════════════════════════════════════════════════════
+    const oauthProxyFunction = new lambda.Function(this, 'OAuthProxyFunction', {{
+      functionName: `${{serverName}}-oauth-proxy`,
+      runtime: lambda.Runtime.PROVIDED_AL2023,
+      handler: 'bootstrap',
+      code: lambda.Code.fromAsset('.build-oauth-proxy'),
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(30),
+      environment: {{
+        RUST_LOG: 'info',
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        COGNITO_REGION: this.region,
+        DCR_TABLE_NAME: clientsTable.tableName,
+      }},
+    }});
+
+    // OAuth proxy needs access to Cognito and DynamoDB
+    clientsTable.grantReadWriteData(oauthProxyFunction);
+    oauthProxyFunction.addToRolePolicy(new cdk.aws_iam.PolicyStatement({{
+      actions: [
+        'cognito-idp:CreateUserPoolClient',
+        'cognito-idp:DescribeUserPoolClient',
+        'cognito-idp:DeleteUserPoolClient',
+        'cognito-idp:ListUserPoolClients',
+      ],
+      resources: [userPool.userPoolArn],
+    }}));
+
+    // Log group for OAuth proxy
+    new logs.LogGroup(this, 'OAuthProxyLogGroup', {{
+      logGroupName: `/aws/lambda/${{oauthProxyFunction.functionName}}`,
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    }});
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Token Validator Lambda Authorizer
+    // ═══════════════════════════════════════════════════════════════════════
+    const authorizerFunction = new lambda.Function(this, 'AuthorizerFunction', {{
+      functionName: `${{serverName}}-authorizer`,
+      runtime: lambda.Runtime.PROVIDED_AL2023,
+      handler: 'bootstrap',
+      code: lambda.Code.fromAsset('.build-authorizer'),
+      architecture: lambda.Architecture.ARM_64,
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(10),
+      environment: {{
+        RUST_LOG: 'info',
+        COGNITO_USER_POOL_ID: userPool.userPoolId,
+        COGNITO_REGION: this.region,
+      }},
+    }});
+
+    // Log group for authorizer
+    new logs.LogGroup(this, 'AuthorizerLogGroup', {{
+      logGroupName: `/aws/lambda/${{authorizerFunction.functionName}}`,
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    }});
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // HTTP API with OAuth routes
+    // ═══════════════════════════════════════════════════════════════════════
+    const httpApi = new apigatewayv2.HttpApi(this, 'HttpApi', {{
+      apiName: serverName,
+      description: 'MCP Server HTTP API with OAuth',
+      corsPreflight: {{
+        allowOrigins: ['*'],
+        allowMethods: [
+          apigatewayv2.CorsHttpMethod.GET,
+          apigatewayv2.CorsHttpMethod.POST,
+          apigatewayv2.CorsHttpMethod.OPTIONS,
+        ],
+        allowHeaders: ['*'],
+      }},
+    }});
+
+    // Lambda Authorizer for protected routes
+    const authorizer = new apigatewayv2.CfnAuthorizer(this, 'Authorizer', {{
+      apiId: httpApi.apiId,
+      authorizerType: 'REQUEST',
+      name: `${{serverName}}-authorizer`,
+      authorizerUri: `arn:aws:apigateway:${{this.region}}:lambda:path/2015-03-31/functions/${{authorizerFunction.functionArn}}/invocations`,
+      authorizerPayloadFormatVersion: '2.0',
+      authorizerResultTtlInSeconds: 300,
+      identitySource: ['$request.header.Authorization'],
+      enableSimpleResponses: true,
+    }});
+
+    // Permission for API Gateway to invoke authorizer
+    authorizerFunction.addPermission('ApiGatewayInvokeAuthorizer', {{
+      principal: new cdk.aws_iam.ServicePrincipal('apigateway.amazonaws.com'),
+      sourceArn: `arn:aws:execute-api:${{this.region}}:${{this.account}}:${{httpApi.apiId}}/*/*`,
+    }});
+
+    // MCP Server integration (protected)
+    const mcpIntegration = new apigatewayv2.CfnIntegration(this, 'McpIntegration', {{
+      apiId: httpApi.apiId,
+      integrationType: 'AWS_PROXY',
+      integrationUri: mcpFunction.functionArn,
+      payloadFormatVersion: '2.0',
+    }});
+
+    // OAuth Proxy integration (public)
+    const oauthIntegration = new apigatewayv2.CfnIntegration(this, 'OAuthIntegration', {{
+      apiId: httpApi.apiId,
+      integrationType: 'AWS_PROXY',
+      integrationUri: oauthProxyFunction.functionArn,
+      payloadFormatVersion: '2.0',
+    }});
+
+    // Permission for API Gateway to invoke functions
+    mcpFunction.addPermission('ApiGatewayInvokeMcp', {{
+      principal: new cdk.aws_iam.ServicePrincipal('apigateway.amazonaws.com'),
+      sourceArn: `arn:aws:execute-api:${{this.region}}:${{this.account}}:${{httpApi.apiId}}/*/*`,
+    }});
+    oauthProxyFunction.addPermission('ApiGatewayInvokeOAuth', {{
+      principal: new cdk.aws_iam.ServicePrincipal('apigateway.amazonaws.com'),
+      sourceArn: `arn:aws:execute-api:${{this.region}}:${{this.account}}:${{httpApi.apiId}}/*/*`,
+    }});
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Routes
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // OAuth routes (public - no auth required)
+    new apigatewayv2.CfnRoute(this, 'OAuthDiscoveryRoute', {{
+      apiId: httpApi.apiId,
+      routeKey: 'GET /.well-known/{{proxy+}}',
+      target: `integrations/${{oauthIntegration.ref}}`,
+    }});
+
+    new apigatewayv2.CfnRoute(this, 'OAuthRegisterRoute', {{
+      apiId: httpApi.apiId,
+      routeKey: 'POST /oauth2/register',
+      target: `integrations/${{oauthIntegration.ref}}`,
+    }});
+
+    new apigatewayv2.CfnRoute(this, 'OAuthAuthorizeRoute', {{
+      apiId: httpApi.apiId,
+      routeKey: 'GET /oauth2/authorize',
+      target: `integrations/${{oauthIntegration.ref}}`,
+    }});
+
+    new apigatewayv2.CfnRoute(this, 'OAuthTokenRoute', {{
+      apiId: httpApi.apiId,
+      routeKey: 'POST /oauth2/token',
+      target: `integrations/${{oauthIntegration.ref}}`,
+    }});
+
+    // MCP routes (protected - require valid token)
+    new apigatewayv2.CfnRoute(this, 'McpRoute', {{
+      apiId: httpApi.apiId,
+      routeKey: 'POST /mcp',
+      target: `integrations/${{mcpIntegration.ref}}`,
+      authorizerId: authorizer.ref,
+      authorizationType: 'CUSTOM',
+    }});
+
+    new apigatewayv2.CfnRoute(this, 'McpProxyRoute', {{
+      apiId: httpApi.apiId,
+      routeKey: 'POST /mcp/{{proxy+}}',
+      target: `integrations/${{mcpIntegration.ref}}`,
+      authorizerId: authorizer.ref,
+      authorizationType: 'CUSTOM',
+    }});
+
+    // Health check route (public)
+    new apigatewayv2.CfnRoute(this, 'HealthRoute', {{
+      apiId: httpApi.apiId,
+      routeKey: 'GET /',
+      target: `integrations/${{mcpIntegration.ref}}`,
+    }});
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Outputs
+    // ═══════════════════════════════════════════════════════════════════════
+    new cdk.CfnOutput(this, 'ApiUrl', {{
+      value: httpApi.apiEndpoint || '',
+      description: 'MCP Server API URL',
+    }});
+
+    new cdk.CfnOutput(this, 'OAuthDiscoveryUrl', {{
+      value: `${{httpApi.apiEndpoint}}/.well-known/openid-configuration`,
+      description: 'OAuth Discovery URL',
+    }});
+
+    new cdk.CfnOutput(this, 'UserPoolId', {{
+      value: userPool.userPoolId,
+      description: 'Cognito User Pool ID',
+    }});
+
+    new cdk.CfnOutput(this, 'UserPoolDomainUrl', {{
+      value: `https://${{domainPrefix}}.auth.${{this.region}}.amazoncognito.com`,
+      description: 'Cognito Hosted UI Domain',
+    }});
+
+    new cdk.CfnOutput(this, 'ClientsTableName', {{
+      value: clientsTable.tableName,
+      description: 'DynamoDB table for registered OAuth clients',
+    }});
+
+    new cdk.CfnOutput(this, 'DashboardUrl', {{
+      value: `https://console.aws.amazon.com/cloudwatch/home?region=${{this.region}}`,
+      description: 'CloudWatch Console',
+    }});
+  }}
+}}
+"#,
+            server_name = server_name,
+            user_pool_name = user_pool_name
+        );
+
+        std::fs::write(lib_dir.join("stack.ts"), stack_ts)?;
+
+        Ok(())
+    }
+
     fn install_cdk_deps(&self) -> Result<()> {
         print!("📦 Installing CDK dependencies (this may take a minute)...");
         std::io::Write::flush(&mut std::io::stdout())?;
@@ -940,6 +1468,76 @@ Cold starts can take a few seconds. Consider:
         }
 
         println!(" ✅");
+        Ok(())
+    }
+
+    /// Create OAuth Lambda projects (authorizer and proxy) when OAuth is enabled.
+    fn create_oauth_lambdas(&self, server_name: &str) -> Result<()> {
+        // Get User Pool ID and region for the Lambda templates
+        let user_pool_id = self
+            .oauth_options
+            .cognito_user_pool_id
+            .clone()
+            .unwrap_or_else(|| format!("${{COGNITO_USER_POOL_ID}}")); // Placeholder for CDK
+
+        let region = &self.region;
+
+        // Create OAuth Proxy Lambda project
+        self.create_oauth_proxy_project(server_name, &user_pool_id, region)?;
+
+        // Create Authorizer Lambda project
+        self.create_authorizer_project(server_name, &user_pool_id, region)?;
+
+        Ok(())
+    }
+
+    fn create_oauth_proxy_project(
+        &self,
+        server_name: &str,
+        user_pool_id: &str,
+        region: &str,
+    ) -> Result<()> {
+        let proxy_dir = self
+            .project_root
+            .join(format!("{}-oauth-proxy", server_name));
+        std::fs::create_dir_all(proxy_dir.join("src"))?;
+
+        // Write Cargo.toml
+        let cargo_toml = proxy::get_proxy_cargo_toml(server_name);
+        std::fs::write(proxy_dir.join("Cargo.toml"), cargo_toml)?;
+
+        // Write main.rs
+        let main_rs = proxy::get_proxy_template(user_pool_id, region, server_name);
+        std::fs::write(proxy_dir.join("src/main.rs"), main_rs)?;
+
+        // Add to workspace
+        self.add_to_workspace(format!("{}-oauth-proxy", server_name))?;
+
+        Ok(())
+    }
+
+    fn create_authorizer_project(
+        &self,
+        server_name: &str,
+        user_pool_id: &str,
+        region: &str,
+    ) -> Result<()> {
+        let authorizer_dir = self
+            .project_root
+            .join(format!("{}-authorizer", server_name));
+        std::fs::create_dir_all(authorizer_dir.join("src"))?;
+
+        // Write Cargo.toml
+        let cargo_toml = authorizer::get_authorizer_cargo_toml(server_name);
+        std::fs::write(authorizer_dir.join("Cargo.toml"), cargo_toml)?;
+
+        // Write main.rs
+        let main_rs = authorizer::get_authorizer_template(user_pool_id, region);
+        std::fs::write(authorizer_dir.join("src/main.rs"), main_rs)?;
+
+        // Add to workspace
+        self.add_to_workspace(format!("{}-authorizer", server_name))?;
+
         Ok(())
     }
 }

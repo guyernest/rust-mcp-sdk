@@ -44,14 +44,185 @@ pub struct ServerConfig {
     pub reserved_concurrency: Option<u32>,
 }
 
+/// OAuth authentication configuration for MCP servers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
+    /// Whether OAuth is enabled
     pub enabled: bool,
+
+    /// OAuth provider type (cognito, oidc, none)
+    #[serde(default = "default_oauth_provider")]
+    pub provider: String,
+
+    /// Cognito-specific configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cognito: Option<CognitoConfig>,
+
+    /// External OIDC provider configuration (future)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oidc: Option<OidcConfig>,
+
+    /// Dynamic Client Registration settings
+    #[serde(default)]
+    pub dcr: DcrConfig,
+
+    /// OAuth scopes configuration
+    #[serde(default)]
+    pub scopes: ScopesConfig,
+
+    /// Legacy fields for backwards compatibility
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_pool_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
+    #[serde(default)]
     pub callback_urls: Vec<String>,
+}
+
+fn default_oauth_provider() -> String {
+    "none".to_string()
+}
+
+/// Cognito-specific OAuth configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CognitoConfig {
+    /// Cognito User Pool ID (created or existing)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_pool_id: Option<String>,
+
+    /// User Pool name (used when creating new)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_pool_name: Option<String>,
+
+    /// Resource server identifier for scopes
+    #[serde(default = "default_resource_server_id")]
+    pub resource_server_id: String,
+
+    /// Social identity providers
+    #[serde(default)]
+    pub social_providers: Vec<String>,
+
+    /// MFA setting (optional, required, off)
+    #[serde(default = "default_mfa")]
+    pub mfa: String,
+
+    /// Access token TTL
+    #[serde(default = "default_access_token_ttl")]
+    pub access_token_ttl: String,
+
+    /// Refresh token TTL
+    #[serde(default = "default_refresh_token_ttl")]
+    pub refresh_token_ttl: String,
+
+    /// Hosted UI domain prefix (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+}
+
+fn default_resource_server_id() -> String {
+    "mcp".to_string()
+}
+
+fn default_mfa() -> String {
+    "optional".to_string()
+}
+
+fn default_access_token_ttl() -> String {
+    "1h".to_string()
+}
+
+fn default_refresh_token_ttl() -> String {
+    "30d".to_string()
+}
+
+/// External OIDC provider configuration (future)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OidcConfig {
+    /// OIDC issuer URL
+    pub issuer: String,
+
+    /// Expected audience
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
+
+    /// JWKS URL (auto-discovered if not specified)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jwks_url: Option<String>,
+}
+
+/// Dynamic Client Registration configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DcrConfig {
+    /// Enable DCR endpoint
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Patterns to auto-detect public clients (no secret required)
+    #[serde(default = "default_public_client_patterns")]
+    pub public_client_patterns: Vec<String>,
+
+    /// Default scopes for new clients
+    #[serde(default = "default_scopes")]
+    pub default_scopes: Vec<String>,
+
+    /// Allowed scopes clients can request
+    #[serde(default = "default_allowed_scopes")]
+    pub allowed_scopes: Vec<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_public_client_patterns() -> Vec<String> {
+    vec![
+        "claude".to_string(),
+        "desktop".to_string(),
+        "cursor".to_string(),
+        "mcp-inspector".to_string(),
+        "chatgpt".to_string(),
+    ]
+}
+
+fn default_scopes() -> Vec<String> {
+    vec![
+        "openid".to_string(),
+        "email".to_string(),
+        "mcp/read".to_string(),
+    ]
+}
+
+fn default_allowed_scopes() -> Vec<String> {
+    vec![
+        "openid".to_string(),
+        "email".to_string(),
+        "profile".to_string(),
+        "mcp/read".to_string(),
+        "mcp/write".to_string(),
+    ]
+}
+
+/// OAuth scopes configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ScopesConfig {
+    /// Custom scope definitions
+    #[serde(default)]
+    pub custom: std::collections::HashMap<String, String>,
+}
+
+impl Default for CognitoConfig {
+    fn default() -> Self {
+        Self {
+            user_pool_id: None,
+            user_pool_name: None,
+            resource_server_id: default_resource_server_id(),
+            social_providers: vec![],
+            mfa: default_mfa(),
+            access_token_ttl: default_access_token_ttl(),
+            refresh_token_ttl: default_refresh_token_ttl(),
+            domain: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,12 +301,7 @@ impl DeployConfig {
             },
             environment,
             secrets: HashMap::new(),
-            auth: AuthConfig {
-                enabled: true,
-                user_pool_id: None,
-                client_id: None,
-                callback_urls: vec!["http://localhost:3000/callback".to_string()],
-            },
+            auth: AuthConfig::default(),
             observability: ObservabilityConfig {
                 log_retention_days: 30,
                 enable_xray: true,
@@ -147,6 +313,55 @@ impl DeployConfig {
             },
             api_gateway: None,
             project_root,
+        }
+    }
+
+    /// Create config with OAuth enabled using Cognito
+    pub fn with_cognito_oauth(
+        server_name: String,
+        region: String,
+        project_root: PathBuf,
+        cognito_config: CognitoConfig,
+    ) -> Self {
+        let mut config = Self::default_for_server(server_name, region, project_root);
+        config.auth = AuthConfig {
+            enabled: true,
+            provider: "cognito".to_string(),
+            cognito: Some(cognito_config),
+            oidc: None,
+            dcr: DcrConfig::default(),
+            scopes: ScopesConfig::default(),
+            user_pool_id: None,
+            client_id: None,
+            callback_urls: vec![],
+        };
+        config
+    }
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: "none".to_string(),
+            cognito: None,
+            oidc: None,
+            dcr: DcrConfig::default(),
+            scopes: ScopesConfig::default(),
+            user_pool_id: None,
+            client_id: None,
+            callback_urls: vec![],
+        }
+    }
+}
+
+impl Default for DcrConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            public_client_patterns: default_public_client_patterns(),
+            default_scopes: default_scopes(),
+            allowed_scopes: default_allowed_scopes(),
         }
     }
 }

@@ -186,6 +186,7 @@ pub async fn create_deployment_from_s3(
             ) {
                 deploymentId
                 status
+                projectName
                 createdAt
             }
         }
@@ -203,13 +204,15 @@ pub async fn create_deployment_from_s3(
     #[derive(Debug, Deserialize)]
     struct CreateDeploymentResponse {
         #[serde(rename = "createDeploymentFromS3")]
-        create_deployment_from_s3: DeploymentInfo,
+        create_deployment_from_s3: Option<DeploymentInfo>,
     }
 
     let response: CreateDeploymentResponse =
         execute_graphql(access_token, query, variables).await?;
 
-    Ok(response.create_deployment_from_s3)
+    response
+        .create_deployment_from_s3
+        .context("Deployment creation returned null - check pmcp.run service logs")
 }
 
 /// Get deployment status
@@ -273,57 +276,136 @@ where
         bail!("GraphQL request failed: {}", error_text);
     }
 
-    let graphql_response: GraphQLResponse<T> = response
-        .json()
-        .await
-        .context("Failed to parse GraphQL response")?;
+    // Get raw text first for debugging
+    let response_text = response.text().await.context("Failed to read response")?;
 
-    if let Some(errors) = graphql_response.errors {
-        let error_messages: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
-        bail!("GraphQL errors: {}", error_messages.join(", "));
+    // Try to parse as generic JSON first to check for errors
+    let raw_json: serde_json::Value =
+        serde_json::from_str(&response_text).context("Failed to parse response as JSON")?;
+
+    // Check for GraphQL errors in raw response
+    if let Some(errors) = raw_json.get("errors") {
+        if let Some(errors_array) = errors.as_array() {
+            let error_messages: Vec<String> = errors_array
+                .iter()
+                .filter_map(|e| e.get("message").and_then(|m| m.as_str()))
+                .map(|s| s.to_string())
+                .collect();
+            if !error_messages.is_empty() {
+                bail!("GraphQL errors: {}", error_messages.join(", "));
+            }
+        }
     }
 
-    graphql_response.data.context("No data in GraphQL response")
+    // Now parse as the expected type
+    let graphql_response: GraphQLResponse<T> = serde_json::from_str(&response_text)
+        .with_context(|| format!("Failed to parse GraphQL response: {}", response_text))?;
+
+    graphql_response
+        .data
+        .with_context(|| format!("No data in GraphQL response: {}", response_text))
 }
 
-/// Delete deployment
-pub async fn delete_deployment(access_token: &str, project_name: &str) -> Result<()> {
+/// Destroy deployment by ID (complete cleanup including CloudFormation stack)
+///
+/// This performs a complete cleanup:
+/// - Deletes CloudFormation stack
+/// - Removes OAuth configuration and Cognito User Pool
+/// - Deletes McpServer registry entry
+/// - Deletes Deployment DynamoDB record
+pub async fn destroy_deployment(access_token: &str, deployment_id: &str) -> Result<()> {
     let query = r#"
-        mutation DeleteDeployment($projectName: String!) {
-            deleteDeployment(projectName: $projectName) {
-                success
+        mutation DestroyDeployment($id: ID!) {
+            destroyDeployment(id: $id) {
+                id
+                stackName
+                status
                 message
             }
         }
     "#;
 
     let variables = serde_json::json!({
-        "projectName": project_name
+        "id": deployment_id
     });
 
     #[derive(Debug, Deserialize)]
-    struct DeleteDeploymentResponse {
-        #[serde(rename = "deleteDeployment")]
-        delete_deployment: DeleteResult,
+    struct DestroyDeploymentResponse {
+        #[serde(rename = "destroyDeployment")]
+        destroy_deployment: Option<DestroyResult>,
     }
 
     #[derive(Debug, Deserialize)]
-    struct DeleteResult {
-        success: bool,
+    struct DestroyResult {
+        id: String,
+        #[serde(rename = "stackName")]
+        stack_name: Option<String>,
+        status: String,
         message: Option<String>,
     }
 
-    let response: DeleteDeploymentResponse =
+    let response: DestroyDeploymentResponse =
         execute_graphql(access_token, query, variables).await?;
 
-    if !response.delete_deployment.success {
-        bail!(
-            "Failed to delete deployment: {}",
-            response.delete_deployment.message.unwrap_or_default()
-        );
+    match response.destroy_deployment {
+        Some(result) => {
+            if result.status == "failed" {
+                bail!(
+                    "Failed to destroy deployment: {}",
+                    result
+                        .message
+                        .unwrap_or_else(|| "Unknown error".to_string())
+                );
+            }
+            Ok(())
+        },
+        None => bail!("Failed to destroy deployment: no response returned"),
+    }
+}
+
+/// Find deployment ID by project name
+pub async fn find_deployment_id_by_name(access_token: &str, project_name: &str) -> Result<String> {
+    let query = r#"
+        query ListDeployments {
+            listDeployments {
+                items {
+                    id
+                    projectName
+                }
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({});
+
+    #[derive(Debug, Deserialize)]
+    struct ListDeploymentsResponse {
+        #[serde(rename = "listDeployments")]
+        list_deployments: DeploymentList,
     }
 
-    Ok(())
+    #[derive(Debug, Deserialize)]
+    struct DeploymentList {
+        items: Vec<DeploymentItem>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct DeploymentItem {
+        id: String,
+        #[serde(rename = "projectName")]
+        project_name: String,
+    }
+
+    let response: ListDeploymentsResponse = execute_graphql(access_token, query, variables).await?;
+
+    // Find deployment by project name
+    response
+        .list_deployments
+        .items
+        .iter()
+        .find(|d| d.project_name == project_name)
+        .map(|d| d.id.clone())
+        .context(format!("No deployment found for project: {}", project_name))
 }
 
 /// Get deployment outputs (for outputs command)
@@ -554,4 +636,195 @@ pub async fn get_landing_status(access_token: &str, landing_id: &str) -> Result<
     response
         .get_landing_status
         .context("Landing page not found")
+}
+
+// ========== OAuth Configuration GraphQL Functions ==========
+
+/// OAuth configuration response from configureServerOAuth mutation
+#[derive(Debug, Clone, Deserialize)]
+pub struct OAuthConfig {
+    #[serde(rename = "serverId")]
+    pub server_id: String,
+    #[serde(rename = "oauthEnabled")]
+    pub oauth_enabled: bool,
+    #[serde(rename = "userPoolId")]
+    pub user_pool_id: Option<String>,
+    #[serde(rename = "userPoolRegion")]
+    pub user_pool_region: Option<String>,
+    #[serde(rename = "discoveryUrl")]
+    pub discovery_url: Option<String>,
+    #[serde(rename = "registrationEndpoint")]
+    pub registration_endpoint: Option<String>,
+    #[serde(rename = "authorizationEndpoint")]
+    pub authorization_endpoint: Option<String>,
+    #[serde(rename = "tokenEndpoint")]
+    pub token_endpoint: Option<String>,
+}
+
+/// OAuth endpoints response from fetchServerOAuthEndpoints query
+#[derive(Debug, Clone, Deserialize)]
+pub struct OAuthEndpoints {
+    #[serde(rename = "serverId")]
+    pub server_id: String,
+    #[serde(rename = "oauthEnabled")]
+    pub oauth_enabled: bool,
+    pub provider: Option<String>,
+    #[serde(rename = "userPoolId")]
+    pub user_pool_id: Option<String>,
+    #[serde(rename = "userPoolRegion")]
+    pub user_pool_region: Option<String>,
+    pub scopes: Option<Vec<String>>,
+    #[serde(rename = "dcrEnabled")]
+    pub dcr_enabled: Option<bool>,
+    #[serde(rename = "discoveryUrl")]
+    pub discovery_url: Option<String>,
+    #[serde(rename = "registrationEndpoint")]
+    pub registration_endpoint: Option<String>,
+    #[serde(rename = "authorizationEndpoint")]
+    pub authorization_endpoint: Option<String>,
+    #[serde(rename = "tokenEndpoint")]
+    pub token_endpoint: Option<String>,
+}
+
+/// Configure OAuth for an MCP server
+///
+/// This creates a Cognito User Pool if one doesn't exist and configures
+/// the API Gateway routes with the shared authorizer Lambda.
+pub async fn configure_server_oauth(
+    access_token: &str,
+    server_id: &str,
+    enabled: bool,
+    scopes: Option<Vec<String>>,
+    dcr_enabled: Option<bool>,
+    public_client_patterns: Option<Vec<String>>,
+    shared_pool_name: Option<String>,
+) -> Result<OAuthConfig> {
+    let query = r#"
+        mutation ConfigureServerOAuth(
+            $serverId: String!
+            $enabled: Boolean!
+            $scopes: [String]
+            $dcrEnabled: Boolean
+            $publicClientPatterns: [String]
+            $sharedPoolName: String
+        ) {
+            configureServerOAuth(
+                serverId: $serverId
+                enabled: $enabled
+                scopes: $scopes
+                dcrEnabled: $dcrEnabled
+                publicClientPatterns: $publicClientPatterns
+                sharedPoolName: $sharedPoolName
+            ) {
+                serverId
+                oauthEnabled
+                userPoolId
+                userPoolRegion
+                discoveryUrl
+                registrationEndpoint
+                authorizationEndpoint
+                tokenEndpoint
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "serverId": server_id,
+        "enabled": enabled,
+        "scopes": scopes,
+        "dcrEnabled": dcr_enabled,
+        "publicClientPatterns": public_client_patterns,
+        "sharedPoolName": shared_pool_name
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct ConfigureServerOAuthResponse {
+        #[serde(rename = "configureServerOAuth")]
+        configure_server_oauth: OAuthConfig,
+    }
+
+    let response: ConfigureServerOAuthResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    Ok(response.configure_server_oauth)
+}
+
+/// Disable OAuth for an MCP server
+pub async fn disable_server_oauth(access_token: &str, server_id: &str) -> Result<()> {
+    let query = r#"
+        mutation DisableServerOAuth($serverId: String!) {
+            disableServerOAuth(serverId: $serverId) {
+                serverId
+                oauthEnabled
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "serverId": server_id
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct DisableServerOAuthResponse {
+        #[serde(rename = "disableServerOAuth")]
+        disable_server_oauth: DisableResult,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct DisableResult {
+        #[serde(rename = "serverId")]
+        _server_id: String,
+        #[serde(rename = "oauthEnabled")]
+        oauth_enabled: bool,
+    }
+
+    let response: DisableServerOAuthResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    if response.disable_server_oauth.oauth_enabled {
+        bail!("Failed to disable OAuth - server still reports OAuth enabled");
+    }
+
+    Ok(())
+}
+
+/// Fetch OAuth endpoints for an MCP server
+pub async fn fetch_server_oauth_endpoints(
+    access_token: &str,
+    server_id: &str,
+) -> Result<OAuthEndpoints> {
+    let query = r#"
+        query FetchServerOAuthEndpoints($serverId: String!) {
+            fetchServerOAuthEndpoints(serverId: $serverId) {
+                serverId
+                oauthEnabled
+                provider
+                userPoolId
+                userPoolRegion
+                scopes
+                dcrEnabled
+                discoveryUrl
+                registrationEndpoint
+                authorizationEndpoint
+                tokenEndpoint
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "serverId": server_id
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct FetchServerOAuthEndpointsResponse {
+        #[serde(rename = "fetchServerOAuthEndpoints")]
+        fetch_server_oauth_endpoints: Option<OAuthEndpoints>,
+    }
+
+    let response: FetchServerOAuthEndpointsResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    response
+        .fetch_server_oauth_endpoints
+        .context("OAuth not configured for this server")
 }
