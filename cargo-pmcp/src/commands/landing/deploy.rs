@@ -146,7 +146,7 @@ pub async fn deploy_landing_page(
 
     // Upload to pmcp.run via GraphQL (same as server deployment)
     println!("☁️  Uploading to pmcp.run...");
-    let landing_id =
+    let (landing_id, landing_url) =
         upload_landing_via_graphql(&zip_path, &server_id, &config, &credentials.access_token)
             .await?;
     println!("   ✅ Uploaded (ID: {})", landing_id);
@@ -157,12 +157,12 @@ pub async fn deploy_landing_page(
 
     // Poll for deployment status
     println!("⏳ Building landing page...");
-    let url = poll_landing_status(&landing_id, &credentials.access_token).await?;
+    poll_landing_status(&landing_id, &credentials.access_token).await?;
 
     println!();
     println!("✅ Landing page deployed successfully!");
     println!();
-    println!("🌐 URL: {}", url);
+    println!("🌐 URL: {}", landing_url);
     println!();
     println!("💡 Tip: You can update your landing page by running this command again");
 
@@ -225,7 +225,7 @@ async fn upload_landing_via_graphql(
     server_id: &str,
     config: &LandingConfig,
     access_token: &str,
-) -> Result<String> {
+) -> Result<(String, String)> {
     use crate::deployment::targets::pmcp_run::graphql;
 
     // Read zip file
@@ -261,7 +261,8 @@ async fn upload_landing_via_graphql(
     .await
     .context("Failed to deploy landing page")?;
 
-    Ok(landing_info.landing_id)
+    // Return both landing_id and landing_url for display
+    Ok((landing_info.landing_id, landing_info.landing_url))
 }
 
 /// Poll landing deployment status until complete (using GraphQL)
