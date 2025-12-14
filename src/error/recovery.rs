@@ -346,13 +346,13 @@ pub enum RecoveryStrategy {
         /// Maximum total recovery time
         max_recovery_time: Duration,
         /// Base recovery strategy
-        base_strategy: Box<RecoveryStrategy>,
+        base_strategy: Box<Self>,
     },
 
     /// Bulk operation recovery strategy.
     BulkRecovery {
         /// Individual operation strategy
-        individual_strategy: Box<RecoveryStrategy>,
+        individual_strategy: Box<Self>,
         /// Minimum success rate to consider bulk operation successful
         min_success_rate: f64,
         /// Whether to fail fast on first failure
@@ -362,7 +362,7 @@ pub enum RecoveryStrategy {
     /// Cascade-aware recovery to prevent failure propagation.
     CascadeAware {
         /// Base recovery strategy
-        base_strategy: Box<RecoveryStrategy>,
+        base_strategy: Box<Self>,
         /// Component dependencies for cascade detection
         dependencies: Vec<String>,
         /// Isolation timeout to prevent cascade

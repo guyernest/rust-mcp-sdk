@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use super::config::DeployConfig;
+use super::operations::{AsyncOperation, DestroyResult};
 
 /// Represents a built artifact ready for deployment
 #[derive(Debug, Clone)]
@@ -163,7 +164,36 @@ pub trait DeploymentTarget: Send + Sync {
     ) -> Result<DeploymentOutputs>;
 
     /// Destroy deployment and optionally clean up local files
+    ///
+    /// This is the legacy synchronous destroy method. For targets that support
+    /// async operations, consider using `destroy_async` instead.
     async fn destroy(&self, config: &DeployConfig, clean: bool) -> Result<()>;
+
+    /// Destroy deployment with async operation support
+    ///
+    /// Returns a `DestroyResult` that may contain an async operation for polling.
+    /// By default, this calls the legacy `destroy` method and returns a sync result.
+    async fn destroy_async(&self, config: &DeployConfig, clean: bool) -> Result<DestroyResult> {
+        self.destroy(config, clean).await?;
+        Ok(DestroyResult::sync_success(
+            "Deployment destroyed successfully",
+        ))
+    }
+
+    /// Whether this target supports async operations
+    ///
+    /// If true, long-running operations like destroy may return async operations
+    /// that can be polled for completion status.
+    fn supports_async_operations(&self) -> bool {
+        false
+    }
+
+    /// Check the status of an async operation
+    ///
+    /// This is only supported for targets where `supports_async_operations` returns true.
+    async fn get_operation_status(&self, _operation_id: &str) -> Result<AsyncOperation> {
+        anyhow::bail!("Async operations not supported by target: {}", self.id())
+    }
 
     /// Get deployment outputs (URLs, etc.)
     async fn outputs(&self, config: &DeployConfig) -> Result<DeploymentOutputs>;

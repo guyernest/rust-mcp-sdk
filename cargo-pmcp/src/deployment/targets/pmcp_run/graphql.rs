@@ -58,6 +58,8 @@ pub struct DeploymentStatus {
     pub id: String,
     pub status: String,
     pub url: Option<String>,
+    #[serde(rename = "projectName")]
+    pub project_name: String,
     #[serde(rename = "errorMessage")]
     pub error_message: Option<String>,
     #[serde(rename = "createdAt")]
@@ -223,6 +225,7 @@ pub async fn get_deployment(access_token: &str, deployment_id: &str) -> Result<D
                 id
                 status
                 url
+                projectName
                 errorMessage
                 createdAt
                 completedAt
@@ -306,6 +309,18 @@ where
         .with_context(|| format!("No data in GraphQL response: {}", response_text))
 }
 
+/// Response from destroyDeployment mutation
+#[derive(Debug, Clone, Deserialize)]
+pub struct DestroyDeploymentResult {
+    pub id: String,
+    #[serde(rename = "stackName")]
+    pub stack_name: Option<String>,
+    pub status: String,
+    pub message: Option<String>,
+    #[serde(rename = "executionArn")]
+    pub execution_arn: Option<String>,
+}
+
 /// Destroy deployment by ID (complete cleanup including CloudFormation stack)
 ///
 /// This performs a complete cleanup:
@@ -313,7 +328,12 @@ where
 /// - Removes OAuth configuration and Cognito User Pool
 /// - Deletes McpServer registry entry
 /// - Deletes Deployment DynamoDB record
-pub async fn destroy_deployment(access_token: &str, deployment_id: &str) -> Result<()> {
+///
+/// Returns the operation result which may be async (initiated) or sync (completed/failed).
+pub async fn destroy_deployment(
+    access_token: &str,
+    deployment_id: &str,
+) -> Result<DestroyDeploymentResult> {
     let query = r#"
         mutation DestroyDeployment($id: ID!) {
             destroyDeployment(id: $id) {
@@ -321,6 +341,7 @@ pub async fn destroy_deployment(access_token: &str, deployment_id: &str) -> Resu
                 stackName
                 status
                 message
+                executionArn
             }
         }
     "#;
@@ -332,35 +353,64 @@ pub async fn destroy_deployment(access_token: &str, deployment_id: &str) -> Resu
     #[derive(Debug, Deserialize)]
     struct DestroyDeploymentResponse {
         #[serde(rename = "destroyDeployment")]
-        destroy_deployment: Option<DestroyResult>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct DestroyResult {
-        id: String,
-        #[serde(rename = "stackName")]
-        stack_name: Option<String>,
-        status: String,
-        message: Option<String>,
+        destroy_deployment: Option<DestroyDeploymentResult>,
     }
 
     let response: DestroyDeploymentResponse =
         execute_graphql(access_token, query, variables).await?;
 
-    match response.destroy_deployment {
-        Some(result) => {
-            if result.status == "failed" {
-                bail!(
-                    "Failed to destroy deployment: {}",
-                    result
-                        .message
-                        .unwrap_or_else(|| "Unknown error".to_string())
-                );
+    response
+        .destroy_deployment
+        .context("Failed to destroy deployment: no response returned")
+}
+
+/// Response from getDeploymentOperationStatus query
+#[derive(Debug, Clone, Deserialize)]
+pub struct OperationStatusResult {
+    pub id: String,
+    pub status: String,
+    pub message: Option<String>,
+    #[serde(rename = "executionArn")]
+    pub execution_arn: Option<String>,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: Option<String>,
+}
+
+/// Get the status of an async deployment operation
+///
+/// Use this to poll for completion of long-running operations like destroy.
+pub async fn get_deployment_operation_status(
+    access_token: &str,
+    operation_id: &str,
+) -> Result<OperationStatusResult> {
+    let query = r#"
+        query GetDeploymentOperationStatus($id: ID!) {
+            getDeploymentOperationStatus(id: $id) {
+                id
+                status
+                message
+                executionArn
+                updatedAt
             }
-            Ok(())
-        },
-        None => bail!("Failed to destroy deployment: no response returned"),
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "id": operation_id
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct GetOperationStatusResponse {
+        #[serde(rename = "getDeploymentOperationStatus")]
+        get_deployment_operation_status: Option<OperationStatusResult>,
     }
+
+    let response: GetOperationStatusResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    response
+        .get_deployment_operation_status
+        .context("Operation not found")
 }
 
 /// Find deployment ID by project name
@@ -493,6 +543,8 @@ pub struct LandingInfo {
     pub amplify_app_id: String,
     #[serde(rename = "amplifyDomainUrl")]
     pub amplify_domain_url: String,
+    #[serde(rename = "landingUrl")]
+    pub landing_url: String, // Clean URL: https://{serverName}.{region}.true-mcp.com/landing
     pub status: String,
     #[serde(rename = "buildJobId")]
     pub build_job_id: String,
@@ -579,6 +631,7 @@ pub async fn deploy_landing_page(
                 landingId
                 amplifyAppId
                 amplifyDomainUrl
+                landingUrl
                 status
                 buildJobId
             }

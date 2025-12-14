@@ -191,10 +191,12 @@ pub async fn deploy_to_pmcp_run(
         .unwrap_or_else(|| format!("https://api.pmcp.run/{}/mcp", deployment.deployment_id));
     let health_url = mcp_url.replace("/mcp", "/health");
 
-    // Extract serverId from URL (pattern: https://api.pmcp.run/{serverId}/mcp)
-    let server_id = mcp_url
-        .strip_suffix("/mcp")
-        .and_then(|s| s.rsplit('/').next())
+    // Get server_id from the deployment outputs (projectName returned by backend)
+    // This is the clean server name like "chess", not the full URL
+    let server_id = deployment_outputs
+        .custom
+        .get("project_name")
+        .and_then(|v| v.as_str())
         .unwrap_or(&config.server.name);
 
     // Display deployment information
@@ -344,13 +346,20 @@ async fn poll_deployment_status(
                 }
                 println!();
 
+                // Include project_name in outputs for use by save_deployment_info
+                let mut custom = std::collections::HashMap::new();
+                custom.insert(
+                    "project_name".to_string(),
+                    serde_json::Value::String(status.project_name),
+                );
+
                 return Ok(DeploymentOutputs {
                     url: status.url,
                     additional_urls: vec![],
                     regions: vec![],
                     stack_name: None,
                     version: None,
-                    custom: std::collections::HashMap::new(),
+                    custom,
                 });
             },
             "failed" => {
