@@ -34,7 +34,7 @@ pub enum PromptContent {
 
     /// Multiple content parts
     /// `SmallVec` optimized for 2-4 parts (common case)
-    Multi(SmallVec<[Box<PromptContent>; 3]>),
+    Multi(SmallVec<[Box<Self>; 3]>),
 }
 
 /// Internal representation of a prompt message
