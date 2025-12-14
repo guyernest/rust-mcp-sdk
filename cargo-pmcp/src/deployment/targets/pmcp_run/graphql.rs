@@ -58,6 +58,8 @@ pub struct DeploymentStatus {
     pub id: String,
     pub status: String,
     pub url: Option<String>,
+    #[serde(rename = "projectName")]
+    pub project_name: String,
     #[serde(rename = "errorMessage")]
     pub error_message: Option<String>,
     #[serde(rename = "createdAt")]
@@ -223,6 +225,7 @@ pub async fn get_deployment(access_token: &str, deployment_id: &str) -> Result<D
                 id
                 status
                 url
+                projectName
                 errorMessage
                 createdAt
                 completedAt
@@ -541,7 +544,7 @@ pub struct LandingInfo {
     #[serde(rename = "amplifyDomainUrl")]
     pub amplify_domain_url: String,
     #[serde(rename = "landingUrl")]
-    pub landing_url: String,  // Clean URL: https://{serverName}.{region}.true-mcp.com/landing
+    pub landing_url: String, // Clean URL: https://{serverName}.{region}.true-mcp.com/landing
     pub status: String,
     #[serde(rename = "buildJobId")]
     pub build_job_id: String,

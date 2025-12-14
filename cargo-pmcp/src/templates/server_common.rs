@@ -31,10 +31,13 @@ authors.workspace = true
 pmcp = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
-tower-http = { workspace = true }
+tower-http = { workspace = true, features = ["trace", "cors", "request-id", "util"] }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 anyhow = { workspace = true }
+uuid = { version = "1", features = ["v4", "fast-rng"] }
+serde_json = "1"
+chrono = "0.4"
 "#;
 
     fs::write(server_common_dir.join("Cargo.toml"), content)
@@ -48,22 +51,46 @@ fn generate_lib_rs(server_common_dir: &Path) -> Result<()> {
 //!
 //! This module provides production-grade HTTP server setup used by all servers.
 //! Binary servers just call `run_http()` with their configured server (~6 LOC).
+//!
+//! Features:
+//! - Structured JSON logging for CloudWatch Logs compatibility
+//! - Request ID tracking and correlation
+//! - Performance metrics and tracing
+//! - Error tracking and categorization
+//! - Tool invocation logging for observability
 
 use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
 use pmcp::Server;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tower_http::request_id::{MakeRequestId, RequestId, SetRequestIdLayer, PropagateRequestIdLayer};
+use tower_http::trace::{TraceLayer, DefaultOnRequest, DefaultOnResponse};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use uuid::Uuid;
+use std::time::Duration;
+
+/// Custom request ID generator for distributed tracing
+#[derive(Clone, Default)]
+struct MakeRequestUuid;
+
+impl MakeRequestId for MakeRequestUuid {
+    fn make_request_id<B>(&mut self, _request: &axum::http::Request<B>) -> Option<RequestId> {
+        let id = Uuid::new_v4().to_string();
+        Some(RequestId::new(id.parse().ok()?))
+    }
+}
 
 /// Run HTTP server with production middleware and logging
 ///
 /// This function:
-/// - Sets up production logging (env filter for runtime control)
+/// - Sets up production JSON logging for enterprise observability
+/// - Adds request ID tracking for distributed tracing
+/// - Configures performance monitoring and metrics
 /// - Resolves port from PORT/MCP_HTTP_PORT env vars (default: 3000)
 /// - Binds to 0.0.0.0 for container compatibility
-/// - Starts StreamableHttpServer in stateless mode
+/// - Starts StreamableHttpServer with observability middleware
 ///
 /// # Example
 /// ```no_run
@@ -83,46 +110,133 @@ pub async fn run_http(server: Server) -> Result<(), Box<dyn std::error::Error>> 
     // Initialize production logging
     init_logging();
 
+    // Log server info for observability
+    let server_name = server.config.name.clone();
+    let server_version = server.config.version.clone();
+    
+    tracing::info!(
+        server_name = %server_name,
+        server_version = %server_version,
+        "Initializing MCP server"
+    );
+
     // Resolve port (PORT > MCP_HTTP_PORT > 3000)
     let port = resolve_port();
     let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port);
 
-    tracing::info!(port = port, "Starting MCP HTTP server");
+    tracing::info!(
+        port = port,
+        address = %addr,
+        "Starting MCP HTTP server"
+    );
 
     // Wrap server in Arc<Mutex<>> for sharing
     let server = Arc::new(Mutex::new(server));
 
-    // Create stateless configuration (no session management)
+    // Create HTTP middleware for observability
+    let trace_layer = TraceLayer::new_for_http()
+        .on_request(DefaultOnRequest::new().level(tracing::Level::INFO))
+        .on_response(
+            DefaultOnResponse::new()
+                .level(tracing::Level::INFO)
+                .latency_unit(tower_http::LatencyUnit::Micros)
+        );
+
+    let http_middleware = axum::middleware::from_fn(move |req: axum::extract::Request, next: axum::middleware::Next| async move {
+        // Add custom middleware layers here
+        let response = next.run(req).await;
+        response
+    })
+    .layer(trace_layer)
+    .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid::default()))
+    .layer(PropagateRequestIdLayer::x_request_id());
+
+    // Create stateless configuration with observability
     let config = StreamableHttpServerConfig {
         session_id_generator: None,
         enable_json_response: true,
         event_store: None,
         on_session_initialized: None,
         on_session_closed: None,
-        http_middleware: None,
+        http_middleware: Some(http_middleware.into()),
     };
 
     // Create and start the HTTP server
     let http_server = StreamableHttpServer::with_config(addr, server, config);
-    let (_bound_addr, server_handle) = http_server.start().await?;
+    let (bound_addr, server_handle) = http_server.start().await?;
 
-    tracing::info!("Server started on {}", addr);
+    tracing::info!(
+        actual_address = %bound_addr,
+        server_name = %server_name,
+        "Server started successfully"
+    );
+
+    // Log periodic health check for monitoring
+    let health_check_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            tracing::info!(
+                server_name = %server_name,
+                "Health check - server running"
+            );
+        }
+    });
 
     // Wait for server to finish
-    server_handle.await?;
+    tokio::select! {
+        result = server_handle => {
+            result?;
+        }
+        _ = health_check_handle => {
+            // Health check task ended unexpectedly
+        }
+    }
 
     Ok(())
 }
 
-/// Initialize production logging
+/// Initialize production logging with structured JSON format
 fn init_logging() {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| {
+            // Default logging configuration for production
+            // - INFO level for pmcp and server crates
+            // - WARN level for dependencies
+            "info,tower_http=debug,pmcp=info,server=info".into()
+        });
+
+    // Detect if we're running in AWS Lambda or containerized environment
+    let is_lambda = std::env::var("AWS_LAMBDA_FUNCTION_NAME").is_ok();
+    let is_json = std::env::var("LOG_FORMAT")
+        .map(|v| v.to_lowercase() == "json")
+        .unwrap_or(is_lambda); // Default to JSON in Lambda
+
+    if is_json {
+        // JSON format for CloudWatch Logs and structured logging
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_target(true)
+                    .with_current_span(true)
+                    .with_span_list(true)
+            )
+            .init();
+    } else {
+        // Human-readable format for local development
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+    }
+    
+    // Log initialization info
+    tracing::info!(
+        log_format = if is_json { "json" } else { "pretty" },
+        "Logging initialized"
+    );
 }
 
 /// Resolve HTTP port from environment variables
@@ -138,6 +252,29 @@ fn resolve_port() -> u16 {
                 .and_then(|p| p.parse().ok())
         })
         .unwrap_or(3000)
+}
+
+/// Log MCP tool invocation for observability
+///
+/// This should be called by tool implementations to track usage
+pub fn log_tool_invocation(tool_name: &str, request_id: Option<&str>) {
+    tracing::info!(
+        tool = %tool_name,
+        request_id = request_id.unwrap_or("unknown"),
+        event = "tool_invoked",
+        "MCP tool invoked"
+    );
+}
+
+/// Log MCP tool error for monitoring
+pub fn log_tool_error(tool_name: &str, error: &str, request_id: Option<&str>) {
+    tracing::error!(
+        tool = %tool_name,
+        error = %error,
+        request_id = request_id.unwrap_or("unknown"),
+        event = "tool_error",
+        "MCP tool error"
+    );
 }
 
 #[cfg(test)]

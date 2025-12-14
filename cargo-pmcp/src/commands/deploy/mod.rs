@@ -154,6 +154,10 @@ pub enum DeployAction {
         /// Remove all deployment files (CDK project, Lambda wrapper, config)
         #[clap(long)]
         clean: bool,
+
+        /// Don't wait for async operations to complete (pmcp-run only)
+        #[clap(long)]
+        no_wait: bool,
     },
 
     /// Manage secrets
@@ -179,6 +183,12 @@ pub enum DeployAction {
     Oauth {
         #[clap(subcommand)]
         action: OAuthAction,
+    },
+
+    /// Check status of an async operation (pmcp-run only)
+    Status {
+        /// Operation ID to check (deployment ID for destroy operations)
+        operation_id: String,
     },
 }
 
@@ -265,183 +275,247 @@ impl DeployCommand {
         let target = registry.get(&target_id)?;
 
         match &self.action {
-            Some(action) => match action {
-                DeployAction::Init {
-                    region,
-                    skip_credentials_check,
-                    oauth,
-                    oauth_shared,
-                    cognito_user_pool_id,
-                    cognito_pool_name,
-                    social_providers,
-                } => {
-                    // For init, we can use the old approach or new depending on target
-                    if target_id == "aws-lambda" {
-                        let mut cmd = InitCommand::new(project_root)
-                            .with_region(region)
-                            .with_credentials_check(!skip_credentials_check);
+            Some(action) => {
+                match action {
+                    DeployAction::Init {
+                        region,
+                        skip_credentials_check,
+                        oauth,
+                        oauth_shared,
+                        cognito_user_pool_id,
+                        cognito_pool_name,
+                        social_providers,
+                    } => {
+                        // For init, we can use the old approach or new depending on target
+                        if target_id == "aws-lambda" {
+                            let mut cmd = InitCommand::new(project_root)
+                                .with_region(region)
+                                .with_credentials_check(!skip_credentials_check);
 
-                        // Configure OAuth if specified
-                        if let Some(provider) = oauth {
-                            cmd = cmd.with_oauth_provider(provider);
-                        }
-                        if let Some(shared_name) = oauth_shared {
-                            cmd = cmd.with_oauth_shared(&shared_name);
-                        }
-                        if let Some(pool_id) = cognito_user_pool_id {
-                            cmd = cmd.with_cognito_user_pool_id(&pool_id);
-                        }
-                        if let Some(pool_name) = cognito_pool_name {
-                            cmd = cmd.with_cognito_pool_name(&pool_name);
-                        }
-                        if let Some(providers) = social_providers {
-                            cmd = cmd.with_social_providers(providers.clone());
-                        }
+                            // Configure OAuth if specified
+                            if let Some(provider) = oauth {
+                                cmd = cmd.with_oauth_provider(provider);
+                            }
+                            if let Some(shared_name) = oauth_shared {
+                                cmd = cmd.with_oauth_shared(&shared_name);
+                            }
+                            if let Some(pool_id) = cognito_user_pool_id {
+                                cmd = cmd.with_cognito_user_pool_id(&pool_id);
+                            }
+                            if let Some(pool_name) = cognito_pool_name {
+                                cmd = cmd.with_cognito_pool_name(&pool_name);
+                            }
+                            if let Some(providers) = social_providers {
+                                cmd = cmd.with_social_providers(providers.clone());
+                            }
 
-                        cmd.execute()
-                    } else {
-                        // For other targets (pmcp-run, etc.), use the new modular approach
-                        // Auto-detect server name from workspace or use package name
-                        let server_name = detect_server_name(&project_root)?;
-                        let mut config = crate::deployment::DeployConfig::default_for_server(
-                            server_name,
-                            region.clone(),
-                            project_root.clone(),
-                        );
+                            cmd.execute()
+                        } else {
+                            // For other targets (pmcp-run, etc.), use the new modular approach
+                            // Auto-detect server name from workspace or use package name
+                            let server_name = detect_server_name(&project_root)?;
+                            let mut config = crate::deployment::DeployConfig::default_for_server(
+                                server_name,
+                                region.clone(),
+                                project_root.clone(),
+                            );
 
-                        // Update target type to match the actual target
-                        config.target.target_type = target_id.clone();
+                            // Update target type to match the actual target
+                            config.target.target_type = target_id.clone();
 
-                        // Configure OAuth if specified (for pmcp-run target)
-                        if let Some(provider) = oauth {
-                            if provider == "cognito" || provider == "oidc" {
-                                config.auth.enabled = true;
-                                config.auth.provider = provider.clone();
+                            // Configure OAuth if specified (for pmcp-run target)
+                            if let Some(provider) = oauth {
+                                if provider == "cognito" || provider == "oidc" {
+                                    config.auth.enabled = true;
+                                    config.auth.provider = provider.clone();
 
-                                // Set default scopes if not specified
-                                if config.auth.dcr.default_scopes.is_empty() {
-                                    config.auth.dcr.default_scopes = vec![
-                                        "openid".to_string(),
-                                        "email".to_string(),
-                                        "mcp/read".to_string(),
-                                        "mcp/write".to_string(),
-                                    ];
+                                    // Set default scopes if not specified
+                                    if config.auth.dcr.default_scopes.is_empty() {
+                                        config.auth.dcr.default_scopes = vec![
+                                            "openid".to_string(),
+                                            "email".to_string(),
+                                            "mcp/read".to_string(),
+                                            "mcp/write".to_string(),
+                                        ];
+                                    }
                                 }
                             }
+
+                            target.init(&config).await
+                        }
+                    },
+                    DeployAction::Logs { tail, lines } => {
+                        let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        target.logs(&config, *tail, *lines).await
+                    },
+                    DeployAction::Metrics { period } => {
+                        let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        let metrics = target.metrics(&config, period).await?;
+                        println!("📊 Metrics for {}: {}", target.name(), metrics.period);
+                        Ok(())
+                    },
+                    DeployAction::Test { verbose } => {
+                        let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        let results = target.test(&config, *verbose).await?;
+                        if results.success {
+                            println!(
+                                "✅ All tests passed ({}/{})",
+                                results.tests_passed, results.tests_run
+                            );
+                        } else {
+                            println!(
+                                "❌ Some tests failed ({}/{})",
+                                results.tests_passed, results.tests_run
+                            );
+                        }
+                        Ok(())
+                    },
+                    DeployAction::Rollback { version, yes: _ } => {
+                        let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        target.rollback(&config, version.as_deref()).await
+                    },
+                    DeployAction::Destroy {
+                        yes,
+                        clean,
+                        no_wait,
+                    } => {
+                        let config = crate::deployment::DeployConfig::load(&project_root)?;
+
+                        if !yes {
+                            println!("⚠️  This will destroy deployment on {}", target.name());
+                            print!("Type '{}' to confirm: ", config.server.name);
+                            use std::io::{self, Write};
+                            io::stdout().flush()?;
+
+                            let mut input = String::new();
+                            io::stdin().read_line(&mut input)?;
+
+                            if input.trim() != config.server.name {
+                                println!("❌ Confirmation failed. Aborting.");
+                                return Ok(());
+                            }
                         }
 
-                        target.init(&config).await
-                    }
-                },
-                DeployAction::Logs { tail, lines } => {
-                    let config = crate::deployment::DeployConfig::load(&project_root)?;
-                    target.logs(&config, *tail, *lines).await
-                },
-                DeployAction::Metrics { period } => {
-                    let config = crate::deployment::DeployConfig::load(&project_root)?;
-                    let metrics = target.metrics(&config, period).await?;
-                    println!("📊 Metrics for {}: {}", target.name(), metrics.period);
-                    Ok(())
-                },
-                DeployAction::Test { verbose } => {
-                    let config = crate::deployment::DeployConfig::load(&project_root)?;
-                    let results = target.test(&config, *verbose).await?;
-                    if results.success {
-                        println!(
-                            "✅ All tests passed ({}/{})",
-                            results.tests_passed, results.tests_run
-                        );
-                    } else {
-                        println!(
-                            "❌ Some tests failed ({}/{})",
-                            results.tests_passed, results.tests_run
-                        );
-                    }
-                    Ok(())
-                },
-                DeployAction::Rollback { version, yes: _ } => {
-                    let config = crate::deployment::DeployConfig::load(&project_root)?;
-                    target.rollback(&config, version.as_deref()).await
-                },
-                DeployAction::Destroy { yes, clean } => {
-                    let config = crate::deployment::DeployConfig::load(&project_root)?;
-
-                    if !yes {
-                        println!("⚠️  This will destroy deployment on {}", target.name());
-                        print!("Type '{}' to confirm: ", config.server.name);
-                        use std::io::{self, Write};
-                        io::stdout().flush()?;
-
-                        let mut input = String::new();
-                        io::stdin().read_line(&mut input)?;
-
-                        if input.trim() != config.server.name {
-                            println!("❌ Confirmation failed. Aborting.");
-                            return Ok(());
+                        // Use async destroy if --no-wait is specified and target supports it
+                        if *no_wait && target.supports_async_operations() {
+                            let result = target.destroy_async(&config, *clean).await?;
+                            if let Some(op) = result.async_operation {
+                                println!();
+                                println!("⏳ {}", op.message);
+                                println!();
+                                println!("ℹ️  Destruction initiated. Use the following to check progress:");
+                                println!("   cargo pmcp deploy status {}", op.operation_id);
+                            } else {
+                                println!("✅ {}", result.message);
+                            }
+                            Ok(())
+                        } else {
+                            // Default behavior: wait for completion
+                            target.destroy(&config, *clean).await
                         }
-                    }
+                    },
+                    DeployAction::Secrets { action } => {
+                        let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        let secrets_action = match action {
+                            SecretsAction::Set { key, from_env } => {
+                                crate::deployment::SecretsAction::Set {
+                                    key: key.clone(),
+                                    from_env: from_env.clone(),
+                                }
+                            },
+                            SecretsAction::List => crate::deployment::SecretsAction::List,
+                            SecretsAction::Delete { key, yes } => {
+                                crate::deployment::SecretsAction::Delete {
+                                    key: key.clone(),
+                                    yes: *yes,
+                                }
+                            },
+                        };
+                        target.secrets(&config, secrets_action).await
+                    },
+                    DeployAction::Outputs { format } => {
+                        let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        let outputs = target.outputs(&config).await?;
 
-                    target.destroy(&config, *clean).await
-                },
-                DeployAction::Secrets { action } => {
-                    let config = crate::deployment::DeployConfig::load(&project_root)?;
-                    let secrets_action = match action {
-                        SecretsAction::Set { key, from_env } => {
-                            crate::deployment::SecretsAction::Set {
-                                key: key.clone(),
-                                from_env: from_env.clone(),
-                            }
-                        },
-                        SecretsAction::List => crate::deployment::SecretsAction::List,
-                        SecretsAction::Delete { key, yes } => {
-                            crate::deployment::SecretsAction::Delete {
-                                key: key.clone(),
-                                yes: *yes,
-                            }
-                        },
-                    };
-                    target.secrets(&config, secrets_action).await
-                },
-                DeployAction::Outputs { format } => {
-                    let config = crate::deployment::DeployConfig::load(&project_root)?;
-                    let outputs = target.outputs(&config).await?;
+                        match format.as_str() {
+                            "json" => {
+                                println!("{}", serde_json::to_string_pretty(&outputs)?);
+                            },
+                            "text" => {
+                                outputs.display();
+                            },
+                            _ => bail!("Unknown format: {}", format),
+                        }
+                        Ok(())
+                    },
+                    DeployAction::Login => {
+                        // Login is target-specific
+                        match target_id.as_str() {
+                            "pmcp-run" => crate::deployment::targets::pmcp_run::login().await,
+                            _ => {
+                                bail!("Login is not supported for target: {}", target_id);
+                            },
+                        }
+                    },
+                    DeployAction::Logout => {
+                        // Logout is target-specific
+                        match target_id.as_str() {
+                            "pmcp-run" => crate::deployment::targets::pmcp_run::logout(),
+                            _ => {
+                                bail!("Logout is not supported for target: {}", target_id);
+                            },
+                        }
+                    },
+                    DeployAction::Oauth { action } => {
+                        // OAuth is only supported for pmcp-run target
+                        if target_id != "pmcp-run" {
+                            bail!("OAuth management is only supported for pmcp-run target");
+                        }
+                        handle_oauth_action(action).await
+                    },
+                    DeployAction::Status { operation_id } => {
+                        // Status is only supported for targets with async operations
+                        if !target.supports_async_operations() {
+                            bail!(
+                                "Async operation status is not supported for target: {}",
+                                target_id
+                            );
+                        }
 
-                    match format.as_str() {
-                        "json" => {
-                            println!("{}", serde_json::to_string_pretty(&outputs)?);
-                        },
-                        "text" => {
-                            outputs.display();
-                        },
-                        _ => bail!("Unknown format: {}", format),
-                    }
-                    Ok(())
-                },
-                DeployAction::Login => {
-                    // Login is target-specific
-                    match target_id.as_str() {
-                        "pmcp-run" => crate::deployment::targets::pmcp_run::login().await,
-                        _ => {
-                            bail!("Login is not supported for target: {}", target_id);
-                        },
-                    }
-                },
-                DeployAction::Logout => {
-                    // Logout is target-specific
-                    match target_id.as_str() {
-                        "pmcp-run" => crate::deployment::targets::pmcp_run::logout(),
-                        _ => {
-                            bail!("Logout is not supported for target: {}", target_id);
-                        },
-                    }
-                },
-                DeployAction::Oauth { action } => {
-                    // OAuth is only supported for pmcp-run target
-                    if target_id != "pmcp-run" {
-                        bail!("OAuth management is only supported for pmcp-run target");
-                    }
-                    handle_oauth_action(action).await
-                },
+                        println!("🔍 Checking operation status...");
+                        println!();
+
+                        let status = target.get_operation_status(operation_id).await?;
+
+                        match status.status {
+                            crate::deployment::OperationStatus::Initiated => {
+                                println!("⏳ Status: Initiated");
+                                println!("   {}", status.message);
+                            },
+                            crate::deployment::OperationStatus::Running => {
+                                println!("🔄 Status: Running");
+                                println!("   {}", status.message);
+                            },
+                            crate::deployment::OperationStatus::Completed => {
+                                println!("✅ Status: Completed");
+                                println!("   {}", status.message);
+                            },
+                            crate::deployment::OperationStatus::Failed => {
+                                println!("❌ Status: Failed");
+                                println!("   {}", status.message);
+                            },
+                        }
+
+                        if let Some(metadata) = &status.metadata {
+                            if let Some(updated_at) = metadata.get("updated_at") {
+                                println!();
+                                println!("   Last updated: {}", updated_at);
+                            }
+                        }
+
+                        Ok(())
+                    },
+                }
             },
             None => {
                 // No subcommand = deploy
@@ -500,12 +574,13 @@ impl DeployCommand {
     ) -> Result<()> {
         use std::io::Write;
 
-        // Extract deployment_id from custom outputs
-        let deployment_id = outputs
+        // Extract server_id from custom outputs (the server name, e.g., "chess")
+        // NOT deployment_id which is like "dep_xxx" - landing pages use server_id
+        let server_id = outputs
             .custom
-            .get("deployment_id")
+            .get("server_id")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("No deployment_id in outputs"))?;
+            .ok_or_else(|| anyhow::anyhow!("No server_id in outputs"))?;
 
         // Get URL
         let url = outputs
@@ -526,7 +601,7 @@ impl DeployCommand {
 server_id = "{}"
 endpoint = "{}"
 "#,
-            deployment_id, url
+            server_id, url
         );
 
         // Write to .pmcp/deployment.toml
