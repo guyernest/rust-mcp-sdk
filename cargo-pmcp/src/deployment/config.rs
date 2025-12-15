@@ -138,19 +138,55 @@ fn default_refresh_token_ttl() -> String {
     "30d".to_string()
 }
 
-/// External OIDC provider configuration (future)
+/// External OIDC provider configuration.
+///
+/// Supports multiple OIDC providers via the `provider_type` field:
+/// - `google` - Google Identity Platform
+/// - `auth0` - Auth0
+/// - `okta` - Okta
+/// - `entra` - Microsoft Entra ID (Azure AD)
+/// - `generic` - Any OIDC-compliant provider
+///
+/// The SDK's `GenericOidcProvider` is used for token validation at runtime.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OidcConfig {
+    /// OIDC provider type (google, auth0, okta, entra, generic)
+    #[serde(default = "default_oidc_provider_type")]
+    pub provider_type: String,
+
     /// OIDC issuer URL
     pub issuer: String,
 
-    /// Expected audience
+    /// Client ID for this application
+    pub client_id: String,
+
+    /// Client secret (optional for public clients)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<String>,
+
+    /// Expected audience (defaults to client_id if not specified)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audience: Option<String>,
 
     /// JWKS URL (auto-discovered if not specified)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jwks_url: Option<String>,
+
+    /// Custom scopes to request (in addition to openid)
+    #[serde(default = "default_oidc_scopes")]
+    pub scopes: Vec<String>,
+}
+
+fn default_oidc_provider_type() -> String {
+    "generic".to_string()
+}
+
+fn default_oidc_scopes() -> Vec<String> {
+    vec![
+        "openid".to_string(),
+        "email".to_string(),
+        "profile".to_string(),
+    ]
 }
 
 /// Dynamic Client Registration configuration
@@ -463,6 +499,108 @@ impl Default for AuthConfig {
             scopes: ScopesConfig::default(),
             user_pool_id: None,
             client_id: None,
+            callback_urls: vec![],
+        }
+    }
+}
+
+impl AuthConfig {
+    /// Convert auth config to environment variables for the server.
+    ///
+    /// These environment variables are read by the server_common template
+    /// to initialize the appropriate `IdentityProvider` at runtime.
+    pub fn to_env_vars(&self, region: &str) -> HashMap<String, String> {
+        let mut vars = HashMap::new();
+
+        if !self.enabled {
+            vars.insert("AUTH_PROVIDER".to_string(), "none".to_string());
+            return vars;
+        }
+
+        match self.provider.as_str() {
+            "cognito" => {
+                vars.insert("AUTH_PROVIDER".to_string(), "cognito".to_string());
+                vars.insert("AUTH_REGION".to_string(), region.to_string());
+
+                // Use cognito config if available, fall back to legacy fields
+                if let Some(cognito) = &self.cognito {
+                    if let Some(user_pool_id) = &cognito.user_pool_id {
+                        vars.insert("AUTH_USER_POOL_ID".to_string(), user_pool_id.clone());
+                    }
+                } else if let Some(user_pool_id) = &self.user_pool_id {
+                    vars.insert("AUTH_USER_POOL_ID".to_string(), user_pool_id.clone());
+                }
+
+                // Client ID from cognito config or legacy field
+                if let Some(client_id) = &self.client_id {
+                    vars.insert("AUTH_CLIENT_ID".to_string(), client_id.clone());
+                }
+            },
+            "oidc" | "google" | "auth0" | "okta" | "entra" => {
+                if let Some(oidc) = &self.oidc {
+                    vars.insert("AUTH_PROVIDER".to_string(), oidc.provider_type.clone());
+                    vars.insert("AUTH_ISSUER".to_string(), oidc.issuer.clone());
+                    vars.insert("AUTH_CLIENT_ID".to_string(), oidc.client_id.clone());
+
+                    if let Some(secret) = &oidc.client_secret {
+                        vars.insert("AUTH_CLIENT_SECRET".to_string(), secret.clone());
+                    }
+                } else {
+                    // Fallback to generic OIDC with provider as type
+                    vars.insert("AUTH_PROVIDER".to_string(), self.provider.clone());
+                }
+            },
+            _ => {
+                vars.insert("AUTH_PROVIDER".to_string(), "none".to_string());
+            },
+        }
+
+        vars
+    }
+
+    /// Create auth config for Cognito.
+    pub fn cognito(region: &str, user_pool_id: &str, client_id: &str) -> Self {
+        Self {
+            enabled: true,
+            provider: "cognito".to_string(),
+            cognito: Some(CognitoConfig {
+                user_pool_id: Some(user_pool_id.to_string()),
+                user_pool_name: None,
+                resource_server_id: default_resource_server_id(),
+                social_providers: vec![],
+                mfa: default_mfa(),
+                access_token_ttl: default_access_token_ttl(),
+                refresh_token_ttl: default_refresh_token_ttl(),
+                domain: None,
+            }),
+            oidc: None,
+            dcr: DcrConfig::default(),
+            scopes: ScopesConfig::default(),
+            user_pool_id: Some(user_pool_id.to_string()),
+            client_id: Some(client_id.to_string()),
+            callback_urls: vec![],
+        }
+    }
+
+    /// Create auth config for generic OIDC.
+    pub fn oidc(provider_type: &str, issuer: &str, client_id: &str) -> Self {
+        Self {
+            enabled: true,
+            provider: "oidc".to_string(),
+            cognito: None,
+            oidc: Some(OidcConfig {
+                provider_type: provider_type.to_string(),
+                issuer: issuer.to_string(),
+                client_id: client_id.to_string(),
+                client_secret: None,
+                audience: None,
+                jwks_url: None,
+                scopes: default_oidc_scopes(),
+            }),
+            dcr: DcrConfig::default(),
+            scopes: ScopesConfig::default(),
+            user_pool_id: None,
+            client_id: Some(client_id.to_string()),
             callback_urls: vec![],
         }
     }

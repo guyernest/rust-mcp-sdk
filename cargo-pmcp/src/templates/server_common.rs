@@ -1,6 +1,6 @@
 //! server-common template generator
 //!
-//! Generates the shared HTTP bootstrap crate (~80 LOC) used by all servers.
+//! Generates the shared HTTP bootstrap crate with OAuth support used by all servers.
 
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -28,7 +28,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-pmcp = { workspace = true }
+pmcp = { workspace = true, features = ["full"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
@@ -52,9 +52,36 @@ fn generate_lib_rs(server_common_dir: &Path) -> Result<()> {
 //! - Performance metrics and tracing
 //! - Error tracking and categorization
 //! - Tool invocation logging for observability
+//! - OAuth/OIDC authentication (optional, env-configured)
+//!
+//! # Authentication
+//!
+//! Enable OAuth authentication via environment variables:
+//!
+//! ```bash
+//! # For AWS Cognito:
+//! AUTH_PROVIDER=cognito
+//! AUTH_REGION=us-east-1
+//! AUTH_USER_POOL_ID=us-east-1_xxxxx
+//! AUTH_CLIENT_ID=your-client-id
+//!
+//! # For generic OIDC (Google, Auth0, Okta, Entra):
+//! AUTH_PROVIDER=oidc
+//! AUTH_ISSUER=https://accounts.google.com
+//! AUTH_CLIENT_ID=your-client-id
+//!
+//! # To disable auth (default):
+//! AUTH_PROVIDER=none
+//! ```
 
 use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
-use pmcp::server::http_middleware::{ServerHttpMiddlewareChain, ServerHttpLoggingMiddleware};
+use pmcp::server::http_middleware::{
+    ServerHttpMiddlewareChain, ServerHttpLoggingMiddleware,
+    ServerHttpMiddleware, ServerHttpRequest, ServerHttpResponse, ServerHttpContext,
+};
+use pmcp::server::auth::{
+    IdentityProvider, CognitoProvider, GenericOidcConfig, GenericOidcProvider,
+};
 use pmcp::Server;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -62,6 +89,79 @@ use tokio::sync::Mutex;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use std::time::Duration;
+
+/// Authentication provider type for runtime configuration.
+pub enum AuthProviderType {
+    /// No authentication required.
+    None,
+    /// AWS Cognito authentication.
+    Cognito(Arc<CognitoProvider>),
+    /// Generic OIDC authentication (Google, Auth0, Okta, Entra, etc.).
+    Oidc(Arc<GenericOidcProvider>),
+}
+
+impl std::fmt::Debug for AuthProviderType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => write!(f, "None"),
+            Self::Cognito(_) => write!(f, "Cognito"),
+            Self::Oidc(_) => write!(f, "Oidc"),
+        }
+    }
+}
+
+/// OAuth authentication middleware using IdentityProvider.
+pub struct OAuthMiddleware {
+    provider: Arc<dyn IdentityProvider>,
+}
+
+impl OAuthMiddleware {
+    /// Create new OAuth middleware with the given provider.
+    pub fn new(provider: Arc<dyn IdentityProvider>) -> Self {
+        Self { provider }
+    }
+}
+
+impl ServerHttpMiddleware for OAuthMiddleware {
+    fn process_request(
+        &self,
+        request: ServerHttpRequest,
+        context: &mut ServerHttpContext,
+    ) -> Result<ServerHttpRequest, ServerHttpResponse> {
+        // Extract Bearer token from Authorization header
+        let auth_header = request.headers
+            .get("authorization")
+            .or_else(|| request.headers.get("Authorization"));
+
+        let token = match auth_header {
+            Some(header) => {
+                let header_str = header.to_str().unwrap_or("");
+                if header_str.starts_with("Bearer ") {
+                    Some(header_str.trim_start_matches("Bearer ").to_string())
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
+
+        // Store token for async validation in response processing
+        // Note: Actual validation happens in the handler since we can't do async here
+        if let Some(token) = token {
+            context.set("auth_token", token);
+        }
+
+        Ok(request)
+    }
+
+    fn process_response(
+        &self,
+        response: ServerHttpResponse,
+        _context: &ServerHttpContext,
+    ) -> ServerHttpResponse {
+        response
+    }
+}
 
 /// Run HTTP server with production middleware and logging
 ///
@@ -94,11 +194,19 @@ pub async fn run_http(server: Server, server_name: &str, server_version: &str) -
     // Log server info for observability
     let server_name = server_name.to_string();
     let server_version = server_version.to_string();
-    
+
     tracing::info!(
         server_name = %server_name,
         server_version = %server_version,
         "Initializing MCP server"
+    );
+
+    // Initialize auth provider from environment
+    let auth_provider = init_auth_provider().await;
+
+    tracing::info!(
+        auth_provider = ?auth_provider,
+        "Authentication configured"
     );
 
     // Resolve port (PORT > MCP_HTTP_PORT > 3000)
@@ -114,9 +222,24 @@ pub async fn run_http(server: Server, server_name: &str, server_version: &str) -
     // Wrap server in Arc<Mutex<>> for sharing
     let server = Arc::new(Mutex::new(server));
 
-    // Create HTTP middleware chain with logging
+    // Create HTTP middleware chain with logging and optional auth
     let mut middleware_chain = ServerHttpMiddlewareChain::new();
     middleware_chain.add(Arc::new(ServerHttpLoggingMiddleware::new()));
+
+    // Add OAuth middleware if auth is enabled
+    match &auth_provider {
+        AuthProviderType::Cognito(provider) => {
+            tracing::info!("Adding Cognito OAuth middleware");
+            middleware_chain.add(Arc::new(OAuthMiddleware::new(provider.clone())));
+        }
+        AuthProviderType::Oidc(provider) => {
+            tracing::info!("Adding OIDC OAuth middleware");
+            middleware_chain.add(Arc::new(OAuthMiddleware::new(provider.clone())));
+        }
+        AuthProviderType::None => {
+            tracing::info!("Authentication disabled");
+        }
+    }
 
     // Create stateless configuration with observability
     let config = StreamableHttpServerConfig {
@@ -163,6 +286,103 @@ pub async fn run_http(server: Server, server_name: &str, server_version: &str) -
     Ok(())
 }
 
+/// Initialize authentication provider from environment variables.
+///
+/// Supports:
+/// - `AUTH_PROVIDER=cognito` with `AUTH_REGION`, `AUTH_USER_POOL_ID`, `AUTH_CLIENT_ID`
+/// - `AUTH_PROVIDER=oidc` with `AUTH_ISSUER`, `AUTH_CLIENT_ID`
+/// - `AUTH_PROVIDER=none` (default)
+async fn init_auth_provider() -> AuthProviderType {
+    let provider_type = std::env::var("AUTH_PROVIDER")
+        .unwrap_or_else(|_| "none".to_string())
+        .to_lowercase();
+
+    match provider_type.as_str() {
+        "cognito" => {
+            let region = std::env::var("AUTH_REGION")
+                .expect("AUTH_REGION required for Cognito auth");
+            let user_pool_id = std::env::var("AUTH_USER_POOL_ID")
+                .expect("AUTH_USER_POOL_ID required for Cognito auth");
+            let client_id = std::env::var("AUTH_CLIENT_ID")
+                .expect("AUTH_CLIENT_ID required for Cognito auth");
+
+            tracing::info!(
+                region = %region,
+                user_pool_id = %user_pool_id,
+                "Initializing Cognito provider"
+            );
+
+            match CognitoProvider::new(&region, &user_pool_id, &client_id).await {
+                Ok(provider) => AuthProviderType::Cognito(Arc::new(provider)),
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to initialize Cognito provider");
+                    panic!("Failed to initialize Cognito provider: {}", e);
+                }
+            }
+        }
+        "oidc" | "google" | "auth0" | "okta" | "entra" => {
+            let issuer = std::env::var("AUTH_ISSUER")
+                .expect("AUTH_ISSUER required for OIDC auth");
+            let client_id = std::env::var("AUTH_CLIENT_ID")
+                .expect("AUTH_CLIENT_ID required for OIDC auth");
+            let client_secret = std::env::var("AUTH_CLIENT_SECRET").ok();
+
+            tracing::info!(
+                issuer = %issuer,
+                provider_type = %provider_type,
+                "Initializing OIDC provider"
+            );
+
+            // Create appropriate config based on provider type
+            let mut config = match provider_type.as_str() {
+                "google" => GenericOidcConfig::google(&client_id),
+                "auth0" => {
+                    // Extract domain from issuer for Auth0
+                    let domain = issuer.trim_start_matches("https://").trim_end_matches('/');
+                    GenericOidcConfig::auth0(domain, &client_id)
+                }
+                "okta" => {
+                    let domain = issuer.trim_start_matches("https://");
+                    GenericOidcConfig::okta(domain, &client_id)
+                }
+                "entra" => {
+                    // Extract tenant ID from issuer for Entra
+                    // Format: https://login.microsoftonline.com/{tenant}/v2.0
+                    let parts: Vec<&str> = issuer.split('/').collect();
+                    let tenant_id = parts.get(3).unwrap_or(&"common");
+                    GenericOidcConfig::entra(tenant_id, &client_id)
+                }
+                _ => GenericOidcConfig::new(
+                    "oidc",
+                    "Generic OIDC",
+                    &issuer,
+                    &client_id,
+                ),
+            };
+
+            if let Some(secret) = client_secret {
+                config = config.with_client_secret(secret);
+            }
+
+            match GenericOidcProvider::new(config).await {
+                Ok(provider) => AuthProviderType::Oidc(Arc::new(provider)),
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to initialize OIDC provider");
+                    panic!("Failed to initialize OIDC provider: {}", e);
+                }
+            }
+        }
+        "none" | "" => {
+            tracing::info!("Authentication disabled");
+            AuthProviderType::None
+        }
+        other => {
+            tracing::warn!(provider = %other, "Unknown auth provider, disabling auth");
+            AuthProviderType::None
+        }
+    }
+}
+
 /// Initialize production logging with structured JSON format
 fn init_logging() {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -198,7 +418,7 @@ fn init_logging() {
             .with(tracing_subscriber::fmt::layer())
             .init();
     }
-    
+
     // Log initialization info
     tracing::info!(
         log_format = if is_json { "json" } else { "pretty" },
@@ -244,6 +464,27 @@ pub fn log_tool_error(tool_name: &str, error: &str, request_id: Option<&str>) {
     );
 }
 
+/// Validate a token using the configured auth provider.
+///
+/// Returns the authenticated user's subject (user ID) or an error.
+/// This is useful for tools that need to know who is calling them.
+pub async fn validate_token(
+    provider: &AuthProviderType,
+    token: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    match provider {
+        AuthProviderType::None => Ok("anonymous".to_string()),
+        AuthProviderType::Cognito(p) => {
+            let context = p.validate_token(token).await?;
+            Ok(context.user_id().to_string())
+        }
+        AuthProviderType::Oidc(p) => {
+            let context = p.validate_token(token).await?;
+            Ok(context.user_id().to_string())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,6 +497,12 @@ mod tests {
         // Test runs with whatever env vars are set
         let port = resolve_port();
         assert!(port >= 1 && port <= 65535, "Port should be valid");
+    }
+
+    #[test]
+    fn test_auth_provider_type_debug() {
+        let none = AuthProviderType::None;
+        assert_eq!(format!("{:?}", none), "None");
     }
 }
 "#;

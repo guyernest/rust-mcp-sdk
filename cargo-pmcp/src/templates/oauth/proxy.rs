@@ -1,4 +1,8 @@
 //! OAuth Proxy Lambda template for handling OAuth flows with Cognito.
+//!
+//! This template implements DCR (Dynamic Client Registration) because Cognito
+//! doesn't support RFC 7591 natively. It also proxies authorization and token
+//! requests to Cognito.
 
 /// Returns the Rust source code for the OAuth Proxy Lambda.
 /// This Lambda handles:
@@ -14,11 +18,15 @@
 /// Reason: RFC 8707 can cause issues with clients like Claude Code that discover
 /// and validate the underlying Cognito provider, which may not support S256 PKCE.
 /// The OIDC discovery endpoint is sufficient for OAuth client discovery.
+///
+/// Note: Token validation is handled separately by the Authorizer Lambda or
+/// in the MCP server using CognitoProvider.
 pub fn get_proxy_template(user_pool_id: &str, region: &str, _server_name: &str) -> String {
     format!(
         r#"//! OAuth Proxy Lambda for MCP servers.
 //!
 //! Handles OAuth flows including Dynamic Client Registration (DCR).
+//! This Lambda works alongside CognitoProvider for token validation.
 
 use lambda_http::{{run, service_fn, Body, Error, Request, Response}};
 use serde::{{Deserialize, Serialize}};
@@ -430,7 +438,10 @@ async fn main() -> Result<(), Error> {{
         .with_max_level(tracing::Level::INFO)
         .with_target(false)
         .without_time()
+        .json()
         .init();
+
+    tracing::info!("Starting OAuth Proxy Lambda");
 
     run(service_fn(handler)).await
 }}
@@ -449,6 +460,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+pmcp = {{ version = "0.3", features = ["full"] }}
 lambda_http = "0.14"
 tokio = {{ version = "1", features = ["full"] }}
 serde = {{ version = "1.0", features = ["derive"] }}
@@ -461,7 +473,7 @@ aws-config = "1.5"
 aws-sdk-dynamodb = "1.56"
 reqwest = {{ version = "0.12", default-features = false, features = ["json", "rustls-tls"] }}
 tracing = "0.1"
-tracing-subscriber = {{ version = "0.3", default-features = false, features = ["fmt"] }}
+tracing-subscriber = {{ version = "0.3", features = ["fmt", "json"] }}
 "#,
         name = name
     )
