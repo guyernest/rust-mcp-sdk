@@ -73,6 +73,7 @@ impl AuthMiddleware for BearerTokenMiddleware {
                     token: None,
                     client_id: Some("anonymous".to_string()),
                     expires_at: None,
+                    authenticated: false,
                 });
             }
         };
@@ -105,6 +106,7 @@ impl AuthMiddleware for BearerTokenMiddleware {
             token: Some(token.clone()),
             client_id: Some(token_info.client_id),
             expires_at: Some(token_info.expires_at),
+            authenticated: true,
         })
     }
 
@@ -183,6 +185,7 @@ impl AuthMiddleware for ClientCredentialsMiddleware {
             token: None,
             client_id: Some(client.client_id),
             expires_at: None,
+            authenticated: true,
         })
     }
 }
@@ -322,6 +325,7 @@ impl AuthMiddleware for CompositeMiddleware {
                 token: None,
                 client_id: Some("anonymous".to_string()),
                 expires_at: None,
+                authenticated: false,
             })
         }
     }

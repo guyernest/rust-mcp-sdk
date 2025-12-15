@@ -15,6 +15,9 @@ pub struct DeployConfig {
     pub observability: ObservabilityConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_gateway: Option<ApiGatewayConfig>,
+    /// Assets configuration for bundling files with deployment
+    #[serde(default)]
+    pub assets: AssetsConfig,
 
     /// Project root directory (not serialized)
     #[serde(skip)]
@@ -248,6 +251,115 @@ pub struct ApiGatewayConfig {
     pub burst_limit: Option<u32>,
 }
 
+/// Assets configuration for bundling files with deployment.
+///
+/// Assets are files bundled with your MCP server (databases, markdown files, configs).
+/// They are accessible at runtime via `pmcp::assets` module.
+///
+/// # Example Configuration
+///
+/// ```toml
+/// [assets]
+/// include = [
+///     "chinook.db",
+///     "resources/**/*.md",
+///     "config/*.toml",
+/// ]
+/// exclude = ["**/*.tmp", "**/.DS_Store"]
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetsConfig {
+    /// Glob patterns for files to include as assets.
+    ///
+    /// Patterns are relative to the workspace root.
+    /// Examples: `"chinook.db"`, `"resources/**/*.md"`, `"config/*.toml"`
+    #[serde(default)]
+    pub include: Vec<String>,
+
+    /// Glob patterns for files to exclude from assets.
+    ///
+    /// Applied after include patterns.
+    /// Examples: `"**/*.tmp"`, `"**/.DS_Store"`
+    #[serde(default)]
+    pub exclude: Vec<String>,
+
+    /// Base directory for assets (relative to workspace root).
+    ///
+    /// If not specified, assets are resolved from workspace root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_dir: Option<String>,
+}
+
+impl Default for AssetsConfig {
+    fn default() -> Self {
+        Self {
+            include: vec![],
+            exclude: vec![
+                "**/*.tmp".to_string(),
+                "**/.DS_Store".to_string(),
+                "**/Thumbs.db".to_string(),
+            ],
+            base_dir: None,
+        }
+    }
+}
+
+impl AssetsConfig {
+    /// Create a new assets config with the given include patterns.
+    pub fn new(include: Vec<String>) -> Self {
+        Self {
+            include,
+            ..Default::default()
+        }
+    }
+
+    /// Check if any assets are configured.
+    pub fn has_assets(&self) -> bool {
+        !self.include.is_empty()
+    }
+
+    /// Resolve asset patterns to actual file paths.
+    pub fn resolve_files(&self, project_root: &Path) -> Result<Vec<PathBuf>> {
+        let base = match &self.base_dir {
+            Some(dir) => project_root.join(dir),
+            None => project_root.to_path_buf(),
+        };
+
+        let mut files = Vec::new();
+
+        for pattern in &self.include {
+            let full_pattern = base.join(pattern);
+            let glob_pattern = full_pattern.to_string_lossy();
+
+            let paths =
+                glob::glob(&glob_pattern).context(format!("Invalid glob pattern: {}", pattern))?;
+
+            for entry in paths.flatten() {
+                if entry.is_file() && !self.is_excluded(&entry) {
+                    files.push(entry);
+                }
+            }
+        }
+
+        Ok(files)
+    }
+
+    /// Check if a path matches any exclude pattern.
+    fn is_excluded(&self, path: &Path) -> bool {
+        let path_str = path.to_string_lossy();
+
+        for pattern in &self.exclude {
+            if let Ok(glob_pattern) = glob::Pattern::new(pattern) {
+                if glob_pattern.matches(&path_str) {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+}
+
 impl DeployConfig {
     pub fn load(project_root: &Path) -> Result<Self> {
         let config_path = project_root.join(".pmcp/deploy.toml");
@@ -312,6 +424,7 @@ impl DeployConfig {
                 }),
             },
             api_gateway: None,
+            assets: AssetsConfig::default(),
             project_root,
         }
     }

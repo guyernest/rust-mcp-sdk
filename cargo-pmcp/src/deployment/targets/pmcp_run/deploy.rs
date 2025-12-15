@@ -60,27 +60,67 @@ pub async fn deploy_to_pmcp_run(
     let template_path = find_template_file(&cdk_out)?;
     println!("   Template: {}", template_path.display());
 
-    // Step 3: Extract bootstrap binary path from artifact
-    let bootstrap_path = match artifact {
-        BuildArtifact::Binary { path, .. } => path,
-        BuildArtifact::Wasm { path, .. } => path,
-        BuildArtifact::Custom { path, .. } => path,
+    // Step 3: Extract bootstrap binary path and deployment package from artifact
+    let (bootstrap_path, deployment_package) = match artifact {
+        BuildArtifact::Binary {
+            path,
+            deployment_package,
+            ..
+        } => (path, deployment_package),
+        BuildArtifact::Wasm {
+            path,
+            deployment_package,
+            ..
+        } => (path, deployment_package),
+        BuildArtifact::Custom {
+            path,
+            deployment_package,
+            ..
+        } => (path, deployment_package),
     };
 
-    if !bootstrap_path.exists() {
-        bail!("Bootstrap binary not found: {}", bootstrap_path.display());
-    }
+    // Determine what to upload: deployment package (zip with assets) or raw binary
+    let (bootstrap_data, bootstrap_content_type, has_assets) = if let Some(ref package_path) =
+        deployment_package
+    {
+        if package_path.exists() {
+            println!("   📦 Using deployment package with assets");
+            println!("   Package: {}", package_path.display());
+            let data = std::fs::read(package_path).context("Failed to read deployment package")?;
+            (data, "application/zip", true)
+        } else {
+            // Fall back to raw binary if package doesn't exist
+            if !bootstrap_path.exists() {
+                bail!("Bootstrap binary not found: {}", bootstrap_path.display());
+            }
+            println!("   Bootstrap: {}", bootstrap_path.display());
+            let data = std::fs::read(&bootstrap_path).context("Failed to read bootstrap binary")?;
+            (data, "application/octet-stream", false)
+        }
+    } else {
+        if !bootstrap_path.exists() {
+            bail!("Bootstrap binary not found: {}", bootstrap_path.display());
+        }
+        println!("   Bootstrap: {}", bootstrap_path.display());
+        let data = std::fs::read(&bootstrap_path).context("Failed to read bootstrap binary")?;
+        (data, "application/octet-stream", false)
+    };
 
-    println!("   Bootstrap: {}", bootstrap_path.display());
     println!();
 
-    // Step 4: Read files
+    // Step 4: Read template file
     let template = std::fs::read_to_string(&template_path)
         .context("Failed to read CloudFormation template")?;
-    let bootstrap = std::fs::read(&bootstrap_path).context("Failed to read bootstrap binary")?;
 
     println!("📦 Template size: {} KB", template.len() / 1024);
-    println!("📦 Bootstrap size: {} KB", bootstrap.len() / 1024);
+    if has_assets {
+        println!(
+            "📦 Deployment package size: {} KB",
+            bootstrap_data.len() / 1024
+        );
+    } else {
+        println!("📦 Bootstrap size: {} KB", bootstrap_data.len() / 1024);
+    }
     println!();
 
     // Step 5: Get presigned S3 URLs from GraphQL
@@ -89,7 +129,7 @@ pub async fn deploy_to_pmcp_run(
         &credentials.access_token,
         &config.server.name,
         template.len(),
-        bootstrap.len(),
+        bootstrap_data.len(),
     )
     .await
     .context("Failed to get upload URLs")?;
@@ -109,8 +149,8 @@ pub async fn deploy_to_pmcp_run(
         ),
         graphql::upload_to_s3(
             &urls.bootstrap_upload_url,
-            bootstrap,
-            "application/octet-stream"
+            bootstrap_data,
+            bootstrap_content_type
         )
     );
 

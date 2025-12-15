@@ -1025,6 +1025,233 @@ async fn validate_tenant_access(auth_ctx: &AuthContext, resource_id: &str)
 
 ❌ **Don't ignore tenant boundaries** - Always validate tenant context in multi-tenant apps
 
+## Provider-Agnostic Authentication SDK
+
+PMCP provides a provider-agnostic authentication abstraction. Your MCP server code should never know about OAuth providers, tokens, or authentication flows - it only sees `AuthContext`.
+
+### The Core Principle
+
+**OAuth is a deployment concern, not a code concern.** Your server code uses the same `AuthContext` API regardless of whether tokens come from Cognito, Entra, Google, Okta, or Auth0.
+
+### AuthContext: The Only Auth Type You Need
+
+```rust
+use pmcp::server::auth::AuthContext;
+
+fn handle_request(auth: &AuthContext) -> Result<String, &'static str> {
+    // Require authentication
+    auth.require_auth()?;
+
+    // Check scopes
+    auth.require_scope("read:data")?;
+
+    // Access user info (provider-agnostic)
+    let user_id = auth.user_id();
+    let email = auth.email().unwrap_or("unknown");
+    let tenant = auth.tenant_id();
+
+    // Check group membership
+    if auth.in_group("admins") {
+        // Admin-only logic
+    }
+
+    Ok(format!("Hello, {} ({})", email, user_id))
+}
+```
+
+**Key helper methods:**
+
+| Method | Description |
+|--------|-------------|
+| `user_id()` | Standard user identifier (from `sub` claim) |
+| `email()` | Email address (handles Cognito, Entra, Google differences) |
+| `tenant_id()` | Tenant ID (handles `tid`, `custom:tenant`, `org_id` variations) |
+| `groups()` | Group membership (handles `groups`, `cognito:groups`, `roles`) |
+| `name()` | Display name |
+| `claim<T>(key)` | Get any typed claim value |
+| `require_auth()` | Returns error if not authenticated |
+| `require_scope(s)` | Returns error if scope missing |
+| `in_group(g)` | Check group membership |
+
+### ClaimMappings: Provider-Specific Translations
+
+Different providers use different claim names. `ClaimMappings` handles the translation:
+
+```rust
+use pmcp::server::auth::ClaimMappings;
+
+// Built-in presets for major providers
+let cognito_mappings = ClaimMappings::cognito();
+let entra_mappings = ClaimMappings::entra();
+let google_mappings = ClaimMappings::google();
+let okta_mappings = ClaimMappings::okta();
+let auth0_mappings = ClaimMappings::auth0();
+
+// Or create custom mappings
+let custom = ClaimMappings {
+    user_id: "sub".to_string(),
+    tenant_id: Some("organization_id".to_string()),
+    email: Some("email_address".to_string()),
+    groups: Some("user_roles".to_string()),
+    ..Default::default()
+};
+```
+
+**Provider claim name differences:**
+
+| Standard | Cognito | Entra ID | Google | Okta | Auth0 |
+|----------|---------|----------|--------|------|-------|
+| `user_id` | sub | oid | sub | uid | sub |
+| `tenant_id` | `custom:tenant` | tid | N/A | `org_id` | `org_id` |
+| email | email | `preferred_username` | email | email | email |
+| groups | `cognito:groups` | groups | N/A | groups | roles |
+
+### TokenValidatorConfig: Configuration-Driven Validation
+
+Configure validators via TOML or code - no code changes to switch providers:
+
+```rust
+use pmcp::server::auth::TokenValidatorConfig;
+
+// JWT validation (recommended for production)
+let jwt_config = TokenValidatorConfig::jwt(
+    "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_xxxxx",
+    "your-app-client-id",
+);
+
+// Mock validation (for development/testing)
+let mock_config = TokenValidatorConfig::mock("dev-user");
+
+// Disabled (development only)
+let disabled = TokenValidatorConfig::disabled();
+```
+
+**Configuration via `pmcp.toml`:**
+
+```toml
+# Production profile
+[profile.production.auth]
+type = "jwt"
+issuer = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_xxxxx"
+audience = "your-app-client-id"
+
+# Development profile
+[profile.dev.auth]
+type = "mock"
+default_user_id = "dev-user"
+default_scopes = ["read", "write", "admin"]
+```
+
+### JwtValidator: Stateless Token Validation
+
+The `JwtValidator` fetches and caches JWKS from your OAuth provider:
+
+```rust
+use pmcp::server::auth::{JwtValidator, TokenValidator};
+use pmcp::server::auth::config::JwtValidatorConfig;
+
+// Create validator for AWS Cognito
+let config = JwtValidatorConfig::cognito(
+    "us-east-1",
+    "us-east-1_xxxxx",
+    "client-id"
+);
+let validator = JwtValidator::new(config).await?;
+
+// Validate a token
+let auth_context = validator.validate("eyJhbGci...").await?;
+println!("User: {}", auth_context.user_id());
+```
+
+**Provider-specific configurations:**
+
+```rust
+// AWS Cognito
+let config = JwtValidatorConfig::cognito("us-east-1", "pool-id", "client-id");
+
+// Microsoft Entra ID (Azure AD)
+let config = JwtValidatorConfig::entra("tenant-id", "api://my-api");
+
+// Google Identity
+let config = JwtValidatorConfig::google("client-id.apps.googleusercontent.com");
+
+// Okta
+let config = JwtValidatorConfig::okta("dev-123456.okta.com", "api://default");
+
+// Auth0
+let config = JwtValidatorConfig::auth0("myapp.auth0.com", "https://myapi/");
+```
+
+**Feature flag:** Requires the `jwt-auth` feature:
+
+```toml
+[dependencies]
+pmcp = { version = "1.8", features = ["jwt-auth"] }
+```
+
+### MockValidator: Development and Testing
+
+Use `MockValidator` for local development and unit testing:
+
+```rust
+use pmcp::server::auth::{MockValidator, MockAuthContextBuilder, TokenValidator};
+
+// Create a mock validator
+let validator = MockValidator::new("test-user")
+    .with_tenant_id("test-tenant")
+    .with_scopes(vec!["read", "write", "admin"])
+    .with_claim("email", "test@example.com");
+
+// Any token works in mock mode
+let auth = validator.validate("any-token").await?;
+assert_eq!(auth.user_id(), "test-user");
+assert!(auth.has_scope("admin"));
+
+// Or build contexts directly for unit tests
+let auth = MockAuthContextBuilder::new()
+    .user_id("unit-test-user")
+    .tenant_id("tenant-abc")
+    .scopes(vec!["read"])
+    .claim("email", "test@example.com")
+    .build();
+```
+
+### Developer Journey: From No Auth to Production OAuth
+
+The SDK enables incremental development:
+
+**Phase 1: Build with no auth**
+```rust
+// Just implement your tools - no auth code needed
+async fn my_tool(args: Value) -> Result<Value> {
+    // Business logic only
+}
+```
+
+**Phase 2: Add auth-aware logic**
+```rust
+// Use MockValidator or AuthContext::anonymous() for testing
+async fn my_tool(args: Value, auth: &AuthContext) -> Result<Value> {
+    let user_id = auth.user_id();  // Works with mock or real auth
+    // Business logic uses user context
+}
+```
+
+**Phase 3: Deploy with real OAuth**
+```bash
+# Configure in pmcp.toml or environment variables
+PMCP_AUTH_TYPE=jwt
+PMCP_AUTH_ISSUER=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_xxxxx
+PMCP_AUTH_AUDIENCE=your-client-id
+```
+
+**Phase 4: Switch providers (no code changes!)**
+```bash
+# Just change configuration
+PMCP_AUTH_ISSUER=https://login.microsoftonline.com/tenant-id/v2.0
+PMCP_AUTH_AUDIENCE=api://my-api
+```
+
 ## Key Takeaways
 
 1. **Reuse existing OAuth infrastructure** - Don't reinvent authentication
@@ -1037,6 +1264,8 @@ async fn validate_tenant_access(auth_ctx: &AuthContext, resource_id: &str)
 8. **Keep tokens short-lived** - Use refresh tokens for long sessions
 9. **Enforce least privilege** - Grant minimum necessary permissions
 10. **Test security** - Verify authorization works correctly
+11. **Use provider-agnostic code** - Your MCP code should only see `AuthContext`
+12. **Configure, don't code** - Switch OAuth providers via configuration
 
 Authentication done right makes MCP servers secure, auditable, and integrated with your organization's existing identity infrastructure. By following OAuth 2.0 and OIDC standards, you get enterprise-grade security without reinventing the wheel.
 

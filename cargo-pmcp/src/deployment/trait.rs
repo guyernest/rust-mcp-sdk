@@ -10,13 +10,25 @@ use super::operations::{AsyncOperation, DestroyResult};
 #[derive(Debug, Clone)]
 pub enum BuildArtifact {
     /// Native binary (e.g., ARM64 Linux for Lambda)
-    Binary { path: PathBuf, size: u64 },
+    Binary {
+        path: PathBuf,
+        size: u64,
+        /// Optional deployment package (zip) containing binary + assets
+        deployment_package: Option<PathBuf>,
+    },
     /// WebAssembly module
-    Wasm { path: PathBuf, size: u64 },
+    Wasm {
+        path: PathBuf,
+        size: u64,
+        /// Optional deployment package containing WASM + assets
+        deployment_package: Option<PathBuf>,
+    },
     /// Custom artifact type
     Custom {
         path: PathBuf,
         artifact_type: String,
+        /// Optional deployment package
+        deployment_package: Option<PathBuf>,
     },
 }
 

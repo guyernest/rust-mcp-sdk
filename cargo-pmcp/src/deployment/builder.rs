@@ -1,6 +1,9 @@
 use anyhow::{bail, Context, Result};
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use zip::write::SimpleFileOptions;
+use zip::ZipWriter;
 
 pub struct BinaryBuilder {
     project_root: PathBuf,
@@ -14,6 +17,8 @@ pub struct BuildResult {
     pub binary_size: u64,
     pub oauth_proxy_path: Option<PathBuf>,
     pub authorizer_path: Option<PathBuf>,
+    /// Path to deployment package (zip) if assets were bundled
+    pub deployment_package: Option<PathBuf>,
 }
 
 impl BinaryBuilder {
@@ -67,11 +72,15 @@ impl BinaryBuilder {
             (None, None)
         };
 
+        // 5. Bundle assets and create deployment package if assets are configured
+        let deployment_package = self.bundle_assets_if_configured(&binary_path)?;
+
         Ok(BuildResult {
             binary_path,
             binary_size,
             oauth_proxy_path,
             authorizer_path,
+            deployment_package,
         })
     }
 
@@ -259,5 +268,104 @@ impl BinaryBuilder {
 
         println!(" ✅");
         Ok(dst)
+    }
+
+    /// Bundle assets and create a deployment package (zip) if assets are configured.
+    ///
+    /// Returns the path to the zip file if assets were bundled, None otherwise.
+    fn bundle_assets_if_configured(&self, binary_path: &Path) -> Result<Option<PathBuf>> {
+        let config = crate::deployment::config::DeployConfig::load(&self.project_root)?;
+
+        // Check if any assets are configured
+        if !config.assets.has_assets() {
+            return Ok(None);
+        }
+
+        println!("📦 Bundling assets...");
+
+        // Resolve asset files
+        let asset_files = config.assets.resolve_files(&self.project_root)?;
+
+        if asset_files.is_empty() {
+            println!("   No asset files found matching patterns");
+            return Ok(None);
+        }
+
+        println!("   Found {} asset file(s)", asset_files.len());
+
+        // Create deployment package directory
+        let package_dir = self.project_root.join("deploy/.build");
+        std::fs::create_dir_all(&package_dir)
+            .context("Failed to create deployment package directory")?;
+
+        // Create zip file
+        let zip_path = package_dir.join("deployment.zip");
+        let zip_file =
+            std::fs::File::create(&zip_path).context("Failed to create deployment.zip")?;
+        let mut zip = ZipWriter::new(zip_file);
+
+        let options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .unix_permissions(0o755);
+
+        // Add bootstrap binary
+        print!("   Adding bootstrap binary...");
+        std::io::Write::flush(&mut std::io::stdout())?;
+
+        let bootstrap_data =
+            std::fs::read(binary_path).context("Failed to read bootstrap binary")?;
+        zip.start_file("bootstrap", options)
+            .context("Failed to add bootstrap to zip")?;
+        zip.write_all(&bootstrap_data)
+            .context("Failed to write bootstrap to zip")?;
+        println!(" ✅");
+
+        // Add assets to assets/ subdirectory in the zip
+        // Lambda will extract to $LAMBDA_TASK_ROOT/assets/
+        let base_dir = config
+            .assets
+            .base_dir
+            .as_ref()
+            .map(|d| self.project_root.join(d))
+            .unwrap_or_else(|| self.project_root.clone());
+
+        let asset_options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .unix_permissions(0o644);
+
+        for asset_path in &asset_files {
+            // Get relative path from base directory
+            let relative_path = pathdiff::diff_paths(asset_path, &base_dir)
+                .unwrap_or_else(|| asset_path.file_name().unwrap().into());
+
+            // Put assets in assets/ subdirectory
+            let zip_path = format!("assets/{}", relative_path.display());
+
+            print!("   Adding {}...", relative_path.display());
+            std::io::Write::flush(&mut std::io::stdout())?;
+
+            let asset_data = std::fs::read(asset_path)
+                .context(format!("Failed to read {}", asset_path.display()))?;
+            zip.start_file(&zip_path, asset_options)
+                .context(format!("Failed to add {} to zip", zip_path))?;
+            zip.write_all(&asset_data)
+                .context(format!("Failed to write {} to zip", zip_path))?;
+
+            println!(" ✅");
+        }
+
+        zip.finish().context("Failed to finalize zip file")?;
+
+        let zip_size = std::fs::metadata(&zip_path)
+            .context("Failed to get zip size")?
+            .len();
+
+        println!(
+            "✅ Deployment package created: {:.2} MB ({} files)",
+            zip_size as f64 / 1_048_576.0,
+            asset_files.len() + 1 // +1 for bootstrap
+        );
+
+        Ok(Some(zip_path))
     }
 }

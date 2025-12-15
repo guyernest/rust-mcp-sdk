@@ -137,6 +137,7 @@ impl DeploymentTarget for GoogleCloudRunTarget {
         Ok(BuildArtifact::Custom {
             path: config.project_root.clone(),
             artifact_type: "docker".to_string(),
+            deployment_package: None, // Cloud Run uses Docker image, not deployment packages
         })
     }
 

@@ -26,6 +26,7 @@ tracing = "0.1"
 http = "1.1"
 
 # Utility dependencies (needed on all platforms)
+glob = "0.3"
 url = "2.5"
 uuid = { version = "1.17", features = ["v4", "serde", "js"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -47,6 +48,7 @@ http-body-util = "0.1"
 # OAuth dependencies
 sha2 = "0.10"
 base64 = "0.22"
+jsonwebtoken = { version = "9.3", optional = true }
 tokio-tungstenite = { version = "0.28", features = ["native-tls"], optional = true }
 hyper = { version = "1.6", features = ["full"], optional = true }
 hyper-util = { version = "0.1", features = ["full"], optional = true }
@@ -89,6 +91,7 @@ rayon = { version = "1.10", optional = true }
 
 [dev-dependencies]
 # Testing
+tempfile = "3.19"
 proptest = "1.7"
 quickcheck = "1.0"
 quickcheck_macros = "1.1"
@@ -108,7 +111,8 @@ dashmap = "6.1"  # Already in main deps but needed for examples
 
 [features]
 default = ["validation"]
-full = ["websocket", "http", "streamable-http", "sse", "validation", "resource-watcher", "rayon", "schema-generation"]
+full = ["websocket", "http", "streamable-http", "sse", "validation", "resource-watcher", "rayon", "schema-generation", "jwt-auth"]
+jwt-auth = ["dep:jsonwebtoken"]
 sse = ["dep:bytes"]
 websocket = ["dep:tokio-tungstenite"]
 http = ["dep:hyper", "dep:hyper-util", "dep:bytes"]

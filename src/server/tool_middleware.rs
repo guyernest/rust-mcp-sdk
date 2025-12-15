@@ -636,6 +636,7 @@ mod tests {
                 token: Some("oauth-token-abc123".to_string()),
                 client_id: Some("client-456".to_string()),
                 expires_at: None,
+                authenticated: true,
             }));
 
         let mut args = serde_json::json!({});

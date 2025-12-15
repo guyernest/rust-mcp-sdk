@@ -275,6 +275,7 @@ mod tests {
             token: Some("test-token-123".to_string()),
             client_id: Some("client-456".to_string()),
             expires_at: None,
+            authenticated: true,
         };
 
         // Create extra with auth_context

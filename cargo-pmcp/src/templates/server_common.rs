@@ -29,15 +29,9 @@ authors.workspace = true
 
 [dependencies]
 pmcp = { workspace = true }
-axum = { workspace = true }
 tokio = { workspace = true }
-tower-http = { workspace = true, features = ["trace", "cors", "request-id", "util"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
-anyhow = { workspace = true }
-uuid = { version = "1", features = ["v4", "fast-rng"] }
-serde_json = "1"
-chrono = "0.4"
 "#;
 
     fs::write(server_common_dir.join("Cargo.toml"), content)
@@ -60,27 +54,14 @@ fn generate_lib_rs(server_common_dir: &Path) -> Result<()> {
 //! - Tool invocation logging for observability
 
 use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
+use pmcp::server::http_middleware::{ServerHttpMiddlewareChain, ServerHttpLoggingMiddleware};
 use pmcp::Server;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tower_http::request_id::{MakeRequestId, RequestId, SetRequestIdLayer, PropagateRequestIdLayer};
-use tower_http::trace::{TraceLayer, DefaultOnRequest, DefaultOnResponse};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use uuid::Uuid;
 use std::time::Duration;
-
-/// Custom request ID generator for distributed tracing
-#[derive(Clone, Default)]
-struct MakeRequestUuid;
-
-impl MakeRequestId for MakeRequestUuid {
-    fn make_request_id<B>(&mut self, _request: &axum::http::Request<B>) -> Option<RequestId> {
-        let id = Uuid::new_v4().to_string();
-        Some(RequestId::new(id.parse().ok()?))
-    }
-}
 
 /// Run HTTP server with production middleware and logging
 ///
@@ -103,16 +84,16 @@ impl MakeRequestId for MakeRequestUuid {
 ///         .name("calculator")
 ///         .version("1.0.0")
 ///         .build()?;
-///     run_http(server).await
+///     run_http(server, "calculator", "1.0.0").await
 /// }
 /// ```
-pub async fn run_http(server: Server) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_http(server: Server, server_name: &str, server_version: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize production logging
     init_logging();
 
     // Log server info for observability
-    let server_name = server.config.name.clone();
-    let server_version = server.config.version.clone();
+    let server_name = server_name.to_string();
+    let server_version = server_version.to_string();
     
     tracing::info!(
         server_name = %server_name,
@@ -133,23 +114,9 @@ pub async fn run_http(server: Server) -> Result<(), Box<dyn std::error::Error>> 
     // Wrap server in Arc<Mutex<>> for sharing
     let server = Arc::new(Mutex::new(server));
 
-    // Create HTTP middleware for observability
-    let trace_layer = TraceLayer::new_for_http()
-        .on_request(DefaultOnRequest::new().level(tracing::Level::INFO))
-        .on_response(
-            DefaultOnResponse::new()
-                .level(tracing::Level::INFO)
-                .latency_unit(tower_http::LatencyUnit::Micros)
-        );
-
-    let http_middleware = axum::middleware::from_fn(move |req: axum::extract::Request, next: axum::middleware::Next| async move {
-        // Add custom middleware layers here
-        let response = next.run(req).await;
-        response
-    })
-    .layer(trace_layer)
-    .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid::default()))
-    .layer(PropagateRequestIdLayer::x_request_id());
+    // Create HTTP middleware chain with logging
+    let mut middleware_chain = ServerHttpMiddlewareChain::new();
+    middleware_chain.add(Arc::new(ServerHttpLoggingMiddleware::new()));
 
     // Create stateless configuration with observability
     let config = StreamableHttpServerConfig {
@@ -158,7 +125,7 @@ pub async fn run_http(server: Server) -> Result<(), Box<dyn std::error::Error>> 
         event_store: None,
         on_session_initialized: None,
         on_session_closed: None,
-        http_middleware: Some(http_middleware.into()),
+        http_middleware: Some(Arc::new(middleware_chain)),
     };
 
     // Create and start the HTTP server
