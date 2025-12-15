@@ -43,7 +43,7 @@ pub enum AssetError {
 }
 
 /// Result type for asset operations.
-pub(crate) type Result<T> = std::result::Result<T, AssetError>;
+pub(super) type Result<T> = std::result::Result<T, AssetError>;
 
 /// Detected runtime platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,8 +96,7 @@ impl Platform {
                 // Lambda packages are extracted to LAMBDA_TASK_ROOT
                 // Assets are placed in assets/ subdirectory
                 std::env::var("LAMBDA_TASK_ROOT")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|_| PathBuf::from("/var/task"))
+                    .map_or_else(|_| PathBuf::from("/var/task"), PathBuf::from)
                     .join("assets")
             },
             Self::CloudRun | Self::Container => {
@@ -110,11 +109,10 @@ impl Platform {
             },
             Self::Local => {
                 // Local dev uses workspace root or ASSETS_DIR env var
-                std::env::var("PMCP_ASSETS_DIR")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|_| {
-                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                    })
+                std::env::var("PMCP_ASSETS_DIR").map_or_else(
+                    |_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                    PathBuf::from,
+                )
             },
         }
     }
@@ -433,7 +431,7 @@ pub fn load_string(asset_path: &str) -> Result<String> {
 ///
 /// On serverless platforms (Lambda, Workers), this extracts the asset
 /// to a temp directory and returns that path. This is necessary for
-/// libraries that require a filesystem path (e.g., SQLite).
+/// libraries that require a filesystem path (e.g., `SQLite`).
 ///
 /// # Example
 ///

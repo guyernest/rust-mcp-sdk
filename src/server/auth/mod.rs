@@ -34,6 +34,8 @@ pub mod jwt;
 pub mod middleware;
 pub mod mock;
 pub mod oauth2;
+pub mod provider;
+pub mod providers;
 pub mod proxy;
 pub mod traits;
 
@@ -54,6 +56,15 @@ pub use mock::{MockAuthContextBuilder, MockValidator};
 
 // Re-export proxy providers
 pub use proxy::{NoOpAuthProvider, OptionalAuthProvider, ProxyProvider, ProxyProviderConfig};
+
+// Re-export identity provider plugin interface
+pub use provider::{
+    AuthorizationParams, DcrRequest, DcrResponse, IdentityProvider, OidcDiscovery,
+    ProviderCapabilities, ProviderError, ProviderRegistry, TokenExchangeParams, TokenResponse,
+};
+
+// Re-export concrete provider implementations
+pub use providers::{CognitoProvider, GenericOidcConfig, GenericOidcProvider};
 
 // Keep existing OAuth2 exports for compatibility
 pub use oauth2::{

@@ -7,7 +7,7 @@
 //! # Overview
 //!
 //! Assets are files bundled with your MCP server deployment. Common use cases:
-//! - SQLite databases
+//! - `SQLite` databases
 //! - Markdown resource files
 //! - Configuration files
 //! - Prompt templates
