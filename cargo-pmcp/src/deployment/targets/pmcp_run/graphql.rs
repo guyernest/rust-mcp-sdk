@@ -881,3 +881,173 @@ pub async fn fetch_server_oauth_endpoints(
         .fetch_server_oauth_endpoints
         .context("OAuth not configured for this server")
 }
+
+// ========== Test Scenario Management GraphQL Functions ==========
+
+/// Response from uploadTestScenario mutation
+#[derive(Debug, Deserialize)]
+pub struct UploadScenarioResult {
+    #[serde(rename = "scenarioId")]
+    pub scenario_id: String,
+    pub version: i32,
+}
+
+/// Response from downloadTestScenario query
+#[derive(Debug, Deserialize)]
+pub struct DownloadScenarioResult {
+    pub name: String,
+    pub content: String,
+    pub version: i32,
+}
+
+/// Scenario info from queryTestScenariosForServer query
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScenarioInfo {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub source: String,
+    pub enabled: bool,
+    pub version: i32,
+    #[serde(rename = "lastExecutedAt")]
+    pub last_executed_at: Option<String>,
+    #[serde(rename = "lastExecutionStatus")]
+    pub last_execution_status: Option<String>,
+    #[serde(rename = "createdAt")]
+    pub created_at: Option<String>,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: Option<String>,
+}
+
+/// Response from queryTestScenariosForServer query
+#[derive(Debug, Deserialize)]
+pub struct ListScenariosResult {
+    pub scenarios: Vec<ScenarioInfo>,
+}
+
+/// Upload a test scenario to pmcp.run
+pub async fn upload_test_scenario(
+    access_token: &str,
+    server_id: &str,
+    name: &str,
+    description: Option<&str>,
+    content: &str,
+    format: &str,
+) -> Result<UploadScenarioResult> {
+    let query = r#"
+        mutation UploadTestScenario(
+            $serverId: String!
+            $name: String!
+            $description: String
+            $content: String!
+            $format: TestScenarioFormat
+        ) {
+            uploadTestScenario(
+                serverId: $serverId
+                name: $name
+                description: $description
+                content: $content
+                format: $format
+            ) {
+                scenarioId
+                version
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "serverId": server_id,
+        "name": name,
+        "description": description,
+        "content": content,
+        "format": format.to_uppercase()
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct UploadTestScenarioResponse {
+        #[serde(rename = "uploadTestScenario")]
+        upload_test_scenario: UploadScenarioResult,
+    }
+
+    let response: UploadTestScenarioResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    Ok(response.upload_test_scenario)
+}
+
+/// Download a test scenario from pmcp.run
+pub async fn download_test_scenario(
+    access_token: &str,
+    scenario_id: &str,
+    format: &str,
+) -> Result<DownloadScenarioResult> {
+    let query = r#"
+        query DownloadTestScenario(
+            $scenarioId: String!
+            $format: TestScenarioFormat
+        ) {
+            downloadTestScenario(
+                scenarioId: $scenarioId
+                format: $format
+            ) {
+                name
+                content
+                version
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "scenarioId": scenario_id,
+        "format": format.to_uppercase()
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct DownloadTestScenarioResponse {
+        #[serde(rename = "downloadTestScenario")]
+        download_test_scenario: DownloadScenarioResult,
+    }
+
+    let response: DownloadTestScenarioResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    Ok(response.download_test_scenario)
+}
+
+/// List test scenarios for an MCP server on pmcp.run
+pub async fn list_test_scenarios(
+    access_token: &str,
+    server_id: &str,
+) -> Result<ListScenariosResult> {
+    let query = r#"
+        query QueryTestScenariosForServer($serverId: String!) {
+            queryTestScenariosForServer(serverId: $serverId) {
+                scenarios
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "serverId": server_id
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct QueryTestScenariosResponse {
+        #[serde(rename = "queryTestScenariosForServer")]
+        query_test_scenarios: ListScenariosRaw,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ListScenariosRaw {
+        scenarios: serde_json::Value,
+    }
+
+    let response: QueryTestScenariosResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    // Parse the JSON scenarios array
+    let scenarios: Vec<ScenarioInfo> = serde_json::from_value(response.query_test_scenarios.scenarios)
+        .context("Failed to parse scenarios list")?;
+
+    Ok(ListScenariosResult { scenarios })
+}

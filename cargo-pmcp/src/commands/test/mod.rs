@@ -1,0 +1,211 @@
+//! Test MCP servers using mcp-tester library
+//!
+//! This module provides commands for testing MCP servers both locally and remotely:
+//! - `run`: Run test scenarios against local or deployed servers
+//! - `generate`: Generate test scenarios from server capabilities
+//! - `upload`: Upload scenarios to pmcp.run for scheduled testing
+//! - `download`: Download scenarios from pmcp.run
+//! - `list`: List scenarios on pmcp.run
+
+mod download;
+mod generate;
+mod list;
+mod run;
+mod upload;
+
+use anyhow::Result;
+use clap::Subcommand;
+use std::path::PathBuf;
+
+#[derive(Debug, Subcommand)]
+pub enum TestCommand {
+    /// Run test scenarios against an MCP server
+    ///
+    /// Run tests against a local development server or a deployed remote server.
+    /// Scenarios are loaded from the local filesystem.
+    Run {
+        /// Name of the local server to test (uses localhost)
+        #[arg(long)]
+        server: Option<String>,
+
+        /// URL of the MCP server to test (for remote testing)
+        #[arg(long)]
+        url: Option<String>,
+
+        /// Port to connect to (default: 3000)
+        #[arg(long, default_value = "3000")]
+        port: u16,
+
+        /// Path to scenario files or directory
+        #[arg(long)]
+        scenarios: Option<PathBuf>,
+
+        /// Transport type: http (SSE streaming), jsonrpc (simple POST), or stdio
+        /// Auto-detected by default based on URL patterns
+        #[arg(long)]
+        transport: Option<String>,
+
+        /// Show detailed test output
+        #[arg(long)]
+        detailed: bool,
+    },
+
+    /// Generate test scenarios from server capabilities
+    ///
+    /// Connects to a running MCP server and generates test scenarios
+    /// based on its declared tools, resources, and prompts.
+    Generate {
+        /// Name of the local server (uses localhost)
+        #[arg(long)]
+        server: Option<String>,
+
+        /// URL of the MCP server
+        #[arg(long)]
+        url: Option<String>,
+
+        /// Port to connect to (default: 3000)
+        #[arg(long, default_value = "3000")]
+        port: u16,
+
+        /// Output file path
+        #[arg(long)]
+        output: Option<PathBuf>,
+
+        /// Transport type: http (SSE streaming), jsonrpc (simple POST), or stdio
+        /// Auto-detected by default based on URL patterns
+        #[arg(long)]
+        transport: Option<String>,
+
+        /// Include all tools in generated scenarios
+        #[arg(long, default_value = "true")]
+        all_tools: bool,
+
+        /// Include resource operations
+        #[arg(long, default_value = "true")]
+        with_resources: bool,
+
+        /// Include prompt operations
+        #[arg(long, default_value = "true")]
+        with_prompts: bool,
+    },
+
+    /// Upload test scenarios to pmcp.run
+    ///
+    /// Upload local scenario files to pmcp.run for scheduled testing
+    /// and cloud-based test execution.
+    Upload {
+        /// Server ID (deployment ID) on pmcp.run
+        #[arg(long)]
+        server_id: String,
+
+        /// Path(s) to scenario files or directories
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+
+        /// Override scenario name (only for single file uploads)
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Description for the scenario
+        #[arg(long)]
+        description: Option<String>,
+    },
+
+    /// Download test scenarios from pmcp.run
+    ///
+    /// Download scenario files from pmcp.run to edit locally.
+    Download {
+        /// Scenario ID to download
+        #[arg(long)]
+        scenario_id: String,
+
+        /// Output file path
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+
+        /// Output format (yaml or json)
+        #[arg(long, default_value = "yaml")]
+        format: Option<String>,
+    },
+
+    /// List test scenarios on pmcp.run
+    ///
+    /// Show all scenarios configured for an MCP server on pmcp.run.
+    List {
+        /// Server ID (deployment ID) on pmcp.run
+        #[arg(long)]
+        server_id: String,
+
+        /// Show all scenarios including disabled ones
+        #[arg(long)]
+        all: bool,
+    },
+}
+
+impl TestCommand {
+    pub fn execute(self) -> Result<()> {
+        match self {
+            TestCommand::Run {
+                server,
+                url,
+                port,
+                scenarios,
+                transport,
+                detailed,
+            } => run::execute(server, url, port, scenarios, transport, detailed),
+
+            TestCommand::Generate {
+                server,
+                url,
+                port,
+                output,
+                transport,
+                all_tools,
+                with_resources,
+                with_prompts,
+            } => generate::execute(server, url, port, output, transport, all_tools, with_resources, with_prompts),
+
+            TestCommand::Upload {
+                server_id,
+                paths,
+                name,
+                description,
+            } => {
+                let runtime = tokio::runtime::Runtime::new()?;
+                runtime.block_on(upload::execute(server_id, paths, name, description))
+            }
+
+            TestCommand::Download {
+                scenario_id,
+                output,
+                format,
+            } => {
+                let runtime = tokio::runtime::Runtime::new()?;
+                runtime.block_on(download::execute(scenario_id, output, format))
+            }
+
+            TestCommand::List { server_id, all } => {
+                let runtime = tokio::runtime::Runtime::new()?;
+                runtime.block_on(list::execute(server_id, all))
+            }
+        }
+    }
+}
+
+// Legacy function for backwards compatibility with old CLI structure
+pub fn execute(server: String, port: u16, do_generate_scenarios: bool, detailed: bool) -> Result<()> {
+    if do_generate_scenarios {
+        generate::execute(
+            Some(server.clone()),
+            None,
+            port,
+            None,
+            None, // transport
+            true,
+            true,
+            true,
+        )?;
+    }
+
+    run::execute(Some(server), None, port, None, None, detailed) // transport = None
+}

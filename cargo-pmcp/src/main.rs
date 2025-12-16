@@ -47,25 +47,12 @@ enum Commands {
         component: AddCommands,
     },
 
-    /// Test a server with mcp-tester
+    /// Test MCP servers with mcp-tester
     ///
-    /// Builds the server, starts it, and runs mcp-tester scenarios
+    /// Run tests locally, generate scenarios, or manage scenarios on pmcp.run
     Test {
-        /// Name of the server to test
-        #[arg(long)]
-        server: String,
-
-        /// Port to run the server on
-        #[arg(long, default_value = "3000")]
-        port: u16,
-
-        /// Generate scenarios before testing
-        #[arg(long)]
-        generate_scenarios: bool,
-
-        /// Show detailed test output
-        #[arg(long)]
-        detailed: bool,
+        #[command(subcommand)]
+        command: commands::test::TestCommand,
     },
 
     /// Start development server
@@ -199,13 +186,8 @@ fn execute_command(command: Commands) -> Result<()> {
                 commands::add::workflow(name, server)?;
             },
         },
-        Commands::Test {
-            server,
-            port,
-            generate_scenarios,
-            detailed,
-        } => {
-            commands::test::execute(server, port, generate_scenarios, detailed)?;
+        Commands::Test { command } => {
+            command.execute()?;
         },
         Commands::Dev {
             server,
