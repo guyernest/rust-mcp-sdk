@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 use crate::error::{Error, ErrorCode, Result};
+#[cfg(feature = "jwt-auth")]
 use crate::server::auth::jwt_validator::{JwtValidator, ValidationConfig};
 use crate::server::auth::provider::{
     AuthorizationParams, DcrRequest, DcrResponse, IdentityProvider, OidcDiscovery,
@@ -82,11 +83,13 @@ pub struct CognitoProvider {
     /// Issuer URL.
     issuer: String,
     /// JWKS URI.
+    #[allow(dead_code)]
     jwks_uri: String,
     /// JWT validator with shared JWKS cache.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "jwt-auth"))]
     jwt_validator: JwtValidator,
     /// Validation config for this provider.
+    #[cfg(all(not(target_arch = "wasm32"), feature = "jwt-auth"))]
     validation_config: ValidationConfig,
     /// Cached discovery document.
     #[cfg(not(target_arch = "wasm32"))]
@@ -114,20 +117,16 @@ impl CognitoProvider {
         );
         let jwks_uri = format!("{}/.well-known/jwks.json", issuer);
 
-        // Create validation config for Cognito
-        let validation_config = ValidationConfig::cognito(region, user_pool_id, client_id);
-
-        // Create shared JWT validator
-        let jwt_validator = JwtValidator::new();
-
         let provider = Self {
             region: region.to_string(),
             user_pool_id: user_pool_id.to_string(),
             client_id: client_id.to_string(),
             issuer,
             jwks_uri,
-            jwt_validator,
-            validation_config,
+            #[cfg(feature = "jwt-auth")]
+            jwt_validator: JwtValidator::new(),
+            #[cfg(feature = "jwt-auth")]
+            validation_config: ValidationConfig::cognito(region, user_pool_id, client_id),
             discovery_cache: Arc::new(RwLock::new(None)),
             http_client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
@@ -155,7 +154,7 @@ impl CognitoProvider {
     /// let provider1 = CognitoProvider::with_validator("us-east-1", "pool1", "client1", validator.clone()).await?;
     /// let provider2 = CognitoProvider::with_validator("us-west-2", "pool2", "client2", validator.clone()).await?;
     /// ```
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "jwt-auth"))]
     pub async fn with_validator(
         region: &str,
         user_pool_id: &str,
@@ -168,8 +167,6 @@ impl CognitoProvider {
         );
         let jwks_uri = format!("{}/.well-known/jwks.json", issuer);
 
-        let validation_config = ValidationConfig::cognito(region, user_pool_id, client_id);
-
         let provider = Self {
             region: region.to_string(),
             user_pool_id: user_pool_id.to_string(),
@@ -177,7 +174,7 @@ impl CognitoProvider {
             issuer,
             jwks_uri,
             jwt_validator,
-            validation_config,
+            validation_config: ValidationConfig::cognito(region, user_pool_id, client_id),
             discovery_cache: Arc::new(RwLock::new(None)),
             http_client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))

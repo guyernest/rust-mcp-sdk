@@ -50,21 +50,25 @@
 
 use super::traits::{AuthContext, ClaimMappings};
 use crate::error::{Error, ErrorCode, Result};
+#[cfg(feature = "jwt-auth")]
 use std::collections::HashMap;
+#[cfg(feature = "jwt-auth")]
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(feature = "jwt-auth")]
+use std::time::Instant;
+#[cfg(feature = "jwt-auth")]
 use tokio::sync::RwLock;
 
 /// Cached JWKS keys for a single issuer.
+#[cfg(feature = "jwt-auth")]
 struct CachedJwks {
-    #[cfg(feature = "jwt-auth")]
     keys: HashMap<String, jsonwebtoken::DecodingKey>,
-    #[cfg(not(feature = "jwt-auth"))]
-    keys: HashMap<String, ()>,
     fetched_at: Instant,
     ttl: Duration,
 }
 
+#[cfg(feature = "jwt-auth")]
 impl std::fmt::Debug for CachedJwks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CachedJwks")
@@ -75,16 +79,8 @@ impl std::fmt::Debug for CachedJwks {
     }
 }
 
+#[cfg(feature = "jwt-auth")]
 impl CachedJwks {
-    #[allow(dead_code)]
-    fn new(ttl: Duration) -> Self {
-        Self {
-            keys: HashMap::new(),
-            fetched_at: Instant::now(),
-            ttl,
-        }
-    }
-
     fn is_expired(&self) -> bool {
         self.fetched_at.elapsed() > self.ttl
     }
@@ -122,6 +118,7 @@ impl CachedJwks {
 #[derive(Debug)]
 pub struct JwtValidator {
     /// Multi-tenant JWKS cache: JWKS URI -> cached keys
+    #[cfg(feature = "jwt-auth")]
     jwks_cache: Arc<RwLock<HashMap<String, CachedJwks>>>,
     /// HTTP client for fetching JWKS
     #[cfg(not(target_arch = "wasm32"))]
@@ -139,6 +136,7 @@ impl Default for JwtValidator {
 impl Clone for JwtValidator {
     fn clone(&self) -> Self {
         Self {
+            #[cfg(feature = "jwt-auth")]
             jwks_cache: Arc::clone(&self.jwks_cache),
             #[cfg(not(target_arch = "wasm32"))]
             http_client: self.http_client.clone(),
@@ -160,6 +158,7 @@ impl JwtValidator {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn with_cache_ttl(cache_ttl: Duration) -> Self {
         Self {
+            #[cfg(feature = "jwt-auth")]
             jwks_cache: Arc::new(RwLock::new(HashMap::new())),
             http_client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
@@ -175,6 +174,7 @@ impl JwtValidator {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn with_http_client(http_client: reqwest::Client, cache_ttl: Duration) -> Self {
         Self {
+            #[cfg(feature = "jwt-auth")]
             jwks_cache: Arc::new(RwLock::new(HashMap::new())),
             http_client,
             cache_ttl,
@@ -412,18 +412,21 @@ impl JwtValidator {
     }
 
     /// Clear all cached JWKS.
+    #[cfg(feature = "jwt-auth")]
     pub async fn clear_cache(&self) {
         let mut cache = self.jwks_cache.write().await;
         cache.clear();
     }
 
     /// Clear cached JWKS for a specific issuer.
+    #[cfg(feature = "jwt-auth")]
     pub async fn clear_issuer_cache(&self, jwks_uri: &str) {
         let mut cache = self.jwks_cache.write().await;
         cache.remove(jwks_uri);
     }
 
     /// Get the number of cached issuers.
+    #[cfg(feature = "jwt-auth")]
     pub async fn cache_size(&self) -> usize {
         let cache = self.jwks_cache.read().await;
         cache.len()

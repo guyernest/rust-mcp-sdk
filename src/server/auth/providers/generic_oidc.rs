@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 use crate::error::{Error, ErrorCode, Result};
+#[cfg(feature = "jwt-auth")]
 use crate::server::auth::jwt_validator::{JwtValidator, ValidationConfig};
 use crate::server::auth::provider::{
     AuthorizationParams, DcrRequest, DcrResponse, IdentityProvider, OidcDiscovery,
@@ -197,10 +198,10 @@ pub struct GenericOidcProvider {
     /// Display name (leaked string for 'static lifetime).
     display_name: &'static str,
     /// JWT validator with shared JWKS cache.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "jwt-auth"))]
     jwt_validator: JwtValidator,
     /// Validation config (built after discovery to get JWKS URI).
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "jwt-auth"))]
     validation_config: ValidationConfig,
     /// Cached discovery document.
     #[cfg(not(target_arch = "wasm32"))]
@@ -239,24 +240,26 @@ impl GenericOidcProvider {
         // Fetch discovery to get JWKS URI
         let discovery = fetch_discovery_doc(&http_client, &config.issuer).await?;
 
-        // Build validation config from discovered JWKS URI
-        let validation_config =
-            ValidationConfig::new(&config.issuer, &discovery.jwks_uri, &config.client_id)
-                .with_leeway(config.leeway_seconds)
-                .with_claim_mappings(config.claim_mappings.clone());
-
         // Cache the discovery document
         let discovery_cache = Arc::new(RwLock::new(Some(CachedData::new(
-            discovery,
+            discovery.clone(),
             config.cache_ttl,
         ))));
 
         let provider = Self {
+            #[cfg(feature = "jwt-auth")]
+            jwt_validator: JwtValidator::new(),
+            #[cfg(feature = "jwt-auth")]
+            validation_config: ValidationConfig::new(
+                &config.issuer,
+                &discovery.jwks_uri,
+                &config.client_id,
+            )
+            .with_leeway(config.leeway_seconds)
+            .with_claim_mappings(config.claim_mappings.clone()),
             config,
             id,
             display_name,
-            jwt_validator: JwtValidator::new(),
-            validation_config,
             discovery_cache,
             http_client,
         };
@@ -283,7 +286,7 @@ impl GenericOidcProvider {
     /// let auth0_config = GenericOidcConfig::auth0("tenant.auth0.com", "auth0-client-id");
     /// let auth0 = GenericOidcProvider::with_validator(auth0_config, validator.clone()).await?;
     /// ```
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "jwt-auth"))]
     pub async fn with_validator(
         config: GenericOidcConfig,
         jwt_validator: JwtValidator,
@@ -299,22 +302,23 @@ impl GenericOidcProvider {
         // Fetch discovery to get JWKS URI
         let discovery = fetch_discovery_doc(&http_client, &config.issuer).await?;
 
-        let validation_config =
-            ValidationConfig::new(&config.issuer, &discovery.jwks_uri, &config.client_id)
-                .with_leeway(config.leeway_seconds)
-                .with_claim_mappings(config.claim_mappings.clone());
-
         let discovery_cache = Arc::new(RwLock::new(Some(CachedData::new(
-            discovery,
+            discovery.clone(),
             config.cache_ttl,
         ))));
 
         Ok(Self {
+            jwt_validator,
+            validation_config: ValidationConfig::new(
+                &config.issuer,
+                &discovery.jwks_uri,
+                &config.client_id,
+            )
+            .with_leeway(config.leeway_seconds)
+            .with_claim_mappings(config.claim_mappings.clone()),
             config,
             id,
             display_name,
-            jwt_validator,
-            validation_config,
             discovery_cache,
             http_client,
         })
