@@ -32,6 +32,7 @@ pmcp = { workspace = true, features = ["full"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+async-trait = { workspace = true }
 "#;
 
     fs::write(server_common_dir.join("Cargo.toml"), content)
@@ -77,12 +78,14 @@ fn generate_lib_rs(server_common_dir: &Path) -> Result<()> {
 use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
 use pmcp::server::http_middleware::{
     ServerHttpMiddlewareChain, ServerHttpLoggingMiddleware,
-    ServerHttpMiddleware, ServerHttpRequest, ServerHttpResponse, ServerHttpContext,
+    ServerHttpMiddleware, ServerHttpRequest, ServerHttpContext,
 };
 use pmcp::server::auth::{
     IdentityProvider, CognitoProvider, GenericOidcConfig, GenericOidcProvider,
 };
 use pmcp::Server;
+use pmcp::error::Error as PmcpError;
+use async_trait::async_trait;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -122,12 +125,14 @@ impl OAuthMiddleware {
     }
 }
 
+#[async_trait]
 impl ServerHttpMiddleware for OAuthMiddleware {
-    fn process_request(
+    /// Validate Bearer token on incoming requests.
+    async fn on_request(
         &self,
-        request: ServerHttpRequest,
-        context: &mut ServerHttpContext,
-    ) -> Result<ServerHttpRequest, ServerHttpResponse> {
+        request: &mut ServerHttpRequest,
+        context: &ServerHttpContext,
+    ) -> Result<(), PmcpError> {
         // Extract Bearer token from Authorization header
         let auth_header = request.headers
             .get("authorization")
@@ -145,21 +150,38 @@ impl ServerHttpMiddleware for OAuthMiddleware {
             None => None,
         };
 
-        // Store token for async validation in response processing
-        // Note: Actual validation happens in the handler since we can't do async here
+        // Validate token if present
         if let Some(token) = token {
-            context.set("auth_token", token);
+            match self.provider.validate_token(&token).await {
+                Ok(auth_context) => {
+                    tracing::debug!(
+                        request_id = %context.request_id,
+                        user_id = %auth_context.user_id(),
+                        "Token validated successfully"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        request_id = %context.request_id,
+                        error = %e,
+                        "Token validation failed"
+                    );
+                    return Err(PmcpError::authentication("Invalid or expired token"));
+                }
+            }
+        } else {
+            // No token provided - log but allow (handler can enforce auth)
+            tracing::debug!(
+                request_id = %context.request_id,
+                "No Bearer token in request"
+            );
         }
 
-        Ok(request)
+        Ok(())
     }
 
-    fn process_response(
-        &self,
-        response: ServerHttpResponse,
-        _context: &ServerHttpContext,
-    ) -> ServerHttpResponse {
-        response
+    fn priority(&self) -> i32 {
+        10 // Run early (before logging at 90)
     }
 }
 
@@ -349,7 +371,7 @@ async fn init_auth_provider() -> AuthProviderType {
                     // Extract tenant ID from issuer for Entra
                     // Format: https://login.microsoftonline.com/{tenant}/v2.0
                     let parts: Vec<&str> = issuer.split('/').collect();
-                    let tenant_id = parts.get(3).unwrap_or(&"common");
+                    let tenant_id = *parts.get(3).unwrap_or(&"common");
                     GenericOidcConfig::entra(tenant_id, &client_id)
                 }
                 _ => GenericOidcConfig::new(

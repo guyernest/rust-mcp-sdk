@@ -49,13 +49,24 @@ http-body-util = "0.1"
 sha2 = "0.10"
 base64 = "0.22"
 jsonwebtoken = { version = "9.3", optional = true }
-tokio-tungstenite = { version = "0.28", features = ["native-tls"], optional = true }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+
+# Transport dependencies (optional, feature-gated)
+tokio-tungstenite = { version = "0.28", optional = true }
 hyper = { version = "1.6", features = ["full"], optional = true }
 hyper-util = { version = "0.1", features = ["full"], optional = true }
 axum = { version = "0.8.5", optional = true }
+
+# File watching dependencies (optional, feature-gated)
 notify = { version = "8.2", optional = true }
 glob-match = { version = "0.2", optional = true }
-tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+
+# Validation (optional, feature-gated)
+jsonschema = { version = "0.37", optional = true }
+garde = { version = "0.22", optional = true }
+
+# SIMD support (optional)
+rayon = { version = "1.10", optional = true }
 
 # Platform-specific dependencies
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -72,22 +83,6 @@ js-sys = "0.3"
 futures-channel = "0.3"
 futures-locks = { version = "0.7", default-features = false }
 getrandom = { version = "0.3", features = ["wasm_js"] }
-
-# Transport dependencies
-tokio-tungstenite = { version = "0.27", optional = true }
-hyper = { version = "1.6", features = ["full"], optional = true }
-hyper-util = { version = "0.1", features = ["full"], optional = true }
-
-# File watching dependencies
-notify = { version = "8.2", optional = true }
-glob-match = { version = "0.2", optional = true }
-
-# Validation
-jsonschema = { version = "0.37", optional = true }
-garde = { version = "0.22", optional = true }
-
-# SIMD support
-rayon = { version = "1.10", optional = true }
 
 [dev-dependencies]
 # Testing

@@ -413,7 +413,47 @@ impl DeployConfig {
         // Set the project root
         config.project_root = project_root.to_path_buf();
 
+        // Auto-detect and merge template-required assets
+        config.auto_configure_template_assets(project_root);
+
         Ok(config)
+    }
+
+    /// Auto-configure assets based on detected templates in the workspace.
+    ///
+    /// This scans the workspace config for templates that require specific assets
+    /// (e.g., sqlite-explorer requires chinook.db) and adds them to the assets config
+    /// if they exist in the workspace and aren't already configured.
+    fn auto_configure_template_assets(&mut self, project_root: &Path) {
+        // Load workspace config to detect templates
+        let workspace_config = match crate::utils::config::WorkspaceConfig::load() {
+            Ok(config) => config,
+            Err(_) => return, // No workspace config, skip auto-detection
+        };
+
+        // Collect template-required assets
+        let mut required_assets: Vec<String> = Vec::new();
+
+        for server in workspace_config.servers.values() {
+            match server.template.as_str() {
+                "sqlite-explorer" | "db-explorer" => {
+                    // sqlite-explorer template requires chinook.db
+                    if !required_assets.contains(&"chinook.db".to_string()) {
+                        required_assets.push("chinook.db".to_string());
+                    }
+                },
+                // Add other templates with asset requirements here
+                _ => {},
+            }
+        }
+
+        // Add required assets that exist and aren't already configured
+        for asset in required_assets {
+            let asset_path = project_root.join(&asset);
+            if asset_path.exists() && !self.assets.include.contains(&asset) {
+                self.assets.include.push(asset);
+            }
+        }
     }
 
     pub fn save(&self, project_root: &Path) -> Result<()> {

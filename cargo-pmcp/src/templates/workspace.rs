@@ -46,7 +46,8 @@ schemars = { version = "1.0", features = ["preserve_order"] }
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+async-trait = "0.1"
 
 # Error handling
 anyhow = "1"
