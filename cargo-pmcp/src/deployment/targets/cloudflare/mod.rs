@@ -178,6 +178,7 @@ impl DeploymentTarget for CloudflareTarget {
         Ok(BuildArtifact::Wasm {
             path: wasm_path,
             size: wasm_size,
+            deployment_package: None, // Cloudflare Workers doesn't use deployment packages yet
         })
     }
 

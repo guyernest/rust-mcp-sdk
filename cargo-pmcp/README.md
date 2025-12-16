@@ -211,7 +211,9 @@ cargo pmcp deploy destroy --target google-cloud-run --clean
 
 ### OAuth Authentication
 
-Enable OAuth 2.0 authentication for your MCP server with AWS Cognito. MCP clients (like Claude Desktop, ChatGPT, Cursor) automatically discover and use OAuth via the standard OpenID Connect discovery endpoint.
+Enable OAuth 2.0 authentication for your MCP server. Supports multiple providers: AWS Cognito, Microsoft Entra ID, Google, Okta, and Auth0.
+
+#### Infrastructure Setup (cargo-pmcp)
 
 **Initialize with OAuth:**
 ```bash
@@ -238,6 +240,74 @@ cargo pmcp deploy init --target aws-lambda --oauth cognito
 5. API Gateway validates tokens using Lambda Authorizer (stateless JWT)
 6. Your MCP server code requires zero OAuth logic
 
+#### Server-Side SDK Integration
+
+Your MCP server code is **provider-agnostic**. It only interacts with `AuthContext`, never with OAuth providers directly:
+
+```rust
+use pmcp::server::auth::AuthContext;
+
+fn handle_tool_call(auth: &AuthContext) -> Result<Value, Error> {
+    // Require authentication
+    auth.require_auth()?;
+
+    // Check scopes
+    auth.require_scope("read:data")?;
+
+    // Access user info (works with any OAuth provider)
+    let user_id = auth.user_id();
+    let email = auth.email().unwrap_or("unknown");
+    let tenant = auth.tenant_id();
+
+    // Your business logic here
+    Ok(json!({ "user": user_id }))
+}
+```
+
+**Key `AuthContext` methods:**
+
+| Method | Description |
+|--------|-------------|
+| `user_id()` | User identifier (from `sub` claim) |
+| `email()` | Email (handles provider differences) |
+| `tenant_id()` | Tenant ID (handles `tid`, `custom:tenant`, `org_id`) |
+| `groups()` | Group membership |
+| `require_auth()` | Error if not authenticated |
+| `require_scope(s)` | Error if scope missing |
+
+#### Configuration-Driven Validation
+
+Configure token validation via `pmcp.toml` - **no code changes to switch providers**:
+
+```toml
+# Production: JWT validation against Cognito
+[profile.production.auth]
+type = "jwt"
+issuer = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_xxxxx"
+audience = "your-app-client-id"
+
+# Development: Mock authentication
+[profile.dev.auth]
+type = "mock"
+default_user_id = "dev-user"
+default_scopes = ["read", "write", "admin"]
+```
+
+**Switch to Microsoft Entra ID (no code changes):**
+```toml
+[profile.production.auth]
+type = "jwt"
+issuer = "https://login.microsoftonline.com/tenant-id/v2.0"
+audience = "api://my-api"
+```
+
+#### Developer Workflow
+
+1. **Phase 1: Build** - Implement tools with no auth code
+2. **Phase 2: Test** - Use `MockValidator` for local development
+3. **Phase 3: Deploy** - Configure OAuth via `pmcp.toml`
+4. **Phase 4: Switch** - Change providers via configuration only
+
 **View Registered Clients:**
 ```bash
 cargo pmcp oauth clients
@@ -249,7 +319,9 @@ cargo pmcp oauth clients
 cargo pmcp test --server myserver
 ```
 
-For detailed OAuth architecture and configuration, see [docs/oauth-design.md](docs/oauth-design.md).
+For detailed OAuth architecture and SDK design, see:
+- [docs/oauth-design.md](docs/oauth-design.md) - Infrastructure design
+- [docs/oauth-sdk-design.md](docs/oauth-sdk-design.md) - SDK integration
 
 ## Test Scenarios
 

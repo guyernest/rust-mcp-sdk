@@ -30,6 +30,7 @@ pub async fn build_lambda_binary(config: &DeployConfig) -> Result<BuildArtifact>
     Ok(BuildArtifact::Binary {
         path: result.binary_path,
         size: result.binary_size,
+        deployment_package: result.deployment_package,
     })
 }
 

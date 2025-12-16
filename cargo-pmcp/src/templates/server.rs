@@ -477,8 +477,12 @@ tokio = {{ workspace = true }}
         .context("Failed to create core Cargo.toml")?;
 
     // Use the sqlite explorer template with parameterized server name
-    let template = super::sqlite_explorer::SQLITE_EXPLORER_LIB
-        .replace("build_sqlite_server", &format!("build_{}_server", name));
+    // Convert hyphens to underscores for valid Rust function names
+    let safe_name = name.replace('-', "_");
+    let template = super::sqlite_explorer::SQLITE_EXPLORER_LIB.replace(
+        "build_sqlite_server",
+        &format!("build_{}_server", safe_name),
+    );
 
     fs::write(core_dir.join("src/lib.rs"), template)
         .context("Failed to create sqlite explorer lib.rs")?;
@@ -491,9 +495,9 @@ fn create_chinook_placeholder() -> Result<()> {
 
 This server requires the Chinook sample database.
 
-## Quick Setup
+## Local Development
 
-Download the chinook database:
+Download the chinook database to your workspace root:
 
 ```bash
 curl -L https://github.com/lerocha/chinook-database/raw/master/ChinookDatabase/DataSources/Chinook_Sqlite.sqlite -o chinook.db
@@ -503,6 +507,55 @@ Or manually:
 1. Visit https://github.com/lerocha/chinook-database
 2. Download `Chinook_Sqlite.sqlite`
 3. Rename to `chinook.db` and place in workspace root
+
+Then run the server locally:
+
+```bash
+cargo run --bin <name>-server
+```
+
+## Cloud Deployment
+
+When deploying to the cloud (AWS Lambda, pmcp.run, etc.), the database is bundled
+with your deployment as an asset.
+
+### Step 1: Initialize deployment
+
+```bash
+cargo pmcp deploy init --target pmcp-run
+```
+
+### Step 2: Configure assets
+
+The database should already be configured in `.pmcp/deploy.toml`:
+
+```toml
+[assets]
+include = ["chinook.db"]
+```
+
+If not, add the `[assets]` section manually.
+
+### Step 3: Deploy
+
+```bash
+cargo pmcp deploy
+```
+
+The deployment will bundle `chinook.db` with your Lambda function, and the
+`pmcp::assets` module will automatically find it at runtime.
+
+## How Asset Loading Works
+
+This server uses `pmcp::assets::path("chinook.db")` to locate the database.
+The assets module automatically detects the runtime environment:
+
+| Environment | Asset Location |
+|-------------|----------------|
+| Local dev   | Workspace root (`.`) |
+| AWS Lambda  | `/var/task/assets/` |
+| Cloud Run   | `/app/assets/` |
+| Container   | `/app/assets/` |
 
 ## About Chinook Database
 
@@ -556,12 +609,13 @@ anyhow = {{ workspace = true }}
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {{
     let server = mcp_{}_core::build_{}_server()?;
-    server_common::run_http(server).await
+    server_common::run_http(server, "{}", "1.0.0").await
 }}
 "#,
         capitalize(name),
         name.replace("-", "_"),
-        name.replace("-", "_")
+        name.replace("-", "_"),
+        name
     );
 
     fs::write(server_dir.join("src/main.rs"), main_rs)

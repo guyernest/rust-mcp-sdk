@@ -15,6 +15,9 @@ pub struct DeployConfig {
     pub observability: ObservabilityConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_gateway: Option<ApiGatewayConfig>,
+    /// Assets configuration for bundling files with deployment
+    #[serde(default)]
+    pub assets: AssetsConfig,
 
     /// Project root directory (not serialized)
     #[serde(skip)]
@@ -135,19 +138,55 @@ fn default_refresh_token_ttl() -> String {
     "30d".to_string()
 }
 
-/// External OIDC provider configuration (future)
+/// External OIDC provider configuration.
+///
+/// Supports multiple OIDC providers via the `provider_type` field:
+/// - `google` - Google Identity Platform
+/// - `auth0` - Auth0
+/// - `okta` - Okta
+/// - `entra` - Microsoft Entra ID (Azure AD)
+/// - `generic` - Any OIDC-compliant provider
+///
+/// The SDK's `GenericOidcProvider` is used for token validation at runtime.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OidcConfig {
+    /// OIDC provider type (google, auth0, okta, entra, generic)
+    #[serde(default = "default_oidc_provider_type")]
+    pub provider_type: String,
+
     /// OIDC issuer URL
     pub issuer: String,
 
-    /// Expected audience
+    /// Client ID for this application
+    pub client_id: String,
+
+    /// Client secret (optional for public clients)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<String>,
+
+    /// Expected audience (defaults to client_id if not specified)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audience: Option<String>,
 
     /// JWKS URL (auto-discovered if not specified)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jwks_url: Option<String>,
+
+    /// Custom scopes to request (in addition to openid)
+    #[serde(default = "default_oidc_scopes")]
+    pub scopes: Vec<String>,
+}
+
+fn default_oidc_provider_type() -> String {
+    "generic".to_string()
+}
+
+fn default_oidc_scopes() -> Vec<String> {
+    vec![
+        "openid".to_string(),
+        "email".to_string(),
+        "profile".to_string(),
+    ]
 }
 
 /// Dynamic Client Registration configuration
@@ -248,6 +287,115 @@ pub struct ApiGatewayConfig {
     pub burst_limit: Option<u32>,
 }
 
+/// Assets configuration for bundling files with deployment.
+///
+/// Assets are files bundled with your MCP server (databases, markdown files, configs).
+/// They are accessible at runtime via `pmcp::assets` module.
+///
+/// # Example Configuration
+///
+/// ```toml
+/// [assets]
+/// include = [
+///     "chinook.db",
+///     "resources/**/*.md",
+///     "config/*.toml",
+/// ]
+/// exclude = ["**/*.tmp", "**/.DS_Store"]
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetsConfig {
+    /// Glob patterns for files to include as assets.
+    ///
+    /// Patterns are relative to the workspace root.
+    /// Examples: `"chinook.db"`, `"resources/**/*.md"`, `"config/*.toml"`
+    #[serde(default)]
+    pub include: Vec<String>,
+
+    /// Glob patterns for files to exclude from assets.
+    ///
+    /// Applied after include patterns.
+    /// Examples: `"**/*.tmp"`, `"**/.DS_Store"`
+    #[serde(default)]
+    pub exclude: Vec<String>,
+
+    /// Base directory for assets (relative to workspace root).
+    ///
+    /// If not specified, assets are resolved from workspace root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_dir: Option<String>,
+}
+
+impl Default for AssetsConfig {
+    fn default() -> Self {
+        Self {
+            include: vec![],
+            exclude: vec![
+                "**/*.tmp".to_string(),
+                "**/.DS_Store".to_string(),
+                "**/Thumbs.db".to_string(),
+            ],
+            base_dir: None,
+        }
+    }
+}
+
+impl AssetsConfig {
+    /// Create a new assets config with the given include patterns.
+    pub fn new(include: Vec<String>) -> Self {
+        Self {
+            include,
+            ..Default::default()
+        }
+    }
+
+    /// Check if any assets are configured.
+    pub fn has_assets(&self) -> bool {
+        !self.include.is_empty()
+    }
+
+    /// Resolve asset patterns to actual file paths.
+    pub fn resolve_files(&self, project_root: &Path) -> Result<Vec<PathBuf>> {
+        let base = match &self.base_dir {
+            Some(dir) => project_root.join(dir),
+            None => project_root.to_path_buf(),
+        };
+
+        let mut files = Vec::new();
+
+        for pattern in &self.include {
+            let full_pattern = base.join(pattern);
+            let glob_pattern = full_pattern.to_string_lossy();
+
+            let paths =
+                glob::glob(&glob_pattern).context(format!("Invalid glob pattern: {}", pattern))?;
+
+            for entry in paths.flatten() {
+                if entry.is_file() && !self.is_excluded(&entry) {
+                    files.push(entry);
+                }
+            }
+        }
+
+        Ok(files)
+    }
+
+    /// Check if a path matches any exclude pattern.
+    fn is_excluded(&self, path: &Path) -> bool {
+        let path_str = path.to_string_lossy();
+
+        for pattern in &self.exclude {
+            if let Ok(glob_pattern) = glob::Pattern::new(pattern) {
+                if glob_pattern.matches(&path_str) {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+}
+
 impl DeployConfig {
     pub fn load(project_root: &Path) -> Result<Self> {
         let config_path = project_root.join(".pmcp/deploy.toml");
@@ -265,7 +413,47 @@ impl DeployConfig {
         // Set the project root
         config.project_root = project_root.to_path_buf();
 
+        // Auto-detect and merge template-required assets
+        config.auto_configure_template_assets(project_root);
+
         Ok(config)
+    }
+
+    /// Auto-configure assets based on detected templates in the workspace.
+    ///
+    /// This scans the workspace config for templates that require specific assets
+    /// (e.g., sqlite-explorer requires chinook.db) and adds them to the assets config
+    /// if they exist in the workspace and aren't already configured.
+    fn auto_configure_template_assets(&mut self, project_root: &Path) {
+        // Load workspace config to detect templates
+        let workspace_config = match crate::utils::config::WorkspaceConfig::load() {
+            Ok(config) => config,
+            Err(_) => return, // No workspace config, skip auto-detection
+        };
+
+        // Collect template-required assets
+        let mut required_assets: Vec<String> = Vec::new();
+
+        for server in workspace_config.servers.values() {
+            match server.template.as_str() {
+                "sqlite-explorer" | "db-explorer" => {
+                    // sqlite-explorer template requires chinook.db
+                    if !required_assets.contains(&"chinook.db".to_string()) {
+                        required_assets.push("chinook.db".to_string());
+                    }
+                },
+                // Add other templates with asset requirements here
+                _ => {},
+            }
+        }
+
+        // Add required assets that exist and aren't already configured
+        for asset in required_assets {
+            let asset_path = project_root.join(&asset);
+            if asset_path.exists() && !self.assets.include.contains(&asset) {
+                self.assets.include.push(asset);
+            }
+        }
     }
 
     pub fn save(&self, project_root: &Path) -> Result<()> {
@@ -312,6 +500,7 @@ impl DeployConfig {
                 }),
             },
             api_gateway: None,
+            assets: AssetsConfig::default(),
             project_root,
         }
     }
@@ -350,6 +539,108 @@ impl Default for AuthConfig {
             scopes: ScopesConfig::default(),
             user_pool_id: None,
             client_id: None,
+            callback_urls: vec![],
+        }
+    }
+}
+
+impl AuthConfig {
+    /// Convert auth config to environment variables for the server.
+    ///
+    /// These environment variables are read by the server_common template
+    /// to initialize the appropriate `IdentityProvider` at runtime.
+    pub fn to_env_vars(&self, region: &str) -> HashMap<String, String> {
+        let mut vars = HashMap::new();
+
+        if !self.enabled {
+            vars.insert("AUTH_PROVIDER".to_string(), "none".to_string());
+            return vars;
+        }
+
+        match self.provider.as_str() {
+            "cognito" => {
+                vars.insert("AUTH_PROVIDER".to_string(), "cognito".to_string());
+                vars.insert("AUTH_REGION".to_string(), region.to_string());
+
+                // Use cognito config if available, fall back to legacy fields
+                if let Some(cognito) = &self.cognito {
+                    if let Some(user_pool_id) = &cognito.user_pool_id {
+                        vars.insert("AUTH_USER_POOL_ID".to_string(), user_pool_id.clone());
+                    }
+                } else if let Some(user_pool_id) = &self.user_pool_id {
+                    vars.insert("AUTH_USER_POOL_ID".to_string(), user_pool_id.clone());
+                }
+
+                // Client ID from cognito config or legacy field
+                if let Some(client_id) = &self.client_id {
+                    vars.insert("AUTH_CLIENT_ID".to_string(), client_id.clone());
+                }
+            },
+            "oidc" | "google" | "auth0" | "okta" | "entra" => {
+                if let Some(oidc) = &self.oidc {
+                    vars.insert("AUTH_PROVIDER".to_string(), oidc.provider_type.clone());
+                    vars.insert("AUTH_ISSUER".to_string(), oidc.issuer.clone());
+                    vars.insert("AUTH_CLIENT_ID".to_string(), oidc.client_id.clone());
+
+                    if let Some(secret) = &oidc.client_secret {
+                        vars.insert("AUTH_CLIENT_SECRET".to_string(), secret.clone());
+                    }
+                } else {
+                    // Fallback to generic OIDC with provider as type
+                    vars.insert("AUTH_PROVIDER".to_string(), self.provider.clone());
+                }
+            },
+            _ => {
+                vars.insert("AUTH_PROVIDER".to_string(), "none".to_string());
+            },
+        }
+
+        vars
+    }
+
+    /// Create auth config for Cognito.
+    pub fn cognito(region: &str, user_pool_id: &str, client_id: &str) -> Self {
+        Self {
+            enabled: true,
+            provider: "cognito".to_string(),
+            cognito: Some(CognitoConfig {
+                user_pool_id: Some(user_pool_id.to_string()),
+                user_pool_name: None,
+                resource_server_id: default_resource_server_id(),
+                social_providers: vec![],
+                mfa: default_mfa(),
+                access_token_ttl: default_access_token_ttl(),
+                refresh_token_ttl: default_refresh_token_ttl(),
+                domain: None,
+            }),
+            oidc: None,
+            dcr: DcrConfig::default(),
+            scopes: ScopesConfig::default(),
+            user_pool_id: Some(user_pool_id.to_string()),
+            client_id: Some(client_id.to_string()),
+            callback_urls: vec![],
+        }
+    }
+
+    /// Create auth config for generic OIDC.
+    pub fn oidc(provider_type: &str, issuer: &str, client_id: &str) -> Self {
+        Self {
+            enabled: true,
+            provider: "oidc".to_string(),
+            cognito: None,
+            oidc: Some(OidcConfig {
+                provider_type: provider_type.to_string(),
+                issuer: issuer.to_string(),
+                client_id: client_id.to_string(),
+                client_secret: None,
+                audience: None,
+                jwks_url: None,
+                scopes: default_oidc_scopes(),
+            }),
+            dcr: DcrConfig::default(),
+            scopes: ScopesConfig::default(),
+            user_pool_id: None,
+            client_id: Some(client_id.to_string()),
             callback_urls: vec![],
         }
     }

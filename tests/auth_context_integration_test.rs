@@ -43,6 +43,7 @@ impl AuthProvider for TestOAuthProvider {
                         token: Some(token.to_string()),
                         client_id: Some("test-client".to_string()),
                         expires_at: None,
+                        authenticated: true,
                     }))
                 } else {
                     Err(Error::authentication("Invalid test token"))

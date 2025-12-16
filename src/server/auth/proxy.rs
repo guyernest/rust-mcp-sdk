@@ -223,6 +223,7 @@ impl AuthProvider for NoOpAuthProvider {
             token: None,
             client_id: Some("dev-client".to_string()),
             expires_at: None,
+            authenticated: true,
         }))
     }
 

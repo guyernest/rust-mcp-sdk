@@ -12,9 +12,14 @@ pub const SQLITE_EXPLORER_LIB: &str = r####"//! SQLite Explorer MCP Server
 //! - Tools: Execute queries, list tables, get samples
 //! - Resources: Database and table schemas
 //! - Workflow Prompts: Multi-step database workflows with bindings
+//!
+//! Asset Loading:
+//! - Uses pmcp::assets for platform-agnostic database path resolution
+//! - Works on local dev, AWS Lambda, Google Cloud Run, etc.
 
 use pmcp::{
     Error, ResourceCollection, Result, Server, StaticResource, TypedTool,
+    assets,
 };
 use pmcp::server::workflow::{
     dsl::constant,
@@ -31,7 +36,8 @@ use serde_json::{json, Value};
 // ============================================================================
 
 const MAX_ROWS: usize = 100;
-const DATABASE_PATH: &str = "./chinook.db";
+/// Database asset name - resolved via pmcp::assets for cross-platform deployment
+const DATABASE_ASSET: &str = "chinook.db";
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -73,16 +79,24 @@ fn default_limit() -> u32 {
 // ============================================================================
 
 fn open_db() -> Result<Connection> {
-    Connection::open_with_flags(
-        DATABASE_PATH,
-        OpenFlags::SQLITE_OPEN_READ_ONLY,
-    ).map_err(|e| Error::internal(format!(
-        "Failed to open database: {}
+    // Use pmcp::assets to get database path - works on local dev and serverless platforms
+    let db_path = assets::path(DATABASE_ASSET).map_err(|e| Error::internal(format!(
+        "Failed to locate database asset '{}': {}
 
-Please download the Chinook database:
+For local development, download the Chinook database:
   curl -L https://github.com/lerocha/chinook-database/raw/master/ChinookDatabase/DataSources/Chinook_Sqlite.sqlite -o chinook.db
 
-Or see DATABASE.md for more information.", e)))
+For deployment, configure assets in .pmcp/deploy.toml:
+  [assets]
+  include = [\"chinook.db\"]
+
+Or see DATABASE.md for more information.", DATABASE_ASSET, e)))?;
+
+    Connection::open_with_flags(
+        &db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ).map_err(|e| Error::internal(format!(
+        "Failed to open database at '{}': {}", db_path.display(), e)))
 }
 
 fn validate_sql(sql: &str) -> Result<()> {

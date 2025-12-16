@@ -58,6 +58,7 @@ impl AuthProvider for MockOAuthProvider {
                         token: Some(token.to_string()),
                         client_id: Some("mcp-client".to_string()),
                         expires_at: None,
+                        authenticated: true,
                     }))
                 } else {
                     Err(Error::authentication("Invalid OAuth token"))

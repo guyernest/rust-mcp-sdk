@@ -74,6 +74,7 @@
 #![allow(clippy::multiple_crate_versions)]
 #![allow(clippy::result_large_err)]
 
+pub mod assets;
 pub mod client;
 pub mod error;
 pub mod runtime;

@@ -20,6 +20,7 @@ walkdir = "2"
 colored = "3"
 indicatif = "0.18"
 dirs = "6"
+glob = "0.3"
 tokio = { version = "1", features = ["full", "rt-multi-thread"] }
 mcp-tester = { path = "../crates/mcp-tester" }
 urlencoding = "2"
