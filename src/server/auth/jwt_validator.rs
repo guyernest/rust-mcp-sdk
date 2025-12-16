@@ -785,9 +785,10 @@ mod tests {
         assert_eq!(validator.cache_ttl, Duration::from_secs(7200));
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(feature = "jwt-auth", not(target_arch = "wasm32")))]
     #[test]
     fn test_jwt_validator_clone() {
+        use std::sync::Arc;
         let validator1 = JwtValidator::new();
         let validator2 = validator1.clone();
 
