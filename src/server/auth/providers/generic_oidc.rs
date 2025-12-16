@@ -2,14 +2,15 @@
 //!
 //! This module provides a generic OIDC provider implementation that works with
 //! any OIDC-compliant identity provider (Google, Auth0, Okta, Azure AD, etc.).
+//! JWT validation is delegated to [`JwtValidator`] for code reuse and shared JWKS caching.
 
 use async_trait::async_trait;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 use crate::error::{Error, ErrorCode, Result};
+use crate::server::auth::jwt_validator::{JwtValidator, ValidationConfig};
 use crate::server::auth::provider::{
     AuthorizationParams, DcrRequest, DcrResponse, IdentityProvider, OidcDiscovery,
     ProviderCapabilities, TokenExchangeParams, TokenResponse,
@@ -160,40 +161,15 @@ impl GenericOidcConfig {
     }
 }
 
-/// Type alias for JWKS cache.
-#[cfg(not(target_arch = "wasm32"))]
-type JwksCache = Arc<RwLock<Option<CachedData<HashMap<String, JwkKey>>>>>;
-
 /// Type alias for discovery cache.
 #[cfg(not(target_arch = "wasm32"))]
 type DiscoveryCache = Arc<RwLock<Option<CachedData<OidcDiscovery>>>>;
 
-/// Individual JWK key structure (internal).
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug, Clone, serde::Deserialize)]
-struct JwkKey {
-    /// Key ID.
-    kid: String,
-    /// RSA modulus (base64url-encoded).
-    n: String,
-    /// RSA exponent (base64url-encoded).
-    e: String,
-    /// Algorithm.
-    #[allow(dead_code)]
-    alg: Option<String>,
-}
-
-/// JWKS response structure (internal).
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug, serde::Deserialize)]
-struct JwksResponse {
-    keys: Vec<JwkKey>,
-}
-
 /// Generic OIDC identity provider.
 ///
 /// Works with any OIDC-compliant identity provider by auto-discovering
-/// endpoints from the OIDC discovery document.
+/// endpoints from the OIDC discovery document. JWT validation is delegated
+/// to [`JwtValidator`] for efficient shared JWKS caching.
 ///
 /// # Example
 ///
@@ -220,9 +196,12 @@ pub struct GenericOidcProvider {
     id: &'static str,
     /// Display name (leaked string for 'static lifetime).
     display_name: &'static str,
-    /// Cached JWKS.
+    /// JWT validator with shared JWKS cache.
     #[cfg(not(target_arch = "wasm32"))]
-    jwks_cache: JwksCache,
+    jwt_validator: JwtValidator,
+    /// Validation config (built after discovery to get JWKS URI).
+    #[cfg(not(target_arch = "wasm32"))]
+    validation_config: ValidationConfig,
     /// Cached discovery document.
     #[cfg(not(target_arch = "wasm32"))]
     discovery_cache: DiscoveryCache,
@@ -244,6 +223,8 @@ impl std::fmt::Debug for GenericOidcProvider {
 
 impl GenericOidcProvider {
     /// Create a new generic OIDC provider.
+    ///
+    /// This constructor fetches the OIDC discovery document to determine the JWKS URI.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn new(config: GenericOidcConfig) -> Result<Self> {
         let http_client = reqwest::Client::builder()
@@ -255,20 +236,88 @@ impl GenericOidcProvider {
         let id: &'static str = Box::leak(config.id.clone().into_boxed_str());
         let display_name: &'static str = Box::leak(config.display_name.clone().into_boxed_str());
 
+        // Fetch discovery to get JWKS URI
+        let discovery = fetch_discovery_doc(&http_client, &config.issuer).await?;
+
+        // Build validation config from discovered JWKS URI
+        let validation_config =
+            ValidationConfig::new(&config.issuer, &discovery.jwks_uri, &config.client_id)
+                .with_leeway(config.leeway_seconds)
+                .with_claim_mappings(config.claim_mappings.clone());
+
+        // Cache the discovery document
+        let discovery_cache = Arc::new(RwLock::new(Some(CachedData::new(
+            discovery,
+            config.cache_ttl,
+        ))));
+
         let provider = Self {
             config,
             id,
             display_name,
-            jwks_cache: Arc::new(RwLock::new(None)),
-            discovery_cache: Arc::new(RwLock::new(None)),
+            jwt_validator: JwtValidator::new(),
+            validation_config,
+            discovery_cache,
             http_client,
         };
 
-        // Pre-fetch discovery and JWKS
-        provider.fetch_discovery().await?;
-        provider.refresh_jwks().await?;
-
         Ok(provider)
+    }
+
+    /// Create a provider with a shared JWT validator.
+    ///
+    /// Use this when you want multiple providers to share the same JWKS cache.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use pmcp::server::auth::{MultiTenantJwtValidator, GenericOidcProvider, GenericOidcConfig};
+    ///
+    /// // Create shared validator
+    /// let validator = MultiTenantJwtValidator::new();
+    ///
+    /// // Create providers that share the validator
+    /// let google_config = GenericOidcConfig::google("google-client-id");
+    /// let google = GenericOidcProvider::with_validator(google_config, validator.clone()).await?;
+    ///
+    /// let auth0_config = GenericOidcConfig::auth0("tenant.auth0.com", "auth0-client-id");
+    /// let auth0 = GenericOidcProvider::with_validator(auth0_config, validator.clone()).await?;
+    /// ```
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn with_validator(
+        config: GenericOidcConfig,
+        jwt_validator: JwtValidator,
+    ) -> Result<Self> {
+        let http_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| Error::internal(format!("Failed to create HTTP client: {}", e)))?;
+
+        let id: &'static str = Box::leak(config.id.clone().into_boxed_str());
+        let display_name: &'static str = Box::leak(config.display_name.clone().into_boxed_str());
+
+        // Fetch discovery to get JWKS URI
+        let discovery = fetch_discovery_doc(&http_client, &config.issuer).await?;
+
+        let validation_config =
+            ValidationConfig::new(&config.issuer, &discovery.jwks_uri, &config.client_id)
+                .with_leeway(config.leeway_seconds)
+                .with_claim_mappings(config.claim_mappings.clone());
+
+        let discovery_cache = Arc::new(RwLock::new(Some(CachedData::new(
+            discovery,
+            config.cache_ttl,
+        ))));
+
+        Ok(Self {
+            config,
+            id,
+            display_name,
+            jwt_validator,
+            validation_config,
+            discovery_cache,
+            http_client,
+        })
     }
 
     /// Get the client ID.
@@ -290,30 +339,7 @@ impl GenericOidcProvider {
         }
 
         // Fetch discovery document
-        let discovery_url = format!(
-            "{}/.well-known/openid-configuration",
-            self.config.issuer.trim_end_matches('/')
-        );
-        tracing::debug!("Fetching OIDC discovery from {}", discovery_url);
-
-        let response = self
-            .http_client
-            .get(&discovery_url)
-            .send()
-            .await
-            .map_err(|e| Error::internal(format!("Failed to fetch discovery: {}", e)))?;
-
-        if !response.status().is_success() {
-            return Err(Error::internal(format!(
-                "Discovery endpoint returned status {}",
-                response.status()
-            )));
-        }
-
-        let discovery: OidcDiscovery = response
-            .json()
-            .await
-            .map_err(|e| Error::internal(format!("Failed to parse discovery: {}", e)))?;
+        let discovery = fetch_discovery_doc(&self.http_client, &self.config.issuer).await?;
 
         // Cache the discovery document
         {
@@ -322,51 +348,6 @@ impl GenericOidcProvider {
         }
 
         Ok(discovery)
-    }
-
-    /// Refresh the JWKS cache.
-    #[cfg(not(target_arch = "wasm32"))]
-    async fn refresh_jwks(&self) -> Result<()> {
-        let discovery = self.fetch_discovery().await?;
-
-        tracing::debug!("Fetching JWKS from {}", discovery.jwks_uri);
-
-        let response = self
-            .http_client
-            .get(&discovery.jwks_uri)
-            .send()
-            .await
-            .map_err(|e| Error::internal(format!("Failed to fetch JWKS: {}", e)))?;
-
-        if !response.status().is_success() {
-            return Err(Error::internal(format!(
-                "JWKS endpoint returned status {}",
-                response.status()
-            )));
-        }
-
-        let jwks: JwksResponse = response
-            .json()
-            .await
-            .map_err(|e| Error::internal(format!("Failed to parse JWKS: {}", e)))?;
-
-        let keys: HashMap<String, JwkKey> =
-            jwks.keys.into_iter().map(|k| (k.kid.clone(), k)).collect();
-
-        if keys.is_empty() {
-            return Err(Error::internal("No valid keys found in JWKS"));
-        }
-
-        tracing::info!(
-            "Loaded {} keys from {} JWKS",
-            keys.len(),
-            self.config.display_name
-        );
-
-        let mut cache = self.jwks_cache.write().await;
-        *cache = Some(CachedData::new(keys, self.config.cache_ttl));
-
-        Ok(())
     }
 
     /// Determine capabilities from discovery document.
@@ -402,6 +383,34 @@ impl GenericOidcProvider {
     }
 }
 
+/// Fetch OIDC discovery document (helper function).
+#[cfg(not(target_arch = "wasm32"))]
+async fn fetch_discovery_doc(http_client: &reqwest::Client, issuer: &str) -> Result<OidcDiscovery> {
+    let discovery_url = format!(
+        "{}/.well-known/openid-configuration",
+        issuer.trim_end_matches('/')
+    );
+    tracing::debug!("Fetching OIDC discovery from {}", discovery_url);
+
+    let response = http_client
+        .get(&discovery_url)
+        .send()
+        .await
+        .map_err(|e| Error::internal(format!("Failed to fetch discovery: {}", e)))?;
+
+    if !response.status().is_success() {
+        return Err(Error::internal(format!(
+            "Discovery endpoint returned status {}",
+            response.status()
+        )));
+    }
+
+    response
+        .json()
+        .await
+        .map_err(|e| Error::internal(format!("Failed to parse discovery: {}", e)))
+}
+
 #[async_trait]
 impl IdentityProvider for GenericOidcProvider {
     fn id(&self) -> &'static str {
@@ -429,107 +438,10 @@ impl IdentityProvider for GenericOidcProvider {
 
     #[cfg(all(not(target_arch = "wasm32"), feature = "jwt-auth"))]
     async fn validate_token(&self, token: &str) -> Result<AuthContext> {
-        use jsonwebtoken::{decode, decode_header, Algorithm, Validation};
-
-        // Decode header to get key ID
-        let header = decode_header(token).map_err(|e| {
-            Error::protocol(
-                ErrorCode::AUTHENTICATION_REQUIRED,
-                format!("Invalid token header: {}", e),
-            )
-        })?;
-
-        let kid = header.kid.ok_or_else(|| {
-            Error::protocol(
-                ErrorCode::AUTHENTICATION_REQUIRED,
-                "Token missing key ID (kid)",
-            )
-        })?;
-
-        // Get the key from cache
-        let jwk = {
-            let cache = self.jwks_cache.read().await;
-            let cache_data = cache
-                .as_ref()
-                .ok_or_else(|| Error::internal("JWKS cache not initialized"))?;
-
-            // Refresh if expired
-            if cache_data.is_expired() {
-                drop(cache);
-                self.refresh_jwks().await?;
-                let cache = self.jwks_cache.read().await;
-                cache.as_ref().and_then(|c| c.data.get(&kid).cloned())
-            } else {
-                cache_data.data.get(&kid).cloned()
-            }
-        };
-
-        let jwk = jwk.ok_or_else(|| {
-            Error::protocol(
-                ErrorCode::AUTHENTICATION_REQUIRED,
-                format!("Unknown key ID: {}", kid),
-            )
-        })?;
-
-        // Create decoding key from RSA components
-        let decoding_key = jsonwebtoken::DecodingKey::from_rsa_components(&jwk.n, &jwk.e)
-            .map_err(|e| Error::internal(format!("Failed to create decoding key: {}", e)))?;
-
-        // Build validation
-        let mut validation = Validation::new(Algorithm::RS256);
-        validation.set_issuer(&[&self.config.issuer]);
-        validation.set_audience(&[&self.config.client_id]);
-        validation.leeway = self.config.leeway_seconds;
-
-        // Decode and verify token
-        let token_data =
-            decode::<serde_json::Value>(token, &decoding_key, &validation).map_err(|e| {
-                let msg = match e.kind() {
-                    jsonwebtoken::errors::ErrorKind::ExpiredSignature => "Token expired",
-                    jsonwebtoken::errors::ErrorKind::InvalidIssuer => "Invalid issuer",
-                    jsonwebtoken::errors::ErrorKind::InvalidAudience => "Invalid audience",
-                    jsonwebtoken::errors::ErrorKind::InvalidSignature => "Invalid signature",
-                    _ => "Token validation failed",
-                };
-                Error::protocol(ErrorCode::AUTHENTICATION_REQUIRED, msg)
-            })?;
-
-        // Normalize claims using configured mappings
-        let normalized_claims = self
-            .config
-            .claim_mappings
-            .normalize_claims(&token_data.claims);
-
-        // Extract subject
-        let subject = normalized_claims
-            .get("sub")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-
-        // Extract scopes
-        let scopes = parse_scopes(&token_data.claims);
-
-        // Extract client ID
-        let client_id = token_data
-            .claims
-            .get("azp")
-            .or_else(|| token_data.claims.get("client_id"))
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
-        // Extract expiration
-        let expires_at = token_data.claims.get("exp").and_then(|v| v.as_u64());
-
-        Ok(AuthContext {
-            subject,
-            scopes,
-            claims: normalized_claims,
-            token: Some(token.to_string()),
-            client_id,
-            expires_at,
-            authenticated: true,
-        })
+        // Delegate to shared JWT validator
+        self.jwt_validator
+            .validate(token, &self.validation_config)
+            .await
     }
 
     #[cfg(any(target_arch = "wasm32", not(feature = "jwt-auth")))]
@@ -850,36 +762,6 @@ impl IdentityProvider for GenericOidcProvider {
     }
 }
 
-/// Parse scopes from token claims.
-fn parse_scopes(claims: &serde_json::Value) -> Vec<String> {
-    // Try "scope" claim first (space-separated string or array)
-    if let Some(scope) = claims.get("scope") {
-        if let Some(s) = scope.as_str() {
-            return s.split_whitespace().map(String::from).collect();
-        }
-        if let Some(arr) = scope.as_array() {
-            return arr
-                .iter()
-                .filter_map(|v| v.as_str())
-                .map(String::from)
-                .collect();
-        }
-    }
-
-    // Try "scp" claim (Azure/Entra style)
-    if let Some(scp) = claims.get("scp") {
-        if let Some(arr) = scp.as_array() {
-            return arr
-                .iter()
-                .filter_map(|v| v.as_str())
-                .map(String::from)
-                .collect();
-        }
-    }
-
-    Vec::new()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1020,91 +902,6 @@ mod tests {
         assert_eq!(mappings.tenant_id, Some("tid".to_string()));
         assert_eq!(mappings.email, Some("preferred_username".to_string()));
         assert_eq!(mappings.groups, Some("groups".to_string()));
-    }
-
-    // =========================================================================
-    // parse_scopes Tests
-    // =========================================================================
-
-    #[test]
-    fn test_parse_scopes_string() {
-        let claims = serde_json::json!({
-            "scope": "openid email profile"
-        });
-        let scopes = parse_scopes(&claims);
-        assert_eq!(scopes, vec!["openid", "email", "profile"]);
-    }
-
-    #[test]
-    fn test_parse_scopes_array() {
-        let claims = serde_json::json!({
-            "scope": ["openid", "email"]
-        });
-        let scopes = parse_scopes(&claims);
-        assert_eq!(scopes, vec!["openid", "email"]);
-    }
-
-    #[test]
-    fn test_parse_scopes_scp() {
-        let claims = serde_json::json!({
-            "scp": ["User.Read", "User.Write"]
-        });
-        let scopes = parse_scopes(&claims);
-        assert_eq!(scopes, vec!["User.Read", "User.Write"]);
-    }
-
-    #[test]
-    fn test_parse_scopes_empty() {
-        let claims = serde_json::json!({});
-        let scopes = parse_scopes(&claims);
-        assert!(scopes.is_empty());
-    }
-
-    #[test]
-    fn test_parse_scopes_null() {
-        let claims = serde_json::json!({
-            "scope": null
-        });
-        let scopes = parse_scopes(&claims);
-        assert!(scopes.is_empty());
-    }
-
-    #[test]
-    fn test_parse_scopes_with_extra_whitespace() {
-        let claims = serde_json::json!({
-            "scope": "openid   email    profile"
-        });
-        let scopes = parse_scopes(&claims);
-        assert_eq!(scopes, vec!["openid", "email", "profile"]);
-    }
-
-    #[test]
-    fn test_parse_scopes_single() {
-        let claims = serde_json::json!({
-            "scope": "openid"
-        });
-        let scopes = parse_scopes(&claims);
-        assert_eq!(scopes, vec!["openid"]);
-    }
-
-    #[test]
-    fn test_parse_scopes_prefers_scope_over_scp() {
-        let claims = serde_json::json!({
-            "scope": "openid",
-            "scp": ["User.Read"]
-        });
-        let scopes = parse_scopes(&claims);
-        // Should use "scope" claim, not "scp"
-        assert_eq!(scopes, vec!["openid"]);
-    }
-
-    #[test]
-    fn test_parse_scopes_falls_back_to_scp() {
-        let claims = serde_json::json!({
-            "scp": ["User.Read", "User.Write"]
-        });
-        let scopes = parse_scopes(&claims);
-        assert_eq!(scopes, vec!["User.Read", "User.Write"]);
     }
 
     // =========================================================================

@@ -1,19 +1,20 @@
 //! AWS Cognito identity provider.
 //!
 //! This module provides a Cognito-specific implementation of [`IdentityProvider`].
+//! JWT validation is delegated to [`MultiTenantJwtValidator`] for code reuse.
 
 use async_trait::async_trait;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 use crate::error::{Error, ErrorCode, Result};
+use crate::server::auth::jwt_validator::{JwtValidator, ValidationConfig};
 use crate::server::auth::provider::{
     AuthorizationParams, DcrRequest, DcrResponse, IdentityProvider, OidcDiscovery,
     ProviderCapabilities, TokenExchangeParams, TokenResponse,
 };
-use crate::server::auth::traits::{AuthContext, ClaimMappings};
+use crate::server::auth::traits::AuthContext;
 
 /// Cached data with expiration.
 struct CachedData<T: std::fmt::Debug> {
@@ -46,10 +47,6 @@ impl<T: std::fmt::Debug> CachedData<T> {
     }
 }
 
-/// Type alias for JWKS cache.
-#[cfg(not(target_arch = "wasm32"))]
-type JwksCache = Arc<RwLock<Option<CachedData<HashMap<String, JwkKey>>>>>;
-
 /// Type alias for discovery cache.
 #[cfg(not(target_arch = "wasm32"))]
 type DiscoveryCache = Arc<RwLock<Option<CachedData<OidcDiscovery>>>>;
@@ -57,6 +54,7 @@ type DiscoveryCache = Arc<RwLock<Option<CachedData<OidcDiscovery>>>>;
 /// AWS Cognito identity provider.
 ///
 /// Provides token validation and OIDC discovery for AWS Cognito user pools.
+/// Uses [`JwtValidator`] internally for efficient JWKS caching and JWT validation.
 ///
 /// # Example
 ///
@@ -85,43 +83,19 @@ pub struct CognitoProvider {
     issuer: String,
     /// JWKS URI.
     jwks_uri: String,
-    /// Claim mappings for Cognito.
-    claim_mappings: ClaimMappings,
-    /// Cached JWKS.
+    /// JWT validator with shared JWKS cache.
     #[cfg(not(target_arch = "wasm32"))]
-    jwks_cache: JwksCache,
+    jwt_validator: JwtValidator,
+    /// Validation config for this provider.
+    validation_config: ValidationConfig,
     /// Cached discovery document.
     #[cfg(not(target_arch = "wasm32"))]
     discovery_cache: DiscoveryCache,
-    /// HTTP client.
+    /// HTTP client for non-JWT operations.
     #[cfg(not(target_arch = "wasm32"))]
     http_client: reqwest::Client,
     /// Cache TTL.
     cache_ttl: Duration,
-    /// Clock skew leeway for expiration checking.
-    leeway_seconds: u64,
-}
-
-/// Individual JWK key structure (internal).
-#[derive(Debug, Clone, serde::Deserialize)]
-#[cfg(not(target_arch = "wasm32"))]
-struct JwkKey {
-    /// Key ID.
-    kid: String,
-    /// RSA modulus (base64url-encoded).
-    n: String,
-    /// RSA exponent (base64url-encoded).
-    e: String,
-    /// Algorithm.
-    #[allow(dead_code)]
-    alg: Option<String>,
-}
-
-/// JWKS response structure (internal).
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug, serde::Deserialize)]
-struct JwksResponse {
-    keys: Vec<JwkKey>,
 }
 
 impl CognitoProvider {
@@ -140,25 +114,77 @@ impl CognitoProvider {
         );
         let jwks_uri = format!("{}/.well-known/jwks.json", issuer);
 
+        // Create validation config for Cognito
+        let validation_config = ValidationConfig::cognito(region, user_pool_id, client_id);
+
+        // Create shared JWT validator
+        let jwt_validator = JwtValidator::new();
+
         let provider = Self {
             region: region.to_string(),
             user_pool_id: user_pool_id.to_string(),
             client_id: client_id.to_string(),
             issuer,
             jwks_uri,
-            claim_mappings: ClaimMappings::cognito(),
-            jwks_cache: Arc::new(RwLock::new(None)),
+            jwt_validator,
+            validation_config,
             discovery_cache: Arc::new(RwLock::new(None)),
             http_client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(10))
                 .build()
                 .map_err(|e| Error::internal(format!("Failed to create HTTP client: {}", e)))?,
             cache_ttl: Duration::from_secs(3600), // 1 hour
-            leeway_seconds: 60,
         };
 
-        // Pre-fetch JWKS on startup
-        provider.refresh_jwks().await?;
+        Ok(provider)
+    }
+
+    /// Create a provider with a shared JWT validator.
+    ///
+    /// Use this when you want multiple providers to share the same JWKS cache.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use pmcp::server::auth::{MultiTenantJwtValidator, CognitoProvider};
+    ///
+    /// // Create shared validator
+    /// let validator = MultiTenantJwtValidator::new();
+    ///
+    /// // Create providers that share the validator
+    /// let provider1 = CognitoProvider::with_validator("us-east-1", "pool1", "client1", validator.clone()).await?;
+    /// let provider2 = CognitoProvider::with_validator("us-west-2", "pool2", "client2", validator.clone()).await?;
+    /// ```
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn with_validator(
+        region: &str,
+        user_pool_id: &str,
+        client_id: &str,
+        jwt_validator: JwtValidator,
+    ) -> Result<Self> {
+        let issuer = format!(
+            "https://cognito-idp.{}.amazonaws.com/{}",
+            region, user_pool_id
+        );
+        let jwks_uri = format!("{}/.well-known/jwks.json", issuer);
+
+        let validation_config = ValidationConfig::cognito(region, user_pool_id, client_id);
+
+        let provider = Self {
+            region: region.to_string(),
+            user_pool_id: user_pool_id.to_string(),
+            client_id: client_id.to_string(),
+            issuer,
+            jwks_uri,
+            jwt_validator,
+            validation_config,
+            discovery_cache: Arc::new(RwLock::new(None)),
+            http_client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .map_err(|e| Error::internal(format!("Failed to create HTTP client: {}", e)))?,
+            cache_ttl: Duration::from_secs(3600),
+        };
 
         Ok(provider)
     }
@@ -176,45 +202,6 @@ impl CognitoProvider {
     /// Get the client ID.
     pub fn client_id(&self) -> &str {
         &self.client_id
-    }
-
-    /// Refresh the JWKS cache.
-    #[cfg(not(target_arch = "wasm32"))]
-    async fn refresh_jwks(&self) -> Result<()> {
-        tracing::debug!("Fetching JWKS from {}", self.jwks_uri);
-
-        let response = self
-            .http_client
-            .get(&self.jwks_uri)
-            .send()
-            .await
-            .map_err(|e| Error::internal(format!("Failed to fetch JWKS: {}", e)))?;
-
-        if !response.status().is_success() {
-            return Err(Error::internal(format!(
-                "JWKS endpoint returned status {}",
-                response.status()
-            )));
-        }
-
-        let jwks: JwksResponse = response
-            .json()
-            .await
-            .map_err(|e| Error::internal(format!("Failed to parse JWKS: {}", e)))?;
-
-        let keys: HashMap<String, JwkKey> =
-            jwks.keys.into_iter().map(|k| (k.kid.clone(), k)).collect();
-
-        if keys.is_empty() {
-            return Err(Error::internal("No valid keys found in JWKS"));
-        }
-
-        tracing::info!("Loaded {} keys from Cognito JWKS", keys.len());
-
-        let mut cache = self.jwks_cache.write().await;
-        *cache = Some(CachedData::new(keys, self.cache_ttl));
-
-        Ok(())
     }
 
     /// Get the Cognito hosted UI authorization endpoint.
@@ -256,103 +243,10 @@ impl IdentityProvider for CognitoProvider {
 
     #[cfg(all(not(target_arch = "wasm32"), feature = "jwt-auth"))]
     async fn validate_token(&self, token: &str) -> Result<AuthContext> {
-        use jsonwebtoken::{decode, decode_header, Algorithm, Validation};
-
-        // Decode header to get key ID
-        let header = decode_header(token).map_err(|e| {
-            Error::protocol(
-                ErrorCode::AUTHENTICATION_REQUIRED,
-                format!("Invalid token header: {}", e),
-            )
-        })?;
-
-        let kid = header.kid.ok_or_else(|| {
-            Error::protocol(
-                ErrorCode::AUTHENTICATION_REQUIRED,
-                "Token missing key ID (kid)",
-            )
-        })?;
-
-        // Get the key from cache
-        let jwk = {
-            let cache = self.jwks_cache.read().await;
-            let cache_data = cache
-                .as_ref()
-                .ok_or_else(|| Error::internal("JWKS cache not initialized"))?;
-
-            // Refresh if expired
-            if cache_data.is_expired() {
-                drop(cache);
-                self.refresh_jwks().await?;
-                let cache = self.jwks_cache.read().await;
-                cache.as_ref().and_then(|c| c.data.get(&kid).cloned())
-            } else {
-                cache_data.data.get(&kid).cloned()
-            }
-        };
-
-        let jwk = jwk.ok_or_else(|| {
-            Error::protocol(
-                ErrorCode::AUTHENTICATION_REQUIRED,
-                format!("Unknown key ID: {}", kid),
-            )
-        })?;
-
-        // Create decoding key from RSA components
-        let decoding_key = jsonwebtoken::DecodingKey::from_rsa_components(&jwk.n, &jwk.e)
-            .map_err(|e| Error::internal(format!("Failed to create decoding key: {}", e)))?;
-
-        // Build validation
-        let mut validation = Validation::new(Algorithm::RS256);
-        validation.set_issuer(&[&self.issuer]);
-        validation.set_audience(&[&self.client_id]);
-        validation.leeway = self.leeway_seconds;
-
-        // Decode and verify token
-        let token_data =
-            decode::<serde_json::Value>(token, &decoding_key, &validation).map_err(|e| {
-                let msg = match e.kind() {
-                    jsonwebtoken::errors::ErrorKind::ExpiredSignature => "Token expired",
-                    jsonwebtoken::errors::ErrorKind::InvalidIssuer => "Invalid issuer",
-                    jsonwebtoken::errors::ErrorKind::InvalidAudience => "Invalid audience",
-                    jsonwebtoken::errors::ErrorKind::InvalidSignature => "Invalid signature",
-                    _ => "Token validation failed",
-                };
-                Error::protocol(ErrorCode::AUTHENTICATION_REQUIRED, msg)
-            })?;
-
-        // Normalize claims using Cognito mappings
-        let normalized_claims = self.claim_mappings.normalize_claims(&token_data.claims);
-
-        // Extract subject
-        let subject = normalized_claims
-            .get("sub")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-
-        // Extract scopes
-        let scopes = parse_scopes(&token_data.claims);
-
-        // Extract client ID
-        let client_id = token_data
-            .claims
-            .get("client_id")
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
-        // Extract expiration
-        let expires_at = token_data.claims.get("exp").and_then(|v| v.as_u64());
-
-        Ok(AuthContext {
-            subject,
-            scopes,
-            claims: normalized_claims,
-            token: Some(token.to_string()),
-            client_id,
-            expires_at,
-            authenticated: true,
-        })
+        // Delegate to shared JWT validator
+        self.jwt_validator
+            .validate(token, &self.validation_config)
+            .await
     }
 
     #[cfg(any(target_arch = "wasm32", not(feature = "jwt-auth")))]
@@ -641,92 +535,10 @@ impl IdentityProvider for CognitoProvider {
     }
 }
 
-/// Parse scopes from token claims.
-fn parse_scopes(claims: &serde_json::Value) -> Vec<String> {
-    if let Some(scope) = claims.get("scope") {
-        if let Some(s) = scope.as_str() {
-            return s.split_whitespace().map(String::from).collect();
-        }
-        if let Some(arr) = scope.as_array() {
-            return arr
-                .iter()
-                .filter_map(|v| v.as_str())
-                .map(String::from)
-                .collect();
-        }
-    }
-    Vec::new()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // =========================================================================
-    // parse_scopes Tests
-    // =========================================================================
-
-    #[test]
-    fn test_parse_scopes_string() {
-        let claims = serde_json::json!({
-            "scope": "openid email profile"
-        });
-        let scopes = parse_scopes(&claims);
-        assert_eq!(scopes, vec!["openid", "email", "profile"]);
-    }
-
-    #[test]
-    fn test_parse_scopes_array() {
-        let claims = serde_json::json!({
-            "scope": ["openid", "email"]
-        });
-        let scopes = parse_scopes(&claims);
-        assert_eq!(scopes, vec!["openid", "email"]);
-    }
-
-    #[test]
-    fn test_parse_scopes_empty() {
-        let claims = serde_json::json!({});
-        let scopes = parse_scopes(&claims);
-        assert!(scopes.is_empty());
-    }
-
-    #[test]
-    fn test_parse_scopes_null() {
-        let claims = serde_json::json!({
-            "scope": null
-        });
-        let scopes = parse_scopes(&claims);
-        assert!(scopes.is_empty());
-    }
-
-    #[test]
-    fn test_parse_scopes_with_extra_whitespace() {
-        let claims = serde_json::json!({
-            "scope": "openid   email    profile"
-        });
-        let scopes = parse_scopes(&claims);
-        assert_eq!(scopes, vec!["openid", "email", "profile"]);
-    }
-
-    #[test]
-    fn test_parse_scopes_single_scope() {
-        let claims = serde_json::json!({
-            "scope": "openid"
-        });
-        let scopes = parse_scopes(&claims);
-        assert_eq!(scopes, vec!["openid"]);
-    }
-
-    #[test]
-    fn test_parse_scopes_mixed_array() {
-        // Array with some non-string values (should be filtered out)
-        let claims = serde_json::json!({
-            "scope": ["openid", 123, "email", null, "profile"]
-        });
-        let scopes = parse_scopes(&claims);
-        assert_eq!(scopes, vec!["openid", "email", "profile"]);
-    }
+    use crate::server::auth::traits::ClaimMappings;
 
     // =========================================================================
     // CachedData Tests

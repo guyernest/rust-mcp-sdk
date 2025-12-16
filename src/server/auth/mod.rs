@@ -19,18 +19,34 @@
 //! let mappings = ClaimMappings::cognito();
 //! ```
 //!
+//! # Multi-tenant JWT Validation
+//!
+//! For Lambda authorizers and multi-tenant applications, use [`MultiTenantJwtValidator`]:
+//!
+//! ```rust,ignore
+//! use pmcp::server::auth::{MultiTenantJwtValidator, ValidationConfig};
+//!
+//! // Create one validator (typically at application start)
+//! let validator = MultiTenantJwtValidator::new();
+//!
+//! // Validate tokens from different providers with shared JWKS cache
+//! let auth1 = validator.validate(&token, &ValidationConfig::cognito(...)).await?;
+//! let auth2 = validator.validate(&token, &ValidationConfig::google(...)).await?;
+//! ```
+//!
 //! # Provider Support
 //!
 //! The authentication system supports multiple OAuth providers through configuration:
-//! - AWS Cognito ([`ClaimMappings::cognito`])
-//! - Microsoft Entra ID ([`ClaimMappings::entra`])
-//! - Google Identity ([`ClaimMappings::google`])
-//! - Okta ([`ClaimMappings::okta`])
-//! - Auth0 ([`ClaimMappings::auth0`])
+//! - AWS Cognito ([`ClaimMappings::cognito`], [`ValidationConfig::cognito`])
+//! - Microsoft Entra ID ([`ClaimMappings::entra`], [`ValidationConfig::entra`])
+//! - Google Identity ([`ClaimMappings::google`], [`ValidationConfig::google`])
+//! - Okta ([`ClaimMappings::okta`], [`ValidationConfig::okta`])
+//! - Auth0 ([`ClaimMappings::auth0`], [`ValidationConfig::auth0`])
 //! - Generic OIDC (custom [`ClaimMappings`])
 
 pub mod config;
 pub mod jwt;
+pub mod jwt_validator;
 pub mod middleware;
 pub mod mock;
 pub mod oauth2;
@@ -48,8 +64,12 @@ pub use traits::{
 // Re-export configuration types
 pub use config::TokenValidatorConfig;
 
-// Re-export JWT validator
+// Re-export JWT validators
+// Legacy single-tenant validator (for backward compatibility)
 pub use jwt::JwtValidator;
+
+// New multi-tenant validator (recommended for Lambda authorizers)
+pub use jwt_validator::{JwtValidator as MultiTenantJwtValidator, ValidationConfig};
 
 // Re-export mock validator for testing
 pub use mock::{MockAuthContextBuilder, MockValidator};
