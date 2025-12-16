@@ -940,7 +940,7 @@ pub async fn upload_test_scenario(
             $name: String!
             $description: String
             $content: String!
-            $format: TestScenarioFormat
+            $format: UploadTestScenarioFormat
         ) {
             uploadTestScenario(
                 serverId: $serverId
@@ -960,7 +960,7 @@ pub async fn upload_test_scenario(
         "name": name,
         "description": description,
         "content": content,
-        "format": format.to_uppercase()
+        "format": format.to_lowercase()
     });
 
     #[derive(Debug, Deserialize)]
@@ -984,7 +984,7 @@ pub async fn download_test_scenario(
     let query = r#"
         query DownloadTestScenario(
             $scenarioId: String!
-            $format: TestScenarioFormat
+            $format: DownloadTestScenarioFormat
         ) {
             downloadTestScenario(
                 scenarioId: $scenarioId
@@ -999,7 +999,7 @@ pub async fn download_test_scenario(
 
     let variables = serde_json::json!({
         "scenarioId": scenario_id,
-        "format": format.to_uppercase()
+        "format": format.to_lowercase()
     });
 
     #[derive(Debug, Deserialize)]
