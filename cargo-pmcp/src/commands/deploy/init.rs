@@ -238,9 +238,7 @@ impl InitCommand {
                         let name = member_str.split('/').last().unwrap_or(member_str);
                         if name.ends_with("-lambda") && name != "server-common-lambda" {
                             // Extract server name from "arithmetics-lambda" -> "arithmetics"
-                            let server_name = name
-                                .strip_suffix("-lambda")
-                                .unwrap_or(name);
+                            let server_name = name.strip_suffix("-lambda").unwrap_or(name);
                             return Ok(server_name.to_string());
                         }
                     }
@@ -742,7 +740,10 @@ export class McpServerStack extends cdk.Stack {{
                 existing.package_name
             );
             println!("   ℹ️  Skipping new Lambda wrapper creation - using existing wrapper");
-            println!("   💡 To use this wrapper, ensure it references 'mcp-{}-core'", server_name);
+            println!(
+                "   💡 To use this wrapper, ensure it references 'mcp-{}-core'",
+                server_name
+            );
             return Ok(());
         }
 

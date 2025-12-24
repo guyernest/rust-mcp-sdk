@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use colored::Colorize;
-use mcp_tester::{run_scenario_with_transport, TestScenario};
+use mcp_tester::run_scenario_with_transport;
 use std::path::PathBuf;
 
 /// Run test scenarios against a local or remote MCP server
@@ -20,7 +20,7 @@ pub fn execute(
     // Determine the target URL
     let target_url = if let Some(url) = url {
         url
-    } else if let Some(server) = &server {
+    } else if server.is_some() {
         format!("http://0.0.0.0:{}", port)
     } else {
         anyhow::bail!("Either --url or --server must be specified");
@@ -79,30 +79,44 @@ pub fn execute(
                 println!("\n  Testing: {}", scenario_path.display());
 
                 let result = tokio::runtime::Runtime::new()?.block_on(async {
-                    run_scenario_with_transport(scenario_path.to_str().unwrap(), &target_url, detailed, transport.as_deref()).await
+                    run_scenario_with_transport(
+                        scenario_path.to_str().unwrap(),
+                        &target_url,
+                        detailed,
+                        transport.as_deref(),
+                    )
+                    .await
                 });
 
                 match result {
                     Ok(_) => {
                         println!("  {} Passed", "✓".green());
-                    }
+                    },
                     Err(e) => {
                         println!("  {} Failed: {}", "✗".red(), e);
                         all_passed = false;
-                    }
+                    },
                 }
             }
 
             Ok(all_passed)
         } else {
             // No scenarios found
-            println!("  {} No scenarios found in {}", "⚠".yellow(), scenarios_dir.display());
+            println!(
+                "  {} No scenarios found in {}",
+                "⚠".yellow(),
+                scenarios_dir.display()
+            );
             println!("    Run 'cargo pmcp test generate' to create test scenarios");
             Ok(true)
         }
     } else {
         // No scenarios directory
-        println!("  {} No scenarios directory found at {}", "⚠".yellow(), scenarios_dir.display());
+        println!(
+            "  {} No scenarios directory found at {}",
+            "⚠".yellow(),
+            scenarios_dir.display()
+        );
         println!("    Run 'cargo pmcp test generate' to create test scenarios");
         Ok(true)
     };
@@ -115,7 +129,7 @@ pub fn execute(
             println!("{} All tests passed!", "✓".green().bold());
             println!("{}", "═════════════════════════════════════".bright_cyan());
             Ok(())
-        }
+        },
         Ok(false) => {
             println!("{} Some tests failed", "✗".red().bold());
             println!("{}", "═════════════════════════════════════".bright_cyan());
@@ -124,7 +138,7 @@ pub fn execute(
             println!("  - Check server logs for errors");
             println!("  - Run with --detailed for more output");
             anyhow::bail!("Tests failed");
-        }
+        },
         Err(e) => Err(e),
     }
 }

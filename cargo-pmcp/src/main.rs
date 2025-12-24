@@ -37,6 +37,10 @@ enum Commands {
         /// Directory to create workspace in (defaults to current directory)
         #[arg(long)]
         path: Option<String>,
+
+        /// Server tier: foundation (data connectors) or domain (orchestration)
+        #[arg(long, value_parser = ["foundation", "domain"])]
+        tier: Option<String>,
     },
 
     /// Add a component to the workspace
@@ -100,6 +104,22 @@ enum Commands {
     Landing {
         #[command(subcommand)]
         command: commands::landing::LandingCommand,
+    },
+
+    /// Schema discovery and management
+    ///
+    /// Export, validate, and diff MCP server schemas for code generation
+    Schema {
+        #[command(subcommand)]
+        command: commands::schema::SchemaCommand,
+    },
+
+    /// Generate code from MCP schemas
+    ///
+    /// Generate typed Rust clients for foundation MCP servers
+    Generate {
+        #[command(subcommand)]
+        command: commands::generate::GenerateCommand,
     },
 }
 
@@ -167,8 +187,8 @@ fn main() -> Result<()> {
 
 fn execute_command(command: Commands) -> Result<()> {
     match command {
-        Commands::New { name, path } => {
-            commands::new::execute(name, path)?;
+        Commands::New { name, path, tier } => {
+            commands::new::execute(name, path, tier)?;
         },
         Commands::Add { component } => match component {
             AddCommands::Server {
@@ -210,6 +230,12 @@ fn execute_command(command: Commands) -> Result<()> {
             let runtime = tokio::runtime::Runtime::new()?;
             let project_root = std::env::current_dir()?;
             runtime.block_on(command.execute(project_root))?;
+        },
+        Commands::Schema { command } => {
+            command.execute()?;
+        },
+        Commands::Generate { command } => {
+            command.execute()?;
         },
     }
     Ok(())

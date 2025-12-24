@@ -60,10 +60,6 @@ fn detect_server_name(project_root: &Path) -> Result<String> {
 
 pub mod deploy;
 pub mod init;
-mod logs;
-mod metrics;
-mod secrets;
-mod test;
 
 use init::InitCommand;
 

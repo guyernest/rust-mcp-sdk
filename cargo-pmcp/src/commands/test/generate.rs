@@ -22,7 +22,7 @@ pub fn execute(
     // Determine target URL
     let target_url = if let Some(url) = url {
         url
-    } else if let Some(ref server) = server {
+    } else if server.is_some() {
         format!("http://0.0.0.0:{}", port)
     } else {
         anyhow::bail!("Either --url or --server must be specified");
@@ -32,7 +32,9 @@ pub fn execute(
     let output_path = if let Some(path) = output {
         path
     } else if let Some(ref server) = server {
-        PathBuf::from("scenarios").join(server).join("generated.yaml")
+        PathBuf::from("scenarios")
+            .join(server)
+            .join("generated.yaml")
     } else {
         PathBuf::from("scenarios").join("generated.yaml")
     };
@@ -52,7 +54,13 @@ pub fn execute(
 
     // Use tokio runtime for async generation
     let generation_result = tokio::runtime::Runtime::new()?.block_on(async {
-        generate_scenarios_with_transport(&target_url, output_path.to_str().unwrap(), options, transport.as_deref()).await
+        generate_scenarios_with_transport(
+            &target_url,
+            output_path.to_str().unwrap(),
+            options,
+            transport.as_deref(),
+        )
+        .await
     });
 
     match generation_result {
@@ -64,15 +72,21 @@ pub fn execute(
             );
             println!();
             println!("{}", "Next steps:".bright_white().bold());
-            println!("  1. Edit {} to customize test values", output_path.display());
+            println!(
+                "  1. Edit {} to customize test values",
+                output_path.display()
+            );
             println!("  2. Add assertions to validate responses");
             println!("  3. Run tests with: cargo pmcp test run --server <name>");
             println!();
             println!("{}", "Tip:".bright_cyan().bold());
             println!("  Upload scenarios to pmcp.run for scheduled testing:");
-            println!("    cargo pmcp test upload --server-id <id> {}", output_path.display());
+            println!(
+                "    cargo pmcp test upload --server-id <id> {}",
+                output_path.display()
+            );
             Ok(())
-        }
+        },
         Err(e) => {
             if let Some(ref server) = server {
                 anyhow::bail!(
@@ -87,6 +101,6 @@ pub fn execute(
                     target_url
                 );
             }
-        }
+        },
     }
 }

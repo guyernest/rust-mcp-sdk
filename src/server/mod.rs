@@ -1782,8 +1782,9 @@ impl ServerBuilder {
         // Update capabilities to include tools
         // Use Some(false) instead of None to ensure the field serializes properly
         if self.capabilities.tools.is_none() {
-            self.capabilities.tools =
-                Some(crate::types::ToolCapabilities { list_changed: Some(false) });
+            self.capabilities.tools = Some(crate::types::ToolCapabilities {
+                list_changed: Some(false),
+            });
         }
 
         self
@@ -2224,8 +2225,9 @@ impl ServerBuilder {
         // Update capabilities to include prompts
         // Use Some(false) instead of None to ensure the field serializes properly
         if self.capabilities.prompts.is_none() {
-            self.capabilities.prompts =
-                Some(crate::types::PromptCapabilities { list_changed: Some(false) });
+            self.capabilities.prompts = Some(crate::types::PromptCapabilities {
+                list_changed: Some(false),
+            });
         }
 
         self
@@ -3707,10 +3709,13 @@ mod tests {
             .name("test")
             .version("1.0.0")
             .tool("test-tool", MockTool::new(json!({"result": "ok"})))
-            .prompt("test-prompt", MockPrompt::new(crate::types::GetPromptResult {
-                description: None,
-                messages: vec![],
-            }))
+            .prompt(
+                "test-prompt",
+                MockPrompt::new(crate::types::GetPromptResult {
+                    description: None,
+                    messages: vec![],
+                }),
+            )
             .resources(MockResource::new())
             .build()
             .unwrap();
@@ -3722,20 +3727,39 @@ mod tests {
         let tools = json.get("tools").expect("tools should be present in JSON");
         assert!(tools.is_object(), "tools should be an object");
         let list_changed = tools.get("listChanged");
-        assert!(list_changed.is_some(), "listChanged should be present in tools");
-        assert_eq!(list_changed.unwrap(), &serde_json::json!(false), "listChanged should be false");
+        assert!(
+            list_changed.is_some(),
+            "listChanged should be present in tools"
+        );
+        assert_eq!(
+            list_changed.unwrap(),
+            &serde_json::json!(false),
+            "listChanged should be false"
+        );
 
         // Verify prompts capability
-        let prompts = json.get("prompts").expect("prompts should be present in JSON");
+        let prompts = json
+            .get("prompts")
+            .expect("prompts should be present in JSON");
         assert!(prompts.is_object(), "prompts should be an object");
-        assert!(prompts.get("listChanged").is_some(), "listChanged should be present in prompts");
+        assert!(
+            prompts.get("listChanged").is_some(),
+            "listChanged should be present in prompts"
+        );
 
         // Verify resources capability
-        let resources = json.get("resources").expect("resources should be present in JSON");
+        let resources = json
+            .get("resources")
+            .expect("resources should be present in JSON");
         assert!(resources.is_object(), "resources should be an object");
-        assert!(resources.get("listChanged").is_some() || resources.get("subscribe").is_some(),
-            "resources should have fields");
+        assert!(
+            resources.get("listChanged").is_some() || resources.get("subscribe").is_some(),
+            "resources should have fields"
+        );
 
-        println!("Serialized capabilities: {}", serde_json::to_string_pretty(&json).unwrap());
+        println!(
+            "Serialized capabilities: {}",
+            serde_json::to_string_pretty(&json).unwrap()
+        );
     }
 }

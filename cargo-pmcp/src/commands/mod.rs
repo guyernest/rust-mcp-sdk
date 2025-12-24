@@ -2,6 +2,8 @@ pub mod add;
 pub mod connect;
 pub mod deploy;
 pub mod dev;
+pub mod generate;
 pub mod landing;
 pub mod new;
+pub mod schema;
 pub mod test;

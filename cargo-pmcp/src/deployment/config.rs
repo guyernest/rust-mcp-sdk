@@ -19,9 +19,51 @@ pub struct DeployConfig {
     #[serde(default)]
     pub assets: AssetsConfig,
 
+    /// Composition configuration for server-to-server communication
+    #[serde(default)]
+    pub composition: CompositionConfig,
+
     /// Project root directory (not serialized)
     #[serde(skip)]
     pub project_root: PathBuf,
+}
+
+/// Composition configuration for MCP server-to-server communication.
+///
+/// Enables servers to be composed in a tiered architecture:
+/// - `foundation` tier: Core data connectors (databases, CRMs, APIs)
+/// - `domain` tier: Business logic servers that call foundation servers
+///
+/// # Example Configuration
+///
+/// ```toml
+/// [composition]
+/// tier = "foundation"
+/// allow_composition = true
+/// internal_only = false
+/// description = "Database explorer providing SQL query execution"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompositionConfig {
+    /// Server tier: "foundation" or "domain"
+    #[serde(default = "default_tier")]
+    pub tier: String,
+
+    /// Whether this server can be called by other servers
+    #[serde(default = "default_true")]
+    pub allow_composition: bool,
+
+    /// Whether this server is only available internally (not exposed via API)
+    #[serde(default)]
+    pub internal_only: bool,
+
+    /// Description for composition discovery
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+fn default_tier() -> String {
+    "foundation".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -342,6 +384,7 @@ impl Default for AssetsConfig {
 
 impl AssetsConfig {
     /// Create a new assets config with the given include patterns.
+    #[allow(dead_code)]
     pub fn new(include: Vec<String>) -> Self {
         Self {
             include,
@@ -501,6 +544,7 @@ impl DeployConfig {
             },
             api_gateway: None,
             assets: AssetsConfig::default(),
+            composition: CompositionConfig::default(),
             project_root,
         }
     }
@@ -549,6 +593,7 @@ impl AuthConfig {
     ///
     /// These environment variables are read by the server_common template
     /// to initialize the appropriate `IdentityProvider` at runtime.
+    #[allow(dead_code)]
     pub fn to_env_vars(&self, region: &str) -> HashMap<String, String> {
         let mut vars = HashMap::new();
 
@@ -599,7 +644,8 @@ impl AuthConfig {
     }
 
     /// Create auth config for Cognito.
-    pub fn cognito(region: &str, user_pool_id: &str, client_id: &str) -> Self {
+    #[allow(dead_code)]
+    pub fn cognito(_region: &str, user_pool_id: &str, client_id: &str) -> Self {
         Self {
             enabled: true,
             provider: "cognito".to_string(),
@@ -623,6 +669,7 @@ impl AuthConfig {
     }
 
     /// Create auth config for generic OIDC.
+    #[allow(dead_code)]
     pub fn oidc(provider_type: &str, issuer: &str, client_id: &str) -> Self {
         Self {
             enabled: true,
@@ -653,6 +700,17 @@ impl Default for DcrConfig {
             public_client_patterns: default_public_client_patterns(),
             default_scopes: default_scopes(),
             allowed_scopes: default_allowed_scopes(),
+        }
+    }
+}
+
+impl Default for CompositionConfig {
+    fn default() -> Self {
+        Self {
+            tier: default_tier(),
+            allow_composition: true,
+            internal_only: false,
+            description: None,
         }
     }
 }

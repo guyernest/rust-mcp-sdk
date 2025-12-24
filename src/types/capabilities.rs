@@ -618,8 +618,12 @@ mod tests {
     fn server_capabilities_auto_set_serialization() {
         // Test that auto-set capabilities (with Some(false)) serialize correctly
         let caps = ServerCapabilities {
-            tools: Some(ToolCapabilities { list_changed: Some(false) }),
-            prompts: Some(PromptCapabilities { list_changed: Some(false) }),
+            tools: Some(ToolCapabilities {
+                list_changed: Some(false),
+            }),
+            prompts: Some(PromptCapabilities {
+                list_changed: Some(false),
+            }),
             resources: Some(ResourceCapabilities {
                 subscribe: Some(false),
                 list_changed: Some(false),
@@ -628,12 +632,18 @@ mod tests {
         };
 
         let json = serde_json::to_value(&caps).unwrap();
-        println!("Serialized capabilities: {}", serde_json::to_string_pretty(&json).unwrap());
+        println!(
+            "Serialized capabilities: {}",
+            serde_json::to_string_pretty(&json).unwrap()
+        );
 
         // Verify tools, prompts, resources are present
         assert!(json.get("tools").is_some(), "tools should be present");
         assert!(json.get("prompts").is_some(), "prompts should be present");
-        assert!(json.get("resources").is_some(), "resources should be present");
+        assert!(
+            json.get("resources").is_some(),
+            "resources should be present"
+        );
 
         // Verify the listChanged fields are present
         assert_eq!(json["tools"]["listChanged"], false);
@@ -656,11 +666,23 @@ mod tests {
         };
 
         let json = serde_json::to_value(&caps).unwrap();
-        println!("Serialized capabilities with None: {}", serde_json::to_string_pretty(&json).unwrap());
+        println!(
+            "Serialized capabilities with None: {}",
+            serde_json::to_string_pretty(&json).unwrap()
+        );
 
         // Verify tools, prompts, resources are present (even if empty objects)
-        assert!(json.get("tools").is_some(), "tools should be present even with None fields");
-        assert!(json.get("prompts").is_some(), "prompts should be present even with None fields");
-        assert!(json.get("resources").is_some(), "resources should be present even with None fields");
+        assert!(
+            json.get("tools").is_some(),
+            "tools should be present even with None fields"
+        );
+        assert!(
+            json.get("prompts").is_some(),
+            "prompts should be present even with None fields"
+        );
+        assert!(
+            json.get("resources").is_some(),
+            "resources should be present even with None fields"
+        );
     }
 }

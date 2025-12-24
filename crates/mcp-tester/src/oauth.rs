@@ -68,6 +68,7 @@ struct DeviceAuthResponse {
 
 /// Token response
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct TokenResponse {
     access_token: String,
     #[serde(default)]

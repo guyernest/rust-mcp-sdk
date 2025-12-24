@@ -10,7 +10,7 @@ pub mod r#trait;
 pub use builder::BinaryBuilder;
 pub use config::DeployConfig;
 pub use naming::would_conflict;
-pub use operations::{AsyncOperation, DestroyResult, OperationStatus, OperationType};
+pub use operations::OperationStatus;
 pub use outputs::load_cdk_outputs;
 pub use r#trait::{DeploymentOutputs, SecretsAction};
 pub use registry::TargetRegistry;

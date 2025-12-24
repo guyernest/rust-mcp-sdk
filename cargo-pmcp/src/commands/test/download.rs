@@ -12,8 +12,16 @@ pub async fn execute(
     output: Option<PathBuf>,
     format: Option<String>,
 ) -> Result<()> {
-    println!("\n{}", "Downloading test scenario from pmcp.run".bright_cyan().bold());
-    println!("{}", "─────────────────────────────────────────".bright_cyan());
+    println!(
+        "\n{}",
+        "Downloading test scenario from pmcp.run"
+            .bright_cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        "─────────────────────────────────────────".bright_cyan()
+    );
 
     // Get credentials
     let credentials = auth::get_credentials().await?;
@@ -22,13 +30,10 @@ pub async fn execute(
 
     let format_str = format.as_deref().unwrap_or("yaml");
 
-    let result = graphql::download_test_scenario(
-        &credentials.access_token,
-        &scenario_id,
-        format_str,
-    )
-    .await
-    .context("Failed to download scenario")?;
+    let result =
+        graphql::download_test_scenario(&credentials.access_token, &scenario_id, format_str)
+            .await
+            .context("Failed to download scenario")?;
 
     // Determine output path
     let output_path = if let Some(path) = output {
@@ -50,7 +55,10 @@ pub async fn execute(
         .with_context(|| format!("Failed to write scenario to {}", output_path.display()))?;
 
     println!();
-    println!("{}", "═════════════════════════════════════════".bright_cyan());
+    println!(
+        "{}",
+        "═════════════════════════════════════════".bright_cyan()
+    );
     println!(
         "{} Downloaded '{}' (v{}) to {}",
         "✓".green().bold(),
@@ -58,12 +66,21 @@ pub async fn execute(
         result.version,
         output_path.display()
     );
-    println!("{}", "═════════════════════════════════════════".bright_cyan());
+    println!(
+        "{}",
+        "═════════════════════════════════════════".bright_cyan()
+    );
     println!();
     println!("{}", "Next steps:".bright_white().bold());
     println!("  - Edit the scenario locally: {}", output_path.display());
-    println!("  - Run tests: cargo pmcp test run --scenarios {}", output_path.display());
-    println!("  - Upload changes: cargo pmcp test upload --server-id <id> {}", output_path.display());
+    println!(
+        "  - Run tests: cargo pmcp test run --scenarios {}",
+        output_path.display()
+    );
+    println!(
+        "  - Upload changes: cargo pmcp test upload --server-id <id> {}",
+        output_path.display()
+    );
 
     Ok(())
 }

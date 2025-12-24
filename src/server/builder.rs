@@ -123,8 +123,9 @@ impl ServerCoreBuilder {
         // Update capabilities to include tools
         // Use Some(false) instead of None to ensure the field serializes properly
         if self.capabilities.tools.is_none() {
-            self.capabilities.tools =
-                Some(crate::types::ToolCapabilities { list_changed: Some(false) });
+            self.capabilities.tools = Some(crate::types::ToolCapabilities {
+                list_changed: Some(false),
+            });
         }
 
         self
@@ -139,8 +140,9 @@ impl ServerCoreBuilder {
         // Update capabilities to include tools
         // Use Some(false) instead of None to ensure the field serializes properly
         if self.capabilities.tools.is_none() {
-            self.capabilities.tools =
-                Some(crate::types::ToolCapabilities { list_changed: Some(false) });
+            self.capabilities.tools = Some(crate::types::ToolCapabilities {
+                list_changed: Some(false),
+            });
         }
 
         self
@@ -160,8 +162,9 @@ impl ServerCoreBuilder {
         // Update capabilities to include prompts
         // Use Some(false) instead of None to ensure the field serializes properly
         if self.capabilities.prompts.is_none() {
-            self.capabilities.prompts =
-                Some(crate::types::PromptCapabilities { list_changed: Some(false) });
+            self.capabilities.prompts = Some(crate::types::PromptCapabilities {
+                list_changed: Some(false),
+            });
         }
 
         self
@@ -176,8 +179,9 @@ impl ServerCoreBuilder {
         // Update capabilities to include prompts
         // Use Some(false) instead of None to ensure the field serializes properly
         if self.capabilities.prompts.is_none() {
-            self.capabilities.prompts =
-                Some(crate::types::PromptCapabilities { list_changed: Some(false) });
+            self.capabilities.prompts = Some(crate::types::PromptCapabilities {
+                list_changed: Some(false),
+            });
         }
 
         self
@@ -615,10 +619,20 @@ mod tests {
 
         // Verify listChanged is present (not just an empty object)
         let list_changed = tools.get("listChanged");
-        assert!(list_changed.is_some(), "listChanged should be present in tools");
-        assert_eq!(list_changed.unwrap(), &serde_json::json!(false), "listChanged should be false");
+        assert!(
+            list_changed.is_some(),
+            "listChanged should be present in tools"
+        );
+        assert_eq!(
+            list_changed.unwrap(),
+            &serde_json::json!(false),
+            "listChanged should be false"
+        );
 
-        println!("Serialized capabilities: {}", serde_json::to_string_pretty(&json).unwrap());
+        println!(
+            "Serialized capabilities: {}",
+            serde_json::to_string_pretty(&json).unwrap()
+        );
     }
 
     #[test]

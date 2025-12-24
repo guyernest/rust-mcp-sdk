@@ -87,6 +87,151 @@ pub struct ListToolsRequest {
 /// List tools params (legacy name).
 pub type ListToolsParams = ListToolsRequest;
 
+/// Tool annotations for metadata hints.
+///
+/// Standard MCP annotations plus PMCP extensions for type-safe composition.
+/// Clients SHOULD ignore annotations they don't understand (per MCP spec).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[serde(rename_all = "camelCase")]
+pub struct ToolAnnotations {
+    /// Human-readable title for the tool
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+
+    /// If true, the tool does not modify any state (read-only operation)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_only_hint: Option<bool>,
+
+    /// If true, the tool may perform destructive operations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destructive_hint: Option<bool>,
+
+    /// If true, calling the tool multiple times with same args has same effect
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idempotent_hint: Option<bool>,
+
+    /// If true, the tool interacts with external systems (network, filesystem, etc.)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_world_hint: Option<bool>,
+
+    // =========================================================================
+    // PMCP Extensions for Type-Safe Composition
+    // =========================================================================
+    /// JSON Schema for the tool's output type (PMCP extension).
+    ///
+    /// When present, code generators can create typed return structs instead of
+    /// falling back to `serde_json::Value`. This enables full type safety in
+    /// MCP server composition workflows.
+    ///
+    /// Example:
+    /// ```json
+    /// {
+    ///   "type": "object",
+    ///   "properties": {
+    ///     "columns": { "type": "array", "items": { "type": "string" } },
+    ///     "rows": { "type": "array" },
+    ///     "row_count": { "type": "integer" }
+    ///   },
+    ///   "required": ["columns", "rows", "row_count"]
+    /// }
+    /// ```
+    #[serde(rename = "pmcp:outputSchema", skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<Value>,
+
+    /// Name of the output type for code generation (PMCP extension).
+    ///
+    /// Used by code generators to name the generated struct.
+    /// Example: `"QueryResult"` generates `pub struct QueryResult { ... }`
+    #[serde(
+        rename = "pmcp:outputTypeName",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub output_type_name: Option<String>,
+}
+
+impl ToolAnnotations {
+    /// Create empty annotations.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set human-readable title for the tool.
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set read-only hint (tool does not modify any state).
+    ///
+    /// When `true`, the tool only reads data and never modifies it.
+    /// Useful for clients that want to allow read operations without confirmation.
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only_hint = Some(read_only);
+        self
+    }
+
+    /// Set destructive hint (tool may perform destructive operations).
+    ///
+    /// When `true`, the tool may permanently delete or modify data.
+    /// Clients should warn users before executing destructive tools.
+    pub fn with_destructive(mut self, destructive: bool) -> Self {
+        self.destructive_hint = Some(destructive);
+        self
+    }
+
+    /// Set idempotent hint (multiple calls with same args have same effect).
+    ///
+    /// When `true`, calling the tool multiple times with identical arguments
+    /// produces the same result as calling it once. Safe to retry on failure.
+    pub fn with_idempotent(mut self, idempotent: bool) -> Self {
+        self.idempotent_hint = Some(idempotent);
+        self
+    }
+
+    /// Set open-world hint (tool interacts with external systems).
+    ///
+    /// When `true`, the tool may make network requests, access filesystem,
+    /// or interact with other external services. Results may vary based on
+    /// external state.
+    pub fn with_open_world(mut self, open_world: bool) -> Self {
+        self.open_world_hint = Some(open_world);
+        self
+    }
+
+    /// Set output schema (PMCP extension for type-safe composition).
+    ///
+    /// This enables code generators to create typed return structs for
+    /// server-to-server composition. The `type_name` is used as the
+    /// generated struct name (e.g., `"QueryResult"` becomes `struct QueryResult`).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pmcp::types::ToolAnnotations;
+    /// use serde_json::json;
+    ///
+    /// let annotations = ToolAnnotations::new()
+    ///     .with_read_only(true)
+    ///     .with_output_schema(
+    ///         json!({
+    ///             "type": "object",
+    ///             "properties": {
+    ///                 "count": { "type": "integer" },
+    ///                 "items": { "type": "array" }
+    ///             },
+    ///             "required": ["count", "items"]
+    ///         }),
+    ///         "SearchResult"
+    ///     );
+    /// ```
+    pub fn with_output_schema(mut self, schema: Value, type_name: impl Into<String>) -> Self {
+        self.output_schema = Some(schema);
+        self.output_type_name = Some(type_name.into());
+        self
+    }
+}
+
 /// Tool information.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[non_exhaustive]
@@ -99,6 +244,9 @@ pub struct ToolInfo {
     pub description: Option<String>,
     /// JSON Schema for tool parameters
     pub input_schema: Value,
+    /// Tool annotations (hints and PMCP extensions)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<ToolAnnotations>,
     /// Optional metadata (e.g., for UI resource association in MCP Apps Extension)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
@@ -106,12 +254,58 @@ pub struct ToolInfo {
 }
 
 impl ToolInfo {
-    /// Create a new `ToolInfo` without metadata.
+    /// Create a new `ToolInfo` without metadata or annotations.
     pub fn new(name: impl Into<String>, description: Option<String>, input_schema: Value) -> Self {
         Self {
             name: name.into(),
             description,
             input_schema,
+            annotations: None,
+            _meta: None,
+        }
+    }
+
+    /// Create a new `ToolInfo` with annotations (including PMCP output schema).
+    ///
+    /// Use this constructor when your tool has output type information for
+    /// type-safe composition workflows.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use pmcp::types::{ToolInfo, ToolAnnotations};
+    /// use serde_json::json;
+    ///
+    /// let annotations = ToolAnnotations::new()
+    ///     .with_read_only(true)
+    ///     .with_output_schema(
+    ///         json!({
+    ///             "type": "object",
+    ///             "properties": {
+    ///                 "result": { "type": "string" }
+    ///             }
+    ///         }),
+    ///         "MyResult"
+    ///     );
+    ///
+    /// let tool = ToolInfo::with_annotations(
+    ///     "my_tool",
+    ///     Some("My tool description".to_string()),
+    ///     json!({"type": "object"}),
+    ///     annotations,
+    /// );
+    /// ```
+    pub fn with_annotations(
+        name: impl Into<String>,
+        description: Option<String>,
+        input_schema: Value,
+        annotations: ToolAnnotations,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description,
+            input_schema,
+            annotations: Some(annotations),
             _meta: None,
         }
     }
@@ -133,6 +327,7 @@ impl ToolInfo {
             name: name.into(),
             description,
             input_schema,
+            annotations: None,
             _meta: Some(meta),
         }
     }
