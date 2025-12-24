@@ -5,6 +5,7 @@ use std::process::Command;
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
+#[allow(dead_code)]
 pub struct BinaryBuilder {
     project_root: PathBuf,
     oauth_enabled: bool,
@@ -12,6 +13,7 @@ pub struct BinaryBuilder {
     build_oauth_lambdas: bool,
 }
 
+#[allow(dead_code)]
 pub struct BuildResult {
     pub binary_path: PathBuf,
     pub binary_size: u64,
@@ -115,7 +117,11 @@ impl BinaryBuilder {
 
         // Load config to get server name
         let config = crate::deployment::config::DeployConfig::load(&self.project_root)?;
-        let lambda_package = format!("{}-lambda", config.server.name);
+
+        // Find the actual Lambda package in the workspace
+        // First try {server_name}-lambda, then look for any *-lambda package with bootstrap binary
+        let lambda_package = self.find_lambda_package(&config.server.name)?;
+
         // AWS Lambda Custom Runtime requires the binary to be named "bootstrap"
         let lambda_binary = "bootstrap";
 
@@ -192,6 +198,39 @@ impl BinaryBuilder {
         // cargo-lambda outputs to target/lambda/{binary-name}/bootstrap
         // Since AWS Lambda requires binary name "bootstrap", the output is in target/lambda/bootstrap/
         Ok("bootstrap".to_string())
+    }
+
+    /// Find the Lambda wrapper package in the workspace.
+    /// First tries {server_name}-lambda, then looks for any *-lambda package with bootstrap binary.
+    fn find_lambda_package(&self, server_name: &str) -> Result<String> {
+        let preferred_package = format!("{}-lambda", server_name);
+
+        // Check if the preferred package exists
+        let preferred_dir = self.project_root.join(&preferred_package);
+        if preferred_dir.exists() {
+            return Ok(preferred_package);
+        }
+
+        // Look for any *-lambda package with bootstrap binary in the workspace
+        let binaries = crate::deployment::naming::detect_workspace_binaries(&self.project_root)?;
+
+        for binary in binaries {
+            if binary.binary_name == "bootstrap" && binary.package_name.ends_with("-lambda") {
+                println!();
+                println!(
+                    "   ℹ️  Using existing Lambda wrapper: {}",
+                    binary.package_name
+                );
+                return Ok(binary.package_name);
+            }
+        }
+
+        // No Lambda wrapper found
+        bail!(
+            "No Lambda wrapper package found. Expected '{}' or any '*-lambda' package with 'bootstrap' binary.\n\
+             Run 'cargo pmcp deploy init --target pmcp-run' to create one.",
+            preferred_package
+        );
     }
 
     /// Build and copy an OAuth Lambda (proxy or authorizer)
