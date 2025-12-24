@@ -121,8 +121,10 @@ impl ServerCoreBuilder {
             .insert(name.into(), Arc::new(handler) as Arc<dyn ToolHandler>);
 
         // Update capabilities to include tools
+        // Use Some(false) instead of None to ensure the field serializes properly
         if self.capabilities.tools.is_none() {
-            self.capabilities.tools = Some(crate::types::ToolCapabilities { list_changed: None });
+            self.capabilities.tools =
+                Some(crate::types::ToolCapabilities { list_changed: Some(false) });
         }
 
         self
@@ -135,8 +137,10 @@ impl ServerCoreBuilder {
         self.tools.insert(name.into(), handler);
 
         // Update capabilities to include tools
+        // Use Some(false) instead of None to ensure the field serializes properly
         if self.capabilities.tools.is_none() {
-            self.capabilities.tools = Some(crate::types::ToolCapabilities { list_changed: None });
+            self.capabilities.tools =
+                Some(crate::types::ToolCapabilities { list_changed: Some(false) });
         }
 
         self
@@ -154,9 +158,10 @@ impl ServerCoreBuilder {
             .insert(name.into(), Arc::new(handler) as Arc<dyn PromptHandler>);
 
         // Update capabilities to include prompts
+        // Use Some(false) instead of None to ensure the field serializes properly
         if self.capabilities.prompts.is_none() {
             self.capabilities.prompts =
-                Some(crate::types::PromptCapabilities { list_changed: None });
+                Some(crate::types::PromptCapabilities { list_changed: Some(false) });
         }
 
         self
@@ -169,9 +174,10 @@ impl ServerCoreBuilder {
         self.prompts.insert(name.into(), handler);
 
         // Update capabilities to include prompts
+        // Use Some(false) instead of None to ensure the field serializes properly
         if self.capabilities.prompts.is_none() {
             self.capabilities.prompts =
-                Some(crate::types::PromptCapabilities { list_changed: None });
+                Some(crate::types::PromptCapabilities { list_changed: Some(false) });
         }
 
         self
@@ -184,10 +190,11 @@ impl ServerCoreBuilder {
         self.resources = Some(Arc::new(handler) as Arc<dyn ResourceHandler>);
 
         // Update capabilities to include resources
+        // Use Some(false) instead of None to ensure fields serialize properly
         if self.capabilities.resources.is_none() {
             self.capabilities.resources = Some(crate::types::ResourceCapabilities {
-                subscribe: None,
-                list_changed: None,
+                subscribe: Some(false),
+                list_changed: Some(false),
             });
         }
 
@@ -201,10 +208,11 @@ impl ServerCoreBuilder {
         self.resources = Some(handler);
 
         // Update capabilities to include resources
+        // Use Some(false) instead of None to ensure fields serialize properly
         if self.capabilities.resources.is_none() {
             self.capabilities.resources = Some(crate::types::ResourceCapabilities {
-                subscribe: None,
-                list_changed: None,
+                subscribe: Some(false),
+                list_changed: Some(false),
             });
         }
 
