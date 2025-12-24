@@ -1,0 +1,76 @@
+# Quiz: Database MCP Servers
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why should MCP database servers only allow SELECT queries by default?"
+prompt.distractors = [
+    "SELECT queries are faster than other queries",
+    "Other query types aren't supported by MCP",
+    "SELECT is the only SQL command that returns data"
+]
+answer.answer = "To prevent accidental or malicious data modification"
+context = """
+Security is paramount in enterprise MCP servers. By restricting to SELECT queries,
+you prevent users (or AI) from accidentally or intentionally modifying or deleting data.
+Write operations should require explicit, separate tools with proper authorization.
+"""
+id = "43554326-22af-4c94-ae41-dfa5ef8b8d81"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is SQL injection and why is it dangerous?"
+prompt.distractors = [
+    "A way to speed up database queries",
+    "A technique to compress SQL statements",
+    "A method for caching database results"
+]
+answer.answer = "An attack where malicious SQL is inserted into queries"
+context = """
+SQL injection occurs when user input is directly concatenated into SQL queries.
+An attacker can craft input that changes the query's meaning, potentially
+accessing unauthorized data or modifying the database. Always use parameterized queries.
+"""
+id = "7d07a99a-13de-42e2-92de-eb107b5addb6"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What Rust crate is commonly used for type-safe async SQL queries?"
+answer.answer = "sqlx"
+answer.alternatives = ["SQLx", "SQLX"]
+context = """
+sqlx is a popular async SQL crate that provides compile-time checked queries,
+connection pooling, and support for PostgreSQL, MySQL, and SQLite.
+"""
+id = "5d5eb6e5-1dab-495f-8d9f-6dd5cffb55fa"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "When should you use a Resource instead of a Tool for data access?"
+prompt.distractors = [
+    "When the data is large",
+    "When the data changes frequently",
+    "When you need to execute complex queries"
+]
+answer.answer = "When you want to provide a stable URI for a specific piece of data"
+context = """
+Resources are best for structured, addressable data with stable URIs (like db://customers/123).
+Tools are better for dynamic queries where the user specifies parameters.
+Resources enable caching and direct linking in AI conversations.
+"""
+id = "e428c402-a71d-462a-afc2-ee531ab77cf1"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What should you always add to database queries to prevent memory issues?"
+prompt.distractors = [
+    "ORDER BY clause",
+    "DISTINCT keyword",
+    "GROUP BY clause"
+]
+answer.answer = "LIMIT clause"
+context = """
+Always add a LIMIT clause to prevent queries from returning millions of rows
+and exhausting server memory. A reasonable default (e.g., 100-1000 rows) with
+a maximum limit protects both the server and the user experience.
+"""
+id = "ad853d09-350f-4c86-8c33-3c653e62eda9"

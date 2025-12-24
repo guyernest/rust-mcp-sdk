@@ -1,0 +1,71 @@
+# Quiz: Development Environment Setup
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Which command installs the PMCP development toolkit?"
+prompt.distractors = [
+    "`npm install cargo-pmcp`",
+    "`brew install cargo-pmcp`",
+    "`rustup component add cargo-pmcp`"
+]
+answer.answer = "`cargo install cargo-pmcp`"
+context = """
+cargo-pmcp is a Rust crate, so it's installed using `cargo install`.
+This downloads the source from crates.io and compiles it locally.
+"""
+id = "e1a43758-c97c-4962-92ea-f01cb2c899e0"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the primary purpose of MCP Inspector?"
+prompt.distractors = [
+    "Compiling Rust code",
+    "Deploying MCP servers to production",
+    "Managing OAuth tokens"
+]
+answer.answer = "Debugging and testing MCP servers interactively"
+context = """
+MCP Inspector is a debugging tool that lets you interactively call tools,
+view resources, and see the raw JSON-RPC messages exchanged with your server.
+"""
+id = "c0645e7f-1dfd-41e6-89a3-9f6cc8b7347d"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the minimum Rust version required for PMCP SDK?"
+prompt.distractors = [
+    "1.70.0",
+    "1.75.0",
+    "2.0.0"
+]
+answer.answer = "1.82.0"
+context = """
+PMCP SDK requires Rust 1.82.0 or later to take advantage of modern language
+features and ensure compatibility with async traits.
+"""
+id = "34da0f9e-c366-4a58-a668-ff135ddf0919"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What command creates a new PMCP workspace named 'my-project'?"
+answer.answer = "cargo pmcp new my-project"
+context = """
+The `cargo pmcp new` command creates a new workspace with the proper structure
+for building MCP servers, including server-common and a servers directory.
+"""
+id = "d20d365d-cca1-4674-9cea-1cfb36c0dcb4"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Which of these is NOT a cargo-pmcp subcommand?"
+prompt.distractors = [
+    "`cargo pmcp new`",
+    "`cargo pmcp add`",
+    "`cargo pmcp deploy`"
+]
+answer.answer = "`cargo pmcp compile`"
+context = """
+cargo-pmcp provides `new`, `add`, `test`, `deploy`, and other commands,
+but not `compile`. Standard Rust compilation is done with `cargo build`.
+"""
+id = "5c79685b-e7e3-4278-890b-f2ff2dfd97ea"
