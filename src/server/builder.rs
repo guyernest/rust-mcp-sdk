@@ -598,6 +598,30 @@ mod tests {
     }
 
     #[test]
+    fn test_builder_capabilities_serialization() {
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .tool("test-tool", TestTool)
+            .build()
+            .unwrap();
+
+        let caps = server.capabilities();
+        let json = serde_json::to_value(caps).unwrap();
+
+        // Verify tools capability is present and properly structured
+        let tools = json.get("tools").expect("tools should be present in JSON");
+        assert!(tools.is_object(), "tools should be an object");
+
+        // Verify listChanged is present (not just an empty object)
+        let list_changed = tools.get("listChanged");
+        assert!(list_changed.is_some(), "listChanged should be present in tools");
+        assert_eq!(list_changed.unwrap(), &serde_json::json!(false), "listChanged should be false");
+
+        println!("Serialized capabilities: {}", serde_json::to_string_pretty(&json).unwrap());
+    }
+
+    #[test]
     fn test_builder_with_custom_capabilities() {
         let custom_caps = ServerCapabilities::tools_only();
 

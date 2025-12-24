@@ -1778,6 +1778,14 @@ impl ServerBuilder {
     /// ```
     pub fn tool(mut self, name: impl Into<String>, handler: impl ToolHandler + 'static) -> Self {
         self.tools.insert(name.into(), Arc::new(handler));
+
+        // Update capabilities to include tools
+        // Use Some(false) instead of None to ensure the field serializes properly
+        if self.capabilities.tools.is_none() {
+            self.capabilities.tools =
+                Some(crate::types::ToolCapabilities { list_changed: Some(false) });
+        }
+
         self
     }
 
@@ -2212,6 +2220,14 @@ impl ServerBuilder {
         handler: impl PromptHandler + 'static,
     ) -> Self {
         self.prompts.insert(name.into(), Arc::new(handler));
+
+        // Update capabilities to include prompts
+        // Use Some(false) instead of None to ensure the field serializes properly
+        if self.capabilities.prompts.is_none() {
+            self.capabilities.prompts =
+                Some(crate::types::PromptCapabilities { list_changed: Some(false) });
+        }
+
         self
     }
 
@@ -2355,6 +2371,16 @@ impl ServerBuilder {
     /// ```
     pub fn resources(mut self, handler: impl ResourceHandler + 'static) -> Self {
         self.resources = Some(Arc::new(handler));
+
+        // Update capabilities to include resources
+        // Use Some(false) instead of None to ensure fields serialize properly
+        if self.capabilities.resources.is_none() {
+            self.capabilities.resources = Some(crate::types::ResourceCapabilities {
+                subscribe: Some(false),
+                list_changed: Some(false),
+            });
+        }
+
         self
     }
 
@@ -3671,5 +3697,45 @@ mod tests {
             },
             ResponsePayload::Result(_) => panic!("Expected error from middleware"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_server_builder_auto_capabilities_serialization() {
+        // Test that ServerBuilder (used by Server::builder()) auto-sets capabilities
+        // with proper serialization values
+        let server = Server::builder()
+            .name("test")
+            .version("1.0.0")
+            .tool("test-tool", MockTool::new(json!({"result": "ok"})))
+            .prompt("test-prompt", MockPrompt::new(crate::types::GetPromptResult {
+                description: None,
+                messages: vec![],
+            }))
+            .resources(MockResource::new())
+            .build()
+            .unwrap();
+
+        let caps = &server.capabilities;
+        let json = serde_json::to_value(caps).unwrap();
+
+        // Verify tools capability is present and properly structured
+        let tools = json.get("tools").expect("tools should be present in JSON");
+        assert!(tools.is_object(), "tools should be an object");
+        let list_changed = tools.get("listChanged");
+        assert!(list_changed.is_some(), "listChanged should be present in tools");
+        assert_eq!(list_changed.unwrap(), &serde_json::json!(false), "listChanged should be false");
+
+        // Verify prompts capability
+        let prompts = json.get("prompts").expect("prompts should be present in JSON");
+        assert!(prompts.is_object(), "prompts should be an object");
+        assert!(prompts.get("listChanged").is_some(), "listChanged should be present in prompts");
+
+        // Verify resources capability
+        let resources = json.get("resources").expect("resources should be present in JSON");
+        assert!(resources.is_object(), "resources should be an object");
+        assert!(resources.get("listChanged").is_some() || resources.get("subscribe").is_some(),
+            "resources should have fields");
+
+        println!("Serialized capabilities: {}", serde_json::to_string_pretty(&json).unwrap());
     }
 }
