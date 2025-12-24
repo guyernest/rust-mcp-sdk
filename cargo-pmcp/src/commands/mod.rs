@@ -2,8 +2,6 @@ pub mod add;
 pub mod connect;
 pub mod deploy;
 pub mod dev;
-#[cfg(feature = "codegen")]
-pub mod generate;
 pub mod landing;
 pub mod new;
 pub mod schema;

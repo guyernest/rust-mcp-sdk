@@ -114,15 +114,6 @@ enum Commands {
         command: commands::schema::SchemaCommand,
     },
 
-    /// Generate code from MCP schemas
-    ///
-    /// Generate typed Rust clients for foundation MCP servers
-    /// (requires the `codegen` feature)
-    #[cfg(feature = "codegen")]
-    Generate {
-        #[command(subcommand)]
-        command: commands::generate::GenerateCommand,
-    },
 }
 
 #[derive(Subcommand)]
@@ -234,10 +225,6 @@ fn execute_command(command: Commands) -> Result<()> {
             runtime.block_on(command.execute(project_root))?;
         },
         Commands::Schema { command } => {
-            command.execute()?;
-        },
-        #[cfg(feature = "codegen")]
-        Commands::Generate { command } => {
             command.execute()?;
         },
     }
