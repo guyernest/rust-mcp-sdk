@@ -38,5 +38,9 @@ rpassword = "7.3"                       # Secret input (for other features)
 zip = "7.0"                             # Zip file creation for landing page deployment
 
 # For schema discovery and code generation
-pmcp-composition = { path = "../../pmcp-run/control-plane/pmcp-composition" }
+pmcp-composition = { path = "../../pmcp-run/control-plane/pmcp-composition", optional = true }
 console = "0.16"                        # Terminal styling for schema commands
+
+[features]
+default = []
+codegen = ["pmcp-composition"]          # Enable code generation from MCP schemas

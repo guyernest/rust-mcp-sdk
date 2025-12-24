@@ -1,6 +1,10 @@
 //! Code generation commands
 //!
 //! - `foundation`: Generate typed client for a foundation MCP server
+//!
+//! Requires the `codegen` feature to be enabled.
+
+#![cfg(feature = "codegen")]
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
