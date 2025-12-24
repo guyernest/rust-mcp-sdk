@@ -113,7 +113,6 @@ enum Commands {
         #[command(subcommand)]
         command: commands::schema::SchemaCommand,
     },
-
 }
 
 #[derive(Subcommand)]
