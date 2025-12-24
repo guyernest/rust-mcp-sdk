@@ -163,7 +163,16 @@ impl TestCommand {
                 all_tools,
                 with_resources,
                 with_prompts,
-            } => generate::execute(server, url, port, output, transport, all_tools, with_resources, with_prompts),
+            } => generate::execute(
+                server,
+                url,
+                port,
+                output,
+                transport,
+                all_tools,
+                with_resources,
+                with_prompts,
+            ),
 
             TestCommand::Upload {
                 server_id,
@@ -173,7 +182,7 @@ impl TestCommand {
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
                 runtime.block_on(upload::execute(server_id, paths, name, description))
-            }
+            },
 
             TestCommand::Download {
                 scenario_id,
@@ -182,18 +191,24 @@ impl TestCommand {
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
                 runtime.block_on(download::execute(scenario_id, output, format))
-            }
+            },
 
             TestCommand::List { server_id, all } => {
                 let runtime = tokio::runtime::Runtime::new()?;
                 runtime.block_on(list::execute(server_id, all))
-            }
+            },
         }
     }
 }
 
 // Legacy function for backwards compatibility with old CLI structure
-pub fn execute(server: String, port: u16, do_generate_scenarios: bool, detailed: bool) -> Result<()> {
+#[allow(dead_code)]
+pub fn execute(
+    server: String,
+    port: u16,
+    do_generate_scenarios: bool,
+    detailed: bool,
+) -> Result<()> {
     if do_generate_scenarios {
         generate::execute(
             Some(server.clone()),

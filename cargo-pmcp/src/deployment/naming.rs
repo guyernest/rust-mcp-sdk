@@ -18,6 +18,7 @@ pub struct BinaryInfo {
 
 /// Result of conflict detection
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct ConflictReport {
     pub has_conflicts: bool,
     pub conflicts: HashMap<String, Vec<BinaryInfo>>,
@@ -25,6 +26,7 @@ pub struct ConflictReport {
 }
 
 /// Get recommended binary name for a deployment target
+#[allow(dead_code)]
 pub fn get_recommended_binary_name(target: &str, _app_name: &str) -> String {
     match target {
         "aws-lambda" | "pmcp-run" => "bootstrap".to_string(),
@@ -34,6 +36,7 @@ pub fn get_recommended_binary_name(target: &str, _app_name: &str) -> String {
 }
 
 /// Get recommended package name for a deployment target
+#[allow(dead_code)]
 pub fn get_recommended_package_name(target: &str, app_name: &str) -> String {
     match target {
         "aws-lambda" | "pmcp-run" => format!("{}-lambda", app_name),
@@ -44,11 +47,13 @@ pub fn get_recommended_package_name(target: &str, app_name: &str) -> String {
 }
 
 /// Check if a binary name is required by platform
+#[allow(dead_code)]
 pub fn is_binary_name_required(target: &str) -> bool {
     matches!(target, "aws-lambda" | "pmcp-run")
 }
 
 /// Get the reason why a binary name is required
+#[allow(dead_code)]
 pub fn get_binary_name_reason(target: &str) -> Option<&'static str> {
     match target {
         "aws-lambda" | "pmcp-run" => Some(
@@ -88,6 +93,7 @@ pub fn detect_workspace_binaries(project_root: &Path) -> Result<Vec<BinaryInfo>>
 }
 
 /// Check for binary name conflicts in the workspace
+#[allow(dead_code)]
 pub fn check_conflicts(project_root: &Path) -> Result<ConflictReport> {
     let binaries = detect_workspace_binaries(project_root)?;
     let mut binary_map: HashMap<String, Vec<BinaryInfo>> = HashMap::new();
@@ -134,6 +140,7 @@ pub fn would_conflict(
 }
 
 /// Print conflict report in a user-friendly format
+#[allow(dead_code)]
 pub fn print_conflict_report(report: &ConflictReport) {
     if !report.has_conflicts {
         println!("✅ No binary naming conflicts detected");

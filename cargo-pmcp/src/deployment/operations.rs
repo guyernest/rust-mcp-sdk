@@ -91,6 +91,7 @@ impl DestroyResult {
     }
 
     /// Create a synchronous failure result
+    #[allow(dead_code)]
     pub fn sync_failure(message: impl Into<String>) -> Self {
         Self {
             success: false,
@@ -109,6 +110,7 @@ impl DestroyResult {
     }
 
     /// Check if this is an async operation that needs polling
+    #[allow(dead_code)]
     pub fn is_async(&self) -> bool {
         self.async_operation.is_some()
     }

@@ -76,6 +76,9 @@
 
 pub mod assets;
 pub mod client;
+#[cfg(feature = "composition")]
+#[cfg_attr(docsrs, doc(cfg(feature = "composition")))]
+pub mod composition;
 pub mod error;
 pub mod runtime;
 pub mod server;

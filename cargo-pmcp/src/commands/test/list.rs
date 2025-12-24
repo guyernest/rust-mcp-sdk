@@ -29,7 +29,10 @@ pub async fn execute(server_id: String, show_all: bool) -> Result<()> {
         println!("     cargo pmcp test generate --url <server-url>");
         println!();
         println!("  2. Upload to pmcp.run:");
-        println!("     cargo pmcp test upload --server-id {} scenarios/", server_id);
+        println!(
+            "     cargo pmcp test upload --server-id {} scenarios/",
+            server_id
+        );
         return Ok(());
     }
 
@@ -83,7 +86,7 @@ pub async fn execute(server_id: String, show_all: bool) -> Result<()> {
                     scenario.last_executed_at.as_deref().unwrap_or("-"),
                     status_colored
                 )
-            }
+            },
             None => "-".to_string(),
         };
 
@@ -113,11 +116,17 @@ pub async fn execute(server_id: String, show_all: bool) -> Result<()> {
     }
 
     println!();
-    println!("{}", "═════════════════════════════════════════════════════════════════".bright_cyan());
+    println!(
+        "{}",
+        "═════════════════════════════════════════════════════════════════".bright_cyan()
+    );
     println!();
     println!("{}", "Commands:".bright_white().bold());
     println!("  Download a scenario:  cargo pmcp test download --scenario-id <id>");
-    println!("  Upload scenarios:     cargo pmcp test upload --server-id {} <path>", server_id);
+    println!(
+        "  Upload scenarios:     cargo pmcp test upload --server-id {} <path>",
+        server_id
+    );
 
     if disabled_count > 0 && !show_all {
         println!();

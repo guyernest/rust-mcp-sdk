@@ -245,6 +245,7 @@ pub fn replace_variables_in_files(dir: &Path, variables: &HashMap<String, String
 }
 
 /// List available templates
+#[allow(dead_code)]
 pub fn list_templates() {
     println!("Available landing page templates:\n");
     for template in AVAILABLE_TEMPLATES {

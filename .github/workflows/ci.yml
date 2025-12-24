@@ -209,9 +209,8 @@ jobs:
         if ! command -v cargo-nextest &> /dev/null; then
           cargo install cargo-nextest
         fi
-        if ! command -v cargo-audit &> /dev/null; then
-          cargo install cargo-audit
-        fi
+        # Force install latest cargo-audit to support CVSS 4.0
+        cargo install cargo-audit --force
 
     - name: Check disk space before quality gate
       run: df -h

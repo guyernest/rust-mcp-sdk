@@ -8,8 +8,21 @@ pub const COMPLETE_CALCULATOR_LIB: &str = r##"//! Complete calculator MCP server
 //!   - `solve_quadratic` - SequentialWorkflow that chains tools + fetches resources
 //!   - `quadratic_simple` - SimplePrompt for comparison (self-contained calculation)
 //! - Resources: Educational content about quadratic formulas
+//!
+//! ## Output Schema for Type-Safe Composition
+//!
+//! All arithmetic tools return `ArithmeticResult` with output schema annotations.
+//! This enables:
+//! 1. Type-safe workflow step chaining (the workflow uses `field("step", "result")`)
+//! 2. Generated typed clients for external composition
+//! 3. Self-documenting API for MCP clients
+//!
+//! The workflow prompt `solve_quadratic` demonstrates how output schemas enable
+//! reliable data flow between tool calls - each step binds its result and the
+//! next step can access it with compile-time safety.
 
-use pmcp::{Error, Result, Server, TypedTool, SimplePrompt, ResourceCollection, StaticResource};
+use pmcp::{Error, Result, Server, SimplePrompt, ResourceCollection, StaticResource};
+use pmcp::server::typed_tool::TypedToolWithOutput;
 use pmcp::server::workflow::{SequentialWorkflow, WorkflowStep, ToolHandle, InternalPromptMessage};
 use pmcp::server::workflow::dsl::{prompt_arg, field, constant};
 use pmcp::types::{
@@ -21,6 +34,33 @@ use serde_json::json;
 use schemars::JsonSchema;
 use validator::Validate;
 use std::collections::HashMap;
+
+// ============================================================================
+// SHARED OUTPUT TYPE
+// ============================================================================
+
+/// Result from any arithmetic operation
+///
+/// All calculator tools return this consistent structure, enabling:
+/// 1. **Workflow chaining**: The `solve_quadratic` workflow uses `field("step", "result")`
+///    to pass values between steps - this works because all tools have a `result` field
+/// 2. **Type-safe composition**: Code generators can produce typed client code:
+///    ```rust,ignore
+///    let result: ArithmeticResult = calculator.add(5.0, 3.0).await?;
+///    println!("Answer: {}", result.result);  // Compiler knows the type!
+///    ```
+/// 3. **Human-readable output**: The `operation` field provides a formatted string
+///    that can be displayed to users or included in LLM context
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ArithmeticResult {
+    /// The numeric result of the calculation
+    #[schemars(description = "The numeric result of the arithmetic operation")]
+    pub result: f64,
+
+    /// Human-readable description of the operation performed
+    #[schemars(description = "A formatted string showing the operation (e.g., '5 + 3 = 8')")]
+    pub operation: String,
+}
 
 // ============================================================================
 // TOOL INPUT TYPES
@@ -419,55 +459,58 @@ Solve: **x² + 2x + 5 = 0**
             }),
             ..Default::default()
         })
-        // Add tools
+        // Add tools with TypedToolWithOutput for output schema annotations
+        // Each tool returns ArithmeticResult, enabling:
+        // 1. Workflow step chaining via field("step_name", "result")
+        // 2. Type-safe client generation for composition
         .tool(
             "add",
-            TypedTool::new("add", |input: AddInput, _extra| {
+            TypedToolWithOutput::new("add", |input: AddInput, _extra| {
                 Box::pin(async move {
                     input.validate()
                         .map_err(|e| Error::validation(format!("Validation failed: {}", e)))?;
                     let result = input.a + input.b;
-                    Ok(json!({
-                        "result": result,
-                        "operation": format!("{} + {} = {}", input.a, input.b, result)
-                    }))
+                    Ok(ArithmeticResult {
+                        result,
+                        operation: format!("{} + {} = {}", input.a, input.b, result),
+                    })
                 })
             })
             .with_description("Add two numbers together"),
         )
         .tool(
             "subtract",
-            TypedTool::new("subtract", |input: SubtractInput, _extra| {
+            TypedToolWithOutput::new("subtract", |input: SubtractInput, _extra| {
                 Box::pin(async move {
                     input.validate()
                         .map_err(|e| Error::validation(format!("Validation failed: {}", e)))?;
                     let result = input.a - input.b;
-                    Ok(json!({
-                        "result": result,
-                        "operation": format!("{} - {} = {}", input.a, input.b, result)
-                    }))
+                    Ok(ArithmeticResult {
+                        result,
+                        operation: format!("{} - {} = {}", input.a, input.b, result),
+                    })
                 })
             })
             .with_description("Subtract one number from another"),
         )
         .tool(
             "multiply",
-            TypedTool::new("multiply", |input: MultiplyInput, _extra| {
+            TypedToolWithOutput::new("multiply", |input: MultiplyInput, _extra| {
                 Box::pin(async move {
                     input.validate()
                         .map_err(|e| Error::validation(format!("Validation failed: {}", e)))?;
                     let result = input.a * input.b;
-                    Ok(json!({
-                        "result": result,
-                        "operation": format!("{} × {} = {}", input.a, input.b, result)
-                    }))
+                    Ok(ArithmeticResult {
+                        result,
+                        operation: format!("{} × {} = {}", input.a, input.b, result),
+                    })
                 })
             })
             .with_description("Multiply two numbers together"),
         )
         .tool(
             "divide",
-            TypedTool::new("divide", |input: DivideInput, _extra| {
+            TypedToolWithOutput::new("divide", |input: DivideInput, _extra| {
                 Box::pin(async move {
                     input.validate()
                         .map_err(|e| Error::validation(format!("Validation failed: {}", e)))?;
@@ -477,40 +520,40 @@ Solve: **x² + 2x + 5 = 0**
                     }
 
                     let result = input.a / input.b;
-                    Ok(json!({
-                        "result": result,
-                        "operation": format!("{} ÷ {} = {}", input.a, input.b, result)
-                    }))
+                    Ok(ArithmeticResult {
+                        result,
+                        operation: format!("{} ÷ {} = {}", input.a, input.b, result),
+                    })
                 })
             })
             .with_description("Divide one number by another (with zero-division check)"),
         )
         .tool(
             "power",
-            TypedTool::new("power", |input: PowerInput, _extra| {
+            TypedToolWithOutput::new("power", |input: PowerInput, _extra| {
                 Box::pin(async move {
                     input.validate()
                         .map_err(|e| Error::validation(format!("Validation failed: {}", e)))?;
                     let result = input.base.powf(input.exponent);
-                    Ok(json!({
-                        "result": result,
-                        "operation": format!("{}^{} = {}", input.base, input.exponent, result)
-                    }))
+                    Ok(ArithmeticResult {
+                        result,
+                        operation: format!("{}^{} = {}", input.base, input.exponent, result),
+                    })
                 })
             })
             .with_description("Raise a number to a power (exponentiation)"),
         )
         .tool(
             "sqrt",
-            TypedTool::new("sqrt", |input: SqrtInput, _extra| {
+            TypedToolWithOutput::new("sqrt", |input: SqrtInput, _extra| {
                 Box::pin(async move {
                     input.validate()
                         .map_err(|e| Error::validation(format!("Validation failed: {}", e)))?;
                     let result = input.n.sqrt();
-                    Ok(json!({
-                        "result": result,
-                        "operation": format!("√{} = {}", input.n, result)
-                    }))
+                    Ok(ArithmeticResult {
+                        result,
+                        operation: format!("√{} = {}", input.n, result),
+                    })
                 })
             })
             .with_description("Calculate square root of a non-negative number"),

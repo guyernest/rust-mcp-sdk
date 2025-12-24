@@ -8,16 +8,30 @@
 pub const CALCULATOR_LIB: &str = r####"//! Simple Calculator MCP Server
 //!
 //! A minimal MCP server that demonstrates:
-//! - Tool definition with TypedTool
-//! - JSON schema generation
+//! - Tool definition with TypedToolWithOutput (full input/output type safety)
+//! - Automatic JSON schema generation for both input AND output
+//! - Output schema annotations for type-safe server composition
 //! - Basic arithmetic operations
 //!
 //! This is the starting point for learning MCP. From here, you can:
 //! 1. Add more arithmetic operations (subtract, multiply, divide)
 //! 2. Add resources (e.g., calculation history)
 //! 3. Add workflow prompts for multi-step calculations
+//!
+//! ## Output Schema Feature
+//!
+//! This server uses `TypedToolWithOutput` which automatically generates
+//! output schema annotations (`pmcp:outputSchema`, `pmcp:outputTypeName`).
+//! This enables code generators to create typed clients for server composition:
+//!
+//! ```rust,ignore
+//! // Generated client code would look like:
+//! let result: AddResult = calculator_client.add(AddArgs { a: 5.0, b: 3.0 }).await?;
+//! println!("Sum: {}", result.result);  // Type-safe access!
+//! ```
 
-use pmcp::{Result, Server, TypedTool};
+use pmcp::{Result, Server};
+use pmcp::server::typed_tool::TypedToolWithOutput;
 use pmcp::types::{ServerCapabilities, ToolCapabilities};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -26,21 +40,39 @@ use serde::{Deserialize, Serialize};
 // TYPE DEFINITIONS
 // ============================================================================
 
+/// Input arguments for the add operation
+///
+/// This demonstrates type safety with automatic schema generation and validation:
+/// - `schemars::JsonSchema` automatically generates detailed JSON schema for MCP clients
+/// - `validator::Validate` provides runtime validation with custom constraints
+/// - `serde` handles JSON serialization/deserialization
+/// - `deny_unknown_fields` rejects any extra fields for security
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct AddInput {
-    /// First number
-    #[schemars(description = "The first number to add")]
+    /// First number in the addition operation
+    #[schemars(description = "First number in the addition operation", range(min = -1000000, max = 1000000))]
     pub a: f64,
 
-    /// Second number
-    #[schemars(description = "The second number to add")]
+    /// Second number in the addition operation
+    #[schemars(description = "Second number in the addition operation", range(min = -1000000, max = 1000000))]
     pub b: f64,
 }
 
+/// Output result from the add operation
+///
+/// This type is used for:
+/// 1. Type-safe return values from the tool handler
+/// 2. Automatic output schema generation (`pmcp:outputSchema` annotation)
+/// 3. Enabling typed client generation for server composition
+///
+/// When this server is composed by another MCP server, the code generator
+/// can create typed Rust structs for the response, enabling compile-time
+/// safety for inter-server communication.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AddResult {
-    /// The sum of the two numbers
+    /// The sum of the two input numbers
+    #[schemars(description = "The sum of a + b")]
     pub result: f64,
 }
 
@@ -58,7 +90,16 @@ async fn add_tool(input: AddInput, _extra: pmcp::RequestHandlerExtra) -> Result<
 // SERVER BUILDER
 // ============================================================================
 
-/// Build the calculator server
+/// Build the calculator server with output schema support
+///
+/// This server demonstrates the PMCP output schema feature:
+/// - Tools are registered with `TypedToolWithOutput` instead of `TypedTool`
+/// - Both input AND output types derive `JsonSchema`
+/// - The tool's `ToolInfo` includes `pmcp:outputSchema` and `pmcp:outputTypeName`
+///
+/// When you run `cargo pmcp schema export`, the exported schema will include
+/// the output type information, enabling `cargo pmcp generate` to create
+/// fully typed client code.
 pub fn build_calculator_server() -> Result<Server> {
     Server::builder()
         .name("calculator")
@@ -69,12 +110,16 @@ pub fn build_calculator_server() -> Result<Server> {
             }),
             ..Default::default()
         })
+        // Using TypedToolWithOutput for full input/output type safety
+        // This automatically generates:
+        // - Input schema from AddInput (as inputSchema)
+        // - Output schema from AddResult (as pmcp:outputSchema annotation)
         .tool(
             "add",
-            TypedTool::new("add", |input: AddInput, extra| {
+            TypedToolWithOutput::new("add", |input: AddInput, extra| {
                 Box::pin(add_tool(input, extra))
             })
-            .with_description("Add two numbers together")
+            .with_description("Add two numbers together with range validation")
         )
         .build()
 }

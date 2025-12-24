@@ -613,4 +613,76 @@ mod tests {
         assert!(json.get("prompts").is_none());
         assert!(json.get("resources").is_none());
     }
+
+    #[test]
+    fn server_capabilities_auto_set_serialization() {
+        // Test that auto-set capabilities (with Some(false)) serialize correctly
+        let caps = ServerCapabilities {
+            tools: Some(ToolCapabilities {
+                list_changed: Some(false),
+            }),
+            prompts: Some(PromptCapabilities {
+                list_changed: Some(false),
+            }),
+            resources: Some(ResourceCapabilities {
+                subscribe: Some(false),
+                list_changed: Some(false),
+            }),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_value(&caps).unwrap();
+        println!(
+            "Serialized capabilities: {}",
+            serde_json::to_string_pretty(&json).unwrap()
+        );
+
+        // Verify tools, prompts, resources are present
+        assert!(json.get("tools").is_some(), "tools should be present");
+        assert!(json.get("prompts").is_some(), "prompts should be present");
+        assert!(
+            json.get("resources").is_some(),
+            "resources should be present"
+        );
+
+        // Verify the listChanged fields are present
+        assert_eq!(json["tools"]["listChanged"], false);
+        assert_eq!(json["prompts"]["listChanged"], false);
+        assert_eq!(json["resources"]["listChanged"], false);
+        assert_eq!(json["resources"]["subscribe"], false);
+    }
+
+    #[test]
+    fn server_capabilities_with_none_fields_serialization() {
+        // Test that capabilities with None fields still have the parent object
+        let caps = ServerCapabilities {
+            tools: Some(ToolCapabilities { list_changed: None }),
+            prompts: Some(PromptCapabilities { list_changed: None }),
+            resources: Some(ResourceCapabilities {
+                subscribe: None,
+                list_changed: None,
+            }),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_value(&caps).unwrap();
+        println!(
+            "Serialized capabilities with None: {}",
+            serde_json::to_string_pretty(&json).unwrap()
+        );
+
+        // Verify tools, prompts, resources are present (even if empty objects)
+        assert!(
+            json.get("tools").is_some(),
+            "tools should be present even with None fields"
+        );
+        assert!(
+            json.get("prompts").is_some(),
+            "prompts should be present even with None fields"
+        );
+        assert!(
+            json.get("resources").is_some(),
+            "resources should be present even with None fields"
+        );
+    }
 }
