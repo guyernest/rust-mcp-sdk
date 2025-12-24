@@ -39,6 +39,4 @@ zip = "7.0"                             # Zip file creation for landing page dep
 
 # For schema discovery and code generation
 console = "0.16"                        # Terminal styling for schema commands
-
-# Note: The 'generate' command requires pmcp-composition which is not yet published.
-# It will be available once pmcp-composition is published to crates.io.
+thiserror = "2"                         # Error types for generated code

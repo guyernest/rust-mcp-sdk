@@ -37,10 +37,6 @@ enum Commands {
         /// Directory to create workspace in (defaults to current directory)
         #[arg(long)]
         path: Option<String>,
-
-        /// Server tier: foundation (data connectors) or domain (orchestration)
-        #[arg(long, value_parser = ["foundation", "domain"])]
-        tier: Option<String>,
     },
 
     /// Add a component to the workspace
@@ -106,13 +102,11 @@ enum Commands {
         command: commands::landing::LandingCommand,
     },
 
-    /// Schema discovery and management
+    /// Export schema from foundation MCP servers
     ///
-    /// Export, validate, and diff MCP server schemas for code generation
-    Schema {
-        #[command(subcommand)]
-        command: commands::schema::SchemaCommand,
-    },
+    /// Connect to a foundation server and generate typed Rust client code
+    /// for calling its tools. Supports both MCP HTTP and Lambda invocation.
+    Schema(commands::schema::SchemaCommand),
 }
 
 #[derive(Subcommand)]
@@ -179,8 +173,8 @@ fn main() -> Result<()> {
 
 fn execute_command(command: Commands) -> Result<()> {
     match command {
-        Commands::New { name, path, tier } => {
-            commands::new::execute(name, path, tier)?;
+        Commands::New { name, path } => {
+            commands::new::execute(name, path)?;
         },
         Commands::Add { component } => match component {
             AddCommands::Server {
@@ -223,8 +217,9 @@ fn execute_command(command: Commands) -> Result<()> {
             let project_root = std::env::current_dir()?;
             runtime.block_on(command.execute(project_root))?;
         },
-        Commands::Schema { command } => {
-            command.execute()?;
+        Commands::Schema(schema_cmd) => {
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(schema_cmd.execute())?;
         },
     }
     Ok(())
