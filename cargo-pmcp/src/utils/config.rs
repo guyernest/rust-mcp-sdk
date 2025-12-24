@@ -77,6 +77,7 @@ impl WorkspaceConfig {
     }
 
     /// Remove server configuration
+    #[allow(dead_code)]
     pub fn remove_server(&mut self, name: &str) -> Option<ServerConfig> {
         self.servers.remove(name)
     }

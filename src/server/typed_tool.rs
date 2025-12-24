@@ -250,6 +250,7 @@ where
             name: self.name.clone(),
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
+            annotations: None,
             _meta: None,
         })
     }
@@ -452,10 +453,23 @@ where
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
+        // Build annotations with output schema if available
+        let annotations = self.output_schema.as_ref().map(|schema| {
+            // Extract type name from schema's title field (set by schemars)
+            let type_name = schema
+                .get("title")
+                .and_then(|t| t.as_str())
+                .unwrap_or("Output")
+                .to_string();
+
+            crate::types::ToolAnnotations::new().with_output_schema(schema.clone(), type_name)
+        });
+
         Some(ToolInfo {
             name: self.name.clone(),
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
+            annotations,
             _meta: None,
         })
     }

@@ -40,6 +40,6 @@ pub use protocol::{
     PromptArgumentType, PromptInfo, PromptMessage, ProtocolVersion, ReadResourceParams,
     ReadResourceRequest, ReadResourceResult, Request, RequestMeta, ResourceInfo, ResourceTemplate,
     Role, SamplingMessage, ServerNotification, ServerRequest, SubscribeRequest, TokenUsage,
-    ToolInfo, UnsubscribeRequest,
+    ToolAnnotations, ToolInfo, UnsubscribeRequest,
 };
 pub use ui::{ToolUIMetadata, UIMimeType, UIResource, UIResourceContents};

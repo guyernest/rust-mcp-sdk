@@ -37,6 +37,10 @@ enum Commands {
         /// Directory to create workspace in (defaults to current directory)
         #[arg(long)]
         path: Option<String>,
+
+        /// Server tier: foundation (data connectors) or domain (orchestration)
+        #[arg(long, value_parser = ["foundation", "domain"])]
+        tier: Option<String>,
     },
 
     /// Add a component to the workspace
@@ -47,25 +51,12 @@ enum Commands {
         component: AddCommands,
     },
 
-    /// Test a server with mcp-tester
+    /// Test MCP servers with mcp-tester
     ///
-    /// Builds the server, starts it, and runs mcp-tester scenarios
+    /// Run tests locally, generate scenarios, or manage scenarios on pmcp.run
     Test {
-        /// Name of the server to test
-        #[arg(long)]
-        server: String,
-
-        /// Port to run the server on
-        #[arg(long, default_value = "3000")]
-        port: u16,
-
-        /// Generate scenarios before testing
-        #[arg(long)]
-        generate_scenarios: bool,
-
-        /// Show detailed test output
-        #[arg(long)]
-        detailed: bool,
+        #[command(subcommand)]
+        command: commands::test::TestCommand,
     },
 
     /// Start development server
@@ -113,6 +104,14 @@ enum Commands {
     Landing {
         #[command(subcommand)]
         command: commands::landing::LandingCommand,
+    },
+
+    /// Schema discovery and management
+    ///
+    /// Export, validate, and diff MCP server schemas for code generation
+    Schema {
+        #[command(subcommand)]
+        command: commands::schema::SchemaCommand,
     },
 }
 
@@ -180,8 +179,8 @@ fn main() -> Result<()> {
 
 fn execute_command(command: Commands) -> Result<()> {
     match command {
-        Commands::New { name, path } => {
-            commands::new::execute(name, path)?;
+        Commands::New { name, path, tier } => {
+            commands::new::execute(name, path, tier)?;
         },
         Commands::Add { component } => match component {
             AddCommands::Server {
@@ -199,13 +198,8 @@ fn execute_command(command: Commands) -> Result<()> {
                 commands::add::workflow(name, server)?;
             },
         },
-        Commands::Test {
-            server,
-            port,
-            generate_scenarios,
-            detailed,
-        } => {
-            commands::test::execute(server, port, generate_scenarios, detailed)?;
+        Commands::Test { command } => {
+            command.execute()?;
         },
         Commands::Dev {
             server,
@@ -228,6 +222,9 @@ fn execute_command(command: Commands) -> Result<()> {
             let runtime = tokio::runtime::Runtime::new()?;
             let project_root = std::env::current_dir()?;
             runtime.block_on(command.execute(project_root))?;
+        },
+        Commands::Schema { command } => {
+            command.execute()?;
         },
     }
     Ok(())

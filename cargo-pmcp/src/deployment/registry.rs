@@ -40,11 +40,13 @@ impl TargetRegistry {
     }
 
     /// List all registered targets
+    #[allow(dead_code)]
     pub fn list(&self) -> Vec<Arc<dyn DeploymentTarget>> {
         self.targets.values().cloned().collect()
     }
 
     /// List available targets (have prerequisites installed)
+    #[allow(dead_code)]
     pub async fn list_available(&self) -> Vec<Arc<dyn DeploymentTarget>> {
         let mut available = Vec::new();
         for target in self.targets.values() {
@@ -56,16 +58,19 @@ impl TargetRegistry {
     }
 
     /// Get the default target (currently aws-lambda)
+    #[allow(dead_code)]
     pub fn default_target(&self) -> Result<Arc<dyn DeploymentTarget>> {
         self.get("aws-lambda")
     }
 
     /// Check if a target exists
+    #[allow(dead_code)]
     pub fn has(&self, id: &str) -> bool {
         self.targets.contains_key(id)
     }
 
     /// Get target count
+    #[allow(dead_code)]
     pub fn count(&self) -> usize {
         self.targets.len()
     }

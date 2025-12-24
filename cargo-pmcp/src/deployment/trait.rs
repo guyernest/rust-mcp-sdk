@@ -8,6 +8,7 @@ use super::operations::{AsyncOperation, DestroyResult};
 
 /// Represents a built artifact ready for deployment
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum BuildArtifact {
     /// Native binary (e.g., ARM64 Linux for Lambda)
     Binary {
@@ -110,6 +111,7 @@ pub struct MetricsData {
 
 /// Test results from deployment testing
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TestResults {
     /// Whether tests passed
     pub success: bool,
@@ -123,6 +125,7 @@ pub struct TestResults {
 
 /// A single test failure
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TestFailure {
     /// Test name
     pub name: String,
@@ -146,6 +149,7 @@ pub enum SecretsAction {
 
 /// Trait that all deployment targets must implement
 #[async_trait]
+#[allow(dead_code)]
 pub trait DeploymentTarget: Send + Sync {
     /// Unique identifier for the target (e.g., "aws-lambda", "cloudflare-workers")
     fn id(&self) -> &str;

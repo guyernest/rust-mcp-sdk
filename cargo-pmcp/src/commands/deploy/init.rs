@@ -200,7 +200,7 @@ impl InitCommand {
         // Otherwise, check if this is a workspace
         if let Some(workspace) = cargo_toml.get("workspace") {
             if let Some(members) = workspace.get("members").and_then(|m| m.as_array()) {
-                // Look for *-server binaries in the workspace
+                // Priority 1: Look for *-server binaries in the workspace
                 for member in members {
                     if let Some(member_str) = member.as_str() {
                         if member_str.ends_with("-server") {
@@ -217,7 +217,46 @@ impl InitCommand {
                     }
                 }
 
-                // If no *-server found, just use the first member
+                // Priority 2: Look for mcp-*-core packages (domain server pattern)
+                for member in members {
+                    if let Some(member_str) = member.as_str() {
+                        let name = member_str.split('/').last().unwrap_or(member_str);
+                        if name.starts_with("mcp-") && name.ends_with("-core") {
+                            // Extract server name from "mcp-arithmetics-core" -> "arithmetics"
+                            let server_name = name
+                                .strip_prefix("mcp-")
+                                .and_then(|s| s.strip_suffix("-core"))
+                                .unwrap_or(name);
+                            return Ok(server_name.to_string());
+                        }
+                    }
+                }
+
+                // Priority 3: Look for *-lambda packages and extract the base name
+                for member in members {
+                    if let Some(member_str) = member.as_str() {
+                        let name = member_str.split('/').last().unwrap_or(member_str);
+                        if name.ends_with("-lambda") && name != "server-common-lambda" {
+                            // Extract server name from "arithmetics-lambda" -> "arithmetics"
+                            let server_name = name.strip_suffix("-lambda").unwrap_or(name);
+                            return Ok(server_name.to_string());
+                        }
+                    }
+                }
+
+                // Priority 4: Skip common utility packages and find the first "real" package
+                for member in members {
+                    if let Some(member_str) = member.as_str() {
+                        let name = member_str.split('/').last().unwrap_or(member_str);
+                        // Skip common utility packages
+                        if name == "server-common" || name == "server-common-lambda" {
+                            continue;
+                        }
+                        return Ok(name.to_string());
+                    }
+                }
+
+                // Fallback: use the first member
                 if let Some(first) = members.first().and_then(|m| m.as_str()) {
                     let name = first.split('/').last().unwrap_or(first);
                     return Ok(name.to_string());
@@ -454,6 +493,7 @@ app.synth();
                 r#"import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import {{ Construct }} from 'constructs';
 
 /**
@@ -466,9 +506,15 @@ export class McpServerStack extends cdk.Stack {{
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {{
     super(scope, id, props);
 
+    // Get configuration from context or environment
+    // These can be overridden via CDK context: -c serverId=myserver
+    const serverId = this.node.tryGetContext('serverId') || '{}';
+    const organizationId = this.node.tryGetContext('organizationId') || process.env.PMCP_ORGANIZATION_ID || 'default-org';
+    const mcpServersTable = this.node.tryGetContext('mcpServersTable') || process.env.MCP_SERVERS_TABLE || 'McpServer';
+
     // Lambda function (ARM64 for better price/performance)
     const mcpFunction = new lambda.Function(this, 'McpFunction', {{
-      functionName: '{}',
+      functionName: serverId,
       runtime: lambda.Runtime.PROVIDED_AL2023,
       handler: 'bootstrap',
       code: lambda.Code.fromAsset('.build'),
@@ -477,6 +523,10 @@ export class McpServerStack extends cdk.Stack {{
       timeout: cdk.Duration.seconds(30),
       environment: {{
         RUST_LOG: 'info',
+        // Composition configuration for domain servers calling foundation servers
+        PMCP_ORGANIZATION_ID: organizationId,
+        PMCP_SERVER_ID: serverId,
+        MCP_SERVERS_TABLE: mcpServersTable,
       }},
       tracing: lambda.Tracing.ACTIVE,
     }});
@@ -487,6 +537,30 @@ export class McpServerStack extends cdk.Stack {{
       retention: logs.RetentionDays.ONE_WEEK,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     }});
+
+    // IAM permissions for domain server composition
+    // These permissions allow domain servers to call foundation servers via Lambda
+    // 1. Read from DynamoDB McpServer table to discover foundation servers
+    mcpFunction.addToRolePolicy(new iam.PolicyStatement({{
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'dynamodb:GetItem',
+        'dynamodb:Query',
+      ],
+      resources: [
+        `arn:aws:dynamodb:${{this.region}}:${{this.account}}:table/${{mcpServersTable}}`,
+        `arn:aws:dynamodb:${{this.region}}:${{this.account}}:table/${{mcpServersTable}}/*`,
+      ],
+    }}));
+
+    // 2. Invoke other Lambda functions (foundation servers)
+    mcpFunction.addToRolePolicy(new iam.PolicyStatement({{
+      effect: iam.Effect.ALLOW,
+      actions: ['lambda:InvokeFunction'],
+      resources: [
+        `arn:aws:lambda:${{this.region}}:${{this.account}}:function:*`,
+      ],
+    }}));
 
     // Outputs
     new cdk.CfnOutput(this, 'LambdaArn', {{
@@ -627,26 +701,72 @@ export class McpServerStack extends cdk.Stack {{
         Ok(())
     }
 
+    /// Find an existing Lambda wrapper package in the workspace.
+    /// Returns the first *-lambda package that has a 'bootstrap' binary.
+    fn find_existing_lambda_wrapper(
+        &self,
+    ) -> Result<Option<crate::deployment::naming::BinaryInfo>> {
+        let binaries = crate::deployment::naming::detect_workspace_binaries(&self.project_root)?;
+
+        // Look for any Lambda wrapper package (ends with -lambda) that has the bootstrap binary
+        for binary in binaries {
+            if binary.binary_name == "bootstrap" && binary.package_name.ends_with("-lambda") {
+                return Ok(Some(binary));
+            }
+        }
+
+        Ok(None)
+    }
+
     fn create_lambda_wrapper(&self, server_name: &str) -> Result<()> {
-        // Check for binary name conflicts before creating package
         let new_package_name = format!("{}-lambda", server_name);
         let new_binary_name = "bootstrap";
 
+        // Check if target Lambda wrapper package already exists
+        let lambda_wrapper_dir = self.project_root.join(&new_package_name);
+        if lambda_wrapper_dir.exists() {
+            println!(
+                "   ℹ️  Lambda wrapper '{}' already exists, skipping creation",
+                new_package_name
+            );
+            return Ok(());
+        }
+
+        // Check for existing compatible Lambda wrapper (any *-lambda package with bootstrap binary)
+        // This handles the case where the project was created with a different naming convention
+        if let Some(existing) = self.find_existing_lambda_wrapper()? {
+            println!(
+                "   ℹ️  Found existing Lambda wrapper '{}' with 'bootstrap' binary",
+                existing.package_name
+            );
+            println!("   ℹ️  Skipping new Lambda wrapper creation - using existing wrapper");
+            println!(
+                "   💡 To use this wrapper, ensure it references 'mcp-{}-core'",
+                server_name
+            );
+            return Ok(());
+        }
+
+        // Check for binary name conflicts before creating package
         if let Some(existing) = crate::deployment::would_conflict(
             &self.project_root,
             new_binary_name,
             &new_package_name,
         )? {
-            crate::deployment::naming::print_conflict_warning(
-                &existing,
-                new_binary_name,
-                &new_package_name,
-            );
-            anyhow::bail!(
-                "Cannot create deployment: binary name '{}' conflicts with existing package '{}'",
-                new_binary_name,
-                existing.package_name
-            );
+            // Only error if the conflicting package is not a Lambda wrapper
+            // (should not happen given the check above, but be defensive)
+            if !existing.package_name.ends_with("-lambda") {
+                crate::deployment::naming::print_conflict_warning(
+                    &existing,
+                    new_binary_name,
+                    &new_package_name,
+                );
+                anyhow::bail!(
+                    "Cannot create deployment: binary name '{}' conflicts with existing package '{}'",
+                    new_binary_name,
+                    existing.package_name
+                );
+            }
         }
 
         // Create a Lambda-specific binary wrapper

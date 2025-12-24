@@ -2,6 +2,34 @@
 //!
 //! This module implements the `#[tool]` attribute macro for defining MCP tools
 //! with automatic schema generation and handler implementation.
+//!
+//! # Output Schema Generation
+//!
+//! The macro supports automatic output schema generation for type-safe composition.
+//! When `output_type` is specified, the generated `ToolInfo` includes PMCP output
+//! schema annotations that enable code generators to produce typed client code.
+//!
+//! ## Example
+//!
+//! ```ignore
+//! use pmcp_macros::tool;
+//! use schemars::JsonSchema;
+//! use serde::Serialize;
+//!
+//! #[derive(Debug, Serialize, JsonSchema)]
+//! struct QueryResult {
+//!     rows: Vec<Vec<String>>,
+//!     count: i64,
+//! }
+//!
+//! #[tool(
+//!     description = "Execute SQL query",
+//!     annotations(read_only = true, output_type = "QueryResult")
+//! )]
+//! async fn query(sql: String) -> Result<QueryResult, Error> {
+//!     // ...
+//! }
+//! ```
 
 use darling::FromMeta;
 use proc_macro2::{Ident, TokenStream};
@@ -25,16 +53,42 @@ struct ToolArgs {
 }
 
 /// Tool annotations for metadata
+///
+/// Includes standard MCP annotations plus PMCP extensions for output schema.
 #[derive(Debug, Default, FromMeta)]
 struct ToolAnnotations {
+    /// Category for tool organization
     #[darling(default)]
     category: Option<String>,
 
+    /// Complexity hint (e.g., "simple", "complex")
     #[darling(default)]
     complexity: Option<String>,
 
+    /// If true, the tool does not modify any state (MCP standard annotation)
     #[darling(default)]
     read_only: Option<bool>,
+
+    /// If true, the tool may perform destructive operations (MCP standard annotation)
+    #[darling(default)]
+    destructive: Option<bool>,
+
+    /// If true, tool is idempotent (MCP standard annotation)
+    #[darling(default)]
+    idempotent: Option<bool>,
+
+    /// If true, tool interacts with external systems (MCP standard annotation)
+    #[darling(default)]
+    open_world: Option<bool>,
+
+    /// Output type name for schema generation (PMCP extension)
+    ///
+    /// When specified, the macro generates output schema using `schemars::schema_for!`.
+    /// The type must derive `schemars::JsonSchema`.
+    ///
+    /// Example: `output_type = "QueryResult"`
+    #[darling(default)]
+    output_type: Option<String>,
 }
 
 /// Expands the #[tool] attribute macro  
@@ -81,6 +135,10 @@ pub fn expand_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStream>
     // Generate result conversion
     let result_conversion = generate_result_conversion(&return_type)?;
 
+    // Generate annotations and definition code
+    let (annotations_code, definition_code) =
+        generate_definition_code(&tool_name, &description, &args.annotations)?;
+
     // Build the handler implementation
     let expanded = quote! {
         #input
@@ -108,13 +166,11 @@ pub fn expand_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStream>
         }
 
         impl #wrapper_name {
-            /// Get tool definition
+            #annotations_code
+
+            /// Get tool definition with MCP annotations
             pub fn definition() -> pmcp::types::ToolInfo {
-                pmcp::types::ToolInfo::new(
-                    #tool_name,
-                    Some(#description.to_string()),
-                    Self::input_schema(),
-                )
+                #definition_code
             }
 
             /// Generate input schema
@@ -131,6 +187,120 @@ pub fn expand_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStream>
     };
 
     Ok(expanded)
+}
+
+/// Generate the annotations helper and definition code
+fn generate_definition_code(
+    tool_name: &str,
+    description: &str,
+    annotations: &Option<ToolAnnotations>,
+) -> syn::Result<(TokenStream, TokenStream)> {
+    match annotations {
+        None => {
+            // No annotations - simple ToolInfo::new()
+            let definition = quote! {
+                pmcp::types::ToolInfo::new(
+                    #tool_name,
+                    Some(#description.to_string()),
+                    Self::input_schema(),
+                )
+            };
+            Ok((quote!(), definition))
+        },
+        Some(ann) => {
+            // Build annotations with builder pattern
+            let mut annotation_chain = vec![quote!(pmcp::types::ToolAnnotations::new())];
+
+            // Add standard MCP annotations
+            if let Some(read_only) = ann.read_only {
+                annotation_chain.push(quote!(.with_read_only(#read_only)));
+            }
+            if let Some(destructive) = ann.destructive {
+                annotation_chain.push(quote!(.with_destructive(#destructive)));
+            }
+            if let Some(idempotent) = ann.idempotent {
+                annotation_chain.push(quote!(.with_idempotent(#idempotent)));
+            }
+            if let Some(open_world) = ann.open_world {
+                annotation_chain.push(quote!(.with_open_world(#open_world)));
+            }
+
+            // Check if output schema should be generated
+            let (output_schema_code, definition) = if let Some(ref output_type) = ann.output_type {
+                // Generate output schema method
+                let output_type_ident = Ident::new(output_type, proc_macro2::Span::call_site());
+                let output_type_name = output_type.clone();
+
+                let output_schema_fn = quote! {
+                    /// Generate output schema for type-safe composition (PMCP extension)
+                    ///
+                    /// This schema is included in tool annotations to enable code generators
+                    /// to produce typed client code for server-to-server composition.
+                    #[cfg(feature = "schema-generation")]
+                    fn output_schema() -> serde_json::Value {
+                        let schema = schemars::schema_for!(#output_type_ident);
+                        serde_json::to_value(&schema).unwrap_or_else(|_| {
+                            serde_json::json!({
+                                "type": "object",
+                                "additionalProperties": true
+                            })
+                        })
+                    }
+                };
+
+                // Build annotations with output schema
+                let annotations_with_output = quote! {
+                    #(#annotation_chain)*
+                        .with_output_schema(Self::output_schema(), #output_type_name)
+                };
+
+                let def = quote! {
+                    #[cfg(feature = "schema-generation")]
+                    {
+                        let annotations = #annotations_with_output;
+                        pmcp::types::ToolInfo::with_annotations(
+                            #tool_name,
+                            Some(#description.to_string()),
+                            Self::input_schema(),
+                            annotations,
+                        )
+                    }
+                    #[cfg(not(feature = "schema-generation"))]
+                    {
+                        // Without schema-generation, fall back to simple ToolInfo
+                        let annotations = #(#annotation_chain)*;
+                        pmcp::types::ToolInfo::with_annotations(
+                            #tool_name,
+                            Some(#description.to_string()),
+                            Self::input_schema(),
+                            annotations,
+                        )
+                    }
+                };
+
+                (output_schema_fn, def)
+            } else {
+                // No output schema - just use annotations without output_schema
+                let annotations_build = quote! {
+                    #(#annotation_chain)*
+                };
+
+                let def = quote! {
+                    let annotations = #annotations_build;
+                    pmcp::types::ToolInfo::with_annotations(
+                        #tool_name,
+                        Some(#description.to_string()),
+                        Self::input_schema(),
+                        annotations,
+                    )
+                };
+
+                (quote!(), def)
+            };
+
+            Ok((output_schema_code, definition))
+        },
+    }
 }
 
 /// Parameter information

@@ -17,12 +17,14 @@ struct GraphQLRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct GraphQLResponse<T> {
     data: Option<T>,
     errors: Option<Vec<GraphQLError>>,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct GraphQLError {
     message: String,
 }
@@ -44,6 +46,7 @@ pub struct UploadUrls {
 
 /// Response from createDeploymentFromS3 mutation
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct DeploymentInfo {
     #[serde(rename = "deploymentId")]
     pub deployment_id: String,
@@ -54,6 +57,7 @@ pub struct DeploymentInfo {
 
 /// Deployment status from getDeployment query
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct DeploymentStatus {
     pub id: String,
     pub status: String,
@@ -163,11 +167,37 @@ pub async fn upload_to_s3(url: &str, content: Vec<u8>, content_type: &str) -> Re
     Ok(())
 }
 
+/// Composition configuration for deployment
+#[derive(Debug, Clone, Default)]
+pub struct CompositionSettings {
+    pub tier: String,
+    pub allow_composition: bool,
+    pub internal_only: bool,
+    pub description: Option<String>,
+}
+
 /// Create deployment from S3 files
+#[allow(dead_code)]
 pub async fn create_deployment_from_s3(
     access_token: &str,
     urls: &UploadUrls,
     project_name: &str,
+) -> Result<DeploymentInfo> {
+    create_deployment_from_s3_with_composition(
+        access_token,
+        urls,
+        project_name,
+        CompositionSettings::default(),
+    )
+    .await
+}
+
+/// Create deployment from S3 files with composition settings
+pub async fn create_deployment_from_s3_with_composition(
+    access_token: &str,
+    urls: &UploadUrls,
+    project_name: &str,
+    composition: CompositionSettings,
 ) -> Result<DeploymentInfo> {
     let query = r#"
         mutation CreateDeploymentFromS3(
@@ -176,7 +206,11 @@ pub async fn create_deployment_from_s3(
             $projectName: String!,
             $runtime: String,
             $memorySize: Int,
-            $timeout: Int
+            $timeout: Int,
+            $tier: String,
+            $allowComposition: Boolean,
+            $internalOnly: Boolean,
+            $compositionDescription: String
         ) {
             createDeploymentFromS3(
                 templateS3Key: $templateS3Key,
@@ -184,7 +218,11 @@ pub async fn create_deployment_from_s3(
                 projectName: $projectName,
                 runtime: $runtime,
                 memorySize: $memorySize,
-                timeout: $timeout
+                timeout: $timeout,
+                tier: $tier,
+                allowComposition: $allowComposition,
+                internalOnly: $internalOnly,
+                compositionDescription: $compositionDescription
             ) {
                 deploymentId
                 status
@@ -200,7 +238,11 @@ pub async fn create_deployment_from_s3(
         "projectName": project_name,
         "runtime": "provided.al2023",
         "memorySize": 512,
-        "timeout": 30
+        "timeout": 30,
+        "tier": composition.tier,
+        "allowComposition": composition.allow_composition,
+        "internalOnly": composition.internal_only,
+        "compositionDescription": composition.description
     });
 
     #[derive(Debug, Deserialize)]
@@ -311,6 +353,7 @@ where
 
 /// Response from destroyDeployment mutation
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct DestroyDeploymentResult {
     pub id: String,
     #[serde(rename = "stackName")]
@@ -491,6 +534,7 @@ pub async fn get_deployment_outputs(
     }
 
     #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
     struct DeploymentItem {
         id: String,
         #[serde(rename = "projectName")]
@@ -523,6 +567,7 @@ pub async fn get_deployment_outputs(
 
 /// Response from getLandingUploadUrl mutation
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct LandingUploadUrl {
     #[serde(rename = "uploadUrl")]
     pub upload_url: String,
@@ -536,6 +581,7 @@ pub struct LandingUploadUrl {
 
 /// Response from deployLandingPage mutation
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct LandingInfo {
     #[serde(rename = "landingId")]
     pub landing_id: String,
@@ -552,6 +598,7 @@ pub struct LandingInfo {
 
 /// Landing page status from getLandingStatus mutation
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct LandingStatus {
     pub id: String,
     #[serde(rename = "serverId")]
@@ -695,6 +742,7 @@ pub async fn get_landing_status(access_token: &str, landing_id: &str) -> Result<
 
 /// OAuth configuration response from configureServerOAuth mutation
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct OAuthConfig {
     #[serde(rename = "serverId")]
     pub server_id: String,
@@ -716,6 +764,7 @@ pub struct OAuthConfig {
 
 /// OAuth endpoints response from fetchServerOAuthEndpoints query
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct OAuthEndpoints {
     #[serde(rename = "serverId")]
     pub server_id: String,
@@ -880,4 +929,177 @@ pub async fn fetch_server_oauth_endpoints(
     response
         .fetch_server_oauth_endpoints
         .context("OAuth not configured for this server")
+}
+
+// ========== Test Scenario Management GraphQL Functions ==========
+
+/// Response from uploadTestScenario mutation
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct UploadScenarioResult {
+    #[serde(rename = "scenarioId")]
+    pub scenario_id: String,
+    pub version: i32,
+}
+
+/// Response from downloadTestScenario query
+#[derive(Debug, Deserialize)]
+pub struct DownloadScenarioResult {
+    pub name: String,
+    pub content: String,
+    pub version: i32,
+}
+
+/// Scenario info from queryTestScenariosForServer query
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct ScenarioInfo {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub source: String,
+    pub enabled: bool,
+    pub version: i32,
+    #[serde(rename = "lastExecutedAt")]
+    pub last_executed_at: Option<String>,
+    #[serde(rename = "lastExecutionStatus")]
+    pub last_execution_status: Option<String>,
+    #[serde(rename = "createdAt")]
+    pub created_at: Option<String>,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: Option<String>,
+}
+
+/// Response from queryTestScenariosForServer query
+#[derive(Debug, Deserialize)]
+pub struct ListScenariosResult {
+    pub scenarios: Vec<ScenarioInfo>,
+}
+
+/// Upload a test scenario to pmcp.run
+pub async fn upload_test_scenario(
+    access_token: &str,
+    server_id: &str,
+    name: &str,
+    description: Option<&str>,
+    content: &str,
+    format: &str,
+) -> Result<UploadScenarioResult> {
+    let query = r#"
+        mutation UploadTestScenario(
+            $serverId: String!
+            $name: String!
+            $description: String
+            $content: String!
+            $format: UploadTestScenarioFormat
+        ) {
+            uploadTestScenario(
+                serverId: $serverId
+                name: $name
+                description: $description
+                content: $content
+                format: $format
+            ) {
+                scenarioId
+                version
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "serverId": server_id,
+        "name": name,
+        "description": description,
+        "content": content,
+        "format": format.to_lowercase()
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct UploadTestScenarioResponse {
+        #[serde(rename = "uploadTestScenario")]
+        upload_test_scenario: UploadScenarioResult,
+    }
+
+    let response: UploadTestScenarioResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    Ok(response.upload_test_scenario)
+}
+
+/// Download a test scenario from pmcp.run
+pub async fn download_test_scenario(
+    access_token: &str,
+    scenario_id: &str,
+    format: &str,
+) -> Result<DownloadScenarioResult> {
+    let query = r#"
+        query DownloadTestScenario(
+            $scenarioId: String!
+            $format: DownloadTestScenarioFormat
+        ) {
+            downloadTestScenario(
+                scenarioId: $scenarioId
+                format: $format
+            ) {
+                name
+                content
+                version
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "scenarioId": scenario_id,
+        "format": format.to_lowercase()
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct DownloadTestScenarioResponse {
+        #[serde(rename = "downloadTestScenario")]
+        download_test_scenario: DownloadScenarioResult,
+    }
+
+    let response: DownloadTestScenarioResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    Ok(response.download_test_scenario)
+}
+
+/// List test scenarios for an MCP server on pmcp.run
+pub async fn list_test_scenarios(
+    access_token: &str,
+    server_id: &str,
+) -> Result<ListScenariosResult> {
+    let query = r#"
+        query QueryTestScenariosForServer($serverId: String!) {
+            queryTestScenariosForServer(serverId: $serverId) {
+                scenarios
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "serverId": server_id
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct QueryTestScenariosResponse {
+        #[serde(rename = "queryTestScenariosForServer")]
+        query_test_scenarios: ListScenariosRaw,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct ListScenariosRaw {
+        scenarios: serde_json::Value,
+    }
+
+    let response: QueryTestScenariosResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    // Parse the JSON scenarios array
+    let scenarios: Vec<ScenarioInfo> =
+        serde_json::from_value(response.query_test_scenarios.scenarios)
+            .context("Failed to parse scenarios list")?;
+
+    Ok(ListScenariosResult { scenarios })
 }

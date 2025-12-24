@@ -117,14 +117,31 @@ pub async fn generate_scenarios(
     output_path: &str,
     options: GenerateOptions,
 ) -> Result<()> {
+    generate_scenarios_with_transport(server_url, output_path, options, None).await
+}
+
+/// Generate test scenarios with explicit transport type
+///
+/// # Arguments
+///
+/// * `server_url` - URL of the MCP server to test
+/// * `output_path` - Path where the generated scenario file will be written
+/// * `options` - Configuration for scenario generation
+/// * `transport` - Transport type: "http" (SSE), "jsonrpc" (POST), "stdio", or None for auto-detect
+pub async fn generate_scenarios_with_transport(
+    server_url: &str,
+    output_path: &str,
+    options: GenerateOptions,
+    transport: Option<&str>,
+) -> Result<()> {
     // Create a server tester
     let mut tester = ServerTester::new(
         server_url,
         Duration::from_secs(30),
-        false, // insecure
-        None,  // api_key
-        None,  // transport
-        None,  // http_middleware_chain
+        false,     // insecure
+        None,      // api_key
+        transport, // transport type
+        None,      // http_middleware_chain
     )?;
 
     // Create generator
@@ -162,6 +179,23 @@ pub async fn generate_scenarios(
 /// # }
 /// ```
 pub async fn run_scenario(scenario_path: &str, server_url: &str, detailed: bool) -> Result<()> {
+    run_scenario_with_transport(scenario_path, server_url, detailed, None).await
+}
+
+/// Run a test scenario with explicit transport type
+///
+/// # Arguments
+///
+/// * `scenario_path` - Path to the scenario YAML/JSON file
+/// * `server_url` - URL of the MCP server to test
+/// * `detailed` - Whether to show detailed step-by-step output
+/// * `transport` - Transport type: "http" (SSE), "jsonrpc" (POST), "stdio", or None for auto-detect
+pub async fn run_scenario_with_transport(
+    scenario_path: &str,
+    server_url: &str,
+    detailed: bool,
+    transport: Option<&str>,
+) -> Result<()> {
     use colored::*;
 
     // Load scenario
@@ -178,10 +212,10 @@ pub async fn run_scenario(scenario_path: &str, server_url: &str, detailed: bool)
     let mut tester = ServerTester::new(
         server_url,
         Duration::from_secs(30),
-        false, // insecure
-        None,  // api_key
-        None,  // transport
-        None,  // http_middleware_chain
+        false,     // insecure
+        None,      // api_key
+        transport, // transport type
+        None,      // http_middleware_chain
     )?;
 
     // Execute scenario

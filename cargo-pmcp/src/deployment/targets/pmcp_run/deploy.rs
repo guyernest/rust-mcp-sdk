@@ -160,12 +160,22 @@ pub async fn deploy_to_pmcp_run(
     println!("✅ Files uploaded successfully to S3");
     println!();
 
-    // Step 7: Create deployment via GraphQL
+    // Step 7: Create deployment via GraphQL with composition settings
     println!("🚀 Creating deployment...");
-    let deployment =
-        graphql::create_deployment_from_s3(&credentials.access_token, &urls, &config.server.name)
-            .await
-            .context("Failed to create deployment")?;
+    let composition = graphql::CompositionSettings {
+        tier: config.composition.tier.clone(),
+        allow_composition: config.composition.allow_composition,
+        internal_only: config.composition.internal_only,
+        description: config.composition.description.clone(),
+    };
+    let deployment = graphql::create_deployment_from_s3_with_composition(
+        &credentials.access_token,
+        &urls,
+        &config.server.name,
+        composition,
+    )
+    .await
+    .context("Failed to create deployment")?;
 
     println!("   Deployment ID: {}", deployment.deployment_id);
     println!();
