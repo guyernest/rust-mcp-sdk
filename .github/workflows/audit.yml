@@ -30,9 +30,8 @@ jobs:
     
     - name: Install cargo-audit
       run: |
-        if ! command -v cargo-audit &> /dev/null; then
-          cargo install cargo-audit
-        fi
+        # Force install latest version to support CVSS 4.0
+        cargo install cargo-audit --force
     
     - name: Run security audit
       run: cargo audit
