@@ -379,7 +379,7 @@ harness = false
 [workspace]
 members = ["pmcp-macros", "crates/mcp-tester", "examples/25-oauth-basic", "examples/test-basic", "cargo-pmcp"]
 # WASM examples require wasm32-unknown-unknown target and are excluded from regular workspace tests
-exclude = ["fuzz", "examples/cloudflare-worker-mcp", "examples/26-server-tester", "examples/wasm-client"]
+exclude = ["fuzz", "examples/cloudflare-worker-mcp", "examples/26-server-tester", "examples/27-course-server-minimal", "examples/wasm-client"]
 
 [package.metadata.docs.rs]
 all-features = true

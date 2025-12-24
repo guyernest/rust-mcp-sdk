@@ -1,0 +1,28 @@
+[package]
+name = "course-server-minimal"
+version = "0.1.0"
+edition = "2021"
+authors = ["PMCP SDK Contributors"]
+description = "Minimal MCP course server example - demonstrates content serving patterns"
+license = "MIT"
+repository = "https://github.com/paiml/rust-mcp-sdk"
+keywords = ["mcp", "course", "education", "content", "example"]
+categories = ["education", "development-tools"]
+
+[[bin]]
+name = "course-server-minimal"
+path = "src/main.rs"
+
+[dependencies]
+pmcp = { path = "../../", features = ["streamable-http"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+async-trait = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

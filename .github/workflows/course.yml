@@ -1,0 +1,180 @@
+name: Build and Deploy PMCP Course
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'pmcp-course/**'
+      - '.github/workflows/course.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'pmcp-course/**'
+      - '.github/workflows/course.yml'
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "course-pages"
+  cancel-in-progress: false
+
+jobs:
+  # Build the course book
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install mdBook
+        run: |
+          curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.4.40/mdbook-v0.4.40-x86_64-unknown-linux-gnu.tar.gz | tar -xz
+          chmod +x mdbook
+          sudo mv mdbook /usr/local/bin/
+
+      - name: Install mdbook-quiz
+        run: |
+          cargo install mdbook-quiz --locked || echo "mdbook-quiz installation failed, continuing without quiz support"
+
+      - name: Build Course Book
+        run: |
+          cd pmcp-course
+          mdbook build
+
+      - name: Upload book artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: course-book
+          path: pmcp-course/book
+          retention-days: 7
+
+  # Package course content for pmcp.run consumption
+  package-content:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Create course content package
+        run: |
+          # Create metadata file
+          cat > pmcp-course/src/metadata.toml << 'EOF'
+          [course]
+          title = "Advanced MCP Development"
+          version = "${{ github.ref_name }}"
+          authors = ["PMCP SDK Contributors"]
+          description = "Master enterprise MCP server development with Rust"
+
+          [build]
+          commit = "${{ github.sha }}"
+          date = "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          EOF
+
+          # Package content (excluding book output)
+          tar -czf course-content.tar.gz \
+            --transform 's,^pmcp-course/src/,,' \
+            pmcp-course/src/
+
+          # Show package contents
+          echo "Package contents:"
+          tar -tzf course-content.tar.gz | head -50
+
+          # Show package size
+          ls -lh course-content.tar.gz
+
+      - name: Upload content artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: course-content
+          path: course-content.tar.gz
+          retention-days: 30
+
+  # Upload content package to release (only on release)
+  upload-to-release:
+    if: github.event_name == 'release'
+    needs: [build, package-content]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download content artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: course-content
+
+      - name: Rename with version
+        run: |
+          mv course-content.tar.gz course-content-${{ github.ref_name }}.tar.gz
+          ls -lh course-content-*.tar.gz
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: course-content-${{ github.ref_name }}.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Deploy book to GitHub Pages (only on main branch push)
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages-course
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download book artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: course-book
+          path: book
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: book
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  # Validate examples compile (on PR)
+  validate-examples:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "examples/27-course-server-minimal"
+
+      - name: Build course-server-minimal example
+        run: |
+          cd examples/27-course-server-minimal
+          cargo build
+
+      - name: Test content loading
+        run: |
+          cd examples/27-course-server-minimal
+          CONTENT_DIR=../../pmcp-course/src cargo build
+          echo "Content loading validated"

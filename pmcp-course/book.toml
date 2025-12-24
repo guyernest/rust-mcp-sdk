@@ -1,0 +1,54 @@
+[book]
+title = "Advanced MCP: Enterprise-Grade AI Integration with Rust"
+authors = ["PMCP SDK Team"]
+description = "Build production-ready MCP servers for enterprise AI integration using the PMCP SDK"
+language = "en"
+multilingual = false
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = true
+
+[output.html]
+default-theme = "rust"
+preferred-dark-theme = "coal"
+additional-css = ["src/custom.css"]
+git-repository-url = "https://github.com/paiml/rust-mcp-sdk"
+edit-url-template = "https://github.com/paiml/rust-mcp-sdk/edit/main/pmcp-course/{path}"
+site-url = "/pmcp-course/"
+cname = ""
+input-404 = "not-found.md"
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.playground]
+editable = true
+copy-js = true
+line-numbers = true
+
+[output.html.code]
+hidelines = { rust = "#" }
+
+[output.html.search]
+enable = true
+limit-results = 30
+teaser-word-count = 30
+use-hierarchical-index = true
+boost-title = 2
+boost-hierarchy = 1
+boost-paragraph = 1
+expand = true
+heading-split-level = 3
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[preprocessor.quiz]
+command = "mdbook-quiz"
+fullscreen = true       # Quiz takes full screen during use
+cache-answers = true    # Saves progress in localStorage
+
+[output.html.redirect]

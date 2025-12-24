@@ -1,0 +1,1 @@
+# Lambda Architecture for MCP
