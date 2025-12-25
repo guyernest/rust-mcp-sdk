@@ -62,18 +62,17 @@ jobs:
         run: |
           mkdir -p site
 
-          # Copy landing page
-          cp docs/index.html site/
-          cp -r docs/assets site/ 2>/dev/null || true
-
-          # Copy book to root (for backwards compatibility) and /book/
-          cp -r pmcp-book/book/* site/
+          # Copy book to /book/ subdirectory
           mkdir -p site/book
           cp -r pmcp-book/book/* site/book/
 
-          # Copy course to /course/
+          # Copy course to /course/ subdirectory
           mkdir -p site/course
           cp -r pmcp-course/book/* site/course/
+
+          # Copy landing page (must be last to not be overwritten)
+          cp docs/index.html site/
+          cp -r docs/assets site/ 2>/dev/null || true
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

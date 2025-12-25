@@ -106,7 +106,10 @@ enum Commands {
     ///
     /// Connect to a foundation server and generate typed Rust client code
     /// for calling its tools. Supports both MCP HTTP and Lambda invocation.
-    Schema(commands::schema::SchemaCommand),
+    Schema {
+        #[command(subcommand)]
+        command: commands::schema::SchemaCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -174,7 +177,7 @@ fn main() -> Result<()> {
 fn execute_command(command: Commands) -> Result<()> {
     match command {
         Commands::New { name, path } => {
-            commands::new::execute(name, path)?;
+            commands::new::execute(name, path, None)?;
         },
         Commands::Add { component } => match component {
             AddCommands::Server {
@@ -217,9 +220,8 @@ fn execute_command(command: Commands) -> Result<()> {
             let project_root = std::env::current_dir()?;
             runtime.block_on(command.execute(project_root))?;
         },
-        Commands::Schema(schema_cmd) => {
-            let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(schema_cmd.execute())?;
+        Commands::Schema { command } => {
+            command.execute()?;
         },
     }
     Ok(())
