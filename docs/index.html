@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PMCP - Production MCP SDK for Rust</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --bg: #0f172a;
+            --bg-card: #1e293b;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --border: #334155;
+            --accent-book: #10b981;
+            --accent-course: #8b5cf6;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 4rem;
+        }
+
+        .logo {
+            font-size: 3.5rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--primary) 0%, #8b5cf6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 1rem;
+        }
+
+        .tagline {
+            font-size: 1.25rem;
+            color: var(--text-muted);
+            max-width: 600px;
+            margin: 0 auto;
+            line-height: 1.6;
+        }
+
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 2rem;
+            margin-top: 2rem;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 2rem;
+            text-decoration: none;
+            color: inherit;
+            transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+        }
+
+        .card-book:hover {
+            border-color: var(--accent-book);
+        }
+
+        .card-course:hover {
+            border-color: var(--accent-course);
+        }
+
+        .card-icon {
+            font-size: 3rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .card-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 0.75rem;
+        }
+
+        .card-book .card-title {
+            color: var(--accent-book);
+        }
+
+        .card-course .card-title {
+            color: var(--accent-course);
+        }
+
+        .card-description {
+            color: var(--text-muted);
+            line-height: 1.6;
+            margin-bottom: 1.5rem;
+            flex: 1;
+        }
+
+        .card-features {
+            list-style: none;
+            margin-bottom: 1.5rem;
+        }
+
+        .card-features li {
+            padding: 0.5rem 0;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card-features li::before {
+            content: "\2713";
+            font-weight: bold;
+        }
+
+        .card-book .card-features li::before {
+            color: var(--accent-book);
+        }
+
+        .card-course .card-features li::before {
+            color: var(--accent-course);
+        }
+
+        .card-cta {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 600;
+            margin-top: auto;
+        }
+
+        .card-book .card-cta {
+            color: var(--accent-book);
+        }
+
+        .card-course .card-cta {
+            color: var(--accent-course);
+        }
+
+        .card-cta::after {
+            content: "\2192";
+            transition: transform 0.2s;
+        }
+
+        .card:hover .card-cta::after {
+            transform: translateX(4px);
+        }
+
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
+            border-top: 1px solid var(--border);
+        }
+
+        footer a {
+            color: var(--primary);
+            text-decoration: none;
+        }
+
+        footer a:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 768px) {
+            .logo {
+                font-size: 2.5rem;
+            }
+
+            .tagline {
+                font-size: 1rem;
+            }
+
+            .container {
+                padding: 1.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1 class="logo">PMCP</h1>
+            <p class="tagline">
+                Production-grade Model Context Protocol SDK for Rust.
+                Build robust, scalable MCP servers with confidence.
+            </p>
+        </header>
+
+        <div class="cards">
+            <a href="./book/" class="card card-book">
+                <div class="card-icon">📖</div>
+                <h2 class="card-title">PMCP Guide</h2>
+                <p class="card-description">
+                    Comprehensive reference documentation for the PMCP SDK.
+                    Learn the architecture, APIs, and best practices for building MCP servers.
+                </p>
+                <ul class="card-features">
+                    <li>Complete API reference</li>
+                    <li>Architecture deep-dives</li>
+                    <li>Production patterns</li>
+                    <li>Example implementations</li>
+                </ul>
+                <span class="card-cta">Read the Guide</span>
+            </a>
+
+            <a href="./course/" class="card card-course">
+                <div class="card-icon">🎓</div>
+                <h2 class="card-title">Advanced MCP Course</h2>
+                <p class="card-description">
+                    Hands-on learning path for mastering MCP development.
+                    Build real-world servers through structured lessons and exercises.
+                </p>
+                <ul class="card-features">
+                    <li>Step-by-step tutorials</li>
+                    <li>Interactive quizzes</li>
+                    <li>Real-world projects</li>
+                    <li>Best practices</li>
+                </ul>
+                <span class="card-cta">Start Learning</span>
+            </a>
+        </div>
+    </div>
+
+    <footer>
+        <p>
+            <a href="https://github.com/paiml/rust-mcp-sdk">GitHub</a> ·
+            <a href="https://crates.io/crates/pmcp">crates.io</a> ·
+            <a href="https://docs.rs/pmcp">docs.rs</a>
+        </p>
+    </footer>
+</body>
+</html>
