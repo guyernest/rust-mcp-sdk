@@ -1,5 +1,10 @@
 # Quiz: Database MCP Servers
 
+id = "ch03-database"
+title = "Database MCP Servers"
+lesson_id = "ch03"
+pass_threshold = 0.7
+
 [[questions]]
 type = "MultipleChoice"
 prompt.prompt = "Why should MCP database servers only allow SELECT queries by default?"
