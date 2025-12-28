@@ -88,9 +88,11 @@ jobs:
           EOF
 
           # Package content (excluding book output)
+          # Include both src/ (chapters, quizzes) and exercises/
           tar -czf course-content.tar.gz \
-            --transform 's,^pmcp-course/src/,,' \
-            pmcp-course/src/
+            --transform 's,^pmcp-course/,,' \
+            pmcp-course/src/ \
+            pmcp-course/exercises/
 
           # Show package contents
           echo "Package contents:"
