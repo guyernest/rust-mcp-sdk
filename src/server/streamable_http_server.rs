@@ -662,8 +662,86 @@ async fn extract_and_validate_auth(
             },
         }
     } else {
-        Ok(None)
+        // No auth provider - try to extract auth from proxy headers (X-PMCP-*)
+        // This is used when running behind a proxy that validates auth and forwards claims
+        Ok(extract_auth_from_proxy_headers(headers))
     }
+}
+
+/// Extract authentication context from proxy-forwarded headers (X-PMCP-*)
+///
+/// When running behind the pmcp.run proxy or similar, the proxy validates OAuth
+/// tokens and forwards user claims as X-PMCP-* headers. This function extracts
+/// those headers into an `AuthContext`.
+fn extract_auth_from_proxy_headers(
+    headers: &HeaderMap,
+) -> Option<crate::server::auth::AuthContext> {
+    // Check for user ID header (required)
+    let user_id = headers
+        .get("x-pmcp-user-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())?;
+
+    // Extract optional claims
+    let email = headers
+        .get("x-pmcp-user-email")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let name = headers
+        .get("x-pmcp-user-name")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let groups = headers
+        .get("x-pmcp-user-groups")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let tenant_id = headers
+        .get("x-pmcp-tenant-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    // Build claims map
+    let mut claims = std::collections::HashMap::new();
+    if let Some(ref email) = email {
+        claims.insert(
+            "email".to_string(),
+            serde_json::Value::String(email.clone()),
+        );
+    }
+    if let Some(ref name) = name {
+        claims.insert("name".to_string(), serde_json::Value::String(name.clone()));
+    }
+    if let Some(ref groups) = groups {
+        claims.insert(
+            "groups".to_string(),
+            serde_json::Value::String(groups.clone()),
+        );
+    }
+    if let Some(ref tenant_id) = tenant_id {
+        claims.insert(
+            "tenant_id".to_string(),
+            serde_json::Value::String(tenant_id.clone()),
+        );
+    }
+
+    tracing::debug!(
+        user_id = %user_id,
+        email = ?email,
+        "Extracted auth context from proxy headers"
+    );
+
+    Some(crate::server::auth::AuthContext {
+        subject: user_id,
+        scopes: vec![],
+        claims,
+        token: None,
+        client_id: None,
+        expires_at: None,
+        authenticated: true,
+    })
 }
 
 /// Fast path handler without HTTP middleware
