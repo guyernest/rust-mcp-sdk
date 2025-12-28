@@ -1,5 +1,3 @@
-# Exercise: Building a Calculator Tool
-
 ::: exercise
 id: ch02-02-calculator
 difficulty: beginner

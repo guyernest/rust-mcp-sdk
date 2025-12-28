@@ -88,11 +88,10 @@ jobs:
           EOF
 
           # Package content (excluding book output)
-          # Include both src/ (chapters, quizzes) and exercises/
+          # Exercises are now under src/exercises/ per mdbook-exercises conventions
           tar -czf course-content.tar.gz \
             --transform 's,^pmcp-course/,,' \
-            pmcp-course/src/ \
-            pmcp-course/exercises/
+            pmcp-course/src/
 
           # Show package contents
           echo "Package contents:"

@@ -1,5 +1,3 @@
-# Exercise: Your First MCP Server
-
 ::: exercise
 id: ch02-01-hello-mcp
 difficulty: beginner

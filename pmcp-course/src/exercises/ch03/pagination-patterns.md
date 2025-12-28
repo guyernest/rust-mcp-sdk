@@ -1,13 +1,10 @@
-# Implementing Pagination for Large Results
-
-**Type:** Implementation  
-**Difficulty:** Intermediate  
-**Estimated Time:** 30 minutes  
-**Prerequisites:** ch03-01-db-query-basics
-
----
-
-## Overview
+::: exercise
+id: ch03-03-pagination-patterns
+type: implementation
+difficulty: intermediate
+time: 30 minutes
+prerequisites: ch03-01-db-query-basics
+:::
 
 Your database query tool from the previous exercise works great for small result sets, but what happens when a table has millions of rows? Without proper pagination:
 
@@ -17,67 +14,38 @@ Your database query tool from the previous exercise works great for small result
 
 This exercise teaches cursor-based pagination - the production pattern for handling large datasets efficiently. You'll learn why it's superior to offset-based pagination and how to implement it safely.
 
----
+::: objectives
+thinking:
+  - Why offset pagination fails at scale (OFFSET 1000000 is slow)
+  - How cursor-based pagination maintains consistent performance
+  - Tradeoffs between different pagination strategies
+doing:
+  - Implement cursor-based pagination with a 'next' token
+  - Handle edge cases (empty results, last page, invalid cursors)
+  - Design API responses that guide AI assistants to fetch more
+:::
 
-## Learning Objectives
+::: discussion
+- If you have 10 million rows and an AI asks for "all customers", what should happen?
+- Why is `OFFSET 999000 LIMIT 1000` slower than `WHERE id > 999000 LIMIT 1000`?
+- How should an MCP response indicate that more data is available?
+- What makes a good pagination cursor? (hint: not just a page number)
+:::
 
-### Thinking
-- Why offset pagination fails at scale (OFFSET 1000000 is slow)
-- How cursor-based pagination maintains consistent performance
-- Tradeoffs between different pagination strategies
-
-### Doing
-- Implement cursor-based pagination with a 'next' token
-- Handle edge cases (empty results, last page, invalid cursors)
-- Design API responses that guide AI assistants to fetch more
-
----
-
-## Discussion Questions
-
-Before starting, consider:
-
-1. If you have 10 million rows and an AI asks for "all customers", what should happen?
-2. Why is `OFFSET 999000 LIMIT 1000` slower than `WHERE id > 999000 LIMIT 1000`?
-3. How should an MCP response indicate that more data is available?
-4. What makes a good pagination cursor? (hint: not just a page number)
-
----
-
-## Concepts
-
-### Offset-Based Pagination (The Problem)
-
-```sql
--- Page 1
-SELECT * FROM users LIMIT 100 OFFSET 0
-
--- Page 10000
-SELECT * FROM users LIMIT 100 OFFSET 999900
-```
-
-**Problem:** The database must scan and skip 999,900 rows for page 10000. Performance degrades linearly with offset.
-
-### Cursor-Based Pagination (The Solution)
-
-```sql
--- Page 1
-SELECT * FROM users WHERE id > 0 ORDER BY id LIMIT 100
-
--- Next page (cursor contains last_id = 100)
-SELECT * FROM users WHERE id > 100 ORDER BY id LIMIT 100
-```
-
-**Solution:** Uses an index to jump directly to the starting point. O(1) performance regardless of position.
-
----
-
-## Starter Code
-
-```rust
+::: starter file="src/main.rs" language=rust
 //! Paginated Database Query Tool
 //!
 //! Demonstrates production-ready pagination patterns for large datasets.
+//!
+//! CONCEPT: Offset vs Cursor Pagination
+//!
+//! Offset-Based (SLOW at scale):
+//!   SELECT * FROM users LIMIT 100 OFFSET 999900
+//!   // Database must scan and skip 999,900 rows!
+//!
+//! Cursor-Based (O(1) performance):
+//!   SELECT * FROM users WHERE id > 999900 ORDER BY id LIMIT 100
+//!   // Uses index to jump directly to starting point
 
 use pmcp::{Server, ServerCapabilities, ToolCapabilities};
 use pmcp::server::TypedTool;
@@ -217,21 +185,20 @@ async fn main() -> Result<()> {
     println!("Paginated database server ready!");
     Ok(())
 }
-```
+:::
 
----
-
-## Hints
-
-### Level 1: Validate the table
+::: hint level=1
+Start by validating the table is in the allowlist:
 
 ```rust
 if !ALLOWED_TABLES.contains(&input.table.as_str()) {
     return Err(anyhow::anyhow!("Table not allowed"));
 }
 ```
+:::
 
-### Level 2: Build query with cursor support
+::: hint level=2
+Build the query with cursor support:
 
 ```rust
 let start_id = if let Some(cursor_str) = &input.cursor {
@@ -249,8 +216,10 @@ let query = format!(
     input.table, start_id, input.page_size + 1
 );
 ```
+:::
 
-### Level 3: Complete implementation with has_more detection
+::: hint level=3
+Complete implementation with has_more detection:
 
 ```rust
 async fn paginated_query(pool: &DbPool, input: PaginatedQueryInput) -> Result<PaginatedResult> {
@@ -274,7 +243,7 @@ async fn paginated_query(pool: &DbPool, input: PaginatedQueryInput) -> Result<Pa
         None => 0,
     };
 
-    // Build and execute query
+    // Build and execute query - fetch N+1 to detect more pages
     let query = format!(
         "SELECT * FROM {} WHERE id > {} ORDER BY id LIMIT {}",
         input.table, start_id, page_size + 1
@@ -288,16 +257,118 @@ async fn paginated_query(pool: &DbPool, input: PaginatedQueryInput) -> Result<Pa
     let has_more = rows.len() > page_size as usize;
     let rows: Vec<_> = rows.into_iter().take(page_size as usize).collect();
 
-    // Build result...
+    // Build next_cursor if more pages exist...
 }
 ```
+:::
 
----
+::: solution reveal=on-demand
+```rust
+async fn paginated_query(pool: &DbPool, input: PaginatedQueryInput) -> Result<PaginatedResult> {
+    // Validate table is in allowlist
+    if !ALLOWED_TABLES.contains(&input.table.as_str()) {
+        return Err(anyhow::anyhow!("Table '{}' not in allowlist", input.table));
+    }
 
-## Tests
+    // Limit page size to max 100
+    let page_size = input.page_size.min(100).max(1);
 
-Your implementation should pass these tests:
+    // Decode cursor if provided
+    let start_id = match &input.cursor {
+        Some(cursor_str) => {
+            let cursor = Cursor::decode(cursor_str)?;
+            // Validate cursor is for same table (security check)
+            if cursor.table != input.table {
+                return Err(anyhow::anyhow!(
+                    "Cursor was created for table '{}', not '{}'",
+                    cursor.table, input.table
+                ));
+            }
+            cursor.last_id
+        }
+        None => 0,
+    };
 
+    // Build query - fetch page_size + 1 to detect if more pages exist
+    let query = format!(
+        "SELECT * FROM {} WHERE id > ? ORDER BY id LIMIT ?",
+        input.table
+    );
+
+    let all_rows = sqlx::query(&query)
+        .bind(start_id)
+        .bind(page_size + 1)
+        .fetch_all(pool.as_ref())
+        .await?;
+
+    // Determine if there are more results
+    let has_more = all_rows.len() > page_size as usize;
+    let rows: Vec<_> = all_rows.into_iter().take(page_size as usize).collect();
+
+    // Extract column names
+    let columns: Vec<String> = if let Some(first_row) = rows.first() {
+        first_row.columns().iter().map(|c| c.name().to_string()).collect()
+    } else {
+        vec![]
+    };
+
+    // Convert rows to JSON values
+    let row_data: Vec<Vec<serde_json::Value>> = rows.iter().map(|row| {
+        columns.iter().enumerate().map(|(i, _)| {
+            // Try to get as different types
+            if let Ok(v) = row.try_get::<i64, _>(i) {
+                serde_json::Value::Number(v.into())
+            } else if let Ok(v) = row.try_get::<String, _>(i) {
+                serde_json::Value::String(v)
+            } else {
+                serde_json::Value::Null
+            }
+        }).collect()
+    }).collect();
+
+    // Get last ID for cursor
+    let last_id = row_data.last()
+        .and_then(|row| row.first())
+        .and_then(|v| v.as_i64());
+
+    // Create next cursor if more data exists
+    let next_cursor = if has_more {
+        last_id.map(|id| Cursor {
+            last_id: id,
+            table: input.table.clone(),
+        }.encode())
+    } else {
+        None
+    };
+
+    // Human-readable status for AI
+    let status = if has_more {
+        format!(
+            "Showing {} rows. More data available - pass next_cursor to continue.",
+            row_data.len()
+        )
+    } else {
+        format!("Showing {} rows. This is all available data.", row_data.len())
+    };
+
+    Ok(PaginatedResult {
+        columns,
+        rows: row_data,
+        count: row_data.len(),
+        next_cursor,
+        status,
+    })
+}
+
+// Key patterns demonstrated:
+// 1. Opaque Cursors - base64 JSON hides implementation details
+// 2. Fetch N+1 Pattern - efficiently detect more pages without COUNT
+// 3. Table Validation in Cursor - prevent cursor reuse attacks
+// 4. Human-Readable Status - helps AI understand pagination state
+```
+:::
+
+::: tests mode=local
 ```rust
 #[cfg(test)]
 mod tests {
@@ -329,62 +400,11 @@ mod tests {
     }
 }
 ```
+:::
 
----
-
-## Solution Explanation
-
-The complete solution demonstrates these key patterns:
-
-### 1. Opaque Cursors
-We encode cursor state as base64 JSON. This:
-- Hides implementation details from clients
-- Allows adding fields without breaking clients
-- Validates that cursor matches the current query
-
-### 2. Fetch N+1 Pattern
-```rust
-let rows = ... LIMIT page_size + 1
-let has_more = rows.len() > page_size;
-let rows = rows.into_iter().take(page_size);
-```
-This efficiently detects whether more pages exist without an extra COUNT query.
-
-### 3. Table Validation in Cursor
-The cursor includes the table name to prevent attacks like:
-- Get cursor from `users` table
-- Use it to paginate `admin_secrets` table
-
-### 4. Human-Readable Status
-The `status` field helps AI assistants understand pagination:
-- "More data available - use next_cursor"
-- "This is all available data"
-
----
-
-## Reflection Questions
-
-1. Why do we include the table name in the cursor?
-2. What would happen if rows were deleted between page fetches?
-3. How would you support sorting by a non-unique column?
-4. Why is the cursor base64-encoded JSON instead of just an ID?
-
----
-
-## Production Considerations
-
-Real-world pagination often needs:
-- Support for non-integer primary keys (UUIDs)
-- Compound cursors for multi-column sorting
-- Cursor expiration for long-lived operations
-- Total count estimates (not exact, for UI)
-- Support for backward pagination (previous page)
-
----
-
-## Next Steps
-
-After completing this exercise:
-- Consider how pagination affects the AI conversation experience
-- Think about caching strategies for repeated queries
-- Explore how different databases handle large result sets
+::: reflection
+- Why do we include the table name in the cursor?
+- What would happen if rows were deleted between page fetches?
+- How would you support sorting by a non-unique column?
+- Why is the cursor base64-encoded JSON instead of just an ID?
+:::

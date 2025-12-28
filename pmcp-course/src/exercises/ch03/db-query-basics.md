@@ -1,5 +1,3 @@
-# Exercise: Building a Database Query Tool
-
 ::: exercise
 id: ch03-01-db-query-basics
 type: implementation

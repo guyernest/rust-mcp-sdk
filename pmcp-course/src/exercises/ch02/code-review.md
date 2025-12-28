@@ -1,5 +1,3 @@
-# Exercise: Code Review - Common MCP Server Mistakes
-
 ::: exercise
 id: ch02-03-code-review-basics
 type: code_review
