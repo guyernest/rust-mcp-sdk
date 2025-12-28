@@ -49,6 +49,10 @@ jobs:
         run: |
           cargo install mdbook-quiz --locked || echo "mdbook-quiz installation failed, continuing without quiz support"
 
+      - name: Install mdbook-exercises
+        run: |
+          cargo install mdbook-exercises --locked || echo "mdbook-exercises installation failed, continuing without exercise support"
+
       - name: Build Course Book
         run: |
           cd pmcp-course
