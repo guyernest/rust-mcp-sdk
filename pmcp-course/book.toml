@@ -13,8 +13,8 @@ create-missing = true
 [output.html]
 default-theme = "rust"
 preferred-dark-theme = "coal"
-additional-css = ["src/custom.css"]
-additional-js = []
+additional-css = ["src/custom.css", "src/theme/exercises.css"]
+additional-js = ["src/theme/exercises.js"]
 git-repository-url = "https://github.com/paiml/rust-mcp-sdk"
 edit-url-template = "https://github.com/paiml/rust-mcp-sdk/edit/main/pmcp-course/{path}"
 site-url = "/pmcp-course/"
@@ -54,7 +54,7 @@ cache-answers = true    # Saves progress in localStorage
 
 [preprocessor.exercises]
 command = "mdbook-exercises"
-enabled = false
+enabled = true
 manage_assets = true
 reveal_hints = false
 reveal_solution = false
