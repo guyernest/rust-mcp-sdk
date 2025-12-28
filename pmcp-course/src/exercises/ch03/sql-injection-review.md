@@ -1,13 +1,10 @@
-# Code Review: SQL Injection Vulnerabilities
-
-**Type:** Code Review  
-**Difficulty:** Intermediate  
-**Estimated Time:** 25 minutes  
-**Prerequisites:** ch03-01-db-query-basics, ch02-03-code-review-basics
-
----
-
-## Overview
+::: exercise
+id: ch03-02-sql-injection-review
+type: code-review
+difficulty: intermediate
+time: 25 minutes
+prerequisites: ch03-01-db-query-basics, ch02-03-code-review-basics
+:::
 
 You've been asked to review a database query tool before it goes to production. The developer is new to security and made several classic mistakes. SQL injection vulnerabilities can lead to data breaches, data loss, and complete system compromise.
 
@@ -15,47 +12,35 @@ This exercise builds on your code review skills from Chapter 2, now with a secur
 
 **Your task:** Identify ALL security vulnerabilities, categorize them by severity, and propose secure alternatives using parameterized queries.
 
----
+::: objectives
+thinking:
+  - How SQL injection attacks work and why they're dangerous
+  - Why string concatenation for SQL is always wrong
+  - The difference between blocklisting and allowlisting
+doing:
+  - Identify multiple SQL injection vulnerabilities
+  - Propose fixes using parameterized queries
+  - Recognize insufficient security controls
+:::
 
-## Learning Objectives
+::: discussion
+- How does SQL injection work? What allows it to happen?
+- Why is checking for "DROP" and "DELETE" not sufficient protection?
+- What's the fundamental problem with string concatenation in SQL?
+- How do parameterized queries prevent injection?
+:::
 
-### Thinking
-- How SQL injection attacks work and why they're dangerous
-- Why string concatenation for SQL is always wrong
-- The difference between blocklisting and allowlisting
-
-### Doing
-- Identify multiple SQL injection vulnerabilities
-- Propose fixes using parameterized queries
-- Recognize insufficient security controls
-
----
-
-## Discussion Questions
-
-Before reviewing the code, consider:
-
-1. How does SQL injection work? What allows it to happen?
-2. Why is checking for "DROP" and "DELETE" not sufficient protection?
-3. What's the fundamental problem with string concatenation in SQL?
-4. How do parameterized queries prevent injection?
-
----
-
-## Code to Review
-
-Review the following code for security vulnerabilities. You should find at least 7 issues.
-
-**Severity Guide:**
-- **Critical:** Direct SQL injection, data breach possible
-- **High:** Indirect injection, privilege escalation possible
-- **Medium:** Information disclosure, DoS potential
-- **Low:** Missing best practices, defense in depth gaps
-
-```rust
-//! User Search MCP Server
+::: starter file="src/main.rs" language=rust
+//! User Search MCP Server - CODE REVIEW EXERCISE
 //!
-//! Provides tools to search and filter user data.
+//! Review this code for security vulnerabilities.
+//! You should find at least 7 issues.
+//!
+//! Severity Guide:
+//! - Critical: Direct SQL injection, data breach possible
+//! - High: Indirect injection, privilege escalation possible
+//! - Medium: Information disclosure, DoS potential
+//! - Low: Missing best practices, defense in depth gaps
 
 use pmcp::{Server, ServerCapabilities, ToolCapabilities};
 use pmcp::server::TypedTool;
@@ -219,40 +204,30 @@ async fn main() -> anyhow::Result<()> {
     println!("User search server ready!");
     Ok(())
 }
-```
+:::
 
----
+::: hint level=1
+Look for string concatenation patterns like `format!()` or `push_str()` that include user input directly in SQL queries.
+:::
 
-## Review Categories
+::: hint level=2
+The blocklist approach (checking for "DROP" and "DELETE") can be bypassed. Consider: `'; SELECT * FROM users WHERE role='admin' --`
+:::
 
-Organize your findings by these categories:
+::: hint level=3
+Issues to find:
+1. Name filter: SQL injection via string concatenation
+2. Email domain filter: SQL injection (no validation)
+3. Sort column: SQL injection (arbitrary column/expression)
+4. Sort order: Injection possible (only checks exact match)
+5. get_user: user_id is String, concatenated without validation
+6. update_nickname: Direct string concatenation
+7. Architecture: UPDATE tool on "read-only" server
+:::
 
-1. **SQL Injection** - Direct vulnerabilities allowing arbitrary SQL execution
-2. **Input Validation** - Missing or inadequate input validation
-3. **Authorization/Access Control** - Missing permission checks
-4. **Data Exposure** - Leaking sensitive information
-5. **Defense in Depth** - Missing security layers
-
----
-
-## Your Review
-
-For each issue found, document:
-
-1. **Location:** Which line(s) or function
-2. **Severity:** Critical / High / Medium / Low
-3. **Category:** From the list above
-4. **Issue:** What's wrong
-5. **Attack Example:** How an attacker could exploit it
-6. **Fix:** How to remediate it
-
----
-
-## Secure Alternative
-
-After completing your review, consider how the `search_users` function should be rewritten using parameterized queries:
-
+::: solution reveal=on-demand
 ```rust
+// Secure implementation of search_users using parameterized queries
 async fn search_users(pool: &DbPool, input: SearchUsersInput) -> anyhow::Result<Vec<User>> {
     let mut conditions = vec!["1=1".to_string()];
     let mut params: Vec<String> = vec![];
@@ -298,34 +273,19 @@ async fn search_users(pool: &DbPool, input: SearchUsersInput) -> anyhow::Result<
         User { id, name, email, role }
     }).collect())
 }
+
+// Key security principles:
+// - Never use string concatenation for SQL with user input
+// - Blocklists can always be bypassed - use allowlists instead
+// - Parameterized queries separate SQL structure from data
+// - Defense in depth: read-only connections, least privilege, audit logging
+// - Code comments don't enforce security - "read-only server" with UPDATE tool
 ```
+:::
 
----
-
-## Reflection Questions
-
-After completing the review:
-
-1. Why can't you parameterize ORDER BY column names?
-2. What's the difference between escaping quotes and parameterized queries?
-3. If the database user only has SELECT permission, is SQL injection still dangerous?
-4. How would you test for SQL injection in an automated way?
-
----
-
-## Key Takeaways
-
-- **Never use string concatenation for SQL with user input**
-- **Blocklists can always be bypassed** - use allowlists instead
-- **Parameterized queries separate SQL structure from data**
-- **Defense in depth:** read-only connections, least privilege, audit logging
-- **Code comments don't enforce security** - "read-only server" with UPDATE tool
-
----
-
-## Next Steps
-
-After completing this review:
-- Apply these principles to the pagination exercise
-- Consider how to build security testing into your development workflow
-- Explore static analysis tools that detect SQL injection patterns
+::: reflection
+- Why can't you parameterize ORDER BY column names?
+- What's the difference between escaping quotes and parameterized queries?
+- If the database user only has SELECT permission, is SQL injection still dangerous?
+- How would you test for SQL injection in an automated way?
+:::
