@@ -1,0 +1,487 @@
+# Exercise: The Calculator Tool
+#
+# This exercise builds on the first by introducing multiple operations,
+# input validation, and error handling - key skills for production servers.
+
+[exercise]
+id = "ch02-02-calculator"
+title = "Building a Calculator Tool"
+type = "implementation"
+chapter = "ch02"
+difficulty = "beginner"
+estimated_minutes = 25
+prerequisites = ["ch02-01-hello-mcp"]
+
+[exercise.context]
+description = """
+Now that you've created your first MCP server, let's build something more
+useful: a calculator. But this isn't just about math - it's about learning
+how to handle different operations, validate inputs, and return meaningful
+errors.
+
+Think about it: when an AI asks your calculator to divide by zero, what
+should happen? When someone passes "abc" instead of a number, how do you
+respond helpfully?
+
+Production MCP servers must handle edge cases gracefully. This exercise
+teaches you how.
+"""
+
+[exercise.learning_objectives]
+thinking = [
+    "Why input validation matters for AI interactions",
+    "How to design tools that handle edge cases",
+    "The difference between expected errors and bugs",
+]
+
+doing = [
+    "Create a tool that handles multiple operations",
+    "Implement input validation with helpful error messages",
+    "Use Rust's Result type for error handling",
+]
+
+[exercise.discussion]
+prompts = [
+    "If you were an AI trying to use a calculator, what operations would you expect?",
+    "What should happen if someone tries to divide by zero?",
+    "How can error messages help an AI correct its request?",
+    "Should a calculator tool accept 'two plus three' or just '2 + 3'?",
+]
+
+concepts = [
+    "enum types for operations",
+    "Result-based error handling",
+    "Helpful error messages",
+    "Input normalization",
+]
+
+[exercise.starter_code]
+language = "rust"
+filename = "src/main.rs"
+template = """
+//! Calculator MCP Server
+//!
+//! A calculator that demonstrates input validation and error handling.
+//! Supports: add, subtract, multiply, divide
+
+use pmcp::{Server, ServerCapabilities, ToolCapabilities};
+use pmcp::server::TypedTool;
+use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
+use anyhow::{Result, anyhow};
+
+/// Supported mathematical operations
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum Operation {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+}
+
+/// Input for the calculate tool
+#[derive(Deserialize, JsonSchema)]
+struct CalculateInput {
+    /// First operand
+    a: f64,
+    /// Second operand
+    b: f64,
+    /// The operation to perform
+    operation: Operation,
+}
+
+/// Result of a calculation
+#[derive(Serialize)]
+struct CalculateResult {
+    result: f64,
+    expression: String,
+}
+
+/// Error response for invalid calculations
+#[derive(Serialize)]
+struct CalculateError {
+    error: String,
+    suggestion: String,
+}
+
+/// Perform the calculation
+///
+/// TODO: Implement this function
+/// - Handle all four operations
+/// - Return an error for division by zero
+/// - Return an error for operations that produce NaN or Infinity
+fn calculate(input: &CalculateInput) -> Result<CalculateResult> {
+    // TODO: Match on the operation and perform the calculation
+    //
+    // Hints:
+    // 1. Use a match expression on input.operation
+    // 2. For division, check if b is zero BEFORE dividing
+    // 3. After calculation, check if result.is_nan() or result.is_infinite()
+    // 4. Create a human-readable expression like "5 + 3 = 8"
+
+    todo!("Implement the calculate function")
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let server = Server::builder()
+        .name("calculator")
+        .version("1.0.0")
+        .capabilities(ServerCapabilities {
+            tools: Some(ToolCapabilities::default()),
+            ..Default::default()
+        })
+        .tool("calculate", TypedTool::new("calculate", |input: CalculateInput| {
+            Box::pin(async move {
+                // TODO: Call calculate() and handle both success and error cases
+                //
+                // On success: return CalculateResult as JSON
+                // On error: return CalculateError as JSON with a helpful message
+
+                todo!("Handle the calculation result")
+            })
+        }))
+        .build()?;
+
+    println!("Calculator server ready!");
+    Ok(())
+}
+"""
+
+[exercise.tests]
+language = "rust"
+run_command = "cargo test"
+test_code = """
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_addition() {
+        let input = CalculateInput {
+            a: 5.0,
+            b: 3.0,
+            operation: Operation::Add,
+        };
+        let result = calculate(&input).unwrap();
+        assert_eq!(result.result, 8.0);
+        assert!(result.expression.contains("5") && result.expression.contains("3"));
+    }
+
+    #[test]
+    fn test_subtraction() {
+        let input = CalculateInput {
+            a: 10.0,
+            b: 4.0,
+            operation: Operation::Subtract,
+        };
+        let result = calculate(&input).unwrap();
+        assert_eq!(result.result, 6.0);
+    }
+
+    #[test]
+    fn test_multiplication() {
+        let input = CalculateInput {
+            a: 7.0,
+            b: 6.0,
+            operation: Operation::Multiply,
+        };
+        let result = calculate(&input).unwrap();
+        assert_eq!(result.result, 42.0);
+    }
+
+    #[test]
+    fn test_division() {
+        let input = CalculateInput {
+            a: 15.0,
+            b: 3.0,
+            operation: Operation::Divide,
+        };
+        let result = calculate(&input).unwrap();
+        assert_eq!(result.result, 5.0);
+    }
+
+    #[test]
+    fn test_division_by_zero() {
+        let input = CalculateInput {
+            a: 10.0,
+            b: 0.0,
+            operation: Operation::Divide,
+        };
+        let result = calculate(&input);
+        assert!(result.is_err());
+        let error = result.unwrap_err().to_string();
+        assert!(error.to_lowercase().contains("zero") ||
+                error.to_lowercase().contains("divide"));
+    }
+
+    #[test]
+    fn test_negative_numbers() {
+        let input = CalculateInput {
+            a: -5.0,
+            b: 3.0,
+            operation: Operation::Add,
+        };
+        let result = calculate(&input).unwrap();
+        assert_eq!(result.result, -2.0);
+    }
+
+    #[test]
+    fn test_decimal_precision() {
+        let input = CalculateInput {
+            a: 0.1,
+            b: 0.2,
+            operation: Operation::Add,
+        };
+        let result = calculate(&input).unwrap();
+        // Floating point: 0.1 + 0.2 ≈ 0.30000000000000004
+        assert!((result.result - 0.3).abs() < 0.0001);
+    }
+}
+"""
+
+[exercise.hints]
+level_1 = """
+For the calculate function, start with a match expression:
+```rust
+match input.operation {
+    Operation::Add => { /* ... */ },
+    Operation::Subtract => { /* ... */ },
+    // ...
+}
+```
+"""
+
+level_2 = """
+Handle division by zero explicitly:
+```rust
+Operation::Divide => {
+    if input.b == 0.0 {
+        return Err(anyhow!("Cannot divide by zero"));
+    }
+    input.a / input.b
+}
+```
+"""
+
+level_3 = """
+Complete calculate function:
+```rust
+fn calculate(input: &CalculateInput) -> Result<CalculateResult> {
+    let (result, op_symbol) = match input.operation {
+        Operation::Add => (input.a + input.b, "+"),
+        Operation::Subtract => (input.a - input.b, "-"),
+        Operation::Multiply => (input.a * input.b, "*"),
+        Operation::Divide => {
+            if input.b == 0.0 {
+                return Err(anyhow!("Cannot divide by zero. Try a non-zero divisor."));
+            }
+            (input.a / input.b, "/")
+        }
+    };
+
+    if result.is_nan() || result.is_infinite() {
+        return Err(anyhow!("Calculation produced invalid result"));
+    }
+
+    Ok(CalculateResult {
+        result,
+        expression: format!("{} {} {} = {}", input.a, op_symbol, input.b, result),
+    })
+}
+```
+"""
+
+hint_policy = "after_stuck"
+stuck_threshold_minutes = 5
+
+[exercise.solution]
+unlock_policy = "after_attempt"
+solution_code = """
+use pmcp::{Server, ServerCapabilities, ToolCapabilities};
+use pmcp::server::TypedTool;
+use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
+use anyhow::{Result, anyhow};
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum Operation {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct CalculateInput {
+    a: f64,
+    b: f64,
+    operation: Operation,
+}
+
+#[derive(Serialize)]
+struct CalculateResult {
+    result: f64,
+    expression: String,
+}
+
+fn calculate(input: &CalculateInput) -> Result<CalculateResult> {
+    let (result, op_symbol) = match input.operation {
+        Operation::Add => (input.a + input.b, "+"),
+        Operation::Subtract => (input.a - input.b, "-"),
+        Operation::Multiply => (input.a * input.b, "*"),
+        Operation::Divide => {
+            if input.b == 0.0 {
+                return Err(anyhow!(
+                    "Cannot divide by zero. Please provide a non-zero divisor."
+                ));
+            }
+            (input.a / input.b, "/")
+        }
+    };
+
+    if result.is_nan() || result.is_infinite() {
+        return Err(anyhow!(
+            "Calculation produced an invalid result (NaN or Infinity)"
+        ));
+    }
+
+    Ok(CalculateResult {
+        result,
+        expression: format!("{} {} {} = {}", input.a, op_symbol, input.b, result),
+    })
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let server = Server::builder()
+        .name("calculator")
+        .version("1.0.0")
+        .capabilities(ServerCapabilities {
+            tools: Some(ToolCapabilities::default()),
+            ..Default::default()
+        })
+        .tool("calculate", TypedTool::new("calculate", |input: CalculateInput| {
+            Box::pin(async move {
+                match calculate(&input) {
+                    Ok(result) => Ok(serde_json::to_value(result)?),
+                    Err(e) => Ok(serde_json::json!({
+                        "error": e.to_string(),
+                        "suggestion": "Check your inputs and try again"
+                    })),
+                }
+            })
+        }))
+        .build()?;
+
+    println!("Calculator server ready!");
+    Ok(())
+}
+"""
+
+explanation = """
+This solution demonstrates several important patterns:
+
+**1. Enum for Operations**
+Using an enum instead of a string for operations:
+- Compile-time validation of operation types
+- Pattern matching ensures all cases are handled
+- `#[serde(rename_all = "lowercase")]` allows JSON like `"add"` instead of `"Add"`
+
+**2. Separation of Concerns**
+The `calculate()` function is separate from the tool handler:
+- Easier to test (pure function, no async)
+- Cleaner error handling
+- Reusable logic
+
+**3. Defensive Error Handling**
+- Check for division by zero BEFORE computing
+- Check for NaN/Infinity AFTER computing
+- Return helpful error messages that guide the AI
+
+**4. Human-Readable Output**
+- The `expression` field shows the full calculation
+- Helps debugging and transparency
+- AI can show this to users
+
+**5. Error Response Pattern**
+Instead of returning a tool error (which might retry), we return a
+structured error response. This lets the AI understand what went wrong
+and explain it to the user.
+
+**Why This Matters for AI**
+When Claude uses this tool and gets a division-by-zero error, the
+message "Cannot divide by zero. Please provide a non-zero divisor."
+helps it:
+1. Understand what went wrong
+2. Explain the issue to the user
+3. Potentially retry with corrected input
+"""
+
+[exercise.ai_instructions]
+role = """
+You are helping a student build a calculator MCP tool that handles errors
+gracefully. Focus on teaching error handling patterns and defensive coding.
+"""
+
+approach = """
+1. START WITH DESIGN DISCUSSION (5 minutes):
+   - What operations should the calculator support?
+   - What edge cases need handling?
+   - How should errors be communicated to the AI?
+
+2. IMPLEMENT IN STAGES:
+   a) First, get addition working (simplest case)
+   b) Add the other operations
+   c) Add division-by-zero handling
+   d) Add the tool handler with error conversion
+
+3. TESTING STRATEGY:
+   - Run tests after each stage
+   - If tests fail, diagnose together
+   - Celebrate passing tests!
+
+4. COMMON MISTAKES:
+   - Forgetting to handle division by zero
+   - Returning tool errors instead of structured error responses
+   - Not checking for NaN/Infinity
+   - Incorrect match arm syntax
+
+5. DEEPEN UNDERSTANDING:
+   - Why use Result instead of Option or panic?
+   - Why return errors as JSON instead of failing the tool call?
+   - What other edge cases might exist? (overflow, precision)
+"""
+
+watch_for = [
+    "Dividing before checking for zero",
+    "Using panic! instead of returning Result",
+    "Not using #[serde(rename_all)] for the enum",
+    "Forgetting the async move in the tool closure",
+]
+
+production_note = """
+In a production calculator, you might also:
+- Add more operations (power, sqrt, modulo)
+- Implement arbitrary precision math for financial calculations
+- Add unit conversions
+- Rate limit to prevent abuse
+- Log calculations for audit trails
+"""
+
+[exercise.reflection]
+questions = [
+    "Why do we check for division by zero before computing, not after?",
+    "What's the advantage of returning a structured error vs failing the tool call?",
+    "How would you add a 'power' operation to this calculator?",
+    "What might go wrong with floating-point math that integers wouldn't have?",
+]
+
+expected_insights = [
+    "Checking before prevents undefined behavior; checking after only catches the symptom",
+    "Structured errors let the AI understand and explain the problem; failures just retry",
+    "Add Power variant to enum, add match arm with a.powf(b)",
+    "Floating-point has precision issues (0.1 + 0.2 != 0.3), NaN, Infinity",
+]

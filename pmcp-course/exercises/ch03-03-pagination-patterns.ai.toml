@@ -1,0 +1,235 @@
+# AI Tutor Instructions for: Pagination Patterns for Large Results
+# Exercise ID: ch03-03-pagination-patterns
+
+[tutor]
+exercise_id = "ch03-03-pagination-patterns"
+title = "Implementing Pagination for Large Results"
+
+[tutor.context]
+student_level = "intermediate"
+prior_knowledge = [
+    "Completed ch03-01 database query basics",
+    "Basic SQL and SQLite",
+    "Arc and async patterns in Rust",
+    "MCP server tool patterns",
+]
+
+objective = """
+Guide the student to implement cursor-based pagination that:
+1. Efficiently handles large datasets without memory issues
+2. Uses opaque cursors for stateless pagination
+3. Provides clear feedback to AI assistants about pagination state
+4. Handles edge cases gracefully
+
+This teaches a critical production pattern for database MCP servers.
+"""
+
+[tutor.pedagogy]
+approach = "problem_driven"
+
+phases = [
+    { name = "motivate", duration_minutes = 5, focus = "Demonstrate why naive approaches fail at scale" },
+    { name = "compare", duration_minutes = 5, focus = "Offset vs cursor pagination - why cursor wins" },
+    { name = "implement", duration_minutes = 15, focus = "Build the paginated query step by step" },
+    { name = "edge_cases", duration_minutes = 5, focus = "Handle invalid cursors, last page, empty results" },
+]
+
+[tutor.scaffolding]
+motivation_questions = [
+    "What happens if you SELECT * from a table with 10 million rows?",
+    "How much memory would that use? How long would it take?",
+    "Can an AI assistant effectively process a 100MB JSON response?",
+]
+
+offset_vs_cursor = """
+Help the student understand the performance difference:
+
+OFFSET: SELECT * FROM users LIMIT 100 OFFSET 999900
+- Database scans from the beginning
+- Skips 999,900 rows one by one
+- Gets slower as you go deeper
+
+CURSOR: SELECT * FROM users WHERE id > 999900 ORDER BY id LIMIT 100
+- Uses the index on id
+- Jumps directly to the starting point
+- Same speed for any position
+
+Draw an analogy: "OFFSET is like counting pages in a book. CURSOR is like
+using a bookmark."
+"""
+
+[tutor.implementation_guidance]
+step_1_validation = """
+Start with table validation:
+
+if !ALLOWED_TABLES.contains(&input.table.as_str()) {
+    return Err(anyhow::anyhow!("Table not allowed"));
+}
+
+Ask: "Why is a table allowlist important here?"
+Answer: Prevents access to sensitive tables like admin_users, credentials
+"""
+
+step_2_cursor_decode = """
+Handle the cursor:
+
+let start_id = match &input.cursor {
+    Some(cursor_str) => {
+        let cursor = Cursor::decode(cursor_str)?;
+        if cursor.table != input.table {
+            return Err(anyhow::anyhow!("Cursor table mismatch"));
+        }
+        cursor.last_id
+    }
+    None => 0, // First page starts at 0
+};
+
+Ask: "Why do we store the table name in the cursor?"
+Answer: Security - prevents using a cursor from users to query admin_secrets
+"""
+
+step_3_fetch_plus_one = """
+The key insight - fetch one extra row:
+
+let query = format!(
+    "SELECT * FROM {} WHERE id > ? ORDER BY id LIMIT ?",
+    input.table
+);
+
+let rows = sqlx::query(&query)
+    .bind(start_id)
+    .bind(page_size + 1)  // +1 to detect if more pages exist
+    .fetch_all(pool.as_ref())
+    .await?;
+
+let has_more = rows.len() > page_size as usize;
+let rows: Vec<_> = rows.into_iter().take(page_size as usize).collect();
+
+Ask: "Why fetch page_size + 1 instead of doing a COUNT query?"
+Answer: COUNT on large tables is expensive. Fetching one extra row is O(1).
+"""
+
+step_4_create_next_cursor = """
+Generate the next cursor from the last row:
+
+let next_cursor = if has_more && !json_rows.is_empty() {
+    let last_row = json_rows.last().unwrap();
+    let last_id = last_row[0].as_i64()
+        .ok_or_else(|| anyhow::anyhow!("First column must be id"))?;
+
+    Some(Cursor {
+        last_id,
+        table: input.table.clone(),
+    }.encode())
+} else {
+    None
+};
+"""
+
+step_5_status_message = """
+Create AI-friendly status messages:
+
+let status = if count == 0 {
+    "No results found.".to_string()
+} else if next_cursor.is_some() {
+    format!("Returned {} rows. More data available - use next_cursor.", count)
+} else {
+    format!("Returned {} rows. This is all available data.", count)
+};
+
+Ask: "Why is the status message important for AI assistants?"
+Answer: Guides the AI to continue fetching or stop. Natural language is
+easier for AI to act on than just checking if next_cursor is null.
+"""
+
+[tutor.common_mistakes]
+mistakes = [
+    { pattern = "forgetting_plus_one", symptom = "Can't detect if more pages exist", fix = "Fetch page_size + 1, then take only page_size. The extra row tells you if there's more." },
+    { pattern = "offset_approach", symptom = "Using OFFSET instead of WHERE id >", fix = "OFFSET gets slower as you paginate. WHERE id > uses the index." },
+    { pattern = "missing_table_in_cursor", symptom = "Cursor works across any table", fix = "Include table name in cursor and validate it matches the query table." },
+    { pattern = "empty_result_crash", symptom = "Panics on empty result when getting last row", fix = "Check if rows is empty before accessing last element." },
+]
+
+[tutor.edge_cases]
+cases = [
+    { case = "empty_table", behavior = "Return empty rows, no cursor, status: 'No results found'" },
+    { case = "exactly_page_size", behavior = "Need to check if there are more - the +1 pattern handles this" },
+    { case = "last_page", behavior = "next_cursor is None, status indicates completion" },
+    { case = "invalid_cursor", behavior = "Return error with helpful message" },
+    { case = "cursor_for_wrong_table", behavior = "Return error - security boundary" },
+]
+
+[tutor.discussion_prompts]
+opening = [
+    "Have you dealt with pagination in web applications before?",
+    "What problems have you seen with 'Load More' buttons or infinite scroll?",
+]
+
+during_implementation = [
+    "Why is the cursor base64 encoded JSON instead of just the ID?",
+    "What would happen if rows were deleted between page fetches?",
+    "How would you handle sorting by a column that isn't unique?",
+]
+
+closing = [
+    "How would you implement 'previous page' navigation?",
+    "What if the ID column isn't an integer (like UUID)?",
+    "How would you estimate total pages without an expensive COUNT?",
+]
+
+[tutor.advanced_topics]
+compound_cursors = """
+For non-unique sort columns, use compound cursors:
+
+struct Cursor {
+    sort_value: String,
+    last_id: i64,  // Tiebreaker
+    table: String,
+}
+
+Query: WHERE (sort_col, id) > (?, ?) ORDER BY sort_col, id
+"""
+
+backward_pagination = """
+For previous page, reverse the query:
+
+WHERE id < ? ORDER BY id DESC LIMIT ?
+
+Then reverse the results in memory.
+"""
+
+[tutor.assessment]
+success_criteria = [
+    "First page returns data with next_cursor",
+    "Subsequent pages use cursor and have no overlap",
+    "Last page has no next_cursor",
+    "Invalid tables are rejected",
+    "Cursor table mismatch is detected",
+]
+
+mastery_indicators = [
+    "Student explains why offset is slow",
+    "Student understands the fetch N+1 pattern",
+    "Student suggests compound cursors for non-unique columns",
+    "Student considers security implications of cursor design",
+]
+
+[tutor.knowledge_connections]
+builds_on = [
+    "Database query patterns from ch03-01",
+    "Security awareness from ch03-02",
+    "JSON serialization with serde",
+]
+
+leads_to = [
+    "Streaming responses for real-time data",
+    "Caching strategies for repeated queries",
+    "Rate limiting and resource management",
+]
+
+real_world_applications = [
+    "API pagination in REST/GraphQL services",
+    "Log viewer tools with millions of entries",
+    "Analytics dashboards with large datasets",
+    "Search results in enterprise applications",
+]

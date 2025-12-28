@@ -1,0 +1,298 @@
+# Exercise: Code Review - Spotting Common Mistakes
+#
+# This code review exercise develops critical analysis skills that are
+# essential when working with AI-generated code.
+
+[exercise]
+id = "ch02-03-code-review-basics"
+title = "Code Review: Common MCP Server Mistakes"
+type = "code_review"
+chapter = "ch02"
+difficulty = "beginner"
+estimated_minutes = 20
+prerequisites = ["ch02-01-hello-mcp", "ch02-02-calculator"]
+
+[exercise.context]
+description = """
+You've been asked to review a colleague's MCP server code before it goes
+to production. The server is supposed to process user messages and return
+responses, but something isn't quite right.
+
+This exercise develops a crucial skill: **code review**. When working with
+AI assistants, you'll often need to review generated code for issues. Even
+when you write code yourself, a critical eye catches bugs before users do.
+
+Your task: Find at least 5 issues in this code, categorize them by severity,
+and suggest fixes.
+"""
+
+[exercise.learning_objectives]
+thinking = [
+    "How to systematically review code for issues",
+    "Distinguishing bugs from style issues from security concerns",
+    "Why error handling patterns matter",
+]
+
+doing = [
+    "Identify bugs, security issues, and anti-patterns",
+    "Categorize issues by severity",
+    "Propose concrete fixes",
+]
+
+[exercise.code_to_review]
+language = "rust"
+code = """
+//! Message Processor MCP Server
+//!
+//! Processes user messages and returns responses.
+
+use pmcp::{Server, ServerCapabilities, ToolCapabilities};
+use pmcp::server::TypedTool;
+use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
+use std::sync::Mutex;
+
+// Global message counter
+static MESSAGE_COUNT: Mutex<i32> = Mutex::new(0);
+
+#[derive(Deserialize, JsonSchema)]
+struct ProcessMessageInput {
+    message: String,
+    user_id: String,
+}
+
+#[derive(Serialize)]
+struct MessageResponse {
+    processed: String,
+    message_number: i32,
+}
+
+fn process_message(input: ProcessMessageInput) -> MessageResponse {
+    // Increment counter
+    let count = MESSAGE_COUNT.lock().unwrap();
+    *count += 1;
+
+    // Process the message
+    let processed = if input.message.len() > 0 {
+        format!("User {} said: {}", input.user_id, input.message)
+    } else {
+        "Empty message received".to_string()
+    };
+
+    // Log for debugging
+    println!("Processing message #{}: {}", count, input.message);
+
+    MessageResponse {
+        processed,
+        message_number: *count,
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let server = Server::builder()
+        .name("message-processor")
+        .version("0.1")
+        .capabilities(ServerCapabilities {
+            tools: Some(ToolCapabilities::default()),
+            ..Default::default()
+        })
+        .tool("process", TypedTool::new("process", |input: ProcessMessageInput| {
+            Box::pin(async {
+                let response = process_message(input);
+                Ok(serde_json::to_value(response).unwrap())
+            })
+        }))
+        .build()
+        .unwrap();
+
+    // Server is ready but never started...
+}
+"""
+
+[exercise.review_guidance]
+categories = [
+    "Bugs / Correctness",
+    "Error Handling",
+    "Concurrency Issues",
+    "Security Concerns",
+    "Code Quality",
+]
+
+minimum_issues = 5
+
+severity_guide = """
+- **Critical**: Will cause crashes, data loss, or security vulnerabilities
+- **High**: Will cause incorrect behavior or poor user experience
+- **Medium**: Could cause issues under certain conditions
+- **Low**: Style issues, missing best practices
+"""
+
+[exercise.known_issues]
+issues = [
+    {
+        severity = "critical",
+        category = "Bugs / Correctness",
+        description = "Mutex is never released - deadlock on second call",
+        line_hint = "let count = MESSAGE_COUNT.lock().unwrap();",
+        explanation = """
+The mutex lock is taken but `*count += 1` doesn't work as expected.
+Actually, the bigger issue is that `count` is a MutexGuard, and
+incrementing requires mutable access. The lock is held for the entire
+function, and the code won't even compile as written.
+"""
+    },
+    {
+        severity = "high",
+        category = "Error Handling",
+        description = "unwrap() on lock() can panic if mutex is poisoned",
+        line_hint = ".lock().unwrap()",
+        explanation = """
+If a previous thread panicked while holding the lock, the mutex becomes
+'poisoned'. Using unwrap() will then panic. Use .lock().unwrap_or_else()
+or handle the PoisonError explicitly.
+"""
+    },
+    {
+        severity = "high",
+        category = "Error Handling",
+        description = "unwrap() on to_value() and build() can panic",
+        line_hint = ".unwrap()",
+        explanation = """
+Multiple unwrap() calls that could panic in production:
+- to_value() could fail if serialization fails
+- build() could fail if configuration is invalid
+Use ? operator or proper error handling.
+"""
+    },
+    {
+        severity = "high",
+        category = "Bugs / Correctness",
+        description = "Server is built but never started/run",
+        line_hint = "// Server is ready but never started...",
+        explanation = """
+The server is created but there's no transport started. The main
+function exits immediately. Need to actually run the server with
+a transport like stdio, HTTP, or WebSocket.
+"""
+    },
+    {
+        severity = "medium",
+        category = "Concurrency Issues",
+        description = "Global mutable state makes testing and scaling difficult",
+        line_hint = "static MESSAGE_COUNT",
+        explanation = """
+Global mutable state:
+- Makes unit testing harder (tests affect each other)
+- Prevents running multiple server instances
+- Doesn't work in serverless (Lambda) environments
+Better: Pass state through the server or use per-request context.
+"""
+    },
+    {
+        severity = "medium",
+        category = "Security Concerns",
+        description = "User input logged without sanitization",
+        line_hint = "println!(\"Processing message #{}: {}\", count, input.message);",
+        explanation = """
+Logging raw user input could:
+- Leak sensitive data to log files
+- Enable log injection attacks
+- Fill up disk with large messages
+Should sanitize/truncate before logging.
+"""
+    },
+    {
+        severity = "low",
+        category = "Code Quality",
+        description = "Empty message check uses .len() > 0 instead of !.is_empty()",
+        line_hint = "if input.message.len() > 0",
+        explanation = """
+Idiomatic Rust prefers is_empty() for clarity:
+`if !input.message.is_empty()` or even better, handle empty as an error.
+"""
+    },
+    {
+        severity = "low",
+        category = "Code Quality",
+        description = "Version string '0.1' should be '0.1.0' for semver compliance",
+        line_hint = ".version(\"0.1\")",
+        explanation = """
+Semantic versioning expects MAJOR.MINOR.PATCH format.
+Use \"0.1.0\" for proper semver.
+"""
+    },
+    {
+        severity = "low",
+        category = "Code Quality",
+        description = "main() returns () instead of Result<()>",
+        line_hint = "async fn main() {",
+        explanation = """
+Should return Result<()> to propagate errors properly instead of
+using unwrap() everywhere.
+"""
+    },
+]
+
+[exercise.ai_instructions]
+role = """
+You are mentoring a student in code review skills. Guide them to find
+issues systematically rather than pointing them all out directly.
+"""
+
+approach = """
+1. START SYSTEMATICALLY:
+   - Ask the student to read through the code once
+   - Then suggest reviewing category by category
+   - "Let's start with error handling. What do you notice about how
+     errors are handled?"
+
+2. GUIDE DISCOVERY:
+   - If they miss critical issues, ask leading questions:
+     * "What happens on line 27 if this isn't the first call?"
+     * "If the server crashes here, what happens to the lock?"
+     * "What does the server actually DO after it's built?"
+   - Let them articulate the problem before confirming
+
+3. PRIORITIZATION:
+   - After finding issues, help them prioritize
+   - "Of these issues, which one would cause immediate problems?"
+   - "Which would you fix first before production deployment?"
+
+4. SOLUTIONS:
+   - For each issue, ask "How would you fix this?"
+   - Guide toward idiomatic Rust solutions
+   - Discuss tradeoffs (e.g., ? vs match for errors)
+
+5. LEARNING REINFORCEMENT:
+   - Connect issues to previous exercises
+   - "Remember the calculator? How did we handle errors there?"
+   - Build mental models for spotting these patterns
+"""
+
+common_patterns = """
+Issues students often miss:
+- The mutex actually won't compile (mutable borrow issue)
+- The server never runs (subtle - no transport started)
+- Version format (seems minor but breaks tooling)
+
+Issues students often find first:
+- println! for logging (visible and obvious)
+- .unwrap() calls (common code smell)
+- Empty string check style
+"""
+
+[exercise.reflection]
+questions = [
+    "What's your process for reviewing unfamiliar code?",
+    "How do you prioritize which issues to fix first?",
+    "How would you give feedback to the author without being discouraging?",
+    "What tools could help catch some of these issues automatically?",
+]
+
+expected_insights = [
+    "Systematic approach: compile, test, review by category (security, errors, logic)",
+    "Fix critical/blocking issues first, then high-severity, save style for last",
+    "Focus on code, not person. Ask questions. Suggest alternatives. Be specific.",
+    "Clippy for lints, cargo check for compilation, tests for logic, audit for security",
+]

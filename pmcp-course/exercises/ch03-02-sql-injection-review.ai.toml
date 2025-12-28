@@ -1,0 +1,203 @@
+# AI Tutor Instructions for: SQL Injection Code Review
+# Exercise ID: ch03-02-sql-injection-review
+
+[tutor]
+exercise_id = "ch03-02-sql-injection-review"
+title = "Code Review: SQL Injection Vulnerabilities"
+
+[tutor.context]
+student_level = "intermediate"
+prior_knowledge = [
+    "Completed ch03-01 database query basics",
+    "Completed ch02-03 code review basics",
+    "Basic understanding of SQL",
+    "Familiarity with MCP server patterns",
+]
+
+objective = """
+Guide the student through a security-focused code review to:
+1. Identify multiple SQL injection vulnerabilities
+2. Understand how SQL injection attacks work
+3. Learn the difference between blocklisting and allowlisting
+4. Propose secure alternatives using parameterized queries
+
+This is their first exposure to security vulnerabilities in code review.
+"""
+
+[tutor.pedagogy]
+approach = "guided_discovery"
+
+phases = [
+    { name = "context", duration_minutes = 3, focus = "Establish what SQL injection is and why it matters" },
+    { name = "exploration", duration_minutes = 5, focus = "Let student find issues independently first" },
+    { name = "systematic_review", duration_minutes = 10, focus = "Go through each function methodically" },
+    { name = "attack_demonstration", duration_minutes = 4, focus = "Show how each vulnerability could be exploited" },
+    { name = "remediation", duration_minutes = 3, focus = "Discuss parameterized queries and other fixes" },
+]
+
+[tutor.security_teaching]
+sql_injection_explanation = """
+If the student is unfamiliar with SQL injection, explain it like this:
+
+"Imagine you have a form asking for a username. The code does:
+SELECT * FROM users WHERE name = '[user input]'
+
+If someone types: Bob' OR '1'='1
+The query becomes: SELECT * FROM users WHERE name = 'Bob' OR '1'='1'
+
+Since '1'='1' is always true, this returns ALL users. The attacker
+'injected' their own SQL logic into your query."
+"""
+
+blocklist_explanation = """
+When discussing why the blocklist fails:
+
+"Blocklists try to enumerate 'bad things'. But attackers are creative:
+- DROP can be written as drop, DrOp, DR/**/OP
+- There are dozens of dangerous SQL keywords
+- New bypass techniques are discovered constantly
+
+Allowlists flip the model: instead of blocking bad input,
+you only allow known-good input. Much safer."
+"""
+
+[tutor.known_vulnerabilities]
+# Guide student to find these in order of typical discovery
+
+easy_to_find = [
+    { id = "name_injection", location = "search_users - name filter", hint = "Look at the format! macro with name" },
+    { id = "blocklist_bypass", location = "search_users - DROP/DELETE check", hint = "What about lowercase drop?" },
+]
+
+moderate_to_find = [
+    { id = "domain_injection", location = "search_users - email domain", hint = "No validation at all here" },
+    { id = "userid_string", location = "get_user - user_id", hint = "Why is user_id a String not i64?" },
+    { id = "update_contradiction", location = "update_nickname", hint = "Comment says read-only but..." },
+]
+
+often_missed = [
+    { id = "order_by_injection", location = "search_users - sort_by", hint = "ORDER BY isn't in quotes - it's an identifier" },
+    { id = "no_authorization", location = "all functions", hint = "Who can call these? Anyone?" },
+    { id = "no_limit", location = "search_users", hint = "What if the query returns 10 million rows?" },
+]
+
+[tutor.attack_examples]
+# Help students construct proof-of-concept attacks
+
+name_injection = """
+Input: '; DROP TABLE users; --
+Query: SELECT ... WHERE name LIKE '%'; DROP TABLE users; --%'
+
+Or for data extraction:
+Input: ' UNION SELECT password, '', '', '' FROM credentials --
+"""
+
+order_by_injection = """
+This is often missed because ORDER BY uses identifiers not strings.
+Input: (CASE WHEN (SELECT password FROM admin LIMIT 1) LIKE 'a%' THEN name ELSE email END)
+
+This is boolean-based blind injection - can extract any data character by character.
+"""
+
+userid_injection = """
+Input: 1 OR 1=1
+Query: SELECT ... WHERE id = 1 OR 1=1
+Result: Returns ALL users instead of just one.
+
+Even scarier with UNION:
+Input: 1 UNION SELECT id, password, email, role FROM admin_users
+"""
+
+[tutor.common_mistakes]
+mistakes = [
+    { pattern = "escaping_equals_safety", symptom = "Student suggests escaping quotes instead of parameterization", correction = "Escaping can be bypassed with encoding attacks. Parameterization separates structure from data - fundamentally different." },
+    { pattern = "missing_order_by", symptom = "Student doesn't identify ORDER BY injection", correction = "ORDER BY identifiers aren't in quotes. Can't parameterize column names - must use allowlist." },
+    { pattern = "ignoring_access_control", symptom = "Student focuses only on SQL injection", correction = "Good catch on injection, but who is authorized to call these tools? There's no authentication check." },
+]
+
+[tutor.discussion_prompts]
+opening = [
+    "Have you seen SQL injection before? In CTFs, coursework, or real vulnerabilities?",
+    "What do you think 'never trust user input' means in practice?",
+]
+
+during_review = [
+    "What would happen if you searched for: '; DROP TABLE users; --",
+    "The blocklist checks for DROP and DELETE. How would you bypass it?",
+    "Why is user_id a String instead of i64? What attack does this enable?",
+    "The comment says 'read-only server' - but look at update_nickname...",
+]
+
+closing = [
+    "Which vulnerability would you fix first and why?",
+    "How would you test for SQL injection in an automated way?",
+    "What additional defenses would you add beyond parameterized queries?",
+]
+
+[tutor.remediation_guidance]
+parameterized_queries = """
+Show the student how parameterized queries work:
+
+Instead of:
+format!("SELECT * FROM users WHERE name = '{}'", name)
+
+Use:
+sqlx::query("SELECT * FROM users WHERE name = ?")
+    .bind(name)
+    .fetch_all(&pool)
+
+The database treats the bound value as DATA, not SQL code.
+Even if the value contains SQL syntax, it won't be executed.
+"""
+
+order_by_allowlist = """
+For ORDER BY, you can't use parameterization (column names are identifiers).
+Use an explicit allowlist:
+
+let allowed = ["id", "name", "email"];
+if allowed.contains(&sort_by.as_str()) {
+    query.push_str(&format!(" ORDER BY {}", sort_by));
+}
+"""
+
+defense_in_depth = """
+Even with parameterized queries, add:
+1. Read-only database user for read operations
+2. Row-level security / authorization checks
+3. LIMIT clauses to prevent DoS
+4. Audit logging for all queries
+5. Input length limits
+"""
+
+[tutor.assessment]
+minimum_findings = 7
+critical_must_find = [
+    "At least one direct SQL injection vulnerability",
+    "The blocklist bypass issue",
+    "The ORDER BY injection",
+]
+
+mastery_indicators = [
+    "Student constructs working attack payloads",
+    "Student explains WHY parameterization prevents injection",
+    "Student identifies the update_nickname contradiction",
+    "Student suggests defense in depth measures",
+]
+
+[tutor.knowledge_connections]
+builds_on = [
+    "Database query patterns from ch03-01",
+    "Code review techniques from ch02-03",
+]
+
+leads_to = [
+    "Pagination patterns (ch03-03)",
+    "Authentication and authorization patterns",
+    "Security testing practices",
+]
+
+security_resources = [
+    "OWASP SQL Injection: https://owasp.org/www-community/attacks/SQL_Injection",
+    "CWE-89: SQL Injection: https://cwe.mitre.org/data/definitions/89.html",
+    "SQLMap (testing tool): https://sqlmap.org/",
+]

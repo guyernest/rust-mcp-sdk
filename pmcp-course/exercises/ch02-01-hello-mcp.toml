@@ -1,0 +1,348 @@
+# Exercise: Your First MCP Server
+#
+# This is the first hands-on exercise in the course. It introduces
+# the fundamental structure of an MCP server using the PMCP SDK.
+
+[exercise]
+id = "ch02-01-hello-mcp"
+title = "Your First MCP Server"
+type = "implementation"
+chapter = "ch02"
+difficulty = "beginner"
+estimated_minutes = 20
+
+[exercise.context]
+description = """
+Every journey starts with a first step. In this exercise, you'll create
+your first MCP server - one that responds to a simple "greet" tool.
+
+This might seem simple, but you're learning the foundation that every
+production MCP server builds upon. By the end, you'll understand:
+- How MCP servers are structured
+- How tools receive and process input
+- How to return results to clients
+
+The AI assistant is here to help with syntax - your job is to understand
+the concepts and make design decisions.
+"""
+
+[exercise.learning_objectives]
+thinking = [
+    "How MCP servers are structured (builder pattern)",
+    "The relationship between server, tools, and responses",
+    "Why typed inputs matter for AI interactions",
+]
+
+doing = [
+    "Create an MCP server using Server::builder()",
+    "Define a tool with typed input parameters",
+    "Return a properly formatted response",
+]
+
+[exercise.discussion]
+prompts = [
+    "What do you think an MCP server does? How is it different from a REST API?",
+    "Why might we want to define input types (schemas) for our tools?",
+    "When Claude or another AI calls a tool, what information does it need?",
+]
+
+concepts = [
+    "MCP protocol basics",
+    "JSON Schema for tool inputs",
+    "Server-client communication model",
+]
+
+[exercise.starter_code]
+language = "rust"
+filename = "src/main.rs"
+template = """
+//! Your First MCP Server
+//!
+//! This server provides a simple "greet" tool that returns a personalized
+//! greeting. It demonstrates the fundamental patterns of PMCP development.
+
+use pmcp::{Server, ServerCapabilities, ToolCapabilities};
+use pmcp::server::TypedTool;
+use serde::Deserialize;
+use schemars::JsonSchema;
+use anyhow::Result;
+
+/// Input for the greet tool
+///
+/// The #[derive] macros automatically:
+/// - Deserialize: Parse JSON input from clients
+/// - JsonSchema: Generate schema for AI to understand the inputs
+#[derive(Deserialize, JsonSchema)]
+struct GreetInput {
+    /// The name of the person to greet
+    name: String,
+
+    // TODO: Add an optional "formal" field (bool) to control greeting style
+    // Hint: Use Option<bool> for optional fields
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // TODO: Build the MCP server
+    //
+    // Steps:
+    // 1. Create a server using Server::builder()
+    // 2. Set the name to "hello-mcp"
+    // 3. Set the version to "1.0.0"
+    // 4. Configure capabilities to include tools
+    // 5. Add a "greet" tool using .tool()
+    // 6. Build the server
+    //
+    // The greet tool should:
+    // - Take GreetInput as input
+    // - Return "Hello, {name}!" or "Good day, {name}." based on formal flag
+    // - Default to informal greeting if formal is not specified
+
+    todo!("Build your MCP server here")
+}
+"""
+
+[exercise.tests]
+language = "rust"
+run_command = "cargo test"
+test_code = """
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_informal_greeting() {
+        // Informal greeting should say "Hello"
+        let input = GreetInput {
+            name: "Alice".to_string(),
+            formal: None,
+        };
+        let result = create_greeting(&input);
+        assert!(result.contains("Hello"));
+        assert!(result.contains("Alice"));
+    }
+
+    #[test]
+    fn test_formal_greeting() {
+        // Formal greeting should say "Good day"
+        let input = GreetInput {
+            name: "Dr. Smith".to_string(),
+            formal: Some(true),
+        };
+        let result = create_greeting(&input);
+        assert!(result.contains("Good day"));
+        assert!(result.contains("Dr. Smith"));
+    }
+
+    #[test]
+    fn test_explicit_informal() {
+        // Explicit informal should still say "Hello"
+        let input = GreetInput {
+            name: "Bob".to_string(),
+            formal: Some(false),
+        };
+        let result = create_greeting(&input);
+        assert!(result.contains("Hello"));
+    }
+
+    // Helper function that mirrors your tool's logic
+    fn create_greeting(input: &GreetInput) -> String {
+        if input.formal.unwrap_or(false) {
+            format!("Good day, {}.", input.name)
+        } else {
+            format!("Hello, {}!", input.name)
+        }
+    }
+}
+"""
+
+[exercise.hints]
+level_1 = """
+Start with the server builder:
+```rust
+let server = Server::builder()
+    .name("hello-mcp")
+    .version("1.0.0")
+    // ...continue building
+```
+"""
+
+level_2 = """
+You need to configure capabilities and add a tool:
+```rust
+.capabilities(ServerCapabilities {
+    tools: Some(ToolCapabilities::default()),
+    ..Default::default()
+})
+.tool("greet", TypedTool::new(...))
+```
+"""
+
+level_3 = """
+The complete structure looks like:
+```rust
+let server = Server::builder()
+    .name("hello-mcp")
+    .version("1.0.0")
+    .capabilities(ServerCapabilities {
+        tools: Some(ToolCapabilities::default()),
+        ..Default::default()
+    })
+    .tool("greet", TypedTool::new("greet", |input: GreetInput| {
+        Box::pin(async move {
+            // Your greeting logic here
+            let greeting = if input.formal.unwrap_or(false) {
+                format!("Good day, {}.", input.name)
+            } else {
+                format!("Hello, {}!", input.name)
+            };
+            Ok(serde_json::json!({ "message": greeting }))
+        })
+    }))
+    .build()?;
+```
+"""
+
+hint_policy = "after_stuck"
+stuck_threshold_minutes = 5
+
+[exercise.solution]
+unlock_policy = "after_attempt"
+solution_code = """
+use pmcp::{Server, ServerCapabilities, ToolCapabilities};
+use pmcp::server::TypedTool;
+use serde::Deserialize;
+use schemars::JsonSchema;
+use anyhow::Result;
+
+#[derive(Deserialize, JsonSchema)]
+struct GreetInput {
+    /// The name of the person to greet
+    name: String,
+    /// Whether to use a formal greeting style
+    formal: Option<bool>,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let server = Server::builder()
+        .name("hello-mcp")
+        .version("1.0.0")
+        .capabilities(ServerCapabilities {
+            tools: Some(ToolCapabilities::default()),
+            ..Default::default()
+        })
+        .tool("greet", TypedTool::new("greet", |input: GreetInput| {
+            Box::pin(async move {
+                let greeting = if input.formal.unwrap_or(false) {
+                    format!("Good day, {}.", input.name)
+                } else {
+                    format!("Hello, {}!", input.name)
+                };
+                Ok(serde_json::json!({ "message": greeting }))
+            })
+        }))
+        .build()?;
+
+    // In a real server, you'd run this with a transport
+    // For now, we just verify it builds
+    println!("Server '{}' v{} ready!", server.name(), server.version());
+
+    Ok(())
+}
+"""
+
+explanation = """
+Let's break down what this code does:
+
+**1. Input Definition (GreetInput)**
+- `#[derive(Deserialize)]` - Allows parsing JSON input from clients
+- `#[derive(JsonSchema)]` - Generates a schema that tells AI what inputs are valid
+- `Option<bool>` - Makes the `formal` field optional
+
+**2. Server Builder Pattern**
+- `Server::builder()` - Starts building a server configuration
+- `.name()` / `.version()` - Metadata that identifies your server
+- `.capabilities()` - Declares what the server can do (tools, resources, etc.)
+- `.tool()` - Registers a tool that clients can call
+
+**3. TypedTool**
+- Wraps your handler function with type information
+- Automatically deserializes JSON input to your struct
+- The closure receives typed input and returns a JSON result
+
+**4. Async Handler**
+- `Box::pin(async move { ... })` - Creates an async future
+- Returns `Result<Value>` - Either a JSON response or an error
+
+**Why This Pattern?**
+- Type safety catches errors at compile time
+- Schemas help AI understand how to call your tools
+- The builder pattern makes configuration clear and extensible
+"""
+
+[exercise.ai_instructions]
+role = """
+You are helping a student write their very first MCP server. This is a
+foundational exercise - focus on building understanding and confidence.
+"""
+
+approach = """
+1. START WITH DISCUSSION (5-7 minutes):
+   - Work through the discussion prompts
+   - Ensure they understand what MCP servers do
+   - If they want to jump to code, ask: "Before we code, can you explain
+     what the server will do when Claude calls the greet tool?"
+
+2. GUIDE THE IMPLEMENTATION (10-12 minutes):
+   - Start with the GreetInput struct - help them add the optional field
+   - Move to the server builder - explain each method's purpose
+   - Help with the TypedTool syntax - this is often confusing at first
+   - Encourage them to run `cargo check` frequently
+
+3. WHEN THEY GET STUCK:
+   - Ask what they're trying to accomplish
+   - Point to the relevant part of the starter code comments
+   - Offer hint level 1 first, then progress if needed
+   - If syntax is the blocker, help with that - focus learning on concepts
+
+4. COMMON STRUGGLES:
+   - TypedTool closure syntax (Box::pin, async move)
+   - Understanding capabilities configuration
+   - JsonSchema derive macro requirements (needs schemars dependency)
+
+5. AFTER COMPLETION:
+   - Celebrate! This is their first server
+   - Ask reflection questions
+   - Preview what comes next: "Now imagine adding more tools..."
+"""
+
+watch_for = [
+    "Forgetting to add schemars to Cargo.toml dependencies",
+    "Missing the async move in the closure",
+    "Returning String instead of serde_json::Value",
+    "Not handling the Option properly for formal greeting",
+]
+
+production_note = """
+In production, you would:
+1. Add error handling for edge cases (empty name, very long name)
+2. Connect to a transport (HTTP, stdio, WebSocket)
+3. Add logging and observability
+We'll cover these in later exercises.
+"""
+
+[exercise.reflection]
+questions = [
+    "Why do we use a struct with derive macros instead of just parsing JSON manually?",
+    "What happens if a client sends an input that doesn't match the schema?",
+    "How might you extend this server to greet in different languages?",
+    "What would change if you wanted to add a second tool to this server?",
+]
+
+expected_insights = [
+    "Structs with derives provide compile-time type safety and auto-generate schemas",
+    "Invalid input is rejected before reaching your handler - the SDK handles validation",
+    "Could add a 'language' field to the input or create separate tools per language",
+    "Just add another .tool() call to the builder chain",
+]

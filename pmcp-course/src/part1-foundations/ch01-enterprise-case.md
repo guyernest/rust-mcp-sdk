@@ -1,7 +1,7 @@
 # The Enterprise Case for MCP
 
 > "We're spending millions on AI tools, but our employees still copy-paste data between applications."
-> — Every CIO, 2024
+> — Every CIO, 2024-2025
 
 ## The Disconnect
 
@@ -63,9 +63,9 @@ The Model Context Protocol enables secure, direct connections between AI assista
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│                 │     │                 │     │                 │
-│  AI Assistant   │────▶│   MCP Server    │────▶│  Enterprise     │
-│  (ChatGPT,      │     │   (Your Code)   │     │  Systems        │
+│  AI Assistant   │     │                 │     │                 │
+│   (ChatGPT,     │────▶│   MCP Server    │────▶│  Enterprise     │
+│    Claude,      │     │   (Your Code)   │     │  Systems        │
 │   Copilot)      │◀────│                 │◀────│  (DB, API, etc) │
 │                 │     │                 │     │                 │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
@@ -74,7 +74,7 @@ The Model Context Protocol enables secure, direct connections between AI assista
 Instead of copy-paste:
 
 ```
-1. Open ChatGPT with MCP connection
+1. Open ChatGPT with MCP connections
 2. Ask "What were our Q3 sales figures by region?"
 3. ChatGPT calls your MCP server
 4. MCP server queries Salesforce (with your permissions)
@@ -85,6 +85,8 @@ Instead of copy-paste:
 
 ## What MCP Provides
 
+We will dive deeper into the design of MCP server is lesson 4. Here is a quick overview:
+
 ### Tools
 Functions the AI can call:
 - `query_sales(region, quarter)`
@@ -92,9 +94,9 @@ Functions the AI can call:
 - `generate_report(type, date_range)`
 
 ### Resources
-Data the AI can read:
-- `salesforce://accounts/{id}`
-- `jira://issues/{key}`
+Documentation the AI can read:
+- `salesforce://accounts/tiers`
+- `jira://issues/severity-and-escalation`
 - `s3://reports/quarterly/{year}`
 
 ### Prompts
@@ -109,9 +111,14 @@ Building a "hello world" MCP server is easy. Building one for enterprise is not.
 
 **Enterprise MCP servers must be:**
 
+### Business Focused
+- Easy to connect by non technical people (no local installation)
+- Connected to the organization data fabric
+- Domain specific (different per department)
+
 ### Secure
 - OAuth 2.0 authentication (no API keys)
-- Integration with enterprise IdPs (Cognito, Okta, Entra)
+- Integration with enterprise identity providers (Cognito, Okta, Entra)
 - Audit logging for compliance
 - Input validation to prevent injection
 
@@ -135,7 +142,7 @@ Building a "hello world" MCP server is easy. Building one for enterprise is not.
 
 ### Scalable
 - Handle concurrent users
-- Cost-effective at scale
+- Cost-effective at scale and can scale to zero
 - Global availability options
 
 ## Why Most Tutorials Fail
@@ -161,6 +168,7 @@ This runs on localhost. It has no authentication. No error handling. No tests. N
 
 You'll quickly discover:
 - How do users authenticate?
+- How can it connect securely to data systems 
 - Where does this run?
 - How do we update it?
 - What happens when it fails?
@@ -188,9 +196,10 @@ You focus on business logic. PMCP handles the infrastructure.
 
 By the end of this section, you'll understand:
 
-1. **Why MCP over alternatives** (custom integrations, RAG, etc.)
-2. **Why Rust for enterprise** (safety, performance, reliability)
-3. **How to build production-ready servers** from day one
+1. **Why do we need MCP in the age of LLMs** (statistic models vs. symbolic computation)
+2. **Why MCP over alternatives** (custom integrations, RAG, etc.)
+3. **Why Rust for enterprise** (safety, performance, reliability)
+4. **How to build production-ready servers** from day one
 
 Let's start with why MCP beats the alternatives.
 

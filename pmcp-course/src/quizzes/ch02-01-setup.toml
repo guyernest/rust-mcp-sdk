@@ -1,5 +1,10 @@
 # Quiz: Development Environment Setup
 
+id = "ch02-01-setup"
+title = "Development Environment Setup"
+lesson_id = "ch02"
+pass_threshold = 0.7
+
 [[questions]]
 type = "MultipleChoice"
 prompt.prompt = "Which command installs the PMCP development toolkit?"

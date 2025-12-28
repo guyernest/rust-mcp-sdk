@@ -21,10 +21,10 @@ MCP Inspector is the official debugging tool for MCP servers.
 
 ```bash
 # Connect to a local server
-npx @anthropic-ai/mcp-inspector http://localhost:3000
+npx @modelcontextprotocol/inspector http://localhost:3000
 
 # With SSE transport
-npx @anthropic-ai/mcp-inspector --transport sse http://localhost:3000/sse
+npx @modelcontextprotocol/inspector --transport sse http://localhost:3000/sse
 ```
 
 This opens a web UI at `http://localhost:5173` (or similar).
