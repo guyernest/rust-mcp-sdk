@@ -1,0 +1,173 @@
+# Environment Setup for Chapter 2: Your First Production Server
+#
+# This setup guide walks students through installing the complete
+# development environment for building MCP servers with PMCP.
+
+[setup]
+chapter = "ch02"
+title = "Development Environment Setup"
+description = """
+Set up your local development environment for building production MCP servers.
+This includes the Rust toolchain and cargo-pmcp CLI.
+"""
+estimated_minutes = 10
+
+# Prerequisites check
+[setup.prerequisites]
+description = "Before starting, ensure you have:"
+items = [
+    "A terminal (Terminal.app, iTerm2, Windows Terminal, etc.)",
+    "Internet connection for downloading packages",
+    "Admin/sudo access for installing tools",
+]
+
+# Step 1: Install Rust
+[[setup.steps]]
+name = "Install Rust Toolchain"
+description = """
+Rust is the foundation for PMCP development. We use rustup to manage
+the Rust installation, which makes it easy to update and manage versions.
+"""
+order = 1
+
+[setup.steps.os_commands]
+linux = "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
+macos = "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
+windows = "Download and run rustup-init.exe from https://rustup.rs"
+
+[setup.steps.verification]
+command = "rustc --version"
+expected_pattern = "rustc \\d+\\.\\d+\\.\\d+"
+success_message = "Rust is installed correctly!"
+
+[[setup.steps.troubleshooting]]
+error_pattern = "command not found"
+solution = """
+The Rust binaries aren't in your PATH. Try:
+1. Restart your terminal
+2. Or run: source $HOME/.cargo/env
+3. Or add to your shell profile: export PATH=\"$HOME/.cargo/bin:$PATH\"
+"""
+
+[[setup.steps.troubleshooting]]
+error_pattern = "SSL certificate"
+solution = """
+SSL certificate verification failed. Try:
+- On Ubuntu/Debian: sudo apt update && sudo apt install ca-certificates
+- On macOS: This usually means a network issue; check your internet connection
+"""
+
+[[setup.steps.troubleshooting]]
+error_pattern = "xcode-select"
+solution = """
+macOS needs Xcode command line tools. Run:
+xcode-select --install
+Then try installing Rust again.
+"""
+
+# Step 2: Install cargo-pmcp
+[[setup.steps]]
+name = "Install cargo-pmcp CLI"
+description = """
+cargo-pmcp is the development toolkit for PMCP. It provides commands for
+creating projects, adding tools, testing, and deploying MCP servers.
+"""
+order = 2
+prerequisites = ["Rust toolchain installed"]
+command = "cargo install cargo-pmcp"
+
+[setup.steps.verification]
+command = "cargo pmcp --version"
+expected_pattern = "cargo-pmcp \\d+\\.\\d+\\.\\d+"
+success_message = "cargo-pmcp is ready!"
+
+[[setup.steps.troubleshooting]]
+error_pattern = "could not find"
+solution = """
+The cargo-pmcp binary wasn't found. Ensure ~/.cargo/bin is in your PATH:
+export PATH=\"$HOME/.cargo/bin:$PATH\"
+"""
+
+[[setup.steps.troubleshooting]]
+error_pattern = "failed to compile"
+solution = """
+Compilation failed. This might be due to:
+1. Outdated Rust version - run: rustup update stable
+2. Missing system dependencies - check the error message for details
+"""
+
+# Step 3: Verify Complete Setup
+[[setup.steps]]
+name = "Verify Complete Setup"
+description = """
+Let's verify everything works by creating a test project.
+This confirms your environment is correctly configured.
+"""
+order = 3
+commands = [
+    "cargo pmcp new test-setup-verification",
+    "cd test-setup-verification && cargo build",
+]
+
+[setup.steps.verification]
+command = "cd test-setup-verification && cargo build --release 2>&1 | tail -1"
+expected_pattern = "Finished|Compiling"
+success_message = """
+Congratulations! Your development environment is fully configured.
+You're ready to build production MCP servers!
+"""
+
+[setup.steps.cleanup]
+description = "You can delete the test project after verification"
+command = "rm -rf test-setup-verification"
+
+[[setup.steps.troubleshooting]]
+error_pattern = "error\\[E"
+solution = """
+Build failed with a Rust error. This might indicate:
+1. Incompatible Rust version - run: rustup update stable
+2. Missing features - check Cargo.toml for required features
+Please share the full error message for specific help.
+"""
+
+# AI Instructions for Setup
+[setup.ai_instructions]
+role = """
+You are helping a student set up their PMCP development environment.
+Be patient, thorough, and encouraging. Setup issues can be frustrating,
+so maintain a supportive tone throughout.
+"""
+
+approach = """
+1. RUN EACH STEP IN ORDER:
+   - Execute the command for their operating system
+   - Run the verification command
+   - Only proceed when verification passes
+
+2. IF VERIFICATION FAILS:
+   - Check the troubleshooting section for known issues
+   - Ask clarifying questions about their system
+   - Provide step-by-step debugging guidance
+   - Don't skip ahead - fix the current step first
+
+3. ADAPT TO THEIR ENVIRONMENT:
+   - Ask about their OS if not clear
+   - Adjust commands for their shell (bash, zsh, fish, PowerShell)
+   - Consider corporate proxy/firewall restrictions
+
+4. CELEBRATE SUCCESS:
+   - Acknowledge each completed step
+   - After full setup, confirm they're ready for exercises
+   - Offer to explain any tools they want to learn more about
+
+5. COMMON ISSUES TO WATCH FOR:
+   - PATH not updated after Rust install (need terminal restart)
+   - Corporate proxies blocking downloads
+   - Outdated system packages on Linux
+   - Missing Xcode tools on macOS
+
+6. MCP INSPECTOR:
+   - MCP Inspector is useful for testing but doesn't need to be installed
+   - Students can run it directly with: npx @modelcontextprotocol/inspector
+   - Requires Node.js/npm to be available
+"""

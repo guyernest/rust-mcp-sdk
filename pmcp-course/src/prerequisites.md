@@ -35,16 +35,10 @@ cargo pmcp --version
 
 ### MCP Inspector
 
-For manual testing and debugging:
+For manual testing and debugging (no installation needed):
 
 ```bash
-npx @anthropic-ai/mcp-inspector
-```
-
-Or install globally:
-
-```bash
-npm install -g @anthropic-ai/mcp-inspector
+npx @modelcontextprotocol/inspector
 ```
 
 ## MCP Clients

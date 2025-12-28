@@ -1,0 +1,118 @@
+# AI Tutor Instructions for: Building a Database Query Tool
+# Exercise ID: ch03-01-db-query-basics
+
+[tutor]
+exercise_id = "ch03-01-db-query-basics"
+title = "Building a Database Query Tool"
+
+[tutor.context]
+student_level = "intermediate"
+prior_knowledge = [
+    "Completed ch02 exercises (hello-mcp, calculator)",
+    "Basic Rust async/await",
+    "ServerBuilder pattern",
+    "Tool input/output structures with serde and schemars",
+]
+
+objective = """
+Guide the student to build a database query MCP server that:
+1. Lists tables from a SQLite database
+2. Executes read-only SQL queries
+3. Returns structured results suitable for AI consumption
+
+This is their first encounter with external resource integration (database).
+"""
+
+[tutor.pedagogy]
+approach = "scaffolded_implementation"
+
+phases = [
+    { name = "connect", duration_minutes = 5, focus = "Link to calculator experience; discuss why databases matter for AI" },
+    { name = "foundations", duration_minutes = 5, focus = "Explain connection pooling, async database ops, sqlite_master" },
+    { name = "implement_list_tables", duration_minutes = 8, focus = "Build the simpler tool first to establish patterns" },
+    { name = "implement_query", duration_minutes = 12, focus = "Build execute_query with validation and result formatting" },
+    { name = "test_and_reflect", duration_minutes = 5, focus = "Run against real data, discuss security implications" },
+]
+
+[tutor.scaffolding]
+starter_guidance = """
+Before diving into code, establish context:
+
+1. Ask: "Why might an AI assistant need direct database access instead of
+   pre-built reports?"
+
+2. Connect to their experience: "Remember how we handled errors in the
+   calculator? Database queries need even more validation."
+
+3. Explain the new concepts:
+   - Connection pooling: "Think of it as a parking lot for database connections"
+   - sqlite_master: "SQLite's internal table that describes all other tables"
+   - Arc<Pool<Sqlite>>: "We need to share the pool across async tool handlers"
+"""
+
+hint_progression = [
+    { trigger = "stuck_on_query_sqlite_master", response = "SQLite stores table metadata in sqlite_master. Try: SELECT name FROM sqlite_master WHERE type='table'" },
+    { trigger = "stuck_on_row_count", response = "For each table name, run a separate COUNT(*) query. Loop through the table names." },
+    { trigger = "stuck_on_select_validation", response = "Trim and uppercase the query, then check if it starts_with('SELECT')" },
+    { trigger = "stuck_on_dynamic_columns", response = "Use row.columns() to get column metadata, then iterate with indices" },
+    { trigger = "stuck_on_type_extraction", response = "SQLite is dynamically typed. Try i64 first, then f64, then String, then Null as fallback." },
+]
+
+[tutor.common_mistakes]
+mistakes = [
+    { pattern = "forgetting_arc_clone", symptom = "Borrow checker errors when using pool in closures", fix = "Clone the Arc before moving into async blocks: let pool = pool.clone();" },
+    { pattern = "missing_imports", symptom = "Cannot find Row, Column in sqlx", fix = "Add: use sqlx::{Row, Column};" },
+    { pattern = "sync_database_ops", symptom = "Trying to use blocking database calls", fix = "All sqlx operations are async - use .await on fetch_all(), execute(), etc." },
+    { pattern = "format_in_query", symptom = "Building SQL with format! for user input", fix = "This leads to SQL injection! For this exercise it's okay for table names (from our code), but preview parameterized queries for user input." },
+]
+
+[tutor.assessment]
+success_criteria = [
+    "list_tables returns all user tables with row counts",
+    "execute_query validates SELECT-only queries",
+    "Query results include column names",
+    "Truncation is detected and reported",
+    "All tests pass",
+]
+
+mastery_indicators = [
+    "Student explains why Arc is needed for sharing pool",
+    "Student identifies that starts_with('SELECT') has security limitations",
+    "Student suggests improvements like parameterized queries or allowlisting",
+]
+
+[tutor.discussion_prompts]
+opening = [
+    "What's the 'killer app' use case for database access in AI assistants?",
+    "Why is read-only access important for AI tools?",
+]
+
+during_implementation = [
+    "What happens if a query returns 10 million rows?",
+    "How would you prevent SQL injection in user-provided table names?",
+    "Why do we fetch limit+1 rows to detect truncation?",
+]
+
+closing = [
+    "What would change if you switched from SQLite to PostgreSQL?",
+    "What production features would you add to this server?",
+]
+
+[tutor.knowledge_connections]
+builds_on = [
+    "TypedTool pattern from calculator exercise",
+    "Error handling with anyhow::Result",
+    "serde serialization for structured output",
+]
+
+leads_to = [
+    "SQL injection review (security focus)",
+    "Pagination patterns (performance focus)",
+    "Connection pool configuration (reliability focus)",
+]
+
+real_world_applications = [
+    "Business intelligence dashboards with natural language queries",
+    "Customer support assistants that look up account information",
+    "Developer tools that query issue trackers and logs",
+]

@@ -1,0 +1,173 @@
+# Course Metadata for MCP Server
+# Generated from book.toml and actual file structure
+
+title = "Advanced MCP: Enterprise-Grade AI Integration with Rust"
+version = "1.0.0"
+authors = ["PMCP SDK Team"]
+description = "Build production-ready MCP servers for enterprise AI integration using the PMCP SDK"
+
+# Part I: Foundations
+[[parts]]
+id = "part1"
+title = "Part I: Foundations"
+
+[[parts.chapters]]
+id = "ch01"
+title = "The Enterprise MCP Case"
+path = "src/part1-foundations/ch01-enterprise-case.md"
+estimated_minutes = 20
+quiz_id = "ch01-enterprise-case"
+
+[[parts.chapters]]
+id = "ch02"
+title = "Your First Production Server"
+path = "src/part1-foundations/ch02-first-server.md"
+estimated_minutes = 45
+quiz_id = "ch02-01-setup"
+setup_id = "ch02-environment"
+exercise_ids = ["ch02-01-hello-mcp", "ch02-02-calculator", "ch02-03-code-review-basics"]
+
+[[parts.chapters]]
+id = "ch03"
+title = "Database Query Servers"
+path = "src/part1-foundations/ch03-database-servers.md"
+estimated_minutes = 60
+quiz_id = "ch03-database"
+exercise_ids = ["ch03-01-db-query-basics", "ch03-02-sql-injection-review", "ch03-03-pagination-patterns"]
+
+# Part II: Thoughtful Design
+[[parts]]
+id = "part2"
+title = "Part II: Thoughtful Design"
+
+[[parts.chapters]]
+id = "ch04"
+title = "Design Principles"
+path = "src/part2-design/ch04-design-principles.md"
+estimated_minutes = 45
+
+[[parts.chapters]]
+id = "ch05"
+title = "Input Validation"
+path = "src/part2-design/ch05-validation.md"
+estimated_minutes = 40
+
+[[parts.chapters]]
+id = "ch06"
+title = "Beyond Tools"
+path = "src/part2-design/ch06-beyond-tools.md"
+estimated_minutes = 35
+
+# Part III: Cloud Deployment
+[[parts]]
+id = "part3"
+title = "Part III: Cloud Deployment"
+
+[[parts.chapters]]
+id = "ch07"
+title = "Deployment Overview"
+path = "src/part3-deployment/ch07-deployment-overview.md"
+estimated_minutes = 30
+
+[[parts.chapters]]
+id = "ch08"
+title = "AWS Lambda Deployment"
+path = "src/part3-deployment/ch08-aws-lambda.md"
+estimated_minutes = 45
+
+[[parts.chapters]]
+id = "ch09"
+title = "Cloudflare Workers"
+path = "src/part3-deployment/ch09-cloudflare.md"
+estimated_minutes = 40
+
+[[parts.chapters]]
+id = "ch10"
+title = "Google Cloud Run"
+path = "src/part3-deployment/ch10-cloud-run.md"
+estimated_minutes = 40
+
+# Part IV: Testing
+[[parts]]
+id = "part4"
+title = "Part IV: Testing"
+
+[[parts.chapters]]
+id = "ch11"
+title = "Local Testing"
+path = "src/part4-testing/ch11-local-testing.md"
+estimated_minutes = 35
+
+[[parts.chapters]]
+id = "ch12"
+title = "Remote Testing"
+path = "src/part4-testing/ch12-remote-testing.md"
+estimated_minutes = 35
+
+# Part V: Enterprise Security
+[[parts]]
+id = "part5"
+title = "Part V: Enterprise Security"
+
+[[parts.chapters]]
+id = "ch13"
+title = "OAuth Integration"
+path = "src/part5-security/ch13-oauth.md"
+estimated_minutes = 50
+
+[[parts.chapters]]
+id = "ch14"
+title = "Identity Providers"
+path = "src/part5-security/ch14-providers.md"
+estimated_minutes = 45
+
+# Part VI: AI-Assisted Development
+[[parts]]
+id = "part6"
+title = "Part VI: AI-Assisted Development"
+
+[[parts.chapters]]
+id = "ch15"
+title = "AI-Assisted Development"
+path = "src/part6-ai-dev/ch15-ai-assisted.md"
+estimated_minutes = 40
+
+[[parts.chapters]]
+id = "ch16"
+title = "Collaboration Patterns"
+path = "src/part6-ai-dev/ch16-collaboration.md"
+estimated_minutes = 45
+
+# Part VII: Observability
+[[parts]]
+id = "part7"
+title = "Part VII: Observability"
+
+[[parts.chapters]]
+id = "ch17"
+title = "Middleware"
+path = "src/part7-observability/ch17-middleware.md"
+estimated_minutes = 35
+
+[[parts.chapters]]
+id = "ch18"
+title = "Operations"
+path = "src/part7-observability/ch18-operations.md"
+estimated_minutes = 35
+
+# Part VIII: Advanced Patterns
+[[parts]]
+id = "part8"
+title = "Part VIII: Advanced Patterns"
+
+[[parts.chapters]]
+id = "ch19"
+title = "Composition"
+path = "src/part8-advanced/ch19-composition.md"
+estimated_minutes = 50
+
+[[parts.chapters]]
+id = "ch20"
+title = "Building Applications"
+path = "src/part8-advanced/ch20-applications.md"
+estimated_minutes = 55

@@ -1,0 +1,75 @@
+# AI Instructions for: Building a Calculator Tool
+#
+# This file contains AI-specific guidance for tutoring this exercise.
+
+[ai]
+role = """
+You are helping a student build a calculator MCP tool that handles errors
+gracefully. Focus on teaching error handling patterns and defensive coding.
+"""
+
+approach = """
+1. START WITH DESIGN DISCUSSION (5 minutes):
+   - What operations should the calculator support?
+   - What edge cases need handling?
+   - How should errors be communicated to the AI?
+
+2. IMPLEMENT IN STAGES:
+   a) First, get addition working (simplest case)
+   b) Add the other operations
+   c) Add division-by-zero handling
+   d) Add the tool handler with error conversion
+
+3. TESTING STRATEGY:
+   - Run tests after each stage
+   - If tests fail, diagnose together
+   - Celebrate passing tests!
+
+4. COMMON MISTAKES:
+   - Forgetting to handle division by zero
+   - Returning tool errors instead of structured error responses
+   - Not checking for NaN/Infinity
+   - Incorrect match arm syntax
+
+5. DEEPEN UNDERSTANDING:
+   - Why use Result instead of Option or panic?
+   - Why return errors as JSON instead of failing the tool call?
+   - What other edge cases might exist? (overflow, precision)
+"""
+
+watch_for = [
+    "Dividing before checking for zero",
+    "Using panic! instead of returning Result",
+    "Not using #[serde(rename_all)] for the enum",
+    "Forgetting the async move in the tool closure",
+]
+
+[ai.policies]
+hint_policy = "after_stuck"
+stuck_threshold_minutes = 5
+unlock_solution_policy = "after_attempt"
+
+[ai.feedback]
+expected_insights = [
+    "Checking before prevents undefined behavior; checking after only catches the symptom",
+    "Structured errors let the AI understand and explain the problem; failures just retry",
+    "Add Power variant to enum, add match arm with a.powf(b)",
+    "Floating-point has precision issues (0.1 + 0.2 != 0.3), NaN, Infinity",
+]
+
+production_note = """
+In a production calculator, you might also:
+- Add more operations (power, sqrt, modulo)
+- Implement arbitrary precision math for financial calculations
+- Add unit conversions
+- Rate limit to prevent abuse
+- Log calculations for audit trails
+"""
+
+[ai.concepts]
+topics = [
+    "enum types for operations",
+    "Result-based error handling",
+    "Helpful error messages",
+    "Input normalization",
+]

@@ -1,0 +1,163 @@
+# Quiz: The Enterprise Case for MCP
+
+id = "ch01-enterprise-case"
+title = "The Enterprise Case for MCP"
+lesson_id = "ch01"
+pass_threshold = 0.7
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the 'copy-paste tax' described in the enterprise context?"
+prompt.distractors = [
+    "A licensing fee for using AI tools in enterprise",
+    "The cost of data storage for AI systems",
+    "A government regulation on AI usage"
+]
+answer.answer = "The time and errors from manually copying data between enterprise systems and AI tools"
+context = """
+The copy-paste tax refers to the productivity loss when employees must manually
+copy data from enterprise systems (databases, CRMs, etc.) into AI assistants
+because the AI cannot directly access that data.
+"""
+id = "a1b2c3d4-e5f6-7890-abcd-ef1234567801"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the key distinction between what LLMs excel at versus what they cannot do?"
+prompt.distractors = [
+    "LLMs excel at database queries but cannot write creative content",
+    "LLMs excel at real-time data but cannot reason about text",
+    "LLMs excel at arithmetic but cannot understand natural language"
+]
+answer.answer = "LLMs excel at probabilistic pattern recognition but cannot perform deterministic symbolic computation"
+context = """
+LLMs are statistical models trained on text patterns. They excel at understanding
+intent, synthesis, and reasoning. However, they cannot query databases, call APIs,
+perform exact calculations, or access real-time data without external tools.
+"""
+id = "a1b2c3d4-e5f6-7890-abcd-ef1234567802"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why is fine-tuning LLMs no longer recommended for enterprise data access?"
+prompt.distractors = [
+    "Fine-tuning is too fast and easy",
+    "Fine-tuning makes models too accurate",
+    "Fine-tuning is only available for open-source models"
+]
+answer.answer = "Fine-tuning teaches language patterns, not data access—the model still cannot query your live data"
+context = """
+Fine-tuning bakes knowledge into model weights during training. It cannot provide
+access to live, real-time enterprise data. Additionally, fine-tuned models become
+stale as soon as training ends, offer no audit trail, and risk data leakage.
+"""
+id = "a1b2c3d4-e5f6-7890-abcd-ef1234567803"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is a key limitation of RAG (Retrieval-Augmented Generation) compared to MCP?"
+prompt.distractors = [
+    "RAG cannot work with any LLM",
+    "RAG requires fine-tuning first",
+    "RAG is more expensive than MCP"
+]
+answer.answer = "RAG retrieves documents but cannot perform actions like creating tickets or executing database queries"
+context = """
+RAG excels at retrieving relevant text chunks for Q&A over document collections.
+However, it cannot execute SQL queries, call APIs with exact parameters, or
+perform write operations. MCP supports both read (Resources) and write (Tools).
+"""
+id = "a1b2c3d4-e5f6-7890-abcd-ef1234567804"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the main problem with hand-written agent code that embeds API calls directly?"
+prompt.distractors = [
+    "It runs too fast",
+    "It requires no authentication",
+    "It only works with open-source LLMs"
+]
+answer.answer = "Tight coupling, no reusability across applications, and maintenance burden that multiplies with each integration"
+context = """
+Hand-written agents tightly couple business logic to specific APIs. Each AI application
+must maintain its own integrations, leading to 20 integrations × 5 apps = 100 maintenance
+points. MCP servers are reusable: 20 servers + 5 apps = 25 maintenance points.
+"""
+id = "a1b2c3d4-e5f6-7890-abcd-ef1234567805"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "In the MCP authentication flow, what happens when the AI assistant calls an MCP server?"
+prompt.distractors = [
+    "The MCP server uses its own admin credentials to access enterprise data",
+    "The user must manually approve each individual request",
+    "The AI assistant directly queries the enterprise system"
+]
+answer.answer = "The AI sends the user's access token, and the MCP server validates it and queries data with user permissions"
+context = """
+MCP supports OAuth 2.0 delegated access. The user authenticates once, and the AI
+assistant includes the access token with tool calls. The MCP server validates the
+token and accesses enterprise data using the user's permissions, ensuring proper
+authorization and audit trails.
+"""
+id = "a1b2c3d4-e5f6-7890-abcd-ef1234567806"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "On the AI capability spectrum, which tasks are on the 'MCP Essential' side?"
+prompt.distractors = [
+    "Creative writing and sentiment analysis",
+    "Language translation and text summarization",
+    "Historical facts and scientific concepts"
+]
+answer.answer = "Database queries, real-time data access, exact math, and code execution"
+context = """
+The right side of the spectrum contains deterministic tasks that are impossible
+without external tools: database queries need database connections, real-time
+data needs live APIs, and exact math demands calculators. These are where MCP
+servers become essential.
+"""
+id = "a1b2c3d4-e5f6-7890-abcd-ef1234567807"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What protocol does MCP use for enterprise authentication?"
+answer.answer = "OAuth 2.0"
+context = """
+MCP supports OAuth 2.0 for enterprise authentication, enabling integration with
+identity providers like Cognito, Okta, and Microsoft Entra ID. This provides
+secure, delegated access with proper audit trails.
+"""
+id = "a1b2c3d4-e5f6-7890-abcd-ef1234567808"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why does MCP provide 'model flexibility' that fine-tuning does not?"
+prompt.distractors = [
+    "MCP only works with one specific model",
+    "MCP requires retraining when models update",
+    "MCP servers are written in the same language as LLMs"
+]
+answer.answer = "MCP servers work with any compliant client, so you can switch foundation models without changing integration code"
+context = """
+When you fine-tune a model, your investment is frozen in that specific base model.
+MCP servers are model-agnostic—the same server works with Claude, GPT, Gemini, or
+any MCP-compliant client. When a new model releases, you can switch instantly.
+"""
+id = "a1b2c3d4-e5f6-7890-abcd-ef1234567809"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Which organizations have adopted MCP for their AI products?"
+prompt.distractors = [
+    "Only Anthropic",
+    "Only open-source projects",
+    "Only enterprise software vendors"
+]
+answer.answer = "Anthropic, OpenAI, Google, Microsoft, and IDE vendors like Cursor and Windsurf"
+context = """
+MCP, published by Anthropic in late 2024, has been widely adopted. Claude Desktop,
+ChatGPT desktop apps, Gemini integrations, GitHub Copilot, and various IDEs all
+support MCP. Building an MCP server means building once for all these platforms.
+"""
+id = "a1b2c3d4-e5f6-7890-abcd-ef1234567810"

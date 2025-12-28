@@ -14,10 +14,14 @@
 
 - [Your First Production Server](./part1-foundations/ch02-first-server.md)
   - [Development Environment Setup](./part1-foundations/ch02-01-setup.md)
-  - [Creating a Workspace with cargo pmcp](./part1-foundations/ch02-02-workspace.md)
+  - [Building and Running](./part1-foundations/ch02-02-workspace.md)
   - [The Calculator Server](./part1-foundations/ch02-03-calculator.md)
   - [Understanding the Generated Code](./part1-foundations/ch02-04-code-walkthrough.md)
-  - [Running with MCP Inspector](./part1-foundations/ch02-05-inspector.md)
+  - [Testing with MCP Inspector](./part1-foundations/ch02-05-inspector.md)
+  - [Chapter 2 Exercises](./part1-foundations/ch02-exercises.md)
+    - [Exercise: Your First MCP Server](./part1-foundations/ch02-ex01-hello-mcp.md)
+    - [Exercise: The Calculator Tool](./part1-foundations/ch02-ex02-calculator.md)
+    - [Exercise: Code Review Challenge](./part1-foundations/ch02-ex03-code-review.md)
 
 - [Database MCP Servers](./part1-foundations/ch03-database-servers.md)
   - [The Enterprise Data Access Problem](./part1-foundations/ch03-01-data-access.md)
@@ -25,6 +29,10 @@
   - [SQL Safety and Injection Prevention](./part1-foundations/ch03-03-sql-safety.md)
   - [Resource-Based Data Patterns](./part1-foundations/ch03-04-resources.md)
   - [Handling Large Results](./part1-foundations/ch03-05-pagination.md)
+  - [Chapter 3 Exercises](./part1-foundations/ch03-exercises.md)
+    - [Exercise: Building a Database Query Tool](./part1-foundations/ch03-ex01-db-query.md)
+    - [Exercise: SQL Injection Code Review](./part1-foundations/ch03-ex02-sql-injection.md)
+    - [Exercise: Pagination Patterns](./part1-foundations/ch03-ex03-pagination.md)
 
 ---
 
