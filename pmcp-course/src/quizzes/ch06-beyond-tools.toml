@@ -1,0 +1,169 @@
+# Quiz: Resources, Prompts, and Workflows
+
+id = "ch06-beyond-tools"
+title = "Resources, Prompts, and Workflows"
+lesson_id = "ch06"
+pass_threshold = 0.7
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the key difference between MCP Resources and Tools?"
+prompt.distractors = [
+    "Resources are faster than tools",
+    "Tools support JSON but resources don't",
+    "Resources require authentication but tools don't"
+]
+answer.answer = "Resources provide stable, addressable data; Tools perform actions that may have side effects"
+context = """
+Resources are like bookmarks - stable data with a URI identity (db://schema).
+Tools are like form submissions - actions with potential side effects. The AI
+treats them differently: reading resources freely for context, but calling tools
+deliberately to accomplish goals.
+"""
+id = "d6a1b2c3-e5f6-7890-abcd-ef1234560601"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why are Prompts described as the 'primary mechanism for user-controlled workflows'?"
+prompt.distractors = [
+    "Prompts are faster than tools",
+    "Prompts bypass AI decision-making entirely",
+    "Prompts are required by MCP protocol"
+]
+answer.answer = "Users explicitly invoke prompts to select a workflow, giving them predictable control over AI behavior"
+context = """
+Unlike tools (AI decides when to use) and resources (AI reads for context),
+prompts are explicitly invoked by users. When a user types /quarterly-analysis,
+they're choosing that specific workflow. This gives users control rather than
+hoping the AI picks the right approach.
+"""
+id = "d6a1b2c3-e5f6-7890-abcd-ef1234560602"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What should you use for database schema information - a Resource or a Tool?"
+prompt.distractors = [
+    "A tool called 'get_schema'",
+    "Either one works equally well",
+    "A prompt that fetches the schema"
+]
+answer.answer = "A Resource like 'db://schema' because schemas are stable, addressable data"
+context = """
+Schema information is stable reference data with a clear identity - perfect for
+a resource. The AI can read db://schema proactively for context without counting
+it as an 'action'. A tool called 'get_schema' implies an action, but reading
+schema is just gathering information.
+"""
+id = "d6a1b2c3-e5f6-7890-abcd-ef1234560603"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "In prompt design, why should steps be explicitly numbered with specific tool references?"
+prompt.distractors = [
+    "Numbered steps are required by MCP protocol",
+    "It reduces the prompt's token count",
+    "It prevents the prompt from being cached"
+]
+answer.answer = "AI follows explicit numbered steps better and knows exactly which tools to use at each step"
+context = """
+Vague prompts like 'analyze the data' leave AI guessing which tools to use.
+Explicit steps like '1. Read db://schema, 2. Use sales_query to get revenue,
+3. Use sales_aggregate for totals' give clear guidance. The AI executes the
+prescribed workflow reliably.
+"""
+id = "d6a1b2c3-e5f6-7890-abcd-ef1234560604"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the rule of thumb for deciding between Resources and Tools?"
+prompt.distractors = [
+    "Use resources for anything JSON-formatted",
+    "Use tools for anything requiring parameters",
+    "Use resources for read-only, tools for write"
+]
+answer.answer = "If you'd bookmark it, use a Resource; if you'd submit a form, use a Tool"
+context = """
+The bookmark/form metaphor captures the distinction well. Bookmarks point to
+stable, addressable content (resources). Forms submit data and trigger actions
+(tools). Database schema is a bookmark. Query execution is a form submission.
+"""
+id = "d6a1b2c3-e5f6-7890-abcd-ef1234560605"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why include guard rails in prompts for data modification workflows?"
+prompt.distractors = [
+    "To improve query performance",
+    "Because MCP requires confirmation for all tools",
+    "To reduce the number of tool calls"
+]
+answer.answer = "To ensure the AI shows affected records, explains changes, and asks for confirmation before destructive operations"
+context = """
+Guard rails in prompts like 'show affected records, explain changes, ask for
+confirmation' protect against accidental modifications. The prompt forces the
+AI to follow a safe workflow: preview → explain → confirm → execute. Without
+this, the AI might execute immediately.
+"""
+id = "d6a1b2c3-e5f6-7890-abcd-ef1234560606"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "In Claude Desktop, how do users invoke MCP prompts?"
+answer.answer = "slash commands"
+answer.alternatives = ["/commands", "/ commands", "Slash commands", "/", "slash command"]
+context = """
+Claude Desktop exposes MCP prompts as slash commands. Users type /quarterly-analysis
+or /customer-health-check to invoke specific workflows. Other clients may show
+prompts differently - VS Code uses command palette, ChatGPT shows conversation starters.
+"""
+id = "d6a1b2c3-e5f6-7890-abcd-ef1234560607"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the benefit of including 'negative descriptions' in tool documentation?"
+prompt.distractors = [
+    "It improves tool performance",
+    "It's required for MCP compliance",
+    "It reduces schema size"
+]
+answer.answer = "Telling AI what a tool is NOT for helps prevent misuse - 'Cannot modify data, use sales_admin for updates'"
+context = """
+Sometimes it's helpful to say what a tool can't do. 'sales_query: Read-only.
+CANNOT modify data - use sales_admin. For reports, use sales_report (faster).'
+This prevents AI from using the wrong tool and guides it to the correct alternative.
+"""
+id = "d6a1b2c3-e5f6-7890-abcd-ef1234560608"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "In multi-step workflows, why should tools explicitly document ID relationships between output and input?"
+prompt.distractors = [
+    "To reduce network bandwidth",
+    "Because IDs must be globally unique",
+    "To enable database joins"
+]
+answer.answer = "So AI knows that 'customer_id' from sales_top_customers works as input to order_history"
+context = """
+When chaining tools, AI needs to know how outputs connect to inputs. Documenting
+'Returns customer_id for use with order_history, customer_details tools' explicitly
+tells the AI how to chain them. Without this, AI might use wrong field names or
+incompatible IDs.
+"""
+id = "d6a1b2c3-e5f6-7890-abcd-ef1234560609"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What distinguishes the 'Orchestration Tool' pattern from the 'Guided Prompt' pattern?"
+prompt.distractors = [
+    "Orchestration tools are faster",
+    "Guided prompts support more steps",
+    "Orchestration tools require fewer parameters"
+]
+answer.answer = "Orchestration tools coordinate multiple operations internally; Guided prompts direct AI to call tools sequentially"
+context = """
+An orchestration tool like 'customer_analysis' gathers orders, support tickets,
+and engagement internally - AI calls once. A guided prompt instructs AI:
+'Step 1: call order_history, Step 2: call support_tickets...' - AI calls each
+tool. Orchestration hides complexity; guided prompts show the workflow.
+"""
+id = "d6a1b2c3-e5f6-7890-abcd-ef1234560610"

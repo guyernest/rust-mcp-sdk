@@ -1,0 +1,168 @@
+# Quiz: Input Validation and Output Schemas
+
+id = "ch05-validation"
+title = "Input Validation and Output Schemas"
+lesson_id = "ch05"
+pass_threshold = 0.7
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why is validation in MCP servers described as 'a critical feedback mechanism' for AI clients?"
+prompt.distractors = [
+    "It prevents the server from crashing",
+    "It's required by the MCP protocol specification",
+    "It reduces server response time"
+]
+answer.answer = "Clear validation errors help AI clients learn and self-correct their parameter mistakes"
+context = """
+When an AI sends invalid parameters, detailed error messages create a feedback loop.
+The AI sees 'expected: 2024-11-15, received: November 15, 2024' in the tool output,
+understands the mistake, and retries with correct parameters. Without clear errors,
+the AI keeps making the same mistakes.
+"""
+id = "d5a1b2c3-e5f6-7890-abcd-ef1234560501"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What happens when an AI client receives a RATE_LIMITED error with 'retry_after_seconds: 30'?"
+prompt.distractors = [
+    "The AI immediately retries the request",
+    "The AI gives up and informs the user",
+    "The AI tries a different tool instead"
+]
+answer.answer = "The AI can wait 30 seconds then retry, using the structured error to make an intelligent decision"
+context = """
+Structured error codes enable programmatic decisions. RATE_LIMITED with retry timing
+tells the AI to wait and retry. NOT_FOUND suggests trying a different query.
+PERMISSION_DENIED means inform the user. The AI uses error codes to choose the
+appropriate recovery strategy.
+"""
+id = "d5a1b2c3-e5f6-7890-abcd-ef1234560502"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is wrong with this validation code: `let limit = params.get(\"limit\").and_then(|v| v.as_u64()).unwrap_or(100);`?"
+prompt.distractors = [
+    "It doesn't support large numbers",
+    "It's too slow for production",
+    "It doesn't use the default correctly"
+]
+answer.answer = "It silently ignores invalid values - the AI never learns its mistake"
+context = """
+Silent coercion with unwrap_or() means if the AI sends limit: 'many' (a string),
+it silently becomes 100. The AI thinks it requested 'many' and got results for 100,
+never learning the correct format. Explicit errors teach the AI to use integers.
+"""
+id = "d5a1b2c3-e5f6-7890-abcd-ef1234560503"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why should JSON Schema include an example in the description when using pattern validation?"
+prompt.distractors = [
+    "Examples are required by JSON Schema specification",
+    "Examples improve validation performance",
+    "Examples are displayed to users in error messages"
+]
+answer.answer = "AI may not perfectly interpret regex patterns but will use the example as a format guide"
+context = """
+A pattern like '^ORD-[0-9]{4}-[A-Z]{2}-[0-9]{6}$' is complex. The AI might misinterpret
+the regex, but a description like 'Order ID (format: ORD-YYYY-RR-NNNNNN, e.g.,
+ORD-2024-NA-000123)' gives a concrete example the AI can follow directly.
+"""
+id = "d5a1b2c3-e5f6-7890-abcd-ef1234560504"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What are the four levels of the 'validation spectrum' for MCP tools?"
+prompt.distractors = [
+    "Input, output, error, success",
+    "Required, optional, default, computed",
+    "Client, server, protocol, transport"
+]
+answer.answer = "Schema (type mismatches), Format (structural errors), Business (domain violations), Security (dangerous inputs)"
+context = """
+The validation spectrum covers increasingly domain-specific checks: Schema catches
+string-instead-of-number; Format catches invalid date formats; Business catches
+future dates for historical queries; Security catches SQL injection attempts.
+Each level provides different protection.
+"""
+id = "d5a1b2c3-e5f6-7890-abcd-ef1234560505"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why should output schemas document the relationship between returned IDs and other tools?"
+prompt.distractors = [
+    "To reduce the size of responses",
+    "Because IDs must be unique across all tools",
+    "To comply with MCP protocol requirements"
+]
+answer.answer = "AI clients can confidently chain tools when they know output IDs work as input to other tools"
+context = """
+When sales_top_customers returns customer_id and order_history accepts customer_id,
+documenting this relationship helps AI understand how to chain the tools. Without
+documentation, AI might try to use 'id', 'customer', or 'cust_id' - wrong field names.
+"""
+id = "d5a1b2c3-e5f6-7890-abcd-ef1234560506"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What Rust crate provides the #[derive(JsonSchema)] macro for generating JSON schemas from types?"
+answer.answer = "schemars"
+answer.alternatives = ["Schemars", "SCHEMARS"]
+context = """
+The schemars crate provides JsonSchema derive macros that generate JSON schemas
+from Rust types. Combined with serde for serialization, this enables type-safe
+schema generation where the schema always matches the actual struct definition.
+"""
+id = "d5a1b2c3-e5f6-7890-abcd-ef1234560507"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is a 'consistent response envelope' and why is it valuable?"
+prompt.distractors = [
+    "A standard HTTP header format",
+    "A way to compress response data",
+    "A caching mechanism for responses"
+]
+answer.answer = "A standard structure (success, data, error, metadata) that all tools in a domain return"
+context = """
+When all tools return {success: bool, data: {...}, error: {...}, metadata: {...}},
+the AI learns one pattern for processing responses. It always knows to check success,
+access data on success, or read error on failure - regardless of which specific tool
+was called.
+"""
+id = "d5a1b2c3-e5f6-7890-abcd-ef1234560508"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the 'readOnlyHint' annotation and how might AI clients use it?"
+prompt.distractors = [
+    "It caches the tool's results",
+    "It prevents the tool from being listed",
+    "It requires user authentication"
+]
+answer.answer = "It indicates the tool only reads data, so AI may call it more freely without confirmation"
+context = """
+Tools with readOnlyHint: true are safe to call speculatively - they don't modify
+data. AI clients may call read-only tools without user confirmation, while being
+more cautious with modifying tools (readOnlyHint: false). This enables faster
+exploration while maintaining safety for writes.
+"""
+id = "d5a1b2c3-e5f6-7890-abcd-ef1234560509"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "A good validation error should include which four pieces of information?"
+prompt.distractors = [
+    "Timestamp, server name, request ID, stack trace",
+    "User ID, session token, IP address, browser type",
+    "CPU usage, memory usage, disk space, network latency"
+]
+answer.answer = "What was wrong, what was expected, what was received, and how to fix it"
+context = """
+AI-friendly errors include: (1) what was wrong - clear problem identification;
+(2) what was expected - correct format or value; (3) what was received - echo back
+the invalid input; (4) how to fix it - specific guidance like 'Convert November 15
+to 2024-11-15'.
+"""
+id = "d5a1b2c3-e5f6-7890-abcd-ef1234560510"

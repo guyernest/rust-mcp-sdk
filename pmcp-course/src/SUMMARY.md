@@ -43,16 +43,22 @@
   - [The Anti-Pattern: 50 Confusing Tools](./part2-design/ch04-01-antipatterns.md)
   - [Cohesive API Design](./part2-design/ch04-02-cohesion.md)
   - [Single Responsibility for Tools](./part2-design/ch04-03-responsibility.md)
+  - [Chapter 4 Exercises](./part2-design/ch04-exercises.md)
+    - [Exercise: Tool Design Review](./part2-design/ch04-ex01-tool-design-review.md)
 
 - [Input Validation and Output Schemas](./part2-design/ch05-validation.md)
   - [Schema-Driven Validation](./part2-design/ch05-01-input-validation.md)
   - [Output Schemas for Composition](./part2-design/ch05-02-output-schemas.md)
   - [Type-Safe Tool Annotations](./part2-design/ch05-03-annotations.md)
+  - [Chapter 5 Exercises](./part2-design/ch05-exercises.md)
+    - [Exercise: Validation Errors for AI](./part2-design/ch05-ex01-validation-errors.md)
 
 - [Resources, Prompts, and Workflows](./part2-design/ch06-beyond-tools.md)
   - [When to Use Resources vs Tools](./part2-design/ch06-01-resources-vs-tools.md)
   - [Prompts as Workflow Templates](./part2-design/ch06-02-prompts.md)
   - [Designing Multi-Step Workflows](./part2-design/ch06-03-workflows.md)
+  - [Chapter 6 Exercises](./part2-design/ch06-exercises.md)
+    - [Exercise: Prompt Design Workshop](./part2-design/ch06-ex01-prompt-design.md)
 
 ---
 
