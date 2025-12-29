@@ -1,6 +1,6 @@
 # When to Use Resources vs Tools
 
-Resources and tools both provide data to AI clients, but they serve fundamentally different purposes. Understanding when to use each leads to cleaner designs and better AI behavior.
+Resources and tools both provide data to AI clients, but they serve fundamentally different purposes. Understanding when to use each leads to cleaner designs and better AI behavior, and in building domain specific MCP servers.
 
 ## The Key Distinction
 
@@ -22,34 +22,34 @@ Use this flowchart to decide:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ Does the operation have side effects?                        │
+│ Does the operation have side effects?                       │
 ├─────────────────────────────────────────────────────────────┤
-│                                                              │
+│                                                             │
 │   YES ──► Use a TOOL                                        │
-│           - Database modifications                           │
-│           - External API calls that mutate                   │
-│           - Sending notifications                            │
-│           - Creating files                                   │
-│                                                              │
+│           - Database modifications                          │
+│           - External API calls that mutate                  │
+│           - Sending notifications                           │
+│           - Creating files                                  │
+│                                                             │
 │   NO ──► Does the data have a stable identity?              │
-│          │                                                   │
+│          │                                                  │
 │          ├─ YES ──► Use a RESOURCE                          │
-│          │          - Schema definitions                     │
-│          │          - Configuration                          │
-│          │          - Reference data                         │
-│          │          - Static documentation                   │
-│          │                                                   │
+│          │          - Schema definitions                    │
+│          │          - Configuration                         │
+│          │          - Reference data                        │
+│          │          - Static documentation                  │
+│          │                                                  │
 │          └─ NO ──► Does it require computation?             │
-│                    │                                         │
+│                    │                                        │
 │                    ├─ YES ──► Use a TOOL                    │
-│                    │          - Complex queries              │
-│                    │          - Aggregations                 │
-│                    │          - Reports                      │
-│                    │                                         │
+│                    │          - Complex queries             │
+│                    │          - Aggregations                │
+│                    │          - Reports                     │
+│                    │                                        │
 │                    └─ NO ──► Use a RESOURCE                 │
-│                               - Simple lookups               │
-│                               - Cached data                  │
-│                                                              │
+│                               - Simple lookups              │
+│                               - Cached data                 │
+│                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 

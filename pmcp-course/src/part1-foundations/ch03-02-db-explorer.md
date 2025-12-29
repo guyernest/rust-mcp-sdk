@@ -379,6 +379,16 @@ The next sections address these:
 2. **[Resources](./ch03-04-resources.md)** - Structured access patterns
 3. **[Pagination](./ch03-05-pagination.md)** - Handling large result sets
 
+> **Production Security Note**
+>
+> The examples in Part 1 focus on MCP fundamentals and omit authentication for simplicity. In production deployments, you should:
+>
+> 1. **Require OAuth authentication** for all MCP requests
+> 2. **Pass access tokens through** to backend data systems as the source of truth for permissions
+> 3. **Let the database enforce row-level security** based on the authenticated user
+>
+> See [Part 5: Security](../part5-security/ch13-oauth.md) for complete OAuth integration patterns with AWS Cognito, Auth0, and Microsoft Entra ID.
+
 ---
 
 *Continue to [SQL Safety and Injection Prevention](./ch03-03-sql-safety.md) →*
