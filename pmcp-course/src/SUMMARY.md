@@ -19,6 +19,7 @@
   - [Understanding the Generated Code](./part1-foundations/ch02-04-code-walkthrough.md)
   - [Testing with MCP Inspector](./part1-foundations/ch02-05-inspector.md)
   - [Chapter 2 Exercises](./part1-foundations/ch02-exercises.md)
+    - [Exercise: Environment Setup](./part1-foundations/ch02-ex00-setup.md)
     - [Exercise: Your First MCP Server](./part1-foundations/ch02-ex01-hello-mcp.md)
     - [Exercise: The Calculator Tool](./part1-foundations/ch02-ex02-calculator.md)
     - [Exercise: Code Review Challenge](./part1-foundations/ch02-ex03-code-review.md)

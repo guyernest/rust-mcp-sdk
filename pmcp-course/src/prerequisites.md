@@ -1,198 +1,63 @@
 # Prerequisites
 
-This chapter covers everything you need to set up before starting the course.
+This course assumes familiarity with several foundational concepts. Review the areas below to ensure you're ready to get the most from the material.
 
-## Required Software
+## Knowledge Prerequisites
 
-### Rust Toolchain
+### Rust Fundamentals
 
-Install Rust using rustup:
+You should be comfortable with:
 
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
+- **Ownership and borrowing** - Understanding Rust's memory model
+- **Traits and generics** - Implementing and using traits
+- **Error handling** - Using `Result`, `Option`, and the `?` operator
+- **Async/await** - Basic understanding of async Rust
+- **Cargo** - Creating projects, adding dependencies, running tests
 
-Verify installation:
+**Recommended resources:**
+- [The Rust Book](https://doc.rust-lang.org/book/)
+- [Rust by Example](https://doc.rust-lang.org/rust-by-example/)
+- [Async Rust Book](https://rust-lang.github.io/async-book/)
 
-```bash
-rustc --version  # Should be 1.82.0 or later
-cargo --version
-```
+### HTTP and APIs
 
-### cargo-pmcp
+Basic understanding of:
 
-Install the PMCP development toolkit:
+- HTTP methods (GET, POST, etc.)
+- JSON data format
+- REST API concepts
+- WebSocket basics (helpful but not required)
 
-```bash
-cargo install cargo-pmcp
-```
+### Command Line
 
-Verify installation:
+Comfort with:
 
-```bash
-cargo pmcp --version
-```
+- Terminal/shell basics
+- Running commands and scripts
+- Environment variables
+- Package managers (npm, cargo)
 
-### MCP Inspector
+## Cloud Knowledge (For Deployment Chapters)
 
-For manual testing and debugging (no installation needed):
+For Parts III-V (deployment and security), familiarity with at least one cloud platform is helpful:
 
-```bash
-npx @modelcontextprotocol/inspector
-```
+- **AWS** - Lambda, API Gateway, IAM basics
+- **Cloudflare** - Workers, Wrangler CLI
+- **Google Cloud** - Cloud Run, Container Registry
 
-## MCP Clients
+Don't worry if you're new to cloud deployment - we cover everything step by step.
 
-You'll need at least one MCP client. We recommend:
+## Environment Setup
 
-### Claude Desktop (Recommended)
+For installation and tool setup, complete the **Environment Setup Exercise** at the start of Chapter 2:
 
-Download from [claude.ai](https://claude.ai/download). Claude Desktop has native MCP support and works well for testing.
+- [Exercise: Environment Setup](./part1-foundations/ch02-ex00-setup.md)
 
-### VS Code with Continue
-
-If you prefer an IDE-based workflow:
-
-1. Install [Continue extension](https://marketplace.visualstudio.com/items?itemName=Continue.continue)
-2. Configure MCP servers in Continue settings
-
-### Cursor
-
-[Cursor](https://cursor.sh) has built-in MCP support.
-
-## Cloud Accounts
-
-For the deployment chapters, you'll need access to at least one:
-
-### AWS (Recommended for Enterprise)
-
-- Create an AWS account or use your organization's account
-- Install AWS CLI: `brew install awscli` or [download](https://aws.amazon.com/cli/)
-- Configure credentials: `aws configure`
-- For Lambda deployment, ensure you have permissions for:
-  - Lambda
-  - API Gateway
-  - IAM (for role creation)
-  - CloudWatch (for logs)
-
-### Cloudflare (For Edge Deployment)
-
-- Create a Cloudflare account
-- Install Wrangler: `npm install -g wrangler`
-- Authenticate: `wrangler login`
-
-### Google Cloud (For Container Deployment)
-
-- Create a GCP account
-- Install gcloud CLI: `brew install google-cloud-sdk`
-- Authenticate: `gcloud auth login`
-- Set project: `gcloud config set project YOUR_PROJECT_ID`
-
-## Identity Provider (For OAuth Chapters)
-
-For the security chapters, you'll need an identity provider. Choose one:
-
-### AWS Cognito (If Using AWS)
-
-We'll create a Cognito User Pool during the course.
-
-### Auth0 (Cross-Platform)
-
-Create a free account at [auth0.com](https://auth0.com).
-
-### Microsoft Entra ID (For Microsoft Shops)
-
-If your organization uses Microsoft 365, you can use your existing Entra ID tenant.
-
-## Development Tools
-
-### Recommended IDE
-
-- **VS Code** with rust-analyzer extension
-- **RustRover** (JetBrains)
-- **Cursor** with Rust extensions
-
-### Database Tools (For db-explorer Chapter)
-
-- SQLite CLI: `brew install sqlite` (usually pre-installed on macOS)
-- Optional: [DBeaver](https://dbeaver.io/) for visual database management
-
-### HTTP Tools
-
-- **curl** (pre-installed on most systems)
-- Optional: [httpie](https://httpie.io/) for friendlier HTTP testing
-
-## Claude Code (Optional but Recommended)
-
-For the AI-assisted development chapters:
-
-```bash
-npm install -g @anthropic-ai/claude-code
-```
-
-Or use Claude Code within VS Code/Cursor.
-
-## Verify Your Setup
-
-Run this checklist to ensure everything is ready:
-
-```bash
-# Rust toolchain
-rustc --version
-cargo --version
-
-# cargo-pmcp
-cargo pmcp --version
-
-# Cloud CLI (at least one)
-aws --version
-wrangler --version
-gcloud --version
-
-# Node.js (for MCP Inspector)
-node --version
-npx --version
-```
-
-## Troubleshooting
-
-### Rust Installation Issues
-
-If rustup fails, try:
-```bash
-# Remove existing installations
-rm -rf ~/.rustup ~/.cargo
-
-# Reinstall
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-```
-
-### cargo-pmcp Installation Issues
-
-If cargo install fails:
-```bash
-# Update Rust
-rustup update stable
-
-# Try with verbose output
-cargo install cargo-pmcp --verbose
-```
-
-### Permission Issues on macOS
-
-If you get permission errors:
-```bash
-# For Homebrew
-sudo chown -R $(whoami) /usr/local/bin
-
-# For cargo binaries
-chmod +x ~/.cargo/bin/*
-```
+This interactive exercise will guide you through installing Rust, cargo-pmcp, and setting up your MCP client.
 
 ## Ready?
 
-Once you've verified all prerequisites, you're ready to start building.
+If you're comfortable with Rust basics and have completed the environment setup, you're ready to start building production MCP servers.
 
 ---
 

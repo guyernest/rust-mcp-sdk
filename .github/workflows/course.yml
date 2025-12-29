@@ -74,24 +74,14 @@ jobs:
 
       - name: Create course content package
         run: |
-          # Create metadata file
-          cat > pmcp-course/src/metadata.toml << 'EOF'
-          [course]
-          title = "Advanced MCP Development"
-          version = "${{ github.ref_name }}"
-          authors = ["PMCP SDK Contributors"]
-          description = "Master enterprise MCP server development with Rust"
-
-          [build]
-          commit = "${{ github.sha }}"
-          date = "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          EOF
-
           # Package content (excluding book output)
-          # Exercises are now under src/exercises/ per mdbook-exercises conventions
+          # Structure: part1-foundations/, exercises/, quizzes/, metadata.toml
+          # The transform strips pmcp-course/src/ to create flat structure matching metadata.toml paths
           tar -czf course-content.tar.gz \
+            --transform 's,^pmcp-course/src/,,' \
             --transform 's,^pmcp-course/,,' \
-            pmcp-course/src/
+            pmcp-course/src/ \
+            pmcp-course/metadata.toml
 
           # Show package contents
           echo "Package contents:"
