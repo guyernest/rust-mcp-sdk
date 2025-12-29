@@ -73,15 +73,15 @@ With 47 tools, the AI might:
 Your 47 tools don't exist in isolation. Other MCP servers connected to the same client may have similar names:
 
 ```
-Your server:                  GitHub server:           Filesystem server:
-- create_product             - create_issue           - create_file
-- update_product             - update_issue           - update_file
-- delete_product             - delete_issue           - delete_file
-- list_products              - list_issues            - list_files
-- get_product                - get_issue              - get_file
+Your server:                  Asana server:            Google Drive server:
+- create_product             - create_task            - create_document
+- update_product             - update_task            - update_document
+- delete_product             - delete_task            - delete_document
+- list_products              - list_tasks             - list_documents
+- get_product                - get_task               - get_document
 ```
 
-The AI sees a sea of `create_*`, `update_*`, `delete_*`, `list_*`, `get_*` tools. Without excellent descriptions, it will make mistakes.
+A business user might have your e-commerce server connected alongside their project management (Asana, Notion) and document storage (Google Drive, SharePoint). The AI sees a sea of `create_*`, `update_*`, `delete_*`, `list_*`, `get_*` tools. Without excellent descriptions, it will make mistakes.
 
 ### Problem 3: Implicit Workflows Hidden
 

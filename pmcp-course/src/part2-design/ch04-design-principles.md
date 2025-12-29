@@ -21,10 +21,10 @@ Your MCP server isn't alone. The MCP client (Claude Desktop, Cursor, ChatGPT, or
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      MCP Client                              │
-│                   (Claude Desktop)                           │
+│                      MCP Client                             │
+│                   (Claude Desktop)                          │
 ├─────────────────────────────────────────────────────────────┤
-│                                                              │
+│                                                             │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │
 │  │ Your Server  │  │ Filesystem   │  │ GitHub       │       │
 │  │ (db-explorer)│  │ Server       │  │ Server       │       │
@@ -33,8 +33,8 @@ Your MCP server isn't alone. The MCP client (Claude Desktop, Cursor, ChatGPT, or
 │  │ • list_tables│  │ • write_file │  │ • create_pr  │       │
 │  │ • get_schema │  │ • list_dir   │  │ • get_commits│       │
 │  └──────────────┘  └──────────────┘  └──────────────┘       │
-│                                                              │
-│  The AI sees ALL tools from ALL servers simultaneously       │
+│                                                             │
+│  The AI sees ALL tools from ALL servers simultaneously      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
