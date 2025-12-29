@@ -23,47 +23,198 @@ But wait:
 
 Without knowing the output structure, the AI must guess—or execute the first tool and inspect results before continuing.
 
-## Declaring Output Schemas
+## The PMCP SDK Approach: TypedToolWithOutput
 
-MCP tools can declare their output structure, giving AI clients advance knowledge of what to expect:
+Just as `TypedTool` auto-generates input schemas from Rust structs, PMCP provides `TypedToolWithOutput` that generates **both input AND output schemas** automatically:
 
 ```rust
-Tool::new("sales_top_customers")
-    .description("Get top customers by revenue for a time period")
-    .input_schema(json!({
-        "type": "object",
-        "properties": {
-            "period": { "type": "string", "enum": ["month", "quarter", "year"] },
-            "limit": { "type": "integer", "default": 10 }
-        }
-    }))
-    .output_schema(json!({
-        "type": "object",
-        "properties": {
-            "customers": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "customer_id": { "type": "string" },
-                        "name": { "type": "string" },
-                        "total_revenue": { "type": "number" },
-                        "order_count": { "type": "integer" },
-                        "last_order_date": { "type": "string", "format": "date" }
-                    }
-                }
-            },
-            "period": { "type": "string" },
-            "generated_at": { "type": "string", "format": "date-time" }
-        }
-    }))
+use pmcp::TypedToolWithOutput;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+/// Input: Query parameters for top customers
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TopCustomersInput {
+    /// Time period for revenue calculation
+    period: Period,
+
+    /// Maximum number of customers to return (1-100)
+    #[serde(default = "default_limit")]
+    limit: u32,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Period {
+    Month,
+    Quarter,
+    Year,
+}
+
+fn default_limit() -> u32 { 10 }
+
+/// Output: List of top customers with revenue data
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct TopCustomersOutput {
+    /// List of customers sorted by revenue (highest first)
+    pub customers: Vec<CustomerSummary>,
+
+    /// The period that was queried
+    pub period: String,
+
+    /// When this report was generated (ISO 8601)
+    pub generated_at: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CustomerSummary {
+    /// Unique customer identifier - use with order_history, customer_details
+    pub customer_id: String,
+
+    /// Customer display name
+    pub name: String,
+
+    /// Total revenue in USD cents (divide by 100 for dollars)
+    pub total_revenue: i64,
+
+    /// Number of orders in the period
+    pub order_count: u32,
+
+    /// Most recent order date (ISO 8601)
+    pub last_order_date: String,
+}
 ```
 
-Now the AI knows:
+Now create the tool with both schemas auto-generated:
+
+```rust
+let top_customers_tool = TypedToolWithOutput::new(
+    "sales_top_customers",
+    |args: TopCustomersInput, _extra| {
+        Box::pin(async move {
+            let customers = fetch_top_customers(&args.period, args.limit).await?;
+
+            Ok(TopCustomersOutput {
+                customers,
+                period: format!("{:?}", args.period).to_lowercase(),
+                generated_at: chrono::Utc::now().to_rfc3339(),
+            })
+        })
+    }
+)
+.with_description(
+    "Get top customers by revenue for a time period. \
+    Returns customer_id values that work with order_history and customer_details tools."
+);
+```
+
+The PMCP SDK automatically:
+1. Generates `inputSchema` from `TopCustomersInput`
+2. Generates `outputSchema` from `TopCustomersOutput`
+3. Stores the output schema in tool annotations (`pmcp:outputSchema`)
+4. Provides a type name for code generation (`pmcp:outputTypeName`)
+
+### Doc Comments → Schema Descriptions
+
+Just like input schemas, `///` doc comments become field descriptions:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "customers": {
+      "type": "array",
+      "description": "List of customers sorted by revenue (highest first)",
+      "items": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "description": "Unique customer identifier - use with order_history, customer_details"
+          },
+          "total_revenue": {
+            "type": "integer",
+            "description": "Total revenue in USD cents (divide by 100 for dollars)"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+The AI now knows:
 - Results are in a `customers` array
 - Each customer has `customer_id` (not `id` or `customer`)
-- Revenue is a number, order_count is an integer
-- Dates are in ISO 8601 format
+- Revenue is in cents (needs division for dollars)
+- `customer_id` works with other tools
+
+## MCP Structured Content
+
+MCP supports returning both human-readable text and structured data in tool responses. This enables AI clients to display friendly output while having typed data for processing:
+
+```rust
+use serde_json::json;
+
+// Inside your tool handler
+Ok(json!({
+    "content": [{
+        "type": "text",
+        "text": format!("Found {} top customers for {}",
+                       output.customers.len(), output.period)
+    }],
+    "structuredContent": output,  // The typed TopCustomersOutput
+    "isError": false
+}))
+```
+
+AI clients see:
+- **content**: Human-readable summary for display
+- **structuredContent**: Typed data matching your output schema
+
+### The Structured Response Pattern
+
+```rust
+use pmcp::Error;
+use serde::Serialize;
+
+/// Helper to create MCP-compliant responses with structured content
+pub fn structured_response<T: Serialize>(
+    summary: &str,
+    data: T,
+) -> Result<serde_json::Value, Error> {
+    Ok(json!({
+        "content": [{
+            "type": "text",
+            "text": summary
+        }],
+        "structuredContent": data,
+        "isError": false
+    }))
+}
+
+/// Helper for structured error responses
+pub fn structured_error<T: Serialize>(
+    message: &str,
+    error_data: T,
+) -> Result<serde_json::Value, Error> {
+    Ok(json!({
+        "content": [{
+            "type": "text",
+            "text": message
+        }],
+        "structuredContent": error_data,
+        "isError": true
+    }))
+}
+
+// Usage in tool handler
+let output = fetch_top_customers(&args).await?;
+structured_response(
+    &format!("Found {} top customers", output.customers.len()),
+    output
+)
+```
 
 ## Consistent Response Envelopes
 
@@ -72,89 +223,69 @@ Design output schemas with consistent patterns across all tools:
 ### The Standard Envelope
 
 ```rust
-// All sales tools return this structure
-json!({
-    "type": "object",
-    "required": ["success", "data"],
-    "properties": {
-        "success": {
-            "type": "boolean",
-            "description": "Whether the operation succeeded"
-        },
-        "data": {
-            "type": "object",
-            "description": "Tool-specific response data"
-        },
-        "metadata": {
-            "type": "object",
-            "properties": {
-                "execution_time_ms": { "type": "integer" },
-                "source": { "type": "string" },
-                "cached": { "type": "boolean" }
-            }
-        },
-        "error": {
-            "type": "object",
-            "description": "Present only when success is false",
-            "properties": {
-                "code": { "type": "string" },
-                "message": { "type": "string" },
-                "details": { "type": "object" }
-            }
-        }
-    }
-})
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ToolResponse<T> {
+    /// Whether the operation succeeded
+    pub success: bool,
+
+    /// Tool-specific response data (present when success=true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<T>,
+
+    /// Error details (present when success=false)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<ErrorDetail>,
+
+    /// Execution metadata
+    pub metadata: ResponseMetadata,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ResponseMetadata {
+    /// Query execution time in milliseconds
+    pub execution_time_ms: u64,
+
+    /// Data source identifier
+    pub source: String,
+
+    /// Whether results came from cache
+    pub cached: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ErrorDetail {
+    /// Machine-readable error code
+    pub code: String,
+
+    /// Human-readable error message
+    pub message: String,
+
+    /// Additional error context
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
+}
 ```
 
 With a consistent envelope, the AI learns one pattern for all your tools:
 
-```rust
-// AI can reliably process any tool output
+```
 if response.success {
-    let data = response.data;
-    // Process tool-specific data
+    process(response.data)
 } else {
-    let error = response.error;
-    // Handle error, maybe retry
+    handle_error(response.error)
 }
 ```
 
 ### Implementation
 
 ```rust
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize)]
-pub struct ToolResponse<T: Serialize> {
-    pub success: bool,
-    pub data: Option<T>,
-    pub metadata: ResponseMetadata,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<ErrorDetail>,
-}
-
-#[derive(Serialize)]
-pub struct ResponseMetadata {
-    pub execution_time_ms: u64,
-    pub source: String,
-    pub cached: bool,
-}
-
-#[derive(Serialize)]
-pub struct ErrorDetail {
-    pub code: String,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub details: Option<serde_json::Value>,
-}
-
 impl<T: Serialize> ToolResponse<T> {
     pub fn success(data: T, metadata: ResponseMetadata) -> Self {
         Self {
             success: true,
             data: Some(data),
-            metadata,
             error: None,
+            metadata,
         }
     }
 
@@ -162,8 +293,8 @@ impl<T: Serialize> ToolResponse<T> {
         Self {
             success: false,
             data: None,
-            metadata,
             error: Some(error),
+            metadata,
         }
     }
 }
@@ -178,54 +309,59 @@ Structure outputs to support common chaining patterns:
 When a tool returns entities, include IDs that work with other tools:
 
 ```rust
-// sales_top_customers returns customer_id
-{
-    "customers": [
-        { "customer_id": "CUST-001", "name": "Acme Corp", ... },
-        { "customer_id": "CUST-002", "name": "TechStart Inc", ... }
-    ]
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CustomerSummary {
+    /// Unique customer identifier - use with order_history, customer_details tools
+    pub customer_id: String,
+
+    /// Customer display name
+    pub name: String,
+    // ...
 }
 
-// order_history accepts customer_id
-Tool::new("order_history")
-    .input_schema(json!({
-        "properties": {
-            "customer_id": {
-                "type": "string",
-                "description": "Customer ID from sales_top_customers or customer_search"
-            }
-        }
-    }))
+// Document the relationship in the tool receiving the ID
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OrderHistoryInput {
+    /// Customer ID from sales_top_customers or customer_search
+    pub customer_id: String,
+
+    /// Maximum orders to return
+    #[serde(default = "default_order_limit")]
+    pub limit: u32,
+}
 ```
 
-The AI sees `customer_id` in both places and understands how to chain them.
+The AI sees `customer_id` in both schemas and understands how to chain them.
 
 ### Pagination Cursors
 
 For paginated results, return consistent cursor information:
 
 ```rust
-json!({
-    "type": "object",
-    "properties": {
-        "results": {
-            "type": "array",
-            "items": { /* result schema */ }
-        },
-        "pagination": {
-            "type": "object",
-            "properties": {
-                "total_count": { "type": "integer" },
-                "page_size": { "type": "integer" },
-                "has_more": { "type": "boolean" },
-                "next_cursor": {
-                    "type": "string",
-                    "description": "Pass to 'cursor' parameter to get next page"
-                }
-            }
-        }
-    }
-})
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct PaginatedResponse<T> {
+    /// The result items for this page
+    pub results: Vec<T>,
+
+    /// Pagination metadata
+    pub pagination: PaginationInfo,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct PaginationInfo {
+    /// Total number of results available
+    pub total_count: u64,
+
+    /// Number of results per page
+    pub page_size: u32,
+
+    /// Whether more results are available
+    pub has_more: bool,
+
+    /// Pass to 'cursor' parameter to get next page
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
 ```
 
 The AI learns: if `has_more` is true, call again with `cursor: next_cursor`.
@@ -235,225 +371,195 @@ The AI learns: if `has_more` is true, call again with `cursor: next_cursor`.
 When data might be aggregated, use consistent numeric fields:
 
 ```rust
-// Each tool returns numbers in consistent units
-json!({
-    "properties": {
-        "revenue": {
-            "type": "number",
-            "description": "Revenue in USD cents (divide by 100 for dollars)"
-        },
-        "quantity": {
-            "type": "integer",
-            "description": "Number of units"
-        },
-        "percentage": {
-            "type": "number",
-            "description": "Percentage as decimal (0.15 = 15%)"
-        }
-    }
-})
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct SalesMetrics {
+    /// Revenue in USD cents (divide by 100 for dollars)
+    pub revenue_cents: i64,
+
+    /// Number of units sold
+    pub quantity: u32,
+
+    /// Percentage as decimal (0.15 = 15%)
+    pub growth_rate: f64,
+}
 ```
 
-## Output Schema Documentation
+## Type-Safe Server Composition
 
-The schema itself is documentation. Make field purposes clear:
+Output schemas become even more powerful when servers call other servers. PMCP enables **type-safe composition** through code generation.
 
-### Documenting Fields
+### The Problem: Composition Type Blindness
+
+When one MCP server calls another, you lose type information:
 
 ```rust
-json!({
-    "type": "object",
-    "properties": {
-        "customer_id": {
-            "type": "string",
-            "description": "Unique identifier. Use with order_history, customer_details tools."
-        },
-        "segment": {
-            "type": "string",
-            "enum": ["enterprise", "mid-market", "smb"],
-            "description": "Customer segment based on annual revenue"
-        },
-        "health_score": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 100,
-            "description": "Customer health score. <50=at-risk, 50-80=stable, >80=healthy"
-        },
-        "last_contact": {
-            "type": "string",
-            "format": "date-time",
-            "description": "Last customer interaction timestamp (UTC)"
-        }
-    }
-})
+// Without output schemas - what shape does result have?
+let result: Value = composition_client
+    .call_tool("sqlite-explorer", "query", json!({"sql": "SELECT * FROM orders"}))
+    .await?;
+
+// Must guess or parse manually - error prone!
+let rows = result["rows"].as_array().ok_or("expected rows")?;
 ```
 
-### Documenting Relationships
+### The Solution: Generated Typed Clients
 
-```rust
-// In tool description
-Tool::new("sales_pipeline")
-    .description(
-        "Get sales pipeline data. \
-        Returns opportunity_id values that can be used with: \
-        - opportunity_details (full opportunity info) \
-        - opportunity_contacts (related contacts) \
-        - opportunity_activities (activity timeline)"
-    )
-    .output_schema(json!({
-        "type": "object",
-        "properties": {
-            "opportunities": {
-                "type": "array",
-                "description": "List of opportunities. Each opportunity_id works with opportunity_* tools.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "opportunity_id": {
-                            "type": "string",
-                            "description": "Use with opportunity_details, opportunity_contacts, opportunity_activities"
-                        }
-                        // ...
-                    }
-                }
-            }
-        }
-    }))
+PMCP can generate typed clients from servers with output schemas:
+
+```bash
+# Export schema from running server
+cargo pmcp schema export --endpoint https://my-server.pmcp.run/mcp \
+    --output my-server-schema.json
+
+# Generate typed Rust client
+cargo pmcp generate --schema my-server-schema.json \
+    --output src/clients/my_server.rs
 ```
 
-## Error Output Schemas
-
-Define what errors look like so the AI can handle them:
+The generated code includes both input AND output types:
 
 ```rust
-// Error schema as part of output
-json!({
-    "type": "object",
-    "oneOf": [
-        {
-            "type": "object",
-            "required": ["success", "data"],
-            "properties": {
-                "success": { "const": true },
-                "data": { /* success schema */ }
-            }
-        },
-        {
-            "type": "object",
-            "required": ["success", "error"],
-            "properties": {
-                "success": { "const": false },
-                "error": {
-                    "type": "object",
-                    "required": ["code", "message"],
-                    "properties": {
-                        "code": {
-                            "type": "string",
-                            "enum": [
-                                "NOT_FOUND",
-                                "INVALID_QUERY",
-                                "RATE_LIMITED",
-                                "PERMISSION_DENIED",
-                                "TIMEOUT"
-                            ]
-                        },
-                        "message": { "type": "string" },
-                        "retry_after_seconds": {
-                            "type": "integer",
-                            "description": "Present for RATE_LIMITED errors"
-                        }
-                    }
-                }
-            }
-        }
-    ]
-})
-```
+//! Auto-generated typed client for sqlite-explorer
 
-This tells the AI:
-- Success responses have `success: true` and a `data` field
-- Error responses have `success: false` and an `error` field
-- Error codes are from a known set
-- Rate limit errors include retry guidance
-
-## Validation of Outputs
-
-Just as you validate inputs, validate outputs before returning:
-
-```rust
-use serde::Serialize;
-use schemars::JsonSchema;
-
-#[derive(Serialize, JsonSchema)]
-pub struct CustomerReport {
-    pub customer_id: String,
-    pub name: String,
-    pub total_revenue: f64,
-    pub order_count: u32,
+/// Arguments for query tool
+#[derive(Debug, Serialize)]
+pub struct QueryArgs {
+    /// SQL query to execute
+    pub sql: String,
 }
 
-pub async fn generate_report(params: ReportParams) -> Result<ToolResponse<CustomerReport>> {
+/// Result from query tool (from pmcp:outputSchema)
+#[derive(Debug, Deserialize)]
+pub struct QueryResult {
+    /// Column names from the result set
+    pub columns: Vec<String>,
+    /// Row data as arrays of values
+    pub rows: Vec<Vec<serde_json::Value>>,
+    /// Total number of rows returned
+    pub row_count: i64,
+}
+
+/// Typed client for sqlite-explorer server
+impl SqliteExplorerClient {
+    /// Execute SQL query and return results
+    pub async fn query(&self, args: QueryArgs) -> Result<QueryResult, Error> {
+        // Type-safe call with automatic serialization/deserialization
+    }
+}
+```
+
+Now your domain server has full type safety:
+
+```rust
+// In your domain server composing sqlite-explorer
+let result: QueryResult = sqlite_client
+    .query(QueryArgs { sql: "SELECT * FROM orders".into() })
+    .await?;
+
+// Compiler-checked field access!
+println!("Found {} rows with {} columns",
+         result.row_count, result.columns.len());
+
+for row in &result.rows {
+    // Process typed data
+}
+```
+
+### Output Schema Annotations
+
+PMCP stores output schemas in tool annotations using `pmcp:` prefixed fields:
+
+```rust
+use pmcp::types::ToolAnnotations;
+
+let annotations = ToolAnnotations::new()
+    .with_read_only(true)
+    .with_output_schema(
+        schemars::schema_for!(QueryResult),
+        "QueryResult"  // Type name for code generation
+    );
+```
+
+The exported tool metadata includes:
+
+```json
+{
+  "name": "query",
+  "inputSchema": { ... },
+  "annotations": {
+    "readOnlyHint": true,
+    "pmcp:outputSchema": { ... },
+    "pmcp:outputTypeName": "QueryResult"
+  }
+}
+```
+
+Standard MCP clients ignore `pmcp:*` annotations (per MCP spec), while PMCP tools leverage them for code generation.
+
+## Schema Validation Best Practices
+
+### 1. Validate Outputs Before Returning
+
+Just as you validate inputs, validate outputs:
+
+```rust
+pub async fn generate_report(params: ReportInput) -> Result<ReportOutput, Error> {
     let report = build_report(&params).await?;
 
-    // Validate output matches schema expectations
-    if report.total_revenue < 0.0 {
-        return Err(InternalError::new(
-            "Generated report has negative revenue - data integrity issue"
+    // Validate output matches business rules
+    if report.total_revenue < 0 {
+        return Err(Error::Internal(
+            "Generated report has negative revenue - data integrity issue".into()
         ));
     }
 
     if report.customer_id.is_empty() {
-        return Err(InternalError::new(
-            "Generated report missing customer_id"
+        return Err(Error::Internal(
+            "Generated report missing customer_id".into()
         ));
     }
 
-    Ok(ToolResponse::success(report, metadata))
+    Ok(report)
 }
 ```
 
-## Schema Generation from Types
+### 2. Match Output Schema to Actual Return Values
 
-Use derive macros to generate schemas from Rust types:
+When using `TypedToolWithOutput`, this is enforced by the compiler:
 
 ```rust
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+// Compiler error if you return wrong type!
+TypedToolWithOutput::new("my_tool", |args: Input, _| {
+    Box::pin(async move {
+        Ok(Output { ... })  // Must match Output type exactly
+    })
+})
+```
 
-#[derive(Serialize, Deserialize, JsonSchema)]
-pub struct SalesReport {
-    /// Unique report identifier
-    pub report_id: String,
+### 3. Document Field Relationships in Comments
 
-    /// Report generation timestamp (UTC)
-    pub generated_at: chrono::DateTime<chrono::Utc>,
-
-    /// Sales data grouped by region
-    pub by_region: Vec<RegionSales>,
-
-    /// Summary statistics
-    pub summary: SalesSummary,
+```rust
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CustomerSummary {
+    /// Unique customer ID. Use with:
+    /// - order_history: Get customer's order history
+    /// - customer_details: Get full customer profile
+    /// - customer_contacts: Get customer contact list
+    pub customer_id: String,
 }
+```
 
-#[derive(Serialize, Deserialize, JsonSchema)]
-pub struct RegionSales {
-    /// Region identifier (e.g., "NA", "EMEA", "APAC")
-    pub region: String,
+### 4. Use Descriptive Type Names
 
-    /// Total revenue in USD cents
-    pub revenue_cents: i64,
+The output type name becomes the generated struct name:
 
-    /// Number of orders
-    pub order_count: u32,
+```rust
+// Good: Clear, descriptive name
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct OrderQueryResult { ... }
 
-    /// Average order value in USD cents
-    pub avg_order_value_cents: i64,
-}
-
-// Generate schema at compile time
-fn sales_report_schema() -> serde_json::Value {
-    serde_json::to_value(schemars::schema_for!(SalesReport)).unwrap()
-}
+// Bad: Generic name causes conflicts
+pub struct Result { ... }
 ```
 
 ## Summary
@@ -469,4 +575,14 @@ Output schemas enable composition by telling AI clients:
 | **Units and formats** | AI interprets values correctly |
 | **Pagination patterns** | AI knows how to get more results |
 
-Remember: output schemas are a contract. The AI trusts that your tool returns what you declare. Validate your outputs to maintain that trust.
+### PMCP SDK Benefits
+
+| Manual JSON Schema | TypedToolWithOutput |
+|--------------------|---------------------|
+| Schema and code can drift | Schema generated from code—always in sync |
+| Manual JSON construction | Rust types with derive macros |
+| No code generation | Generate typed clients for composition |
+| Runtime type errors | Compile-time type safety |
+| Verbose documentation | Doc comments become schema descriptions |
+
+Remember: output schemas are a contract. The AI trusts that your tool returns what you declare. With `TypedToolWithOutput`, the Rust compiler ensures you keep that contract.

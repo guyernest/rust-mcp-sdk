@@ -7,18 +7,18 @@ Cohesion in MCP server design means your tools, resources, and prompts form a un
 Your MCP server operates in an environment you don't control. Consider what an AI client sees when a user has multiple servers connected:
 
 ```
-Connected MCP Servers (typical developer setup):
+Connected MCP Servers (typical business user setup):
 
-1. filesystem-server (Anthropic official)
-   - read_file, write_file, list_directory, search_files,
-   - get_file_info, create_directory, move_file
+1. google-drive-server (document storage)
+   - create_document, update_document, delete_document,
+   - list_documents, search_documents, share_document
 
-2. github-server (Anthropic official)
-   - create_issue, get_issue, list_issues, create_pull_request,
-   - get_repository, list_commits, create_branch
+2. asana-server (task management)
+   - create_task, update_task, delete_task, list_tasks,
+   - create_project, assign_task, set_due_date
 
-3. postgres-server (community)
-   - query, execute, list_tables, describe_table, get_schema
+3. salesforce-server (CRM)
+   - query_accounts, update_opportunity, list_contacts, log_activity
 
 4. your-server (you're building this)
    - ???
@@ -37,7 +37,7 @@ Prefix tool names with your domain to avoid collisions:
 ```rust
 // Collision risk: generic names
 Tool::new("query")           // Collides with postgres-server
-Tool::new("search")          // Collides with filesystem search_files
+Tool::new("search")          // Collides with Google Drive search_documents
 Tool::new("list")            // Collides with everything
 
 // Cohesive: domain-specific names
@@ -220,12 +220,12 @@ The AI sees a complete, cohesive sales domain:
 
 ### The "50 Tools" Test
 
-List all tools from your server plus common servers (filesystem, GitHub, database). Can an AI easily distinguish yours?
+List all tools from your server plus common business servers (Google Drive, Asana, Salesforce). Can an AI easily distinguish yours?
 
 ```
-filesystem: read_file, write_file, list_directory
-github: create_issue, get_issue, list_issues
-postgres: query, list_tables, describe_table
+google-drive: create_document, update_document, list_documents
+asana: create_task, update_task, list_tasks
+salesforce: query_accounts, update_opportunity, list_contacts
 your-server: ???
 
 If your tools are "query", "list", "get" - FAIL

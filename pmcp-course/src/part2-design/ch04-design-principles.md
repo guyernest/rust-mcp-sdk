@@ -26,12 +26,12 @@ Your MCP server isn't alone. The MCP client (Claude Desktop, Cursor, ChatGPT, or
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │
-│  │ Your Server  │  │ Filesystem   │  │ GitHub       │       │
+│  │ Your Server  │  │ Google Drive │  │ Asana        │       │
 │  │ (db-explorer)│  │ Server       │  │ Server       │       │
 │  │              │  │              │  │              │       │
-│  │ • query_db   │  │ • read_file  │  │ • get_issues │       │
-│  │ • list_tables│  │ • write_file │  │ • create_pr  │       │
-│  │ • get_schema │  │ • list_dir   │  │ • get_commits│       │
+│  │ • query_db   │  │ • get_doc    │  │ • get_task   │       │
+│  │ • list_tables│  │ • create_doc │  │ • create_task│       │
+│  │ • get_schema │  │ • list_docs  │  │ • list_tasks │       │
 │  └──────────────┘  └──────────────┘  └──────────────┘       │
 │                                                             │
 │  The AI sees ALL tools from ALL servers simultaneously      │
@@ -70,7 +70,7 @@ Modern MCP clients like Claude Desktop and ChatGPT provide users with control me
 
 **Server Selection**: Users can enable/disable MCP servers per conversation:
 - "Use only the database server for this task"
-- "Don't use the GitHub server right now"
+- "Don't use the Asana server right now"
 
 **Prompt Templates**: Users can invoke pre-defined prompts that guide the AI:
 - `/analyze-schema` - A prompt that structures how schema analysis should proceed

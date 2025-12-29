@@ -12,9 +12,9 @@ User: "Analyze our sales data"
 
 AI (internally): I see 12 tools from 3 servers...
 - sales_query (from sales-server)
-- query (from postgres-server)
-- read_file (from filesystem-server)
-- search (from filesystem-server)
+- query_accounts (from salesforce-server)
+- list_documents (from google-drive-server)
+- search_documents (from google-drive-server)
 ...
 
 Which should I use? In what order? What analysis approach?
