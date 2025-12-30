@@ -33,6 +33,7 @@ doing:
 :::
 
 ::: starter file="src/main.rs" language=rust
+```rust
 //! Paginated Database Query Tool
 //!
 //! Demonstrates production-ready pagination patterns for large datasets.
@@ -185,6 +186,7 @@ async fn main() -> Result<()> {
     println!("Paginated database server ready!");
     Ok(())
 }
+```
 :::
 
 ::: hint level=1

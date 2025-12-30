@@ -31,6 +31,7 @@ doing:
 :::
 
 ::: starter file="src/main.rs" language=rust
+```rust
 //! User Search MCP Server - CODE REVIEW EXERCISE
 //!
 //! Review this code for security vulnerabilities.
@@ -204,6 +205,7 @@ async fn main() -> anyhow::Result<()> {
     println!("User search server ready!");
     Ok(())
 }
+```
 :::
 
 ::: hint level=1
