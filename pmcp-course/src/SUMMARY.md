@@ -59,6 +59,7 @@
   - [Designing Multi-Step Workflows](./part2-design/ch06-03-workflows.md)
   - [Chapter 6 Exercises](./part2-design/ch06-exercises.md)
     - [Exercise: Prompt Design Workshop](./part2-design/ch06-ex01-prompt-design.md)
+    - [Exercise: Building and Validating Hard Workflows](./part2-design/ch06-ex02-workflow-validation.md)
 
 ---
 

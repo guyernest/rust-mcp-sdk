@@ -141,11 +141,7 @@ where
     ///
     /// Equivalent to `.with_annotations(ToolAnnotations::new().with_read_only(true))`
     pub fn read_only(mut self) -> Self {
-        self.annotations = Some(
-            self.annotations
-                .unwrap_or_default()
-                .with_read_only(true),
-        );
+        self.annotations = Some(self.annotations.unwrap_or_default().with_read_only(true));
         self
     }
 
@@ -166,11 +162,7 @@ where
     ///
     /// Equivalent to `.with_annotations(ToolAnnotations::new().with_idempotent(true))`
     pub fn idempotent(mut self) -> Self {
-        self.annotations = Some(
-            self.annotations
-                .unwrap_or_default()
-                .with_idempotent(true),
-        );
+        self.annotations = Some(self.annotations.unwrap_or_default().with_idempotent(true));
         self
     }
 
@@ -178,11 +170,7 @@ where
     ///
     /// Equivalent to `.with_annotations(ToolAnnotations::new().with_open_world(true))`
     pub fn open_world(mut self) -> Self {
-        self.annotations = Some(
-            self.annotations
-                .unwrap_or_default()
-                .with_open_world(true),
-        );
+        self.annotations = Some(self.annotations.unwrap_or_default().with_open_world(true));
         self
     }
 
@@ -241,10 +229,7 @@ where
         // Build _meta for UI resource if specified
         let meta = self.ui_resource_uri.as_ref().map(|uri| {
             let mut meta = serde_json::Map::new();
-            meta.insert(
-                "ui".to_string(),
-                serde_json::json!({ "resourceUri": uri }),
-            );
+            meta.insert("ui".to_string(), serde_json::json!({ "resourceUri": uri }));
             meta
         });
 
@@ -337,11 +322,7 @@ where
 
     /// Mark this tool as read-only (convenience method).
     pub fn read_only(mut self) -> Self {
-        self.annotations = Some(
-            self.annotations
-                .unwrap_or_default()
-                .with_read_only(true),
-        );
+        self.annotations = Some(self.annotations.unwrap_or_default().with_read_only(true));
         self
     }
 
@@ -358,21 +339,13 @@ where
 
     /// Mark this tool as idempotent (convenience method).
     pub fn idempotent(mut self) -> Self {
-        self.annotations = Some(
-            self.annotations
-                .unwrap_or_default()
-                .with_idempotent(true),
-        );
+        self.annotations = Some(self.annotations.unwrap_or_default().with_idempotent(true));
         self
     }
 
     /// Mark this tool as interacting with external systems (convenience method).
     pub fn open_world(mut self) -> Self {
-        self.annotations = Some(
-            self.annotations
-                .unwrap_or_default()
-                .with_open_world(true),
-        );
+        self.annotations = Some(self.annotations.unwrap_or_default().with_open_world(true));
         self
     }
 }
@@ -619,11 +592,7 @@ where
 
     /// Mark this tool as read-only (convenience method).
     pub fn read_only(mut self) -> Self {
-        self.annotations = Some(
-            self.annotations
-                .unwrap_or_default()
-                .with_read_only(true),
-        );
+        self.annotations = Some(self.annotations.unwrap_or_default().with_read_only(true));
         self
     }
 
@@ -640,21 +609,13 @@ where
 
     /// Mark this tool as idempotent (convenience method).
     pub fn idempotent(mut self) -> Self {
-        self.annotations = Some(
-            self.annotations
-                .unwrap_or_default()
-                .with_idempotent(true),
-        );
+        self.annotations = Some(self.annotations.unwrap_or_default().with_idempotent(true));
         self
     }
 
     /// Mark this tool as interacting with external systems (convenience method).
     pub fn open_world(mut self) -> Self {
-        self.annotations = Some(
-            self.annotations
-                .unwrap_or_default()
-                .with_open_world(true),
-        );
+        self.annotations = Some(self.annotations.unwrap_or_default().with_open_world(true));
         self
     }
 

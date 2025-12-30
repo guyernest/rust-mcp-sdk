@@ -110,6 +110,15 @@ enum Commands {
         #[command(subcommand)]
         command: commands::schema::SchemaCommand,
     },
+
+    /// Validate MCP server components
+    ///
+    /// Run validation checks on workflows, tools, and other server components.
+    /// Helps catch structural errors before runtime.
+    Validate {
+        #[command(subcommand)]
+        command: commands::validate::ValidateCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -221,6 +230,9 @@ fn execute_command(command: Commands) -> Result<()> {
             runtime.block_on(command.execute(project_root))?;
         },
         Commands::Schema { command } => {
+            command.execute()?;
+        },
+        Commands::Validate { command } => {
             command.execute()?;
         },
     }
