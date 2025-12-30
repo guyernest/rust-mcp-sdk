@@ -27,9 +27,9 @@ Local MCP servers have a fundamental limitation: they require technical setup on
 │    └─────────────────────────────────────────────────────────┘  │
 │                                                                 │
 │    ✅ Works great for developers                                │
-│    ❌ Requires local setup, Rust toolchain, database access     │
-│    ❌ Each developer runs their own instance                    │
-│    ❌ No centralized access control or monitoring               │
+│    ❌ Requires local setup, Rust toolchain, database access      │
+│    ❌ Each developer runs their own instance                     │
+│    ❌ No centralized access control or monitoring                │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -59,8 +59,8 @@ For a sales team to query CRM data through Claude, or for analysts to access bus
 │    ┌───────┴───────┬───────────────┬───────────────┐            │
 │    │               │               │               │            │
 │    ▼               ▼               ▼               ▼            │
-│  Developer      Analyst        Sales Rep      Support Agent    │
-│  (Claude.ai)   (Claude.ai)    (Claude.ai)    (Claude.ai)       │
+│  Developer      Analyst        Sales Rep      Support Agent     │
+│  (Claude.ai)   (Claude.ai)    (Claude.ai)    (Claude.ai)        │
 │                                                                 │
 │    ✅ No local setup required                                   │
 │    ✅ Centralized access control (OAuth, SSO)                   │

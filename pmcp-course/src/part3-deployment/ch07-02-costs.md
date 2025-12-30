@@ -13,13 +13,13 @@ Cloud costs for MCP servers typically consist of three components:
 │                                                                 │
 │   Total Cost = Compute + Data Transfer + Storage + Extras       │
 │                                                                 │
-│   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
-│   │  Compute    │  │  Network    │  │  Storage    │            │
-│   │             │  │             │  │             │            │
-│   │  - CPU time │  │  - Egress   │  │  - Database │            │
-│   │  - Memory   │  │  - API GW   │  │  - Logs     │            │
-│   │  - Requests │  │  - CDN      │  │  - Secrets  │            │
-│   └─────────────┘  └─────────────┘  └─────────────┘            │
+│   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
+│   │  Compute    │  │  Network    │  │  Storage    │             │
+│   │             │  │             │  │             │             │
+│   │  - CPU time │  │  - Egress   │  │  - Database │             │
+│   │  - Memory   │  │  - API GW   │  │  - Logs     │             │
+│   │  - Requests │  │  - CDN      │  │  - Secrets  │             │
+│   └─────────────┘  └─────────────┘  └─────────────┘             │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```

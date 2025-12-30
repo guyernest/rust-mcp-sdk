@@ -15,7 +15,7 @@ Serverless functions execute your code in response to events, with the cloud pro
 │                    SERVERLESS ARCHITECTURE                      │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│   Request ──▶ API Gateway ──▶ Lambda Function ──▶ Response     │
+│   Request ──▶ API Gateway ──▶ Lambda Function ──▶ Response      │
 │                                    │                            │
 │                                    ▼                            │
 │                              ┌──────────┐                       │
@@ -65,7 +65,7 @@ Containers package your application with its dependencies into a portable image 
 │                    CONTAINER ARCHITECTURE                       │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│   Request ──▶ Load Balancer ──▶ Container Instance ──▶ Response│
+│   Request ──▶ Load Balancer ──▶ Container Instance ──▶ Response │
 │                                       │                         │
 │                                       ▼                         │
 │                              ┌────────────────┐                 │
@@ -127,10 +127,10 @@ Edge functions run your code at network edge locations, close to users worldwide
 │                      EDGE ARCHITECTURE                          │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│        ┌──────────┐  ┌──────────┐  ┌──────────┐                │
-│        │ Tokyo    │  │ London   │  │ NYC      │                │
-│        │ Edge     │  │ Edge     │  │ Edge     │                │
-│        └────┬─────┘  └────┬─────┘  └────┬─────┘                │
+│        ┌──────────┐  ┌──────────┐  ┌──────────┐                 │
+│        │ Tokyo    │  │ London   │  │ NYC      │                 │
+│        │ Edge     │  │ Edge     │  │ Edge     │                 │
+│        └────┬─────┘  └────┬─────┘  └────┬─────┘                 │
 │             │             │             │                       │
 │      User ──┘      User ──┘      User ──┘                       │
 │      (5ms)         (5ms)         (5ms)                          │
@@ -196,7 +196,7 @@ Cold starts occur when the platform must initialize a new execution environment:
 │   │  Init      │  Init      │   main()   │  Exec     │          │
 │   │  (~30ms)   │  (~10ms)   │  (~10ms)   │  (~50ms)  │          │
 │   │            │            │            │           │          │
-│   └────────────────────────────────────────────────────────────│
+│   └──────────────────────────────────────────────────────────── │
 │                                                                 │
 │   Rust advantage: main() initialization is minimal              │
 │   Python/Node: Interpreter startup adds 200-500ms               │
@@ -238,9 +238,9 @@ Each platform handles concurrent requests differently:
 │                                                                 │
 │  LAMBDA (1 request per instance):                               │
 │                                                                 │
-│    Request 1 ──▶ [Instance A] ──▶ Response 1                   │
-│    Request 2 ──▶ [Instance B] ──▶ Response 2                   │
-│    Request 3 ──▶ [Instance C] ──▶ Response 3                   │
+│    Request 1 ──▶ [Instance A] ──▶ Response 1                    │
+│    Request 2 ──▶ [Instance B] ──▶ Response 2                    │
+│    Request 3 ──▶ [Instance C] ──▶ Response 3                    │
 │                                                                 │
 │    Scaling: New instance for each concurrent request            │
 │    Memory: Separate per instance (128MB-10GB configurable)      │
@@ -250,9 +250,9 @@ Each platform handles concurrent requests differently:
 │  CLOUD RUN (many requests per container):                       │
 │                                                                 │
 │    Request 1 ──┐                                                │
-│    Request 2 ──┼──▶ [Container A] ──┬──▶ Response 1            │
-│    Request 3 ──┘        │           ├──▶ Response 2            │
-│                         │           └──▶ Response 3            │
+│    Request 2 ──┼──▶ [Container A] ──┬──▶ Response 1             │
+│    Request 3 ──┘        │           ├──▶ Response 2             │
+│                         │           └──▶ Response 3             │
 │                   (async runtime)                               │
 │                                                                 │
 │    Scaling: Container handles up to 80 concurrent requests      │
@@ -262,9 +262,9 @@ Each platform handles concurrent requests differently:
 │                                                                 │
 │  WORKERS (isolated per request):                                │
 │                                                                 │
-│    Request 1 ──▶ [Isolate A] ──▶ Response 1                    │
-│    Request 2 ──▶ [Isolate B] ──▶ Response 2                    │
-│    Request 3 ──▶ [Isolate C] ──▶ Response 3                    │
+│    Request 1 ──▶ [Isolate A] ──▶ Response 1                     │
+│    Request 2 ──▶ [Isolate B] ──▶ Response 2                     │
+│    Request 3 ──▶ [Isolate C] ──▶ Response 3                     │
 │                                                                 │
 │    Scaling: Isolates are lightweight (microseconds to create)   │
 │    Memory: 128MB limit per isolate                              │
@@ -346,26 +346,26 @@ For complex applications, you may combine deployment targets:
 │  Global Users                                                   │
 │       │                                                         │
 │       ▼                                                         │
-│  ┌─────────────────────────────────────────┐                   │
-│  │        Cloudflare Workers (Edge)        │                   │
-│  │  - Request routing                      │                   │
-│  │  - Caching                              │                   │
-│  │  - Rate limiting                        │                   │
-│  │  - Authentication                       │                   │
-│  └─────────────────────────────────────────┘                   │
+│  ┌─────────────────────────────────────────┐                    │
+│  │        Cloudflare Workers (Edge)        │                    │
+│  │  - Request routing                      │                    │
+│  │  - Caching                              │                    │
+│  │  - Rate limiting                        │                    │
+│  │  - Authentication                       │                    │
+│  └─────────────────────────────────────────┘                    │
 │       │                                                         │
 │       ▼                                                         │
-│  ┌─────────────────────────────────────────┐                   │
-│  │         AWS Lambda (Serverless)         │                   │
-│  │  - Business logic                       │                   │
-│  │  - Database queries                     │                   │
-│  │  - Complex processing                   │                   │
-│  └─────────────────────────────────────────┘                   │
+│  ┌─────────────────────────────────────────┐                    │
+│  │         AWS Lambda (Serverless)         │                    │
+│  │  - Business logic                       │                    │
+│  │  - Database queries                     │                    │
+│  │  - Complex processing                   │                    │
+│  └─────────────────────────────────────────┘                    │
 │       │                                                         │
 │       ▼                                                         │
-│  ┌─────────────────────────────────────────┐                   │
-│  │    RDS / DynamoDB (Data Layer)          │                   │
-│  └─────────────────────────────────────────┘                   │
+│  ┌─────────────────────────────────────────┐                    │
+│  │    RDS / DynamoDB (Data Layer)          │                    │
+│  └─────────────────────────────────────────┘                    │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
