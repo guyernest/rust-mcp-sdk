@@ -28,7 +28,7 @@ http = "1.1"
 # Utility dependencies (needed on all platforms)
 glob = "0.3"
 url = "2.5"
-toml = "0.8"
+toml = "0.9"
 uuid = { version = "1.17", features = ["v4", "serde", "js"] }
 chrono = { version = "0.4", features = ["serde"] }
 regex = "1.11"
@@ -63,7 +63,7 @@ notify = { version = "8.2", optional = true }
 glob-match = { version = "0.2", optional = true }
 
 # Validation (optional, feature-gated)
-jsonschema = { version = "0.37", optional = true }
+jsonschema = { version = "0.38", optional = true }
 garde = { version = "0.22", optional = true }
 
 # SIMD support (optional)
