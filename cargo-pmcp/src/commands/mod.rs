@@ -6,3 +6,4 @@ pub mod landing;
 pub mod new;
 pub mod schema;
 pub mod test;
+pub mod validate;

@@ -1,44 +1,57 @@
-# Prompts as Workflow Templates
+# Soft Workflows: Text Prompts for AI Guidance
 
-Prompts are your most powerful design tool for creating reliable, user-controlled workflows. While tools give the AI capabilities and resources provide context, prompts let users explicitly select how the AI should approach a task.
+When hard workflows aren't possible—when steps require LLM reasoning, context-dependent decisions, or creative interpretation—text prompts provide structured guidance for AI execution.
 
-## Why Prompts Matter
+## When to Use Soft Workflows
 
-Consider the difference:
+Remember the guiding principle: **Do as much as possible on the server side.** Use soft workflows only when:
 
-**Without prompts:**
+| Scenario | Why Soft Workflow |
+|----------|-------------------|
+| **Complex reasoning required** | AI must interpret, analyze, or synthesize |
+| **Context-dependent decisions** | Right choice depends on conversation history |
+| **Dynamic exploration** | AI discovers what to do based on findings |
+| **Creative or open-ended tasks** | Multiple valid approaches exist |
+| **Multi-domain queries** | AI must coordinate across many servers |
+
+If all steps are deterministic, use a [hard workflow](./ch06-03-workflows.md) instead.
+
+## The Soft Workflow Tradeoff
+
 ```
-User: "Analyze our sales data"
-
-AI (internally): I see 12 tools from 3 servers...
-- sales_query (from sales-server)
-- query (from postgres-server)
-- read_file (from filesystem-server)
-- search (from filesystem-server)
-...
-
-Which should I use? In what order? What analysis approach?
-Let me just start querying and see what happens...
+┌────────────────────────────────────────────────────────────────────┐
+│                    Soft Workflow Execution                         │
+├────────────────────────────────────────────────────────────────────┤
+│                                                                    │
+│  Client                          Server                            │
+│    │                               │                               │
+│    │──── prompts/get ─────────────►│                               │
+│    │◄─── text guidance ────────────│                               │
+│    │                               │                               │
+│    │  AI reads guidance...         │                               │
+│    │  AI decides to call tool 1    │                               │
+│    │                               │                               │
+│    │──── tools/call (tool 1) ─────►│                               │
+│    │◄─── result 1 ─────────────────│                               │
+│    │                               │                               │
+│    │  AI processes result...       │                               │
+│    │  AI decides to call tool 2    │                               │
+│    │                               │                               │
+│    │──── tools/call (tool 2) ─────►│                               │
+│    │◄─── result 2 ─────────────────│                               │
+│    │                               │                               │
+│    │  ... more round trips ...     │                               │
+│    │                               │                               │
+│    │  AI synthesizes final answer  │                               │
+│    ▼                               ▼                               │
+│                                                                    │
+│  Total: 1 + N round trips (where N = number of tool calls)         │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
-**With a prompt:**
-```
-User: /sales-analysis
+**Trade-off**: More flexibility, but more latency and less predictable execution.
 
-Prompt template activates:
-"I'll perform a comprehensive sales analysis:
-1. First, read the schema to understand available data
-2. Query key metrics: revenue, units, customers
-3. Break down by region and time period
-4. Compare against previous periods
-5. Identify trends and anomalies
-
-Starting with step 1..."
-```
-
-The prompt transforms an ambiguous request into a structured workflow.
-
-## Prompt Design Principles
+## Text Prompt Design Principles
 
 ### 1. Be Explicit About Steps
 
@@ -49,20 +62,20 @@ Prompt::new("database-audit")
     .description("Comprehensive database security audit")
     .messages(vec![
         PromptMessage::user(
-            "Perform a security audit of the database:\
-            \n\n**Step 1: Schema Analysis**\
-            \n- Read db://schema to understand table structure\
-            \n- Identify tables containing PII or sensitive data\
-            \n\n**Step 2: Access Review**\
-            \n- List all users with write permissions\
-            \n- Flag any overly broad permission grants\
-            \n\n**Step 3: Data Exposure Check**\
-            \n- Check for unencrypted sensitive columns\
-            \n- Verify no credentials stored in plain text\
-            \n\n**Step 4: Report**\
-            \n- Summarize findings with severity ratings\
-            \n- Provide specific remediation recommendations\
-            \n\nBegin with Step 1."
+            "Perform a security audit of the database:\n\n\
+            **Step 1: Schema Analysis**\n\
+            - Read db://schema to understand table structure\n\
+            - Identify tables containing PII or sensitive data\n\n\
+            **Step 2: Access Review**\n\
+            - List all users with write permissions\n\
+            - Flag any overly broad permission grants\n\n\
+            **Step 3: Data Exposure Check**\n\
+            - Check for unencrypted sensitive columns\n\
+            - Verify no credentials stored in plain text\n\n\
+            **Step 4: Report**\n\
+            - Summarize findings with severity ratings\n\
+            - Provide specific remediation recommendations\n\n\
+            Begin with Step 1."
         )
     ])
 ```
@@ -75,12 +88,12 @@ Don't leave the AI guessing which tools to use:
 Prompt::new("customer-360-view")
     .messages(vec![
         PromptMessage::user(
-            "Create a 360-degree view of customer {{customer_id}}:\
-            \n\n1. **Profile**: Read resource `customers://{{customer_id}}/profile`\
-            \n2. **Orders**: Use `sales_query` to get order history\
-            \n3. **Support**: Use `tickets_query` to get support interactions\
-            \n4. **Payments**: Use `billing_query` to get payment history\
-            \n\nSynthesize into a comprehensive customer summary."
+            "Create a 360-degree view of customer {{customer_id}}:\n\n\
+            1. **Profile**: Read resource `customers://{{customer_id}}/profile`\n\
+            2. **Orders**: Use `sales_query` to get order history\n\
+            3. **Support**: Use `tickets_query` to get support interactions\n\
+            4. **Payments**: Use `billing_query` to get payment history\n\n\
+            Synthesize into a comprehensive customer summary."
         )
     ])
 ```
@@ -93,30 +106,22 @@ Specify how results should be presented:
 Prompt::new("weekly-metrics-report")
     .messages(vec![
         PromptMessage::user(
-            "Generate the weekly metrics report:\
-            \n\n## Data to Gather\
-            \n- Revenue by region (use sales_aggregate)\
-            \n- New customers (use customers_query)\
-            \n- Support tickets (use tickets_summary)\
-            \n\n## Output Format\
-            \n```\
-            \n# Weekly Metrics: {{week_start}} - {{week_end}}\
-            \n\n## Revenue\
-            \n| Region | This Week | Last Week | Change |\
-            \n|--------|-----------|-----------|--------|\
-            \n| ...    | ...       | ...       | ...    |\
-            \n\n## Customer Acquisition\
-            \n- New customers: X\
-            \n- Churn: X\
-            \n- Net growth: X\
-            \n\n## Support Health\
-            \n- Open tickets: X\
-            \n- Avg response time: X\
-            \n- CSAT: X%\
-            \n\n## Key Insights\
-            \n1. [Insight 1]\
-            \n2. [Insight 2]\
-            \n```"
+            "Generate the weekly metrics report:\n\n\
+            ## Data to Gather\n\
+            - Revenue by region (use sales_aggregate)\n\
+            - New customers (use customers_query)\n\
+            - Support tickets (use tickets_summary)\n\n\
+            ## Output Format\n\
+            ```\n\
+            # Weekly Metrics: {{week_start}} - {{week_end}}\n\n\
+            ## Revenue\n\
+            | Region | This Week | Last Week | Change |\n\
+            |--------|-----------|-----------|--------|\n\
+            | ...    | ...       | ...       | ...    |\n\n\
+            ## Key Insights\n\
+            1. [Insight 1]\n\
+            2. [Insight 2]\n\
+            ```"
         )
     ])
 ```
@@ -130,56 +135,78 @@ Prompt::new("data-modification")
     .description("Safely modify production data with review steps")
     .messages(vec![
         PromptMessage::user(
-            "Help me modify data in {{table}}:\
-            \n\n**Safety Protocol:**\
-            \n1. First, show me the current state of affected records\
-            \n2. Explain exactly what changes will be made\
-            \n3. Ask for my explicit confirmation before proceeding\
-            \n4. After modification, show the before/after comparison\
-            \n\n**Constraints:**\
-            \n- Maximum 100 records per operation\
-            \n- No DELETE operations without WHERE clause\
-            \n- All changes must be logged\
-            \n\nWhat modification do you need?"
+            "Help me modify data in {{table}}:\n\n\
+            **Safety Protocol:**\n\
+            1. First, show me the current state of affected records\n\
+            2. Explain exactly what changes will be made\n\
+            3. Ask for my explicit confirmation before proceeding\n\
+            4. After modification, show the before/after comparison\n\n\
+            **Constraints:**\n\
+            - Maximum 100 records per operation\n\
+            - No DELETE operations without WHERE clause\n\
+            - All changes must be logged\n\n\
+            What modification do you need?"
         )
     ])
 ```
 
-## Advanced Prompt Patterns
+## Soft Workflow Patterns
 
-### Multi-Turn Workflows
+### Pattern 1: The Context-Setting Prompt
 
-Prompts can define conversation structure:
+Establish context before the user's actual task:
+
+```rust
+Prompt::new("sales-analysis-mode")
+    .description("Enter sales analysis mode with full context")
+    .messages(vec![
+        PromptMessage::user(
+            "I'm going to analyze sales data. Before I ask my questions:\n\n\
+            1. Read the sales://schema resource\n\
+            2. Read the sales://config/regions resource\n\
+            3. Summarize what data is available and any recent changes\n\n\
+            Then wait for my analysis questions."
+        )
+    ])
+```
+
+**When to use**: User will ask multiple follow-up questions; context needs to be established first.
+
+### Pattern 2: The Exploration Prompt
+
+Guide AI through discovery:
 
 ```rust
 Prompt::new("data-exploration")
     .description("Interactive data exploration session")
     .messages(vec![
         PromptMessage::user(
-            "Start an interactive data exploration session:\
-            \n\n**Initial Setup:**\
-            \n1. Read available schemas\
-            \n2. List tables and their row counts\
-            \n3. Present a summary of available data\
-            \n\n**Then wait for my questions. For each question:**\
-            \n- If I ask about data: query and visualize\
-            \n- If I ask about relationships: show joins and keys\
-            \n- If I ask for export: use safe_export with confirmation\
-            \n\n**Session rules:**\
-            \n- Keep queries under 10,000 rows\
-            \n- Warn before expensive operations\
-            \n- Maintain context across questions\
-            \n\nBegin setup."
+            "Start an interactive data exploration session:\n\n\
+            **Initial Setup:**\n\
+            1. Read available schemas\n\
+            2. List tables and their row counts\n\
+            3. Present a summary of available data\n\n\
+            **Then wait for my questions. For each question:**\n\
+            - If I ask about data: query and visualize\n\
+            - If I ask about relationships: show joins and keys\n\
+            - If I ask for export: use safe_export with confirmation\n\n\
+            **Session rules:**\n\
+            - Keep queries under 10,000 rows\n\
+            - Warn before expensive operations\n\
+            - Maintain context across questions\n\n\
+            Begin setup."
         )
     ])
 ```
 
-### Conditional Logic
+**When to use**: Open-ended exploration where the path isn't known in advance.
 
-Use template variables for dynamic behavior:
+### Pattern 3: The Investigation Prompt
+
+Drill-down analysis with dynamic branching:
 
 ```rust
-Prompt::new("anomaly-investigation")
+Prompt::new("investigate-anomaly")
     .arguments(vec![
         PromptArgument::new("severity")
             .description("Alert severity: low, medium, high, critical"),
@@ -188,31 +215,33 @@ Prompt::new("anomaly-investigation")
     ])
     .messages(vec![
         PromptMessage::user(
-            "Investigate the {{severity}} severity anomaly in {{metric}}:\
-            \n\n{{#if severity == 'critical'}}\
-            \n**CRITICAL ALERT PROTOCOL:**\
-            \n1. Immediately gather last 24 hours of data\
-            \n2. Compare against last 7 days baseline\
-            \n3. Identify correlated metrics\
-            \n4. Check for system events at anomaly time\
-            \n5. Prepare incident summary for escalation\
-            \n{{else if severity == 'high'}}\
-            \n**HIGH ALERT INVESTIGATION:**\
-            \n1. Gather last 48 hours of data\
-            \n2. Identify pattern or one-time spike\
-            \n3. Check for known causes\
-            \n4. Recommend monitoring or action\
-            \n{{else}}\
-            \n**STANDARD INVESTIGATION:**\
-            \n1. Review metric trend for past week\
-            \n2. Note if this is recurring\
-            \n3. Log finding for pattern analysis\
-            \n{{/if}}"
+            "Investigate the {{severity}} severity anomaly in {{metric}}:\n\n\
+            {{#if severity == 'critical'}}\n\
+            **CRITICAL ALERT PROTOCOL:**\n\
+            1. Immediately gather last 24 hours of data\n\
+            2. Compare against last 7 days baseline\n\
+            3. Identify correlated metrics\n\
+            4. Check for system events at anomaly time\n\
+            5. Prepare incident summary for escalation\n\
+            {{else if severity == 'high'}}\n\
+            **HIGH ALERT INVESTIGATION:**\n\
+            1. Gather last 48 hours of data\n\
+            2. Identify pattern or one-time spike\n\
+            3. Check for known causes\n\
+            4. Recommend monitoring or action\n\
+            {{else}}\n\
+            **STANDARD INVESTIGATION:**\n\
+            1. Review metric trend for past week\n\
+            2. Note if this is recurring\n\
+            3. Log finding for pattern analysis\n\
+            {{/if}}"
         )
     ])
 ```
 
-### Chained Prompts
+**When to use**: Response should vary based on parameters; complex conditional logic.
+
+### Pattern 4: Chained Prompts
 
 Design prompts that build on each other:
 
@@ -222,12 +251,12 @@ Prompt::new("discover-opportunities")
     .description("Find potential opportunities in sales data")
     .messages(vec![
         PromptMessage::user(
-            "Analyze sales data to identify opportunities:\
-            \n\n1. Find underperforming products in growing categories\
-            \n2. Identify customers with declining purchase frequency\
-            \n3. Spot regions with untapped potential\
-            \n\nList findings with IDs for follow-up analysis.\
-            \nUser can then run /deep-dive on any finding."
+            "Analyze sales data to identify opportunities:\n\n\
+            1. Find underperforming products in growing categories\n\
+            2. Identify customers with declining purchase frequency\n\
+            3. Spot regions with untapped potential\n\n\
+            List findings with IDs for follow-up analysis.\n\
+            User can then run /deep-dive on any finding."
         )
     ])
 
@@ -240,65 +269,71 @@ Prompt::new("deep-dive")
     .description("Deep dive into a specific opportunity")
     .messages(vec![
         PromptMessage::user(
-            "Perform detailed analysis on finding {{finding_id}}:\
-            \n\n1. Gather all related data\
-            \n2. Analyze root causes\
-            \n3. Model potential impact of intervention\
-            \n4. Provide specific, actionable recommendations\
-            \n5. Estimate effort and expected return"
+            "Perform detailed analysis on finding {{finding_id}}:\n\n\
+            1. Gather all related data\n\
+            2. Analyze root causes\n\
+            3. Model potential impact of intervention\n\
+            4. Provide specific, actionable recommendations\n\
+            5. Estimate effort and expected return"
         )
     ])
 ```
 
-## Client-Specific Considerations
+**When to use**: User workflow naturally has distinct phases; each phase produces different outputs.
 
-### Claude Desktop
+## Converting Soft to Hard Workflows
 
-Claude Desktop shows prompts as slash commands in the input field:
+As you gain experience with a soft workflow, look for opportunities to harden it:
 
-```
-/ [shows autocomplete list]
-/quarterly-analysis
-/customer-health-check
-/data-exploration
-```
+| Soft Pattern | Can It Be Hardened? |
+|--------------|---------------------|
+| Fixed sequence of tool calls | **Yes** → Use `SequentialWorkflow` |
+| Deterministic data gathering | **Yes** → Use server-side steps |
+| Fuzzy matching user input | **Hybrid** → Server gathers, AI matches |
+| Dynamic branching based on results | **Maybe** → Complex, evaluate case-by-case |
+| Creative interpretation | **No** → Keep as soft workflow |
+| Multi-domain coordination | **No** → AI must reason across servers |
 
-Design prompts with short, memorable names:
-- `/analyze-sales` not `/perform-comprehensive-sales-analysis-with-trend`
-- `/health-check` not `/customer-health-check-and-churn-prediction`
+### Example: Hardening a Report Workflow
 
-### VS Code / Cursor
-
-IDEs often show prompts in command palette:
-
-```
-> MCP: quarterly-analysis
-> MCP: customer-health-check
-> MCP: data-exploration
-```
-
-Include descriptions that explain the workflow:
+**Before (Soft):**
 ```rust
-Prompt::new("refactor-sql")
-    .description("Safely refactor SQL queries with testing") // Shows in palette
+Prompt::new("weekly-report")
+    .messages(vec![
+        PromptMessage::user(
+            "Generate weekly sales report:\n\
+            1. Query revenue by region\n\
+            2. Calculate week-over-week change\n\
+            3. Format as markdown table"
+        )
+    ])
 ```
 
-### ChatGPT
-
-ChatGPT may show prompts as conversation starters or actions:
-
+**After (Hard):**
+```rust
+SequentialWorkflow::new("weekly_report", "Generate weekly sales report")
+    .argument("week", "Week number (1-52)", true)
+    .step(
+        WorkflowStep::new("current", ToolHandle::new("sales_query"))
+            .arg("week", prompt_arg("week"))
+            .bind("current_data")
+    )
+    .step(
+        WorkflowStep::new("previous", ToolHandle::new("sales_query"))
+            .arg("week", /* week - 1 calculation */)
+            .bind("previous_data")
+    )
+    .step(
+        WorkflowStep::new("format", ToolHandle::new("format_report"))
+            .arg("current", from_step("current_data"))
+            .arg("previous", from_step("previous_data"))
+            .bind("report")
+    )
 ```
-┌─────────────────────────────────────────┐
-│ Start with:                             │
-│ ○ Weekly Sales Report                   │
-│ ○ Customer Analysis                     │
-│ ○ Data Exploration                      │
-└─────────────────────────────────────────┘
-```
 
-Make prompts self-contained—users may not have prior context.
+The hard workflow executes in a single round-trip with deterministic results.
 
-## Testing Prompts
+## Testing Soft Workflows
 
 ### The "New User" Test
 
@@ -324,15 +359,20 @@ Test with other MCP servers connected:
 
 ## Summary
 
-Prompts are your mechanism for:
+Soft workflows are appropriate when:
 
-| Need | Prompt Pattern |
-|------|---------------|
-| Reliable multi-step workflows | Numbered explicit steps |
-| User control over approach | Let users select the prompt |
-| Safe operations | Built-in guard rails |
-| Consistent output | Defined output format |
-| Complex analysis | Multi-turn conversations |
-| Conditional behavior | Template variables |
+| Scenario | Use Soft Workflow |
+|----------|-------------------|
+| AI reasoning required | Text prompts guide interpretation |
+| Exploration/discovery | AI determines path based on findings |
+| Complex conditionals | AI evaluates and branches |
+| Multi-server coordination | AI reasons across domains |
+| Creative tasks | Multiple valid approaches |
 
-The key insight: **Users invoking prompts are explicitly choosing a workflow.** This is fundamentally different from hoping the AI chooses the right approach. Design prompts that give users the control they need.
+Design effective soft workflows by:
+1. **Being explicit** - Numbered steps, specific tools, clear output formats
+2. **Including guard rails** - Safety checks, constraints, confirmations
+3. **Setting context** - Read resources before acting
+4. **Enabling follow-up** - Chained prompts for multi-phase workflows
+
+Remember: **Start with hard workflows.** Convert to soft workflows only when genuine LLM reasoning is required. The next chapter covers `SequentialWorkflow` for server-side execution.

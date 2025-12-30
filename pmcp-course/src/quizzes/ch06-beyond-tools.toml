@@ -58,18 +58,18 @@ id = "d6a1b2c3-e5f6-7890-abcd-ef1234560603"
 
 [[questions]]
 type = "MultipleChoice"
-prompt.prompt = "In prompt design, why should steps be explicitly numbered with specific tool references?"
+prompt.prompt = "What is the guiding principle for choosing between soft and hard workflows?"
 prompt.distractors = [
-    "Numbered steps are required by MCP protocol",
-    "It reduces the prompt's token count",
-    "It prevents the prompt from being cached"
+    "Use soft workflows by default because they're more flexible",
+    "Use hard workflows only for simple single-step operations",
+    "Let the AI decide which type of workflow to use"
 ]
-answer.answer = "AI follows explicit numbered steps better and knows exactly which tools to use at each step"
+answer.answer = "Do as much as possible on the server side, and allow the AI to complete the workflow if you can't"
 context = """
-Vague prompts like 'analyze the data' leave AI guessing which tools to use.
-Explicit steps like '1. Read db://schema, 2. Use sales_query to get revenue,
-3. Use sales_aggregate for totals' give clear guidance. The AI executes the
-prescribed workflow reliably.
+Hard workflows execute on the server in a single round-trip with deterministic
+results. Soft workflows require multiple round-trips with the AI interpreting
+text guidance. The guiding principle is to push as much as possible to the server
+side, falling back to soft or hybrid workflows only when LLM reasoning is genuinely required.
 """
 id = "d6a1b2c3-e5f6-7890-abcd-ef1234560604"
 
@@ -91,18 +91,18 @@ id = "d6a1b2c3-e5f6-7890-abcd-ef1234560605"
 
 [[questions]]
 type = "MultipleChoice"
-prompt.prompt = "Why include guard rails in prompts for data modification workflows?"
+prompt.prompt = "In a SequentialWorkflow, what is the difference between a step name and a binding name?"
 prompt.distractors = [
-    "To improve query performance",
-    "Because MCP requires confirmation for all tools",
-    "To reduce the number of tool calls"
+    "They are the same thing - interchangeable terms",
+    "Step names are for tools, binding names are for resources",
+    "Binding names are automatically generated from step names"
 ]
-answer.answer = "To ensure the AI shows affected records, explains changes, and asks for confirmation before destructive operations"
+answer.answer = "Step name identifies the step; binding name (from .bind()) is what other steps reference with from_step()"
 context = """
-Guard rails in prompts like 'show affected records, explain changes, ask for
-confirmation' protect against accidental modifications. The prompt forces the
-AI to follow a safe workflow: preview → explain → confirm → execute. Without
-this, the AI might execute immediately.
+This is a critical distinction. WorkflowStep::new('analyze', ...).bind('analysis_result')
+creates step 'analyze' with binding 'analysis_result'. Other steps must use
+from_step('analysis_result') - NOT from_step('analyze'). Using the step name
+instead of the binding name is a common validation error.
 """
 id = "d6a1b2c3-e5f6-7890-abcd-ef1234560606"
 
@@ -120,50 +120,87 @@ id = "d6a1b2c3-e5f6-7890-abcd-ef1234560607"
 
 [[questions]]
 type = "MultipleChoice"
-prompt.prompt = "What is the benefit of including 'negative descriptions' in tool documentation?"
+prompt.prompt = "What are the main advantages of hard workflows over soft workflows?"
 prompt.distractors = [
-    "It improves tool performance",
-    "It's required for MCP compliance",
-    "It reduces schema size"
+    "Hard workflows support more complex logic",
+    "Hard workflows work with more MCP clients",
+    "Hard workflows require less code to implement"
 ]
-answer.answer = "Telling AI what a tool is NOT for helps prevent misuse - 'Cannot modify data, use sales_admin for updates'"
+answer.answer = "Single round-trip, deterministic execution, automatic data binding, and pure function testing"
 context = """
-Sometimes it's helpful to say what a tool can't do. 'sales_query: Read-only.
-CANNOT modify data - use sales_admin. For reports, use sales_report (faster).'
-This prevents AI from using the wrong tool and guides it to the correct alternative.
+Hard workflows execute entirely server-side: one round-trip instead of 6+ for
+a 3-step soft workflow, deterministic order (server enforces it), automatic
+data binding between steps, and testable without AI. Soft workflows require
+multiple LLM calls and may execute steps in unpredictable order.
 """
 id = "d6a1b2c3-e5f6-7890-abcd-ef1234560608"
 
 [[questions]]
 type = "MultipleChoice"
-prompt.prompt = "In multi-step workflows, why should tools explicitly document ID relationships between output and input?"
+prompt.prompt = "In the SequentialWorkflow DSL, which helper function passes the entire output from a previous step?"
 prompt.distractors = [
-    "To reduce network bandwidth",
-    "Because IDs must be globally unique",
-    "To enable database joins"
+    "prompt_arg('step_name')",
+    "field('binding', 'output')",
+    "constant(json!({...}))"
 ]
-answer.answer = "So AI knows that 'customer_id' from sales_top_customers works as input to order_history"
+answer.answer = "from_step('binding_name')"
 context = """
-When chaining tools, AI needs to know how outputs connect to inputs. Documenting
-'Returns customer_id for use with order_history, customer_details tools' explicitly
-tells the AI how to chain them. Without this, AI might use wrong field names or
-incompatible IDs.
+The DSL provides four data source helpers: prompt_arg() for workflow arguments,
+from_step() for entire previous output, field() for specific fields of previous
+output, and constant() for fixed values. from_step('sales_data') passes everything
+from a step that bound to 'sales_data'.
 """
 id = "d6a1b2c3-e5f6-7890-abcd-ef1234560609"
 
 [[questions]]
 type = "MultipleChoice"
-prompt.prompt = "What distinguishes the 'Orchestration Tool' pattern from the 'Guided Prompt' pattern?"
+prompt.prompt = "Why should you embed resources in hybrid workflow steps using .with_resource()?"
 prompt.distractors = [
-    "Orchestration tools are faster",
-    "Guided prompts support more steps",
-    "Orchestration tools require fewer parameters"
+    "It's required by the MCP protocol for all workflows",
+    "It reduces the number of tool calls needed",
+    "It improves server-side caching performance"
 ]
-answer.answer = "Orchestration tools coordinate multiple operations internally; Guided prompts direct AI to call tools sequentially"
+answer.answer = "It provides the AI with exactly the documentation it needs to complete incomplete steps correctly"
 context = """
-An orchestration tool like 'customer_analysis' gathers orders, support tickets,
-and engagement internally - AI calls once. A guided prompt instructs AI:
-'Step 1: call order_history, Step 2: call support_tickets...' - AI calls each
-tool. Orchestration hides complexity; guided prompts show the workflow.
+Resource embedding is a powerful lever for MCP developers. When a step can't be
+fully automated (fuzzy matching, user clarification), embedding relevant resources
+like schemas, validation rules, and format templates gives the AI the exact
+context it needs. Instead of guessing which resources to read, the AI receives
+pre-selected documentation from the developer who knows the domain.
 """
 id = "d6a1b2c3-e5f6-7890-abcd-ef1234560610"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "When does workflow validation occur in the PMCP SDK?"
+prompt.distractors = [
+    "Only when you explicitly call .validate()",
+    "At runtime when a user invokes the workflow",
+    "During cargo build compilation"
+]
+answer.answer = "Automatically when you register with .prompt_workflow() - if invalid, the server won't build"
+context = """
+Workflow validation is automatic and fail-fast. When you call .prompt_workflow(workflow),
+the builder validates the workflow structure - checking for unknown bindings,
+undefined arguments, and invalid mappings. If validation fails, registration
+returns an error and the server won't start. You see errors immediately at
+startup, not when users invoke the workflow.
+"""
+id = "d6a1b2c3-e5f6-7890-abcd-ef1234560611"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "When should you use a hybrid workflow instead of a fully hard workflow?"
+prompt.distractors = [
+    "When you want to reduce server load",
+    "When the workflow has more than 3 steps",
+    "When you need to support multiple MCP clients"
+]
+answer.answer = "When some steps require LLM judgment like fuzzy matching or context-dependent decisions"
+context = """
+Hybrid workflows execute deterministic steps on the server, then hand off to the
+AI for steps requiring reasoning. For example, 'add task to project' might list
+pages server-side, but need the AI to fuzzy-match 'MCP Tester' to 'mcp-tester'.
+Add .with_guidance() and .with_resource() to help the AI complete those steps.
+"""
+id = "d6a1b2c3-e5f6-7890-abcd-ef1234560612"

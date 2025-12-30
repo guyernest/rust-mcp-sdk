@@ -139,6 +139,135 @@ Now the AI's job is clear:
 - User wants a file? → `db_export`
 - User wants to check data? → `db_validate`
 
+## Helping AI Generate Correct SQL
+
+When your tool accepts SQL queries, the AI must generate syntactically correct SQL for your specific database. Different databases have vastly different SQL dialects:
+
+| Database | Date Literal | String Concat | Window Functions | JSON Access |
+|----------|-------------|---------------|------------------|-------------|
+| PostgreSQL | `'2024-01-15'::date` | `||` | Full support | `data->>'key'` |
+| MySQL | `STR_TO_DATE('2024-01-15', '%Y-%m-%d')` | `CONCAT()` | MySQL 8+ only | `JSON_EXTRACT()` |
+| Oracle | `TO_DATE('2024-01-15', 'YYYY-MM-DD')` | `||` | Full support | `JSON_VALUE()` |
+| Amazon Athena | `DATE '2024-01-15'` | `CONCAT()` | Full support | `json_extract_scalar()` |
+| SQLite | `'2024-01-15'` | `||` | v3.25+ only | `json_extract()` |
+
+**Always specify the database flavor in your tool description:**
+
+```rust
+// POOR: AI doesn't know which SQL dialect to use
+Tool::new("db_query")
+    .description(
+        "Execute read-only SQL queries. \
+        Returns results as JSON array."
+    )
+
+// BETTER: AI knows the exact database engine
+Tool::new("db_query")
+    .description(
+        "Execute read-only SQL queries against PostgreSQL 15. \
+        Supports all PostgreSQL features including WINDOW functions, \
+        CTEs, LATERAL joins, and JSON operators (->>, @>). \
+        Use PostgreSQL-specific date functions (DATE_TRUNC, EXTRACT). \
+        Returns results as JSON array."
+    )
+
+// FOR ATHENA: Specify Presto/Trino SQL dialect
+Tool::new("athena_query")
+    .description(
+        "Execute read-only queries against Amazon Athena (Trino SQL). \
+        Use Presto SQL syntax: CONCAT() for strings, DATE '2024-01-15' \
+        for date literals, json_extract_scalar() for JSON. \
+        Supports WINDOW functions and CTEs. \
+        Returns results as JSON array with max 1000 rows."
+    )
+```
+
+### Why This Matters
+
+When a user asks "show me sales by month for 2024," the AI must generate SQL:
+
+**Without dialect information:**
+```sql
+-- AI might generate generic SQL that fails
+SELECT MONTH(sale_date), SUM(amount)
+FROM sales
+WHERE YEAR(sale_date) = 2024
+GROUP BY MONTH(sale_date)
+-- Fails on PostgreSQL: MONTH() doesn't exist
+```
+
+**With PostgreSQL specified:**
+```sql
+-- AI generates PostgreSQL-correct SQL
+SELECT DATE_TRUNC('month', sale_date) AS month, SUM(amount)
+FROM sales
+WHERE sale_date >= '2024-01-01' AND sale_date < '2025-01-01'
+GROUP BY DATE_TRUNC('month', sale_date)
+ORDER BY month
+```
+
+**With Amazon Athena specified:**
+```sql
+-- AI generates Athena/Presto-correct SQL
+SELECT DATE_TRUNC('month', sale_date) AS month, SUM(amount)
+FROM sales
+WHERE sale_date >= DATE '2024-01-01' AND sale_date < DATE '2025-01-01'
+GROUP BY DATE_TRUNC('month', sale_date)
+ORDER BY month
+```
+
+### Include Capability Hints
+
+Beyond the engine name, mention key capabilities the AI can leverage:
+
+```rust
+Tool::new("analytics_query")
+    .description(
+        "Execute analytical queries against ClickHouse. \
+        Optimized for aggregations over large datasets. \
+        Supports: WINDOW functions, Array functions (arrayJoin, groupArray), \
+        approximate functions (uniq, quantile), sampling (SAMPLE 0.1). \
+        Use ClickHouse date functions: toStartOfMonth(), toYear(). \
+        Column-oriented: SELECT only columns you need for best performance."
+    )
+```
+
+This enables the AI to use advanced features when appropriate:
+
+```sql
+-- AI can leverage ClickHouse-specific features
+SELECT
+    toStartOfMonth(sale_date) AS month,
+    uniq(customer_id) AS unique_customers,  -- Approximate count, very fast
+    quantile(0.95)(amount) AS p95_amount    -- 95th percentile
+FROM sales
+WHERE sale_date >= '2024-01-01'
+GROUP BY month
+ORDER BY month
+```
+
+### Database Version Matters
+
+Different versions have different capabilities:
+
+```rust
+// MySQL 5.7 - limited window function support
+Tool::new("legacy_query")
+    .description(
+        "Query against MySQL 5.7. \
+        Note: WINDOW functions not supported. \
+        Use subqueries or temporary tables for ranking/running totals."
+    )
+
+// MySQL 8.0 - full modern SQL support
+Tool::new("modern_query")
+    .description(
+        "Query against MySQL 8.0. \
+        Full WINDOW function support (ROW_NUMBER, RANK, LAG/LEAD). \
+        Supports CTEs (WITH clause) and JSON_TABLE()."
+    )
+```
+
 ## The "One Sentence" Rule
 
 If you can't describe what a tool does in one clear sentence, it's doing too much:

@@ -427,12 +427,102 @@ fn apply_limit(query: &str, limit: i32) -> String {
 }
 ```
 
+## User Context and Token Pass-Through
+
+The `user_context` parameter in the examples above is more than just a logging convenience—in production, it represents the authenticated user and should flow through to your backend systems.
+
+### Where Does UserContext Come From?
+
+In production, `UserContext` is extracted from the OAuth access token in the MCP request:
+
+```rust
+/// User context extracted from OAuth access token
+pub struct UserContext {
+    /// User ID from the identity provider
+    pub user_id: String,
+
+    /// The raw access token - pass this to backend systems
+    pub access_token: String,
+
+    /// User's roles/groups from token claims
+    pub roles: Vec<String>,
+}
+
+impl UserContext {
+    /// Extract from MCP request metadata (simplified)
+    pub fn from_request(extra: &RequestExtra) -> Result<Self> {
+        let token = extra.headers
+            .get("authorization")
+            .and_then(|h| h.strip_prefix("Bearer "))
+            .ok_or_else(|| anyhow!("Missing authorization header"))?;
+
+        // Validate token and extract claims
+        let claims = validate_jwt(token)?;
+
+        Ok(Self {
+            user_id: claims.sub,
+            access_token: token.to_string(),
+            roles: claims.groups,
+        })
+    }
+}
+```
+
+### Pass Tokens to Backend Systems
+
+The MCP server should **not** be the source of truth for permissions. Pass the user's access token to your backend data systems and let them enforce authorization:
+
+```rust
+pub async fn secure_query_with_passthrough(
+    pool: &DbPool,
+    input: QueryInput,
+    user_context: &UserContext,
+) -> Result<QueryOutput> {
+    // For databases that support session context (PostgreSQL, Oracle):
+    // Pass the user identity so row-level security policies apply
+    sqlx::query("SELECT set_config('app.current_user', $1, true)")
+        .bind(&user_context.user_id)
+        .execute(pool.as_ref())
+        .await?;
+
+    // Now queries are filtered by database RLS policies
+    let result = sqlx::query(&input.query)
+        .fetch_all(pool.as_ref())
+        .await?;
+
+    // ...
+}
+```
+
+For external APIs, pass the token in the request:
+
+```rust
+pub async fn call_backend_api(
+    client: &reqwest::Client,
+    user_context: &UserContext,
+    endpoint: &str,
+) -> Result<serde_json::Value> {
+    // Pass the user's token - let the backend validate permissions
+    let response = client.get(endpoint)
+        .header("Authorization", format!("Bearer {}", user_context.access_token))
+        .send()
+        .await?;
+
+    // Backend enforces what this user can access
+    Ok(response.json().await?)
+}
+```
+
+> **Learn More**: See [Part 5: Security](../part5-security/ch13-oauth.md) for complete OAuth integration patterns, including extracting tokens from MCP requests and configuring row-level security in PostgreSQL.
+
 ## Security Checklist
 
 Before deploying your database MCP server:
 
 | Layer | Check | Status |
 |-------|-------|--------|
+| **Authentication** | OAuth required for all requests | ☐ |
+| **Token Pass-Through** | Access tokens passed to backend systems | ☐ |
 | **Parameterization** | All user values use `.bind()` | ☐ |
 | **Allowlisting** | Table/column names validated against lists | ☐ |
 | **Query Validation** | Dangerous keywords blocked | ☐ |

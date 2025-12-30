@@ -15,6 +15,12 @@ Test your understanding of resources, prompts, and workflows:
    - Create safe data modification workflows
    - Build context-setting prompts for exploration
 
+2. **[Building and Validating Hard Workflows](./ch06-ex02-workflow-validation.md)** ⭐⭐ Intermediate (30 min)
+   - Build a SequentialWorkflow with multiple steps
+   - Write validation tests for structural correctness
+   - Use `cargo pmcp validate workflows` for project validation
+   - Understand binding names vs step names
+
 ## Key Concepts to Practice
 
 - **Prompts as User Control**: Users explicitly choose workflows by invoking prompts

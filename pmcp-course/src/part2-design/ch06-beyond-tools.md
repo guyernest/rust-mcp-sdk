@@ -13,14 +13,14 @@ The answer lies in understanding what each MCP primitive is designed for:
 | Primitive | Purpose | Who Controls |
 |-----------|---------|--------------|
 | **Tools** | Actions the AI can take | AI decides when/how to use |
-| **Resources** | Data the AI can read | AI decides what to read |
+| **Resources** | Documents the AI can read | AI decides what to read |
 | **Prompts** | Workflows the *user* can invoke | User explicitly selects |
 
-Prompts are the critical insight: they're the only mechanism where the **user** has explicit control.
+Prompts are the critical insight: they're the only mechanism where the **user** has explicit control, and you, as the MCP developer, have the ability to control the flow.
 
 ## Resources: Stable Data for Context
 
-Resources are addressable data that the AI can read. Unlike tools, which perform actions, resources simply provide information.
+Resources are addressable data that the AI can read. Unlike tools, which perform actions, resources simply provide information. They are the documentation for the AI agents and MCP clients on how to use the tools.
 
 ### When to Use Resources
 
@@ -85,7 +85,7 @@ Resource::new("sales://reports/{year}/{quarter}")
     .description("Sales report for a specific quarter")
 ```
 
-## Prompts: User Control Mechanism
+## Prompts: User Control and Workflow Execution
 
 Prompts are the most underutilized MCP primitive—and potentially the most powerful for complex workflows.
 
@@ -95,33 +95,87 @@ Unlike tools and resources, prompts are **explicitly invoked by users**:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Claude Desktop                           │
+│                     Claude Desktop                          │
 ├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  User types: /quarterly-analysis                             │
-│              ─────────────────────                           │
-│                     │                                        │
-│                     ▼                                        │
+│                                                             │
+│  User types: /quarterly-analysis                            │
+│              ─────────────────────                          │
+│                     │                                       │
+│                     ▼                                       │
 │  ┌────────────────────────────────────────────┐             │
-│  │  Prompt: quarterly-analysis                 │             │
+│  │  Prompt: quarterly-analysis                │             │
 │  │  ────────────────────────────────────────  │             │
-│  │  "I'll analyze quarterly performance       │             │
-│  │   using the following approach:            │             │
-│  │                                            │             │
-│  │   1. Gather sales data for the quarter    │             │
-│  │   2. Compare against previous quarters    │             │
-│  │   3. Identify trends and anomalies        │             │
-│  │   4. Generate actionable insights         │             │
-│  │                                            │             │
-│  │   Which quarter would you like to analyze?"│             │
+│  │  Server executes workflow steps            │             │
+│  │  and returns results to the AI             │             │
 │  └────────────────────────────────────────────┘             │
-│                                                              │
-│  The AI now follows this structured approach                 │
-│                                                              │
+│                                                             │
+│  The AI receives pre-executed context                       │
+│                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 **This is the control users have been missing.** Instead of hoping the AI takes the right approach, users explicitly select a workflow.
+
+### The Workflow Spectrum: Soft → Hybrid → Hard
+
+PMCP provides a spectrum of workflow execution models. The guiding principle:
+
+> **Do as much as possible on the server side, and allow the AI to complete the workflow if you can't complete it on the server side.**
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     Workflow Execution Spectrum                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  SOFT WORKFLOWS              HYBRID WORKFLOWS          HARD WORKFLOWS   │
+│  ──────────────              ────────────────          ──────────────   │
+│  Text guidance               Server executes some      Server executes  │
+│  for AI to follow            AI completes the rest     everything       │
+│                                                                         │
+│  ┌─────────────┐             ┌─────────────┐          ┌─────────────┐   │
+│  │ "Follow     │             │ Server:     │          │ Server:     │   │
+│  │  these      │             │   Step 1    │          │   Step 1 ✓  │   │
+│  │  steps:     │             │   Step 2    │          │   Step 2 ✓  │   │
+│  │  1. ...     │             │ AI:         │          │   Step 3 ✓  │   │
+│  │  2. ...     │             │   Step 3    │          │   Step 4 ✓  │   │
+│  │  3. ..."    │             │   Step 4    │          │ Return:     │   │
+│  └─────────────┘             └─────────────┘          │  Complete   │   │
+│                                                       │  results    │   │
+│                                                       └─────────────┘   │
+│                                                                         │
+│  Use when:                   Use when:                 Use when:        │
+│  - Complex reasoning         - Some steps need         - All steps are  │
+│    required                    LLM judgment              deterministic  │
+│  - Context-dependent         - Fuzzy matching          - No reasoning   │
+│    decisions                 - User clarification        needed         │
+│  - Dynamic exploration         may be needed           - Single result  │
+│                                                                         │
+│  Examples:                   Examples:                 Examples:        │
+│  - Open-ended analysis       - "Add task to project"   - Data pipelines │
+│  - Creative tasks              (fuzzy project name)    - Report gen     │
+│  - Multi-domain queries      - Search + refine         - CRUD workflows │
+│                                                                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│  ◄─── Less deterministic           More deterministic ───►              │
+│  ◄─── More AI reasoning            Less AI reasoning ───►               │
+│  ◄─── Multiple round-trips         Single round-trip ───►               │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Why Prefer Hard Workflows?
+
+Hard workflows (server-side execution) provide significant advantages:
+
+| Aspect | Soft Workflow | Hard Workflow |
+|--------|---------------|---------------|
+| **Round-trips** | 1 per tool call | 1 total |
+| **Execution order** | AI decides (unpredictable) | Server enforces (deterministic) |
+| **Data binding** | AI must remember | Server manages automatically |
+| **Error handling** | AI interprets | Server controls |
+| **Testing** | Requires AI | Pure function tests |
+| **Latency** | High (multiple LLM calls) | Low (single execution) |
+
+**Best practice**: Start with hard workflows. Fall back to hybrid or soft only when LLM reasoning is genuinely required.
 
 ### How MCP Clients Expose Prompts
 
@@ -132,113 +186,89 @@ Different clients expose prompts differently:
 - Users see a list of available prompts from connected servers
 - Arguments are collected interactively
 
-**ChatGPT (with MCP plugin):**
-- Prompts appear in the conversation starters
-- Users can select from available workflows
-- Multi-turn prompts guide the conversation
-
-**Cursor / VS Code:**
+**VS Code / Cursor:**
 - Prompts appear in command palette
 - Can be bound to keyboard shortcuts
 - Context-aware prompt suggestions
 
-### Designing Effective Prompts
+## PMCP SDK: Workflow Types
 
-Prompts should guide the AI toward a reliable workflow:
+The PMCP SDK provides two approaches to prompts:
+
+### 1. Text Prompts (Soft Workflows)
+
+For guidance-based workflows where AI follows instructions:
 
 ```rust
-Prompt::new("quarterly-sales-analysis")
-    .description("Comprehensive quarterly sales analysis with trends and forecasts")
-    .arguments(vec![
-        PromptArgument::new("quarter")
-            .description("Quarter to analyze: Q1, Q2, Q3, or Q4")
-            .required(true),
-        PromptArgument::new("year")
-            .description("Year (defaults to current year)")
-            .required(false),
-        PromptArgument::new("compare_previous")
-            .description("Include year-over-year comparison")
-            .required(false),
-    ])
+use pmcp::server::PromptHandler;
+
+Prompt::new("data-exploration")
+    .description("Interactive data exploration session")
     .messages(vec![
         PromptMessage::user(
-            "Analyze sales performance for {{quarter}} {{year}}. \
-            \n\nPlease follow these steps:\
-            \n1. First, read the sales://schema resource to understand available data\
-            \n2. Query total revenue, units sold, and customer count for the quarter\
-            \n3. Break down by region and product category\
-            \n4. {{#if compare_previous}}Compare against the same quarter last year{{/if}}\
-            \n5. Identify the top 3 trends or anomalies\
-            \n6. Provide 2-3 actionable recommendations\
-            \n\nFormat the output with clear sections and include relevant numbers."
+            "Start an interactive data exploration session:\n\n\
+            **Initial Setup:**\n\
+            1. Read available schemas\n\
+            2. List tables and their row counts\n\
+            3. Present a summary of available data\n\n\
+            **Then wait for my questions...**"
         )
     ])
 ```
 
-### Prompt Design Patterns
+### 2. Sequential Workflows (Hard/Hybrid Workflows)
 
-**1. The Structured Workflow**
-
-Guide the AI through a specific sequence:
+For server-executed workflows with automatic data binding:
 
 ```rust
-Prompt::new("customer-health-check")
-    .messages(vec![
-        PromptMessage::user(
-            "Perform a customer health check for {{customer_id}}:\
-            \n\n## Step 1: Gather Context\
-            \n- Read customer profile from sales://customers/{{customer_id}}\
-            \n- Get recent order history (last 6 months)\
-            \n\n## Step 2: Analyze Behavior\
-            \n- Calculate order frequency trend\
-            \n- Identify any declining metrics\
-            \n- Check for support tickets or complaints\
-            \n\n## Step 3: Risk Assessment\
-            \n- Assign churn risk: Low/Medium/High\
-            \n- Justify with specific data points\
-            \n\n## Step 4: Recommendations\
-            \n- Suggest 2-3 retention actions if risk is Medium or High\
-            \n- Otherwise, suggest upsell opportunities"
-        )
-    ])
+use pmcp::server::workflow::{SequentialWorkflow, WorkflowStep, ToolHandle};
+use pmcp::server::workflow::dsl::*;
+
+let workflow = SequentialWorkflow::new(
+    "quarterly_report",
+    "Generate quarterly sales report with analysis"
+)
+.argument("quarter", "Quarter: Q1, Q2, Q3, Q4", true)
+.argument("year", "Year (default: current)", false)
+
+// Step 1: Fetch sales data (server executes)
+.step(
+    WorkflowStep::new("fetch_sales", ToolHandle::new("sales_query"))
+        .arg("quarter", prompt_arg("quarter"))
+        .arg("year", prompt_arg("year"))
+        .bind("sales_data")  // Output bound for next step
+)
+
+// Step 2: Calculate metrics (server executes)
+.step(
+    WorkflowStep::new("calc_metrics", ToolHandle::new("calculate_metrics"))
+        .arg("data", from_step("sales_data"))  // Use previous output
+        .bind("metrics")
+)
+
+// Step 3: Generate report (server executes)
+.step(
+    WorkflowStep::new("generate_report", ToolHandle::new("format_report"))
+        .arg("sales", from_step("sales_data"))
+        .arg("metrics", from_step("metrics"))
+        .arg("format", constant(json!("markdown")))
+        .bind("report")
+);
+
+// Register with server
+let server = Server::builder()
+    .name("sales-server")
+    .version("1.0.0")
+    .prompt_workflow(workflow)?
+    .build()?;
 ```
 
-**2. The Context-Setting Prompt**
-
-Establish context before the user's actual task:
-
-```rust
-Prompt::new("sales-analysis-mode")
-    .description("Enter sales analysis mode with full context")
-    .messages(vec![
-        PromptMessage::user(
-            "I'm going to analyze sales data. Before I ask my questions:\
-            \n\n1. Read the sales://schema resource\
-            \n2. Read the sales://config/regions resource\
-            \n3. Summarize what data is available and any recent changes\
-            \n\nThen wait for my analysis questions."
-        )
-    ])
-```
-
-**3. The Guard Rails Prompt**
-
-Prevent dangerous operations:
-
-```rust
-Prompt::new("safe-data-export")
-    .description("Export data with compliance checks")
-    .messages(vec![
-        PromptMessage::user(
-            "Help me export {{table}} data. Before exporting:\
-            \n\n1. Check if this table contains PII columns\
-            \n2. If PII exists, confirm I have a legitimate business need\
-            \n3. Offer options to anonymize or redact sensitive columns\
-            \n4. Limit export to 10,000 rows unless I explicitly request more\
-            \n\nProceed with export only after these checks."
-        )
-    ])
-```
+When a user invokes `/quarterly_report Q3 2024`:
+1. Server receives `prompts/get` request
+2. Server executes all three steps sequentially
+3. Server binds outputs between steps automatically
+4. Server returns complete conversation trace with results
+5. AI receives pre-computed data—no additional tool calls needed
 
 ## Combining Primitives
 
@@ -250,28 +280,35 @@ Resource::new("sales://schema")
 Resource::new("sales://regions")
 Resource::new("sales://products")
 
-// TOOLS: Actions the AI can take
+// TOOLS: Actions for direct use and workflow steps
 Tool::new("sales_query")       // Query data
 Tool::new("sales_aggregate")   // Calculate summaries
 Tool::new("sales_export")      // Export results
 
 // PROMPTS: User-controlled workflows
-Prompt::new("quarterly-analysis")    // Structured analysis flow
-Prompt::new("data-exploration")      // Guided exploration
-Prompt::new("safe-export")           // Guarded export workflow
+
+// Soft workflow for exploration
+Prompt::new("data-exploration")
+    .messages(vec![...])
+
+// Hard workflow for reports
+SequentialWorkflow::new("quarterly-analysis")
+    .step(WorkflowStep::new(...))
+    .step(WorkflowStep::new(...))
 ```
 
 A user invoking `/quarterly-analysis`:
-1. **Prompt** guides the AI's approach
+1. **Workflow** executes all steps server-side
 2. **Resources** provide context (schema, regions)
 3. **Tools** perform the actual queries
-4. Result: Predictable, reliable analysis
+4. Result: Complete report in single round-trip
 
-Without the prompt, the AI might:
+Without the workflow, the AI might:
 - Query random tables
 - Miss the year-over-year comparison
 - Forget to check all regions
 - Present data in an inconsistent format
+- Require 6+ round-trips for 3-step workflow
 
 ## Summary
 
@@ -281,6 +318,12 @@ Without the prompt, the AI might:
 | **Resources** | "What context should be available?" | AI reads for understanding |
 | **Prompts** | "What workflows should users control?" | User explicitly invokes |
 
-The key insight: **Prompts are your primary mechanism for reliable, user-controlled workflows.** Don't just expose tools and hope the AI uses them correctly—design prompts that guide the AI toward the outcomes your users need.
+The key insight: **Do as much as possible on the server side.** Use hard workflows by default, falling back to hybrid or soft workflows only when genuine LLM reasoning is required.
 
-Next, we'll dive deeper into when to use resources vs tools, and then explore prompts as workflow templates in detail.
+| Workflow Type | When to Use |
+|---------------|-------------|
+| **Hard** | All steps are deterministic, no reasoning needed |
+| **Hybrid** | Some steps need LLM judgment (fuzzy matching, clarification) |
+| **Soft** | Complex reasoning, exploration, creative tasks |
+
+Next, we'll explore text prompts for guidance-based workflows, then dive deep into the SequentialWorkflow DSL for server-side execution.
