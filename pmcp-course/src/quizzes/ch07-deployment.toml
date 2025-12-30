@@ -1,0 +1,235 @@
+# Quiz: Deployment Overview
+
+id = "ch07-deployment"
+title = "Remote MCP Deployment"
+lesson_id = "ch07"
+pass_threshold = 0.7
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the primary advantage of remote MCP deployments over local servers for business users?"
+prompt.distractors = [
+    "Remote servers are faster than local servers",
+    "Remote servers support more MCP features",
+    "Remote servers use less memory"
+]
+answer.answer = "Business users can access MCP tools without installing Rust, configuring databases, or managing server processes"
+context = """
+Local MCP servers require technical setup on each user's machine - Rust toolchain,
+database credentials, process management. Remote deployment transforms your MCP
+server into a managed service that sales, analysts, and support teams can access
+through Claude.ai without any technical setup.
+"""
+id = "a7b1c2d3-e4f5-6789-abcd-ef1234560701"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why should MCP servers run 'close to the data' they access?"
+prompt.distractors = [
+    "To reduce cloud provider costs",
+    "To avoid firewall configuration",
+    "To simplify deployment scripts"
+]
+answer.answer = "Network latency to databases is ~1ms in the same VPC versus ~50-200ms from a user's laptop, making queries 100x faster"
+context = """
+MCP servers often make multiple database queries per tool call. When running in
+the same AWS VPC as RDS, latency is ~1ms per query. From a user's laptop over
+the internet, it's 50-200ms. For 10 queries, that's 10ms vs 500-2000ms - a
+dramatic difference in user experience.
+"""
+id = "a7b1c2d3-e4f5-6789-abcd-ef1234560702"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the key difference between Lambda's and Cloud Run's concurrency models?"
+prompt.distractors = [
+    "Lambda supports async/await but Cloud Run doesn't",
+    "Cloud Run has faster cold starts than Lambda",
+    "Lambda uses containers but Cloud Run uses functions"
+]
+answer.answer = "Lambda handles 1 request per instance (scales horizontally); Cloud Run handles many concurrent requests per container"
+context = """
+Lambda spawns a new instance for each concurrent request - 100 concurrent requests
+means 100 Lambda instances. Cloud Run runs a container that handles up to 80
+concurrent requests internally using async runtime. This affects scaling behavior
+and how you design stateful operations.
+"""
+id = "a7b1c2d3-e4f5-6789-abcd-ef1234560703"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why does Rust have significantly lower cold start times than Python on AWS Lambda?"
+prompt.distractors = [
+    "Rust uses a faster JIT compiler",
+    "Lambda gives Rust more memory by default",
+    "Python requires more API Gateway configuration"
+]
+answer.answer = "Rust compiles to native machine code with no interpreter startup or JIT warmup required"
+context = """
+Rust cold starts are ~50-100ms on Lambda versus ~500-1500ms for Python. Rust
+compiles to a native binary that starts immediately. Python must load the
+interpreter, import modules, and warm up. This directly translates to lower
+costs (Lambda charges per GB-second) and better user experience.
+"""
+id = "a7b1c2d3-e4f5-6789-abcd-ef1234560704"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What is Cloudflare Workers' compilation target that allows Rust code to run at the edge?"
+answer.answer = "WebAssembly"
+answer.alternatives = ["WASM", "wasm", "Web Assembly", "webassembly"]
+context = """
+Cloudflare Workers runs WebAssembly (WASM) on V8 isolates at 300+ edge locations.
+Rust has first-class WASM support via the wasm32-unknown-unknown target. The
+compiled WASM runs at near-native speed with sub-millisecond cold starts because
+V8 isolates spin up in microseconds, not the hundreds of milliseconds containers require.
+"""
+id = "a7b1c2d3-e4f5-6789-abcd-ef1234560705"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Which deployment target is most cost-effective for high-volume workloads (100M+ requests/month)?"
+prompt.distractors = [
+    "AWS Lambda because of reserved concurrency discounts",
+    "Google Cloud Run because containers are more efficient",
+    "All three cost approximately the same at high volume"
+]
+answer.answer = "Cloudflare Workers at ~$50/month versus Lambda's ~$140 or Cloud Run's ~$250"
+context = """
+At 100M requests/month, Workers costs about $50 (flat $5 base + $0.50 per million
+after first 10M). Lambda scales linearly to ~$140. Cloud Run's per-second billing
+accumulates to ~$250. Workers' request-based pricing becomes extremely cost-effective
+at scale, especially since egress is free.
+"""
+id = "a7b1c2d3-e4f5-6789-abcd-ef1234560706"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What hidden cost often dominates for MCP servers returning large responses?"
+prompt.distractors = [
+    "Cold start provisioning fees",
+    "SSL certificate renewal",
+    "CloudWatch log storage"
+]
+answer.answer = "Data transfer (egress) at $0.09/GB on AWS, which can exceed compute costs for data-heavy responses"
+context = """
+AWS charges $0.09/GB for data leaving Lambda. If your MCP server returns 10KB
+responses at 1M requests/month, that's 10GB = $0.90 in egress. For larger
+responses or higher volume, egress can exceed compute costs. Cloudflare notably
+includes unlimited egress in their pricing.
+"""
+id = "a7b1c2d3-e4f5-6789-abcd-ef1234560707"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why is using ARM64 (Graviton2) recommended for Rust Lambda functions?"
+prompt.distractors = [
+    "ARM64 supports more concurrent executions",
+    "ARM64 has better WASM compatibility",
+    "ARM64 is required for VPC access"
+]
+answer.answer = "ARM64 is 20% cheaper per GB-second and Rust compiles to efficient ARM code with equal or better performance"
+context = """
+AWS Lambda on ARM64 costs $0.0000133334 per GB-second versus $0.0000166667 for x86 -
+a 20% savings. Rust's LLVM backend generates optimized ARM64 code, often matching
+or exceeding x86 performance. cargo pmcp deploy uses ARM64 by default for cost optimization.
+"""
+id = "a7b1c2d3-e4f5-6789-abcd-ef1234560708"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the correct way to store database credentials for a Lambda MCP server?"
+prompt.distractors = [
+    "In .pmcp/deploy.toml under [lambda.environment]",
+    "In a .env file committed to the repository",
+    "Hardcoded in the Rust source code with #[cfg(prod)]"
+]
+answer.answer = "In AWS Secrets Manager, retrieved at runtime with credentials cached in a static OnceCell"
+context = """
+Never store secrets in code, config files, or environment variables that appear in
+logs. Use AWS Secrets Manager to store credentials securely. In Lambda, retrieve
+secrets during cold start and cache them in a static OnceCell for reuse across
+warm invocations. This keeps secrets out of source control and config files.
+"""
+id = "a7b1c2d3-e4f5-6789-abcd-ef1234560709"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the purpose of placing a Lambda function in a VPC private subnet?"
+prompt.distractors = [
+    "To improve Lambda cold start performance",
+    "To enable OAuth authentication with Cognito",
+    "To reduce data transfer costs"
+]
+answer.answer = "To access private resources like RDS databases that have no public internet exposure"
+context = """
+VPC-attached Lambda functions can reach resources in private subnets - like RDS
+databases configured with publiclyAccessible: false. The database never exposes
+a public endpoint; only resources within the VPC (or peered VPCs) can connect.
+This is a critical security boundary for production deployments.
+"""
+id = "a7b1c2d3-e4f5-6789-abcd-ef1234560710"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the difference between authentication and authorization in MCP security?"
+prompt.distractors = [
+    "Authentication uses OAuth; authorization uses API keys",
+    "Authentication is server-side; authorization is client-side",
+    "Authentication is for tools; authorization is for resources"
+]
+answer.answer = "Authentication verifies WHO is making the request; authorization determines WHAT they can access"
+context = """
+Authentication (OAuth tokens, API keys) establishes identity - this request is from
+user alice@company.com. Authorization checks permissions - does Alice have the
+'mcp:write' scope to call the delete_item tool? Both are required: knowing who
+made the request is useless without enforcing what they're allowed to do.
+"""
+id = "a7b1c2d3-e4f5-6789-abcd-ef1234560711"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What SQL vulnerability is prevented by using parameterized queries instead of string concatenation?"
+answer.answer = "SQL injection"
+answer.alternatives = ["sql injection", "SQLi", "sqli", "injection", "SQL Injection"]
+context = """
+String concatenation like format!('SELECT * FROM users WHERE name = '{}'', input.name)
+allows attackers to inject SQL: input '; DROP TABLE users; --. Parameterized
+queries separate SQL structure from data - the database treats user input as
+literal values, never as SQL commands. Always use .bind() with sqlx.
+"""
+id = "a7b1c2d3-e4f5-6789-abcd-ef1234560712"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What managed hosting service does PMCP offer for teams that don't want to manage cloud infrastructure?"
+prompt.distractors = [
+    "pmcp.io with automatic AWS Lambda deployment",
+    "pmcp.cloud with Kubernetes orchestration",
+    "pmcp.deploy with multi-cloud abstraction"
+]
+answer.answer = "pmcp.run with public hosting and enterprise private deployment options"
+context = """
+pmcp.run is a managed hosting service for PMCP servers. The public option provides
+a URL like https://api.pmcp.run/your-server/mcp with automatic HTTPS, scaling,
+and OAuth. Enterprise customers get dedicated infrastructure, VPC peering, SSO
+integration, and SLA guarantees. Deploy with: cargo pmcp deploy --target pmcp-run
+"""
+id = "a7b1c2d3-e4f5-6789-abcd-ef1234560713"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Which deployment target has the fastest cold starts at ~0-5ms?"
+prompt.distractors = [
+    "AWS Lambda with provisioned concurrency",
+    "Google Cloud Run with minimum instances",
+    "AWS Lambda with ARM64 architecture"
+]
+answer.answer = "Cloudflare Workers because V8 isolates spin up in microseconds, not milliseconds"
+context = """
+Workers uses V8 isolates, not containers or microVMs. Isolates are extremely
+lightweight - they share the V8 engine and spin up in microseconds. Lambda
+cold starts are 50-150ms (microVM + runtime init), Cloud Run is 100-500ms
+(container startup). Workers' sub-millisecond cold starts are unmatched.
+"""
+id = "a7b1c2d3-e4f5-6789-abcd-ef1234560714"
