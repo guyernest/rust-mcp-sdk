@@ -1,0 +1,247 @@
+# Quiz: Local Testing
+
+id = "ch11-local-testing"
+title = "Local MCP Server Testing"
+lesson_id = "ch11"
+pass_threshold = 0.7
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the primary purpose of MCP Inspector?"
+prompt.distractors = [
+    "Running automated test suites in CI/CD",
+    "Generating test scenarios from schemas",
+    "Performance benchmarking MCP servers"
+]
+answer.answer = "Interactive debugging and manual exploration of MCP server behavior during development"
+context = """
+MCP Inspector is a visual debugging tool that connects to MCP servers and provides
+real-time protocol visibility, interactive tool execution, and schema exploration.
+It excels at manual exploration and debugging during development, while mcp-tester
+handles automated testing for CI/CD pipelines.
+"""
+id = "e11a2b3c-d4e5-6789-abcd-123456781101"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What testing approach does mcp-tester use to generate test scenarios?"
+prompt.distractors = [
+    "Manual test case definition only",
+    "Random fuzzing of all parameters",
+    "Record and playback of user sessions"
+]
+answer.answer = "Schema-driven test generation from the MCP server's JSON Schema"
+context = """
+mcp-tester generates test scenarios by introspecting the MCP server's JSON Schema.
+It analyzes input schemas to automatically create valid inputs, invalid inputs,
+edge cases, and type validation tests. This approach ensures comprehensive coverage
+without manual test case writing.
+"""
+id = "e11a2b3c-d4e5-6789-abcd-123456781102"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What cargo command generates test scenarios from a running MCP server?"
+answer.answer = "cargo pmcp test generate"
+answer.alternatives = ["pmcp test generate", "cargo pmcp test generate --server"]
+context = """
+The 'cargo pmcp test generate' command connects to a running MCP server, introspects
+its schema, and automatically generates YAML test scenario files. Options include
+--output to specify the directory, --edge-cases for depth level, and --tools to
+generate for specific tools only.
+"""
+id = "e11a2b3c-d4e5-6789-abcd-123456781103"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "In the testing pyramid for MCP servers, which tests should be most numerous?"
+prompt.distractors = [
+    "End-to-end tests with MCP Inspector",
+    "mcp-tester integration tests",
+    "Claude Desktop user acceptance tests"
+]
+answer.answer = "Rust unit tests for tool logic and input validation"
+context = """
+The testing pyramid for MCP servers has unit tests at the base, which should be
+the most numerous. These test tool logic in isolation and run fastest. mcp-tester
+integration tests are in the middle, and E2E tests with Inspector or Claude Desktop
+are at the top (fewest but most comprehensive).
+"""
+id = "e11a2b3c-d4e5-6789-abcd-123456781104"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What Rust crate enables property-based testing with random inputs?"
+prompt.distractors = [
+    "quicktest for rapid iterations",
+    "fuzzcheck for coverage-guided fuzzing",
+    "criterion for benchmarking"
+]
+answer.answer = "proptest for generating random inputs that satisfy properties"
+context = """
+The proptest crate enables property-based testing in Rust, generating random inputs
+that should satisfy invariants. It helps catch edge cases that manual tests miss.
+Use proptest! macro to define property tests with input ranges, then assert that
+properties hold for all generated values.
+"""
+id = "e11a2b3c-d4e5-6789-abcd-123456781105"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What file format does mcp-tester use for test scenario definitions?"
+prompt.distractors = [
+    "JSON files with test cases",
+    "TOML files with assertions",
+    "Rust source files with test functions"
+]
+answer.answer = "YAML files with steps, inputs, and assertions"
+context = """
+mcp-tester uses YAML format for test scenario files. Each file contains a name,
+description, tags, and a list of steps. Each step specifies a tool name, input
+parameters, and expected outcomes (assertions). YAML's readability makes it easy
+to review and edit generated scenarios.
+"""
+id = "e11a2b3c-d4e5-6789-abcd-123456781106"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What assertion type checks if a response contains specific text?"
+answer.answer = "contains"
+answer.alternatives = ["content.contains", "contains:", "message_contains"]
+context = """
+The 'contains' assertion checks if the response content includes specific text.
+In scenario files: expect.content.contains: 'expected text'. This is useful for
+partial matching when you don't want to assert the entire response, just that
+it includes certain key information.
+"""
+id = "e11a2b3c-d4e5-6789-abcd-123456781107"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the purpose of variable capture in mcp-tester scenarios?"
+prompt.distractors = [
+    "Storing test results for later analysis",
+    "Caching responses to speed up tests",
+    "Recording session replays"
+]
+answer.answer = "Extracting values from responses to use in subsequent test steps"
+context = """
+Variable capture allows extracting values from one step's response to use in
+later steps. Use capture: { var_name: '$.path.to.value' } with JSONPath syntax,
+then reference as ${var_name} in subsequent inputs. This enables multi-step
+workflows like Create → Read → Update → Delete testing.
+"""
+id = "e11a2b3c-d4e5-6789-abcd-123456781108"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Which command connects MCP Inspector to a server using HTTP transport?"
+prompt.distractors = [
+    "mcp-inspector connect --http localhost:3000",
+    "npx inspector http://localhost:3000",
+    "cargo inspect --transport http localhost:3000"
+]
+answer.answer = "npx @anthropic/mcp-inspector http://localhost:3000/mcp"
+context = """
+MCP Inspector is installed and run via npm. Use 'npx @anthropic/mcp-inspector URL'
+to connect to an HTTP endpoint. For SSE transport, add --transport sse. For stdio,
+use --transport stdio with the server command. Add --header for authentication.
+"""
+id = "e11a2b3c-d4e5-6789-abcd-123456781109"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What test category is generated for boundary values like minimum and maximum integers?"
+prompt.distractors = [
+    "_valid tests for happy path scenarios",
+    "_invalid tests for error conditions",
+    "_types tests for type coercion"
+]
+answer.answer = "_edge tests for boundary conditions and extreme values"
+context = """
+Schema-driven generation creates _edge tests for boundary conditions including
+minimum/maximum values (integers at INT_MIN/INT_MAX), empty strings, maximum-length
+strings, arrays at minimum/maximum size, and values just inside/outside boundaries.
+These catch off-by-one errors and overflow conditions.
+"""
+id = "e11a2b3c-d4e5-6789-abcd-123456781110"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What attribute marks a Rust function as an async test with tokio runtime?"
+prompt.distractors = [
+    "#[test] with async fn",
+    "#[async_test] from async-std",
+    "#[runtime::test] for multi-threaded"
+]
+answer.answer = "#[tokio::test] which sets up a tokio runtime for the test"
+context = """
+Use #[tokio::test] to write async tests with the tokio runtime. This attribute
+creates a runtime for each test, handles .await calls, and supports async setup
+and teardown. For database tests or HTTP clients, this is essential since most
+MCP operations are async.
+"""
+id = "e11a2b3c-d4e5-6789-abcd-123456781111"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What mcp-tester flag stops test execution on the first failure?"
+answer.answer = "--fail-fast"
+answer.alternatives = ["fail-fast", "-f", "--failfast"]
+context = """
+The --fail-fast flag stops test execution immediately when any test fails.
+This is useful for CI/CD to fail fast and save time, or for debugging to
+examine the failure state. Without it, all tests run and report all failures.
+"""
+id = "e11a2b3c-d4e5-6789-abcd-123456781112"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "When should you use MCP Inspector vs mcp-tester?"
+prompt.distractors = [
+    "Inspector for CI/CD, mcp-tester for development",
+    "Inspector for performance testing, mcp-tester for debugging",
+    "Inspector for regression testing, mcp-tester for exploration"
+]
+answer.answer = "Inspector for interactive debugging during development, mcp-tester for automated CI/CD testing"
+context = """
+Use MCP Inspector during development for interactive debugging, exploring schemas,
+testing individual tools, and reproducing bugs. Use mcp-tester for automated
+testing in CI/CD pipelines, regression testing, and comprehensive test coverage.
+They complement each other in the development workflow.
+"""
+id = "e11a2b3c-d4e5-6789-abcd-123456781113"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What output format should mcp-tester use for CI/CD integration?"
+prompt.distractors = [
+    "JSON for machine readability",
+    "TAP (Test Anything Protocol)",
+    "Plain text for human readability"
+]
+answer.answer = "JUnit XML format which is supported by all major CI systems"
+context = """
+JUnit XML is the standard format for CI/CD test results. Use --format junit
+--output results.xml to generate JUnit format. GitHub Actions, GitLab CI,
+Jenkins, and other CI systems can parse JUnit XML to display test results,
+track trends, and annotate PRs with failures.
+"""
+id = "e11a2b3c-d4e5-6789-abcd-123456781114"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What does the proptest macro prop_assert! do differently from assert!?"
+prompt.distractors = [
+    "It runs assertions in parallel for speed",
+    "It logs assertion failures to a file",
+    "It retries failed assertions automatically"
+]
+answer.answer = "It reports failures as shrunk minimal test cases instead of panicking"
+context = """
+prop_assert! works with proptest's shrinking mechanism. When an assertion fails,
+proptest automatically tries to find the smallest/simplest input that still
+causes the failure. This makes debugging easier since you see minimal failing
+examples rather than complex random values.
+"""
+id = "e11a2b3c-d4e5-6789-abcd-123456781115"

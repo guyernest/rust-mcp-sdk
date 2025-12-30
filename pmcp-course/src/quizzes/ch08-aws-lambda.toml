@@ -1,0 +1,234 @@
+# Quiz: AWS Lambda Deployment
+
+id = "ch08-aws-lambda"
+title = "AWS Lambda MCP Deployment"
+lesson_id = "ch08"
+pass_threshold = 0.7
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What AWS service does Lambda Web Adapter enable MCP servers to use for HTTP handling?"
+prompt.distractors = [
+    "AWS AppSync for GraphQL",
+    "AWS ELB for load balancing",
+    "AWS CloudFront for CDN"
+]
+answer.answer = "API Gateway for REST/HTTP endpoints, allowing standard web frameworks like axum to run on Lambda"
+context = """
+Lambda Web Adapter is an AWS-provided extension that converts API Gateway events
+to standard HTTP requests. This lets you use axum, actix-web, or other Rust web
+frameworks unchanged on Lambda. Your MCP server handles HTTP requests normally
+while Lambda manages scaling, invocation, and billing.
+"""
+id = "b8c2d3e4-f5a6-7890-bcde-f12345670801"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why is the provided_al2023 runtime recommended for Rust Lambda functions?"
+prompt.distractors = [
+    "It includes the Rust compiler for JIT compilation",
+    "It has pre-installed AWS SDK libraries",
+    "It supports multi-threaded execution"
+]
+answer.answer = "It's a minimal Amazon Linux 2023 runtime for custom binaries with fast cold starts and small size"
+context = """
+The provided.al2023 runtime is AWS's custom runtime for compiled languages. Unlike
+managed runtimes (Python, Node.js), it just executes your binary directly with
+minimal overhead. Combined with Rust's native compilation, this delivers cold
+starts of 50-100ms - much faster than interpreted language runtimes.
+"""
+id = "b8c2d3e4-f5a6-7890-bcde-f12345670802"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What IAM role type does a Lambda function use to access AWS services like Secrets Manager and RDS?"
+answer.answer = "execution role"
+answer.alternatives = ["ExecutionRole", "execution-role", "lambda execution role", "IAM execution role"]
+context = """
+Every Lambda function has an execution role - an IAM role that grants permissions
+to access AWS services. When your MCP server calls Secrets Manager or connects
+to RDS via IAM authentication, Lambda assumes this role. The principle of least
+privilege applies: only grant permissions the function actually needs.
+"""
+id = "b8c2d3e4-f5a6-7890-bcde-f12345670803"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the purpose of placing a Lambda function in a VPC with private subnets?"
+prompt.distractors = [
+    "To reduce cold start times through connection pooling",
+    "To enable CloudWatch logging for security compliance",
+    "To automatically scale to more concurrent executions"
+]
+answer.answer = "To access private resources like RDS databases that have no public internet exposure"
+context = """
+VPC-attached Lambda functions can reach resources in private subnets that have
+no public IP addresses. Your RDS instance can be completely isolated from the
+internet while remaining accessible to Lambda. This is a critical security
+boundary - the database attack surface is reduced to only VPC-internal traffic.
+"""
+id = "b8c2d3e4-f5a6-7890-bcde-f12345670804"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "How should an MCP Lambda function handle database connections across warm invocations?"
+prompt.distractors = [
+    "Create a new connection for each request to avoid stale connections",
+    "Use environment variables to pass connection strings",
+    "Disable connection pooling since Lambda handles scaling"
+]
+answer.answer = "Initialize the connection pool in a static OnceCell during cold start and reuse across invocations"
+context = """
+Lambda warm invocations reuse the same execution environment. A connection pool
+initialized in a static OnceCell persists across requests - no reconnection
+overhead. This is crucial for database-heavy MCP servers: establishing a new
+Postgres connection takes ~50-100ms, while reusing an existing one takes <1ms.
+"""
+id = "b8c2d3e4-f5a6-7890-bcde-f12345670805"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the recommended way to handle secrets like database passwords in Lambda MCP servers?"
+prompt.distractors = [
+    "Store in Lambda environment variables encrypted with KMS",
+    "Embed in the deployment package with compile-time encryption",
+    "Pass through API Gateway headers from the client"
+]
+answer.answer = "Retrieve from AWS Secrets Manager at cold start and cache in memory for warm invocations"
+context = """
+Secrets Manager provides secure storage with automatic rotation support. Fetching
+secrets at cold start and caching them avoids per-request API calls (and costs).
+Never put secrets in environment variables - they appear in CloudWatch logs and
+the Lambda console. Secrets Manager also integrates with RDS for auto-rotation.
+"""
+id = "b8c2d3e4-f5a6-7890-bcde-f12345670806"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What AWS service provides managed OAuth 2.0 authentication for Lambda APIs?"
+answer.answer = "Cognito"
+answer.alternatives = ["AWS Cognito", "Amazon Cognito", "cognito"]
+context = """
+AWS Cognito provides user pools for authentication and identity pools for
+authorization. API Gateway can be configured to validate Cognito JWT tokens
+before invoking Lambda - invalid tokens are rejected at the gateway level.
+Cognito supports OAuth 2.0 flows, including the authorization code flow
+required by Claude Desktop and Claude.ai.
+"""
+id = "b8c2d3e4-f5a6-7890-bcde-f12345670807"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What API Gateway integration type preserves the full HTTP request for web frameworks on Lambda?"
+prompt.distractors = [
+    "REST API with Lambda proxy disabled",
+    "WebSocket API with direct integration",
+    "GraphQL API with AppSync resolver"
+]
+answer.answer = "HTTP API (v2) with Lambda proxy integration, which passes the complete request to the function"
+context = """
+HTTP APIs (API Gateway v2) with Lambda proxy integration pass the full HTTP
+request - method, headers, body, path - to your function. Lambda Web Adapter
+then converts this to a standard HTTP request your axum/actix server understands.
+REST APIs (v1) also work but cost more and have higher latency.
+"""
+id = "b8c2d3e4-f5a6-7890-bcde-f12345670808"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why are Rust Lambda functions typically more cost-effective than Python equivalents?"
+prompt.distractors = [
+    "AWS offers discounted pricing for compiled languages",
+    "Rust functions can use smaller memory allocations",
+    "Python functions require additional Lambda layers"
+]
+answer.answer = "Rust's faster execution (3-10x) and lower memory usage means lower GB-second charges"
+context = """
+Lambda bills per GB-second: memory allocated × execution time. Rust executes
+3-10x faster than Python for typical workloads and often needs less memory.
+A 200ms Python function at 512MB costs the same as a 20ms Rust function at 512MB -
+but you can often run Rust at 128MB, making it 20-40x cheaper per invocation.
+"""
+id = "b8c2d3e4-f5a6-7890-bcde-f12345670809"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What CloudWatch metric should you monitor to detect if your Lambda MCP server needs provisioned concurrency?"
+prompt.distractors = [
+    "IteratorAge for processing lag",
+    "Errors for function failures",
+    "Duration for execution time"
+]
+answer.answer = "ConcurrentExecutions approaching your account limit, combined with frequent cold starts"
+context = """
+If ConcurrentExecutions frequently spikes and you see many cold starts in logs
+(init Duration in CloudWatch), users are experiencing latency. Provisioned
+concurrency keeps instances warm, eliminating cold starts for those instances.
+Monitor Init Duration percentiles - if p99 is high and frequent, consider
+provisioned concurrency.
+"""
+id = "b8c2d3e4-f5a6-7890-bcde-f12345670810"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the OAuth flow that Claude Desktop uses to authenticate with Lambda MCP servers?"
+prompt.distractors = [
+    "Client credentials flow with API key",
+    "Implicit flow with access token in URL",
+    "Resource owner password flow"
+]
+answer.answer = "Authorization code flow with PKCE for secure token exchange"
+context = """
+Claude Desktop uses the authorization code flow with PKCE (Proof Key for Code
+Exchange). The user is redirected to your Cognito login page, authenticates,
+and Cognito returns an authorization code. Claude exchanges this code for
+access and refresh tokens. PKCE prevents authorization code interception attacks.
+"""
+id = "b8c2d3e4-f5a6-7890-bcde-f12345670811"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What cargo command deploys a PMCP server to AWS Lambda?"
+answer.answer = "cargo pmcp deploy lambda"
+answer.alternatives = ["cargo pmcp deploy aws", "pmcp deploy lambda", "cargo pmcp deploy --target lambda"]
+context = """
+The cargo pmcp CLI handles Lambda deployment: building for ARM64, packaging with
+Lambda Web Adapter, creating/updating the function, and configuring API Gateway.
+Run 'cargo pmcp deploy lambda --region us-east-1' for a specific region. The CLI
+reads configuration from .pmcp/deploy.toml for customization.
+"""
+id = "b8c2d3e4-f5a6-7890-bcde-f12345670812"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "How does Claude.ai connect to authenticated Lambda MCP servers differently than Claude Desktop?"
+prompt.distractors = [
+    "Claude.ai uses API keys while Desktop uses OAuth",
+    "Claude.ai connects via WebSocket while Desktop uses HTTP",
+    "Claude.ai requires enterprise accounts while Desktop is free"
+]
+answer.answer = "Claude.ai shows an OAuth consent screen in-browser; Desktop opens the system browser for OAuth"
+context = """
+Both use OAuth, but the UX differs. Claude.ai renders the OAuth consent screen
+in an iframe within the web interface. Claude Desktop launches your system's
+default browser for authentication, then receives tokens via a local callback.
+Both result in the same access token being used for API requests.
+"""
+id = "b8c2d3e4-f5a6-7890-bcde-f12345670813"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the maximum execution timeout for AWS Lambda functions?"
+prompt.distractors = [
+    "5 minutes",
+    "30 minutes",
+    "60 minutes"
+]
+answer.answer = "15 minutes (900 seconds)"
+context = """
+Lambda functions can run for up to 15 minutes per invocation. For MCP servers,
+this is usually sufficient since tool calls should be quick. If you need longer
+execution times, consider Step Functions for orchestration or Cloud Run which
+supports up to 60 minutes. Long-running operations should return progress updates.
+"""
+id = "b8c2d3e4-f5a6-7890-bcde-f12345670814"

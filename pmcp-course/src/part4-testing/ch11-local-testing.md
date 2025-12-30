@@ -1,373 +1,589 @@
 # Local Testing
 
-Testing is what separates professional MCP servers from demos. This chapter covers local testing strategies using MCP Inspector and mcp-tester.
+Testing is what separates professional MCP servers from demos. This chapter covers comprehensive local testing strategies including Rust unit tests, MCP Inspector for interactive debugging, and mcp-tester for automated testing.
 
-## The Testing Problem
+## Learning Objectives
 
-MCP servers are challenging to test because:
-- They communicate via JSON-RPC over HTTP/WebSocket
-- Tools have complex input schemas
-- Responses are structured but flexible
-- Errors must be properly formatted
-- Integration with AI clients is the real goal
+By the end of this chapter, you will:
+- Write effective unit tests for MCP tool logic
+- Use MCP Inspector for interactive debugging
+- Generate test scenarios from server schemas with mcp-tester
+- Create comprehensive test suites covering happy paths, errors, and edge cases
+- Integrate tests into your development workflow
 
-Manual testing with copy-paste JSON is tedious and error-prone.
+## The Testing Pyramid for MCP Servers
 
-## MCP Inspector: Interactive Testing
-
-MCP Inspector is the official debugging tool for MCP servers.
-
-### Starting Inspector
-
-```bash
-# Connect to a local server
-npx @modelcontextprotocol/inspector http://localhost:3000
-
-# With SSE transport
-npx @modelcontextprotocol/inspector --transport sse http://localhost:3000/sse
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    MCP Testing Pyramid                              │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│                          ┌─────────┐                               │
+│                         /  E2E     \         MCP Inspector         │
+│                        /  Testing   \        Claude Desktop        │
+│                       /─────────────\                              │
+│                      /   mcp-tester  \       Scenario files        │
+│                     /   Integration   \      API testing           │
+│                    /───────────────────\                           │
+│                   /    Rust Unit Tests  \    Tool logic            │
+│                  /   Property Tests      \   Input validation      │
+│                 /─────────────────────────\                        │
+│                                                                     │
+│  More tests at base, fewer at top                                  │
+│  Base runs fastest, top runs slowest                               │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-This opens a web UI at `http://localhost:5173` (or similar).
+## Rust Unit Tests
 
-### Inspector Features
+Before testing MCP protocol interactions, test your core tool logic with standard Rust tests.
 
-**Server Info Tab**
-- Server name and version
-- Capabilities (tools, resources, prompts)
-- Protocol version
+### Testing Tool Logic
 
-**Tools Tab**
-- List of all registered tools
-- Input schema visualization
-- Interactive tool execution
-- Response display
+```rust
+// src/tools/calculator.rs
+pub fn add(a: f64, b: f64) -> f64 {
+    a + b
+}
 
-**Resources Tab**
-- Available resources and templates
-- Resource content preview
-- URI pattern testing
+pub fn divide(a: f64, b: f64) -> Result<f64, CalculatorError> {
+    if b == 0.0 {
+        return Err(CalculatorError::DivisionByZero);
+    }
+    Ok(a / b)
+}
 
-**Messages Tab**
-- Raw JSON-RPC message log
-- Request/response pairs
-- Error messages
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-### When to Use Inspector
+    #[test]
+    fn test_add_positive_numbers() {
+        assert_eq!(add(2.0, 3.0), 5.0);
+    }
 
-✅ Good for:
-- Initial development and debugging
-- Schema exploration
-- One-off testing
-- Demonstrating functionality
+    #[test]
+    fn test_add_negative_numbers() {
+        assert_eq!(add(-2.0, -3.0), -5.0);
+    }
 
-❌ Not good for:
-- Automated testing
-- CI/CD pipelines
-- Regression testing
-- Load testing
+    #[test]
+    fn test_add_mixed_signs() {
+        assert_eq!(add(-2.0, 3.0), 1.0);
+    }
 
-## mcp-tester: Automated Testing
+    #[test]
+    fn test_divide_normal() {
+        assert_eq!(divide(10.0, 2.0).unwrap(), 5.0);
+    }
 
-mcp-tester is part of cargo-pmcp and enables automated, reproducible testing.
+    #[test]
+    fn test_divide_by_zero() {
+        assert!(matches!(
+            divide(10.0, 0.0),
+            Err(CalculatorError::DivisionByZero)
+        ));
+    }
 
-### Basic Usage
-
-```bash
-# Run tests against a local server
-cargo pmcp test run --server calculator --transport http
-
-# Generate test scenarios from schema
-cargo pmcp test generate --server calculator
-```
-
-### Test Scenario Format
-
-Test scenarios are YAML files:
-
-```yaml
-# tests/calculator/add_numbers.yaml
-name: "Add positive numbers"
-description: "Verify addition of two positive numbers"
-
-steps:
-  - tool: add
-    input:
-      a: 10
-      b: 5
-    expect:
-      result: 15
-      description: "10 + 5 = 15"
-
-  - tool: add
-    input:
-      a: 0
-      b: 0
-    expect:
-      result: 0
-```
-
-### Schema-Driven Test Generation
-
-The killer feature of mcp-tester is automatic test generation:
-
-```bash
-cargo pmcp test generate --server db-explorer --output tests/db-explorer/
-```
-
-This generates:
-- **Happy path tests**: Valid inputs for each tool
-- **Edge case tests**: Boundary values, empty inputs
-- **Error tests**: Invalid inputs that should fail
-- **Type tests**: Wrong types, missing required fields
-
-### Example Generated Tests
-
-For a `query` tool with this schema:
-
-```json
-{
-  "type": "object",
-  "properties": {
-    "query": { "type": "string", "pattern": "^SELECT" },
-    "limit": { "type": "integer", "minimum": 1, "maximum": 1000 }
-  },
-  "required": ["query"]
+    #[test]
+    fn test_divide_zero_numerator() {
+        assert_eq!(divide(0.0, 5.0).unwrap(), 0.0);
+    }
 }
 ```
 
-mcp-tester generates:
-
-```yaml
-# generated/query_valid.yaml
-name: "query - valid inputs"
-steps:
-  - tool: query
-    input:
-      query: "SELECT * FROM users"
-      limit: 100
-    expect:
-      success: true
-
-# generated/query_invalid.yaml
-name: "query - invalid inputs"
-steps:
-  - tool: query
-    input:
-      query: "DROP TABLE users"
-    expect:
-      error:
-        code: -32602  # Invalid params
-
-  - tool: query
-    input:
-      query: "SELECT * FROM users"
-      limit: 0  # Below minimum
-    expect:
-      error:
-        code: -32602
-
-  - tool: query
-    input:
-      limit: 100  # Missing required 'query'
-    expect:
-      error:
-        code: -32602
-```
-
-### Running Test Suites
-
-```bash
-# Run all tests for a server
-cargo pmcp test run --server calculator
-
-# Run specific test file
-cargo pmcp test run --server calculator --scenario tests/calculator/add_numbers.yaml
-
-# Verbose output
-cargo pmcp test run --server calculator --verbose
-
-# JSON output for CI
-cargo pmcp test run --server calculator --format json
-```
-
-### Test Output
-
-```
-Running tests for calculator server...
-
-✓ add_numbers (3 steps)
-✓ subtract_numbers (2 steps)
-✓ divide_by_zero_error (1 step)
-✗ multiply_large_numbers (1 step)
-  └── Expected result: 1000000000000
-      Actual result:   999999999999.9999
-
-3 passed, 1 failed
-```
-
-## Writing Effective Tests
-
-### Test Categories
-
-**1. Happy Path Tests**
-Normal usage with valid inputs:
-
-```yaml
-name: "Query customers successfully"
-steps:
-  - tool: query
-    input:
-      query: "SELECT name, email FROM customers LIMIT 5"
-    expect:
-      row_count: 5
-      truncated: false
-```
-
-**2. Error Handling Tests**
-Verify proper error responses:
-
-```yaml
-name: "Query rejects dangerous SQL"
-steps:
-  - tool: query
-    input:
-      query: "DROP TABLE customers"
-    expect:
-      error:
-        message: "Only SELECT queries are allowed"
-```
-
-**3. Edge Case Tests**
-Boundary conditions and unusual inputs:
-
-```yaml
-name: "Query handles empty results"
-steps:
-  - tool: query
-    input:
-      query: "SELECT * FROM customers WHERE 1=0"
-    expect:
-      row_count: 0
-      rows: []
-```
-
-**4. Integration Tests**
-Multi-step workflows:
-
-```yaml
-name: "Create and retrieve customer"
-steps:
-  - tool: create_customer
-    input:
-      name: "Test Corp"
-      email: "test@example.com"
-    capture:
-      customer_id: "$.id"
-
-  - tool: get_customer
-    input:
-      id: "${customer_id}"
-    expect:
-      name: "Test Corp"
-```
-
-### Assertions
-
-mcp-tester supports various assertion types:
-
-```yaml
-# Exact match
-expect:
-  result: 42
-
-# Partial match (object contains these fields)
-expect:
-  contains:
-    status: "success"
-
-# Type checking
-expect:
-  type:
-    result: number
-    items: array
-
-# Regex matching
-expect:
-  matches:
-    message: "Created customer \\d+"
-
-# Comparisons
-expect:
-  row_count:
-    gte: 1
-    lte: 100
-```
-
-## Property-Based Testing
-
-For complex tools, consider property-based tests:
+### Testing Input Validation
 
 ```rust
+// src/tools/query.rs
+use regex::Regex;
+
+#[derive(Debug, thiserror::Error)]
+pub enum QueryError {
+    #[error("Only SELECT queries are allowed")]
+    NonSelectQuery,
+    #[error("Limit must be between 1 and 1000, got {0}")]
+    InvalidLimit(i32),
+    #[error("Query cannot be empty")]
+    EmptyQuery,
+}
+
+pub fn validate_query(query: &str, limit: Option<i32>) -> Result<(), QueryError> {
+    if query.trim().is_empty() {
+        return Err(QueryError::EmptyQuery);
+    }
+
+    let select_pattern = Regex::new(r"(?i)^\s*SELECT\b").unwrap();
+    if !select_pattern.is_match(query) {
+        return Err(QueryError::NonSelectQuery);
+    }
+
+    if let Some(l) = limit {
+        if l < 1 || l > 1000 {
+            return Err(QueryError::InvalidLimit(l));
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_select_query() {
+        assert!(validate_query("SELECT * FROM users", Some(100)).is_ok());
+    }
+
+    #[test]
+    fn test_select_case_insensitive() {
+        assert!(validate_query("select * from users", None).is_ok());
+        assert!(validate_query("Select id From users", None).is_ok());
+    }
+
+    #[test]
+    fn test_rejects_insert() {
+        assert!(matches!(
+            validate_query("INSERT INTO users VALUES (1)", None),
+            Err(QueryError::NonSelectQuery)
+        ));
+    }
+
+    #[test]
+    fn test_rejects_drop() {
+        assert!(matches!(
+            validate_query("DROP TABLE users", None),
+            Err(QueryError::NonSelectQuery)
+        ));
+    }
+
+    #[test]
+    fn test_limit_boundaries() {
+        assert!(validate_query("SELECT 1", Some(1)).is_ok());
+        assert!(validate_query("SELECT 1", Some(1000)).is_ok());
+        assert!(matches!(
+            validate_query("SELECT 1", Some(0)),
+            Err(QueryError::InvalidLimit(0))
+        ));
+        assert!(matches!(
+            validate_query("SELECT 1", Some(1001)),
+            Err(QueryError::InvalidLimit(1001))
+        ));
+    }
+
+    #[test]
+    fn test_empty_query() {
+        assert!(matches!(
+            validate_query("", None),
+            Err(QueryError::EmptyQuery)
+        ));
+        assert!(matches!(
+            validate_query("   ", None),
+            Err(QueryError::EmptyQuery)
+        ));
+    }
+}
+```
+
+### Testing MCP Response Formatting
+
+```rust
+// src/mcp/response.rs
+use serde_json::{json, Value};
+
+pub fn format_tool_result(data: impl serde::Serialize) -> Value {
+    json!({
+        "content": [{
+            "type": "text",
+            "text": serde_json::to_string_pretty(&data).unwrap_or_default()
+        }]
+    })
+}
+
+pub fn format_error_result(message: &str) -> Value {
+    json!({
+        "content": [{
+            "type": "text",
+            "text": format!("Error: {}", message)
+        }],
+        "isError": true
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_tool_result_with_struct() {
+        #[derive(serde::Serialize)]
+        struct QueryResult {
+            rows: Vec<String>,
+            count: usize,
+        }
+
+        let result = QueryResult {
+            rows: vec!["row1".to_string()],
+            count: 1,
+        };
+
+        let formatted = format_tool_result(result);
+
+        assert_eq!(formatted["content"][0]["type"], "text");
+        let text = formatted["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\"count\": 1"));
+    }
+
+    #[test]
+    fn test_format_error_result() {
+        let formatted = format_error_result("Division by zero");
+
+        assert_eq!(formatted["isError"], true);
+        let text = formatted["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Division by zero"));
+    }
+}
+```
+
+### Property-Based Testing with proptest
+
+For complex logic, property-based tests catch edge cases you might miss:
+
+```rust
+// src/tools/calculator.rs
+#[cfg(test)]
+mod property_tests {
+    use super::*;
     use proptest::prelude::*;
 
     proptest! {
         #[test]
-        fn add_is_commutative(a: f64, b: f64) {
-            let result1 = add(a, b);
-            let result2 = add(b, a);
-            prop_assert_eq!(result1, result2);
+        fn add_is_commutative(a in -1e10..1e10f64, b in -1e10..1e10f64) {
+            prop_assert!((add(a, b) - add(b, a)).abs() < 1e-10);
         }
 
         #[test]
-        fn query_always_respects_limit(limit in 1..1000i32) {
-            let result = query("SELECT * FROM big_table", limit);
-            prop_assert!(result.rows.len() <= limit as usize);
+        fn add_zero_is_identity(a in -1e10..1e10f64) {
+            prop_assert_eq!(add(a, 0.0), a);
+        }
+
+        #[test]
+        fn divide_then_multiply_returns_original(
+            a in -1e10..1e10f64,
+            b in prop::num::f64::NORMAL.prop_filter("non-zero", |x| x.abs() > 1e-10)
+        ) {
+            let result = divide(a, b).unwrap();
+            prop_assert!((result * b - a).abs() < 1e-6);
+        }
+
+        #[test]
+        fn limit_validation_respects_bounds(limit in -100..2000i32) {
+            let result = validate_query("SELECT 1", Some(limit));
+            if limit >= 1 && limit <= 1000 {
+                prop_assert!(result.is_ok());
+            } else {
+                prop_assert!(result.is_err());
+            }
         }
     }
 }
 ```
 
-## Continuous Testing During Development
+### Async Test Patterns
 
-Set up automatic testing:
+For database tools and async operations:
 
-```bash
-# Watch mode - rerun tests on file changes
-cargo watch -x "pmcp test run --server calculator"
+```rust
+// src/tools/database.rs
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::PgPool;
 
-# Or use cargo-watch with specific files
-cargo watch -w src/ -x "test" -x "pmcp test run --server calculator"
+    // Use test fixtures
+    async fn setup_test_db() -> PgPool {
+        let pool = PgPool::connect("postgres://test:test@localhost/test_db")
+            .await
+            .expect("Failed to connect to test database");
+
+        sqlx::query("CREATE TABLE IF NOT EXISTS test_users (id SERIAL, name TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        pool
+    }
+
+    async fn teardown_test_db(pool: &PgPool) {
+        sqlx::query("DROP TABLE IF EXISTS test_users")
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_query_returns_results() {
+        let pool = setup_test_db().await;
+
+        // Insert test data
+        sqlx::query("INSERT INTO test_users (name) VALUES ('Alice'), ('Bob')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Test the query function
+        let result = execute_query(&pool, "SELECT * FROM test_users", 10).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 2);
+
+        teardown_test_db(&pool).await;
+    }
+
+    #[tokio::test]
+    async fn test_query_respects_limit() {
+        let pool = setup_test_db().await;
+
+        // Insert more data than limit
+        for i in 0..20 {
+            sqlx::query(&format!("INSERT INTO test_users (name) VALUES ('User{}')", i))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let result = execute_query(&pool, "SELECT * FROM test_users", 5).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 5);
+
+        teardown_test_db(&pool).await;
+    }
+}
 ```
 
-## Test Coverage
-
-Track which tools and code paths are tested:
+### Running Unit Tests
 
 ```bash
-# Generate coverage report
-cargo pmcp test run --server calculator --coverage
+# Run all tests
+cargo test
 
-# Output
-Tool Coverage:
-  add:       100% (5 scenarios)
-  subtract:  100% (3 scenarios)
-  multiply:   80% (4 scenarios, missing: negative numbers)
-  divide:    100% (6 scenarios, including error cases)
+# Run tests with output
+cargo test -- --nocapture
 
-Overall: 95% tool coverage
+# Run specific test module
+cargo test tools::calculator
+
+# Run tests matching a pattern
+cargo test divide
+
+# Run tests with coverage (requires cargo-tarpaulin)
+cargo tarpaulin --out Html
 ```
+
+## MCP Inspector: Interactive Testing
+
+MCP Inspector is essential for development but not for automation. See [MCP Inspector Deep Dive](./ch11-01-inspector.md) for detailed coverage.
+
+### Quick Start
+
+```bash
+# Install Inspector
+npm install -g @anthropic/mcp-inspector
+
+# Start your server
+cargo run --release
+
+# Connect Inspector (HTTP transport)
+npx @anthropic/mcp-inspector http://localhost:3000/mcp
+
+# Connect with SSE transport
+npx @anthropic/mcp-inspector --transport sse http://localhost:3000/sse
+```
+
+### When to Use Inspector vs mcp-tester
+
+| Task | Inspector | mcp-tester |
+|------|-----------|------------|
+| Debugging new tool | ✓ | |
+| Exploring server capabilities | ✓ | |
+| One-off manual testing | ✓ | |
+| Automated test suites | | ✓ |
+| CI/CD pipelines | | ✓ |
+| Regression testing | | ✓ |
+| Edge case coverage | | ✓ |
+| Performance testing | | ✓ |
+
+## mcp-tester: Automated Testing
+
+mcp-tester is the core of PMCP's testing strategy. It generates test scenarios from your server's schema and executes them automatically.
+
+### Core Workflow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    mcp-tester Workflow                              │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  1. GENERATE                                                        │
+│     cargo pmcp test generate                                        │
+│           │                                                         │
+│           ▼                                                         │
+│     ┌─────────────┐     ┌─────────────┐                            │
+│     │ MCP Server  │────▶│   Schema    │                            │
+│     │ (running)   │     │  Introspect │                            │
+│     └─────────────┘     └──────┬──────┘                            │
+│                                │                                    │
+│                                ▼                                    │
+│     ┌──────────────────────────────────────────────────────┐       │
+│     │              Generated Scenario Files                 │       │
+│     │  tests/scenarios/                                     │       │
+│     │  ├── tool_name_valid.yaml      (happy paths)         │       │
+│     │  ├── tool_name_invalid.yaml    (error cases)         │       │
+│     │  ├── tool_name_edge.yaml       (boundary values)     │       │
+│     │  └── tool_name_types.yaml      (type validation)     │       │
+│     └──────────────────────────────────────────────────────┘       │
+│                                                                     │
+│  2. EDIT (optional)                                                 │
+│     Add custom scenarios, assertions, edge cases                   │
+│                                                                     │
+│  3. RUN                                                             │
+│     cargo pmcp test run                                             │
+│           │                                                         │
+│           ▼                                                         │
+│     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐       │
+│     │  Scenario   │────▶│ MCP Server  │────▶│   Assert    │       │
+│     │   Files     │     │  Execute    │     │   Results   │       │
+│     └─────────────┘     └─────────────┘     └─────────────┘       │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Basic Commands
+
+```bash
+# Generate test scenarios from running server
+cargo pmcp test generate --server http://localhost:3000
+
+# Run all generated tests
+cargo pmcp test run --server http://localhost:3000
+
+# Run specific scenario file
+cargo pmcp test run --scenario tests/scenarios/query_valid.yaml
+
+# Verbose output with timing
+cargo pmcp test run --verbose
+
+# JSON output for CI integration
+cargo pmcp test run --format json --output results.json
+```
+
+See [mcp-tester Introduction](./ch11-02-mcp-tester.md) for comprehensive documentation.
+
+## Schema-Driven Test Generation
+
+The most powerful mcp-tester feature is automatic test generation from JSON Schema.
+
+```bash
+# Generate tests for all tools
+cargo pmcp test generate --output tests/scenarios/
+
+# Generate with edge case depth
+cargo pmcp test generate --edge-cases deep
+
+# Generate only for specific tools
+cargo pmcp test generate --tools query,insert
+```
+
+See [Schema-Driven Test Generation](./ch11-03-schema-tests.md) for the complete guide including:
+- How schema analysis works
+- Generated test categories
+- Customizing generated tests
+- CI/CD integration
+
+## Test Organization Best Practices
+
+### Directory Structure
+
+```
+my-mcp-server/
+├── src/
+│   ├── tools/
+│   │   ├── mod.rs
+│   │   ├── calculator.rs      # Tool implementation
+│   │   └── query.rs
+│   └── lib.rs
+├── tests/
+│   ├── unit/                   # Rust unit tests
+│   │   ├── calculator_test.rs
+│   │   └── query_test.rs
+│   ├── scenarios/              # mcp-tester scenarios
+│   │   ├── generated/          # Auto-generated (gitignore)
+│   │   │   ├── add_valid.yaml
+│   │   │   └── add_invalid.yaml
+│   │   └── custom/             # Hand-written tests
+│   │       ├── complex_workflow.yaml
+│   │       └── regression_123.yaml
+│   └── integration/            # Full integration tests
+│       └── client_test.rs
+└── Cargo.toml
+```
+
+### Naming Conventions
+
+```yaml
+# tests/scenarios/custom/query_sql_injection_prevention.yaml
+name: "Query - SQL injection prevention"
+description: |
+  Verify that the query tool properly rejects SQL injection attempts.
+  This is a critical security test.
+tags:
+  - security
+  - regression
+  - critical
+
+steps:
+  - tool: query
+    input:
+      sql: "SELECT * FROM users WHERE id = '1; DROP TABLE users; --'"
+    expect:
+      error:
+        message_contains: "Invalid SQL"
+```
+
+## Continuous Testing Workflow
+
+```bash
+# Development workflow with watch mode
+cargo watch -x test -x "pmcp test run"
+
+# Pre-commit testing
+cargo test && cargo pmcp test run --fail-fast
+
+# Full test suite before PR
+cargo test --all-features && \
+cargo pmcp test generate && \
+cargo pmcp test run --format junit --output test-results.xml
+```
+
+## Summary
+
+Effective MCP server testing combines:
+
+1. **Rust Unit Tests** - Test tool logic in isolation
+2. **Property Tests** - Catch edge cases with random inputs
+3. **MCP Inspector** - Interactive debugging during development
+4. **mcp-tester Scenarios** - Automated protocol-level testing
+5. **Schema Generation** - Automatic test coverage from schemas
+
+The key insight: most MCP bugs occur at the protocol level (wrong JSON format, missing fields, invalid responses), not in business logic. mcp-tester catches these automatically.
 
 ## Exercises
 
-1. **Generate tests for db-explorer**: Use `cargo pmcp test generate` and review the output
-
-2. **Add custom scenarios**: Write tests for edge cases the generator missed
-
-3. **Test error messages**: Verify error messages are helpful, not just error codes
-
-4. **Test performance**: Add scenarios that measure response time
+1. **Add unit tests** to an existing tool with 100% branch coverage
+2. **Generate scenarios** for the db-explorer server and review them
+3. **Write custom scenarios** for three edge cases the generator missed
+4. **Set up watch mode** for continuous testing during development
 
 ---
 

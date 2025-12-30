@@ -71,16 +71,10 @@
   - [Security Boundaries](./part3-deployment/ch07-03-security.md)
 
 - [AWS Lambda Deployment](./part3-deployment/ch08-aws-lambda.md)
-  - [Lambda Architecture for MCP](./part3-deployment/ch08-01-architecture.md)
-  - [Deploying with cargo pmcp](./part3-deployment/ch08-02-deploy.md)
-  - [API Gateway Configuration](./part3-deployment/ch08-03-api-gateway.md)
-  - [Cold Start Optimization](./part3-deployment/ch08-04-cold-starts.md)
-  - [Connecting Clients](./part3-deployment/ch08-05-connecting.md)
+  - [Connecting Clients](./part3-deployment/ch08-01-connecting-clients.md)
 
 - [Cloudflare Workers (WASM)](./part3-deployment/ch09-cloudflare.md)
-  - [WASM Compilation](./part3-deployment/ch09-01-wasm.md)
-  - [Edge Deployment Benefits](./part3-deployment/ch09-02-edge.md)
-  - [Workers-Specific Considerations](./part3-deployment/ch09-03-workers.md)
+  - [WASM Considerations](./part3-deployment/ch09-01-wasm-considerations.md)
 
 - [Google Cloud Run](./part3-deployment/ch10-cloud-run.md)
   - [Container-Based Deployment](./part3-deployment/ch10-01-containers.md)
@@ -120,16 +114,15 @@
 
 # Part VI: AI-Assisted Development
 
-- [Using AI to Build MCP Servers](./part6-ai-dev/ch15-ai-assisted.md)
-  - [Claude Code CLI](./part6-ai-dev/ch15-01-claude-cli.md)
-  - [IDE Integration](./part6-ai-dev/ch15-02-ide.md)
-  - [AI Agent Instructions](./part6-ai-dev/ch15-03-agents.md)
-  - [Kiro as Alternative](./part6-ai-dev/ch15-04-kiro.md)
+- [AI-Assisted MCP Development](./part6-ai-dev/ch15-ai-assisted.md)
+  - [The AI-Compiler Feedback Loop](./part6-ai-dev/ch15-01-feedback-loop.md)
+  - [Setting Up Claude Code](./part6-ai-dev/ch15-02-claude-code.md)
+  - [Alternative AI Assistants](./part6-ai-dev/ch15-03-alternatives.md)
 
 - [Effective AI Collaboration](./part6-ai-dev/ch16-collaboration.md)
-  - [Prompting for Business Logic](./part6-ai-dev/ch16-01-prompting.md)
-  - [Review and Refinement](./part6-ai-dev/ch16-02-review.md)
-  - [Quality Assurance](./part6-ai-dev/ch16-03-qa.md)
+  - [The Development Workflow](./part6-ai-dev/ch16-01-workflow.md)
+  - [Prompting for MCP Tools](./part6-ai-dev/ch16-02-prompting.md)
+  - [Quality Assurance with AI](./part6-ai-dev/ch16-03-qa.md)
 
 ---
 

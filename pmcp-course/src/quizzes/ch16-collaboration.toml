@@ -1,0 +1,262 @@
+# Quiz: Effective AI Collaboration
+
+id = "ch16-collaboration"
+title = "Effective AI Collaboration for MCP Development"
+lesson_id = "ch16"
+pass_threshold = 0.7
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "In the cargo-pmcp workflow, what is the correct order of steps?"
+prompt.distractors = [
+    "Implement → Scaffold → Test → Deploy",
+    "Test → Implement → Scaffold → Validate",
+    "Deploy → Test → Implement → Scaffold"
+]
+answer.answer = "Scaffold → Implement → Dev Server → Test → Quality Gates → Production"
+context = """
+The correct workflow is: 1) Scaffold with cargo pmcp new/add server, 2) Implement
+tools in crates/mcp-*-core/src/tools/, 3) Start dev server with cargo pmcp dev,
+4) Generate and run tests, 5) Pass quality gates (fmt, clippy, test), 6) Build
+for production. Never skip scaffolding or quality gates.
+"""
+id = "f16a1b2c-d3e4-5678-abcd-123456780201"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What makes a good prompt for requesting an MCP tool?"
+prompt.distractors = [
+    "Specifying exact struct names and function signatures",
+    "Writing the code yourself and asking AI to review it",
+    "Using technical Rust jargon throughout"
+]
+answer.answer = "Describing what the tool does, its inputs/outputs, and error cases without dictating implementation"
+context = """
+Good prompts specify WHAT (purpose), inputs (required/optional fields), outputs
+(structure), and error cases. Let AI decide HOW to implement. Bad prompts either
+micromanage implementation details or are too vague ('make a database thing').
+Focus on behavior and constraints, not code structure.
+"""
+id = "f16a1b2c-d3e4-5678-abcd-123456780202"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What is the quality gate command to check for code style issues in Rust?"
+answer.answer = "cargo clippy"
+answer.alternatives = ["cargo clippy -- -D warnings", "clippy"]
+context = """
+cargo clippy is Rust's lint tool that catches code smells, inefficiencies, and
+anti-patterns. Run with '-- -D warnings' to treat warnings as errors. Common fixes
+include removing redundant clones, simplifying match expressions, and using more
+idiomatic patterns. Zero warnings should be the goal.
+"""
+id = "f16a1b2c-d3e4-5678-abcd-123456780203"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the role of the developer vs AI in the collaboration model?"
+prompt.distractors = [
+    "Developer writes code, AI reviews it",
+    "AI decides architecture, developer implements",
+    "Developer tests, AI deploys"
+]
+answer.answer = "Developer defines WHAT to build and domain knowledge; AI implements HOW and iterates on compiler feedback"
+context = """
+Developers provide requirements, domain expertise, architectural decisions, and
+code review. AI generates implementation code, applies cargo-pmcp patterns, handles
+boilerplate, and iterates until quality gates pass. This division lets developers
+focus on business value while AI handles implementation details.
+"""
+id = "f16a1b2c-d3e4-5678-abcd-123456780204"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What are the five layers of quality assurance in AI-assisted MCP development?"
+prompt.distractors = [
+    "Unit, Integration, E2E, Performance, Security",
+    "Lint, Build, Test, Deploy, Monitor",
+    "Code, Review, Merge, Release, Rollback"
+]
+answer.answer = "Compile-time (cargo build), Static analysis (clippy), Unit tests, Integration tests (cargo pmcp test), Code review"
+context = """
+The five QA layers are: 1) cargo build catches type errors, 2) cargo clippy catches
+code smells, 3) cargo test catches logic errors, 4) cargo pmcp test catches MCP
+protocol issues, 5) Human review catches design flaws. Each layer catches different
+problems; all are necessary for production quality.
+"""
+id = "f16a1b2c-d3e4-5678-abcd-123456780205"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "When should you share compiler error messages with the AI?"
+prompt.distractors = [
+    "Only for critical errors, not warnings",
+    "Never - AI should discover errors itself",
+    "Only if the error is unfamiliar"
+]
+answer.answer = "Always - specific error messages enable targeted fixes instead of guessing"
+context = """
+Sharing exact compiler errors helps AI apply targeted fixes. 'That doesn't work'
+forces AI to guess, while 'error[E0308]: mismatched types at line 25' enables
+precise correction. Copy the full error message including code context and
+suggestions for best results.
+"""
+id = "f16a1b2c-d3e4-5678-abcd-123456780206"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What file should contain the pre-commit quality gate checks?"
+answer.answer = ".git/hooks/pre-commit"
+answer.alternatives = ["pre-commit", "hooks/pre-commit"]
+context = """
+The .git/hooks/pre-commit script runs before each commit to validate code quality.
+It should run cargo fmt --check, cargo clippy -- -D warnings, and cargo test. If
+any fail, the commit is blocked. This prevents low-quality code from entering the
+repository regardless of who wrote it.
+"""
+id = "f16a1b2c-d3e4-5678-abcd-123456780207"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is a prompt anti-pattern that should be avoided?"
+prompt.distractors = [
+    "Specifying input/output types",
+    "Describing error handling requirements",
+    "Listing multiple tools for a server"
+]
+answer.answer = "Micromanaging implementation by specifying exact struct names, field types, and function signatures"
+context = """
+Micromanaging (e.g., 'Create struct WeatherInput with field city of type String...')
+constrains AI unnecessarily and may lead to suboptimal solutions. Describe the
+behavior: 'A tool that takes a city name and returns weather data'. Let AI choose
+idiomatic implementations using its knowledge of pmcp patterns.
+"""
+id = "f16a1b2c-d3e4-5678-abcd-123456780208"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What should be included in error messages for MCP tools?"
+prompt.distractors = [
+    "Stack traces and internal state",
+    "The user's IP address",
+    "Only a generic error code"
+]
+answer.answer = "What went wrong, why it matters, and how to fix it (if possible)"
+context = """
+Good error messages explain: 1) What happened ('File size 15MB exceeds limit'),
+2) The constraint ('Maximum is 10MB'), 3) How to fix it ('Reduce file size or split').
+This helps AI clients auto-recover or provide helpful user feedback. Avoid vague
+messages like 'invalid input' or 'error'.
+"""
+id = "f16a1b2c-d3e4-5678-abcd-123456780209"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the purpose of integration testing with cargo pmcp test?"
+prompt.distractors = [
+    "Test individual Rust functions in isolation",
+    "Measure code coverage percentages",
+    "Deploy to staging environment"
+]
+answer.answer = "Test full MCP server behavior including protocol interactions and tool execution"
+context = """
+cargo pmcp test runs YAML scenarios against the running dev server, testing the
+complete MCP protocol flow: connection, tool listing, tool execution, and responses.
+This catches issues that unit tests miss: serialization problems, transport errors,
+and protocol violations. Run with --generate-scenarios first.
+"""
+id = "f16a1b2c-d3e4-5678-abcd-123456780210"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What anyhow method should be used to add context to errors in tool handlers?"
+answer.answer = ".context()"
+answer.alternatives = ["context", "context()", ".context"]
+context = """
+Use .context('Failed to...') on fallible operations to add meaningful error context.
+Example: .context('Failed to connect to weather API')? This creates a chain of
+context that helps debugging. Never use bare ? without context - 'error' tells
+nothing useful about what went wrong.
+"""
+id = "f16a1b2c-d3e4-5678-abcd-123456780211"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What template should be used when building a custom MCP server with unique tools?"
+prompt.distractors = [
+    "calculator - has the most features",
+    "sqlite_explorer - most production-ready",
+    "complete_calculator - best for learning"
+]
+answer.answer = "minimal - provides empty structure without example tools to customize"
+context = """
+The minimal template creates the directory structure, module organization, and
+transport setup without any example tools. Use it when building custom servers
+where you'll implement all tools yourself. calculator and sqlite_explorer templates
+include example implementations useful for learning but not for custom projects.
+"""
+id = "f16a1b2c-d3e4-5678-abcd-123456780212"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "How should you handle optional input parameters in TypedTool?"
+prompt.distractors = [
+    "Use default values in the struct definition",
+    "Use String::new() for missing values",
+    "Make all parameters required"
+]
+answer.answer = "Use Option<T> for the field type and handle with unwrap_or or if let Some"
+context = """
+Optional parameters should be Option<T> in the input struct. In the handler, use
+unwrap_or(default) for simple defaults or if let Some(value) for conditional logic.
+JsonSchema generates the correct schema marking the field as optional. Don't use
+empty strings or magic values for missing data.
+"""
+id = "f16a1b2c-d3e4-5678-abcd-123456780213"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the recommended approach for testing edge cases in MCP tools?"
+prompt.distractors = [
+    "Only test the happy path, edge cases are rare",
+    "Test edge cases manually in production",
+    "Let users report edge case bugs"
+]
+answer.answer = "Add explicit tests for boundary values, empty inputs, Unicode, and documented error cases"
+context = """
+Request specific edge case tests: empty inputs, max length inputs, Unicode characters,
+boundary values (0, -1, MAX), null/missing optionals, and each documented error case.
+AI can generate these tests automatically when asked. Edge cases often reveal bugs
+that happy-path testing misses.
+"""
+id = "f16a1b2c-d3e4-5678-abcd-123456780214"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What command runs cargo format check without making changes?"
+answer.answer = "cargo fmt --check"
+answer.alternatives = ["cargo fmt -- --check"]
+context = """
+cargo fmt --check verifies formatting without modifying files. It exits with non-zero
+status if formatting differs. Use in CI and pre-commit hooks. Run plain 'cargo fmt'
+to actually fix formatting issues. Consistent formatting makes code reviews easier
+and prevents style debates.
+"""
+id = "f16a1b2c-d3e4-5678-abcd-123456780215"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What should you do after AI generates code for a new tool?"
+prompt.distractors = [
+    "Deploy immediately to test in production",
+    "Commit and push without testing",
+    "Ask AI to explain but don't run tests"
+]
+answer.answer = "Run quality gates (fmt, clippy, test) and review the code to understand what was generated"
+context = """
+Always run cargo fmt --check, cargo clippy -- -D warnings, and cargo test after
+any code generation. Then review the code to understand what was built - you're
+responsible for what goes into production. Ask AI to explain complex logic if
+needed. Never deploy code you don't understand.
+"""
+id = "f16a1b2c-d3e4-5678-abcd-123456780216"

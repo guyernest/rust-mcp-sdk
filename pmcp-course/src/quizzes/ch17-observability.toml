@@ -1,0 +1,353 @@
+# Quiz: Observability for MCP Servers
+
+id = "ch17-observability"
+title = "Middleware, Logging, and Metrics for MCP Servers"
+lesson_id = "ch17"
+pass_threshold = 0.7
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the correct priority order for middleware execution in PMCP?"
+prompt.distractors = [
+    "Low → Normal → High → Critical",
+    "Logging → Validation → Security → Cleanup",
+    "Random order based on addition sequence"
+]
+answer.answer = "Critical → High → Normal → Low → Lowest"
+context = """
+PMCP middleware executes by priority: Critical (0) runs first for validation/security,
+High (1) for authentication/rate limiting, Normal (2) for business logic, Low (3) for
+logging/metrics, and Lowest (4) for cleanup. Responses flow in reverse order. This
+ensures security checks happen before processing and logging captures complete lifecycle.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780301"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why is structured logging with tracing preferred over println! in MCP servers?"
+prompt.distractors = [
+    "println! is slower than tracing",
+    "tracing uses less memory",
+    "println! only works in development mode"
+]
+answer.answer = "Tracing provides structured output, async context propagation, and filtering by level/module"
+context = """
+Structured logging with tracing provides machine-parseable JSON output, automatic context
+propagation across async calls via spans, log level filtering, per-module configuration,
+and integration with observability platforms. println! lacks structure, context, and
+filtering - making debugging production issues extremely difficult.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780302"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What derive macro creates automatic span context for async functions?"
+answer.answer = "#[instrument]"
+answer.alternatives = ["instrument", "#[tracing::instrument]"]
+context = """
+The #[instrument] macro from tracing automatically creates a span around the function,
+capturing parameters as span fields. Use skip() to exclude sensitive parameters and
+fields() to add custom context. Example: #[instrument(skip(password), fields(user_id))]
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780303"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the purpose of MiddlewareContext in PMCP?"
+prompt.distractors = [
+    "To store middleware configuration",
+    "To cache responses between requests",
+    "To authenticate users"
+]
+answer.answer = "To share data between middleware layers and track request metrics"
+context = """
+MiddlewareContext enables communication between middleware in the chain. It provides
+set_metadata/get_metadata for passing data (like user_id, correlation_id), record_metric
+for performance tracking, and request timing. Early middleware can set context that
+later middleware reads, enabling patterns like request ID injection for tracing.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780304"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Which headers does ServerHttpLoggingMiddleware automatically redact?"
+prompt.distractors = [
+    "Content-Type, Accept, Host",
+    "User-Agent, Referer, Origin",
+    "Cache-Control, ETag, If-None-Match"
+]
+answer.answer = "Authorization, Cookie, X-Api-Key"
+context = """
+ServerHttpLoggingMiddleware automatically redacts sensitive headers that may contain
+credentials: Authorization (Bearer tokens, Basic auth), Cookie (session tokens), and
+X-Api-Key. This prevents accidental credential exposure in logs. Additional options
+like with_redact_query(true) strip query parameters from URLs.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780305"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the main benefit of using the metrics crate facade pattern?"
+prompt.distractors = [
+    "Better performance than direct platform SDKs",
+    "Automatic dashboard generation",
+    "Built-in alerting capabilities"
+]
+answer.answer = "Write metrics once, choose the backend (Prometheus, Datadog, CloudWatch) at deployment time"
+context = """
+The metrics crate provides a facade pattern - your code uses counter!, histogram!, gauge!
+macros regardless of destination. At runtime, you install an exporter (PrometheusBuilder,
+StatsdBuilder, etc.) that sends metrics to your chosen platform. This enables platform-
+agnostic instrumentation and easy migration between observability providers.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780306"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What type of metric is used for tracking request durations with percentile calculations?"
+answer.answer = "histogram"
+answer.alternatives = ["Histogram", "histograms"]
+context = """
+Histograms track distributions of values like request duration, enabling percentile
+calculations (P50, P95, P99). They record observations into buckets, allowing queries
+like histogram_quantile(0.95, rate(duration_bucket[5m])). Counters only track totals,
+gauges track current values - neither supports distribution analysis.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780307"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why should you avoid high-cardinality metric labels like user_id?"
+prompt.distractors = [
+    "They make queries slower",
+    "They violate privacy regulations",
+    "They are not supported by Prometheus"
+]
+answer.answer = "They cause memory exhaustion because each unique label combination creates a new time series"
+context = """
+Each unique label combination creates a separate time series in your metrics backend.
+With millions of users, counter!('requests', 'user_id' => user_id) creates millions of
+time series, exhausting memory. Use bounded cardinality labels like 'user_tier' => 'pro'
+instead. For individual user analysis, use logs or tracing, not metrics.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780308"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What does RateLimitMiddleware do when limits are exceeded?"
+prompt.distractors = [
+    "Logs a warning and continues processing",
+    "Queues the request for later processing",
+    "Forwards to a fallback server"
+]
+answer.answer = "Returns Error::RateLimited, blocking the request before it reaches handlers"
+context = """
+RateLimitMiddleware runs with High priority, blocking requests before they consume
+resources. It uses a token bucket algorithm with configurable rate (requests/second)
+and burst capacity. When limits are exceeded, it returns Error::RateLimited immediately,
+which the MCP client can interpret to backoff and retry.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780309"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "How can test scenarios serve as observability tools?"
+prompt.distractors = [
+    "They generate metrics automatically",
+    "They create dashboards from test results",
+    "They replace the need for logging"
+]
+answer.answer = "Run periodically to detect issues like database unavailability, secret rotation, and performance regression"
+context = """
+Test scenarios from cargo pmcp test become health checks when run on schedule. CI/CD
+pipelines or cron jobs execute scenarios periodically, detecting: database connectivity
+issues (timeout failures), expired secrets (auth errors), performance regression (duration
+assertions), and API changes (schema validation failures). This is 'testing as observability'.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780310"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the recommended log output format for production MCP servers?"
+prompt.distractors = [
+    "Human-readable with colors (.pretty())",
+    "Plain text with timestamps",
+    "XML for enterprise compatibility"
+]
+answer.answer = "JSON format for machine parsing and log aggregation"
+context = """
+Production servers should use tracing_subscriber::fmt().json() for structured output
+that log aggregation tools (CloudWatch Insights, Datadog, Elasticsearch) can parse and
+query. JSON includes timestamp, level, target, fields, and span context in a standardized
+format. Use .pretty() only for local development where human readability matters.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780311"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What are the three states of a circuit breaker, and what triggers the transition from OPEN to HALF-OPEN?"
+prompt.distractors = [
+    "ACTIVE, INACTIVE, TESTING - triggered by manual reset",
+    "ON, OFF, STANDBY - triggered by successful request",
+    "RUNNING, STOPPED, PAUSED - triggered by admin command"
+]
+answer.answer = "CLOSED, OPEN, HALF-OPEN - triggered by recovery timeout expiring"
+context = """
+Circuit breakers have three states: CLOSED (normal, requests pass through), OPEN (failing,
+requests rejected immediately), and HALF-OPEN (testing recovery). When failures exceed the
+threshold, it opens. After a recovery timeout expires, it transitions to HALF-OPEN and
+allows one test request. Success closes the circuit; failure reopens it.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780312"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the correct approach for logging sensitive data like API tokens?"
+prompt.distractors = [
+    "Log the first 4 characters only",
+    "Hash the token before logging",
+    "Log it only at DEBUG level"
+]
+answer.answer = "Use Redacted<T> wrapper or #[serde(skip_serializing)] to never include it in logs"
+context = """
+Sensitive data should never appear in logs regardless of level. Use the Redacted<T>
+wrapper that displays '[REDACTED]' in Display/Debug, or #[serde(skip_serializing)] on
+struct fields. For HTTP middleware, ServerHttpLoggingMiddleware automatically redacts
+Authorization, Cookie, and X-Api-Key headers.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780313"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Which metrics type should be used for tracking current number of active connections?"
+prompt.distractors = [
+    "Counter - because connections accumulate",
+    "Histogram - to track connection duration distribution",
+    "Timer - to measure connection time"
+]
+answer.answer = "Gauge - because the value can increase and decrease"
+context = """
+Gauges track values that go up and down: active connections, queue depth, memory usage.
+gauge!('connections_active').increment(1.0) on connect, .decrement(1.0) on disconnect.
+Counters only go up (total connections ever), histograms track distributions. Gauges
+show current state, which is essential for capacity monitoring.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780314"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why are spans essential for debugging async MCP servers?"
+prompt.distractors = [
+    "They reduce memory usage in async code",
+    "They make async code run faster",
+    "They prevent race conditions in handlers"
+]
+answer.answer = "They carry context through async boundaries where traditional call stacks don't work"
+context = """
+In async code, execution jumps between tasks - when an error occurs, the traditional
+call stack doesn't show the original request context. Spans solve this by carrying
+context (request_id, user_id, tool name) through async boundaries. When you see an
+error, the span hierarchy shows exactly which request failed and where in the call chain.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780315"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What observability platforms does the Rust metrics ecosystem support?"
+prompt.distractors = [
+    "Only Prometheus - it's the Rust standard",
+    "Only AWS CloudWatch for production use",
+    "Only Datadog for enterprise deployments"
+]
+answer.answer = "Multiple platforms including Prometheus, Datadog, CloudWatch, and OpenTelemetry via different exporters"
+context = """
+The metrics crate is platform-agnostic. Exporters include: metrics-exporter-prometheus for
+Prometheus/Grafana, metrics-exporter-statsd for Datadog, custom recorders for CloudWatch,
+and OpenTelemetry integration for Grafana Cloud. Choose at deployment time via environment
+variables without changing application code.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780316"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "When choosing a log level, what question helps decide between ERROR and WARN?"
+prompt.distractors = [
+    "Is the message longer than 100 characters?",
+    "Is the code in a hot path?",
+    "Is the user an administrator?"
+]
+answer.answer = "Would I want to be woken up at 3 AM for this? Yes = ERROR, Maybe tomorrow = WARN"
+context = """
+The 'golden rule' for log levels: ERROR means something broke and needs immediate attention
+(wake up the on-call engineer). WARN means degraded operation that should be investigated
+but isn't urgent. INFO is for normal milestones, DEBUG for development diagnostics, and
+TRACE for very fine-grained debugging.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780317"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why is P99 latency a better alerting metric than average latency?"
+prompt.distractors = [
+    "P99 is easier to calculate than average",
+    "P99 uses less memory to track",
+    "P99 is required by cloud providers"
+]
+answer.answer = "Average hides outliers - P99 shows the worst experience that 1% of users face"
+context = """
+With 100 requests where 99 take 50ms and 1 takes 5000ms, the average is 104ms ('looks fine!')
+but P99 is 5000ms (1% of users wait 5 seconds!). At scale, 1% means thousands of bad
+experiences daily. Alert on P95 or P99 to catch tail latency issues that averages hide.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780318"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What problem does middleware solve that would otherwise require duplicating code in every handler?"
+prompt.distractors = [
+    "Type conversion between JSON and Rust structs",
+    "Memory management and garbage collection",
+    "Compiling handlers to optimized machine code"
+]
+answer.answer = "Cross-cutting concerns like logging, authentication, rate limiting, and metrics"
+context = """
+Cross-cutting concerns are functionality that applies across your entire application.
+Without middleware, every handler would need to: validate requests, check authentication,
+log operations, record metrics, and handle rate limits. Middleware lets you write this
+logic once and apply it to all requests automatically.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780319"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "A Counter metric is like an odometer - it only goes up. Which metric type is like a thermometer that goes up and down?"
+prompt.distractors = [
+    "Histogram - because it tracks distributions",
+    "Timer - because it measures duration",
+    "Summary - because it calculates percentiles"
+]
+answer.answer = "Gauge - because it tracks current state that can increase or decrease"
+context = """
+The three metric types serve different purposes: Counter (like an odometer) only increases
+and tracks totals (requests, errors). Gauge (like a thermometer) tracks current state that
+fluctuates (active connections, queue depth, memory usage). Histogram tracks distributions
+for percentile calculations (request latency).
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780320"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the purpose of rate limiting in an MCP server?"
+prompt.distractors = [
+    "To make requests faster by limiting queue depth",
+    "To reduce memory usage by limiting response size",
+    "To improve security by limiting user permissions"
+]
+answer.answer = "To protect server resources by controlling how many requests a client can make per time window"
+context = """
+Rate limiting prevents resource exhaustion from: DoS attacks, runaway AI client loops,
+expensive API calls, and unfair usage by single clients. PMCP's RateLimitMiddleware uses
+a token bucket algorithm with configurable rate (requests/second) and burst capacity.
+Excess requests receive immediate 'rate limited' errors rather than queuing.
+"""
+id = "f17a1b2c-d3e4-5678-abcd-123456780321"

@@ -29,7 +29,7 @@ Remote MCP servers use HTTP transport instead of stdio:
 │  Config:                           Config:                              │
 │  {                                 {                                    │
 │    "command": "my-server"            "url": "https://...",              │
-│  }                                   "transport": "streamable-http"    │
+│  }                                   "transport": "streamable-http"     │
 │                                    }                                    │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘

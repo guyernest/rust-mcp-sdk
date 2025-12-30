@@ -1,0 +1,250 @@
+# Quiz: OAuth for MCP
+
+id = "ch13-oauth"
+title = "OAuth 2.0 Authentication for MCP Servers"
+lesson_id = "ch13"
+pass_threshold = 0.7
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why is OAuth 2.0 preferred over API keys for enterprise MCP servers?"
+prompt.distractors = [
+    "API keys are harder to implement",
+    "OAuth is faster than API key validation",
+    "API keys require more storage space"
+]
+answer.answer = "OAuth provides user identity, fine-grained permissions, automatic token rotation, and federation with enterprise IdPs"
+context = """
+OAuth 2.0 solves enterprise problems that API keys cannot: it provides verified user
+identity (who is making requests), fine-grained permission scopes (what they can do),
+automatic token expiration and refresh (no manual rotation), and federation with
+corporate identity providers (SSO). API keys are just secrets with no identity.
+"""
+id = "f13a2b3c-d4e5-6789-abcd-123456781301"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What are the three parts of a JWT token?"
+prompt.distractors = [
+    "Username, password, signature",
+    "Client ID, secret, scope",
+    "Access token, refresh token, ID token"
+]
+answer.answer = "Header, payload, and signature - each Base64URL encoded and separated by dots"
+context = """
+A JWT has three parts separated by dots: header (algorithm and type), payload
+(claims like sub, iss, exp), and signature (cryptographic verification). Each
+part is Base64URL encoded. The signature is created by signing header + payload
+with the private key, allowing verification with the public key from JWKS.
+"""
+id = "f13a2b3c-d4e5-6789-abcd-123456781302"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What JWT claim contains the token expiration time as a Unix timestamp?"
+answer.answer = "exp"
+answer.alternatives = ["expiration", "expires", "exp claim"]
+context = """
+The 'exp' (expiration) claim is a Unix timestamp indicating when the token
+becomes invalid. Always validate exp > current_time with some leeway for clock
+skew (typically 60 seconds). Never trust tokens with exp in the past or tokens
+missing the exp claim entirely.
+"""
+id = "f13a2b3c-d4e5-6789-abcd-123456781303"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the purpose of JWKS (JSON Web Key Set)?"
+prompt.distractors = [
+    "Store user session data",
+    "Encrypt tokens before transmission",
+    "Generate new access tokens"
+]
+answer.answer = "Provide public keys for verifying JWT signatures without sharing private keys"
+context = """
+JWKS is an endpoint (usually /.well-known/jwks.json) that publishes the IdP's
+public keys. Servers fetch these keys to verify JWT signatures without needing
+the private key. Keys are identified by 'kid' (key ID) in the JWT header. JWKS
+should be cached with periodic refresh to handle key rotation.
+"""
+id = "f13a2b3c-d4e5-6789-abcd-123456781304"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What OAuth 2.0 grant type is recommended for server-to-server (M2M) communication?"
+prompt.distractors = [
+    "Authorization Code Grant with PKCE",
+    "Implicit Grant",
+    "Password Grant"
+]
+answer.answer = "Client Credentials Grant - the client authenticates with its own credentials without user involvement"
+context = """
+Client Credentials Grant is for machine-to-machine scenarios where no user is
+involved. The client (service) authenticates with client_id and client_secret
+to get an access token directly. There's no user context, so the token
+represents the service itself. Use for backend services, cron jobs, etc.
+"""
+id = "f13a2b3c-d4e5-6789-abcd-123456781305"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What does PKCE (Proof Key for Code Exchange) protect against?"
+prompt.distractors = [
+    "Token replay attacks",
+    "Cross-site request forgery",
+    "SQL injection"
+]
+answer.answer = "Authorization code interception attacks by binding the code to the original client"
+context = """
+PKCE protects the Authorization Code flow from code interception. The client
+generates a random code_verifier, hashes it to create code_challenge, and sends
+the challenge with the auth request. When exchanging the code, the client sends
+the original verifier. Even if an attacker intercepts the code, they can't use
+it without the verifier.
+"""
+id = "f13a2b3c-d4e5-6789-abcd-123456781306"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What HTTP header carries the JWT token in API requests?"
+answer.answer = "Authorization"
+answer.alternatives = ["authorization", "Authorization: Bearer", "Bearer"]
+context = """
+The Authorization header with 'Bearer' scheme carries JWT tokens:
+'Authorization: Bearer eyJhbGciOiJS...'. The server extracts the token by
+removing the 'Bearer ' prefix. This is the standard per RFC 6750. Some APIs
+also accept tokens via query parameter or cookie, but header is preferred.
+"""
+id = "f13a2b3c-d4e5-6789-abcd-123456781307"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why should JWKS be cached rather than fetched on every request?"
+prompt.distractors = [
+    "To reduce code complexity",
+    "Keys change on every request",
+    "JWKS endpoints have rate limits"
+]
+answer.answer = "To reduce latency and avoid dependency on IdP availability for every validation"
+context = """
+Fetching JWKS on every request adds 50-200ms latency and creates IdP dependency.
+Cache JWKS for 5-60 minutes with background refresh. If a key ID is not found
+in cache, fetch fresh JWKS (handles key rotation). This provides millisecond
+validation while still respecting key rotation.
+"""
+id = "f13a2b3c-d4e5-6789-abcd-123456781308"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What should you validate when verifying a JWT besides the signature?"
+prompt.distractors = [
+    "Only the signature matters",
+    "Token length and format",
+    "The user's password hash"
+]
+answer.answer = "Issuer (iss), audience (aud), expiration (exp), and that the algorithm matches expected"
+context = """
+Signature verification alone is insufficient. Validate: iss matches your IdP,
+aud includes your API identifier, exp is in the future, iat is in the past,
+nbf (if present) is in the past, and alg matches expected (prevent algorithm
+confusion attacks). Missing any check can lead to token acceptance attacks.
+"""
+id = "f13a2b3c-d4e5-6789-abcd-123456781309"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the 'aud' (audience) claim used for?"
+prompt.distractors = [
+    "Count of users who have used this token",
+    "List of endpoints the token can access",
+    "Geographic region of the user"
+]
+answer.answer = "Identify the intended recipient(s) of the token - typically the API identifier"
+context = """
+The 'aud' claim specifies who the token is intended for. Your MCP server should
+only accept tokens where aud contains your API identifier. This prevents tokens
+issued for other services from being accepted. Aud can be a string or array of
+strings if the token is valid for multiple recipients.
+"""
+id = "f13a2b3c-d4e5-6789-abcd-123456781310"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What OAuth term describes the permissions a token grants?"
+answer.answer = "scope"
+answer.alternatives = ["scopes", "scope claim", "permissions"]
+context = """
+Scopes define what actions a token authorizes. They appear in the 'scope' claim
+as a space-separated string (e.g., 'read:tools execute:tools'). Design scopes
+for your MCP server based on operations: read:tools, execute:tools, admin:*,
+etc. Always validate scopes before performing operations.
+"""
+id = "f13a2b3c-d4e5-6789-abcd-123456781311"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "How should you handle clock skew when validating token expiration?"
+prompt.distractors = [
+    "Ignore expiration if the signature is valid",
+    "Reject tokens within 1 hour of expiration",
+    "Convert all times to UTC before comparison"
+]
+answer.answer = "Allow a small leeway (typically 60 seconds) when comparing exp/iat/nbf claims"
+context = """
+Servers may have slightly different clocks. Allow 60-120 seconds of leeway when
+validating time claims to avoid rejecting valid tokens due to minor clock drift.
+Example: accept if exp > (now - leeway). IdPs like Entra recommend 5 minutes of
+leeway. Use NTP to keep server clocks synchronized.
+"""
+id = "f13a2b3c-d4e5-6789-abcd-123456781312"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the purpose of refresh tokens?"
+prompt.distractors = [
+    "Verify the user's identity",
+    "Store user preferences",
+    "Encrypt the access token"
+]
+answer.answer = "Obtain new access tokens without requiring user re-authentication"
+context = """
+Refresh tokens have longer lifetimes than access tokens and are used to get new
+access tokens when the current one expires. This allows short-lived access tokens
+(15-60 min) for security while maintaining user sessions for hours or days.
+Refresh tokens should be stored securely and can be rotated on each use.
+"""
+id = "f13a2b3c-d4e5-6789-abcd-123456781313"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the 'alg' header vulnerability and how do you prevent it?"
+prompt.distractors = [
+    "Using deprecated algorithms - use SHA-256",
+    "Algorithm mismatch - convert all to RSA",
+    "Missing algorithm - add a default"
+]
+answer.answer = "Attackers may set alg to 'none' or symmetric - validate alg matches your expected list (e.g., RS256)"
+context = """
+The 'alg' header specifies the signing algorithm. Attackers may set it to 'none'
+(no signature) or a symmetric algorithm using the public key as the secret.
+Always validate alg against a whitelist of expected algorithms (typically RS256).
+Never accept 'none' and never allow the token to dictate unexpected algorithms.
+"""
+id = "f13a2b3c-d4e5-6789-abcd-123456781314"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Where should token validation occur in an MCP server architecture?"
+prompt.distractors = [
+    "In each tool's run function",
+    "Only at the database layer",
+    "In the client before sending requests"
+]
+answer.answer = "In middleware that runs before any business logic, rejecting invalid tokens immediately"
+context = """
+Token validation should be middleware that intercepts all requests before they
+reach business logic. This ensures consistent validation, early rejection of
+invalid tokens, and a clean AuthContext available to all downstream handlers.
+Individual tools can then check scopes against the validated context.
+"""
+id = "f13a2b3c-d4e5-6789-abcd-123456781315"

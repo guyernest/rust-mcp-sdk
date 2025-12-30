@@ -1,0 +1,248 @@
+# Quiz: Remote Testing
+
+id = "ch12-remote-testing"
+title = "Remote MCP Server Testing and CI/CD"
+lesson_id = "ch12"
+pass_threshold = 0.7
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why is remote testing important when local tests already pass?"
+prompt.distractors = [
+    "Remote tests are faster than local tests",
+    "Local tests don't test real functionality",
+    "CI/CD requires all tests to be remote"
+]
+answer.answer = "Production environments have variables like load balancers, network latency, and cold starts that local testing can't simulate"
+context = """
+Production introduces factors absent locally: load balancers, network latency,
+connection pooling, resource limits, TLS termination, multiple replicas, and
+cold starts. These can cause issues that never appear in local development.
+Remote testing validates behavior under real-world conditions.
+"""
+id = "f12a2b3c-d4e5-6789-abcd-123456781201"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is a smoke test in the context of deployment testing?"
+prompt.distractors = [
+    "A performance test that stresses the server",
+    "A security test that checks for vulnerabilities",
+    "A load test with simulated traffic"
+]
+answer.answer = "A minimal test suite that quickly validates core functionality after deployment"
+context = """
+Smoke tests are quick validation tests run immediately after deployment. They
+check critical paths (server responds, basic operations work) in seconds rather
+than running the full suite. If smoke tests fail, deployment is rolled back
+before deeper testing wastes time.
+"""
+id = "f12a2b3c-d4e5-6789-abcd-123456781202"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What mcp-tester option passes authentication headers for remote servers?"
+answer.answer = "--header"
+answer.alternatives = ["-H", "--header \"Authorization: Bearer\"", "header"]
+context = """
+Use --header 'Authorization: Bearer TOKEN' to pass authentication headers.
+Multiple headers can be passed: --header 'Auth: token' --header 'X-Key: value'.
+In config files, use the headers section under server configuration to set
+headers that apply to all requests.
+"""
+id = "f12a2b3c-d4e5-6789-abcd-123456781203"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What timeout configuration accounts for serverless cold starts?"
+prompt.distractors = [
+    "Retry count of 5 with 100ms delays",
+    "Connection timeout of 500ms",
+    "Read timeout of 1 second"
+]
+answer.answer = "First request timeout of 30-60 seconds, then shorter timeouts for subsequent requests"
+context = """
+Serverless platforms (Lambda, Cloud Run with min-instances=0) have cold starts
+that can take 30-60 seconds for Rust binaries. Configure a longer timeout for
+the first request, then shorter timeouts (1-5s) for subsequent requests when
+the instance is warm.
+"""
+id = "f12a2b3c-d4e5-6789-abcd-123456781204"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the purpose of a canary deployment for MCP servers?"
+prompt.distractors = [
+    "Testing in a yellow/warning environment",
+    "Running tests that might fail",
+    "Deploying to a separate test cluster"
+]
+answer.answer = "Deploying to a small percentage of traffic (e.g., 10%) to validate before full rollout"
+context = """
+Canary deployment routes a small percentage of traffic (typically 5-10%) to the
+new version while the majority stays on the old version. If smoke tests pass
+on the canary, traffic is gradually increased (25%, 50%, 100%). If tests fail,
+only the small percentage is affected before automatic rollback.
+"""
+id = "f12a2b3c-d4e5-6789-abcd-123456781205"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the main purpose of regression testing?"
+prompt.distractors = [
+    "Testing new features before release",
+    "Performance testing under load",
+    "Security vulnerability scanning"
+]
+answer.answer = "Ensuring that bug fixes stay fixed and new changes don't break existing functionality"
+context = """
+Regression tests verify that previously fixed bugs don't reappear and new code
+doesn't break existing features. Every bug fix should include a regression test
+that fails without the fix and passes with it. This prevents the same bug from
+being fixed multiple times.
+"""
+id = "f12a2b3c-d4e5-6789-abcd-123456781206"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What CI/CD output format is universally supported for test results?"
+answer.answer = "JUnit XML"
+answer.alternatives = ["junit", "JUnit", "junit xml", "XML"]
+context = """
+JUnit XML is the de facto standard for CI/CD test results. GitHub Actions,
+GitLab CI, Jenkins, CircleCI, and others all parse JUnit XML for test reporting.
+Use --format junit --output results.xml to generate this format from mcp-tester.
+"""
+id = "f12a2b3c-d4e5-6789-abcd-123456781207"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "When should regression tests be tagged with severity levels?"
+prompt.distractors = [
+    "Only for tests that have failed before",
+    "Only for performance-related tests",
+    "Only for tests affecting external systems"
+]
+answer.answer = "Always, to enable running critical regressions quickly and prioritizing test execution"
+context = """
+Tagging regressions with severity (critical, medium, low) enables flexible test
+execution. Run only critical tests for quick validation, full suite for thorough
+testing. Critical regressions might run on every commit, while medium runs nightly.
+Tags also help prioritize investigation when multiple tests fail.
+"""
+id = "f12a2b3c-d4e5-6789-abcd-123456781208"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What GitHub Actions feature runs the same test job with different configurations?"
+prompt.distractors = [
+    "workflow_dispatch inputs",
+    "reusable workflows",
+    "composite actions"
+]
+answer.answer = "Matrix strategy which creates parallel jobs for each combination of values"
+context = """
+Matrix strategy in GitHub Actions runs the same job multiple times with different
+variable combinations. Use for testing different scenario directories, environments,
+or configurations in parallel. Example: matrix: { scenario-dir: [smoke, integration] }
+creates two parallel jobs.
+"""
+id = "f12a2b3c-d4e5-6789-abcd-123456781209"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What should you do when a regression test becomes obsolete due to component replacement?"
+prompt.distractors = [
+    "Delete it immediately to reduce test count",
+    "Convert it to a unit test",
+    "Move it to an archive folder"
+]
+answer.answer = "Mark it as deprecated with skip: true and document the reason, keeping it for reference"
+context = """
+Deprecated regression tests should be marked with skip: true and skip_reason
+explaining why. Keep the test for documentation and historical context until
+a major version upgrade. Include metadata about when it was deprecated and when
+it's safe to delete (e.g., 'Safe to remove after v3.0.0').
+"""
+id = "f12a2b3c-d4e5-6789-abcd-123456781210"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the correct order for a staged CI/CD pipeline for MCP servers?"
+prompt.distractors = [
+    "Deploy → Test → Build → Release",
+    "Test → Build → Deploy → Monitor",
+    "Build → Deploy → Release → Test"
+]
+answer.answer = "Build → Unit Test → Integration Test → Deploy Staging → Test Staging → Deploy Production"
+context = """
+A proper CI/CD pipeline is staged: Build and lint first, then unit tests (fast
+feedback), then integration tests with a running server, then deploy to staging,
+then test staging with full suite, finally deploy to production with canary
+testing. Each stage gates the next.
+"""
+id = "f12a2b3c-d4e5-6789-abcd-123456781211"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What mcp-tester config option runs multiple test scenarios concurrently?"
+answer.answer = "--parallel"
+answer.alternatives = ["parallel", "-p", "--parallel 4"]
+context = """
+Use --parallel N to run N test scenarios concurrently. This speeds up test
+execution but may cause issues if tests share state or if the server can't
+handle concurrent requests. For integration tests, --parallel 4 is a reasonable
+default; for load testing, increase as needed.
+"""
+id = "f12a2b3c-d4e5-6789-abcd-123456781212"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What assertion validates that response time meets SLA requirements?"
+prompt.distractors = [
+    "timing.duration: 1000",
+    "performance.max_ms: 1000",
+    "latency.threshold: 1000"
+]
+answer.answer = "response_time_ms.less_than: 1000"
+context = """
+Use response_time_ms assertions to validate performance SLAs. Combine less_than
+and greater_than for ranges. Example: response_time_ms: { less_than: 1000,
+greater_than: 0 }. This ensures requests complete within SLA while also verifying
+they're not suspiciously instant (which might indicate caching or errors).
+"""
+id = "f12a2b3c-d4e5-6789-abcd-123456781213"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What should a regression test include besides the test steps?"
+prompt.distractors = [
+    "Performance benchmarks and load testing",
+    "Code coverage requirements",
+    "Deployment instructions"
+]
+answer.answer = "Context about the original bug, fix version, and why the test exists"
+context = """
+Regression tests should include: description of the original bug, issue/PR
+references, version where fixed, root cause explanation, and tags for filtering.
+This context helps future maintainers understand why the test exists and whether
+it's still relevant when reviewing the test suite.
+"""
+id = "f12a2b3c-d4e5-6789-abcd-123456781214"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "How should you handle a test failure during canary deployment?"
+prompt.distractors = [
+    "Continue rollout and investigate later",
+    "Increase canary percentage to gather more data",
+    "Disable the failing test and proceed"
+]
+answer.answer = "Automatically rollback the canary deployment and alert the team"
+context = """
+Canary deployment failures should trigger automatic rollback to the previous
+stable version. The small percentage affected by the canary minimizes impact.
+Alert the team, preserve logs and test results for investigation, but don't
+promote a failing deployment. This is the whole point of canary testing.
+"""
+id = "f12a2b3c-d4e5-6789-abcd-123456781215"

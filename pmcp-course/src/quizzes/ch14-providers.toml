@@ -1,0 +1,248 @@
+# Quiz: Identity Provider Integration
+
+id = "ch14-providers"
+title = "Enterprise Identity Provider Integration"
+lesson_id = "ch14"
+pass_threshold = 0.7
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the primary reason to use AWS Cognito for MCP server authentication?"
+prompt.distractors = [
+    "It's the only IdP that supports JWT",
+    "It has the lowest latency globally",
+    "It's required for all AWS services"
+]
+answer.answer = "Deep integration with AWS services like Lambda, API Gateway, and IAM for AWS-native applications"
+context = """
+AWS Cognito is ideal for AWS-native applications because it integrates with
+Lambda authorizers, API Gateway, Identity Pools for AWS credentials, and IAM
+roles. If your MCP server runs on AWS infrastructure and accesses AWS services,
+Cognito provides seamless integration without extra configuration.
+"""
+id = "f14a2b3c-d4e5-6789-abcd-123456781401"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "How does Auth0 differ from Cognito in its approach to permissions?"
+prompt.distractors = [
+    "Auth0 only supports API keys",
+    "Auth0 doesn't support custom permissions",
+    "Auth0 requires AWS IAM roles"
+]
+answer.answer = "Auth0 uses RBAC with a 'permissions' array in tokens, while Cognito uses groups and custom scopes"
+context = """
+Auth0's RBAC system places permissions directly in the 'permissions' array of
+access tokens when enabled. Cognito uses 'cognito:groups' for group membership
+and custom scopes defined in resource servers. Auth0's approach is more
+developer-friendly; Cognito's is more AWS-integrated.
+"""
+id = "f14a2b3c-d4e5-6789-abcd-123456781402"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "In Cognito tokens, what claim contains the user's group memberships?"
+answer.answer = "cognito:groups"
+answer.alternatives = ["groups", "cognito groups", "cognito:group"]
+context = """
+Cognito places group memberships in the 'cognito:groups' claim as an array of
+group names. Use this to implement role-based access: map group names like
+'Admins' or 'Developers' to permission sets in your MCP server code.
+"""
+id = "f14a2b3c-d4e5-6789-abcd-123456781403"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What claim should you use as the stable user identifier in Microsoft Entra ID?"
+prompt.distractors = [
+    "sub - the subject claim",
+    "preferred_username - the UPN",
+    "email - the user's email address"
+]
+answer.answer = "oid (Object ID) - the GUID that uniquely identifies the user across Microsoft services"
+context = """
+In Entra ID, use 'oid' (Object ID) as the stable user identifier. The 'sub'
+claim may change across applications, and 'preferred_username' (UPN) can be
+renamed. The 'oid' is a GUID that remains constant for the user's lifetime
+across all Microsoft 365 and Azure services.
+"""
+id = "f14a2b3c-d4e5-6789-abcd-123456781404"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the format of the Auth0 'sub' claim?"
+prompt.distractors = [
+    "A UUID like Cognito",
+    "The user's email address",
+    "A numeric user ID"
+]
+answer.answer = "provider|id format like 'auth0|123456' or 'google-oauth2|789'"
+context = """
+Auth0's 'sub' claim uses the format 'provider|id' where provider is the identity
+source (auth0, google-oauth2, samlp, etc.) and id is the user's identifier from
+that provider. This format tells you how the user authenticated, useful for
+handling federated identities differently.
+"""
+id = "f14a2b3c-d4e5-6789-abcd-123456781405"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the recommended clock skew leeway for Entra ID tokens?"
+prompt.distractors = [
+    "0 seconds - no tolerance",
+    "30 seconds",
+    "60 seconds"
+]
+answer.answer = "5 minutes (300 seconds) as recommended by Microsoft"
+context = """
+Microsoft recommends 5 minutes (300 seconds) of clock skew leeway for Entra ID
+tokens. This is more generous than the typical 60 seconds because enterprise
+environments may have servers with less precise time synchronization. Configure
+leeway_seconds: 300 for Entra ID validators.
+"""
+id = "f14a2b3c-d4e5-6789-abcd-123456781406"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What Entra ID claim contains app roles defined in the app registration?"
+answer.answer = "roles"
+answer.alternatives = ["role", "app_roles", "appRoles"]
+context = """
+Entra ID places app roles in the 'roles' claim as an array of role values
+(e.g., ['MCP.Admin', 'MCP.User']). These roles are defined in the app
+registration under 'App roles' and assigned to users or groups. Unlike groups
+which are GUIDs, roles are the human-readable values you defined.
+"""
+id = "f14a2b3c-d4e5-6789-abcd-123456781407"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "How do you add custom claims in Auth0 tokens?"
+prompt.distractors = [
+    "Modify the JWT directly before sending",
+    "Configure them in the API settings",
+    "Set them in the client request"
+]
+answer.answer = "Use Auth0 Actions (or Rules) to add namespaced custom claims during authentication"
+context = """
+Auth0 requires custom claims to use namespacing (e.g., 'https://myapp/department').
+Use Actions (modern) or Rules (legacy) to add these claims during the login flow.
+Actions run JavaScript code that can access user metadata, event context, and
+external APIs to enrich tokens with custom claims.
+"""
+id = "f14a2b3c-d4e5-6789-abcd-123456781408"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the JWKS URI pattern for AWS Cognito?"
+prompt.distractors = [
+    "https://cognito-idp.{region}.amazonaws.com/.well-known/jwks.json",
+    "https://{user_pool_id}.auth.{region}.amazoncognito.com/jwks",
+    "https://auth.aws.amazon.com/{user_pool_id}/keys"
+]
+answer.answer = "https://cognito-idp.{region}.amazonaws.com/{user_pool_id}/.well-known/jwks.json"
+context = """
+Cognito's JWKS endpoint includes both region and user pool ID:
+https://cognito-idp.{region}.amazonaws.com/{user_pool_id}/.well-known/jwks.json
+This is the issuer URL with /.well-known/jwks.json appended. The issuer itself
+is: https://cognito-idp.{region}.amazonaws.com/{user_pool_id}
+"""
+id = "f14a2b3c-d4e5-6789-abcd-123456781409"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "In a multi-tenant MCP server, what is the primary purpose of tenant isolation?"
+prompt.distractors = [
+    "Improve performance through partitioning",
+    "Reduce cloud costs",
+    "Simplify deployment"
+]
+answer.answer = "Ensure one tenant cannot access another tenant's data, tools, or resources"
+context = """
+Tenant isolation is a security requirement: Organization A must never see
+Organization B's data. This applies to database queries, file storage, tool
+configurations, and any resource. Use schema-per-tenant, row-level security,
+or prefix-based isolation to enforce boundaries at the data layer.
+"""
+id = "f14a2b3c-d4e5-6789-abcd-123456781410"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "How do Entra ID groups appear in JWT tokens compared to Auth0?"
+prompt.distractors = [
+    "Both use group names",
+    "Auth0 uses GUIDs, Entra uses names",
+    "Neither includes groups by default"
+]
+answer.answer = "Entra uses GUIDs (requiring mapping to permissions), Auth0 uses organization features or custom claims"
+context = """
+Entra ID includes group GUIDs in the 'groups' claim, not human-readable names.
+You must maintain a mapping from GUIDs to permissions. Auth0 uses Organizations
+for multi-tenancy or custom claims for groups. Neither approach is automatic;
+both require configuration and mapping code.
+"""
+id = "f14a2b3c-d4e5-6789-abcd-123456781411"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What Auth0 feature provides built-in multi-tenant (B2B) support?"
+answer.answer = "Organizations"
+answer.alternatives = ["organizations", "Auth0 Organizations", "org"]
+context = """
+Auth0 Organizations is the built-in feature for B2B multi-tenancy. It provides
+org_id and org_name claims in tokens, per-organization settings, member
+management, and branded login pages. Enable Organizations in your Auth0
+Application settings and use org_id as the tenant identifier.
+"""
+id = "f14a2b3c-d4e5-6789-abcd-123456781412"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is schema-per-tenant isolation?"
+prompt.distractors = [
+    "Different database servers per tenant",
+    "Separate tables within one schema",
+    "Different S3 buckets per tenant"
+]
+answer.answer = "Each tenant gets a separate database schema with isolated tables within one database"
+context = """
+Schema-per-tenant creates a database schema (namespace) for each tenant:
+tenant_abc.resources, tenant_xyz.resources. All tenants share one database
+server but have completely isolated tables. Use SET search_path to switch
+schemas per request. Balances isolation with operational simplicity.
+"""
+id = "f14a2b3c-d4e5-6789-abcd-123456781413"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What PostgreSQL feature provides row-level tenant isolation in shared tables?"
+prompt.distractors = [
+    "Table partitioning",
+    "Foreign key constraints",
+    "Check constraints"
+]
+answer.answer = "Row Level Security (RLS) with policies that filter by tenant_id"
+context = """
+PostgreSQL RLS creates policies that automatically filter queries by tenant.
+Enable with ALTER TABLE ENABLE ROW LEVEL SECURITY, then create a policy:
+CREATE POLICY tenant_isolation USING (tenant_id = current_setting('app.tenant_id')).
+Set the tenant context per request; RLS handles filtering transparently.
+"""
+id = "f14a2b3c-d4e5-6789-abcd-123456781414"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the On-Behalf-Of (OBO) flow in Entra ID?"
+prompt.distractors = [
+    "Admin impersonating a user",
+    "Service account authentication",
+    "User delegating to another user"
+]
+answer.answer = "A service exchanging a user's token for a new token to call downstream APIs as that user"
+context = """
+On-Behalf-Of flow allows Service A to call Service B using the original user's
+identity. Service A exchanges the user's token for a new token scoped to Service
+B. This maintains user context through the call chain rather than switching to
+service identity. Use grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer.
+"""
+id = "f14a2b3c-d4e5-6789-abcd-123456781415"

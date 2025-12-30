@@ -1,0 +1,243 @@
+# Quiz: AI-Assisted MCP Development
+
+id = "ch15-ai-assisted"
+title = "AI-Assisted MCP Server Development"
+lesson_id = "ch15"
+pass_threshold = 0.7
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why is Rust particularly well-suited for AI-assisted code generation?"
+prompt.distractors = [
+    "Rust code is shorter than other languages",
+    "AI can only generate statically typed code",
+    "Rust requires less testing"
+]
+answer.answer = "Rust's compiler provides detailed, structured error messages that AI can parse and use to iteratively fix code"
+context = """
+Rust's compiler catches errors at compile time with detailed, actionable error messages.
+AI assistants can read these errors, understand what went wrong, and apply targeted fixes.
+This creates a feedback loop: generate → compile → fix → repeat until success. Dynamic
+languages find errors at runtime, making AI iteration much harder.
+"""
+id = "f15a1b2c-d3e4-5678-abcd-123456780101"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the primary purpose of the cargo-pmcp CLI tool in AI-assisted development?"
+prompt.distractors = [
+    "It trains the AI on MCP patterns",
+    "It runs AI models locally",
+    "It deploys servers to production"
+]
+answer.answer = "It scaffolds complete server structures so AI only needs to implement business logic"
+context = """
+cargo-pmcp generates the entire project structure - workspace, crates, Cargo.toml files,
+module organization, and transport setup. This eliminates boilerplate decisions, letting
+AI focus on tool implementation. The consistent structure also makes AI-generated code
+more predictable and maintainable.
+"""
+id = "f15a1b2c-d3e4-5678-abcd-123456780102"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What command creates a new MCP workspace using cargo-pmcp?"
+answer.answer = "cargo pmcp new"
+answer.alternatives = ["cargo pmcp new <name>", "cargo-pmcp new"]
+context = """
+The 'cargo pmcp new <workspace-name>' command creates a complete workspace structure
+including Cargo.toml, server-common crate, scenarios directory, and proper workspace
+configuration. This is always the first step - never create these files manually.
+"""
+id = "f15a1b2c-d3e4-5678-abcd-123456780103"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What are the main components of the AI-compiler feedback loop?"
+prompt.distractors = [
+    "Design → Code → Deploy → Monitor",
+    "Write → Test → Refactor → Document",
+    "Plan → Execute → Review → Merge"
+]
+answer.answer = "Generate → Compile → Parse Errors → Fix → Repeat until quality gates pass"
+context = """
+The AI-compiler feedback loop has AI generate code, run cargo build, parse any errors,
+apply targeted fixes, and repeat until compilation succeeds. Then clippy warnings are
+fixed, tests are run, and the cycle continues until all quality gates pass. This
+iterative process converges quickly because Rust errors are specific and actionable.
+"""
+id = "f15a1b2c-d3e4-5678-abcd-123456780104"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Where should the Claude Code mcp-developer agent be installed for global availability?"
+prompt.distractors = [
+    "In the project's node_modules directory",
+    "In /usr/local/share/claude/agents/",
+    "In the user's home bin directory"
+]
+answer.answer = "~/.claude/agents/mcp-developer.md"
+context = """
+User-level agent installation at ~/.claude/agents/ makes the agent available across
+all projects. For project-specific installation, use .claude/agents/ in the project
+root. The agent file contains knowledge about cargo-pmcp workflow, TypedTool patterns,
+and quality standards.
+"""
+id = "f15a1b2c-d3e4-5678-abcd-123456780105"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the difference between Error::validation() and Error::internal() in MCP tools?"
+prompt.distractors = [
+    "validation() is for unit tests, internal() is for production",
+    "validation() logs to file, internal() logs to console",
+    "validation() is async, internal() is sync"
+]
+answer.answer = "validation() is for user-fixable input errors, internal() is for system/server errors"
+context = """
+Use Error::validation() when the user can fix the problem by changing their input (e.g.,
+'City name cannot be empty'). Use Error::internal() for server-side issues the user
+cannot fix (e.g., 'Failed to connect to weather API'). This distinction helps AI
+clients understand whether to retry with different input or report a server problem.
+"""
+id = "f15a1b2c-d3e4-5678-abcd-123456780106"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What command adds a new server to an existing cargo-pmcp workspace?"
+answer.answer = "cargo pmcp add server"
+answer.alternatives = ["cargo pmcp add server <name>", "cargo pmcp add server <name> --template <template>"]
+context = """
+The 'cargo pmcp add server <name> --template <template>' command adds a new server
+to an existing workspace. It creates the core library crate (mcp-<name>-core), binary
+crate (<name>-server), and test scenario directory. Template options include minimal,
+calculator, and sqlite_explorer.
+"""
+id = "f15a1b2c-d3e4-5678-abcd-123456780107"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "How does Kiro's steering files approach differ from Claude Code's agents?"
+prompt.distractors = [
+    "Steering files require manual invocation each time",
+    "Kiro cannot connect to MCP servers",
+    "Steering files are written in a different language"
+]
+answer.answer = "Kiro's steering files are always-active persistent knowledge, while Claude Code agents are on-demand"
+context = """
+Kiro's steering files in ~/.kiro/powers/ are read for every conversation automatically,
+providing persistent context (10,000+ lines). Claude Code agents are invoked on-demand
+when keywords are detected, with smaller per-invocation context (~600 lines). Choose
+based on whether you want always-available vs. triggered assistance.
+"""
+id = "f15a1b2c-d3e4-5678-abcd-123456780108"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What advantage does compile-time error catching provide over runtime errors?"
+prompt.distractors = [
+    "Faster development because compilation is instant",
+    "Better performance in production",
+    "Smaller binary sizes"
+]
+answer.answer = "Errors are caught before deployment, and AI can iterate to fix them during development"
+context = """
+Rust catches type errors, ownership issues, and many bugs at compile time - before
+the code ever runs. This means AI can generate code, immediately see what's wrong,
+and fix it. With dynamic languages, bugs may only appear in production. The
+compile-time feedback enables rapid iteration with confidence.
+"""
+id = "f15a1b2c-d3e4-5678-abcd-123456780109"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What derive macros are required for TypedTool input types?"
+prompt.distractors = [
+    "Debug, Clone, Default",
+    "Serialize, Clone, Copy",
+    "Debug, Display, FromStr"
+]
+answer.answer = "Debug, Deserialize, and JsonSchema"
+context = """
+Input types need Debug for error messages, Deserialize for JSON parsing from MCP
+requests, and JsonSchema for automatic schema generation. Add #[schemars(deny_unknown_fields)]
+to reject unknown properties. Output types use Serialize instead of Deserialize.
+"""
+id = "f15a1b2c-d3e4-5678-abcd-123456780110"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What command starts the hot-reload development server in cargo-pmcp?"
+answer.answer = "cargo pmcp dev"
+answer.alternatives = ["cargo pmcp dev --server <name>", "cargo pmcp dev --server"]
+context = """
+The 'cargo pmcp dev --server <name>' command builds and starts the MCP server with
+hot-reload enabled on http://0.0.0.0:3000. When source files change, it automatically
+rebuilds and restarts. This provides a rapid development experience for testing
+tool changes without manual restarts.
+"""
+id = "f15a1b2c-d3e4-5678-abcd-123456780111"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why should you never create Cargo.toml or project directories manually in cargo-pmcp projects?"
+prompt.distractors = [
+    "It violates the Rust license",
+    "cargo-pmcp will overwrite them anyway",
+    "Manual files cause compilation errors"
+]
+answer.answer = "Manual creation misses proven patterns, conventions, and scaffolding that cargo-pmcp provides"
+context = """
+cargo-pmcp encodes best practices from production servers. Manual file creation leads
+to inconsistent structure, missing patterns (like transport setup), and wasted time
+on boilerplate. Let cargo-pmcp handle structure - focus your editing on the tool
+implementations in crates/mcp-<name>-core/src/tools/.
+"""
+id = "f15a1b2c-d3e4-5678-abcd-123456780112"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the typical convergence pattern for AI-assisted MCP tool development?"
+prompt.distractors = [
+    "AI generates perfect code on the first try",
+    "Complexity increases with each iteration",
+    "More iterations mean worse code quality"
+]
+answer.answer = "Simple tools: 1-2 iterations, Complex tools: 3-5 iterations, Integration issues: 5-10 iterations"
+context = """
+The AI-compiler feedback loop converges because errors are finite and each fix is
+progress. Simple type mismatches fix in 1-2 tries. Complex lifetime or async issues
+may take 3-5 iterations. Integration problems (multiple files, API calls) may need
+5-10 iterations. The compiler is deterministic, so solutions converge.
+"""
+id = "f15a1b2c-d3e4-5678-abcd-123456780113"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What configuration file does Cursor use for project-specific AI instructions?"
+prompt.distractors = [
+    ".cursor/settings.json",
+    ".github/cursor-instructions.md",
+    "cursor.config.yaml"
+]
+answer.answer = ".cursorrules"
+context = """
+Cursor uses .cursorrules in the project root for project-specific instructions.
+This file contains MCP development rules, cargo-pmcp workflow reminders, TypedTool
+patterns, and quality standards. Cursor reads this file automatically when editing
+Rust MCP code in the project.
+"""
+id = "f15a1b2c-d3e4-5678-abcd-123456780114"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What command generates test scenarios automatically from a running MCP server?"
+answer.answer = "cargo pmcp test --generate-scenarios"
+answer.alternatives = ["cargo pmcp test --server <name> --generate-scenarios"]
+context = """
+The 'cargo pmcp test --server <name> --generate-scenarios' connects to the running
+dev server, discovers tools via tools/list, and generates smart test scenarios with
+realistic values and assertions. This creates scenarios/server-name/generated.yaml
+that can be customized and extended.
+"""
+id = "f15a1b2c-d3e4-5678-abcd-123456780115"

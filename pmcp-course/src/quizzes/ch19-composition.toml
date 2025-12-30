@@ -1,0 +1,306 @@
+# Quiz: Server Composition
+
+id = "ch19-composition"
+title = "Server Composition: Foundation, Domain, and Orchestration Patterns"
+lesson_id = "ch19"
+pass_threshold = 0.7
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "When should an organization consider implementing server composition patterns?"
+prompt.distractors = [
+    "When building their first MCP server",
+    "When a single team owns all MCP servers",
+    "When servers only run in development environments"
+]
+answer.answer = "When they have 10+ MCP servers across teams with duplicated functionality"
+context = """
+Server composition is an advanced pattern that adds complexity. It becomes valuable when you have
+many servers (10+), see duplicated code (like auth validation in every server), have discovery
+problems ("does anyone have a tool that does X?"), or need domain-specific hierarchies. For small
+deployments with few servers, the overhead isn't justified.
+"""
+id = "f19a1b2c-d3e4-5678-abcd-123456790001"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What does the DRY principle mean in the context of MCP server development?"
+prompt.distractors = [
+    "Delete Redundant YAML - remove duplicate configuration files",
+    "Disable Remote Yields - prevent async operations",
+    "Direct Request Yielding - pass requests without processing"
+]
+answer.answer = "Don't Repeat Yourself - write common functionality once in foundation servers, reuse everywhere"
+context = """
+DRY (Don't Repeat Yourself) in MCP means writing shared functionality (authentication, database
+access, file operations) once in foundation servers instead of duplicating it across every domain
+server. When auth logic lives in one place, bug fixes and updates automatically apply everywhere,
+and teams can focus on domain-specific business logic.
+"""
+id = "f19a1b2c-d3e4-5678-abcd-123456790002"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Which is NOT a characteristic of a good foundation server?"
+prompt.distractors = [
+    "Stable APIs that rarely change",
+    "Generic with no business-specific logic",
+    "Well-tested since bugs affect all consumers"
+]
+answer.answer = "Contains department-specific business rules and calculations"
+context = """
+Foundation servers should be: STABLE (breaking changes affect all domains), GENERIC (no business
+logic), COMPOSABLE (combine easily with other foundations), WELL-TESTED (bugs cascade everywhere),
+and DOCUMENTED (clear contracts). Business rules, domain calculations, and department-specific
+logic belong in domain servers, not foundations.
+"""
+id = "f19a1b2c-d3e4-5678-abcd-123456790003"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is a good candidate for a foundation server?"
+prompt.distractors = [
+    "Budget forecasting calculations",
+    "Employee promotion workflows",
+    "Customer pricing rules"
+]
+answer.answer = "Authentication, database connectivity, and file system access"
+context = """
+Good foundation candidates are cross-cutting infrastructure concerns: authentication/authorization,
+database connectivity, file system access, HTTP client operations, caching, logging/metrics. These
+are stable, generic capabilities every domain needs. Business-specific items like budget forecasts,
+HR workflows, or pricing rules are domain server concerns.
+"""
+id = "f19a1b2c-d3e4-5678-abcd-123456790004"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "In the three-tier server composition hierarchy, what is the role of domain servers?"
+prompt.distractors = [
+    "Provide raw database and file access to all servers",
+    "Orchestrate complex workflows spanning multiple departments",
+    "Define authentication and authorization rules"
+]
+answer.answer = "Build business-specific tools using foundation components for a specific department or capability"
+context = """
+The three tiers are: Foundation (core building blocks like auth, database, files), Domain
+(business-specific servers for Finance, HR, Engineering that compose foundations), and
+Orchestration (cross-domain workflows). Domain servers own business logic like expense_report,
+employee_lookup, or deploy_service, built on top of shared foundation capabilities.
+"""
+id = "f19a1b2c-d3e4-5678-abcd-123456790005"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What security measure should a FileSystemFoundation implement to prevent directory traversal attacks?"
+prompt.distractors = [
+    "Check file extension only",
+    "Limit file size to 10MB",
+    "Require admin authentication"
+]
+answer.answer = "Validate that the canonical path starts with the allowed base path"
+context = """
+Directory traversal attacks use '../' sequences to escape allowed directories (../../etc/passwd).
+FileSystemFoundation should canonicalize the requested path and verify it still starts_with the
+base path. Combined with extension allowlists and size limits, this creates defense in depth.
+The foundation handles this once so domain servers don't implement it incorrectly.
+"""
+id = "f19a1b2c-d3e4-5678-abcd-123456790006"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What trait do dynamic resource providers implement to handle URI templates like 'tables://{table}/schema'?"
+answer.answer = "DynamicResourceProvider"
+answer.alternatives = ["dynamic_resources::DynamicResourceProvider", "dynamic resource provider"]
+context = """
+DynamicResourceProvider enables pattern-based resources using URI templates with placeholders.
+Implementations define templates() returning ResourceTemplate structs, and fetch() to resolve
+specific URIs. This allows resources like tables://{table}/schema where {table} matches any
+table name, making database exploration flexible without predefined static resources.
+"""
+id = "f19a1b2c-d3e4-5678-abcd-123456790007"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why should foundation servers implement versioning?"
+prompt.distractors = [
+    "To track which user made changes",
+    "To generate changelogs automatically",
+    "To enforce code review policies"
+]
+answer.answer = "To ensure domain servers can check compatibility before composing foundations"
+context = """
+Foundation changes can break all dependent domain servers. Version checking (using semver)
+lets domain servers verify they're compatible with the foundation version at startup. A
+min_compatible_version() method enables backwards compatibility while evolving foundations.
+This prevents subtle runtime failures from incompatible foundation updates.
+"""
+id = "f19a1b2c-d3e4-5678-abcd-123456790008"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What problem does cross-domain communication solve?"
+prompt.distractors = [
+    "Reducing network latency between servers",
+    "Enforcing consistent error messages",
+    "Minimizing database connection pools"
+]
+answer.answer = "Enabling tasks that require tools from multiple domains, like onboarding needing HR + Engineering + Finance"
+context = """
+Some workflows span multiple domains: employee onboarding needs HR (create employee record),
+Engineering (provision accounts), and Finance (set up payroll). Cross-domain communication
+patterns include orchestration servers (coordinate multiple domains), shared events (domains
+publish/subscribe), and gateway servers (single entry point routing to appropriate domains).
+"""
+id = "f19a1b2c-d3e4-5678-abcd-123456790009"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What DSL helper in PMCP workflows references the output of a previous step?"
+prompt.distractors = [
+    "prompt_arg(\"field_name\") - gets user input",
+    "constant(value) - uses fixed value",
+    "field(\"path\") - extracts from current input"
+]
+answer.answer = "from_step(\"step_name\") - references output from a named workflow step"
+context = """
+PMCP workflow DSL helpers: prompt_arg(\"name\") gets values from the workflow prompt/input,
+from_step(\"step\") references output from previous steps, field(\"path\") extracts nested
+fields, and constant(value) provides fixed values. from_step enables data flow: step 2 can
+use from_step(\"step1\").field(\"id\") to pass step 1's output ID to step 2.
+"""
+id = "f19a1b2c-d3e4-5678-abcd-123456790010"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the key difference between orchestration and direct tool calls?"
+prompt.distractors = [
+    "Orchestration is faster because it skips validation",
+    "Direct calls support more tool types",
+    "Orchestration only works with synchronous tools"
+]
+answer.answer = "Orchestration defines workflows that execute server-side with guaranteed step sequencing"
+context = """
+Direct tool calls: AI decides what to call, when, and in what order - flexible but unpredictable.
+Orchestration: predefined workflows execute server-side with deterministic step order. Workflows
+guarantee: Step 2 always follows Step 1, rollback on failure, audit logging, and consistent
+behavior regardless of which AI client invokes them. Critical for compliance-sensitive operations.
+"""
+id = "f19a1b2c-d3e4-5678-abcd-123456790011"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "When should you NOT use orchestration patterns?"
+prompt.distractors = [
+    "When workflows need guaranteed execution order",
+    "When audit trails are required for compliance",
+    "When multiple domains must coordinate"
+]
+answer.answer = "When the AI needs flexibility to explore different approaches based on intermediate results"
+context = """
+Orchestration trades flexibility for predictability. Don't use it when: the AI should explore
+multiple approaches, steps depend heavily on context the AI discovered, workflows are highly
+variable per user, or the interaction is conversational. For research tasks or exploratory
+debugging, let the AI call tools directly rather than constraining it to fixed workflows.
+"""
+id = "f19a1b2c-d3e4-5678-abcd-123456790012"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "How does server composition help with tool discovery?"
+prompt.distractors = [
+    "It automatically generates documentation websites",
+    "It creates IDE autocomplete for tool names",
+    "It sends email notifications about new tools"
+]
+answer.answer = "Organized hierarchies let clients query domains for relevant capabilities instead of searching 50+ servers"
+context = """
+Without composition, an AI client must search across dozens of servers to find 'expense status'.
+With composition: clear domain organization (HR, Finance, Engineering) lets clients ask the right
+domain server directly. Domain servers can expose discovery resources (domain://info/tools) that
+list available capabilities, and orchestration servers advertise cross-domain workflows.
+"""
+id = "f19a1b2c-d3e4-5678-abcd-123456790013"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What is the purpose of domain-specific types in domain servers?"
+prompt.distractors = [
+    "To make JSON serialization faster",
+    "To reduce memory usage in large datasets",
+    "To enable automatic database schema generation"
+]
+answer.answer = "To provide compile-time safety and clear contracts for domain concepts like Employee or Expense"
+context = """
+Domain-specific types (struct Employee, struct ExpenseReport, enum ApprovalStatus) provide:
+compile-time validation (can't pass Order to employee tools), self-documenting APIs through
+JsonSchema derive, clear ownership boundaries between domains, and type-safe tool inputs/outputs.
+Serde + JsonSchema derive macros enable automatic JSON handling and schema generation for AI clients.
+"""
+id = "f19a1b2c-d3e4-5678-abcd-123456790014"
+
+[[questions]]
+type = "ShortAnswer"
+prompt.prompt = "What PMCP struct represents a complete workflow with multiple connected steps?"
+answer.answer = "SequentialWorkflow"
+answer.alternatives = ["Workflow", "sequential workflow", "Sequential Workflow"]
+context = """
+SequentialWorkflow defines a series of WorkflowStep operations that execute in order. Each step
+references a tool, specifies parameter bindings (from input or previous steps), and can include
+conditions. The workflow validates at build time that all step references exist and types match.
+Server-side execution ensures consistent behavior across all AI clients.
+"""
+id = "f19a1b2c-d3e4-5678-abcd-123456790015"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "Why should foundations be thoroughly tested more than typical code?"
+prompt.distractors = [
+    "Foundation tests run faster than domain tests",
+    "Foundations are required to have 100% coverage by law",
+    "Testing foundations generates better documentation"
+]
+answer.answer = "Bugs in foundations affect all consuming domain servers, cascading failures across the organization"
+context = """
+A bug in AuthFoundation affects every domain server that composes it - potentially breaking all
+MCP servers in the organization simultaneously. Foundations need comprehensive tests: unit tests
+for each method, integration tests for common compositions, security tests (like path traversal
+prevention), and property-based tests for edge cases. The investment in testing foundations
+pays dividends in stability across all dependent domains.
+"""
+id = "f19a1b2c-d3e4-5678-abcd-123456790016"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "What does the priority() method on DynamicResourceProvider control?"
+prompt.distractors = [
+    "Network priority for fetching resources",
+    "Memory allocation priority for caching",
+    "Thread priority for async execution"
+]
+answer.answer = "Resolution order when multiple providers might match the same URI pattern"
+context = """
+When multiple DynamicResourceProviders have overlapping URI patterns, priority determines which
+handles a request. Higher priority (larger number) providers are checked first. This enables
+domain servers to override foundation behaviors: a finance domain could provide custom handling
+for financial tables while the foundation handles generic table access at lower priority.
+"""
+id = "f19a1b2c-d3e4-5678-abcd-123456790017"
+
+[[questions]]
+type = "MultipleChoice"
+prompt.prompt = "In server composition, what ensures that a domain server has all required foundations at startup?"
+prompt.distractors = [
+    "Runtime duck typing - check if methods exist when called",
+    "Configuration files listing required services",
+    "Environment variables specifying foundation URLs"
+]
+answer.answer = "Rust's type system - foundations are passed as typed parameters, missing ones cause compile errors"
+context = """
+Domain servers take foundation parameters with explicit types: create_finance_server(auth:
+Arc<AuthFoundation>, db: Arc<DatabaseFoundation>). Missing a required foundation is a compile
+error, not a runtime failure. Combined with foundation versioning checks, this ensures domain
+servers have compatible foundations before they start serving requests.
+"""
+id = "f19a1b2c-d3e4-5678-abcd-123456790018"
+
