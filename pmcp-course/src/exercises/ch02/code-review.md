@@ -1,5 +1,5 @@
 ::: exercise
-id: ch02-03-code-review-basics
+id: ch02-03-code-review
 type: code_review
 difficulty: beginner
 time: 20 minutes

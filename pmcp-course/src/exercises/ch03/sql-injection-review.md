@@ -3,7 +3,7 @@ id: ch03-02-sql-injection-review
 type: code-review
 difficulty: intermediate
 time: 25 minutes
-prerequisites: ch03-01-db-query-basics, ch02-03-code-review-basics
+prerequisites: ch03-01-db-query-basics, ch02-03-code-review
 :::
 
 You've been asked to review a database query tool before it goes to production. The developer is new to security and made several classic mistakes. SQL injection vulnerabilities can lead to data breaches, data loss, and complete system compromise.
