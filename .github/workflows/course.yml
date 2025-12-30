@@ -17,12 +17,10 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 concurrency:
-  group: "course-pages"
-  cancel-in-progress: false
+  group: "course-build"
+  cancel-in-progress: true
 
 jobs:
   # Build the course book
@@ -120,32 +118,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Deploy book to GitHub Pages (only on main branch push)
-  deploy:
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages-course
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Download book artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: course-book
-          path: book
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: book
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+  # NOTE: Deployment to GitHub Pages is handled by docs.yml workflow
+  # which creates a combined site with landing page, /book/, and /course/
+  # This workflow only builds and packages course content
 
   # Validate examples compile (on PR)
   validate-examples:

@@ -24,7 +24,8 @@ PMCP is a complete MCP ecosystem for Rust, providing everything you need to buil
 
 - **🦀 pmcp SDK** - High-performance Rust crate with full MCP protocol support
 - **⚡ cargo-pmcp** - CLI toolkit for scaffolding, testing, and development
-- **📚 pmcp-book** - Comprehensive guide with 27 chapters
+- **📚 pmcp-book** - Comprehensive reference guide with 27 chapters
+- **🎓 pmcp-course** - Hands-on course with quizzes and exercises
 - **🤖 AI Agents** - Kiro and Claude Code configurations for AI-assisted development
 
 **Why PMCP?**
@@ -81,7 +82,7 @@ $ cargo pmcp add server weather --template minimal
 
 **What you get**: Production-ready code following Toyota Way principles, with comprehensive tests, structured logging, metrics collection, and zero clippy warnings.
 
-**Learn more**: [AI-Assisted Development Guide](https://paiml.github.io/rust-mcp-sdk/ch27-ai-assisted-development.html) | [AI Agents README](ai-agents/README.md)
+**Learn more**: [AI-Assisted Development Course](https://paiml.github.io/rust-mcp-sdk/course/part6-ai-dev/ch15-ai-assisted.html) | [AI Agents README](ai-agents/README.md)
 
 ---
 
@@ -197,7 +198,7 @@ async fn main() -> pmcp::Result<()> {
 }
 ```
 
-**Learn more**: [pmcp-book](https://paiml.github.io/rust-mcp-sdk/) | [API Documentation](https://docs.rs/pmcp)
+**Learn more**: [pmcp-book](https://paiml.github.io/rust-mcp-sdk/book/) | [pmcp-course](https://paiml.github.io/rust-mcp-sdk/course/) | [API Documentation](https://docs.rs/pmcp)
 
 ---
 
@@ -257,11 +258,11 @@ cargo pmcp deploy destroy --clean       # Remove deployment
 
 ---
 
-### 📚 pmcp-book (Comprehensive Guide)
+### 📚 pmcp-book (Reference Guide)
 
-27-chapter comprehensive guide to building MCP servers with pmcp.
+27-chapter comprehensive reference guide to building MCP servers with pmcp.
 
-**📖 [Read Online](https://paiml.github.io/rust-mcp-sdk/)**
+**📖 [Read Online](https://paiml.github.io/rust-mcp-sdk/book/)**
 
 **Coverage:**
 - **Getting Started**: Installation, first server, quick start tutorial
@@ -276,6 +277,35 @@ cargo pmcp deploy destroy --clean       # Remove deployment
 ```bash
 make book-serve    # Serve at http://localhost:3000
 make book-open     # Build and open in browser
+```
+
+---
+
+### 🎓 pmcp-course (Hands-On Learning)
+
+Interactive course with quizzes, exercises, and real-world projects for mastering MCP development.
+
+**🎓 [Start the Course](https://paiml.github.io/rust-mcp-sdk/course/)**
+
+**Course Structure:**
+- **Part I: Foundations** - MCP concepts, first server, typed tools
+- **Part II: Core Concepts** - Tools, resources, prompts, validation
+- **Part III: Deployment** - AWS Lambda, Cloudflare Workers, Google Cloud Run
+- **Part IV: Testing** - Local testing, CI/CD, regression testing
+- **Part V: Security** - OAuth 2.0, identity providers, multi-tenant
+- **Part VI: AI-Assisted Dev** - Claude Code, feedback loops, collaboration
+- **Part VII: Observability** - Middleware, logging, metrics
+- **Part VIII: Advanced** - Server composition, MCP Apps (experimental)
+
+**Features:**
+- Interactive quizzes after each chapter
+- Hands-on exercises with solutions
+- Real-world project examples
+- Best practices from production servers
+
+**Local development:**
+```bash
+cd pmcp-course && mdbook serve    # Serve at http://localhost:3000
 ```
 
 ---
@@ -308,7 +338,7 @@ AI agent configurations that teach Kiro and Claude Code how to build MCP servers
 - GitHub Copilot, Cursor, Cline, and others
 - [Contribution Guide](ai-agents/README.md)
 
-**Learn more**: [AI-Assisted Development](https://paiml.github.io/rust-mcp-sdk/ch27-ai-assisted-development.html) | [ai-agents/](ai-agents/)
+**Learn more**: [AI-Assisted Development Course](https://paiml.github.io/rust-mcp-sdk/course/part6-ai-dev/ch15-ai-assisted.html) | [ai-agents/](ai-agents/)
 
 ---
 
@@ -375,10 +405,11 @@ AI agent configurations that teach Kiro and Claude Code how to build MCP servers
 
 ### 📖 Primary Resources
 
-- **[pmcp-book](https://paiml.github.io/rust-mcp-sdk/)** - Comprehensive guide (27 chapters)
+- **[PMCP Documentation Portal](https://paiml.github.io/rust-mcp-sdk/)** - Landing page for all documentation
+- **[pmcp-book](https://paiml.github.io/rust-mcp-sdk/book/)** - Comprehensive reference guide (27 chapters)
+- **[pmcp-course](https://paiml.github.io/rust-mcp-sdk/course/)** - Hands-on course with quizzes and exercises
 - **[API Reference](https://docs.rs/pmcp)** - Complete API documentation
 - **[cargo-pmcp Guide](cargo-pmcp/README.md)** - CLI toolkit documentation
-- **[AI-Assisted Development](https://paiml.github.io/rust-mcp-sdk/ch27-ai-assisted-development.html)** - Building with AI
 
 ### 📚 Additional Resources
 
@@ -389,10 +420,11 @@ AI agent configurations that teach Kiro and Claude Code how to build MCP servers
 
 ### 🎯 Quick Links
 
-- [Quick Start Tutorial](https://paiml.github.io/rust-mcp-sdk/ch01_5-quick-start-tutorial.html)
-- [Your First Server](https://paiml.github.io/rust-mcp-sdk/ch02-first-server.html)
-- [Testing Guide](https://paiml.github.io/rust-mcp-sdk/ch15-testing.html)
-- [Production Deployment](https://paiml.github.io/rust-mcp-sdk/ch16-deployment.html)
+- [Quick Start Tutorial](https://paiml.github.io/rust-mcp-sdk/book/ch01_5-quick-start-tutorial.html)
+- [Your First Server](https://paiml.github.io/rust-mcp-sdk/book/ch02-first-server.html)
+- [Course: Getting Started](https://paiml.github.io/rust-mcp-sdk/course/part1-foundations/ch01-enterprise-case.html)
+- [Testing Guide](https://paiml.github.io/rust-mcp-sdk/course/part4-testing/ch11-local-testing.html)
+- [Production Deployment](https://paiml.github.io/rust-mcp-sdk/course/part3-deployment/ch07-deployment.html)
 
 ---
 
@@ -604,7 +636,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Links
 
-- **Documentation**: https://paiml.github.io/rust-mcp-sdk/
+- **Documentation Portal**: https://paiml.github.io/rust-mcp-sdk/
+- **Reference Guide**: https://paiml.github.io/rust-mcp-sdk/book/
+- **Course**: https://paiml.github.io/rust-mcp-sdk/course/
 - **Crates.io**: https://crates.io/crates/pmcp
 - **API Docs**: https://docs.rs/pmcp
 - **Issues**: https://github.com/paiml/rust-mcp-sdk/issues
