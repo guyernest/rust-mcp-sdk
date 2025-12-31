@@ -394,6 +394,12 @@ Rust excels on all deployment targets because of its:
 
 In the following chapters, we'll dive deep into each deployment target with hands-on exercises.
 
+## Knowledge Check
+
+Test your understanding of MCP deployment options:
+
+{{#quiz ../quizzes/ch07-deployment.toml}}
+
 ## What's Next
 
 - **Chapter 8**: AWS Lambda deep dive with VPC, Cognito, and CDK

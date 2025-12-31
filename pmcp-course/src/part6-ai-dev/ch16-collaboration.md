@@ -9,38 +9,38 @@ With your AI assistant configured (Chapter 15), this chapter focuses on making y
 │                    Effective AI Collaboration                           │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                        You (Developer)                          │   │
-│  │                                                                  │   │
-│  │  • Define WHAT to build (business requirements)                 │   │
-│  │  • Provide domain knowledge (API constraints, data models)      │   │
-│  │  • Make architectural decisions (transport, security)           │   │
-│  │  • Review generated code (ownership and understanding)          │   │
-│  └──────────────────────────┬──────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │                        You (Developer)                          │    │
+│  │                                                                 │    │
+│  │  • Define WHAT to build (business requirements)                 │    │
+│  │  • Provide domain knowledge (API constraints, data models)      │    │
+│  │  • Make architectural decisions (transport, security)           │    │
+│  │  • Review generated code (ownership and understanding)          │    │
+│  └──────────────────────────┬──────────────────────────────────────┘    │
 │                             │                                           │
 │                    Clear Communication                                  │
 │                             │                                           │
 │                             ▼                                           │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                     AI Assistant                                │   │
-│  │                                                                  │   │
-│  │  • Generates HOW to build (code implementation)                 │   │
-│  │  • Applies cargo-pmcp patterns (scaffolding, testing)           │   │
-│  │  • Handles boilerplate (types, error handling, serialization)   │   │
-│  │  • Iterates on compiler feedback (until quality gates pass)     │   │
-│  └──────────────────────────┬──────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │                     AI Assistant                                │    │
+│  │                                                                 │    │
+│  │  • Generates HOW to build (code implementation)                 │    │
+│  │  • Applies cargo-pmcp patterns (scaffolding, testing)           │    │
+│  │  • Handles boilerplate (types, error handling, serialization)   │    │
+│  │  • Iterates on compiler feedback (until quality gates pass)     │    │
+│  └──────────────────────────┬──────────────────────────────────────┘    │
 │                             │                                           │
 │                      Quality Validation                                 │
 │                             │                                           │
 │                             ▼                                           │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                    Rust Compiler + Tooling                      │   │
-│  │                                                                  │   │
-│  │  • Type checking (catches errors at compile time)               │   │
-│  │  • Borrow checking (memory safety guarantees)                   │   │
-│  │  • Clippy linting (code quality enforcement)                    │   │
-│  │  • Test runner (behavior verification)                          │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │                    Rust Compiler + Tooling                      │    │
+│  │                                                                 │    │
+│  │  • Type checking (catches errors at compile time)               │    │
+│  │  • Borrow checking (memory safety guarantees)                   │    │
+│  │  • Clippy linting (code quality enforcement)                    │    │
+│  │  • Test runner (behavior verification)                          │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -310,6 +310,12 @@ Effective AI collaboration requires:
 4. **Appropriate division** - You decide what, AI implements how
 
 The goal is productive partnership: you provide direction and domain expertise, AI handles implementation details and iteration. The Rust compiler serves as an impartial referee, catching errors before they become bugs.
+
+## Knowledge Check
+
+Test your understanding of AI collaboration patterns:
+
+{{#quiz ../quizzes/ch16-collaboration.toml}}
 
 ---
 

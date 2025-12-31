@@ -624,6 +624,12 @@ The following sub-chapters dive deeper into each topic:
 - [CI/CD Integration](./ch12-02-cicd.md) - Pipeline patterns and best practices
 - [Regression Testing](./ch12-03-regression.md) - Building maintainable regression suites
 
+## Knowledge Check
+
+Test your understanding of remote MCP testing:
+
+{{#quiz ../quizzes/ch12-remote-testing.toml}}
+
 ## Exercises
 
 1. **Configure remote testing** - Set up mcp-tester to test a deployed server with authentication

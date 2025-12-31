@@ -13,6 +13,10 @@ By the end of this lesson, you will:
 
 ## How Schema Analysis Works
 
+Schema-driven testing leverages the fact that MCP tools already define their input requirements via JSON Schema. Instead of manually writing tests for every field and constraint, mcp-tester reads your schema and automatically generates tests that verify your server correctly enforces those constraints.
+
+**The key insight:** Your schema is a contract. If you declare a field as required, you're promising to reject requests without it. If you set `maximum: 1000`, you're promising to reject values above 1000. Schema-driven tests verify you keep those promises.
+
 ### The Generation Process
 
 ```
@@ -21,48 +25,50 @@ By the end of this lesson, you will:
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  1. INTROSPECT                                                      │
-│     ┌─────────────────────────────────────────────────────────┐    │
-│     │  mcp-tester connects to server                          │    │
-│     │  Calls: initialize → tools/list                          │    │
-│     │  Retrieves: tool names, descriptions, inputSchemas       │    │
-│     └─────────────────────────────────────────────────────────┘    │
-│                          │                                         │
-│                          ▼                                         │
+│     ┌─────────────────────────────────────────────────────────┐     │
+│     │  mcp-tester connects to server                          │     │
+│     │  Calls: initialize → tools/list                         │     │
+│     │  Retrieves: tool names, descriptions, inputSchemas      │     │
+│     └─────────────────────────────────────────────────────────┘     │
+│                          │                                          │
+│                          ▼                                          │
 │  2. ANALYZE SCHEMA                                                  │
-│     ┌─────────────────────────────────────────────────────────┐    │
-│     │  For each tool's inputSchema:                           │    │
-│     │  • Parse JSON Schema structure                          │    │
-│     │  • Identify required vs optional properties              │    │
-│     │  • Extract type constraints (string, number, etc.)      │    │
-│     │  • Find validation rules (min, max, pattern, enum)      │    │
-│     │  • Detect nested objects and arrays                     │    │
-│     └─────────────────────────────────────────────────────────┘    │
-│                          │                                         │
-│                          ▼                                         │
-│  3. GENERATE TEST CASES                                            │
-│     ┌─────────────────────────────────────────────────────────┐    │
-│     │  For each property and constraint:                      │    │
-│     │  • Valid value tests (within constraints)               │    │
-│     │  • Boundary value tests (min, max, at limits)           │    │
-│     │  • Invalid value tests (violate constraints)            │    │
-│     │  • Type violation tests (wrong types)                   │    │
-│     │  • Required field tests (missing required)              │    │
-│     └─────────────────────────────────────────────────────────┘    │
-│                          │                                         │
-│                          ▼                                         │
-│  4. OUTPUT YAML FILES                                              │
-│     ┌─────────────────────────────────────────────────────────┐    │
-│     │  tests/scenarios/generated/                             │    │
-│     │  ├── toolname_valid.yaml                                │    │
-│     │  ├── toolname_invalid.yaml                              │    │
-│     │  ├── toolname_edge.yaml                                 │    │
-│     │  └── toolname_types.yaml                                │    │
-│     └─────────────────────────────────────────────────────────┘    │
+│     ┌─────────────────────────────────────────────────────────┐     │
+│     │  For each tool's inputSchema:                           │     │
+│     │  • Parse JSON Schema structure                          │     │
+│     │  • Identify required vs optional properties             │     │
+│     │  • Extract type constraints (string, number, etc.)      │     │
+│     │  • Find validation rules (min, max, pattern, enum)      │     │
+│     │  • Detect nested objects and arrays                     │     │
+│     └─────────────────────────────────────────────────────────┘     │
+│                          │                                          │
+│                          ▼                                          │
+│  3. GENERATE TEST CASES                                             │
+│     ┌─────────────────────────────────────────────────────────┐     │
+│     │  For each property and constraint:                      │     │
+│     │  • Valid value tests (within constraints)               │     │
+│     │  • Boundary value tests (min, max, at limits)           │     │
+│     │  • Invalid value tests (violate constraints)            │     │
+│     │  • Type violation tests (wrong types)                   │     │
+│     │  • Required field tests (missing required)              │     │
+│     └─────────────────────────────────────────────────────────┘     │
+│                          │                                          │
+│                          ▼                                          │
+│  4. OUTPUT YAML FILES                                               │
+│     ┌─────────────────────────────────────────────────────────┐     │
+│     │  tests/scenarios/generated/                             │     │
+│     │  ├── toolname_valid.yaml                                │     │
+│     │  ├── toolname_invalid.yaml                              │     │
+│     │  ├── toolname_edge.yaml                                 │     │
+│     │  └── toolname_types.yaml                                │     │
+│     └─────────────────────────────────────────────────────────┘     │ 
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Schema Elements Analyzed
+
+Each JSON Schema constraint maps to specific test cases. The table below shows what tests are generated for each schema element. This is why well-defined schemas lead to better test coverage—the more constraints you specify, the more tests are generated.
 
 | Schema Element | Generated Tests |
 |----------------|-----------------|
@@ -141,9 +147,19 @@ cargo pmcp test generate \
 
 ## Generated Test Categories
 
+mcp-tester organizes generated tests into four categories, each serving a distinct purpose. Understanding these categories helps you know what's automatically covered and what you might need to add manually.
+
 ### 1. Valid Input Tests (_valid.yaml)
 
-Tests that should succeed with well-formed inputs:
+**Purpose:** Prove that your tool accepts inputs that conform to the schema.
+
+**Why they matter:** These are your "sanity check" tests. If valid input tests fail, your tool is rejecting requests it should accept—a critical bug that would frustrate users.
+
+**What's generated:**
+- One test with all required fields (the minimal valid request)
+- Tests with optional fields included
+- Tests for each enum value (if applicable)
+- Tests with different valid combinations
 
 ```yaml
 # Generated: query_valid.yaml
@@ -190,7 +206,15 @@ steps:
 
 ### 2. Invalid Input Tests (_invalid.yaml)
 
-Tests that should fail with validation errors:
+**Purpose:** Prove that your tool rejects inputs that violate the schema.
+
+**Why they matter:** These tests verify your validation logic actually works. If your schema says `minimum: 1` but you accept `0`, that's a bug. More critically, missing validation can lead to security vulnerabilities, data corruption, or confusing downstream errors.
+
+**What's generated:**
+- One test for each required field (missing that field)
+- Tests that violate each constraint (below minimum, above maximum, wrong pattern)
+- Tests with invalid enum values
+- Tests with null for non-nullable fields
 
 ```yaml
 # Generated: query_invalid.yaml
@@ -254,7 +278,15 @@ steps:
 
 ### 3. Edge Case Tests (_edge.yaml)
 
-Boundary conditions and unusual but valid inputs:
+**Purpose:** Test the boundary conditions—values that are valid but at the extreme edges of what's allowed.
+
+**Why they matter:** Off-by-one errors are among the most common bugs. If your limit is 1000, does the code correctly handle 1000? What about 999? Edge case tests catch these subtle bugs that happy-path tests miss.
+
+**What's generated:**
+- Values exactly at minimum and maximum boundaries
+- Strings exactly at minLength and maxLength
+- Arrays at minItems and maxItems
+- First and last enum values
 
 ```yaml
 # Generated: query_edge.yaml
@@ -318,7 +350,16 @@ steps:
 
 ### 4. Type Validation Tests (_types.yaml)
 
-Tests that verify type constraints:
+**Purpose:** Verify that your tool rejects values of the wrong type.
+
+**Why they matter:** JSON is loosely typed, and clients (including AI assistants) sometimes send wrong types. A number field might receive `"42"` (string) instead of `42` (number). Type validation tests ensure your server catches these mistakes rather than causing cryptic errors or incorrect behavior downstream.
+
+**What's generated:**
+- String fields receiving numbers
+- Number fields receiving strings
+- Boolean fields receiving truthy strings like `"true"`
+- Array fields receiving comma-separated strings
+- Object fields receiving primitives
 
 ```yaml
 # Generated: query_types.yaml
@@ -378,9 +419,17 @@ steps:
 
 ## Customizing Generated Tests
 
+Generated tests cover schema constraints, but they can't know your business logic. A query tool's schema might allow any SELECT statement, but your business rules might require specific table access patterns. Customization bridges this gap.
+
+**The workflow:**
+1. Generate baseline tests from schema
+2. Edit generated tests to add business-specific assertions
+3. Create custom test files for scenarios the generator can't know about
+4. Use override files to replace generated tests when needed
+
 ### Editing Generated Files
 
-Generated tests are a starting point. Edit them to add:
+Generated tests are a starting point—they verify schema compliance but not business correctness. Edit them to add:
 
 ```yaml
 # tests/scenarios/generated/query_valid.yaml (edited)
@@ -416,7 +465,7 @@ steps:
 
 ### Override Files
 
-Create override files that won't be replaced on regeneration:
+When you need to significantly customize generated tests, use override files instead of editing the generated files directly. This keeps your customizations safe when you regenerate tests after schema changes.
 
 ```
 tests/scenarios/
@@ -474,7 +523,16 @@ cargo pmcp test generate \
 
 ## Advanced Schema Patterns
 
+Real-world schemas are rarely flat. You'll have nested objects (user with address), arrays of objects (order with line items), and polymorphic types (payment via credit card OR bank transfer). This section shows how mcp-tester handles these complex patterns.
+
+Understanding these patterns helps you:
+1. Write schemas that generate comprehensive tests
+2. Know what edge cases are automatically covered
+3. Identify gaps where custom tests are needed
+
 ### Nested Object Schemas
+
+Nested objects require testing at each level: the parent object, child objects, and the relationship between them. A user might be valid overall but have an invalid address nested inside.
 
 ```json
 {
@@ -554,6 +612,8 @@ steps:
 ```
 
 ### Array Item Schemas
+
+Arrays of objects are common (order items, user roles, configuration entries). Tests must verify: the array itself (length constraints), and each item within the array (item-level constraints). A single invalid item should cause the entire request to fail.
 
 ```json
 {
@@ -636,6 +696,12 @@ steps:
 
 ### oneOf/anyOf/allOf Schemas
 
+Polymorphic schemas allow different structures for the same field. A payment might be a credit card OR a bank transfer—each with different required fields. These are powerful but tricky: tests must verify each variant works, that invalid variants are rejected, and that each variant's constraints are enforced.
+
+**oneOf:** Exactly one subschema must match (use for mutually exclusive options)
+**anyOf:** At least one subschema must match (use for flexible alternatives)
+**allOf:** All subschemas must match (use for combining constraints)
+
 ```json
 {
   "type": "object",
@@ -712,7 +778,16 @@ steps:
 
 ## CI/CD Pipeline Integration
 
+Schema-driven testing shines in CI/CD pipelines. You can automatically:
+1. **Regenerate tests** when code changes to detect schema drift
+2. **Run all generated tests** to verify schema compliance
+3. **Fail the build** if tests fail or schemas change unexpectedly
+
+This creates a feedback loop: schema changes trigger test changes, which are visible in pull requests, enabling review before merge.
+
 ### Complete GitHub Actions Workflow
+
+This workflow demonstrates a complete setup: build the server, generate tests from the current schema, check for unexpected schema changes, run all tests, and report results.
 
 ```yaml
 # .github/workflows/mcp-tests.yml
@@ -823,6 +898,8 @@ jobs:
 
 ### Schema Change Detection
 
+This specialized workflow catches unintentional schema changes. If a developer modifies tool schemas (intentionally or not), this workflow alerts the team before merge. This is valuable because schema changes can break existing clients—you want to review them explicitly.
+
 ```yaml
 # .github/workflows/schema-check.yml
 name: Schema Change Detection
@@ -865,7 +942,11 @@ jobs:
 
 ## Best Practices
 
+These practices help you maintain a healthy balance between automated generation and manual customization. The goal: maximize automation while keeping tests reliable and maintainable.
+
 ### 1. Version Control Strategy
+
+A key decision: should generated tests be committed to version control? Both approaches have merit.
 
 ```
 tests/scenarios/
@@ -893,6 +974,8 @@ tests/scenarios/generated/
 
 ### 2. Test Organization
 
+Tags help you run subsets of tests for different purposes. Run smoke tests for quick CI feedback, security tests before releases, and performance tests in dedicated environments.
+
 ```yaml
 # Use tags for filtering
 tags:
@@ -908,6 +991,8 @@ cargo pmcp test run --tags security,regression
 ```
 
 ### 3. Maintenance Workflow
+
+Schema-driven tests require periodic maintenance: regenerating after schema changes, adding regression tests for bugs, and reviewing generated tests for relevance. Build these activities into your development rhythm.
 
 ```bash
 # Weekly: regenerate and review
