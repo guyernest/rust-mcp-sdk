@@ -2,36 +2,102 @@
 
 This chapter covers integrating MCP servers with enterprise identity providers. We focus on the three most common enterprise IdPs: AWS Cognito, Auth0, and Microsoft Entra ID.
 
-## Choosing an Identity Provider
+## The Most Important Advice: Use What You Already Have
+
+**The providers in this course are examples, not recommendations.** The best identity provider for your MCP server is the one your organization already uses.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                  Identity Provider Comparison                        │
+│                 Provider Selection Decision Tree                    │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  Does your organization already have an identity provider?          │
+│                                                                     │
+│  YES ──────────────────────────────────────────────────────────────▶│
+│  │                                                                  │
+│  │   USE THAT PROVIDER.                                             │
+│  │                                                                  │
+│  │   • Users already know how to log in                             │
+│  │   • IT already knows how to manage it                            │
+│  │   • Security policies already exist                              │
+│  │   • Compliance is already handled                                │
+│  │   • No new vendor relationships needed                           │
+│  │                                                                  │
+│  └──────────────────────────────────────────────────────────────────│
+│                                                                     │
+│  NO (starting fresh) ──────────────────────────────────────────────▶│
+│  │                                                                  │
+│  │   Consider your existing infrastructure:                         │
+│  │   • Heavy AWS user? → Cognito                                    │
+│  │   • Microsoft 365? → Entra ID                                    │
+│  │   • Need flexibility? → Auth0 or Okta                            │
+│  │   • Self-hosted? → Keycloak                                      │
+│  │                                                                  │
+│  └──────────────────────────────────────────────────────────────────│
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Why not switch providers for MCP?**
+
+| Reason | Impact |
+|--------|--------|
+| Users have to learn new login | Friction, support tickets |
+| IT has to manage two systems | Operational burden |
+| Permissions need duplication | Security gaps |
+| Compliance scope expands | More audit work |
+| More vendors to manage | Procurement complexity |
+
+**The code in this chapter works with any OAuth 2.0 / OIDC provider.** We use Cognito, Auth0, and Entra as examples because they're common, but the patterns apply to Okta, Keycloak, Google Identity, PingIdentity, or any other OIDC-compliant provider.
+
+## Understanding Provider Examples
+
+The providers covered in this chapter:
+
+| Provider | Why We Cover It | Your Situation |
+|----------|-----------------|----------------|
+| **AWS Cognito** | Common in AWS shops | Use if you're already AWS-native |
+| **Auth0** | Developer-friendly, good docs | Use if you need rapid prototyping |
+| **Microsoft Entra** | Enterprise Microsoft environments | Use if you have Microsoft 365 |
+| **Okta** | Enterprise workforce identity | Use if already deployed |
+| **Keycloak** | Self-hosted, open source | Use if you need on-premises |
+
+**If your organization uses a provider not listed here:** The patterns are the same. You need:
+1. JWKS URI (for public keys)
+2. Issuer URL (for token validation)
+3. Audience value (your app identifier)
+4. Understanding of how claims are structured
+
+## Provider Feature Comparison
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                  Identity Provider Comparison                       │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  AWS Cognito                                                        │
-│  ├─ Best for: AWS-native applications                              │
-│  ├─ Pros: Deep AWS integration, pay-per-use pricing                │
-│  ├─ Cons: Limited customization, complex federation                │
-│  └─ Use when: Already invested in AWS ecosystem                    │
+│  ├─ Best for: AWS-native applications                               │
+│  ├─ Pros: Deep AWS integration, pay-per-use pricing                 │
+│  ├─ Cons: Limited customization, complex federation                 │
+│  └─ Use when: Already invested in AWS ecosystem                     │
 │                                                                     │
 │  Auth0                                                              │
-│  ├─ Best for: Developer-friendly, custom requirements              │
-│  ├─ Pros: Extensive customization, excellent docs                  │
-│  ├─ Cons: Can get expensive at scale                               │
-│  └─ Use when: Need flexibility and rapid development               │
+│  ├─ Best for: Developer-friendly, custom requirements               │
+│  ├─ Pros: Extensive customization, excellent docs                   │
+│  ├─ Cons: Can get expensive at scale                                │
+│  └─ Use when: Need flexibility and rapid development                │
 │                                                                     │
 │  Microsoft Entra ID (formerly Azure AD)                             │
-│  ├─ Best for: Microsoft/O365 enterprises                           │
-│  ├─ Pros: SSO with Microsoft apps, enterprise features             │
-│  ├─ Cons: Complex setup, Microsoft-centric                         │
-│  └─ Use when: Enterprise already uses Microsoft 365                │
+│  ├─ Best for: Microsoft/O365 enterprises                            │
+│  ├─ Pros: SSO with Microsoft apps, enterprise features              │
+│  ├─ Cons: Complex setup, Microsoft-centric                          │
+│  └─ Use when: Enterprise already uses Microsoft 365                 │
 │                                                                     │
 │  Okta                                                               │
-│  ├─ Best for: Large enterprises, workforce identity                │
-│  ├─ Pros: Enterprise features, SSO across apps                     │
-│  ├─ Cons: Expensive, complex                                       │
-│  └─ Use when: Enterprise-grade requirements                        │
+│  ├─ Best for: Large enterprises, workforce identity                 │
+│  ├─ Pros: Enterprise features, SSO across apps                      │
+│  ├─ Cons: Expensive, complex                                        │
+│  └─ Use when: Enterprise-grade requirements                         │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -204,22 +270,22 @@ Many enterprises federate to their corporate IdP:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                  Corporate Federation                                │
+│                  Corporate Federation                               │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  User → Corporate IdP (Okta/Entra) → OAuth Provider → MCP Server   │
+│  User → Corporate IdP (Okta/Entra) → OAuth Provider → MCP Server    │
 │                                                                     │
 │  1. User clicks "Login with Corporate SSO"                          │
-│  2. Redirected to corporate IdP (Okta, Entra, etc.)                │
+│  2. Redirected to corporate IdP (Okta, Entra, etc.)                 │
 │  3. User authenticates with corporate credentials                   │
-│  4. Corporate IdP issues SAML assertion to OAuth provider          │
-│  5. OAuth provider (Cognito/Auth0) issues JWT                      │
+│  4. Corporate IdP issues SAML assertion to OAuth provider           │
+│  5. OAuth provider (Cognito/Auth0) issues JWT                       │
 │  6. MCP server validates JWT                                        │
 │                                                                     │
 │  Benefits:                                                          │
-│  • Single sign-on across all apps                                  │
+│  • Single sign-on across all apps                                   │
 │  • Central user management                                          │
-│  • Automatic deprovisioning when employees leave                   │
+│  • Automatic deprovisioning when employees leave                    │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -230,19 +296,19 @@ For consumer applications:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    Social Login Federation                           │
+│                    Social Login Federation                          │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  User → Social Provider (Google/GitHub) → OAuth Provider → MCP     │
+│  User → Social Provider (Google/GitHub) → OAuth Provider → MCP      │
 │                                                                     │
 │  Cognito: Social identity pools                                     │
 │  Auth0: Social connections                                          │
 │  Entra: External identities                                         │
 │                                                                     │
 │  User identity format varies:                                       │
-│  • Cognito: "us-east-1:abc123-def456"                              │
-│  • Auth0: "google-oauth2|1234567890"                               │
-│  • Entra: "external_identity_guid"                                 │
+│  • Cognito: "us-east-1:abc123-def456"                               │
+│  • Auth0: "google-oauth2|1234567890"                                │
+│  • Entra: "external_identity_guid"                                  │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -416,17 +482,22 @@ The following sections provide detailed setup guides for each provider:
 
 ## Summary
 
-Identity provider integration requires:
+**The most important takeaway: Use what you already have.** If your organization uses Okta, use Okta. If you're a Microsoft shop, use Entra ID. If you're all-in on AWS, use Cognito. Don't introduce a new identity provider just for MCP servers.
 
-1. **Configuration** - Issuer, audience, JWKS URI
-2. **Claim mapping** - Each provider structures claims differently
-3. **Scope handling** - Permissions vs scopes vs roles
-4. **Testing** - Get tokens for development
+The providers in this chapter are **examples**, not recommendations. The patterns work with any OIDC-compliant provider:
 
-Choose your provider based on:
-- Existing infrastructure (AWS → Cognito, Microsoft → Entra)
-- Customization needs (high → Auth0)
-- Enterprise requirements (workforce → Okta/Entra)
+1. **Configuration** - Every provider needs: issuer URL, audience, JWKS URI
+2. **Claim mapping** - Providers structure user info differently (adapt `from_claims`)
+3. **Scope handling** - Some use scopes, some use permissions, some use roles
+4. **Testing** - Each provider has ways to get development tokens
+
+**If your provider isn't covered here:** That's fine. You need four things:
+1. The JWKS URI (usually `/.well-known/jwks.json`)
+2. The issuer URL (for token validation)
+3. Your app's audience value
+4. Understanding of how claims are structured
+
+The code patterns in this chapter translate directly to any provider.
 
 ---
 
