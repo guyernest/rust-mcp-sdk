@@ -614,7 +614,9 @@ Test your understanding of local MCP testing:
 
 {{#quiz ../quizzes/ch11-local-testing.toml}}
 
-## Exercises
+## Practice Ideas
+
+These informal exercises help reinforce the concepts. For structured exercises with starter code and tests, see the chapter exercise pages.
 
 1. **Add unit tests** to an existing tool with 100% branch coverage
 2. **Generate scenarios** for the db-explorer server and review them

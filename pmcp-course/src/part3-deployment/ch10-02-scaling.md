@@ -623,13 +623,15 @@ Key configuration summary:
 | CPU throttling | No | Yes | No |
 | CPU boost | Yes | No | Yes |
 
-## Exercises
+## Practice Ideas
 
-### Exercise 1: Load Test Analysis
+These informal exercises help reinforce the concepts.
+
+### Practice 1: Load Test Analysis
 Run load tests against your MCP server and identify the optimal concurrency setting.
 
-### Exercise 2: Cold Start Measurement
+### Practice 2: Cold Start Measurement
 Measure cold start times with different configurations (CPU boost, min instances) and document the results.
 
-### Exercise 3: Cost Optimization
+### Practice 3: Cost Optimization
 Calculate the monthly cost difference between min=0 and min=1 configurations for your workload.

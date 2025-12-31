@@ -344,3 +344,17 @@ mod tests {
 - How would you add a 'power' operation to this calculator?
 - What might go wrong with floating-point math that integers wouldn't have?
 :::
+
+## Related Examples
+
+For more patterns and variations, explore these SDK examples:
+
+- **[02_server_basic.rs](https://github.com/paiml/rust-mcp-sdk/blob/main/examples/02_server_basic.rs)** - Calculator implemented with `ToolHandler` trait
+- **[32_typed_tools.rs](https://github.com/paiml/rust-mcp-sdk/blob/main/examples/32_typed_tools.rs)** - Calculator with enum operations and automatic schema
+- **[12_error_handling.rs](https://github.com/paiml/rust-mcp-sdk/blob/main/examples/12_error_handling.rs)** - Comprehensive error handling patterns
+
+Run locally with:
+```bash
+cargo run --example 02_server_basic
+cargo run --example 12_error_handling
+```

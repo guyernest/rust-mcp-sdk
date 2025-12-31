@@ -696,13 +696,15 @@ Target image sizes:
 
 The smaller your container, the faster your cold starts and the lower your costs.
 
-## Exercises
+## Practice Ideas
 
-### Exercise 1: Size Reduction Challenge
+These informal exercises help reinforce the concepts.
+
+### Practice 1: Size Reduction Challenge
 Take an existing Rust project and create a Dockerfile that produces an image under 20MB.
 
-### Exercise 2: Build Time Optimization
+### Practice 2: Build Time Optimization
 Measure build times with and without cargo-chef caching. Document the improvement.
 
-### Exercise 3: Multi-Architecture Build
+### Practice 3: Multi-Architecture Build
 Create a CI/CD pipeline that builds and pushes images for both AMD64 and ARM64.

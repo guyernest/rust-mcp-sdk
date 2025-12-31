@@ -666,7 +666,9 @@ MCP Inspector is your primary tool for:
 
 Use Inspector during development, then codify working tests in mcp-tester for automation.
 
-## Exercises
+## Practice Ideas
+
+These informal exercises help reinforce the concepts. For structured exercises with starter code and tests, see the chapter exercise pages.
 
 1. **Connect and explore** - Start the db-explorer server and use Inspector to list all tools
 2. **Test error handling** - Send invalid SQL and verify error responses

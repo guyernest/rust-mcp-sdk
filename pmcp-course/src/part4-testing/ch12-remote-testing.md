@@ -630,7 +630,9 @@ Test your understanding of remote MCP testing:
 
 {{#quiz ../quizzes/ch12-remote-testing.toml}}
 
-## Exercises
+## Practice Ideas
+
+These informal exercises help reinforce the concepts. For structured exercises with starter code and tests, see the chapter exercise pages.
 
 1. **Configure remote testing** - Set up mcp-tester to test a deployed server with authentication
 2. **Build a smoke suite** - Create 5 smoke tests covering critical paths

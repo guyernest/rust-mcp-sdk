@@ -466,3 +466,17 @@ mod tests {
 - What happens when tools change but prompts reference old names?
 - How do you balance prescriptive steps vs. AI flexibility?
 :::
+
+## Related Examples
+
+For more prompt and resource patterns, explore these SDK examples:
+
+- **[06_server_prompts.rs](https://github.com/paiml/rust-mcp-sdk/blob/main/examples/06_server_prompts.rs)** - Server with prompts including code review prompt
+- **[17_completable_prompts.rs](https://github.com/paiml/rust-mcp-sdk/blob/main/examples/17_completable_prompts.rs)** - Prompts with auto-completion for arguments
+- **[04_server_resources.rs](https://github.com/paiml/rust-mcp-sdk/blob/main/examples/04_server_resources.rs)** - Resources to pair with prompts
+
+Run locally with:
+```bash
+cargo run --example 06_server_prompts
+cargo run --example 17_completable_prompts
+```
