@@ -44,18 +44,24 @@ id = "ch04"
 title = "Design Principles"
 path = "part2-design/ch04-design-principles.md"
 estimated_minutes = 45
+quiz_id = "ch04-design-principles"
+exercise_ids = ["ch04-01-tool-design-review"]
 
 [[parts.chapters]]
 id = "ch05"
 title = "Input Validation"
 path = "part2-design/ch05-validation.md"
 estimated_minutes = 40
+quiz_id = "ch05-validation"
+exercise_ids = ["ch05-01-validation-errors"]
 
 [[parts.chapters]]
 id = "ch06"
 title = "Beyond Tools"
 path = "part2-design/ch06-beyond-tools.md"
 estimated_minutes = 35
+quiz_id = "ch06-beyond-tools"
+exercise_ids = ["ch06-01-prompt-design", "ch06-02-workflow-validation"]
 
 # Part III: Cloud Deployment
 [[parts]]
@@ -67,24 +73,28 @@ id = "ch07"
 title = "Deployment Overview"
 path = "part3-deployment/ch07-deployment-overview.md"
 estimated_minutes = 30
+quiz_id = "ch07-deployment"
 
 [[parts.chapters]]
 id = "ch08"
 title = "AWS Lambda Deployment"
 path = "part3-deployment/ch08-aws-lambda.md"
 estimated_minutes = 45
+quiz_id = "ch08-aws-lambda"
 
 [[parts.chapters]]
 id = "ch09"
 title = "Cloudflare Workers"
 path = "part3-deployment/ch09-cloudflare.md"
 estimated_minutes = 40
+quiz_id = "ch09-cloudflare"
 
 [[parts.chapters]]
 id = "ch10"
 title = "Google Cloud Run"
 path = "part3-deployment/ch10-cloud-run.md"
 estimated_minutes = 40
+quiz_id = "ch10-cloud-run"
 
 # Part IV: Testing
 [[parts]]
@@ -96,12 +106,14 @@ id = "ch11"
 title = "Local Testing"
 path = "part4-testing/ch11-local-testing.md"
 estimated_minutes = 35
+quiz_id = "ch11-local-testing"
 
 [[parts.chapters]]
 id = "ch12"
 title = "Remote Testing"
 path = "part4-testing/ch12-remote-testing.md"
 estimated_minutes = 35
+quiz_id = "ch12-remote-testing"
 
 # Part V: Enterprise Security
 [[parts]]
@@ -113,12 +125,14 @@ id = "ch13"
 title = "OAuth Integration"
 path = "part5-security/ch13-oauth.md"
 estimated_minutes = 50
+quiz_id = "ch13-oauth"
 
 [[parts.chapters]]
 id = "ch14"
 title = "Identity Providers"
 path = "part5-security/ch14-providers.md"
 estimated_minutes = 45
+quiz_id = "ch14-providers"
 
 # Part VI: AI-Assisted Development
 [[parts]]
@@ -130,12 +144,14 @@ id = "ch15"
 title = "AI-Assisted Development"
 path = "part6-ai-dev/ch15-ai-assisted.md"
 estimated_minutes = 40
+quiz_id = "ch15-ai-assisted"
 
 [[parts.chapters]]
 id = "ch16"
 title = "Collaboration Patterns"
 path = "part6-ai-dev/ch16-collaboration.md"
 estimated_minutes = 45
+quiz_id = "ch16-collaboration"
 
 # Part VII: Observability
 [[parts]]
@@ -147,12 +163,14 @@ id = "ch17"
 title = "Middleware"
 path = "part7-observability/ch17-middleware.md"
 estimated_minutes = 35
+quiz_id = "ch17-observability"
 
 [[parts.chapters]]
 id = "ch18"
 title = "Operations"
 path = "part7-observability/ch18-operations.md"
 estimated_minutes = 35
+# Note: No quiz file exists for ch18
 
 # Part VIII: Advanced Patterns
 [[parts]]
@@ -164,9 +182,11 @@ id = "ch19"
 title = "Composition"
 path = "part8-advanced/ch19-composition.md"
 estimated_minutes = 50
+quiz_id = "ch19-composition"
 
 [[parts.chapters]]
 id = "ch20"
 title = "Building Applications"
 path = "part8-advanced/ch20-applications.md"
 estimated_minutes = 55
+quiz_id = "ch20-mcp-apps"
