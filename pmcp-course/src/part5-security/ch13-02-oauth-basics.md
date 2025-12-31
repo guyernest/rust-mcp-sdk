@@ -2,33 +2,38 @@
 
 This chapter covers the OAuth 2.0 concepts essential for implementing authentication in MCP servers. We focus on the patterns most relevant to enterprise deployments.
 
+**Good news for MCP developers:** You don't need to build token management from scratch. Popular MCP clients—Claude Code, ChatGPT, Cursor, and others—already handle the complexity of OAuth for you. They securely store tokens, automatically refresh them when expired, and manage the entire authentication flow. Your job as an MCP server developer is simpler: validate the tokens these clients send you.
+
+**What this means for users:** Users authenticate once (through your enterprise SSO), and then work uninterrupted for weeks or months until the refresh token expires (typically 30-90 days). No repeated logins, no token copying, no credential management. The MCP client handles everything silently in the background.
+
 ## OAuth 2.0 Core Concepts
 
 ### Roles in OAuth 2.0
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                     OAuth 2.0 Roles for MCP                          │
+│                     OAuth 2.0 Roles for MCP                         │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  Resource Owner (User)                                              │
-│  ├─ The person using the AI assistant                              │
-│  └─ Grants permission for AI to access MCP tools                   │
+│  ├─ The person using the AI assistant                               │
+│  └─ Grants permission for AI to access MCP tools                    │
 │                                                                     │
 │  Client (MCP Client)                                                │
-│  ├─ Claude Desktop, ChatGPT, or custom application                 │
-│  ├─ Requests access on behalf of the user                          │
-│  └─ Receives and uses access tokens                                │
+│  ├─ Claude Code, ChatGPT, Cursor, or custom application             │
+│  ├─ Securely stores tokens (locally or server-side)                 │
+│  ├─ Automatically refreshes tokens before expiration                │
+│  └─ Sends access token with every MCP request                       │
 │                                                                     │
 │  Authorization Server (Identity Provider)                           │
-│  ├─ Cognito, Auth0, Entra ID, Okta                                 │
-│  ├─ Authenticates users                                            │
-│  └─ Issues access tokens                                           │
+│  ├─ Cognito, Auth0, Entra ID, Okta                                  │
+│  ├─ Authenticates users                                             │
+│  └─ Issues access tokens                                            │
 │                                                                     │
 │  Resource Server (Your MCP Server)                                  │
-│  ├─ Validates access tokens                                        │
-│  ├─ Enforces scopes                                                │
-│  └─ Provides tools and resources                                   │
+│  ├─ Validates access tokens                                         │
+│  ├─ Enforces scopes                                                 │
+│  └─ Provides tools and resources                                    │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -43,7 +48,7 @@ The most secure flow for user-facing applications:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                 Authorization Code Flow                              │
+│                 Authorization Code Flow                             │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  1. User clicks "Connect to MCP Server"                             │
@@ -78,10 +83,10 @@ The most secure flow for user-facing applications:
 │     ▼                                                               │
 │  6. Authorization Server returns tokens                             │
 │     {                                                               │
-│       "access_token": "eyJhbGc...",                                │
-│       "refresh_token": "def456...",                                │
-│       "token_type": "Bearer",                                      │
-│       "expires_in": 3600                                           │
+│       "access_token": "eyJhbGc...",                                 │
+│       "refresh_token": "def456...",                                 │
+│       "token_type": "Bearer",                                       │
+│       "expires_in": 3600                                            │
 │     }                                                               │
 │     │                                                               │
 │     ▼                                                               │
@@ -128,20 +133,20 @@ OAuth 2.0 access tokens are typically JWTs. Understanding their structure is ess
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        JWT Structure                                 │
+│                        JWT Structure                                │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImtleS0xIn0.            │
-│  ────────────────────────────────────────────────────────            │
-│                         HEADER (Base64)                              │
+│  eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImtleS0xIn0.           │
+│  ────────────────────────────────────────────────────────           │
+│                         HEADER (Base64)                             │
 │                                                                     │
-│  eyJzdWIiOiJ1c2VyMTIzIiwiZW1haWwiOiJhbGljZUBjby5jb20iLCJzY29w...      │
-│  ────────────────────────────────────────────────────────────        │
-│                         PAYLOAD (Base64)                             │
+│  eyJzdWIiOiJ1c2VyMTIzIiwiZW1haWwiOiJhbGljZUBjby5jb20iLCJzY29w...    │
+│  ────────────────────────────────────────────────────────────       │
+│                         PAYLOAD (Base64)                            │
 │                                                                     │
-│  SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c                         │
-│  ────────────────────────────────────────────────                    │
-│                         SIGNATURE                                    │
+│  SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c                        │
+│  ────────────────────────────────────────────────                   │
+│                         SIGNATURE                                   │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -291,20 +296,95 @@ impl AuthContext {
 }
 ```
 
-## Token Refresh
+## Understanding Token Lifetimes
 
-Access tokens are short-lived. Clients use refresh tokens to get new ones:
+If you're new to OAuth, token lifetimes can be confusing. Here's the mental model:
+
+**Think of it like a building security system:**
+- **Access token** = Day pass. Gets you through the door today, but expires at midnight. If someone steals it, they only have access until it expires (typically 1 hour for OAuth).
+- **Refresh token** = ID badge that lets you print new day passes. Valid for months, but if you lose it (or leave the company), security can deactivate it immediately.
+
+### Why Two Tokens?
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                     Token Refresh Flow                               │
+│                    Token Lifetime Strategy                          │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ACCESS TOKEN (Short-lived: 15-60 minutes)                          │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │  ✓ Sent with every API request                                │  │
+│  │  ✓ If leaked, damage limited to minutes/hours                 │  │
+│  │  ✓ Contains user claims (who, what permissions)               │  │
+│  │  ✗ Cannot be revoked (must wait for expiration)               │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+│  REFRESH TOKEN (Long-lived: 30-90 days)                             │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │  ✓ Only sent to the IdP, never to your MCP server             │  │
+│  │  ✓ Used to get new access tokens silently                     │  │
+│  │  ✓ Can be revoked immediately by administrators               │  │
+│  │  ✓ Enables "login once, work for weeks" experience            │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+│  The combination: Security of short-lived tokens +                  │
+│                   Convenience of long sessions                      │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### What Users Experience
+
+| Day | What Happens | User Action Required |
+|-----|--------------|---------------------|
+| Day 1 | User connects MCP server to Claude Code | Login once via SSO |
+| Day 2-89 | Access tokens refresh automatically every hour | None - seamless |
+| Day 90 | Refresh token expires | Login again via SSO |
+
+**The key insight:** Users authenticate once and work uninterrupted for the refresh token lifetime (often 90 days). MCP clients like Claude Code, ChatGPT, and Cursor handle all the token refresh logic automatically—users never see it happening.
+
+### Administrator Control: Immediate Revocation
+
+Even though refresh tokens last 90 days, administrators can revoke them instantly:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Token Revocation Scenario                        │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  Monday 9am:  Employee leaves company                               │
+│  Monday 9:05am: IT disables account in IdP                          │
+│  Monday 9:06am: Employee tries to use MCP server                    │
+│                                                                     │
+│  What happens:                                                      │
+│  1. Claude Code tries to refresh the access token                   │
+│  2. IdP rejects: "Refresh token revoked"                            │
+│  3. Claude Code prompts for re-authentication                       │
+│  4. Employee can't login (account disabled)                         │
+│  5. Access denied ✓                                                 │
+│                                                                     │
+│  Maximum exposure time: Until current access token expires          │
+│  (typically 15-60 minutes, not 90 days)                             │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+This is why access tokens are kept short-lived: even if you can't revoke them directly, you limit the damage window to minutes, not days.
+
+## Token Refresh Flow
+
+Access tokens are short-lived by design. MCP clients use refresh tokens to get new ones automatically:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     Token Refresh Flow                              │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  Initial State:                                                     │
-│  ┌───────────────────────────────────────────────────────────┐     │
-│  │  access_token: eyJhbGc... (expires in 1 hour)             │     │
-│  │  refresh_token: def456... (expires in 30 days)            │     │
-│  └───────────────────────────────────────────────────────────┘     │
+│  ┌───────────────────────────────────────────────────────────┐      │
+│  │  access_token: eyJhbGc... (expires in 1 hour)             │      │
+│  │  refresh_token: def456... (expires in 30 days)            │      │
+│  └───────────────────────────────────────────────────────────┘      │
 │                                                                     │
 │  When access token expires:                                         │
 │                                                                     │
@@ -317,9 +397,9 @@ Access tokens are short-lived. Clients use refresh tokens to get new ones:
 │                                                                     │
 │  Authorization Server → Client                                      │
 │  {                                                                  │
-│    "access_token": "NEW_TOKEN...",                                 │
-│    "refresh_token": "NEW_REFRESH...",  // May be rotated           │
-│    "expires_in": 3600                                              │
+│    "access_token": "NEW_TOKEN...",                                  │
+│    "refresh_token": "NEW_REFRESH...",  // May be rotated            │
+│    "expires_in": 3600                                               │
 │  }                                                                  │
 │                                                                     │
 │  Note: Some IdPs rotate refresh tokens on each use                  │
@@ -327,7 +407,22 @@ Access tokens are short-lived. Clients use refresh tokens to get new ones:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Client-Side Token Management
+### How MCP Clients Store Tokens Securely
+
+You might wonder: "If refresh tokens last 90 days, where are they stored?" MCP clients handle this differently depending on their architecture:
+
+| Client | Token Storage | Security Model |
+|--------|--------------|----------------|
+| **Claude Code** | OS keychain (macOS Keychain, Windows Credential Manager) | Encrypted, per-user, survives restarts |
+| **ChatGPT** | Server-side (OpenAI infrastructure) | User never sees tokens, encrypted at rest |
+| **Cursor** | OS keychain | Same as Claude Code |
+| **Custom apps** | Your responsibility | Use OS keychain or secure enclave |
+
+**The important point:** Users never need to handle tokens directly. They click "Connect," authenticate via SSO, and the client manages everything securely. This is a major advantage over API keys, which users often store in plain text files or environment variables.
+
+### Client-Side Token Management (For Custom Implementations)
+
+If you're building a custom MCP client, here's the pattern for automatic token refresh:
 
 ```rust
 pub struct TokenManager {
@@ -383,7 +478,7 @@ For public clients (mobile apps, SPAs), use PKCE to prevent authorization code i
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    PKCE Flow                                         │
+│                    PKCE Flow                                        │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  1. Client generates code_verifier (random string)                  │
@@ -501,13 +596,17 @@ Response includes endpoints and supported features:
 4. **Cache JWKS** - But handle key rotation
 5. **Return proper errors** - 401 vs 403 matters
 
-### Token Lifetimes
+### Token Lifetimes: What They Mean in Practice
 
-| Token Type | Recommended Lifetime | Notes |
-|------------|---------------------|-------|
-| Access Token | 15-60 minutes | Shorter = more secure |
-| Refresh Token | 7-30 days | Balance security vs UX |
-| ID Token | 5-15 minutes | Only for initial auth |
+| Token Type | Recommended Lifetime | What This Means |
+|------------|---------------------|-----------------|
+| Access Token | 15-60 minutes | Max time a stolen token is useful. Refreshed silently by MCP clients. |
+| Refresh Token | 30-90 days | How long users work without re-authenticating. Can be revoked anytime by admins. |
+| ID Token | 5-15 minutes | Only used once during initial login. Not sent to MCP servers. |
+
+**For MCP server developers:** You only see access tokens. You don't handle refresh tokens—that's between the MCP client and the IdP. Your job is to validate each access token is legitimate and not expired.
+
+**For enterprise administrators:** You control refresh token lifetime in your IdP settings. Longer = better user experience. Shorter = users re-authenticate more often. Either way, you can revoke any user's tokens instantly if needed.
 
 ### Security Checklist
 
@@ -528,9 +627,23 @@ OAuth 2.0 fundamentals for MCP servers:
 2. **Grant types** - Authorization Code for users, Client Credentials for servers
 3. **JWTs** - Structure, claims, and what to validate
 4. **Scopes** - Design around your capabilities
-5. **Token refresh** - Handle expiration gracefully
+5. **Token refresh** - Handled automatically by MCP clients
 6. **PKCE** - Required for public clients
 7. **OIDC** - Adds identity on top of OAuth
+
+**Key takeaways for the user experience:**
+
+- **Users authenticate once** and work uninterrupted for 30-90 days (refresh token lifetime)
+- **MCP clients handle complexity:** Claude Code, ChatGPT, Cursor store tokens securely and refresh them automatically
+- **Administrators stay in control:** Tokens can be revoked instantly, regardless of expiration date
+- **Security through short access tokens:** Even if something goes wrong, exposure is limited to minutes
+
+**Key takeaways for MCP server developers:**
+
+- **You only validate access tokens** - Refresh handling is the client's job
+- **Check every request** - Validate signature, issuer, audience, and expiration
+- **Use scopes for authorization** - They define what each user can do
+- **Return proper errors** - 401 for invalid tokens, 403 for insufficient permissions
 
 The next chapter covers the practical implementation of token validation in Rust.
 
