@@ -40,18 +40,6 @@ more predictable and maintainable.
 id = "f15a1b2c-d3e4-5678-abcd-123456780102"
 
 [[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What command creates a new MCP workspace using cargo-pmcp?"
-answer.answer = "cargo pmcp new"
-answer.alternatives = ["cargo pmcp new <name>", "cargo-pmcp new"]
-context = """
-The 'cargo pmcp new <workspace-name>' command creates a complete workspace structure
-including Cargo.toml, server-common crate, scenarios directory, and proper workspace
-configuration. This is always the first step - never create these files manually.
-"""
-id = "f15a1b2c-d3e4-5678-abcd-123456780103"
-
-[[questions]]
 type = "MultipleChoice"
 prompt.prompt = "What are the main components of the AI-compiler feedback loop?"
 prompt.distractors = [
@@ -70,23 +58,6 @@ id = "f15a1b2c-d3e4-5678-abcd-123456780104"
 
 [[questions]]
 type = "MultipleChoice"
-prompt.prompt = "Where should the Claude Code mcp-developer agent be installed for global availability?"
-prompt.distractors = [
-    "In the project's node_modules directory",
-    "In /usr/local/share/claude/agents/",
-    "In the user's home bin directory"
-]
-answer.answer = "~/.claude/agents/mcp-developer.md"
-context = """
-User-level agent installation at ~/.claude/agents/ makes the agent available across
-all projects. For project-specific installation, use .claude/agents/ in the project
-root. The agent file contains knowledge about cargo-pmcp workflow, TypedTool patterns,
-and quality standards.
-"""
-id = "f15a1b2c-d3e4-5678-abcd-123456780105"
-
-[[questions]]
-type = "MultipleChoice"
 prompt.prompt = "What is the difference between Error::validation() and Error::internal() in MCP tools?"
 prompt.distractors = [
     "validation() is for unit tests, internal() is for production",
@@ -101,19 +72,6 @@ cannot fix (e.g., 'Failed to connect to weather API'). This distinction helps AI
 clients understand whether to retry with different input or report a server problem.
 """
 id = "f15a1b2c-d3e4-5678-abcd-123456780106"
-
-[[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What command adds a new server to an existing cargo-pmcp workspace?"
-answer.answer = "cargo pmcp add server"
-answer.alternatives = ["cargo pmcp add server <name>", "cargo pmcp add server <name> --template <template>"]
-context = """
-The 'cargo pmcp add server <name> --template <template>' command adds a new server
-to an existing workspace. It creates the core library crate (mcp-<name>-core), binary
-crate (<name>-server), and test scenario directory. Template options include minimal,
-calculator, and sqlite_explorer.
-"""
-id = "f15a1b2c-d3e4-5678-abcd-123456780107"
 
 [[questions]]
 type = "MultipleChoice"
@@ -166,19 +124,6 @@ to reject unknown properties. Output types use Serialize instead of Deserialize.
 id = "f15a1b2c-d3e4-5678-abcd-123456780110"
 
 [[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What command starts the hot-reload development server in cargo-pmcp?"
-answer.answer = "cargo pmcp dev"
-answer.alternatives = ["cargo pmcp dev --server <name>", "cargo pmcp dev --server"]
-context = """
-The 'cargo pmcp dev --server <name>' command builds and starts the MCP server with
-hot-reload enabled on http://0.0.0.0:3000. When source files change, it automatically
-rebuilds and restarts. This provides a rapid development experience for testing
-tool changes without manual restarts.
-"""
-id = "f15a1b2c-d3e4-5678-abcd-123456780111"
-
-[[questions]]
 type = "MultipleChoice"
 prompt.prompt = "Why should you never create Cargo.toml or project directories manually in cargo-pmcp projects?"
 prompt.distractors = [
@@ -228,16 +173,3 @@ patterns, and quality standards. Cursor reads this file automatically when editi
 Rust MCP code in the project.
 """
 id = "f15a1b2c-d3e4-5678-abcd-123456780114"
-
-[[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What command generates test scenarios automatically from a running MCP server?"
-answer.answer = "cargo pmcp test --generate-scenarios"
-answer.alternatives = ["cargo pmcp test --server <name> --generate-scenarios"]
-context = """
-The 'cargo pmcp test --server <name> --generate-scenarios' connects to the running
-dev server, discovers tools via tools/list, and generates smart test scenarios with
-realistic values and assertions. This creates scenarios/server-name/generated.yaml
-that can be customized and extended.
-"""
-id = "f15a1b2c-d3e4-5678-abcd-123456780115"

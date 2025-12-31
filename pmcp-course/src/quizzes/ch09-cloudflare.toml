@@ -86,19 +86,6 @@ memory-heavy dependencies. Rust's zero-cost abstractions help stay within limits
 id = "c9d3e4f5-a6b7-8901-cdef-123456780905"
 
 [[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What CLI tool is used to develop and deploy Cloudflare Workers?"
-answer.answer = "wrangler"
-answer.alternatives = ["Wrangler", "npx wrangler", "wrangler cli"]
-context = """
-Wrangler is Cloudflare's CLI for Workers development. Commands include:
-wrangler dev (local development server), wrangler deploy (publish to Cloudflare),
-wrangler tail (stream logs), and wrangler secret (manage secrets). Install with
-npm install -g wrangler. For Rust, also use worker-build for WASM compilation.
-"""
-id = "c9d3e4f5-a6b7-8901-cdef-123456780906"
-
-[[questions]]
 type = "MultipleChoice"
 prompt.prompt = "What Cargo.toml crate-type is required for Cloudflare Workers?"
 prompt.distractors = [
@@ -114,23 +101,6 @@ library with C-compatible exports that wasm-bindgen can process. The resulting
 or 'lib' - they won't produce the correct WASM output format.
 """
 id = "c9d3e4f5-a6b7-8901-cdef-123456780907"
-
-[[questions]]
-type = "MultipleChoice"
-prompt.prompt = "How should you handle random number generation in WASM for MCP servers?"
-prompt.distractors = [
-    "Use std::rand which works natively in WASM",
-    "Import random numbers from JavaScript globals",
-    "Avoid randomness since WASM is deterministic"
-]
-answer.answer = "Use the getrandom crate with the 'js' feature to bridge to Web Crypto API"
-context = """
-WASM has no native random source - std::rand panics without configuration.
-The getrandom crate with features = ['js'] bridges to JavaScript's crypto.getRandomValues(),
-which uses the Web Crypto API. This enables uuid generation, cryptographic operations,
-and any crate that depends on randomness (like rand).
-"""
-id = "c9d3e4f5-a6b7-8901-cdef-123456780908"
 
 [[questions]]
 type = "MultipleChoice"
@@ -165,67 +135,3 @@ consistent sub-20ms cold starts. Use opt-level='s', LTO, and strip symbols.
 The worker size limit is 10MB compressed, but smaller is faster.
 """
 id = "c9d3e4f5-a6b7-8901-cdef-123456780910"
-
-[[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What Workers binding provides SQLite database access at the edge?"
-answer.answer = "D1"
-answer.alternatives = ["d1", "Workers D1", "Cloudflare D1"]
-context = """
-D1 is Cloudflare's serverless SQLite database. It runs at the edge, providing
-low-latency queries without external database connections. D1 supports standard
-SQL, automatic replication, and point-in-time recovery. Bind with [[d1_databases]]
-in wrangler.toml and access via env.DB in your Worker code.
-"""
-id = "c9d3e4f5-a6b7-8901-cdef-123456780911"
-
-[[questions]]
-type = "MultipleChoice"
-prompt.prompt = "What is the primary advantage of Cloudflare Workers' global edge deployment?"
-prompt.distractors = [
-    "Lower compute costs than regional deployment",
-    "Automatic failover between data centers",
-    "Support for larger memory allocations"
-]
-answer.answer = "Requests are handled by the nearest of 300+ edge locations, minimizing latency globally"
-context = """
-Workers run on Cloudflare's edge network with 300+ points of presence worldwide.
-User requests are routed to the nearest location - a user in Tokyo connects to
-a Tokyo edge server, not a US-central server. This provides sub-50ms response
-times globally, compared to 200-500ms for single-region deployments.
-"""
-id = "c9d3e4f5-a6b7-8901-cdef-123456780912"
-
-[[questions]]
-type = "MultipleChoice"
-prompt.prompt = "How do you store secrets like API keys in Cloudflare Workers?"
-prompt.distractors = [
-    "In wrangler.toml under [vars] section",
-    "As environment variables in the dashboard",
-    "In a .env file deployed with the worker"
-]
-answer.answer = "Using 'wrangler secret put' which encrypts and stores secrets separately from code"
-context = """
-Worker secrets are encrypted and stored separately from your code. Use
-'wrangler secret put API_KEY' to add secrets - they're never visible in
-wrangler.toml or the dashboard. In code, access via env.API_KEY. Secrets
-are injected at runtime, not compile time, keeping them out of your WASM binary.
-"""
-id = "c9d3e4f5-a6b7-8901-cdef-123456780913"
-
-[[questions]]
-type = "MultipleChoice"
-prompt.prompt = "What feature of the chrono crate must be enabled for WASM compatibility?"
-prompt.distractors = [
-    "std for standard library support",
-    "serde for serialization",
-    "clock for time access"
-]
-answer.answer = "wasmbind to bridge JavaScript Date API for time operations"
-context = """
-The chrono crate needs features = ['wasmbind'] for WASM. Without it, chrono
-cannot access system time because WASM has no native clock. The wasmbind feature
-bridges to JavaScript's Date object for current time operations. Similarly, uuid
-needs features = ['js', 'v4'] for WASM random UUID generation.
-"""
-id = "c9d3e4f5-a6b7-8901-cdef-123456780914"

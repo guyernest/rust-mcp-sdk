@@ -1,0 +1,198 @@
+# AI Tutor Instructions for: Building a Foundation Server
+# Exercise ID: ch19-01-foundation-server
+
+[tutor]
+exercise_id = "ch19-01-foundation-server"
+title = "Building a Reusable Foundation Server"
+
+[tutor.context]
+student_level = "advanced"
+prior_knowledge = [
+    "Completed all prior exercises (ch02-ch17)",
+    "Strong understanding of ServerBuilder patterns",
+    "Experience with middleware and authentication",
+    "Familiarity with modular Rust design",
+]
+
+objective = """
+Guide the student to build a foundation server that provides:
+1. Authentication/authorization middleware
+2. Database connection pooling
+3. Logging and metrics infrastructure
+4. Common utility tools (health check, config)
+5. Composition interface for domain servers
+
+This is an architectural exercise for large organizations.
+"""
+
+[tutor.pedagogy]
+approach = "architecture_design"
+
+phases = [
+    { name = "context", duration_minutes = 5, focus = "When does this pattern make sense? (10+ servers, code duplication)" },
+    { name = "design", duration_minutes = 10, focus = "Identify shared capabilities, design interface" },
+    { name = "auth_component", duration_minutes = 12, focus = "Build reusable auth with JwtValidator" },
+    { name = "db_component", duration_minutes = 12, focus = "Build connection pool with health checks" },
+    { name = "utility_tools", duration_minutes = 10, focus = "Add health, config, version tools" },
+    { name = "composition", duration_minutes = 10, focus = "Create composable interface for domain servers" },
+]
+
+[tutor.scaffolding]
+starter_guidance = """
+Before building, establish the problem context:
+
+1. Ask: "Imagine you have 10 MCP servers, each team-owned. What code
+   is duplicated? What inconsistencies exist?"
+
+2. Connect to their experience: "You've built auth, logging, database
+   access. Now extract these into reusable components."
+
+3. Design principle: Foundation servers provide building blocks.
+   Domain servers compose them. Neither knows about the other's
+   business logic.
+"""
+
+hint_progression = [
+    { trigger = "stuck_on_scope", response = "Start with: AuthFoundation (JWT validation), DbFoundation (pool + query tool), ObservabilityFoundation (logging + metrics)." },
+    { trigger = "stuck_on_trait_design", response = "Create trait FoundationCapability with method inject_into(&self, builder: ServerBuilder) -> ServerBuilder. Each foundation implements this." },
+    { trigger = "stuck_on_auth_composition", response = "AuthFoundation stores JwtValidator. inject_into adds auth middleware and optionally a 'whoami' tool that returns current user." },
+    { trigger = "stuck_on_db_composition", response = "DbFoundation owns Pool. inject_into adds pool to state and optional 'health_check' tool that pings database." },
+    { trigger = "stuck_on_domain_usage", response = "Domain server: let builder = ServerBuilder::new().with_foundation(auth).with_foundation(db).tool('domain_specific', ...);" },
+]
+
+[tutor.common_mistakes]
+mistakes = [
+    { pattern = "too_much_foundation", symptom = "Foundation knows about business domain", fix = "Foundation = infrastructure (auth, db, logging). Domain = business (invoices, users). Keep separated." },
+    { pattern = "tight_coupling", symptom = "Domain server can't work without all foundations", fix = "Make foundations optional. Domain server should work with any combination." },
+    { pattern = "state_conflicts", symptom = "Multiple foundations try to use same state key", fix = "Namespace state: 'auth.validator', 'db.pool'. Or use typed keys with PhantomData." },
+    { pattern = "missing_initialization", symptom = "Foundation resources not ready when tools run", fix = "Foundations should lazily initialize or provide explicit init() async method called at startup." },
+]
+
+[tutor.assessment]
+success_criteria = [
+    "AuthFoundation provides JWT validation middleware",
+    "DbFoundation provides connection pool and health tool",
+    "ObservabilityFoundation provides logging middleware",
+    "FoundationCapability trait enables composition",
+    "Domain server demonstrates composing all three",
+    "Each foundation works independently",
+]
+
+mastery_indicators = [
+    "Student identifies appropriate foundation boundaries",
+    "Student explains versioning strategy for foundations",
+    "Student suggests testing approach for composed servers",
+    "Student can extend pattern to discovery/registry",
+]
+
+[tutor.discussion_prompts]
+opening = [
+    "At what scale does code duplication become a maintenance burden?",
+    "What's the cost of each team implementing auth differently?",
+]
+
+during_implementation = [
+    "How would you version foundations independently of domain servers?",
+    "What happens when you need to upgrade auth across all servers?",
+    "How do you test a domain server that depends on foundations?",
+]
+
+closing = [
+    "How would discovery work in a foundation + domain architecture?",
+    "What governance ensures foundations don't grow unbounded?",
+    "How do foundations relate to microservices architecture?",
+]
+
+[tutor.knowledge_connections]
+builds_on = [
+    "Auth middleware from ch13",
+    "Logging/metrics from ch17",
+    "Database patterns from ch03",
+]
+
+leads_to = [
+    "Domain servers (ch19-02)",
+    "Orchestration patterns (ch19-03)",
+    "Enterprise architecture",
+]
+
+real_world_applications = [
+    "Platform team providing infrastructure to product teams",
+    "Enterprise MCP standardization",
+    "Consistent security across organization",
+    "Shared observability infrastructure",
+]
+
+[tutor.code_examples]
+foundation_trait = """
+/// Trait for composable foundation capabilities
+pub trait FoundationCapability: Send + Sync {
+    /// Inject this foundation's capabilities into a server builder
+    fn inject_into(&self, builder: ServerBuilder) -> ServerBuilder;
+
+    /// Optional: Initialize any async resources
+    async fn initialize(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Optional: Health check for this foundation
+    async fn health_check(&self) -> Result<HealthStatus> {
+        Ok(HealthStatus::Healthy)
+    }
+}
+"""
+
+auth_foundation = """
+pub struct AuthFoundation {
+    validator: JwtValidator,
+    config: AuthConfig,
+}
+
+impl AuthFoundation {
+    pub fn new(config: AuthConfig) -> Self {
+        let validator = JwtValidator::new()
+            .with_config(config.clone());
+        Self { validator, config }
+    }
+
+    pub fn validator(&self) -> &JwtValidator {
+        &self.validator
+    }
+}
+
+impl FoundationCapability for AuthFoundation {
+    fn inject_into(&self, builder: ServerBuilder) -> ServerBuilder {
+        builder
+            .middleware(OAuthMiddleware::new(self.validator.clone()))
+            .tool('whoami', WhoAmITool::new())
+    }
+}
+"""
+
+domain_composition = """
+// Domain server composes foundations
+pub async fn create_finance_server(
+    auth: Arc<AuthFoundation>,
+    db: Arc<DbFoundation>,
+    observability: Arc<ObservabilityFoundation>,
+) -> Result<Server> {
+    // Initialize foundations
+    db.initialize().await?;
+
+    // Compose server
+    let builder = ServerBuilder::new()
+        .name('finance-server')
+        .version('1.0.0');
+
+    let builder = auth.inject_into(builder);
+    let builder = db.inject_into(builder);
+    let builder = observability.inject_into(builder);
+
+    // Add domain-specific tools
+    let builder = builder
+        .tool('expense_report', ExpenseReportTool::new(db.pool()))
+        .tool('invoice', InvoiceTool::new(db.pool()));
+
+    builder.build()
+}
+"""

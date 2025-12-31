@@ -71,23 +71,6 @@ id = "d10e4f5a-b6c7-8901-def0-123456781004"
 
 [[questions]]
 type = "MultipleChoice"
-prompt.prompt = "What does the --no-cpu-throttling flag do in Cloud Run?"
-prompt.distractors = [
-    "Removes the CPU usage limit per request",
-    "Enables burst CPU above the allocated amount",
-    "Disables automatic scaling based on CPU"
-]
-answer.answer = "Keeps CPU allocated even between requests, preventing throttling during idle periods"
-context = """
-By default, Cloud Run throttles CPU between requests to reduce costs. With
---no-cpu-throttling, CPU remains allocated continuously. This is essential for
-maintaining WebSocket connections, background tasks, or consistent latency.
-It costs more but provides predictable performance.
-"""
-id = "d10e4f5a-b6c7-8901-def0-123456781005"
-
-[[questions]]
-type = "MultipleChoice"
 prompt.prompt = "What Cloud Run configuration prevents cold starts but increases costs?"
 prompt.distractors = [
     "Setting --cpu-boost for faster startup",
@@ -102,19 +85,6 @@ you pay for 2 containers 24/7 (~$60-120/month each), but user-facing requests
 never experience cold start latency. Balance cost vs latency requirements.
 """
 id = "d10e4f5a-b6c7-8901-def0-123456781006"
-
-[[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What Google Cloud service securely stores database passwords and API keys for Cloud Run?"
-answer.answer = "Secret Manager"
-answer.alternatives = ["secret manager", "SecretManager", "GCP Secret Manager", "Cloud Secret Manager"]
-context = """
-Secret Manager stores secrets with encryption at rest and in transit. Cloud Run
-can mount secrets as environment variables or files. Use 'gcloud secrets create'
-to store secrets, then reference them in Cloud Run with --set-secrets. The
-service account needs secretmanager.secretAccessor role to access secrets.
-"""
-id = "d10e4f5a-b6c7-8901-def0-123456781007"
 
 [[questions]]
 type = "MultipleChoice"
@@ -185,36 +155,6 @@ For CPU-heavy MCP tools, lower concurrency (10-30) often performs better.
 id = "d10e4f5a-b6c7-8901-def0-123456781011"
 
 [[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What gcloud command deploys a container to Cloud Run?"
-answer.answer = "gcloud run deploy"
-answer.alternatives = ["gcloud run deploy SERVICE", "gcloud run services deploy"]
-context = """
-Deploy with: gcloud run deploy SERVICE_NAME --image IMAGE_URL --region REGION.
-Add flags like --allow-unauthenticated for public access, --memory 1Gi,
---min-instances 1, etc. The command creates or updates the Cloud Run service
-and returns the service URL upon completion.
-"""
-id = "d10e4f5a-b6c7-8901-def0-123456781012"
-
-[[questions]]
-type = "MultipleChoice"
-prompt.prompt = "Which deployment platform is most cost-effective for 100M requests/month?"
-prompt.distractors = [
-    "Cloud Run with min-instances=0",
-    "Lambda with ARM64 architecture",
-    "Lambda with provisioned concurrency"
-]
-answer.answer = "Cloudflare Workers at ~$40/month versus Lambda's ~$350 or Cloud Run's ~$500+"
-context = """
-At high volume, Workers' request-based pricing ($0.30/million after free tier)
-beats Lambda's duration-based pricing and Cloud Run's resource-based pricing.
-Lambda costs ~$350/month at 100M requests (200ms each). Cloud Run with always-on
-instances costs even more. Workers is the clear winner for pure cost efficiency.
-"""
-id = "d10e4f5a-b6c7-8901-def0-123456781013"
-
-[[questions]]
 type = "MultipleChoice"
 prompt.prompt = "When should you choose Cloud Run over Lambda or Workers for an MCP server?"
 prompt.distractors = [
@@ -231,20 +171,3 @@ For simpler workloads within Lambda/Workers limits, those platforms are usually
 more cost-effective.
 """
 id = "d10e4f5a-b6c7-8901-def0-123456781014"
-
-[[questions]]
-type = "MultipleChoice"
-prompt.prompt = "What Cargo.toml profile setting produces the smallest release binary?"
-prompt.distractors = [
-    "opt-level = 3 for maximum optimization",
-    "debug = true for symbol information",
-    "incremental = true for faster builds"
-]
-answer.answer = "opt-level = 'z' combined with lto = true, strip = true, and panic = 'abort'"
-context = """
-opt-level = 'z' optimizes for size (smaller than 's' or '3'). LTO enables
-link-time optimization across crates. strip = true removes symbol tables.
-panic = 'abort' removes unwinding code. Together these can reduce binaries by
-50-70%, directly improving cold start times since smaller images load faster.
-"""
-id = "d10e4f5a-b6c7-8901-def0-123456781015"

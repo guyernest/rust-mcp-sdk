@@ -1,0 +1,218 @@
+# AI Tutor Instructions for: Metrics Collection Exercise
+# Exercise ID: ch17-02-metrics-collection
+
+[tutor]
+exercise_id = "ch17-02-metrics-collection"
+title = "Implementing MCP Server Metrics"
+
+[tutor.context]
+student_level = "intermediate"
+prior_knowledge = [
+    "Completed logging middleware (ch17-01)",
+    "Understanding of middleware patterns",
+    "Basic Rust async patterns",
+    "Familiarity with metrics concepts (counters, gauges, histograms)",
+]
+
+objective = """
+Guide the student to implement comprehensive metrics collection:
+1. Count tool invocations by tool name and status
+2. Record request duration histograms
+3. Track concurrent connections
+4. Export metrics in Prometheus format
+5. Create meaningful dashboards
+
+This builds on logging to enable alerting and capacity planning.
+"""
+
+[tutor.pedagogy]
+approach = "metrics_driven_operations"
+
+phases = [
+    { name = "connect", duration_minutes = 3, focus = "Logs tell 'what happened', metrics tell 'how we're doing'" },
+    { name = "counter_basics", duration_minutes = 8, focus = "Add tool invocation counters with labels" },
+    { name = "histograms", duration_minutes = 10, focus = "Record request durations, understand buckets" },
+    { name = "gauges", duration_minutes = 8, focus = "Track concurrent requests, active connections" },
+    { name = "prometheus_export", duration_minutes = 10, focus = "Add /metrics endpoint, Prometheus format" },
+    { name = "dashboard_design", duration_minutes = 8, focus = "Discuss key metrics, alert thresholds" },
+]
+
+[tutor.scaffolding]
+starter_guidance = """
+Before implementing metrics, establish context:
+
+1. Ask: "How would you know if your server is overloaded? How do you
+   plan for capacity?"
+
+2. Connect to their experience: "Logs show individual events, metrics
+   show aggregate patterns - is latency increasing? Error rate spiking?"
+
+3. Explain metric types:
+   - Counter: Monotonically increasing (requests_total)
+   - Gauge: Can go up/down (active_connections)
+   - Histogram: Distribution of values (request_duration_seconds)
+"""
+
+hint_progression = [
+    { trigger = "stuck_on_setup", response = "Add 'metrics' crate. Initialize with: metrics::describe_counter!('mcp_requests_total', 'Total MCP requests');" },
+    { trigger = "stuck_on_labels", response = "Add labels to differentiate: counter!('mcp_requests_total', 'tool' => tool_name, 'status' => 'success').increment(1);" },
+    { trigger = "stuck_on_histogram", response = "Use histogram!('mcp_request_duration_seconds').record(duration.as_secs_f64()); Define buckets in recorder setup." },
+    { trigger = "stuck_on_prometheus", response = "Add metrics-exporter-prometheus crate. Create /metrics endpoint that calls recorder.render() and returns text." },
+    { trigger = "stuck_on_concurrent", response = "Use gauge!('mcp_active_requests').increment(1.0) at start, decrement(-1.0) at end. Gauge shows current value." },
+]
+
+[tutor.common_mistakes]
+mistakes = [
+    { pattern = "unbounded_labels", symptom = "Metrics explosion, OOM", fix = "Never use user input as label values. Stick to known enums: tool names, error codes, regions." },
+    { pattern = "forgetting_decrement", symptom = "Gauge only goes up", fix = "Always decrement in on_response AND on_error. Use defer/RAII pattern or ensure all paths covered." },
+    { pattern = "wrong_bucket_sizes", symptom = "All requests in one bucket", fix = "Set buckets based on expected latency: [0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0] for seconds." },
+    { pattern = "missing_descriptions", symptom = "Dashboard shows cryptic names", fix = "Always use describe_counter!, describe_histogram! with human-readable descriptions." },
+    { pattern = "sync_recording", symptom = "Metrics slow down requests", fix = "Metrics crate is designed to be fast. If still slow, batch updates or use sampling." },
+]
+
+[tutor.assessment]
+success_criteria = [
+    "Tool invocation counter with tool/status labels",
+    "Request duration histogram with appropriate buckets",
+    "Active connections gauge properly incremented/decremented",
+    "/metrics endpoint returns Prometheus format",
+    "Metrics have descriptive names and documentation",
+    "Can query specific tool's error rate",
+]
+
+mastery_indicators = [
+    "Student explains when to use counter vs gauge vs histogram",
+    "Student identifies metrics that would trigger alerts",
+    "Student suggests SLI/SLO based on these metrics",
+    "Student can extend to distributed metrics aggregation",
+]
+
+[tutor.discussion_prompts]
+opening = [
+    "If you could only have three metrics about your server, what would they be?",
+    "How do you currently know if your server is 'healthy'?",
+]
+
+during_implementation = [
+    "What latency would you consider 'too slow' for your tools?",
+    "How would you detect a gradual performance degradation?",
+    "What error rate would trigger an alert at 3am?",
+]
+
+closing = [
+    "How would these metrics help during an incident?",
+    "What capacity planning questions can these metrics answer?",
+    "How do metrics and logs work together for debugging?",
+]
+
+[tutor.knowledge_connections]
+builds_on = [
+    "Logging middleware from ch17-01",
+    "Middleware patterns",
+    "Request/response lifecycle",
+]
+
+leads_to = [
+    "Alerting and on-call practices",
+    "Capacity planning",
+    "SLO-based reliability engineering",
+]
+
+real_world_applications = [
+    "Production dashboards (Grafana, Datadog)",
+    "Autoscaling based on metrics",
+    "SLA reporting and compliance",
+    "Cost optimization through usage analysis",
+]
+
+[tutor.code_examples]
+metrics_middleware = """
+use metrics::{counter, gauge, histogram};
+use std::time::Instant;
+
+pub struct MetricsMiddleware;
+
+#[async_trait]
+impl AdvancedMiddleware for MetricsMiddleware {
+    async fn on_request(&self, req: &Request, ctx: &mut Context) -> Result<()> {
+        let start = Instant::now();
+        ctx.set('metrics_start', start);
+
+        // Track concurrent requests
+        gauge!('mcp_active_requests').increment(1.0);
+
+        Ok(())
+    }
+
+    async fn on_response(&self, res: &Response, ctx: &Context) -> Result<()> {
+        let start: Instant = ctx.get('metrics_start')?;
+        let tool_name = ctx.get::<String>('tool_name').unwrap_or_default();
+
+        // Record duration
+        histogram!('mcp_request_duration_seconds', 'tool' => tool_name.clone())
+            .record(start.elapsed().as_secs_f64());
+
+        // Count by status
+        counter!('mcp_requests_total', 'tool' => tool_name, 'status' => 'success')
+            .increment(1);
+
+        // Decrement concurrent gauge
+        gauge!('mcp_active_requests').decrement(1.0);
+
+        Ok(())
+    }
+
+    async fn on_error(&self, err: &Error, ctx: &Context) -> Result<()> {
+        let tool_name = ctx.get::<String>('tool_name').unwrap_or_default();
+
+        counter!('mcp_requests_total', 'tool' => tool_name, 'status' => 'error')
+            .increment(1);
+
+        gauge!('mcp_active_requests').decrement(1.0);
+
+        Ok(())
+    }
+}
+"""
+
+prometheus_endpoint = """
+use axum::{Router, routing::get, response::IntoResponse};
+use metrics_exporter_prometheus::PrometheusBuilder;
+
+fn setup_metrics() -> impl Fn() -> String {
+    let recorder = PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    metrics::set_global_recorder(recorder).unwrap();
+
+    move || handle.render()
+}
+
+fn create_router() -> Router {
+    let render_metrics = setup_metrics();
+
+    Router::new()
+        .route('/metrics', get(move || async move {
+            render_metrics()
+        }))
+}
+"""
+
+key_metrics = """
+# Essential metrics for MCP servers:
+
+# Rate metrics
+- mcp_requests_total{tool, status} - Request count by tool and outcome
+- mcp_errors_total{error_type} - Error breakdown for debugging
+
+# Latency metrics
+- mcp_request_duration_seconds{tool} - How long tools take
+- mcp_db_query_duration_seconds - Database latency (if applicable)
+
+# Saturation metrics
+- mcp_active_requests - Current concurrent requests
+- mcp_connection_pool_size - Database connection usage
+
+# Business metrics
+- mcp_tokens_processed_total - For usage-based billing
+- mcp_cache_hits_total{cache} - Cache effectiveness
+"""

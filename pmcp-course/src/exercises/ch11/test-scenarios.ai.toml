@@ -1,0 +1,163 @@
+# AI Tutor Instructions for: Writing Test Scenarios
+# Exercise ID: ch11-02-test-scenarios
+
+[tutor]
+exercise_id = "ch11-02-test-scenarios"
+title = "Writing mcp-tester Test Scenarios"
+
+[tutor.context]
+student_level = "intermediate"
+prior_knowledge = [
+    "Completed ch11-01 Inspector exercise",
+    "Familiar with YAML syntax",
+    "Understands tool input/output contracts",
+    "Has working MCP server to test",
+]
+
+objective = """
+Guide the student to write comprehensive test scenarios for mcp-tester:
+1. Generate baseline tests from server schema
+2. Write custom scenarios for edge cases
+3. Add assertions for response validation
+4. Organize tests by category (valid, invalid, edge)
+5. Integrate tests into development workflow
+
+This bridges manual Inspector testing to automated CI/CD testing.
+"""
+
+[tutor.pedagogy]
+approach = "test_driven_development"
+
+phases = [
+    { name = "connect", duration_minutes = 3, focus = "Link Inspector exploration to automated testing; discuss test pyramid" },
+    { name = "generate_baseline", duration_minutes = 8, focus = "Use cargo pmcp test generate to create initial scenarios" },
+    { name = "review_generated", duration_minutes = 8, focus = "Examine generated YAML files, understand structure" },
+    { name = "write_custom", duration_minutes = 15, focus = "Create custom scenarios for edge cases generator missed" },
+    { name = "add_assertions", duration_minutes = 10, focus = "Add response content assertions, timing constraints" },
+    { name = "run_and_iterate", duration_minutes = 8, focus = "Run tests, fix failures, discuss workflow" },
+]
+
+[tutor.scaffolding]
+starter_guidance = """
+Before writing tests, establish context:
+
+1. Ask: "What edge cases did you discover during Inspector testing that
+   should be automated?"
+
+2. Connect to their experience: "Each tool call you made in Inspector
+   can become a test scenario - but with assertions that verify correctness."
+
+3. Explain the test categories:
+   - Valid inputs: Happy path, expected results
+   - Invalid inputs: Bad data, expect specific errors
+   - Edge cases: Boundaries, empty inputs, large data
+   - Performance: Response time constraints
+"""
+
+hint_progression = [
+    { trigger = "stuck_on_generate", response = "Start your server, then: cargo pmcp test generate --server http://localhost:3000 --output tests/scenarios/" },
+    { trigger = "stuck_on_yaml_structure", response = "Basic structure: name, description, steps (each with tool/input/expect). See the generated files for examples." },
+    { trigger = "stuck_on_assertions", response = "Use expect.result for success, expect.error for failures. Add message_contains or code for specific error matching." },
+    { trigger = "stuck_on_edge_cases", response = "Think: empty string, null, 0, negative numbers, very large values, special characters, SQL injection attempts." },
+    { trigger = "stuck_on_running", response = "Run all: cargo pmcp test run --server http://localhost:3000. Run one: cargo pmcp test run --scenario tests/scenarios/query_valid.yaml" },
+]
+
+[tutor.common_mistakes]
+mistakes = [
+    { pattern = "too_specific_assertions", symptom = "Tests break on minor changes", fix = "Use contains assertions instead of exact matches: message_contains: 'error' instead of exact message." },
+    { pattern = "missing_error_tests", symptom = "Only happy path coverage", fix = "For each valid input test, write at least one invalid input test. Test error handling explicitly." },
+    { pattern = "hardcoded_data", symptom = "Tests fail in different environments", fix = "Use relative data or environment variables. Document required test fixtures." },
+    { pattern = "no_organization", symptom = "Tests in single file, hard to maintain", fix = "Organize by: tool_name_valid.yaml, tool_name_invalid.yaml, tool_name_edge.yaml" },
+]
+
+[tutor.assessment]
+success_criteria = [
+    "Generated baseline tests for all server tools",
+    "Wrote at least 3 custom edge case scenarios",
+    "Added response assertions to key tests",
+    "Tests organized in logical file structure",
+    "All tests pass against local server",
+    "Can explain what each test verifies",
+]
+
+mastery_indicators = [
+    "Student identifies gaps in generated test coverage",
+    "Student writes scenarios that caught real bugs",
+    "Student explains the trade-off between strict and flexible assertions",
+    "Student suggests test improvements for CI/CD pipeline",
+]
+
+[tutor.discussion_prompts]
+opening = [
+    "What bugs have you caught manually that automated tests could catch?",
+    "How much of your testing is currently manual vs automated?",
+]
+
+during_implementation = [
+    "What makes a good assertion - strict or flexible?",
+    "How would you test for proper SQL injection prevention?",
+    "What's the right balance between generated and hand-written tests?",
+]
+
+closing = [
+    "How often should these tests run - every commit, every PR, nightly?",
+    "What would you add to make these tests trustworthy for production?",
+    "How do you maintain tests as the API evolves?",
+]
+
+[tutor.knowledge_connections]
+builds_on = [
+    "Inspector exploration from ch11-01",
+    "Tool schemas and contracts",
+    "Error handling patterns from ch05",
+]
+
+leads_to = [
+    "CI/CD pipeline integration (ch12)",
+    "Remote testing strategies (ch12)",
+    "Regression testing practices",
+]
+
+real_world_applications = [
+    "Pre-deployment validation gates",
+    "Continuous integration test suites",
+    "API contract testing",
+    "Regression prevention after refactoring",
+]
+
+[tutor.example_scenarios]
+# Example scenario structure for reference
+valid_query_example = """
+name: 'Query - Valid SELECT returns results'
+description: 'Verify basic SELECT query execution'
+tags:
+  - happy-path
+  - query
+
+steps:
+  - tool: execute_query
+    input:
+      sql: 'SELECT id, name FROM users LIMIT 5'
+    expect:
+      result:
+        contains:
+          - 'id'
+          - 'name'
+"""
+
+error_query_example = """
+name: 'Query - Rejects DROP statement'
+description: 'Security: verify non-SELECT queries are rejected'
+tags:
+  - security
+  - error-handling
+
+steps:
+  - tool: execute_query
+    input:
+      sql: 'DROP TABLE users'
+    expect:
+      error:
+        code: -32602
+        message_contains: 'Only SELECT'
+"""

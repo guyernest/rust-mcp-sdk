@@ -151,23 +151,6 @@ id = "f17a1b2c-d3e4-5678-abcd-123456780309"
 
 [[questions]]
 type = "MultipleChoice"
-prompt.prompt = "How can test scenarios serve as observability tools?"
-prompt.distractors = [
-    "They generate metrics automatically",
-    "They create dashboards from test results",
-    "They replace the need for logging"
-]
-answer.answer = "Run periodically to detect issues like database unavailability, secret rotation, and performance regression"
-context = """
-Test scenarios from cargo pmcp test become health checks when run on schedule. CI/CD
-pipelines or cron jobs execute scenarios periodically, detecting: database connectivity
-issues (timeout failures), expired secrets (auth errors), performance regression (duration
-assertions), and API changes (schema validation failures). This is 'testing as observability'.
-"""
-id = "f17a1b2c-d3e4-5678-abcd-123456780310"
-
-[[questions]]
-type = "MultipleChoice"
 prompt.prompt = "What is the recommended log output format for production MCP servers?"
 prompt.distractors = [
     "Human-readable with colors (.pretty())",
@@ -219,23 +202,6 @@ id = "f17a1b2c-d3e4-5678-abcd-123456780313"
 
 [[questions]]
 type = "MultipleChoice"
-prompt.prompt = "Which metrics type should be used for tracking current number of active connections?"
-prompt.distractors = [
-    "Counter - because connections accumulate",
-    "Histogram - to track connection duration distribution",
-    "Timer - to measure connection time"
-]
-answer.answer = "Gauge - because the value can increase and decrease"
-context = """
-Gauges track values that go up and down: active connections, queue depth, memory usage.
-gauge!('connections_active').increment(1.0) on connect, .decrement(1.0) on disconnect.
-Counters only go up (total connections ever), histograms track distributions. Gauges
-show current state, which is essential for capacity monitoring.
-"""
-id = "f17a1b2c-d3e4-5678-abcd-123456780314"
-
-[[questions]]
-type = "MultipleChoice"
 prompt.prompt = "Why are spans essential for debugging async MCP servers?"
 prompt.distractors = [
     "They reduce memory usage in async code",
@@ -250,23 +216,6 @@ context (request_id, user_id, tool name) through async boundaries. When you see 
 error, the span hierarchy shows exactly which request failed and where in the call chain.
 """
 id = "f17a1b2c-d3e4-5678-abcd-123456780315"
-
-[[questions]]
-type = "MultipleChoice"
-prompt.prompt = "What observability platforms does the Rust metrics ecosystem support?"
-prompt.distractors = [
-    "Only Prometheus - it's the Rust standard",
-    "Only AWS CloudWatch for production use",
-    "Only Datadog for enterprise deployments"
-]
-answer.answer = "Multiple platforms including Prometheus, Datadog, CloudWatch, and OpenTelemetry via different exporters"
-context = """
-The metrics crate is platform-agnostic. Exporters include: metrics-exporter-prometheus for
-Prometheus/Grafana, metrics-exporter-statsd for Datadog, custom recorders for CloudWatch,
-and OpenTelemetry integration for Grafana Cloud. Choose at deployment time via environment
-variables without changing application code.
-"""
-id = "f17a1b2c-d3e4-5678-abcd-123456780316"
 
 [[questions]]
 type = "MultipleChoice"
@@ -317,37 +266,3 @@ log operations, record metrics, and handle rate limits. Middleware lets you writ
 logic once and apply it to all requests automatically.
 """
 id = "f17a1b2c-d3e4-5678-abcd-123456780319"
-
-[[questions]]
-type = "MultipleChoice"
-prompt.prompt = "A Counter metric is like an odometer - it only goes up. Which metric type is like a thermometer that goes up and down?"
-prompt.distractors = [
-    "Histogram - because it tracks distributions",
-    "Timer - because it measures duration",
-    "Summary - because it calculates percentiles"
-]
-answer.answer = "Gauge - because it tracks current state that can increase or decrease"
-context = """
-The three metric types serve different purposes: Counter (like an odometer) only increases
-and tracks totals (requests, errors). Gauge (like a thermometer) tracks current state that
-fluctuates (active connections, queue depth, memory usage). Histogram tracks distributions
-for percentile calculations (request latency).
-"""
-id = "f17a1b2c-d3e4-5678-abcd-123456780320"
-
-[[questions]]
-type = "MultipleChoice"
-prompt.prompt = "What is the purpose of rate limiting in an MCP server?"
-prompt.distractors = [
-    "To make requests faster by limiting queue depth",
-    "To reduce memory usage by limiting response size",
-    "To improve security by limiting user permissions"
-]
-answer.answer = "To protect server resources by controlling how many requests a client can make per time window"
-context = """
-Rate limiting prevents resource exhaustion from: DoS attacks, runaway AI client loops,
-expensive API calls, and unfair usage by single clients. PMCP's RateLimitMiddleware uses
-a token bucket algorithm with configurable rate (requests/second) and burst capacity.
-Excess requests receive immediate 'rate limited' errors rather than queuing.
-"""
-id = "f17a1b2c-d3e4-5678-abcd-123456780321"

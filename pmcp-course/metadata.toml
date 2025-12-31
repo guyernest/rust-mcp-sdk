@@ -81,6 +81,7 @@ title = "AWS Lambda Deployment"
 path = "part3-deployment/ch08-aws-lambda.md"
 estimated_minutes = 45
 quiz_id = "ch08-aws-lambda"
+exercise_ids = ["ch08-01-lambda-deployment"]
 
 [[parts.chapters]]
 id = "ch09"
@@ -107,6 +108,7 @@ title = "Local Testing"
 path = "part4-testing/ch11-local-testing.md"
 estimated_minutes = 35
 quiz_id = "ch11-local-testing"
+exercise_ids = ["ch11-01-mcp-inspector", "ch11-02-test-scenarios"]
 
 [[parts.chapters]]
 id = "ch12"
@@ -114,6 +116,7 @@ title = "Remote Testing"
 path = "part4-testing/ch12-remote-testing.md"
 estimated_minutes = 35
 quiz_id = "ch12-remote-testing"
+exercise_ids = ["ch12-01-ci-pipeline"]
 
 # Part V: Enterprise Security
 [[parts]]
@@ -126,6 +129,7 @@ title = "OAuth Integration"
 path = "part5-security/ch13-oauth.md"
 estimated_minutes = 50
 quiz_id = "ch13-oauth"
+exercise_ids = ["ch13-01-jwt-validation"]
 
 [[parts.chapters]]
 id = "ch14"
@@ -164,6 +168,7 @@ title = "Middleware"
 path = "part7-observability/ch17-middleware.md"
 estimated_minutes = 35
 quiz_id = "ch17-observability"
+exercise_ids = ["ch17-01-logging-middleware", "ch17-02-metrics-collection"]
 
 [[parts.chapters]]
 id = "ch18"
@@ -183,6 +188,7 @@ title = "Composition"
 path = "part8-advanced/ch19-composition.md"
 estimated_minutes = 50
 quiz_id = "ch19-composition"
+exercise_ids = ["ch19-01-foundation-server"]
 
 [[parts.chapters]]
 id = "ch20"
@@ -190,3 +196,4 @@ title = "Building Applications"
 path = "part8-advanced/ch20-applications.md"
 estimated_minutes = 55
 quiz_id = "ch20-mcp-apps"
+exercise_ids = ["ch20-01-ui-resources"]

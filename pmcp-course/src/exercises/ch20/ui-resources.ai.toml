@@ -1,0 +1,216 @@
+# AI Tutor Instructions for: UI Resources Exercise
+# Exercise ID: ch20-01-ui-resources
+
+[tutor]
+exercise_id = "ch20-01-ui-resources"
+title = "Creating MCP UI Resources"
+
+[tutor.context]
+student_level = "advanced"
+prior_knowledge = [
+    "Completed all prior exercises (ch02-ch19)",
+    "Understanding of MCP resources",
+    "Basic HTML/JavaScript knowledge",
+    "Familiarity with iframe security model",
+]
+
+objective = """
+Guide the student to create UI resources with graceful degradation:
+1. Build a UIResource with the ui:// scheme
+2. Create HTML template with text/html+mcp MIME type
+3. Link tool to UI with .with_ui()
+4. Implement postMessage communication
+5. Design for clients without UI support
+
+This is an experimental feature - emphasize graceful degradation.
+"""
+
+[tutor.pedagogy]
+approach = "experimental_exploration"
+
+phases = [
+    { name = "context", duration_minutes = 5, focus = "Experimental warning - API may change, limited client support" },
+    { name = "design_first", duration_minutes = 8, focus = "Design tool to work without UI, then enhance with UI" },
+    { name = "ui_resource", duration_minutes = 12, focus = "Create UIResource with UIResourceBuilder, HTML template" },
+    { name = "tool_association", duration_minutes = 10, focus = "Link tool to UI with .with_ui(), understand metadata" },
+    { name = "postmessage", duration_minutes = 12, focus = "Implement bidirectional communication with host" },
+    { name = "graceful_degradation", duration_minutes = 8, focus = "Test with UI-capable and text-only clients" },
+]
+
+[tutor.scaffolding]
+starter_guidance = """
+Before building UI resources, establish expectations:
+
+1. Critical context: "This feature is EXPERIMENTAL. The API may change,
+   most clients don't support it yet, and you should design servers
+   that work without UI."
+
+2. The philosophy: "Tool results should always include complete data.
+   UI is an enhancement, not a requirement."
+
+3. Ask: "What data would benefit from visual presentation?
+   (images, maps, charts - NOT simple text or status)"
+"""
+
+hint_progression = [
+    { trigger = "stuck_on_uri_scheme", response = "UI resources use ui:// scheme: 'ui://hotel/gallery'. This is like file:// or http:// but for embedded UIs." },
+    { trigger = "stuck_on_builder", response = "Use UIResourceBuilder::new('ui://path', 'Title').description('...').html_template(HTML_STRING).build_with_contents()?" },
+    { trigger = "stuck_on_tool_link", response = "After TypedTool::new(), chain .with_ui('ui://hotel/gallery'). This adds metadata that UI-capable clients use." },
+    { trigger = "stuck_on_postmessage", response = "In HTML: window.parent.postMessage({jsonrpc: '2.0', method: 'tools/call', params: {...}, id: 1}, '*'). Listen with addEventListener('message', handler)." },
+    { trigger = "stuck_on_degradation", response = "Tool handler returns full JSON data regardless of UI. Clients that don't support UI show text, UI-capable clients show both." },
+]
+
+[tutor.common_mistakes]
+mistakes = [
+    { pattern = "ui_only_data", symptom = "Clients without UI get useless response", fix = "Tool result MUST contain complete data as JSON. UI is enhancement only." },
+    { pattern = "trusting_postmessage", symptom = "Security vulnerability", fix = "Validate origin in message handler. Only accept messages from expected parent origin." },
+    { pattern = "hardcoded_urls", symptom = "UI breaks in different environments", fix = "Use relative paths or pass base URL from host via postMessage init event." },
+    { pattern = "blocking_ui_load", symptom = "Slow tool response waiting for UI", fix = "Tool returns immediately. UI loads asynchronously after initial response." },
+    { pattern = "complex_state_in_ui", symptom = "UI becomes mini-application", fix = "Keep UIs simple - display data, handle clicks. Complex logic belongs in tools." },
+]
+
+[tutor.assessment]
+success_criteria = [
+    "UIResource created with valid ui:// URI",
+    "HTML template uses text/html+mcp MIME type",
+    "Tool linked to UI with .with_ui()",
+    "PostMessage communication works bidirectionally",
+    "Tool returns complete data for non-UI clients",
+    "Graceful experience verified without UI support",
+]
+
+mastery_indicators = [
+    "Student explains why graceful degradation matters",
+    "Student identifies appropriate use cases for UI vs text",
+    "Student suggests security considerations for postMessage",
+    "Student understands experimental status implications",
+]
+
+[tutor.discussion_prompts]
+opening = [
+    "What data in your server would genuinely benefit from visual display?",
+    "How do you feel about building on an experimental API?",
+]
+
+during_implementation = [
+    "What happens if a client ignores your UI resource?",
+    "How would you test this with different MCP clients?",
+    "What security risks exist with embedded HTML?",
+]
+
+closing = [
+    "Would you ship this to production? Why or why not?",
+    "How would you monitor for client compatibility issues?",
+    "What future MIME types (WASM, Remote DOM) excite you?",
+]
+
+[tutor.knowledge_connections]
+builds_on = [
+    "Resources from ch04",
+    "Tool design from ch02-ch03",
+    "Server capabilities",
+]
+
+leads_to = [
+    "Future: WASM-based UIs",
+    "Future: Server-rendered DOM",
+    "Rich client experiences",
+]
+
+real_world_applications = [
+    "Product image galleries",
+    "Interactive maps and location data",
+    "Data visualization dashboards",
+    "Form-based data entry with validation",
+]
+
+[tutor.experimental_warning]
+status = "experimental"
+message = """
+MCP Apps (SEP-1865) is EXPERIMENTAL:
+- APIs will change as specification matures
+- Most MCP clients do NOT support UI resources yet
+- Different clients may implement support differently
+- PMCP SDK will update as the spec evolves
+
+ALWAYS design servers to work without UI support.
+"""
+
+[tutor.code_examples]
+ui_resource_creation = """
+use pmcp::{UIResourceBuilder, ResourceCollection};
+
+const GALLERY_HTML: &str = r#'<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        .gallery { display: grid; grid-template-columns: repeat(auto-fill, 200px); gap: 16px; }
+        .gallery img { width: 100%; border-radius: 8px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class='gallery' id='gallery'></div>
+    <script>
+        // Wait for data from MCP host
+        window.addEventListener('message', (event) => {
+            if (event.data.type === 'mcp-tool-result') {
+                const images = event.data.result.images;
+                renderGallery(images);
+            }
+        });
+
+        function renderGallery(images) {
+            const gallery = document.getElementById('gallery');
+            images.forEach(img => {
+                const el = document.createElement('img');
+                el.src = img.thumbnail;
+                el.onclick = () => window.open(img.full);
+                gallery.appendChild(el);
+            });
+        }
+    </script>
+</body>
+</html>'#;
+
+fn create_ui_resources() -> ResourceCollection {
+    let (resource, contents) = UIResourceBuilder::new(
+        'ui://hotel/gallery',
+        'Room Photo Gallery'
+    )
+        .description('Interactive photo gallery for hotel rooms')
+        .html_template(GALLERY_HTML)
+        .build_with_contents()
+        .expect('Failed to build UI resource');
+
+    ResourceCollection::new()
+        .add_ui_resource(resource, contents)
+}
+"""
+
+graceful_tool = """
+// Tool ALWAYS returns complete data - works without UI
+async fn get_room_images(args: RoomImagesArgs, _: RequestHandlerExtra) -> pmcp::Result<Value> {
+    let images = fetch_images(&args.hotel_id, &args.room_type).await?;
+
+    // Complete data for clients without UI support
+    Ok(serde_json::json!({
+        'hotel_id': args.hotel_id,
+        'room_type': args.room_type,
+        'image_count': images.len(),
+        'images': images.iter().map(|img| {
+            serde_json::json!({
+                'id': img.id,
+                'thumbnail': img.thumbnail_url,
+                'full': img.full_url,
+                'caption': img.caption,
+                'dimensions': { 'width': img.width, 'height': img.height }
+            })
+        }).collect::<Vec<_>>()
+    }))
+}
+
+// Link to optional UI enhancement
+let tool = TypedTool::new('get_room_images', get_room_images)
+    .with_description('Get photos for a hotel room type')
+    .with_ui('ui://hotel/gallery');  // UI-capable clients will render this
+"""

@@ -1,0 +1,181 @@
+# AI Tutor Instructions for: Logging Middleware Exercise
+# Exercise ID: ch17-01-logging-middleware
+
+[tutor]
+exercise_id = "ch17-01-logging-middleware"
+title = "Building Production-Ready Logging Middleware"
+
+[tutor.context]
+student_level = "intermediate"
+prior_knowledge = [
+    "Completed MCP server exercises (ch02-ch03)",
+    "Basic Rust tracing/logging experience",
+    "Understanding of middleware concept",
+    "Familiarity with async request handling",
+]
+
+objective = """
+Guide the student to build comprehensive logging middleware that:
+1. Logs every request with structured context
+2. Calculates and records request duration
+3. Redacts sensitive data (tokens, passwords)
+4. Correlates logs with request IDs
+5. Integrates with observability platforms
+
+This transforms 'printf debugging' into production observability.
+"""
+
+[tutor.pedagogy]
+approach = "observability_driven_development"
+
+phases = [
+    { name = "connect", duration_minutes = 3, focus = "Discuss 'why is production broken?' - need visibility" },
+    { name = "basic_logging", duration_minutes = 8, focus = "Add tracing subscriber, log request/response" },
+    { name = "structured_context", duration_minutes = 10, focus = "Add spans with tool name, user ID, request ID" },
+    { name = "timing_metrics", duration_minutes = 8, focus = "Record start/end time, log duration" },
+    { name = "sensitive_redaction", duration_minutes = 10, focus = "Identify and redact tokens, passwords, PII" },
+    { name = "integration", duration_minutes = 8, focus = "Connect to CloudWatch, Datadog, or OpenTelemetry" },
+]
+
+[tutor.scaffolding]
+starter_guidance = """
+Before building logging middleware, establish context:
+
+1. Ask: "When something breaks in production, what information do you
+   wish you had? What questions can't you currently answer?"
+
+2. Connect to their experience: "Think of the Inspector from ch11 -
+   logging middleware gives you that visibility in production."
+
+3. Explain structured logging:
+   - Not just text strings - key-value pairs
+   - Machine-parseable for dashboards
+   - Correlatable across requests
+   - Searchable in log aggregators
+"""
+
+hint_progression = [
+    { trigger = "stuck_on_tracing_setup", response = "Add tracing-subscriber with env-filter: tracing_subscriber::fmt().with_env_filter('info').init(). Set RUST_LOG=debug for more." },
+    { trigger = "stuck_on_span_creation", response = "Use #[instrument] macro or create manually: let span = info_span!('handle_request', tool = %name, request_id = %id);" },
+    { trigger = "stuck_on_timing", response = "Record start with Instant::now() at middleware entry. Log duration in on_response: info!(duration_ms = start.elapsed().as_millis());" },
+    { trigger = "stuck_on_redaction", response = "Check field names: if name contains 'token', 'password', 'secret', 'key', replace value with '[REDACTED]' before logging." },
+    { trigger = "stuck_on_request_id", response = "Generate UUID at request start: let request_id = Uuid::new_v4(). Add to span and response headers for tracing." },
+]
+
+[tutor.common_mistakes]
+mistakes = [
+    { pattern = "logging_secrets", symptom = "Credentials visible in logs", fix = "ALWAYS redact before logging. Check Authorization header, body fields with 'password', 'token', 'secret'." },
+    { pattern = "too_verbose", symptom = "Logs overwhelming, expensive storage", fix = "Use appropriate levels: debug for dev, info for prod. Log less in hot paths." },
+    { pattern = "missing_context", symptom = "Can't correlate logs for one request", fix = "Always include request_id in every log within a request. Use tracing spans for automatic propagation." },
+    { pattern = "string_concatenation", symptom = "Hard to search/filter logs", fix = "Use structured fields: info!(user_id = %id, tool = %name, ...) not info!('user {} called {}')" },
+    { pattern = "sync_logging", symptom = "Logging slows down requests", fix = "Use async-friendly tracing subscriber. Consider buffered/batch logging for high throughput." },
+]
+
+[tutor.assessment]
+success_criteria = [
+    "All requests logged with structured context",
+    "Request duration captured for every call",
+    "Sensitive data redacted before logging",
+    "Request ID present in all related logs",
+    "Log level appropriately configured for production",
+    "Can find all logs for a specific request using request_id",
+]
+
+mastery_indicators = [
+    "Student explains the difference between debug and info levels",
+    "Student identifies additional fields useful for debugging",
+    "Student suggests alerting based on log patterns",
+    "Student can extend to distributed tracing",
+]
+
+[tutor.discussion_prompts]
+opening = [
+    "What's the first thing you check when investigating a production bug?",
+    "How do you currently know if your MCP server is working correctly?",
+]
+
+during_implementation = [
+    "What information would help debug a slow request?",
+    "How do you balance logging enough vs too much?",
+    "What patterns in logs might indicate an attack?",
+]
+
+closing = [
+    "How would you set up alerts based on these logs?",
+    "What metrics would you extract from log data?",
+    "How does this connect to the CI/CD pipeline from ch12?",
+]
+
+[tutor.knowledge_connections]
+builds_on = [
+    "Middleware architecture concepts",
+    "Async Rust patterns",
+    "Error handling from ch05",
+]
+
+leads_to = [
+    "Metrics collection (ch17-02)",
+    "Distributed tracing",
+    "Alerting and dashboards",
+]
+
+real_world_applications = [
+    "Production incident investigation",
+    "Performance optimization",
+    "Security audit trails",
+    "SLA monitoring and reporting",
+]
+
+[tutor.code_examples]
+middleware_structure = """
+use tracing::{info, warn, instrument, Span};
+use std::time::Instant;
+
+pub struct LoggingMiddleware {
+    redact_patterns: Vec<&'static str>,
+}
+
+impl LoggingMiddleware {
+    fn redact(&self, key: &str, value: &str) -> String {
+        if self.redact_patterns.iter().any(|p| key.to_lowercase().contains(p)) {
+            '[REDACTED]'.to_string()
+        } else {
+            value.to_string()
+        }
+    }
+}
+
+#[async_trait]
+impl AdvancedMiddleware for LoggingMiddleware {
+    async fn on_request(&self, req: &Request, ctx: &mut Context) -> Result<()> {
+        let request_id = Uuid::new_v4();
+        let start = Instant::now();
+
+        ctx.set('request_id', request_id);
+        ctx.set('start_time', start);
+
+        info!(
+            request_id = %request_id,
+            method = %req.method(),
+            'Request started'
+        );
+
+        Ok(())
+    }
+
+    async fn on_response(&self, res: &Response, ctx: &Context) -> Result<()> {
+        let request_id: Uuid = ctx.get('request_id')?;
+        let start: Instant = ctx.get('start_time')?;
+        let duration = start.elapsed();
+
+        info!(
+            request_id = %request_id,
+            duration_ms = duration.as_millis() as u64,
+            status = 'success',
+            'Request completed'
+        );
+
+        Ok(())
+    }
+}
+"""

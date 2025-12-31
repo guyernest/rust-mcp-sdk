@@ -40,19 +40,6 @@ before deeper testing wastes time.
 id = "f12a2b3c-d4e5-6789-abcd-123456781202"
 
 [[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What mcp-tester option passes authentication headers for remote servers?"
-answer.answer = "--header"
-answer.alternatives = ["-H", "--header \"Authorization: Bearer\"", "header"]
-context = """
-Use --header 'Authorization: Bearer TOKEN' to pass authentication headers.
-Multiple headers can be passed: --header 'Auth: token' --header 'X-Key: value'.
-In config files, use the headers section under server configuration to set
-headers that apply to all requests.
-"""
-id = "f12a2b3c-d4e5-6789-abcd-123456781203"
-
-[[questions]]
 type = "MultipleChoice"
 prompt.prompt = "What timeout configuration accounts for serverless cold starts?"
 prompt.distractors = [
@@ -102,18 +89,6 @@ that fails without the fix and passes with it. This prevents the same bug from
 being fixed multiple times.
 """
 id = "f12a2b3c-d4e5-6789-abcd-123456781206"
-
-[[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What CI/CD output format is universally supported for test results?"
-answer.answer = "JUnit XML"
-answer.alternatives = ["junit", "JUnit", "junit xml", "XML"]
-context = """
-JUnit XML is the de facto standard for CI/CD test results. GitHub Actions,
-GitLab CI, Jenkins, CircleCI, and others all parse JUnit XML for test reporting.
-Use --format junit --output results.xml to generate this format from mcp-tester.
-"""
-id = "f12a2b3c-d4e5-6789-abcd-123456781207"
 
 [[questions]]
 type = "MultipleChoice"
@@ -182,19 +157,6 @@ then test staging with full suite, finally deploy to production with canary
 testing. Each stage gates the next.
 """
 id = "f12a2b3c-d4e5-6789-abcd-123456781211"
-
-[[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What mcp-tester config option runs multiple test scenarios concurrently?"
-answer.answer = "--parallel"
-answer.alternatives = ["parallel", "-p", "--parallel 4"]
-context = """
-Use --parallel N to run N test scenarios concurrently. This speeds up test
-execution but may cause issues if tests share state or if the server can't
-handle concurrent requests. For integration tests, --parallel 4 is a reasonable
-default; for load testing, increase as needed.
-"""
-id = "f12a2b3c-d4e5-6789-abcd-123456781212"
 
 [[questions]]
 type = "MultipleChoice"

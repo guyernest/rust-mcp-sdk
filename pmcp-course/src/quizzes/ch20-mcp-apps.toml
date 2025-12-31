@@ -135,23 +135,6 @@ id = "f20a1b2c-d3e4-5678-abcd-123456800008"
 
 [[questions]]
 type = "MultipleChoice"
-prompt.prompt = "What does UIResourceBuilder::build_with_contents() return?"
-prompt.distractors = [
-    "A String containing the rendered HTML",
-    "A Server instance ready to serve the UI",
-    "A single UIResource with embedded content"
-]
-answer.answer = "A tuple of (UIResource, UIResourceContents) for registration and delivery"
-context = """
-build_with_contents() returns both pieces needed for UI resources: the UIResource
-declaration (uri, name, description, mime_type) for advertising to clients, and
-UIResourceContents (the actual HTML) for delivery when requested. Both are needed
-when adding to ResourceCollection.
-"""
-id = "f20a1b2c-d3e4-5678-abcd-123456800009"
-
-[[questions]]
-type = "MultipleChoice"
 prompt.prompt = "Can multiple tools share the same UI resource?"
 prompt.distractors = [
     "No, each tool must have its own unique UI resource",
@@ -183,23 +166,6 @@ fetch UI resources alongside regular resources. Tools capability is also typical
 needed since UIs are associated with tools.
 """
 id = "f20a1b2c-d3e4-5678-abcd-123456800011"
-
-[[questions]]
-type = "MultipleChoice"
-prompt.prompt = "What validation does UIResourceBuilder perform on URIs?"
-prompt.distractors = [
-    "Checks that the path matches an existing file",
-    "Validates the URI is reachable via HTTP",
-    "Ensures the URI has valid HTML content"
-]
-answer.answer = "Verifies the URI starts with 'ui://' and has a non-empty path"
-context = """
-UIResourceBuilder validates that URIs start with 'ui://' (not http:// or file://) and
-that there's a path after the scheme (ui://test is valid, ui:// alone is not). This
-catches common mistakes before server startup. Content validation (html_template set)
-is also checked.
-"""
-id = "f20a1b2c-d3e4-5678-abcd-123456800012"
 
 [[questions]]
 type = "MultipleChoice"
@@ -237,23 +203,6 @@ id = "f20a1b2c-d3e4-5678-abcd-123456800014"
 
 [[questions]]
 type = "MultipleChoice"
-prompt.prompt = "What metadata key does .with_ui() populate in the tool definition?"
-prompt.distractors = [
-    "_meta['uiResource']",
-    "_meta['ui_uri']",
-    "_meta['displayUri']"
-]
-answer.answer = "_meta['ui/resourceUri']"
-context = """
-The .with_ui() method sets the 'ui/resourceUri' key in the tool's _meta field. This
-follows the MCP Apps specification naming convention. When clients list tools, they
-check _meta['ui/resourceUri'] to discover associated UIs. The ToolUIMetadata type
-provides helpers for reading/writing this metadata.
-"""
-id = "f20a1b2c-d3e4-5678-abcd-123456800015"
-
-[[questions]]
-type = "MultipleChoice"
 prompt.prompt = "Which of these is a BAD practice for MCP UI development?"
 prompt.distractors = [
     "Showing loading states while waiting for data",
@@ -268,4 +217,3 @@ handle errors gracefully, and not assume any persistent storage. All state shoul
 from tool calls, not browser storage.
 """
 id = "f20a1b2c-d3e4-5678-abcd-123456800016"
-

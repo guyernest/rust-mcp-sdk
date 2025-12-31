@@ -105,19 +105,6 @@ it without the verifier.
 id = "f13a2b3c-d4e5-6789-abcd-123456781306"
 
 [[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What HTTP header carries the JWT token in API requests?"
-answer.answer = "Authorization"
-answer.alternatives = ["authorization", "Authorization: Bearer", "Bearer"]
-context = """
-The Authorization header with 'Bearer' scheme carries JWT tokens:
-'Authorization: Bearer eyJhbGciOiJS...'. The server extracts the token by
-removing the 'Bearer ' prefix. This is the standard per RFC 6750. Some APIs
-also accept tokens via query parameter or cookie, but header is preferred.
-"""
-id = "f13a2b3c-d4e5-6789-abcd-123456781307"
-
-[[questions]]
 type = "MultipleChoice"
 prompt.prompt = "Why should JWKS be cached rather than fetched on every request?"
 prompt.distractors = [
@@ -167,19 +154,6 @@ issued for other services from being accepted. Aud can be a string or array of
 strings if the token is valid for multiple recipients.
 """
 id = "f13a2b3c-d4e5-6789-abcd-123456781310"
-
-[[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What OAuth term describes the permissions a token grants?"
-answer.answer = "scope"
-answer.alternatives = ["scopes", "scope claim", "permissions"]
-context = """
-Scopes define what actions a token authorizes. They appear in the 'scope' claim
-as a space-separated string (e.g., 'read:tools execute:tools'). Design scopes
-for your MCP server based on operations: read:tools, execute:tools, admin:*,
-etc. Always validate scopes before performing operations.
-"""
-id = "f13a2b3c-d4e5-6789-abcd-123456781311"
 
 [[questions]]
 type = "MultipleChoice"

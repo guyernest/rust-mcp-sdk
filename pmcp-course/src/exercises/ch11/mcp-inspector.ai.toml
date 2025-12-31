@@ -1,0 +1,125 @@
+# AI Tutor Instructions for: MCP Inspector Deep Dive
+# Exercise ID: ch11-01-mcp-inspector
+
+[tutor]
+exercise_id = "ch11-01-mcp-inspector"
+title = "Interactive Debugging with MCP Inspector"
+
+[tutor.context]
+student_level = "intermediate"
+prior_knowledge = [
+    "Built MCP servers from ch02-ch03",
+    "Understanding of MCP protocol (tools, resources, prompts)",
+    "Basic debugging experience",
+    "npm/npx available",
+]
+
+objective = """
+Guide the student to master MCP Inspector for interactive debugging:
+1. Connect Inspector to their running server
+2. Explore server capabilities (tools, resources, prompts)
+3. Execute tools and examine responses
+4. Debug a failing tool call step-by-step
+5. Understand when to use Inspector vs automated testing
+
+This builds debugging intuition before introducing automated testing.
+"""
+
+[tutor.pedagogy]
+approach = "exploratory_debugging"
+
+phases = [
+    { name = "connect", duration_minutes = 3, focus = "Link to printf debugging; introduce visual protocol inspection" },
+    { name = "setup", duration_minutes = 5, focus = "Install Inspector, start local server, establish connection" },
+    { name = "explore_capabilities", duration_minutes = 8, focus = "List tools/resources, examine schemas, understand discovery" },
+    { name = "execute_tools", duration_minutes = 10, focus = "Call tools with valid inputs, examine responses, try edge cases" },
+    { name = "debug_failure", duration_minutes = 12, focus = "Intentionally break a tool, use Inspector to diagnose" },
+    { name = "reflect", duration_minutes = 5, focus = "When Inspector vs automated tests; development workflow" },
+]
+
+[tutor.scaffolding]
+starter_guidance = """
+Before diving into Inspector, establish context:
+
+1. Ask: "When your MCP server returns unexpected results, how do you
+   currently debug it? Print statements? Logging?"
+
+2. Connect to their experience: "Inspector is like browser DevTools for
+   MCP - you can see exactly what the client sends and server responds."
+
+3. Explain the value:
+   - See raw JSON-RPC messages
+   - Test tools without an AI client
+   - Validate schema generation
+   - Rapid iteration during development
+"""
+
+hint_progression = [
+    { trigger = "stuck_on_install", response = "Install with: npm install -g @anthropic/mcp-inspector. Or use npx directly: npx @anthropic/mcp-inspector" },
+    { trigger = "stuck_on_connection", response = "First start your server: cargo run --release. Then connect: npx @anthropic/mcp-inspector http://localhost:3000/mcp" },
+    { trigger = "stuck_on_sse_transport", response = "For SSE servers, add --transport sse flag: npx @anthropic/mcp-inspector --transport sse http://localhost:3000/sse" },
+    { trigger = "stuck_on_tool_execution", response = "In Inspector, click the tool name, fill in the input JSON matching the schema, then click Execute. Response appears below." },
+    { trigger = "stuck_on_error_interpretation", response = "Look at the 'error' field in the response. The 'code' indicates error type (e.g., -32602 = invalid params). The 'message' explains what went wrong." },
+]
+
+[tutor.common_mistakes]
+mistakes = [
+    { pattern = "wrong_endpoint", symptom = "Connection refused or timeout", fix = "Verify server is running and check the correct endpoint. For streamable-http, it's usually /mcp, for SSE it's /sse" },
+    { pattern = "json_syntax_errors", symptom = "Parse error when executing tool", fix = "Use proper JSON: strings in quotes, no trailing commas. Inspector sometimes shows schema hints - follow them." },
+    { pattern = "missing_required_fields", symptom = "-32602 Invalid params error", fix = "Check the tool schema for required fields. Inspector shows them with asterisks (*) or in the schema view." },
+    { pattern = "confusing_transport", symptom = "Works locally but not with inspector", fix = "Inspector defaults to POST/JSON-RPC. If your server uses SSE, explicitly use --transport sse flag." },
+]
+
+[tutor.assessment]
+success_criteria = [
+    "Successfully connects Inspector to running server",
+    "Lists all tools and examines their schemas",
+    "Executes at least 3 different tool calls",
+    "Intentionally triggers an error and explains the response",
+    "Identifies at least one issue through Inspector that logs didn't reveal",
+]
+
+mastery_indicators = [
+    "Student explains the JSON-RPC request/response cycle",
+    "Student can interpret error codes (-32600, -32601, -32602)",
+    "Student articulates when Inspector vs mcp-tester is appropriate",
+    "Student uses Inspector to validate schema generation",
+]
+
+[tutor.discussion_prompts]
+opening = [
+    "Have you ever wished you could 'step through' an API call visually?",
+    "What information is lost when you only have server logs?",
+]
+
+during_implementation = [
+    "What does the tool schema tell you about expected inputs?",
+    "Why is seeing the raw JSON-RPC response valuable?",
+    "How would you test this same call with an automated test?",
+]
+
+closing = [
+    "When would you use Inspector vs mcp-tester for regression testing?",
+    "How could Inspector help when debugging a production issue?",
+    "What did Inspector reveal that surprised you?",
+]
+
+[tutor.knowledge_connections]
+builds_on = [
+    "Server construction from ch02-ch03",
+    "Tool input/output schemas",
+    "MCP protocol basics",
+]
+
+leads_to = [
+    "mcp-tester automated testing (ch11-02)",
+    "Schema-driven test generation (ch11-03)",
+    "CI/CD integration (ch12)",
+]
+
+real_world_applications = [
+    "Debugging customer-reported issues",
+    "Validating server changes before deployment",
+    "Teaching new team members MCP protocol",
+    "Demonstrating server capabilities to stakeholders",
+]

@@ -40,19 +40,6 @@ without manual test case writing.
 id = "e11a2b3c-d4e5-6789-abcd-123456781102"
 
 [[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What cargo command generates test scenarios from a running MCP server?"
-answer.answer = "cargo pmcp test generate"
-answer.alternatives = ["pmcp test generate", "cargo pmcp test generate --server"]
-context = """
-The 'cargo pmcp test generate' command connects to a running MCP server, introspects
-its schema, and automatically generates YAML test scenario files. Options include
---output to specify the directory, --edge-cases for depth level, and --tools to
-generate for specific tools only.
-"""
-id = "e11a2b3c-d4e5-6789-abcd-123456781103"
-
-[[questions]]
 type = "MultipleChoice"
 prompt.prompt = "In the testing pyramid for MCP servers, which tests should be most numerous?"
 prompt.distractors = [
@@ -104,19 +91,6 @@ to review and edit generated scenarios.
 id = "e11a2b3c-d4e5-6789-abcd-123456781106"
 
 [[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What assertion type checks if a response contains specific text?"
-answer.answer = "contains"
-answer.alternatives = ["content.contains", "contains:", "message_contains"]
-context = """
-The 'contains' assertion checks if the response content includes specific text.
-In scenario files: expect.content.contains: 'expected text'. This is useful for
-partial matching when you don't want to assert the entire response, just that
-it includes certain key information.
-"""
-id = "e11a2b3c-d4e5-6789-abcd-123456781107"
-
-[[questions]]
 type = "MultipleChoice"
 prompt.prompt = "What is the purpose of variable capture in mcp-tester scenarios?"
 prompt.distractors = [
@@ -132,22 +106,6 @@ then reference as ${var_name} in subsequent inputs. This enables multi-step
 workflows like Create → Read → Update → Delete testing.
 """
 id = "e11a2b3c-d4e5-6789-abcd-123456781108"
-
-[[questions]]
-type = "MultipleChoice"
-prompt.prompt = "Which command connects MCP Inspector to a server using HTTP transport?"
-prompt.distractors = [
-    "mcp-inspector connect --http localhost:3000",
-    "npx inspector http://localhost:3000",
-    "cargo inspect --transport http localhost:3000"
-]
-answer.answer = "npx @anthropic/mcp-inspector http://localhost:3000/mcp"
-context = """
-MCP Inspector is installed and run via npm. Use 'npx @anthropic/mcp-inspector URL'
-to connect to an HTTP endpoint. For SSE transport, add --transport sse. For stdio,
-use --transport stdio with the server command. Add --header for authentication.
-"""
-id = "e11a2b3c-d4e5-6789-abcd-123456781109"
 
 [[questions]]
 type = "MultipleChoice"
@@ -182,18 +140,6 @@ and teardown. For database tests or HTTP clients, this is essential since most
 MCP operations are async.
 """
 id = "e11a2b3c-d4e5-6789-abcd-123456781111"
-
-[[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What mcp-tester flag stops test execution on the first failure?"
-answer.answer = "--fail-fast"
-answer.alternatives = ["fail-fast", "-f", "--failfast"]
-context = """
-The --fail-fast flag stops test execution immediately when any test fails.
-This is useful for CI/CD to fail fast and save time, or for debugging to
-examine the failure state. Without it, all tests run and report all failures.
-"""
-id = "e11a2b3c-d4e5-6789-abcd-123456781112"
 
 [[questions]]
 type = "MultipleChoice"

@@ -1,0 +1,176 @@
+# AI Tutor Instructions for: JWT Validation Exercise
+# Exercise ID: ch13-01-jwt-validation
+
+[tutor]
+exercise_id = "ch13-01-jwt-validation"
+title = "Implementing JWT Token Validation"
+
+[tutor.context]
+student_level = "intermediate"
+prior_knowledge = [
+    "Completed basic MCP server exercises (ch02-ch03)",
+    "Understanding of HTTP middleware from ch17",
+    "Basic knowledge of OAuth/JWT concepts",
+    "Familiarity with async Rust patterns",
+]
+
+objective = """
+Guide the student to implement secure JWT validation for their MCP server:
+1. Configure JWKS endpoint for public key fetching
+2. Build validation middleware that extracts and verifies tokens
+3. Propagate user identity to tool handlers
+4. Implement scope-based authorization
+5. Handle token errors gracefully
+
+This is their first security implementation, connecting identity to tools.
+"""
+
+[tutor.pedagogy]
+approach = "security_first_development"
+
+phases = [
+    { name = "connect", duration_minutes = 5, focus = "Discuss why API keys are insufficient; introduce OAuth flow" },
+    { name = "understand_jwt", duration_minutes = 8, focus = "Decode a sample JWT, explain header/payload/signature" },
+    { name = "configure_validation", duration_minutes = 10, focus = "Set up JwtValidator with issuer, audience, JWKS URL" },
+    { name = "build_middleware", duration_minutes = 12, focus = "Extract Bearer token, validate, store in context" },
+    { name = "use_in_tools", duration_minutes = 10, focus = "Access user identity in tool handlers, check scopes" },
+    { name = "error_handling", duration_minutes = 8, focus = "Return proper 401/403 responses with WWW-Authenticate" },
+]
+
+[tutor.scaffolding]
+starter_guidance = """
+Before implementing JWT validation, establish context:
+
+1. Ask: "What information does your MCP server currently know about
+   who is calling it? How would you implement 'only admin can delete'?"
+
+2. Connect to their experience: "Remember middleware from ch17? JWT
+   validation is a middleware that runs before every tool call."
+
+3. Explain the JWT structure:
+   - Header: Algorithm and key ID
+   - Payload: User info, scopes, expiration
+   - Signature: Proves token wasn't tampered with
+"""
+
+hint_progression = [
+    { trigger = "stuck_on_jwks", response = "JWKS is a JSON endpoint that returns public keys. For Cognito: https://cognito-idp.{region}.amazonaws.com/{poolId}/.well-known/jwks.json" },
+    { trigger = "stuck_on_bearer_extraction", response = "Get header: request.headers().get('authorization'). Strip prefix: .strip_prefix('Bearer '). Return 401 if missing." },
+    { trigger = "stuck_on_validation_config", response = "ValidationConfig needs: issuer (from IdP), audience (your client_id), and jwks_url. Use ValidationConfig::cognito() helper." },
+    { trigger = "stuck_on_context_propagation", response = "After validation, call context.set_auth(AuthContext::from_claims(claims)). Tools access via context.auth()." },
+    { trigger = "stuck_on_scope_checking", response = "Token payload has 'scope' field (space-separated). Check: auth.scopes().contains(&'admin:delete')" },
+]
+
+[tutor.common_mistakes]
+mistakes = [
+    { pattern = "trusting_client_claims", symptom = "Security bypass by modifying JWT", fix = "ALWAYS validate signature server-side. Never decode without verification." },
+    { pattern = "missing_expiration_check", symptom = "Expired tokens still work", fix = "The jsonwebtoken crate checks exp automatically. Ensure validation config has validate_exp: true." },
+    { pattern = "wrong_issuer", symptom = "All tokens rejected", fix = "Copy issuer exactly from your IdP. For Cognito it's the full URL including pool ID." },
+    { pattern = "blocking_jwks_fetch", symptom = "Every request slow", fix = "Cache JWKS with TTL (1 hour typical). Use once_cell or dashmap for thread-safe caching." },
+    { pattern = "generic_error_messages", symptom = "Hard to debug auth failures", fix = "Log detailed error internally but return generic 'Invalid token' to client. Use tracing::warn! for details." },
+]
+
+[tutor.assessment]
+success_criteria = [
+    "JwtValidator configured with correct issuer and audience",
+    "Middleware extracts Bearer token from Authorization header",
+    "Valid tokens pass, expired/invalid tokens return 401",
+    "User info accessible in tool handlers via context.auth()",
+    "Scope checking works for admin-only operations",
+    "Proper 401/403 error responses with WWW-Authenticate header",
+]
+
+mastery_indicators = [
+    "Student explains the difference between 401 and 403",
+    "Student identifies JWKS caching as performance requirement",
+    "Student suggests audit logging for security events",
+    "Student can extend to multi-tenant validation",
+]
+
+[tutor.discussion_prompts]
+opening = [
+    "What happens if you deploy an API without authentication?",
+    "Why can't you just check username/password on every request?",
+]
+
+during_implementation = [
+    "What information should be in the JWT for your use case?",
+    "How often should JWKS be refreshed? What if keys rotate?",
+    "What's the security difference between 401 and 403?",
+]
+
+closing = [
+    "How would you add API key fallback for service-to-service calls?",
+    "What audit trail would you implement for security compliance?",
+    "How does this integrate with your deployment from ch08?",
+]
+
+[tutor.knowledge_connections]
+builds_on = [
+    "Middleware patterns from ch17",
+    "Server builder patterns",
+    "Error handling from ch05",
+]
+
+leads_to = [
+    "Identity provider integration (ch14)",
+    "Multi-tenant architectures",
+    "Security audit logging",
+]
+
+real_world_applications = [
+    "Enterprise SSO integration",
+    "Role-based access control",
+    "Compliance and audit requirements",
+    "Zero-trust security architectures",
+]
+
+[tutor.code_examples]
+# Example code patterns for reference
+middleware_pattern = """
+pub struct OAuthMiddleware {
+    validator: JwtValidator,
+}
+
+#[async_trait]
+impl ServerHttpMiddleware for OAuthMiddleware {
+    async fn on_request(
+        &self,
+        request: &HttpRequest,
+        context: &mut ServerHttpContext,
+    ) -> Result<Option<HttpResponse>> {
+        // Extract Bearer token
+        let token = request
+            .headers()
+            .get('authorization')
+            .and_then(|h| h.to_str().ok())
+            .and_then(|h| h.strip_prefix('Bearer '))
+            .ok_or_else(|| PmcpError::unauthorized('Missing authorization'))?;
+
+        // Validate JWT
+        let claims = self.validator.validate(token).await?;
+
+        // Store in context for tools
+        context.set_auth(AuthContext::from_claims(claims));
+
+        Ok(None)  // Continue to handler
+    }
+}
+"""
+
+tool_usage_pattern = """
+pub async fn admin_tool(input: Input, context: &ToolContext) -> Result<Output> {
+    let auth = context.auth()
+        .ok_or_else(|| PmcpError::unauthorized('Not authenticated'))?;
+
+    if !auth.has_scope('admin:write') {
+        return Err(PmcpError::forbidden('Requires admin:write scope'));
+    }
+
+    // User info available
+    let user_id = auth.user_id();
+    tracing::info!(user = %user_id, 'Admin operation performed');
+
+    // ... implement tool
+}
+"""

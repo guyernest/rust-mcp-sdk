@@ -1,0 +1,127 @@
+# AI Tutor Instructions for: Lambda Deployment Exercise
+# Exercise ID: ch08-01-lambda-deployment
+
+[tutor]
+exercise_id = "ch08-01-lambda-deployment"
+title = "Deploying an MCP Server to AWS Lambda"
+
+[tutor.context]
+student_level = "intermediate"
+prior_knowledge = [
+    "Completed ch02-ch03 exercises (basic MCP servers)",
+    "Understanding of ServerBuilder pattern",
+    "Basic AWS knowledge (accounts, CLI)",
+    "Familiarity with cargo-pmcp commands",
+]
+
+objective = """
+Guide the student to deploy their database query MCP server to AWS Lambda using:
+1. cargo-pmcp deployment initialization
+2. CDK infrastructure configuration
+3. Cold start optimization techniques
+4. Verification of the deployed endpoint
+
+This is their first cloud deployment, connecting local development to production.
+"""
+
+[tutor.pedagogy]
+approach = "scaffolded_deployment"
+
+phases = [
+    { name = "connect", duration_minutes = 5, focus = "Link to local server experience; discuss why serverless matters for MCP" },
+    { name = "prerequisites", duration_minutes = 5, focus = "Verify AWS CLI, cargo-lambda, CDK are installed and configured" },
+    { name = "init_deployment", duration_minutes = 10, focus = "Run cargo pmcp deploy init, explain generated files" },
+    { name = "configure", duration_minutes = 10, focus = "Edit deploy.toml for memory, timeout, environment variables" },
+    { name = "optimize_binary", duration_minutes = 8, focus = "Add release profile optimizations for cold start" },
+    { name = "deploy_verify", duration_minutes = 10, focus = "Build, deploy, test endpoint with curl" },
+    { name = "reflect", duration_minutes = 5, focus = "Discuss monitoring, costs, and production considerations" },
+]
+
+[tutor.scaffolding]
+starter_guidance = """
+Before deployment, establish context:
+
+1. Ask: "Your local MCP server works great. What happens when you close
+   your laptop? How do AI clients access it?"
+
+2. Connect to their experience: "Remember the StreamableHttpServer from
+   earlier chapters? Lambda Web Adapter translates Lambda events to HTTP -
+   your same code runs unchanged."
+
+3. Explain the architecture:
+   - API Gateway: HTTPS termination, CORS, rate limiting
+   - Lambda: Your MCP server with Web Adapter layer
+   - Secrets Manager: Secure credentials (not environment variables!)
+"""
+
+hint_progression = [
+    { trigger = "stuck_on_aws_cli", response = "Run 'aws sts get-caller-identity' to verify credentials. If it fails, run 'aws configure' and enter your access key." },
+    { trigger = "stuck_on_cargo_lambda", response = "Install with: cargo install cargo-lambda. It handles cross-compilation for Lambda's ARM64 Linux environment." },
+    { trigger = "stuck_on_deploy_init", response = "From your project directory: cargo pmcp deploy init --target aws-lambda. This creates .pmcp/ with CDK configuration." },
+    { trigger = "stuck_on_timeout", response = "Database connections take time. In deploy.toml, increase timeout_seconds to 30 or 60. For cold starts, use lazy initialization." },
+    { trigger = "stuck_on_binary_size", response = "Add to Cargo.toml: [profile.release] opt-level = 'z', lto = true, strip = true. Smaller binaries = faster cold starts." },
+    { trigger = "stuck_on_curl_test", response = "Use the endpoint from 'cargo pmcp deploy outputs'. Test with: curl -X POST https://your-endpoint/mcp -H 'Content-Type: application/json' -d '{...initialize...}'" },
+]
+
+[tutor.common_mistakes]
+mistakes = [
+    { pattern = "hardcoded_secrets", symptom = "Database password in deploy.toml or code", fix = "Never commit secrets! Use Secrets Manager: let db_url = get_secret('my-server/database').await?" },
+    { pattern = "insufficient_memory", symptom = "Lambda out of memory or very slow", fix = "Start with 256MB in deploy.toml. Rust is efficient, but increase if you see OOM errors." },
+    { pattern = "missing_vpc", symptom = "Cannot connect to RDS/private database", fix = "Enable VPC in deploy.toml: [vpc] enabled = true. Ensure security groups allow Lambda." },
+    { pattern = "blocking_init", symptom = "30+ second cold starts", fix = "Use OnceCell for lazy initialization: static DB_POOL: OnceCell<Pool> = OnceCell::new();" },
+    { pattern = "x86_vs_arm", symptom = "Binary won't run on Lambda", fix = "Use architecture = 'arm64' in deploy.toml. ARM is cheaper and cargo-lambda cross-compiles correctly." },
+]
+
+[tutor.assessment]
+success_criteria = [
+    "cargo pmcp deploy init creates .pmcp/ directory",
+    "deploy.toml configured with appropriate memory and timeout",
+    "Cargo.toml has release profile optimizations",
+    "cargo pmcp deploy completes without errors",
+    "curl test to /mcp endpoint returns valid MCP response",
+    "CloudWatch logs show successful invocation",
+]
+
+mastery_indicators = [
+    "Student explains Lambda Web Adapter role",
+    "Student identifies cold start optimization opportunities",
+    "Student understands VPC requirements for database access",
+    "Student can interpret CloudWatch metrics",
+]
+
+[tutor.discussion_prompts]
+opening = [
+    "What's the advantage of serverless over running a VM 24/7?",
+    "Why is 'same code locally and in Lambda' important for debugging?",
+]
+
+during_implementation = [
+    "Why do we use ARM64 instead of x86_64?",
+    "What happens during a cold start vs warm invocation?",
+    "Where should database credentials come from - environment or Secrets Manager?",
+]
+
+closing = [
+    "How would you add a custom domain to your API Gateway?",
+    "What metrics would you alert on for production monitoring?",
+    "How does provisioned concurrency eliminate cold starts?",
+]
+
+[tutor.knowledge_connections]
+builds_on = [
+    "StreamableHttpServer from ch03",
+    "Database connection patterns from ch03",
+    "Server configuration from ch02",
+]
+
+leads_to = [
+    "Connecting clients to deployed servers (ch08-01)",
+    "Remote testing strategies (ch12)",
+    "OAuth for Lambda APIs (ch13)",
+]
+
+real_world_applications = [
+    "Internal enterprise tools with pay-per-use scaling",
+    "Customer-facing AI integrations with automatic scaling",
+    "Multi-region deployments for global availability",
+]

@@ -1,0 +1,172 @@
+# AI Tutor Instructions for: CI/CD Pipeline for MCP Servers
+# Exercise ID: ch12-01-ci-pipeline
+
+[tutor]
+exercise_id = "ch12-01-ci-pipeline"
+title = "Building a CI/CD Pipeline for MCP Servers"
+
+[tutor.context]
+student_level = "intermediate"
+prior_knowledge = [
+    "Completed ch11 exercises (testing strategies)",
+    "Basic GitHub Actions or CI experience",
+    "Understanding of test scenarios from ch11",
+    "Familiarity with cargo build and test commands",
+]
+
+objective = """
+Guide the student to build a production-ready CI/CD pipeline that:
+1. Runs Rust unit tests on every push
+2. Executes mcp-tester scenarios against ephemeral server
+3. Deploys to staging/production environments
+4. Runs health checks post-deployment
+5. Handles secrets securely
+
+This connects local testing to production deployment workflows.
+"""
+
+[tutor.pedagogy]
+approach = "pipeline_construction"
+
+phases = [
+    { name = "connect", duration_minutes = 3, focus = "Link manual testing to automated gates; discuss CI/CD value" },
+    { name = "basic_workflow", duration_minutes = 10, focus = "Create GitHub Actions workflow with build and unit tests" },
+    { name = "add_mcp_tests", duration_minutes = 12, focus = "Start server in background, run mcp-tester scenarios" },
+    { name = "deployment_stage", duration_minutes = 12, focus = "Add deployment job with environment protection" },
+    { name = "health_checks", duration_minutes = 8, focus = "Add post-deployment smoke tests" },
+    { name = "secrets_security", duration_minutes = 5, focus = "Configure secrets, discuss security best practices" },
+]
+
+[tutor.scaffolding]
+starter_guidance = """
+Before building the pipeline, establish context:
+
+1. Ask: "What would happen if broken code reached production? How do
+   you currently catch bugs before deployment?"
+
+2. Connect to their experience: "Your test scenarios from ch11 become
+   the automated gates that prevent broken code from deploying."
+
+3. Explain the pipeline stages:
+   - Build: Compile and check for errors
+   - Test: Unit tests and mcp-tester scenarios
+   - Deploy: Push to staging/production
+   - Verify: Health checks on deployed server
+"""
+
+hint_progression = [
+    { trigger = "stuck_on_workflow_file", response = "Create .github/workflows/ci.yml. Start with 'on: [push, pull_request]' and a single job with checkout and cargo test." },
+    { trigger = "stuck_on_server_background", response = "Use 'cargo run --release &' with '&' to background. Add 'sleep 5' for startup. Use 'kill $!' or process management for cleanup." },
+    { trigger = "stuck_on_mcp_tester", response = "After server starts: 'cargo pmcp test run --server http://localhost:3000 --format junit --output test-results.xml'" },
+    { trigger = "stuck_on_deployment", response = "Use 'needs: test' to run after tests pass. Add 'environment: production' for protection rules in GitHub." },
+    { trigger = "stuck_on_secrets", response = "Use ${{ secrets.AWS_ACCESS_KEY_ID }} in workflow. Configure in repo Settings > Secrets. Never log secrets!" },
+]
+
+[tutor.common_mistakes]
+mistakes = [
+    { pattern = "missing_server_wait", symptom = "mcp-tester runs before server starts", fix = "Add 'sleep 5' or use wait-for-it script. Or check health endpoint in loop before tests." },
+    { pattern = "secrets_in_logs", symptom = "Credentials visible in CI output", fix = "GitHub auto-masks secrets, but avoid echo/print. Use --quiet flags and environment variables." },
+    { pattern = "flaky_tests", symptom = "Tests pass locally but fail in CI", fix = "Use --test-threads=1 for cargo test. Ensure deterministic ordering. Add retry for network tests." },
+    { pattern = "no_cleanup", symptom = "Background processes leak", fix = "Use 'trap cleanup EXIT' or GitHub Actions post steps. Kill server process after tests." },
+    { pattern = "missing_caching", symptom = "CI takes 10+ minutes", fix = "Cache cargo registry and target: actions/cache@v3 with key on Cargo.lock hash." },
+]
+
+[tutor.assessment]
+success_criteria = [
+    "Workflow triggers on push and pull_request",
+    "Rust unit tests run and report results",
+    "mcp-tester scenarios execute against running server",
+    "Test results uploaded as artifacts",
+    "Deployment job runs only after tests pass",
+    "Health check verifies deployed server responds",
+]
+
+mastery_indicators = [
+    "Student explains why tests must pass before deployment",
+    "Student identifies security considerations for secrets",
+    "Student can extend pipeline for multiple environments",
+    "Student suggests improvements for faster builds",
+]
+
+[tutor.discussion_prompts]
+opening = [
+    "How long should a CI pipeline take before developers get frustrated?",
+    "What's the cost of a bug reaching production vs catching it in CI?",
+]
+
+during_implementation = [
+    "Why do we run tests on every PR, not just main branch?",
+    "How do you handle tests that need real databases or APIs?",
+    "When should deployment be automatic vs require approval?",
+]
+
+closing = [
+    "How would you add staging environment before production?",
+    "What alerts would you set up for pipeline failures?",
+    "How do you handle breaking changes that require coordinated deployment?",
+]
+
+[tutor.knowledge_connections]
+builds_on = [
+    "Test scenarios from ch11",
+    "Lambda deployment from ch08",
+    "Server configuration patterns",
+]
+
+leads_to = [
+    "Remote testing strategies (ch12)",
+    "Production monitoring (ch17)",
+    "Secure deployments (ch13-14)",
+]
+
+real_world_applications = [
+    "Enterprise deployment pipelines",
+    "Multi-environment promotion workflows",
+    "Automated quality gates",
+    "Compliance and audit trails",
+]
+
+[tutor.example_workflow]
+# Example GitHub Actions structure for reference
+basic_structure = """
+name: MCP Server CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo
+          key: cargo-${{ hashFiles('Cargo.lock') }}
+      - name: Run unit tests
+        run: cargo test --all-features
+      - name: Start server
+        run: cargo run --release &
+      - name: Wait for server
+        run: sleep 5
+      - name: Run MCP tests
+        run: cargo pmcp test run --server http://localhost:3000
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to Lambda
+        run: cargo pmcp deploy
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+"""

@@ -137,41 +137,6 @@ id = "d6a1b2c3-e5f6-7890-abcd-ef1234560608"
 
 [[questions]]
 type = "MultipleChoice"
-prompt.prompt = "In the SequentialWorkflow DSL, which helper function passes the entire output from a previous step?"
-prompt.distractors = [
-    "prompt_arg('step_name')",
-    "field('binding', 'output')",
-    "constant(json!({...}))"
-]
-answer.answer = "from_step('binding_name')"
-context = """
-The DSL provides four data source helpers: prompt_arg() for workflow arguments,
-from_step() for entire previous output, field() for specific fields of previous
-output, and constant() for fixed values. from_step('sales_data') passes everything
-from a step that bound to 'sales_data'.
-"""
-id = "d6a1b2c3-e5f6-7890-abcd-ef1234560609"
-
-[[questions]]
-type = "MultipleChoice"
-prompt.prompt = "Why should you embed resources in hybrid workflow steps using .with_resource()?"
-prompt.distractors = [
-    "It's required by the MCP protocol for all workflows",
-    "It reduces the number of tool calls needed",
-    "It improves server-side caching performance"
-]
-answer.answer = "It provides the AI with exactly the documentation it needs to complete incomplete steps correctly"
-context = """
-Resource embedding is a powerful lever for MCP developers. When a step can't be
-fully automated (fuzzy matching, user clarification), embedding relevant resources
-like schemas, validation rules, and format templates gives the AI the exact
-context it needs. Instead of guessing which resources to read, the AI receives
-pre-selected documentation from the developer who knows the domain.
-"""
-id = "d6a1b2c3-e5f6-7890-abcd-ef1234560610"
-
-[[questions]]
-type = "MultipleChoice"
 prompt.prompt = "When does workflow validation occur in the PMCP SDK?"
 prompt.distractors = [
     "Only when you explicitly call .validate()",

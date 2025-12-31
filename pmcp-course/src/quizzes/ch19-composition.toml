@@ -108,36 +108,6 @@ The foundation handles this once so domain servers don't implement it incorrectl
 id = "f19a1b2c-d3e4-5678-abcd-123456790006"
 
 [[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What trait do dynamic resource providers implement to handle URI templates like 'tables://{table}/schema'?"
-answer.answer = "DynamicResourceProvider"
-answer.alternatives = ["dynamic_resources::DynamicResourceProvider", "dynamic resource provider"]
-context = """
-DynamicResourceProvider enables pattern-based resources using URI templates with placeholders.
-Implementations define templates() returning ResourceTemplate structs, and fetch() to resolve
-specific URIs. This allows resources like tables://{table}/schema where {table} matches any
-table name, making database exploration flexible without predefined static resources.
-"""
-id = "f19a1b2c-d3e4-5678-abcd-123456790007"
-
-[[questions]]
-type = "MultipleChoice"
-prompt.prompt = "Why should foundation servers implement versioning?"
-prompt.distractors = [
-    "To track which user made changes",
-    "To generate changelogs automatically",
-    "To enforce code review policies"
-]
-answer.answer = "To ensure domain servers can check compatibility before composing foundations"
-context = """
-Foundation changes can break all dependent domain servers. Version checking (using semver)
-lets domain servers verify they're compatible with the foundation version at startup. A
-min_compatible_version() method enables backwards compatibility while evolving foundations.
-This prevents subtle runtime failures from incompatible foundation updates.
-"""
-id = "f19a1b2c-d3e4-5678-abcd-123456790008"
-
-[[questions]]
 type = "MultipleChoice"
 prompt.prompt = "What problem does cross-domain communication solve?"
 prompt.distractors = [
@@ -153,23 +123,6 @@ patterns include orchestration servers (coordinate multiple domains), shared eve
 publish/subscribe), and gateway servers (single entry point routing to appropriate domains).
 """
 id = "f19a1b2c-d3e4-5678-abcd-123456790009"
-
-[[questions]]
-type = "MultipleChoice"
-prompt.prompt = "What DSL helper in PMCP workflows references the output of a previous step?"
-prompt.distractors = [
-    "prompt_arg(\"field_name\") - gets user input",
-    "constant(value) - uses fixed value",
-    "field(\"path\") - extracts from current input"
-]
-answer.answer = "from_step(\"step_name\") - references output from a named workflow step"
-context = """
-PMCP workflow DSL helpers: prompt_arg(\"name\") gets values from the workflow prompt/input,
-from_step(\"step\") references output from previous steps, field(\"path\") extracts nested
-fields, and constant(value) provides fixed values. from_step enables data flow: step 2 can
-use from_step(\"step1\").field(\"id\") to pass step 1's output ID to step 2.
-"""
-id = "f19a1b2c-d3e4-5678-abcd-123456790010"
 
 [[questions]]
 type = "MultipleChoice"
@@ -204,23 +157,6 @@ variable per user, or the interaction is conversational. For research tasks or e
 debugging, let the AI call tools directly rather than constraining it to fixed workflows.
 """
 id = "f19a1b2c-d3e4-5678-abcd-123456790012"
-
-[[questions]]
-type = "MultipleChoice"
-prompt.prompt = "How does server composition help with tool discovery?"
-prompt.distractors = [
-    "It automatically generates documentation websites",
-    "It creates IDE autocomplete for tool names",
-    "It sends email notifications about new tools"
-]
-answer.answer = "Organized hierarchies let clients query domains for relevant capabilities instead of searching 50+ servers"
-context = """
-Without composition, an AI client must search across dozens of servers to find 'expense status'.
-With composition: clear domain organization (HR, Finance, Engineering) lets clients ask the right
-domain server directly. Domain servers can expose discovery resources (domain://info/tools) that
-list available capabilities, and orchestration servers advertise cross-domain workflows.
-"""
-id = "f19a1b2c-d3e4-5678-abcd-123456790013"
 
 [[questions]]
 type = "MultipleChoice"
@@ -272,23 +208,6 @@ id = "f19a1b2c-d3e4-5678-abcd-123456790016"
 
 [[questions]]
 type = "MultipleChoice"
-prompt.prompt = "What does the priority() method on DynamicResourceProvider control?"
-prompt.distractors = [
-    "Network priority for fetching resources",
-    "Memory allocation priority for caching",
-    "Thread priority for async execution"
-]
-answer.answer = "Resolution order when multiple providers might match the same URI pattern"
-context = """
-When multiple DynamicResourceProviders have overlapping URI patterns, priority determines which
-handles a request. Higher priority (larger number) providers are checked first. This enables
-domain servers to override foundation behaviors: a finance domain could provide custom handling
-for financial tables while the foundation handles generic table access at lower priority.
-"""
-id = "f19a1b2c-d3e4-5678-abcd-123456790017"
-
-[[questions]]
-type = "MultipleChoice"
 prompt.prompt = "In server composition, what ensures that a domain server has all required foundations at startup?"
 prompt.distractors = [
     "Runtime duck typing - check if methods exist when called",
@@ -303,4 +222,3 @@ error, not a runtime failure. Combined with foundation versioning checks, this e
 servers have compatible foundations before they start serving requests.
 """
 id = "f19a1b2c-d3e4-5678-abcd-123456790018"
-

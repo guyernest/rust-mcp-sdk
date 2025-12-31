@@ -104,19 +104,6 @@ suggestions for best results.
 id = "f16a1b2c-d3e4-5678-abcd-123456780206"
 
 [[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What file should contain the pre-commit quality gate checks?"
-answer.answer = ".git/hooks/pre-commit"
-answer.alternatives = ["pre-commit", "hooks/pre-commit"]
-context = """
-The .git/hooks/pre-commit script runs before each commit to validate code quality.
-It should run cargo fmt --check, cargo clippy -- -D warnings, and cargo test. If
-any fail, the commit is blocked. This prevents low-quality code from entering the
-repository regardless of who wrote it.
-"""
-id = "f16a1b2c-d3e4-5678-abcd-123456780207"
-
-[[questions]]
 type = "MultipleChoice"
 prompt.prompt = "What is a prompt anti-pattern that should be avoided?"
 prompt.distractors = [
@@ -168,19 +155,6 @@ and protocol violations. Run with --generate-scenarios first.
 id = "f16a1b2c-d3e4-5678-abcd-123456780210"
 
 [[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What anyhow method should be used to add context to errors in tool handlers?"
-answer.answer = ".context()"
-answer.alternatives = ["context", "context()", ".context"]
-context = """
-Use .context('Failed to...') on fallible operations to add meaningful error context.
-Example: .context('Failed to connect to weather API')? This creates a chain of
-context that helps debugging. Never use bare ? without context - 'error' tells
-nothing useful about what went wrong.
-"""
-id = "f16a1b2c-d3e4-5678-abcd-123456780211"
-
-[[questions]]
 type = "MultipleChoice"
 prompt.prompt = "What template should be used when building a custom MCP server with unique tools?"
 prompt.distractors = [
@@ -230,19 +204,6 @@ AI can generate these tests automatically when asked. Edge cases often reveal bu
 that happy-path testing misses.
 """
 id = "f16a1b2c-d3e4-5678-abcd-123456780214"
-
-[[questions]]
-type = "ShortAnswer"
-prompt.prompt = "What command runs cargo format check without making changes?"
-answer.answer = "cargo fmt --check"
-answer.alternatives = ["cargo fmt -- --check"]
-context = """
-cargo fmt --check verifies formatting without modifying files. It exits with non-zero
-status if formatting differs. Use in CI and pre-commit hooks. Run plain 'cargo fmt'
-to actually fix formatting issues. Consistent formatting makes code reviews easier
-and prevents style debates.
-"""
-id = "f16a1b2c-d3e4-5678-abcd-123456780215"
 
 [[questions]]
 type = "MultipleChoice"

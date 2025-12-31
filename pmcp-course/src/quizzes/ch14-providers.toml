@@ -86,23 +86,6 @@ handling federated identities differently.
 id = "f14a2b3c-d4e5-6789-abcd-123456781405"
 
 [[questions]]
-type = "MultipleChoice"
-prompt.prompt = "What is the recommended clock skew leeway for Entra ID tokens?"
-prompt.distractors = [
-    "0 seconds - no tolerance",
-    "30 seconds",
-    "60 seconds"
-]
-answer.answer = "5 minutes (300 seconds) as recommended by Microsoft"
-context = """
-Microsoft recommends 5 minutes (300 seconds) of clock skew leeway for Entra ID
-tokens. This is more generous than the typical 60 seconds because enterprise
-environments may have servers with less precise time synchronization. Configure
-leeway_seconds: 300 for Entra ID validators.
-"""
-id = "f14a2b3c-d4e5-6789-abcd-123456781406"
-
-[[questions]]
 type = "ShortAnswer"
 prompt.prompt = "What Entra ID claim contains app roles defined in the app registration?"
 answer.answer = "roles"
@@ -131,23 +114,6 @@ Actions run JavaScript code that can access user metadata, event context, and
 external APIs to enrich tokens with custom claims.
 """
 id = "f14a2b3c-d4e5-6789-abcd-123456781408"
-
-[[questions]]
-type = "MultipleChoice"
-prompt.prompt = "What is the JWKS URI pattern for AWS Cognito?"
-prompt.distractors = [
-    "https://cognito-idp.{region}.amazonaws.com/.well-known/jwks.json",
-    "https://{user_pool_id}.auth.{region}.amazoncognito.com/jwks",
-    "https://auth.aws.amazon.com/{user_pool_id}/keys"
-]
-answer.answer = "https://cognito-idp.{region}.amazonaws.com/{user_pool_id}/.well-known/jwks.json"
-context = """
-Cognito's JWKS endpoint includes both region and user pool ID:
-https://cognito-idp.{region}.amazonaws.com/{user_pool_id}/.well-known/jwks.json
-This is the issuer URL with /.well-known/jwks.json appended. The issuer itself
-is: https://cognito-idp.{region}.amazonaws.com/{user_pool_id}
-"""
-id = "f14a2b3c-d4e5-6789-abcd-123456781409"
 
 [[questions]]
 type = "MultipleChoice"
