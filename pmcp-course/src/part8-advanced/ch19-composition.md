@@ -200,6 +200,12 @@ Before diving into this chapter, ensure you're comfortable with:
 | **Dynamic Resources** | URI-template-based resource providers | When resources follow patterns (users/{id}, files/{path}) |
 | **Server-Side Execution** | Tools executed by server, not client | When workflows need deterministic execution |
 
+## Knowledge Check
+
+Test your understanding of MCP server composition:
+
+{{#quiz ../quizzes/ch19-composition.toml}}
+
 ---
 
 *Continue to [Foundation Servers](./ch19-01-foundations.md) →*

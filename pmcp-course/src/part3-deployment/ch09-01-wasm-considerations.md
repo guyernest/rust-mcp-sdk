@@ -1155,15 +1155,17 @@ Building WASM-compatible Rust MCP servers requires understanding:
 
 The constraints push you toward cleaner, more portable code that runs efficiently at the edge.
 
-## Exercises
+## Practice Ideas
 
-### Exercise 1: Crate Audit
+These informal exercises help reinforce the concepts.
+
+### Practice 1: Crate Audit
 Review your existing Rust project's dependencies and identify which crates need WASM-specific configuration or replacement.
 
-### Exercise 2: Memory Profiling
+### Practice 2: Memory Profiling
 Build a test Worker that processes large JSON payloads and measure memory usage across multiple requests.
 
-### Exercise 3: Binary Size Optimization
+### Practice 3: Binary Size Optimization
 Take an existing Worker and reduce its binary size by 50% while maintaining functionality.
 
 ## Additional Resources

@@ -421,7 +421,9 @@ Testing deployed servers requires:
 4. **Performance assertions** - Verify SLAs are met
 5. **Debugging tools** - Verbose logs for troubleshooting
 
-## Exercises
+## Practice Ideas
+
+These informal exercises help reinforce the concepts. For structured exercises with starter code and tests, see the chapter exercise pages.
 
 1. **Configure staging tests** - Set up authentication and timeouts for a staging server
 2. **Add latency assertions** - Create performance tests with response time requirements

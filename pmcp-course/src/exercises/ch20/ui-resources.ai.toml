@@ -214,3 +214,11 @@ let tool = TypedTool::new('get_room_images', get_room_images)
     .with_description('Get photos for a hotel room type')
     .with_ui('ui://hotel/gallery');  // UI-capable clients will render this
 """
+
+[tutor.sdk_examples]
+description = "Explore these SDK examples for resources and dynamic data patterns"
+examples = [
+    { name = "04_server_resources.rs", description = "Basic server with file-based resources", run = "cargo run --example 04_server_resources" },
+    { name = "56_dynamic_resources.rs", description = "Dynamic resources with runtime data", run = "cargo run --example 56_dynamic_resources" },
+    { name = "hotel_gallery.rs", description = "Real UI resource example for hotel images", run = "cargo run --example hotel_gallery --features schema-generation" },
+]
