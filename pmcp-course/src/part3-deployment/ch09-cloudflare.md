@@ -727,4 +727,12 @@ wrangler secret put KEY                             # Set secrets
 - Long-running computations >50ms CPU (use Lambda/Cloud Run)
 - Complex native dependencies (use Lambda/Cloud Run)
 
-Next: Learn about WASM-specific considerations for Rust MCP servers.
+## Knowledge Check
+
+Test your understanding of Cloudflare Workers deployment:
+
+{{#quiz ../quizzes/ch09-cloudflare.toml}}
+
+---
+
+*Continue to [WASM Considerations](./ch09-01-wasm-considerations.md) →*

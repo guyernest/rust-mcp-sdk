@@ -2,31 +2,147 @@
 
 Microsoft Entra ID (formerly Azure Active Directory) is the identity platform for Microsoft 365 enterprises. This chapter covers Entra ID integration for MCP servers.
 
+> **Note:** Entra ID is shown here as an example. If your organization already uses a different identity provider (Okta, Auth0, Cognito, etc.), use that instead. The patterns in this chapter apply to any OIDC-compliant provider. However, if your organization is a Microsoft 365 shop, Entra ID is likely your best choice—it's what your employees already use.
+
+## The Easy Way: `cargo pmcp` + CDK
+
+**The fastest path to production:** Use `cargo pmcp` to configure OAuth with Entra ID. Your server validates tokens automatically.
+
+### Step 1: Initialize OAuth Configuration
+
+```bash
+# Initialize deployment with Entra ID OAuth
+cargo pmcp deploy init --target pmcp-run --oauth entra
+
+# This creates/updates .pmcp/deploy.toml with:
+```
+
+```toml
+# .pmcp/deploy.toml
+[auth]
+enabled = true
+provider = "entra"
+tenant_id = "your-tenant-id"  # From Azure Portal
+client_id = "your-client-id"  # From App Registration
+
+[auth.dcr]
+# Dynamic Client Registration for MCP clients
+enabled = true
+public_client_patterns = [
+    "claude",
+    "cursor",
+    "chatgpt",
+    "mcp-inspector",
+]
+default_scopes = [
+    "openid",
+    "email",
+    "profile",
+]
+```
+
+### Step 2: Configure Entra ID (One-Time Setup)
+
+Entra ID resources are managed in Azure Portal. `cargo pmcp` tells you what to create:
+
+```bash
+# After running deploy init, it outputs:
+#
+# Entra ID Setup Required:
+# 1. Create App Registration in Azure Portal
+#    - Go to: Entra ID → App registrations → New registration
+#    - Name: "MCP Server - Production"
+#    - Redirect URI: https://your-deployment.pmcp.run/callback
+#
+# 2. Configure App Roles (App registration → App roles):
+#    - MCP.User: Can read and execute tools
+#    - MCP.Admin: Full administrative access
+#
+# 3. Configure Token (App registration → Token configuration):
+#    - Add optional claims: email, groups
+#
+# 4. Record these values for deploy.toml:
+#    - Application (client) ID
+#    - Directory (tenant) ID
+#
+# 5. Set environment variables or update deploy.toml:
+#    ENTRA_TENANT_ID=your-tenant-id
+#    ENTRA_CLIENT_ID=your-client-id
+```
+
+### Step 3: Deploy
+
+```bash
+# Build and deploy
+cargo pmcp deploy
+
+# The deployment:
+# - Configures Lambda with Entra ID environment variables
+# - Sets up JWT validation middleware with correct issuer/JWKS
+# - Your server validates Entra ID tokens automatically
+```
+
+### Step 4: Your Server Code
+
+Your Rust code is provider-agnostic:
+
+```rust
+use pmcp::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // OAuth configuration loaded from environment
+    // (ENTRA_TENANT_ID, ENTRA_CLIENT_ID set by deployment)
+    let server = ServerBuilder::new("my-server", "1.0.0")
+        .with_oauth_from_env()  // Works with any provider
+        .with_tool(MyTool)
+        .build()?;
+
+    server.serve().await
+}
+```
+
+### Why Entra ID for Microsoft Shops
+
+If your organization uses Microsoft 365, Entra ID is the natural choice:
+
+| Benefit | Description |
+|---------|-------------|
+| **Same login** | Employees use their Microsoft 365 credentials |
+| **AD groups** | Existing Active Directory groups work for MCP permissions |
+| **SSO everywhere** | MCP access works like Teams, Outlook, SharePoint |
+| **IT familiarity** | Your IT team already knows Entra ID |
+| **Conditional Access** | Apply existing security policies to MCP |
+
+## Manual Setup (When You Need Control)
+
+If you need more control over Entra ID configuration, or your organization has specific requirements (custom claims, complex group mappings, on-behalf-of flows), you can configure it manually. The rest of this chapter covers manual setup.
+
 ## Entra ID Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    Entra ID for MCP Servers                          │
+│                    Entra ID for MCP Servers                         │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  Microsoft 365 Tenant                                               │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │                                                              │   │
-│  │  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐   │   │
-│  │  │    Users      │  │    Groups     │  │  App Roles    │   │   │
-│  │  │  (Employees)  │  │ (AD Groups)   │  │  (Defined in  │   │   │
-│  │  │              │  │               │  │   App Reg)    │   │   │
-│  │  └───────────────┘  └───────────────┘  └───────────────┘   │   │
-│  │                                                              │   │
-│  │  App Registration (MCP Server)                               │   │
-│  │  ├─ Client ID                                               │   │
-│  │  ├─ API permissions                                         │   │
-│  │  └─ App roles                                               │   │
-│  │                                                              │   │
-│  └─────────────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │                                                             │    │
+│  │  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐    │    │
+│  │  │    Users      │  │    Groups     │  │  App Roles    │    │    │
+│  │  │  (Employees)  │  │ (AD Groups)   │  │  (Defined in  │    │    │
+│  │  │               │  │               │  │   App Reg)    │    │    │
+│  │  └───────────────┘  └───────────────┘  └───────────────┘    │    │
+│  │                                                             │    │
+│  │  App Registration (MCP Server)                              │    │
+│  │  ├─ Client ID                                               │    │
+│  │  ├─ API permissions                                         │    │
+│  │  └─ App roles                                               │    │
+│  │                                                             │    │
+│  └─────────────────────────────────────────────────────────────┘    │
 │                                                                     │
 │  Token Flow:                                                        │
-│  User → Entra ID → JWT with oid, groups, roles → MCP Server        │
+│  User → Entra ID → JWT with oid, groups, roles → MCP Server         │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -410,7 +526,11 @@ async fn test_entra_validation() {
 
 ## Summary
 
-Microsoft Entra ID integration requires:
+**Recommended approach:** Use `cargo pmcp deploy init --oauth entra` to generate deployment configuration. Create the App Registration in Azure Portal (one-time setup), then `cargo pmcp deploy` handles the rest.
+
+**If your organization uses Microsoft 365:** Entra ID is your best choice. Employees use their existing credentials, IT uses familiar tools, and existing AD groups translate to MCP permissions.
+
+**If you need manual setup**, Microsoft Entra ID integration requires:
 
 1. **App Registration** - Client ID, tenant ID, app roles
 2. **Token Configuration** - Optional claims for user info
@@ -418,11 +538,13 @@ Microsoft Entra ID integration requires:
 4. **Group Claims** - Map AD groups to permissions
 
 Key Entra-specific considerations:
-- Use `oid` (Object ID) as the stable user identifier
-- Roles appear in `roles` array (from app roles)
-- Groups are GUIDs, need mapping to permissions
-- Multi-tenant requires special issuer validation
-- 5-minute clock skew recommended
+- Use `oid` (Object ID) as the stable user identifier, not `sub`
+- Roles appear in `roles` array (from app roles you define)
+- Groups are GUIDs—you need to map them to human-readable permissions
+- Multi-tenant apps require special issuer validation (tenant ID varies)
+- 5-minute clock skew recommended (Entra's guidance)
+
+**Remember:** Entra ID is just one option. If your organization uses Okta, Auth0, Cognito, or another provider, use that instead—the patterns are the same.
 
 ---
 

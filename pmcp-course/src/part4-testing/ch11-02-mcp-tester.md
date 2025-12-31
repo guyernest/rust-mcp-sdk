@@ -20,24 +20,24 @@ By the end of this lesson, you will:
 │                    Manual MCP Testing Pain                          │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  1. Craft JSON-RPC request manually                                │
+│  1. Craft JSON-RPC request manually                                 │
 │     {                                                               │
-│       "jsonrpc": "2.0",                                            │
-│       "id": 1,                                                     │
-│       "method": "tools/call",                                      │
-│       "params": { "name": "query", "arguments": { ... } }          │
+│       "jsonrpc": "2.0",                                             │
+│       "id": 1,                                                      │
+│       "method": "tools/call",                                       │
+│       "params": { "name": "query", "arguments": { ... } }           │
 │     }                                                               │
 │                                                                     │
-│  2. Send via curl or Inspector                                     │
-│     curl -X POST ... -d '...'                                      │
+│  2. Send via curl or Inspector                                      │
+│     curl -X POST ... -d '...'                                       │
 │                                                                     │
-│  3. Manually verify response                                       │
-│     - Check JSON structure                                         │
-│     - Verify expected values                                       │
-│     - Test error cases... repeat for each                         │
+│  3. Manually verify response                                        │
+│     - Check JSON structure                                          │
+│     - Verify expected values                                        │
+│     - Test error cases... repeat for each                           │
 │                                                                     │
-│  4. Repeat for every tool × every input combination                │
-│     🔁 Tedious, error-prone, not repeatable                       │
+│  4. Repeat for every tool × every input combination                 │
+│     🔁 Tedious, error-prone, not repeatable                         │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -49,22 +49,22 @@ By the end of this lesson, you will:
 │                    mcp-tester Automation                            │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  1. Generate scenarios from schema                                 │
+│  1. Generate scenarios from schema                                  │
 │     cargo pmcp test generate                                        │
-│     → Creates YAML test files automatically                        │
+│     → Creates YAML test files automatically                         │
 │                                                                     │
-│  2. Edit scenarios (optional)                                      │
-│     → Add custom edge cases                                        │
-│     → Tune assertions                                              │
+│  2. Edit scenarios (optional)                                       │
+│     → Add custom edge cases                                         │
+│     → Tune assertions                                               │
 │                                                                     │
-│  3. Run tests automatically                                        │
+│  3. Run tests automatically                                         │
 │     cargo pmcp test run                                             │
-│     → Executes all scenarios                                       │
-│     → Reports pass/fail with details                               │
+│     → Executes all scenarios                                        │
+│     → Reports pass/fail with details                                │
 │                                                                     │
-│  4. Integrate in CI/CD                                             │
-│     → JUnit output for CI systems                                  │
-│     → Fail builds on test failures                                 │
+│  4. Integrate in CI/CD                                              │
+│     → JUnit output for CI systems                                   │
+│     → Fail builds on test failures                                  │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -302,7 +302,18 @@ steps:
 
 ## Assertion Types
 
+Assertions are how you tell mcp-tester what to verify about the response. The right assertion type depends on how strict you need to be and what you're trying to prove.
+
+**Choosing the right assertion:**
+- **Exact match** when you need to verify the complete response (simple values, critical fields)
+- **Partial match** when you only care about specific fields (response may include extra data)
+- **Type checking** when the structure matters but values vary (IDs, timestamps)
+- **Regex matching** when values follow a pattern (UUIDs, dates, formatted strings)
+- **Numeric comparisons** when values should fall within a range (counts, scores)
+
 ### Exact Match
+
+Use exact match when you need to verify the complete response or when specific values are critical. Be cautious with exact matching on complex objects—if the server adds a new field, the test breaks.
 
 ```yaml
 expect:
@@ -316,6 +327,8 @@ expect:
 
 ### Partial Match (contains)
 
+The most commonly used assertion. Use it when you want to verify specific fields exist with correct values, but you don't care about other fields in the response. This makes tests more resilient to API evolution—adding new fields won't break existing tests.
+
 ```yaml
 expect:
   contains:
@@ -324,6 +337,8 @@ expect:
 ```
 
 ### Type Checking
+
+Use type checking when the structure matters more than specific values. This is ideal for fields that vary by call (like auto-generated IDs or timestamps) where you can't predict the exact value but know it should be a string, number, etc.
 
 ```yaml
 expect:
@@ -338,6 +353,8 @@ expect:
 
 ### Regex Matching
 
+Use regex when values follow a predictable pattern but aren't exact. Common uses: UUIDs, timestamps, formatted IDs, or messages with dynamic content. Regex assertions prove the format is correct without knowing the specific value.
+
 ```yaml
 expect:
   matches:
@@ -347,6 +364,8 @@ expect:
 ```
 
 ### Numeric Comparisons
+
+Use comparisons when you need to verify values fall within acceptable ranges rather than matching exact numbers. This is essential for counts (should be at least 1), scores (should be between 0-100), or any value where the exact number varies but should stay within bounds.
 
 ```yaml
 expect:
@@ -363,6 +382,8 @@ expect:
 ```
 
 ### Array Assertions
+
+Use array assertions when working with collections. You often can't predict exact array contents, but you can verify: length constraints (pagination working?), presence of specific elements (admin user exists?), or that all elements meet certain criteria (all users have required fields?).
 
 ```yaml
 expect:
@@ -382,6 +403,14 @@ expect:
 ```
 
 ### Error Assertions
+
+Error assertions verify that your server fails correctly. This is just as important as success testing—you need to prove that invalid input produces helpful errors, not crashes or security vulnerabilities.
+
+**Levels of strictness:**
+- `error: true` — just verify it fails (any error is acceptable)
+- `error.code` — verify the JSON-RPC error code (for programmatic handling)
+- `error.message` — verify the exact message (for user-facing errors)
+- `error.message_contains` — verify the message includes key information
 
 ```yaml
 # Expect specific error
@@ -407,7 +436,18 @@ expect:
 
 ## Test Categories
 
+Testing isn't just about verifying your code works—it's about systematically proving your server handles all the situations it will encounter in production. Each test category targets a different dimension of quality. Think of them as layers of protection: happy path tests prove your server does what it should, error tests prove it fails gracefully, edge case tests prove it handles unusual inputs, and security tests prove it can't be exploited.
+
 ### Happy Path Tests
+
+**What they test:** The normal, expected usage patterns—what happens when users use your tool correctly.
+
+**Why they matter:** These tests form your baseline. If happy path tests fail, your server's core functionality is broken. They're also your documentation: anyone reading these tests can understand how your tool is supposed to work.
+
+**What to include:**
+- The most common use case (the one 80% of users will hit)
+- Variations with different valid input combinations
+- Empty results (a valid query that returns nothing is still a success)
 
 ```yaml
 # tests/scenarios/query_happy_path.yaml
@@ -445,6 +485,21 @@ steps:
 ```
 
 ### Error Handling Tests
+
+**What they test:** How your server responds when given bad input or when something goes wrong.
+
+**Why they matter:** In production, users *will* send invalid inputs—sometimes accidentally, sometimes deliberately. AI assistants may construct malformed requests. Error handling tests ensure your server:
+1. Rejects invalid input clearly (not with cryptic crashes)
+2. Returns helpful error messages that explain what went wrong
+3. Uses appropriate error codes so clients can handle failures programmatically
+
+**What to include:**
+- Missing required fields
+- Invalid field values (wrong type, out of range)
+- Forbidden operations (like DROP TABLE in a read-only query tool)
+- Malformed input that might cause parsing errors
+
+**The key insight:** A good error message helps users fix their request. `"Query cannot be empty"` is actionable; `"Internal server error"` is not.
 
 ```yaml
 # tests/scenarios/query_errors.yaml
@@ -488,6 +543,19 @@ steps:
 
 ### Edge Case Tests
 
+**What they test:** The boundary conditions and unusual-but-valid inputs at the extremes of what your tool accepts.
+
+**Why they matter:** Bugs often hide at boundaries. If your limit is 1000, what happens at 999, 1000, and 1001? If you accept strings, what about empty strings, very long strings, or Unicode? Edge cases catch the "off-by-one errors" and "I didn't think about that" bugs before users find them.
+
+**What to include:**
+- Boundary values (minimum, maximum, just above/below limits)
+- Empty inputs (empty string, empty array, null where allowed)
+- Unicode and special characters
+- Very large or very small values
+- Unusual but valid combinations
+
+**The mental model:** Imagine the valid input space as a rectangle. Happy path tests hit the middle; edge case tests probe the corners and edges where implementations often break.
+
 ```yaml
 # tests/scenarios/query_edge_cases.yaml
 name: "Query Tool - Edge Cases"
@@ -527,6 +595,20 @@ steps:
 ```
 
 ### Security Tests
+
+**What they test:** Whether your server can be tricked into doing something dangerous through malicious input.
+
+**Why they matter:** MCP servers often have access to databases, file systems, APIs, and other sensitive resources. An attacker who can exploit your server gains access to everything your server can access. Unlike other bugs that cause inconvenience, security bugs can cause data breaches, data loss, or system compromise.
+
+**Common attack patterns to test:**
+- **SQL Injection:** Can an attacker embed SQL commands in input fields?
+- **Command Injection:** Can input escape to the shell?
+- **Path Traversal:** Can `../../../etc/passwd` access files outside allowed directories?
+- **Authorization Bypass:** Can users access data they shouldn't?
+
+**The testing mindset:** Think adversarially. What would a malicious user try? What would happen if your tool was called by a compromised AI assistant?
+
+**Important:** Security tests should be tagged (see `tags:` below) so you can run them separately and ensure they never regress.
 
 ```yaml
 # tests/scenarios/query_security.yaml
@@ -571,6 +653,23 @@ steps:
 
 ### Performance Tests
 
+**What they test:** Whether your server responds within acceptable time limits.
+
+**Why they matter:** MCP servers are called by AI assistants that are interacting with users in real-time. If your tool takes 30 seconds to respond, the user experience suffers. Performance tests catch regressions early—that "small" code change that accidentally made queries 10x slower.
+
+**What to include:**
+- Simple operations (should be fast—under 100ms)
+- Complex operations (acceptable latency—1-5 seconds)
+- Timeout boundaries (verify the server doesn't hang indefinitely)
+
+**Key considerations:**
+- Set realistic thresholds based on what your users expect
+- Performance can vary by environment (CI machines are often slower)
+- Consider running performance tests separately from functional tests
+- Track performance trends over time, not just pass/fail
+
+**The timeout assertion:** Using `timeout: 100ms` doesn't just test speed—it proves your server will fail fast rather than hang when something goes wrong.
+
 ```yaml
 # tests/scenarios/query_performance.yaml
 name: "Query Tool - Performance"
@@ -598,7 +697,19 @@ steps:
 
 ## Multi-Step Workflows
 
+Single-tool tests verify individual operations work correctly. But real-world usage involves sequences of operations: create an item, update it, query it, delete it. Multi-step workflow tests verify that operations work correctly *in combination*—that the data from one step is correctly usable in the next.
+
+**Why workflows matter:**
+- They test the actual user journeys, not just isolated operations
+- They catch state-related bugs (e.g., created record has wrong ID format)
+- They verify that your API is coherent (create returns what get expects)
+- They document real-world usage patterns
+
+**Variable capture** is the key feature: `capture` extracts values from one step's response so you can use them in later steps. This mirrors how real users work—they create something, get back an ID, and use that ID for subsequent operations.
+
 ### CRUD Workflow
+
+The most common workflow pattern tests the full lifecycle of a resource: **C**reate, **R**ead, **U**pdate, **D**elete. This is the minimum viable workflow test for any tool that manages persistent data.
 
 ```yaml
 # tests/scenarios/customer_crud_workflow.yaml
@@ -666,6 +777,13 @@ steps:
 
 ### Conditional Workflows
 
+Sometimes workflows need to branch based on runtime conditions—testing different paths depending on server state or configuration. Conditional steps let you write tests that adapt to the actual server response rather than assuming a fixed state.
+
+**Use cases:**
+- Testing feature flag behavior (if flag enabled, test new behavior; otherwise, test legacy)
+- Handling optional features (if server supports X, test X)
+- Testing different authorization levels
+
 ```yaml
 # tests/scenarios/conditional_workflow.yaml
 name: "Conditional Processing"
@@ -699,6 +817,16 @@ steps:
 ```
 
 ## CI/CD Integration
+
+Tests are only valuable if they run consistently. Running mcp-tester in your CI/CD pipeline ensures every code change is verified before merge—catching bugs before they reach production.
+
+**Key integration patterns:**
+1. **Run on every PR** — catch issues before they're merged
+2. **Use JUnit output** — integrates with standard CI reporting tools
+3. **Fail the build** — don't allow merging if tests fail
+4. **Archive results** — keep test output for debugging failed runs
+
+The examples below show complete, copy-paste-ready configurations for common CI systems.
 
 ### GitHub Actions
 
@@ -891,31 +1019,35 @@ cargo pmcp test run --save-responses ./debug/
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  "Connection refused"                                               │
-│  → Server not running or wrong port                                │
-│  → Check: curl http://localhost:3000/health                        │
+│  → Server not running or wrong port                                 │
+│  → Check: curl http://localhost:3000/health                         │ 
 │                                                                     │
-│  "Expected X but got Y"                                            │
-│  → Response format changed                                         │
-│  → Check: cargo pmcp test run --verbose                            │
+│  "Expected X but got Y"                                             │
+│  → Response format changed                                          │
+│  → Check: cargo pmcp test run --verbose                             │
 │                                                                     │
-│  "Timeout exceeded"                                                │
-│  → Server too slow or hung                                         │
-│  → Increase timeout or check server logs                           │
+│  "Timeout exceeded"                                                 │
+│  → Server too slow or hung                                          │
+│  → Increase timeout or check server logs                            │
 │                                                                     │
-│  "Invalid JSON-RPC response"                                       │
-│  → Server returning non-JSON or malformed response                 │
-│  → Check server implementation                                     │
+│  "Invalid JSON-RPC response"                                        │
+│  → Server returning non-JSON or malformed response                  │
+│  → Check server implementation                                      │
 │                                                                     │
-│  "Capture failed: path not found"                                  │
-│  → JSONPath doesn't match response structure                       │
-│  → Use --verbose to see actual response                            │
+│  "Capture failed: path not found"                                   │
+│  → JSONPath doesn't match response structure                        │
+│  → Use --verbose to see actual response                             │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Best Practices
 
+Good test suites are maintainable, reliable, and trustworthy. These practices help you avoid common pitfalls that make tests fragile, slow, or confusing.
+
 ### Scenario Organization
+
+Keep your test files organized so you can find what you need. A well-organized test directory tells a story: what's generated vs. custom, what's for regression vs. exploration.
 
 ```
 tests/scenarios/
@@ -932,6 +1064,10 @@ tests/scenarios/
 ```
 
 ### Test Independence
+
+Tests should be self-contained—each scenario should set up its own data and clean up after itself. When tests depend on each other (or on pre-existing data), they become order-dependent and fragile. One failing test can cascade into many false failures.
+
+**The rule:** A test that passes when run alone should pass when run with other tests. A test that fails should fail for one reason: the code under test is broken.
 
 ```yaml
 # BAD: Tests depend on each other
@@ -959,6 +1095,10 @@ teardown:
 ```
 
 ### Meaningful Assertions
+
+A test that only checks `success: true` proves very little—the server could return completely wrong data and the test would still pass. Good assertions verify the *behavior* you care about: the right data was returned, in the right structure, with the right values.
+
+**Ask yourself:** "If this assertion passes but the code is broken, would I notice?" If the answer is no, add more specific assertions.
 
 ```yaml
 # BAD: Only checks success

@@ -11,20 +11,20 @@ The combination of Rust's compiler and AI coding assistants creates a powerful f
 │                                                                         │
 │     ┌─────────────┐                                                     │
 │     │  Developer  │                                                     │
-│     │  Request    │ "Create a weather tool"                            │
+│     │  Request    │ "Create a weather tool"                             │
 │     └──────┬──────┘                                                     │
 │            │                                                            │
 │            ▼                                                            │
 │     ┌─────────────┐                                                     │
-│     │     AI      │ Generates initial code                             │
+│     │     AI      │ Generates initial code                              │
 │     │  Assistant  │                                                     │
 │     └──────┬──────┘                                                     │
 │            │                                                            │
 │            ▼                                                            │
-│     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐            │
-│     │   cargo     │────▶│   Errors?   │────▶│   AI reads  │            │
-│     │   build     │     │             │ Yes │   errors    │            │
-│     └─────────────┘     └──────┬──────┘     └──────┬──────┘            │
+│     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐             │
+│     │   cargo     │────▶│   Errors?   │────▶│   AI reads  │             │
+│     │   build     │     │             │ Yes │   errors    │             │
+│     └─────────────┘     └──────┬──────┘     └──────┬──────┘             │
 │                                │ No                │                    │
 │                                ▼                   │                    │
 │                         ┌─────────────┐            │                    │

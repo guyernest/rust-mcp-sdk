@@ -2,53 +2,202 @@
 
 This chapter covers the practical implementation of JWT token validation in Rust MCP servers. Proper validation is critical for security.
 
+## Multi-Layer Security: Understanding Where to Validate
+
+Before diving into implementation, understand that security happens at multiple layers. You don't have to implement everything in your MCP server—you can leverage existing security in your backend systems.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Security Layers in MCP                           │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  LAYER 1: MCP Server Access                                         │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │  Question: Can this user reach the MCP server at all?         │  │
+│  │  Validated: Token signature, expiration, issuer, audience     │  │
+│  │  Claims used: sub, iss, aud, exp                              │  │
+│  │  Result: 401 Unauthorized if invalid                          │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                           │                                         │
+│                           ▼                                         │
+│  LAYER 2: Tool-Level Authorization                                  │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │  Question: Can this user call this specific tool?             │  │
+│  │  Validated: Scopes match tool requirements                    │  │
+│  │  Claims used: scope, permissions, roles, groups               │  │
+│  │  Result: 403 Forbidden if insufficient permissions            │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                           │                                         │
+│                           ▼                                         │
+│  LAYER 3: Data-Level Security (Backend Systems)                     │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │  Question: What data can this user see/modify?                │  │
+│  │  Validated by: Database, API, or data platform                │  │
+│  │  Examples:                                                    │  │
+│  │  • PostgreSQL Row-Level Security (RLS)                        │  │
+│  │  • GraphQL field-level authorization                          │  │
+│  │  • API gateway per-resource policies                          │  │
+│  │  • Data warehouse column masking                              │  │
+│  │  Result: Filtered/masked data or 403 from backend             │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Why Multiple Layers?
+
+Each layer catches different security concerns:
+
+| Layer | What It Catches | Example |
+|-------|-----------------|---------|
+| **Layer 1: Server Access** | Invalid/expired tokens, wrong IdP, attacks | Stolen token from different app |
+| **Layer 2: Tool Authorization** | Users calling tools they shouldn't | Analyst trying to use admin tools |
+| **Layer 3: Data Security** | Users accessing data they shouldn't | User A reading User B's records |
+
+### What You Control vs. What You Delegate
+
+**Your MCP server handles Layers 1 & 2:**
+- Validate the token is legitimate (Layer 1)
+- Check scopes match tool requirements (Layer 2)
+- Pass user identity to backend systems
+
+**Backend systems handle Layer 3:**
+- Databases enforce row-level security using the user ID you provide
+- APIs check permissions on each resource
+- Data platforms apply column masking based on user roles
+
+**The advantage:** You don't reinvent data security. If your database already has RLS policies, or your API already checks permissions, your MCP server just passes through the authenticated user identity and lets the backend do what it already does.
+
+### Practical Example: The Three Layers in Action
+
+```rust
+// LAYER 1: Happens in middleware before your tool code runs
+// The request already has a validated token at this point
+
+#[derive(TypedTool)]
+#[tool(name = "query_sales", description = "Query sales data")]
+pub struct QuerySales;
+
+impl QuerySales {
+    pub async fn run(
+        &self,
+        input: QueryInput,
+        context: &ToolContext,
+    ) -> Result<SalesData> {
+        let auth = context.auth()?;
+
+        // LAYER 2: Check tool-level scope
+        // "Can this user call this tool at all?"
+        auth.require_scope("read:sales")?;
+
+        // LAYER 3: Pass identity to database, let RLS handle row filtering
+        // "What sales records can this user see?"
+        let results = self.database
+            .query(&input.sql)
+            .with_user_context(&auth.user_id, &auth.org_id)  // Database uses this for RLS
+            .await?;
+
+        // The database only returns rows this user is allowed to see
+        // We didn't write that logic—the database handles it
+
+        Ok(results)
+    }
+}
+```
+
+### Layer 3 Examples in Different Systems
+
+**PostgreSQL Row-Level Security:**
+```sql
+-- Policy defined once in database, enforced automatically
+CREATE POLICY sales_team_only ON sales
+    FOR SELECT
+    USING (team_id = current_setting('app.team_id')::uuid);
+
+-- MCP server just sets the context
+SET app.team_id = 'team-123';  -- From JWT claims
+SELECT * FROM sales;  -- Only sees their team's data
+```
+
+**GraphQL with field-level auth:**
+```graphql
+type Customer {
+  id: ID!
+  name: String!
+  email: String! @auth(requires: "read:pii")      # Only users with PII scope
+  ssn: String @auth(requires: "admin:sensitive")  # Only admins
+}
+```
+
+**API Gateway policies:**
+```yaml
+# AWS API Gateway resource policy
+/customers/{customerId}:
+  GET:
+    auth:
+      # User can only access customers in their organization
+      condition: $context.authorizer.org_id == $resource.org_id
+```
+
+### Choosing Where to Implement Security
+
+| Security Concern | Best Layer | Reasoning |
+|-----------------|------------|-----------|
+| "Is this token valid?" | Layer 1 (MCP Server) | Must happen first |
+| "Can user call this tool?" | Layer 2 (MCP Server) | Scope-based, defined in IdP |
+| "Can user see this row?" | Layer 3 (Database) | Database knows data relationships |
+| "Can user see this field?" | Layer 3 (API/GraphQL) | Field sensitivity is data concern |
+| "What columns should be masked?" | Layer 3 (Data Platform) | Masking rules are data governance |
+
+**The principle:** Implement security as close to the data as possible. Your MCP server is the front door (Layers 1 & 2), but the data systems are the vault (Layer 3).
+
 ## The Validation Pipeline
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    JWT Validation Pipeline                           │
+│                    JWT Validation Pipeline                          │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  Incoming Request                                                   │
 │       │                                                             │
 │       ▼                                                             │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │ 1. EXTRACT TOKEN                                             │   │
-│  │    Authorization: Bearer eyJhbGciOiJS...                     │   │
-│  └─────────────────────────────┬───────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │ 1. EXTRACT TOKEN                                            │    │
+│  │    Authorization: Bearer eyJhbGciOiJS...                    │    │
+│  └─────────────────────────────┬───────────────────────────────┘    │
 │                                │                                    │
 │                                ▼                                    │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │ 2. DECODE HEADER (without verification)                      │   │
-│  │    { "alg": "RS256", "kid": "key-123" }                     │   │
-│  └─────────────────────────────┬───────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │ 2. DECODE HEADER (without verification)                     │    │
+│  │    { "alg": "RS256", "kid": "key-123" }                     │    │
+│  └─────────────────────────────┬───────────────────────────────┘    │
 │                                │                                    │
 │                                ▼                                    │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │ 3. FETCH PUBLIC KEY (from JWKS, cached)                      │   │
-│  │    Match key by "kid" from header                            │   │
-│  └─────────────────────────────┬───────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │ 3. FETCH PUBLIC KEY (from JWKS, cached)                     │    │
+│  │    Match key by "kid" from header                           │    │
+│  └─────────────────────────────┬───────────────────────────────┘    │
 │                                │                                    │
 │                                ▼                                    │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │ 4. VERIFY SIGNATURE                                          │   │
-│  │    RSA/ECDSA verification using public key                   │   │
-│  └─────────────────────────────┬───────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │ 4. VERIFY SIGNATURE                                         │    │
+│  │    RSA/ECDSA verification using public key                  │    │
+│  └─────────────────────────────┬───────────────────────────────┘    │
 │                                │                                    │
 │                                ▼                                    │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │ 5. VALIDATE CLAIMS                                           │   │
-│  │    • exp (expiration)                                        │   │
-│  │    • nbf (not before)                                        │   │
-│  │    • iss (issuer)                                            │   │
-│  │    • aud (audience)                                          │   │
-│  └─────────────────────────────┬───────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │ 5. VALIDATE CLAIMS                                          │    │
+│  │    • exp (expiration)                                       │    │
+│  │    • nbf (not before)                                       │    │
+│  │    • iss (issuer)                                           │    │
+│  │    • aud (audience)                                         │    │
+│  └─────────────────────────────┬───────────────────────────────┘    │
 │                                │                                    │
 │                                ▼                                    │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │ 6. EXTRACT USER INFO                                         │   │
-│  │    sub, email, scopes → AuthContext                          │   │
-│  └─────────────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │ 6. EXTRACT USER INFO                                        │    │
+│  │    sub, email, scopes → AuthContext                         │    │
+│  └─────────────────────────────────────────────────────────────┘    │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -409,7 +558,7 @@ impl JwtValidator {
 
 ## Auth Context for Tools
 
-Make authentication available to tools:
+Make authentication available to tools. The auth context carries not just identity, but all the claims needed for Layer 2 (scope checking) and Layer 3 (passing to backend systems):
 
 ```rust
 use std::collections::HashSet;
@@ -462,6 +611,69 @@ impl AuthContext {
         } else {
             Err(AuthError::InsufficientScope)
         }
+    }
+}
+```
+
+### Extended Auth Context for Backend Passthrough
+
+For Layer 3 security, you often need to pass additional claims to backend systems. Extend the context with organization, team, and role information:
+
+```rust
+#[derive(Debug, Clone)]
+pub struct AuthContext {
+    // Identity (Layer 1)
+    pub user_id: String,
+    pub email: Option<String>,
+    pub name: Option<String>,
+
+    // Scopes for tool authorization (Layer 2)
+    pub scopes: HashSet<String>,
+
+    // Organization context for backend systems (Layer 3)
+    pub org_id: Option<String>,
+    pub team_id: Option<String>,
+    pub roles: Vec<String>,
+    pub groups: Vec<String>,
+
+    // Raw claims for custom backend needs
+    pub custom_claims: serde_json::Value,
+}
+
+impl AuthContext {
+    /// Get the context as headers for HTTP backend calls
+    pub fn as_headers(&self) -> Vec<(&'static str, String)> {
+        let mut headers = vec![
+            ("X-User-ID", self.user_id.clone()),
+        ];
+
+        if let Some(ref org) = self.org_id {
+            headers.push(("X-Org-ID", org.clone()));
+        }
+        if let Some(ref team) = self.team_id {
+            headers.push(("X-Team-ID", team.clone()));
+        }
+        if let Some(ref email) = self.email {
+            headers.push(("X-User-Email", email.clone()));
+        }
+
+        headers
+    }
+
+    /// Get context for database session variables (PostgreSQL RLS)
+    pub fn as_db_session_vars(&self) -> Vec<(&'static str, String)> {
+        let mut vars = vec![
+            ("app.user_id", self.user_id.clone()),
+        ];
+
+        if let Some(ref org) = self.org_id {
+            vars.push(("app.org_id", org.clone()));
+        }
+        if let Some(ref team) = self.team_id {
+            vars.push(("app.team_id", team.clone()));
+        }
+
+        vars
     }
 }
 ```
@@ -707,9 +919,137 @@ if !claims.aud.contains(&self.config.audience) {
 }
 ```
 
+## Passing Identity to Backend Systems
+
+Now that you have the auth context, here's how to pass it to different backend systems for Layer 3 security:
+
+### Database with Row-Level Security
+
+```rust
+impl QueryTool {
+    pub async fn run(&self, input: QueryInput, context: &ToolContext) -> Result<QueryResult> {
+        let auth = context.auth()?;
+        auth.require_scope("read:data")?;  // Layer 2
+
+        // Layer 3: Set session variables for PostgreSQL RLS
+        let pool = &self.database;
+        let conn = pool.acquire().await?;
+
+        // Set user context that RLS policies will use
+        for (key, value) in auth.as_db_session_vars() {
+            sqlx::query(&format!("SET LOCAL {} = $1", key))
+                .bind(&value)
+                .execute(&mut *conn)
+                .await?;
+        }
+
+        // Query executes with RLS automatically filtering rows
+        let results = sqlx::query_as::<_, Record>(&input.sql)
+            .fetch_all(&mut *conn)
+            .await?;
+
+        Ok(QueryResult { records: results })
+    }
+}
+```
+
+### Downstream API Calls
+
+```rust
+impl ApiTool {
+    pub async fn run(&self, input: ApiInput, context: &ToolContext) -> Result<ApiResult> {
+        let auth = context.auth()?;
+        auth.require_scope("read:api")?;  // Layer 2
+
+        // Layer 3: Forward identity headers to downstream API
+        let mut request = self.client
+            .get(&format!("{}/resource/{}", self.api_base, input.resource_id));
+
+        for (name, value) in auth.as_headers() {
+            request = request.header(name, value);
+        }
+
+        // Downstream API uses these headers for its own authorization
+        let response = request.send().await?;
+
+        if response.status() == StatusCode::FORBIDDEN {
+            // Backend denied access - this is Layer 3 rejection
+            return Err(McpError::forbidden(
+                "You don't have access to this resource"
+            ));
+        }
+
+        Ok(response.json().await?)
+    }
+}
+```
+
+### GraphQL with Field-Level Security
+
+```rust
+impl GraphQLTool {
+    pub async fn run(&self, input: GraphQLInput, context: &ToolContext) -> Result<GraphQLResult> {
+        let auth = context.auth()?;
+        auth.require_scope("read:graphql")?;  // Layer 2
+
+        // Layer 3: GraphQL server handles field-level authorization
+        // using the identity we pass in the context
+        let response = self.graphql_client
+            .query(&input.query)
+            .variables(input.variables)
+            .header("X-User-ID", &auth.user_id)
+            .header("X-User-Scopes", auth.scopes.iter().collect::<Vec<_>>().join(" "))
+            .execute()
+            .await?;
+
+        // Fields the user can't access come back as null or are omitted
+        // based on the GraphQL schema's @auth directives
+
+        Ok(response)
+    }
+}
+```
+
+### The Security Division of Labor
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│              What Each System Is Responsible For                    │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  YOUR MCP SERVER                                                    │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │  ✓ Validate JWT signature and claims (Layer 1)                │  │
+│  │  ✓ Check scopes for each tool (Layer 2)                       │  │
+│  │  ✓ Extract and forward user identity                          │  │
+│  │  ✗ NOT: Per-row or per-field authorization                    │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+│  YOUR DATABASE                                                      │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │  ✓ Row-Level Security policies                                │  │
+│  │  ✓ Column-level permissions                                   │  │
+│  │  ✓ Data filtering based on user context                       │  │
+│  │  ✗ NOT: Token validation (trusts MCP server)                  │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+│  YOUR API LAYER                                                     │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │  ✓ Resource-level authorization                               │  │
+│  │  ✓ Field masking (PII, sensitive data)                        │  │
+│  │  ✓ Rate limiting per user/org                                 │  │
+│  │  ✗ NOT: Token validation (trusts MCP server)                  │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+│  RESULT: Each system does what it's best at                         │
+│  MCP validates identity → Backend enforces data policies            │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
 ## Summary
 
-Token validation requires:
+### Token Validation Pipeline
 
 1. **Extract token** - Parse Authorization header
 2. **Decode header** - Get algorithm and key ID
@@ -718,13 +1058,24 @@ Token validation requires:
 5. **Validate claims** - Check iss, aud, exp, nbf
 6. **Extract context** - Make user info available to tools
 
-Common pitfalls to avoid:
+### Multi-Layer Security Model
+
+| Layer | What | Where | Your Responsibility |
+|-------|------|-------|---------------------|
+| **Layer 1** | Token validation | MCP Server | Implement (this chapter) |
+| **Layer 2** | Tool authorization | MCP Server | Check scopes in tools |
+| **Layer 3** | Data authorization | Backend systems | Pass identity, delegate to existing systems |
+
+**The key insight:** You don't have to build all security in your MCP server. Validate the token (Layer 1), check scopes (Layer 2), then pass the authenticated identity to your databases and APIs (Layer 3). Let each system do what it's designed for.
+
+### Common Pitfalls to Avoid
 
 - Not caching JWKS (DoS risk)
 - Not handling key rotation
 - Accepting any algorithm
 - Skipping audience verification
 - Ignoring clock skew
+- Trying to implement row-level security in MCP instead of the database
 
 The next chapter covers integration with specific identity providers.
 
