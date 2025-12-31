@@ -627,7 +627,9 @@ Effective CI/CD integration requires:
 5. **Caching** - Speed up builds with proper caching
 6. **Rollback strategy** - Auto-rollback on test failures
 
-## Exercises
+## Practice Ideas
+
+These informal exercises help reinforce the concepts. For structured exercises with starter code and tests, see the chapter exercise pages.
 
 1. **Set up GitHub Actions** - Create a complete CI pipeline for an MCP server
 2. **Add test reporting** - Configure JUnit reporting and GitHub annotations

@@ -624,7 +624,15 @@ The following sub-chapters dive deeper into each topic:
 - [CI/CD Integration](./ch12-02-cicd.md) - Pipeline patterns and best practices
 - [Regression Testing](./ch12-03-regression.md) - Building maintainable regression suites
 
-## Exercises
+## Knowledge Check
+
+Test your understanding of remote MCP testing:
+
+{{#quiz ../quizzes/ch12-remote-testing.toml}}
+
+## Practice Ideas
+
+These informal exercises help reinforce the concepts. For structured exercises with starter code and tests, see the chapter exercise pages.
 
 1. **Configure remote testing** - Set up mcp-tester to test a deployed server with authentication
 2. **Build a smoke suite** - Create 5 smoke tests covering critical paths

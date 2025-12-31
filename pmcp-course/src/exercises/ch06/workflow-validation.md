@@ -361,3 +361,18 @@ mod exercise_tests {
 - How does `cargo pmcp validate` fit into your CI/CD pipeline?
 - What other MCP components could benefit from similar validation patterns?
 :::
+
+## Related Examples
+
+For more workflow patterns and variations, explore these SDK examples:
+
+- **[50_workflow_minimal.rs](https://github.com/paiml/rust-mcp-sdk/blob/main/examples/50_workflow_minimal.rs)** - Quadratic formula solver workflow demonstrating DSL helpers
+- **[51_workflow_error_messages.rs](https://github.com/paiml/rust-mcp-sdk/blob/main/examples/51_workflow_error_messages.rs)** - Workflow error handling patterns
+- **[52_workflow_dsl_cookbook.rs](https://github.com/paiml/rust-mcp-sdk/blob/main/examples/52_workflow_dsl_cookbook.rs)** - Comprehensive DSL cookbook with many patterns
+- **[54_hybrid_workflow_execution.rs](https://github.com/paiml/rust-mcp-sdk/blob/main/examples/54_hybrid_workflow_execution.rs)** - Hybrid workflows with AI guidance
+
+Run locally with:
+```bash
+cargo run --example 50_workflow_minimal
+cargo run --example 52_workflow_dsl_cookbook
+```

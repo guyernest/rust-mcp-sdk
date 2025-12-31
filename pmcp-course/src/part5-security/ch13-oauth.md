@@ -380,7 +380,15 @@ mod tests {
 6. **Rotate signing keys** - Follow your IdP's key rotation schedule
 7. **Validate all claims** - issuer, audience, expiration, etc.
 
-## Exercises
+## Knowledge Check
+
+Test your understanding of OAuth for MCP:
+
+{{#quiz ../quizzes/ch13-oauth.toml}}
+
+## Practice Ideas
+
+These informal exercises help reinforce the concepts. For structured exercises with starter code and tests, see the chapter exercise pages.
 
 1. **Add OAuth to calculator**: Implement authentication for your calculator server
 

@@ -949,7 +949,9 @@ cargo pmcp test generate --diff
 cargo pmcp test run --server http://localhost:3000
 ```
 
-## Exercises
+## Practice Ideas
+
+These informal exercises help reinforce the concepts. For structured exercises with starter code and tests, see the chapter exercise pages.
 
 1. **Generate and analyze**: Generate tests for an existing server and identify what edge cases it covers
 2. **Customize tests**: Edit generated tests to add business-specific assertions

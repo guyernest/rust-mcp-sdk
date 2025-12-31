@@ -1002,7 +1002,9 @@ cargo pmcp test run --server http://localhost:3000
 cargo pmcp test run --format junit --output results.xml
 ```
 
-## Exercises
+## Practice Ideas
+
+These informal exercises help reinforce the concepts. For structured exercises with starter code and tests, see the chapter exercise pages.
 
 1. **Generate and review**: Generate tests for an existing server and review what edge cases it creates
 2. **Write security tests**: Create a security-focused scenario file for SQL injection prevention

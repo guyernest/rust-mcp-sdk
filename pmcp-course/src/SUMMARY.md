@@ -72,6 +72,7 @@
 
 - [AWS Lambda Deployment](./part3-deployment/ch08-aws-lambda.md)
   - [Connecting Clients](./part3-deployment/ch08-01-connecting-clients.md)
+  - [Chapter 8 Exercises](./part3-deployment/ch08-exercises.md)
 
 - [Cloudflare Workers (WASM)](./part3-deployment/ch09-cloudflare.md)
   - [WASM Considerations](./part3-deployment/ch09-01-wasm-considerations.md)
@@ -89,11 +90,13 @@
   - [MCP Inspector Deep Dive](./part4-testing/ch11-01-inspector.md)
   - [mcp-tester Introduction](./part4-testing/ch11-02-mcp-tester.md)
   - [Schema-Driven Test Generation](./part4-testing/ch11-03-schema-tests.md)
+  - [Chapter 11 Exercises](./part4-testing/ch11-exercises.md)
 
 - [Remote Testing](./part4-testing/ch12-remote-testing.md)
   - [Testing Deployed Servers](./part4-testing/ch12-01-remote.md)
   - [CI/CD Integration](./part4-testing/ch12-02-cicd.md)
   - [Regression Testing](./part4-testing/ch12-03-regression.md)
+  - [Chapter 12 Exercises](./part4-testing/ch12-exercises.md)
 
 ---
 
@@ -103,6 +106,7 @@
   - [Why OAuth, Not API Keys](./part5-security/ch13-01-why-oauth.md)
   - [OAuth 2.0 Fundamentals](./part5-security/ch13-02-oauth-basics.md)
   - [Token Validation](./part5-security/ch13-03-validation.md)
+  - [Chapter 13 Exercises](./part5-security/ch13-exercises.md)
 
 - [Identity Provider Integration](./part5-security/ch14-providers.md)
   - [AWS Cognito](./part5-security/ch14-01-cognito.md)
@@ -132,6 +136,7 @@
   - [Middleware Architecture](./part7-observability/ch17-01-architecture.md)
   - [Logging Best Practices](./part7-observability/ch17-02-logging.md)
   - [Metrics Collection](./part7-observability/ch17-03-metrics.md)
+  - [Chapter 17 Exercises](./part7-observability/ch17-exercises.md)
 
 - [Operations and Monitoring](./part7-observability/ch18-operations.md)
   - [pmcp.run Dashboard](./part7-observability/ch18-01-pmcp-run.md)
@@ -146,11 +151,13 @@
   - [Foundation Servers](./part8-advanced/ch19-01-foundations.md)
   - [Domain Servers](./part8-advanced/ch19-02-domains.md)
   - [Orchestration Patterns](./part8-advanced/ch19-03-orchestration.md)
+  - [Chapter 19 Exercises](./part8-advanced/ch19-exercises.md)
 
 - [MCP Applications](./part8-advanced/ch20-applications.md)
   - [Building UIs for MCP](./part8-advanced/ch20-01-ui.md)
   - [High Availability](./part8-advanced/ch20-02-ha.md)
   - [Migration Strategies](./part8-advanced/ch20-03-migration.md)
+  - [Chapter 20 Exercises](./part8-advanced/ch20-exercises.md)
 
 ---
 

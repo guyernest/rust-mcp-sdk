@@ -125,3 +125,10 @@ real_world_applications = [
     "Customer-facing AI integrations with automatic scaling",
     "Multi-region deployments for global availability",
 ]
+
+[tutor.sdk_examples]
+description = "Explore these SDK examples for HTTP server patterns suitable for Lambda deployment"
+examples = [
+    { name = "23_streamable_http_server_stateless.rs", description = "Stateless HTTP server (ideal for Lambda)", run = "cargo run --example 23_streamable_http_server_stateless --features streamable-http" },
+    { name = "22_streamable_http_server_stateful.rs", description = "Stateful server (contrast with stateless)", run = "cargo run --example 22_streamable_http_server_stateful --features streamable-http" },
+]
