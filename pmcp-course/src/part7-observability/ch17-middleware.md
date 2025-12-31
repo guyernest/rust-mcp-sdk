@@ -247,6 +247,12 @@ This chapter covers:
 - **Test scenarios become health checks** when run periodically
 - **Platform-agnostic design** lets you integrate with any observability stack
 
+## Knowledge Check
+
+Test your understanding of MCP middleware and observability:
+
+{{#quiz ../quizzes/ch17-observability.toml}}
+
 ---
 
 *Continue to [Middleware Architecture](./ch17-01-architecture.md) →*

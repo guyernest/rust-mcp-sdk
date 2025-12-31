@@ -608,6 +608,12 @@ Effective MCP server testing combines:
 
 The key insight: most MCP bugs occur at the protocol level (wrong JSON format, missing fields, invalid responses), not in business logic. mcp-tester catches these automatically.
 
+## Knowledge Check
+
+Test your understanding of local MCP testing:
+
+{{#quiz ../quizzes/ch11-local-testing.toml}}
+
 ## Exercises
 
 1. **Add unit tests** to an existing tool with 100% branch coverage

@@ -983,4 +983,12 @@ Key deployment steps:
 4. Set up monitoring and alerting
 5. Configure CI/CD for automated deployments
 
-In the next lesson, we'll explore container optimization patterns and advanced scaling configurations.
+## Knowledge Check
+
+Test your understanding of Google Cloud Run deployment:
+
+{{#quiz ../quizzes/ch10-cloud-run.toml}}
+
+---
+
+*Continue to [Container-Based Deployment](./ch10-01-containers.md) →*

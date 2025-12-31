@@ -442,6 +442,12 @@ These practices come from real-world OAuth incidents. Each addresses a specific 
 6. **Rotate signing keys** - Follow your IdP's key rotation schedule
 7. **Validate all claims** - issuer, audience, expiration, etc.
 
+## Knowledge Check
+
+Test your understanding of OAuth for MCP:
+
+{{#quiz ../quizzes/ch13-oauth.toml}}
+
 ## Exercises
 
 1. **Add OAuth to calculator**: Implement authentication for your calculator server

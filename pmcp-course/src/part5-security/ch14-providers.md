@@ -499,6 +499,12 @@ The providers in this chapter are **examples**, not recommendations. The pattern
 
 The code patterns in this chapter translate directly to any provider.
 
+## Knowledge Check
+
+Test your understanding of identity provider integration:
+
+{{#quiz ../quizzes/ch14-providers.toml}}
+
 ---
 
 *Continue to [AWS Cognito](./ch14-01-cognito.md) →*
