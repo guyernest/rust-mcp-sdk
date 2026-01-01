@@ -1,63 +1,136 @@
 # Prerequisites
 
-This course assumes familiarity with several foundational concepts. Review the areas below to ensure you're ready to get the most from the material.
+Welcome! This course is designed to be accessible to enterprise developers coming from any background. Whether you're a Java architect, C# backend developer, or Python data engineer, you'll find familiar concepts here—just expressed in Rust's syntax.
 
-## Knowledge Prerequisites
+## Our Learning Philosophy: Read, Don't Write
 
-### Rust Fundamentals
+**You need to know how to read Rust code, not how to write it.**
 
-You should be comfortable with:
+This course provides extensive code examples that you'll read to understand concepts. When it comes to writing code, you'll use AI coding assistants (Claude Code, Cursor, Copilot) to do the heavy lifting. Your job is to:
 
-- **Ownership and borrowing** - Understanding Rust's memory model
-- **Traits and generics** - Implementing and using traits
-- **Error handling** - Using `Result`, `Option`, and the `?` operator
-- **Async/await** - Basic understanding of async Rust
-- **Cargo** - Creating projects, adding dependencies, running tests
+1. **Understand** what the code is doing
+2. **Instruct** the AI what you want to build
+3. **Review** the generated code
+4. **Run** the compiler to catch any issues
 
-**Recommended resources:**
-- [The Rust Book](https://doc.rust-lang.org/book/)
-- [Rust by Example](https://doc.rust-lang.org/rust-by-example/)
-- [Async Rust Book](https://rust-lang.github.io/async-book/)
+The Rust compiler becomes your safety net—if it compiles, it almost certainly works correctly. This is why Rust is uniquely suited for AI-assisted development.
 
-### HTTP and APIs
+## Why This Approach Works
 
-Basic understanding of:
+Rust has an exceptional compiler that provides clear, actionable error messages. Combined with AI assistants that can read and fix these errors, you get a powerful feedback loop:
 
-- HTTP methods (GET, POST, etc.)
-- JSON data format
+```
+You describe what you want
+    ↓
+AI generates Rust code
+    ↓
+Compiler catches issues (if any)
+    ↓
+AI fixes issues automatically
+    ↓
+Working, production-ready code
+```
+
+We cover this in depth in [Part VI: AI-Assisted Development](./part6-ai-dev/ch15-ai-assisted.md), where you'll learn how to effectively collaborate with AI assistants to build MCP servers.
+
+## Rust Concepts You'll Encounter
+
+Don't worry if these aren't familiar yet—you'll learn them through the code examples.
+
+### Familiar Concepts (Coming from Java/C#)
+
+| Java/C# | Rust | Example |
+|---------|------|---------|
+| `class` | `struct` | `struct User { name: String }` |
+| `interface` | `trait` | `trait Tool { fn call(&self); }` |
+| `try/catch` | `Result<T, E>` | `Ok(value)` or `Err(error)` |
+| `nullable` | `Option<T>` | `Some(value)` or `None` |
+| `async/await` | `async/await` | Same concept, same keywords! |
+| Generics `<T>` | Generics `<T>` | Same syntax! |
+
+### Rust-Specific Concepts
+
+You'll see these in code examples. AI assistants handle them well:
+
+- **Ownership & borrowing** - Rust's way of managing memory without garbage collection. The compiler ensures you use references safely. You'll see `&` and `&mut` in function signatures.
+
+- **The `?` operator** - A clean way to propagate errors. When you see `result?`, it means "return the error if there is one, otherwise continue."
+
+- **Pattern matching** - Like a powerful `switch` statement. You'll see `match` and `if let` used to handle `Result` and `Option` values.
+
+- **Macros** - Code that generates code. You'll see `#[derive(...)]` annotations that automatically implement common functionality.
+
+### What You Don't Need to Master
+
+These advanced topics are handled by AI assistants and the PMCP SDK:
+
+- Lifetime annotations (`'a`, `'static`)
+- Unsafe Rust
+- Advanced trait bounds
+- Macro writing
+- Memory layout optimization
+
+## Technical Prerequisites
+
+### Required Tools
+
+```bash
+# You'll set these up in Chapter 2
+rust (latest stable)    # Programming language
+cargo-pmcp              # MCP development toolkit
+```
+
+### Helpful Background
+
+**HTTP and APIs** (you probably already know this):
+- HTTP methods (GET, POST)
+- JSON format
 - REST API concepts
-- WebSocket basics (helpful but not required)
 
-### Command Line
-
-Comfort with:
-
-- Terminal/shell basics
-- Running commands and scripts
+**Command Line** (basic comfort):
+- Running commands
 - Environment variables
-- Package managers (npm, cargo)
 
-## Cloud Knowledge (For Deployment Chapters)
+### Cloud Platforms (For Deployment Chapters)
 
-For Parts III-V (deployment and security), familiarity with at least one cloud platform is helpful:
+Parts III-V cover deployment. Familiarity with one is helpful:
+- **AWS** - Lambda, API Gateway
+- **Cloudflare** - Workers
+- **Google Cloud** - Cloud Run
 
-- **AWS** - Lambda, API Gateway, IAM basics
-- **Cloudflare** - Workers, Wrangler CLI
-- **Google Cloud** - Cloud Run, Container Registry
-
-Don't worry if you're new to cloud deployment - we cover everything step by step.
+Don't worry if cloud is new—we guide you step by step.
 
 ## Environment Setup
 
-For installation and tool setup, complete the **Environment Setup Exercise** at the start of Chapter 2:
+Chapter 2 includes an interactive setup exercise that guides you through:
 
-- [Exercise: Environment Setup](./part1-foundations/ch02-ex00-setup.md)
+- Installing Rust
+- Installing cargo-pmcp
+- Configuring your MCP client (Claude Desktop, VS Code, etc.)
 
-This interactive exercise will guide you through installing Rust, cargo-pmcp, and setting up your MCP client.
+**[Go to Environment Setup Exercise →](./part1-foundations/ch02-ex00-setup.md)**
 
-## Ready?
+## A Note for Enterprise Developers
 
-If you're comfortable with Rust basics and have completed the environment setup, you're ready to start building production MCP servers.
+If you're coming from enterprise Java or C#, you'll find that:
+
+1. **Rust's type system** is similar to what you know, with some additions for safety
+2. **The package manager (Cargo)** is more ergonomic than Maven or NuGet
+3. **Error handling** uses explicit types instead of exceptions—cleaner once you're used to it
+4. **No null pointer exceptions** ever—Rust simply doesn't have null
+
+The strictness that might seem unusual at first is exactly what makes Rust reliable for enterprise systems. And with AI assistants handling the syntax, you can focus on the architecture and business logic you're already expert in.
+
+## Ready to Start?
+
+You're ready if you can:
+
+- [ ] Read code and understand its intent
+- [ ] Describe what you want to build in plain English
+- [ ] Run commands in a terminal
+- [ ] Accept that AI will write most of your code
+
+That's it. The compiler and AI handle the rest.
 
 ---
 
