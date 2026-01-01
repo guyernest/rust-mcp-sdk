@@ -255,3 +255,16 @@ mod tests {
 - How might you extend this server to greet in different languages?
 - What would change if you wanted to add a second tool to this server?
 :::
+
+## Related Examples
+
+For more patterns and variations, explore these SDK examples:
+
+- **[02_server_basic.rs](https://github.com/paiml/rust-mcp-sdk/blob/main/examples/02_server_basic.rs)** - Basic server with calculator tool using `ToolHandler` trait
+- **[32_typed_tools.rs](https://github.com/paiml/rust-mcp-sdk/blob/main/examples/32_typed_tools.rs)** - Type-safe tools with automatic schema generation using `TypedTool`
+
+Run locally with:
+```bash
+cargo run --example 02_server_basic
+cargo run --example 32_typed_tools --features schema-generation
+```

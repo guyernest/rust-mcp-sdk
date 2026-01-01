@@ -196,3 +196,11 @@ pub async fn create_finance_server(
     builder.build()
 }
 """
+
+[tutor.sdk_examples]
+description = "Explore these SDK examples for server composition and multi-tool patterns"
+examples = [
+    { name = "34_serverbuilder_typed.rs", description = "ServerBuilder with typed tools composition", run = "cargo run --example 34_serverbuilder_typed --features schema-generation" },
+    { name = "53_typed_tools_workflow_integration.rs", description = "Tools and workflows integration", run = "cargo run --example 53_typed_tools_workflow_integration --features schema-generation" },
+    { name = "47_multiple_clients_parallel.rs", description = "Multiple clients for multi-server patterns", run = "cargo run --example 47_multiple_clients_parallel" },
+]

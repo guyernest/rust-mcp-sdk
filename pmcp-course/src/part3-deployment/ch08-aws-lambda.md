@@ -630,4 +630,12 @@ cargo pmcp deploy logs --tail               # View logs
 cargo pmcp deploy destroy --clean           # Cleanup
 ```
 
-Next: Learn how to connect MCP clients to your deployed Lambda server.
+## Knowledge Check
+
+Test your understanding of AWS Lambda deployment:
+
+{{#quiz ../quizzes/ch08-aws-lambda.toml}}
+
+---
+
+*Continue to [Connecting Clients](./ch08-01-connecting-clients.md) →*

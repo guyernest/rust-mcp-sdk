@@ -7,18 +7,19 @@ pass_threshold = 0.7
 
 [[questions]]
 type = "MultipleChoice"
-prompt.prompt = "What is the primary reason to use AWS Cognito for MCP server authentication?"
+prompt.prompt = "What is the most important factor when choosing an OAuth provider for your MCP server?"
 prompt.distractors = [
-    "It's the only IdP that supports JWT",
-    "It has the lowest latency globally",
-    "It's required for all AWS services"
+    "Which provider has the best documentation",
+    "Which provider offers the most features",
+    "Which provider is cheapest"
 ]
-answer.answer = "Deep integration with AWS services like Lambda, API Gateway, and IAM for AWS-native applications"
+answer.answer = "Use the provider your organization already has - don't introduce a new IdP just for MCP"
 context = """
-AWS Cognito is ideal for AWS-native applications because it integrates with
-Lambda authorizers, API Gateway, Identity Pools for AWS credentials, and IAM
-roles. If your MCP server runs on AWS infrastructure and accesses AWS services,
-Cognito provides seamless integration without extra configuration.
+The best OAuth provider is the one your organization already uses. If you have
+Okta, use Okta. If you're a Microsoft 365 shop, use Entra ID. If you're AWS-native,
+use Cognito. Introducing a new provider means duplicate user management, new
+vendor relationships, and IT teams learning another system. The patterns work
+with any OIDC-compliant provider.
 """
 id = "f14a2b3c-d4e5-6789-abcd-123456781401"
 
@@ -117,18 +118,19 @@ id = "f14a2b3c-d4e5-6789-abcd-123456781408"
 
 [[questions]]
 type = "MultipleChoice"
-prompt.prompt = "In a multi-tenant MCP server, what is the primary purpose of tenant isolation?"
+prompt.prompt = "When should you implement multi-tenancy for your MCP server?"
 prompt.distractors = [
-    "Improve performance through partitioning",
-    "Reduce cloud costs",
-    "Simplify deployment"
+    "When you have multiple departments in your organization",
+    "When you need role-based access control",
+    "When you want to isolate dev/staging/prod environments"
 ]
-answer.answer = "Ensure one tenant cannot access another tenant's data, tools, or resources"
+answer.answer = "When building a SaaS platform serving multiple external organizations from shared infrastructure"
 context = """
-Tenant isolation is a security requirement: Organization A must never see
-Organization B's data. This applies to database queries, file storage, tool
-configurations, and any resource. Use schema-per-tenant, row-level security,
-or prefix-based isolation to enforce boundaries at the data layer.
+Most organizations don't need multi-tenancy. If all users come from the same
+organization (even different departments), use your IdP's groups and roles instead.
+Multi-tenancy is for SaaS platforms where Organization A and Organization B
+share the same server but must never see each other's data. It adds significant
+complexity: tenant isolation at every layer, provisioning, cross-tenant attack surfaces.
 """
 id = "f14a2b3c-d4e5-6789-abcd-123456781410"
 

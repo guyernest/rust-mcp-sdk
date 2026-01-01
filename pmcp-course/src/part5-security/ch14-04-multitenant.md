@@ -2,38 +2,124 @@
 
 Multi-tenant MCP servers serve multiple organizations from a single deployment. This chapter covers architecture patterns, isolation strategies, and security considerations for multi-tenant deployments.
 
+## Do You Need Multi-Tenancy?
+
+**Most organizations don't.** Before diving into multi-tenant complexity, consider whether you actually need it:
+
+| Scenario | Multi-Tenant? | Why |
+|----------|---------------|-----|
+| **Internal MCP server** for your company | No | Single organization, use your IdP directly |
+| **Department-specific** servers | No | Deploy separate servers per department |
+| **SaaS product** serving multiple customers | **Yes** | Multiple organizations, shared infrastructure |
+| **Partner integrations** with isolated data | **Yes** | Multiple external organizations |
+| **Enterprise platform** with subsidiaries | Maybe | Could use separate deployments or multi-tenant |
+
+**The rule of thumb:** If all your users come from the same organization (even with different teams or roles), you don't need multi-tenancy. Your IdP handles groups and permissions within the organization.
+
+Multi-tenancy adds significant complexity:
+- Tenant isolation at every layer (code, data, rate limits)
+- Cross-tenant attack surface to protect
+- Tenant provisioning and lifecycle management
+- Complex debugging (which tenant had the issue?)
+
+Only adopt it if you're building a shared platform for multiple organizations.
+
+## The Easy Way: `cargo pmcp` Multi-Tenant Mode
+
+If you do need multi-tenancy, `cargo pmcp` provides configuration support:
+
+```bash
+# Initialize with multi-tenant support
+cargo pmcp deploy init --target pmcp-run --oauth auth0 --multi-tenant
+
+# This creates/updates .pmcp/deploy.toml with:
+```
+
+```toml
+# .pmcp/deploy.toml
+[auth]
+enabled = true
+provider = "auth0"  # Or cognito, entra—any provider works
+domain = "your-tenant.auth0.com"
+
+[auth.multi_tenant]
+enabled = true
+# How to identify the tenant from the JWT
+tenant_claim = "org_id"  # Auth0 Organizations
+# Or: "tid" for Entra ID
+# Or: "custom:tenant_id" for Cognito
+
+# Tenant isolation strategy
+isolation = "row_level_security"  # Or "schema_per_tenant", "prefix"
+
+# Default rate limit per tenant (requests per minute)
+default_rate_limit = 100
+```
+
+### What Multi-Tenant Mode Enables
+
+When you deploy with multi-tenant enabled:
+
+1. **Tenant extraction middleware** - Automatically extracts tenant ID from JWT claims
+2. **Tenant context injection** - Every tool receives `TenantContext` in its context
+3. **Database isolation** - Configures RLS policies or schema-per-tenant
+4. **Rate limiting** - Per-tenant rate limits to prevent noisy neighbors
+5. **Audit logging** - All operations tagged with tenant ID
+
+Your tools receive the tenant automatically:
+
+```rust
+pub async fn run(
+    &self,
+    input: Input,
+    context: &ToolContext,
+) -> Result<Output> {
+    // Tenant is extracted from JWT by middleware
+    let tenant = context.tenant()?;  // TenantContext
+
+    // All database operations automatically scoped
+    let data = self.db.query(&tenant, "SELECT * FROM resources").await?;
+
+    Ok(Output { data })
+}
+```
+
+## Manual Setup (For Complex Requirements)
+
+If you need custom tenant resolution, complex isolation patterns, or cross-tenant admin operations, configure multi-tenancy manually. The rest of this chapter covers these advanced patterns.
+
 ## Multi-Tenant Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                Multi-Tenant MCP Architecture                         │
+│                Multi-Tenant MCP Architecture                        │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  Organization A          Organization B          Organization C     │
-│  ┌─────────────┐        ┌─────────────┐        ┌─────────────┐     │
-│  │ MCP Client  │        │ MCP Client  │        │ MCP Client  │     │
-│  └──────┬──────┘        └──────┬──────┘        └──────┬──────┘     │
+│  ┌─────────────┐        ┌─────────────┐        ┌─────────────┐      │
+│  │ MCP Client  │        │ MCP Client  │        │ MCP Client  │      │
+│  └──────┬──────┘        └──────┬──────┘        └──────┬──────┘      │
 │         │                      │                      │             │
 │         │ JWT (tenant_a)       │ JWT (tenant_b)       │ JWT (c)     │
 │         │                      │                      │             │
 │         └──────────────────────┼──────────────────────┘             │
 │                                │                                    │
 │                                ▼                                    │
-│                    ┌───────────────────────┐                       │
-│                    │    MCP Server         │                       │
-│                    │    ───────────        │                       │
-│                    │    • Extract tenant   │                       │
-│                    │    • Validate access  │                       │
-│                    │    • Isolate data     │                       │
-│                    └───────────┬───────────┘                       │
+│                    ┌───────────────────────┐                        │
+│                    │    MCP Server         │                        │
+│                    │    ───────────        │                        │
+│                    │    • Extract tenant   │                        │
+│                    │    • Validate access  │                        │
+│                    │    • Isolate data     │                        │
+│                    └───────────┬───────────┘                        │
 │                                │                                    │
-│         ┌──────────────────────┼──────────────────────┐            │
+│         ┌──────────────────────┼──────────────────────┐             │
 │         │                      │                      │             │
 │         ▼                      ▼                      ▼             │
-│  ┌─────────────┐        ┌─────────────┐        ┌─────────────┐     │
-│  │ Tenant A    │        │ Tenant B    │        │ Tenant C    │     │
-│  │ Data/Config │        │ Data/Config │        │ Data/Config │     │
-│  └─────────────┘        └─────────────┘        └─────────────┘     │
+│  ┌─────────────┐        ┌─────────────┐        ┌─────────────┐      │
+│  │ Tenant A    │        │ Tenant B    │        │ Tenant C    │      │
+│  │ Data/Config │        │ Data/Config │        │ Data/Config │      │
+│  └─────────────┘        └─────────────┘        └─────────────┘      │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -958,7 +1044,11 @@ impl MultiTenantTestHarness {
 
 ## Summary
 
-Multi-tenant MCP servers require:
+**First, ask: Do you need multi-tenancy?** Most organizations don't. If all your users come from the same organization, single-tenant is simpler and more secure. Multi-tenancy is for SaaS platforms serving multiple external organizations.
+
+**If you do need it:** Use `cargo pmcp deploy init --multi-tenant` to configure tenant extraction, isolation strategy, and per-tenant rate limiting. Your tools receive `TenantContext` automatically.
+
+**For advanced requirements**, multi-tenant MCP servers require:
 
 1. **Tenant Identification** - Extract tenant from JWT claims (org_id, tid, custom claims)
 2. **Data Isolation** - Schema-per-tenant, row-level security, or prefix-based
@@ -967,10 +1057,11 @@ Multi-tenant MCP servers require:
 5. **Admin Access** - Controlled cross-tenant operations for support
 
 Key security principles:
-- Defense in depth: Multiple isolation layers
-- Fail secure: Default deny cross-tenant access
-- Audit everything: Log all tenant operations
-- Test isolation: Verify data cannot leak between tenants
+- **Defense in depth** - Multiple isolation layers (middleware + database + storage)
+- **Fail secure** - Default deny cross-tenant access; explicit allow only
+- **Audit everything** - Log all operations with tenant ID
+- **Test isolation** - Verify data cannot leak between tenants (write tests!)
+- **Minimize cross-tenant** - Admin operations should be rare and heavily logged
 
 ---
 

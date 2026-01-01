@@ -4,6 +4,14 @@ MCP Inspector is an interactive debugging and exploration tool for MCP servers. 
 
 ## What is MCP Inspector?
 
+Think of MCP Inspector as a "Postman for MCP"—it lets you interactively explore and test your server without writing code. While automated tests verify your server works correctly, Inspector helps you *understand* how it works and *debug* when it doesn't.
+
+**When to reach for Inspector:**
+- You're developing a new tool and want to see if it works
+- Something is broken and you need to see the actual requests/responses
+- You want to understand an unfamiliar server's capabilities
+- You're reproducing a bug report from a user
+
 MCP Inspector is a visual debugging tool that connects to MCP servers and provides:
 
 - **Real-time protocol visibility** - See every message exchanged
@@ -14,27 +22,28 @@ MCP Inspector is a visual debugging tool that connects to MCP servers and provid
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                     MCP Inspector Architecture                       │
+│                     MCP Inspector Architecture                      │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  ┌─────────────────┐     MCP Protocol      ┌─────────────────┐     │
-│  │                 │─────────────────────▶│                 │     │
-│  │  MCP Inspector  │   JSON-RPC over:      │   MCP Server    │     │
-│  │    (Browser)    │   - HTTP POST         │  (Your Server)  │     │
-│  │                 │◀─────────────────────│                 │     │
-│  └────────┬────────┘   - SSE              └─────────────────┘     │
+│  ┌─────────────────┐     MCP Protocol      ┌─────────────────┐      │
+│  │                 │──────────────────────▶│                 │      │
+│  │  MCP Inspector  │   JSON-RPC over:      │   MCP Server    │      │
+│  │    (Browser)    │   - HTTP POST         │  (Your Server)  │      │
+│  │                 │◀──────────────────────│                 │      │
+│  └────────┬────────┘   - SSE               └─────────────────┘      │
 │           │            - stdio                                      │
 │           │                                                         │
 │           ▼                                                         │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  Developer Features:                                         │   │
-│  │  • Tool browser with schema display                         │   │
-│  │  • Input form generation from JSON Schema                   │   │
-│  │  • Response viewer with pretty-printing                     │   │
-│  │  • Request/response history                                 │   │
-│  │  • Error inspection and debugging                           │   │
-│  │  • Session lifecycle management                             │   │
-│  └─────────────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │  Developer Features:                                        │    │
+│  │  • Tool browser with schema display                         │    │
+│  │  • Input form generation from JSON Schema                   │    │
+│  │  • Response viewer with pretty-printing                     │    │
+│  │  • Request/response history                                 │    │
+│  │  • Error inspection and debugging                           │    │
+│  │  • Session lifecycle management                             │    │
+│  │  • Session management                                       │    │
+│  └─────────────────────────────────────────────────────────────┘    │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -99,22 +108,22 @@ When you first connect, Inspector shows the main dashboard:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        MCP Inspector                                 │
+│                        MCP Inspector                                │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  Connection: ● Connected to http://localhost:3000/mcp               │
 │  Server: db-explorer v1.0.0                                         │
 │  Protocol: MCP 2024-11-05                                           │
 │                                                                     │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │  CAPABILITIES                                                 │  │
-│  │  ├─ Tools: 3 available                                       │  │
-│  │  │    ├─ list_tables                                         │  │
-│  │  │    ├─ get_sample_rows                                     │  │
-│  │  │    └─ execute_query                                       │  │
-│  │  ├─ Resources: 0                                             │  │
-│  │  └─ Prompts: 0                                               │  │
-│  └──────────────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  CAPABILITIES                                                │   │
+│  │  ├─ Tools: 3 available                                       │   │
+│  │  │    ├─ list_tables                                         │   │
+│  │  │    ├─ get_sample_rows                                     │   │
+│  │  │    └─ execute_query                                       │   │
+│  │  ├─ Resources: 0                                             │   │
+│  │  └─ Prompts: 0                                               │   │
+│  └──────────────────────────────────────────────────────────────┘   │
 │                                                                     │
 │  [Tools] [Resources] [Prompts] [Messages] [Settings]                │
 │                                                                     │
@@ -127,31 +136,31 @@ Click on a tool to see its schema and test interface:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Tool: execute_query                                                 │
+│  Tool: execute_query                                                │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  Description: Execute a SELECT query on the database (read-only)    │
 │                                                                     │
 │  INPUT SCHEMA:                                                      │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │  {                                                            │  │
-│  │    "type": "object",                                          │  │
-│  │    "properties": {                                            │  │
-│  │      "sql": {                                                 │  │
-│  │        "type": "string",                                      │  │
-│  │        "description": "SQL SELECT query to execute"           │  │
-│  │      }                                                        │  │
-│  │    },                                                         │  │
-│  │    "required": ["sql"]                                        │  │
-│  │  }                                                            │  │
-│  └──────────────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  {                                                           │   │
+│  │    "type": "object",                                         │   │
+│  │    "properties": {                                           │   │
+│  │      "sql": {                                                │   │
+│  │        "type": "string",                                     │   │
+│  │        "description": "SQL SELECT query to execute"          │   │
+│  │      }                                                       │   │
+│  │    },                                                        │   │
+│  │    "required": ["sql"]                                       │   │
+│  │  }                                                           │   │
+│  └──────────────────────────────────────────────────────────────┘   │
 │                                                                     │
 │  INPUT FORM:                                                        │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │  sql*: [SELECT * FROM users LIMIT 5                       ]  │  │
-│  └──────────────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  sql*: [SELECT * FROM users LIMIT 5                       ]  │   │
+│  └──────────────────────────────────────────────────────────────┘   │
 │                                                                     │
-│                                              [Execute Tool]          │
+│                                              [Execute Tool]         │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -162,31 +171,31 @@ After executing a tool, see the full response:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Response: execute_query                           Duration: 23ms    │
+│  Response: execute_query                           Duration: 23ms   │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  STATUS: Success                                                    │
 │                                                                     │
 │  CONTENT:                                                           │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │  [                                                            │  │
-│  │    {                                                          │  │
-│  │      "type": "text",                                          │  │
-│  │      "text": "| id | name  | email           |\n..."          │  │
-│  │    }                                                          │  │
-│  │  ]                                                            │  │
-│  └──────────────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  [                                                           │   │
+│  │    {                                                         │   │
+│  │      "type": "text",                                         │   │
+│  │      "text": "| id | name  | email           |\n..."         │   │
+│  │    }                                                         │   │
+│  │  ]                                                           │   │
+│  └──────────────────────────────────────────────────────────────┘   │
 │                                                                     │
 │  RAW JSON:                                                          │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │  {                                                            │  │
-│  │    "jsonrpc": "2.0",                                          │  │
-│  │    "id": 3,                                                   │  │
-│  │    "result": {                                                │  │
-│  │      "content": [...]                                         │  │
-│  │    }                                                          │  │
-│  │  }                                                            │  │
-│  └──────────────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  {                                                           │   │
+│  │    "jsonrpc": "2.0",                                         │   │
+│  │    "id": 3,                                                  │   │
+│  │    "result": {                                               │   │
+│  │      "content": [...]                                        │   │
+│  │    }                                                         │   │
+│  │  }                                                           │   │
+│  └──────────────────────────────────────────────────────────────┘   │
 │                                                                     │
 │  [Copy Response] [Add to History] [Export]                          │
 │                                                                     │
@@ -199,7 +208,7 @@ Track all protocol messages in the Messages tab:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Message History                                   [Clear] [Export]  │
+│  Message History                                   [Clear] [Export] │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  #1 [10:23:45] → initialize                                         │
@@ -227,9 +236,11 @@ Track all protocol messages in the Messages tab:
 
 ## Common Debugging Workflows
 
+These workflows represent the most common debugging scenarios you'll encounter. Each follows a pattern: observe the problem, form a hypothesis, test with Inspector, and verify the fix.
+
 ### Workflow 1: Debugging a New Tool
 
-When developing a new tool, use Inspector to validate behavior:
+When developing a new tool, use Inspector to validate behavior before writing automated tests. This "exploratory testing" phase helps you understand if your tool works as intended and catch obvious issues early.
 
 ```bash
 # 1. Start server with debug logging
@@ -268,7 +279,7 @@ npx @anthropic/mcp-inspector http://localhost:3000/mcp
 
 ### Workflow 2: Diagnosing Connection Issues
 
-When Inspector won't connect:
+Connection problems are frustrating because the error messages are often generic ("connection refused", "timeout"). This workflow helps you systematically identify where the problem lies: Is the server running? Is it listening on the right port? Is it responding to MCP requests?
 
 ```bash
 # Check server is running
@@ -297,7 +308,7 @@ npx @anthropic/mcp-inspector --verbose http://localhost:3000/mcp
 
 ### Workflow 3: Testing Authentication
 
-For servers with authentication:
+Authentication bugs are common and often subtle. Does your server reject requests without tokens? Does it accept expired tokens? Does it properly validate scopes? Inspector lets you test each scenario by manually controlling the headers.
 
 ```bash
 # Test without auth (should fail)
@@ -318,7 +329,7 @@ npx @anthropic/mcp-inspector \
 
 ### Workflow 4: Reproducing Bug Reports
 
-When a user reports unexpected behavior:
+The first step in fixing any bug is reproducing it. Inspector lets you replay the exact sequence of operations a user performed, see the actual request/response data, and export the session for analysis or sharing with team members.
 
 ```bash
 # 1. Start server with exact configuration
@@ -341,26 +352,28 @@ npx @anthropic/mcp-inspector http://localhost:3000/mcp
 
 ## Advanced Inspector Features
 
+Beyond basic tool testing, Inspector provides advanced capabilities for edge case testing, security verification, and deep protocol debugging.
+
 ### Custom Request Builder
 
-For testing edge cases, use the raw request builder:
+Sometimes you need to send requests that the normal UI can't construct—malformed JSON, missing fields, or injection attempts. The raw request builder lets you craft arbitrary JSON-RPC requests to test how your server handles unexpected input.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Custom Request                                                      │
+│  Custom Request                                                     │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  METHOD: [tools/call                                    ▼]          │
 │                                                                     │
 │  PARAMS:                                                            │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │  {                                                            │  │
-│  │    "name": "execute_query",                                   │  │
-│  │    "arguments": {                                             │  │
-│  │      "sql": "SELECT * FROM users; DROP TABLE users; --"       │  │
-│  │    }                                                          │  │
-│  │  }                                                            │  │
-│  └──────────────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │  {                                                           │   │
+│  │    "name": "execute_query",                                  │   │
+│  │    "arguments": {                                            │   │
+│  │      "sql": "SELECT * FROM users; DROP TABLE users; --"      │   │
+│  │    }                                                         │   │
+│  │  }                                                           │   │
+│  └──────────────────────────────────────────────────────────────┘   │
 │                                                                     │
 │  [Send Request]                                                     │
 │                                                                     │
@@ -423,9 +436,11 @@ Export debugging sessions for team sharing:
 
 ## Testing Different Transports
 
+MCP supports multiple transport mechanisms, and Inspector can test all of them. Understanding transport differences helps you debug connectivity issues and choose the right transport for your deployment.
+
 ### HTTP POST Transport
 
-The simplest transport for testing:
+The simplest and most common transport. Each request-response is a separate HTTP POST. Easy to debug with standard HTTP tools, but doesn't support server-initiated messages.
 
 ```bash
 npx @anthropic/mcp-inspector http://localhost:3000/mcp
@@ -440,7 +455,7 @@ async fn mcp_handler(
 
 ### SSE Transport
 
-For servers using Server-Sent Events:
+Server-Sent Events enable the server to push updates to the client—useful for long-running operations or real-time notifications. More complex to debug because the connection is persistent.
 
 ```bash
 npx @anthropic/mcp-inspector --transport sse http://localhost:3000/sse
@@ -458,7 +473,7 @@ Inspector will:
 
 ### Streamable HTTP Transport
 
-For the new Streamable HTTP transport:
+The newest transport option, combining the simplicity of HTTP with streaming capabilities. Best for cloud deployments where you need both request-response and streaming patterns.
 
 ```bash
 npx @anthropic/mcp-inspector --transport streamable http://localhost:3000/mcp
@@ -471,7 +486,7 @@ npx @anthropic/mcp-inspector --transport streamable http://localhost:3000/mcp
 
 ### stdio Transport
 
-For CLI-style servers:
+For servers that run as local processes (like CLI tools), stdio transport communicates via standard input/output. Inspector spawns your server as a subprocess and manages the communication.
 
 ```bash
 npx @anthropic/mcp-inspector --transport stdio "cargo run --release"
@@ -512,30 +527,30 @@ npx @anthropic/mcp-inspector --transport stdio "cargo run --release"
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    Testing Tool Selection                            │
+│                    Testing Tool Selection                           │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  Development Phase:                                                 │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  Writing new tool → Inspector                               │   │
-│  │  Debugging issue  → Inspector                               │   │
-│  │  Learning MCP     → Inspector                               │   │
-│  └─────────────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │  Writing new tool → Inspector                               │    │
+│  │  Debugging issue  → Inspector                               │    │
+│  │  Learning MCP     → Inspector                               │    │
+│  └─────────────────────────────────────────────────────────────┘    │
 │                                                                     │
 │  Testing Phase:                                                     │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  Unit tests      → cargo test                               │   │
-│  │  Integration     → mcp-tester                               │   │
-│  │  Edge cases      → mcp-tester (generated)                   │   │
-│  │  Regression      → mcp-tester (CI/CD)                       │   │
-│  └─────────────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │  Unit tests      → cargo test                               │    │
+│  │  Integration     → mcp-tester                               │    │
+│  │  Edge cases      → mcp-tester (generated)                   │    │
+│  │  Regression      → mcp-tester (CI/CD)                       │    │
+│  └─────────────────────────────────────────────────────────────┘    │
 │                                                                     │
 │  Production Phase:                                                  │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │  Smoke tests     → mcp-tester (subset)                      │   │
-│  │  User acceptance → Claude Desktop                           │   │
-│  │  Bug reproduction→ Inspector                                │   │
-│  └─────────────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │  Smoke tests     → mcp-tester (subset)                      │    │
+│  │  User acceptance → Claude Desktop                           │    │
+│  │  Bug reproduction→ Inspector                                │    │
+│  └─────────────────────────────────────────────────────────────┘    │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -651,7 +666,9 @@ MCP Inspector is your primary tool for:
 
 Use Inspector during development, then codify working tests in mcp-tester for automation.
 
-## Exercises
+## Practice Ideas
+
+These informal exercises help reinforce the concepts. For structured exercises with starter code and tests, see the chapter exercise pages.
 
 1. **Connect and explore** - Start the db-explorer server and use Inspector to list all tools
 2. **Test error handling** - Send invalid SQL and verify error responses

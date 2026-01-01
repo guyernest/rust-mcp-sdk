@@ -10,44 +10,44 @@ This chapter walks through the complete cargo-pmcp workflow for AI-assisted MCP 
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
 │  ┌───────────────────┐                                                  │
-│  │ 1. Scaffold       │ cargo pmcp new <workspace>                      │
-│  │    Workspace      │ cargo pmcp add server <name> --template minimal │
+│  │ 1. Scaffold       │ cargo pmcp new <workspace>                       │
+│  │    Workspace      │ cargo pmcp add server <name> --template minimal  │
 │  └─────────┬─────────┘                                                  │
 │            │                                                            │
 │            ▼                                                            │
 │  ┌───────────────────┐                                                  │
-│  │ 2. Implement      │ Edit crates/mcp-<name>-core/src/tools/*.rs      │
-│  │    Tools          │ Register tools in lib.rs                        │
+│  │ 2. Implement      │ Edit crates/mcp-<name>-core/src/tools/*.rs       │
+│  │    Tools          │ Register tools in lib.rs                         │
 │  └─────────┬─────────┘                                                  │
 │            │                                                            │
 │            ▼                                                            │
 │  ┌───────────────────┐                                                  │
-│  │ 3. Development    │ cargo pmcp dev --server <name>                  │
-│  │    Server         │ Hot-reload on http://0.0.0.0:3000               │
+│  │ 3. Development    │ cargo pmcp dev --server <name>                   │
+│  │    Server         │ Hot-reload on http://0.0.0.0:3000                │
 │  └─────────┬─────────┘                                                  │
 │            │                                                            │
 │            ▼                                                            │
 │  ┌───────────────────┐                                                  │
-│  │ 4. Generate       │ cargo pmcp test --server <name>                 │
-│  │    Tests          │     --generate-scenarios                        │
+│  │ 4. Generate       │ cargo pmcp test --server <name>                  │
+│  │    Tests          │     --generate-scenarios                         │
 │  └─────────┬─────────┘                                                  │
 │            │                                                            │
 │            ▼                                                            │
 │  ┌───────────────────┐                                                  │
-│  │ 5. Run Tests      │ cargo pmcp test --server <name>                 │
+│  │ 5. Run Tests      │ cargo pmcp test --server <name>                  │
 │  │                   │ cargo test                                       │
 │  └─────────┬─────────┘                                                  │
 │            │                                                            │
 │            ▼                                                            │
 │  ┌───────────────────┐                                                  │
-│  │ 6. Quality        │ cargo fmt --check                               │
-│  │    Gates          │ cargo clippy -- -D warnings                     │
+│  │ 6. Quality        │ cargo fmt --check                                │
+│  │    Gates          │ cargo clippy -- -D warnings                      │
 │  └─────────┬─────────┘                                                  │
 │            │                                                            │
 │            ▼                                                            │
 │  ┌───────────────────┐                                                  │
-│  │ 7. Production     │ cargo build --release                           │
-│  │    Build          │ Configure MCP client                            │
+│  │ 7. Production     │ cargo build --release                            │
+│  │    Build          │ Configure MCP client                             │
 │  └───────────────────┘                                                  │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘

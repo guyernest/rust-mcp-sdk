@@ -582,7 +582,9 @@ Effective regression testing:
 
 Regression tests are insurance against repeating past mistakes. The time spent creating them pays dividends in prevented bugs and faster debugging.
 
-## Exercises
+## Practice Ideas
+
+These informal exercises help reinforce the concepts. For structured exercises with starter code and tests, see the chapter exercise pages.
 
 1. **Create a regression test** - Pick a bug from your issue tracker and write a test
 2. **Organize existing tests** - Set up a tagging strategy for your regression suite

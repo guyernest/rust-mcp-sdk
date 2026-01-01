@@ -2,31 +2,163 @@
 
 AWS Cognito is Amazon's identity service, providing user pools for authentication and identity pools for AWS resource access. This chapter covers Cognito integration for MCP servers.
 
+> **Note:** Cognito is shown here as an example. If your organization already uses a different identity provider (Okta, Auth0, Entra ID, etc.), use that instead. The patterns in this chapter apply to any OIDC-compliant provider.
+
+## The Easy Way: `cargo pmcp` + CDK
+
+**The fastest path to production:** Use `cargo pmcp` to configure OAuth, then let the generated CDK handle Cognito setup. You don't need to manually create user pools, configure clients, or set up resource servers—the CDK does it all.
+
+### Step 1: Initialize OAuth Configuration
+
+```bash
+# Initialize deployment with Cognito OAuth
+cargo pmcp deploy init --target pmcp-run --oauth cognito
+
+# This creates/updates .pmcp/deploy.toml with:
+```
+
+```toml
+# .pmcp/deploy.toml
+[auth]
+enabled = true
+provider = "cognito"
+callback_urls = [
+    "http://localhost:3000/callback",  # For development
+]
+
+[auth.dcr]
+# Dynamic Client Registration for MCP clients
+enabled = true
+public_client_patterns = [
+    "claude",
+    "cursor",
+    "chatgpt",
+    "mcp-inspector",
+]
+default_scopes = [
+    "openid",
+    "email",
+    "mcp/read",
+]
+allowed_scopes = [
+    "openid",
+    "email",
+    "profile",
+    "mcp/read",
+    "mcp/write",
+    "mcp/admin",
+]
+```
+
+### Step 2: Deploy with CDK
+
+The deployment generates a CDK stack that creates all Cognito resources:
+
+```bash
+# Build and deploy
+cargo pmcp deploy
+
+# The CDK stack creates:
+# - Cognito User Pool with password policies
+# - App client with OAuth flows configured
+# - Resource server with MCP scopes
+# - Optional: Federation with corporate IdP
+```
+
+### What the CDK Creates
+
+The generated CDK stack (in `deploy/lib/`) handles all the complexity:
+
+```typescript
+// Example: What cargo pmcp deploy generates in CDK
+// You don't write this - it's generated from deploy.toml
+
+// User Pool with enterprise settings
+const userPool = new cognito.UserPool(this, 'McpUserPool', {
+  userPoolName: `${serverId}-users`,
+  selfSignUpEnabled: false,  // Admin-only provisioning
+  passwordPolicy: {
+    minLength: 12,
+    requireLowercase: true,
+    requireUppercase: true,
+    requireDigits: true,
+    requireSymbols: true,
+  },
+  mfa: cognito.Mfa.OPTIONAL,
+});
+
+// Resource server with MCP scopes
+const resourceServer = userPool.addResourceServer('McpApi', {
+  identifier: 'mcp',
+  scopes: [
+    { scopeName: 'read', scopeDescription: 'Read MCP resources' },
+    { scopeName: 'write', scopeDescription: 'Modify MCP resources' },
+    { scopeName: 'admin', scopeDescription: 'Admin operations' },
+  ],
+});
+
+// App client with OAuth configuration
+const appClient = userPool.addClient('McpClient', {
+  generateSecret: true,
+  oAuth: {
+    flows: { authorizationCodeGrant: true },
+    scopes: [/* from deploy.toml */],
+    callbackUrls: [/* from deploy.toml */],
+  },
+});
+```
+
+**The key insight:** You configure OAuth in `deploy.toml`, and the deployment tooling generates the correct CDK/CloudFormation. You don't need to understand Cognito's complex configuration options.
+
+### Step 3: Your Server Code
+
+Your Rust code just uses the OAuth middleware—it doesn't know or care that Cognito is the provider:
+
+```rust
+use pmcp::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // OAuth configuration is loaded from environment
+    // (set by CDK stack outputs)
+    let server = ServerBuilder::new("my-server", "1.0.0")
+        .with_oauth_from_env()  // Reads COGNITO_* env vars
+        .with_tool(MyTool)
+        .build()?;
+
+    server.serve().await
+}
+```
+
+## Manual Setup (When You Need Control)
+
+If you need more control, or your organization has specific Cognito requirements, you can configure Cognito manually. The rest of this chapter covers manual setup.
+
 ## Cognito Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    Cognito for MCP Servers                           │
+│                    Cognito for MCP Servers                          │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  ┌─────────────────┐                                               │
-│  │   User Pool     │  Authentication                               │
-│  │  ─────────────  │  • User sign-up/sign-in                       │
-│  │  • Users        │  • Password policies                          │
-│  │  • Groups       │  • MFA                                        │
-│  │  • App clients  │  • Custom attributes                          │
-│  └────────┬────────┘  • Federation (SAML/OIDC)                     │
+│  ┌─────────────────┐                                                │
+│  │   User Pool     │  Authentication                                │
+│  │  ─────────────  │  • User sign-up/sign-in                        │
+│  │  • Users        │  • Password policies                           │
+│  │  • Groups       │  • MFA                                         │
+│  │  • App clients  │  • Custom attributes                           │
+│  └────────┬────────┘  • Federation (SAML/OIDC)                      │
 │           │                                                         │
 │           │ Issues JWT                                              │
 │           ▼                                                         │
-│  ┌─────────────────┐                                               │
-│  │   MCP Server    │  Validates JWT, extracts user info            │
-│  └─────────────────┘                                               │
+│  ┌─────────────────┐                                                │
+│  │   MCP Server    │  Validates JWT, extracts user info             │
+│  └─────────────────┘                                                │
 │                                                                     │
 │  (Optional for AWS access)                                          │
-│  ┌─────────────────┐                                               │
-│  │  Identity Pool  │  AWS credentials for resources                │
-│  └─────────────────┘  • S3, DynamoDB, etc.                         │
+│  ┌─────────────────┐                                                │
+│  │  Identity Pool  │  AWS credentials for resources                 │
+│  └─────────────────┘  • S3, DynamoDB, etc.                          │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -448,7 +580,9 @@ async fn get_cognito_token(config: &CognitoConfig) -> Result<String> {
 
 ## Summary
 
-AWS Cognito integration requires:
+**Recommended approach:** Use `cargo pmcp deploy init --oauth cognito` to generate the CDK stack that handles all Cognito complexity. You configure scopes in `deploy.toml`, and the deployment creates the user pool, app client, and resource server automatically.
+
+**If you need manual setup**, AWS Cognito integration requires:
 
 1. **User Pool** - Authentication and user management
 2. **App Client** - OAuth configuration
@@ -461,6 +595,8 @@ Key Cognito-specific considerations:
 - Groups appear in `cognito:groups` claim
 - Custom attributes prefixed with `custom:`
 - Lambda triggers for claim customization
+
+**Remember:** Cognito is just one option. If your organization uses Okta, Auth0, Entra ID, or another provider, use that instead—the patterns are the same.
 
 ---
 
