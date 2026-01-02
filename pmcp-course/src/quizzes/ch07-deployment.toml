@@ -9,11 +9,12 @@ pass_threshold = 0.7
 type = "MultipleChoice"
 prompt.prompt = "What is the primary advantage of remote MCP deployments over local servers for business users?"
 prompt.distractors = [
-    "Remote servers are faster than local servers",
-    "Remote servers support more MCP features",
-    "Remote servers use less memory"
+    "Remote servers are faster than local servers due to better hardware",
+    "Remote servers support more MCP features than local deployments",
+    "Remote servers use less memory by sharing resources across users"
 ]
 answer.answer = "Business users can access MCP tools without installing Rust, configuring databases, or managing server processes"
+answer.position = 1
 context = """
 Local MCP servers require technical setup on each user's machine - Rust toolchain,
 database credentials, process management. Remote deployment transforms your MCP
@@ -26,11 +27,12 @@ id = "a7b1c2d3-e4f5-6789-abcd-ef1234560701"
 type = "MultipleChoice"
 prompt.prompt = "Why should MCP servers run 'close to the data' they access?"
 prompt.distractors = [
-    "To reduce cloud provider costs",
-    "To avoid firewall configuration",
-    "To simplify deployment scripts"
+    "To reduce cloud provider costs through data transfer optimization",
+    "To avoid firewall configuration and complex networking rules",
+    "To simplify deployment scripts by using the same environment"
 ]
 answer.answer = "Network latency to databases is ~1ms in the same VPC versus ~50-200ms from a user's laptop, making queries 100x faster"
+answer.position = 2
 context = """
 MCP servers often make multiple database queries per tool call. When running in
 the same AWS VPC as RDS, latency is ~1ms per query. From a user's laptop over
@@ -43,11 +45,12 @@ id = "a7b1c2d3-e4f5-6789-abcd-ef1234560702"
 type = "MultipleChoice"
 prompt.prompt = "What is the key difference between Lambda's and Cloud Run's concurrency models?"
 prompt.distractors = [
-    "Lambda supports async/await but Cloud Run doesn't",
-    "Cloud Run has faster cold starts than Lambda",
-    "Lambda uses containers but Cloud Run uses functions"
+    "Lambda supports async/await but Cloud Run doesn't support async patterns",
+    "Cloud Run has faster cold starts than Lambda due to lighter isolation",
+    "Lambda uses containers but Cloud Run uses functions for lighter deployment"
 ]
 answer.answer = "Lambda handles 1 request per instance (scales horizontally); Cloud Run handles many concurrent requests per container"
+answer.position = 3
 context = """
 Lambda spawns a new instance for each concurrent request - 100 concurrent requests
 means 100 Lambda instances. Cloud Run runs a container that handles up to 80
@@ -60,11 +63,12 @@ id = "a7b1c2d3-e4f5-6789-abcd-ef1234560703"
 type = "MultipleChoice"
 prompt.prompt = "Why does Rust have significantly lower cold start times than Python on AWS Lambda?"
 prompt.distractors = [
-    "Rust uses a faster JIT compiler",
-    "Lambda gives Rust more memory by default",
-    "Python requires more API Gateway configuration"
+    "Rust uses a faster JIT compiler that optimizes code at runtime",
+    "Lambda gives Rust more memory by default for better performance",
+    "Python requires more API Gateway configuration for routing"
 ]
 answer.answer = "Rust compiles to native machine code with no interpreter startup or JIT warmup required"
+answer.position = 0
 context = """
 Rust cold starts are ~50-100ms on Lambda versus ~500-1500ms for Python. Rust
 compiles to a native binary that starts immediately. Python must load the
@@ -90,11 +94,12 @@ id = "a7b1c2d3-e4f5-6789-abcd-ef1234560705"
 type = "MultipleChoice"
 prompt.prompt = "What is the correct way to store database credentials for a Lambda MCP server?"
 prompt.distractors = [
-    "In .pmcp/deploy.toml under [lambda.environment]",
-    "In a .env file committed to the repository",
-    "Hardcoded in the Rust source code with #[cfg(prod)]"
+    "In .pmcp/deploy.toml under [lambda.environment] for easy configuration",
+    "In a .env file committed to the repository for version control tracking",
+    "Hardcoded in the Rust source code with #[cfg(prod)] for compile-time injection"
 ]
 answer.answer = "In AWS Secrets Manager, retrieved at runtime with credentials cached in a static OnceCell"
+answer.position = 1
 context = """
 Never store secrets in code, config files, or environment variables that appear in
 logs. Use AWS Secrets Manager to store credentials securely. In Lambda, retrieve
@@ -107,11 +112,12 @@ id = "a7b1c2d3-e4f5-6789-abcd-ef1234560709"
 type = "MultipleChoice"
 prompt.prompt = "What is the purpose of placing a Lambda function in a VPC private subnet?"
 prompt.distractors = [
-    "To improve Lambda cold start performance",
-    "To enable OAuth authentication with Cognito",
-    "To reduce data transfer costs"
+    "To improve Lambda cold start performance through pre-warming",
+    "To enable OAuth authentication with Cognito user pools",
+    "To reduce data transfer costs between services"
 ]
 answer.answer = "To access private resources like RDS databases that have no public internet exposure"
+answer.position = 2
 context = """
 VPC-attached Lambda functions can reach resources in private subnets - like RDS
 databases configured with publiclyAccessible: false. The database never exposes
@@ -124,11 +130,12 @@ id = "a7b1c2d3-e4f5-6789-abcd-ef1234560710"
 type = "MultipleChoice"
 prompt.prompt = "What is the difference between authentication and authorization in MCP security?"
 prompt.distractors = [
-    "Authentication uses OAuth; authorization uses API keys",
-    "Authentication is server-side; authorization is client-side",
-    "Authentication is for tools; authorization is for resources"
+    "Authentication uses OAuth while authorization uses API keys for access",
+    "Authentication is server-side while authorization is checked client-side",
+    "Authentication is for tools while authorization applies only to resources"
 ]
 answer.answer = "Authentication verifies WHO is making the request; authorization determines WHAT they can access"
+answer.position = 3
 context = """
 Authentication (OAuth tokens, API keys) establishes identity - this request is from
 user alice@company.com. Authorization checks permissions - does Alice have the
@@ -154,11 +161,12 @@ id = "a7b1c2d3-e4f5-6789-abcd-ef1234560712"
 type = "MultipleChoice"
 prompt.prompt = "Which deployment target has the fastest cold starts at ~0-5ms?"
 prompt.distractors = [
-    "AWS Lambda with provisioned concurrency",
-    "Google Cloud Run with minimum instances",
-    "AWS Lambda with ARM64 architecture"
+    "AWS Lambda with provisioned concurrency for pre-warmed instances",
+    "Google Cloud Run with minimum instances kept always running",
+    "AWS Lambda with ARM64 architecture for faster binary execution"
 ]
 answer.answer = "Cloudflare Workers because V8 isolates spin up in microseconds, not milliseconds"
+answer.position = 0
 context = """
 Workers uses V8 isolates, not containers or microVMs. Isolates are extremely
 lightweight - they share the V8 engine and spin up in microseconds. Lambda

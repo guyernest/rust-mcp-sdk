@@ -9,11 +9,12 @@ pass_threshold = 0.7
 type = "MultipleChoice"
 prompt.prompt = "What is the current status of MCP Apps and UI Resources?"
 prompt.distractors = [
-    "Stable and supported by all MCP clients",
-    "Deprecated and will be removed in future versions",
-    "Only available in enterprise MCP deployments"
+    "Stable and supported by all MCP clients in the ecosystem",
+    "Deprecated and will be removed in future versions of the specification",
+    "Only available in enterprise MCP deployments with premium licensing"
 ]
 answer.answer = "Experimental - subject to change, with limited client support"
+answer.position = 0
 context = """
 MCP Apps (SEP-1865) are experimental. The APIs may change as the specification matures,
 most MCP clients don't yet support UI resources, and there may be ecosystem fragmentation
@@ -25,11 +26,12 @@ id = "f20a1b2c-d3e4-5678-abcd-123456800001"
 type = "MultipleChoice"
 prompt.prompt = "What URI scheme must UI resources use?"
 prompt.distractors = [
-    "http:// or https:// for web resources",
-    "file:// for local HTML files",
-    "mcp:// for MCP-specific resources"
+    "http:// or https:// for web resources hosted on external servers",
+    "file:// for local HTML files stored on the client machine",
+    "mcp:// for MCP-specific resources following the protocol standard"
 ]
 answer.answer = "ui:// followed by a path identifier (e.g., ui://hotel/gallery)"
+answer.position = 1
 context = """
 UI resources use the 'ui://' scheme, similar to how 'http://' identifies web resources
 and 'file://' identifies local files. The URI format is ui://namespace/resource-name.
@@ -53,11 +55,12 @@ id = "f20a1b2c-d3e4-5678-abcd-123456800003"
 type = "MultipleChoice"
 prompt.prompt = "How do tools associate with UI resources in PMCP?"
 prompt.distractors = [
-    "By naming the tool the same as the UI resource",
-    "By placing the HTML file next to the Rust source file",
-    "By registering a callback in the server configuration"
+    "By naming the tool the same as the UI resource identifier string",
+    "By placing the HTML file next to the Rust source file in directory",
+    "By registering a callback in the server configuration initialization code"
 ]
 answer.answer = "Using the .with_ui(\"ui://...\") method on TypedTool"
+answer.position = 2
 context = """
 TypedTool provides a fluent .with_ui() method that sets the 'ui/resourceUri' metadata.
 When the tool is discovered via tools/list, clients see this metadata and know to fetch
@@ -70,11 +73,12 @@ id = "f20a1b2c-d3e4-5678-abcd-123456800004"
 type = "MultipleChoice"
 prompt.prompt = "Why are MCP UIs rendered in sandboxed iframes?"
 prompt.distractors = [
-    "For better CSS styling isolation",
-    "To improve rendering performance",
-    "To enable offline caching of UI content"
+    "For better CSS styling isolation between UI components and host application",
+    "To improve rendering performance by using isolated browser contexts",
+    "To enable offline caching of UI content for improved user experience"
 ]
 answer.answer = "For security - preventing untrusted HTML from accessing host data or DOM"
+answer.position = 3
 context = """
 Sandboxed iframes prevent untrusted HTML from servers from accessing the parent window's
 DOM, cookies, localStorage, or making same-origin requests. UIs can only communicate
@@ -87,11 +91,12 @@ id = "f20a1b2c-d3e4-5678-abcd-123456800005"
 type = "MultipleChoice"
 prompt.prompt = "How does a UI request data from its associated tool?"
 prompt.distractors = [
-    "Using fetch() to call the MCP server directly",
-    "Reading from a global window.mcpData variable",
-    "Accessing document.referrer for the tool URL"
+    "Using fetch() to call the MCP server directly over HTTP connection",
+    "Reading from a global window.mcpData variable injected by the host",
+    "Accessing document.referrer for the tool URL to make direct requests"
 ]
 answer.answer = "Using window.parent.postMessage() with JSON-RPC format"
+answer.position = 0
 context = """
 UIs communicate with the MCP host via postMessage. To request tool data:
 window.parent.postMessage({ jsonrpc: '2.0', method: 'tools/call', params: {...}, id: 1 }, '*').
@@ -104,11 +109,12 @@ id = "f20a1b2c-d3e4-5678-abcd-123456800006"
 type = "MultipleChoice"
 prompt.prompt = "What message type does the MCP host send when returning tool results to a UI?"
 prompt.distractors = [
-    "mcp-response",
-    "tool-result",
-    "jsonrpc-result"
+    "mcp-response for general MCP protocol messages",
+    "tool-result for direct tool execution responses",
+    "jsonrpc-result for standard JSON-RPC response format"
 ]
 answer.answer = "mcp-tool-result"
+answer.position = 1
 context = """
 When the host executes a tool and has results, it sends a message with type 'mcp-tool-result'
 to the iframe via postMessage. The message structure is: { type: 'mcp-tool-result',
@@ -120,11 +126,12 @@ id = "f20a1b2c-d3e4-5678-abcd-123456800007"
 type = "MultipleChoice"
 prompt.prompt = "What should MCP servers do to handle clients that don't support UI resources?"
 prompt.distractors = [
-    "Return an error when UI is not supported",
-    "Require clients to update before connecting",
-    "Disable all tools when UI capability is missing"
+    "Return an error when UI is not supported by the connected client",
+    "Require clients to update before connecting to servers with UI resources",
+    "Disable all tools when UI capability is missing from client capabilities"
 ]
 answer.answer = "Design tools to return complete JSON data that works without UI (graceful degradation)"
+answer.position = 2
 context = """
 Since many MCP clients don't support UI yet, tools should always return complete, useful
 JSON data. The UI is an enhancement, not a requirement. Clients without UI support still
@@ -137,11 +144,12 @@ id = "f20a1b2c-d3e4-5678-abcd-123456800008"
 type = "MultipleChoice"
 prompt.prompt = "Can multiple tools share the same UI resource?"
 prompt.distractors = [
-    "No, each tool must have its own unique UI resource",
-    "Only if they are in the same server module",
-    "Only if they have identical input schemas"
+    "No, each tool must have its own unique UI resource for isolation",
+    "Only if they are in the same server module and share namespace",
+    "Only if they have identical input schemas defined in their parameters"
 ]
 answer.answer = "Yes, if their output formats are compatible for the shared UI to render"
+answer.position = 3
 context = """
 Multiple tools can reference the same ui:// resource. For example, search_rooms,
 search_restaurants, and search_activities could all use ui://search/results-grid if
@@ -154,11 +162,12 @@ id = "f20a1b2c-d3e4-5678-abcd-123456800010"
 type = "MultipleChoice"
 prompt.prompt = "Which capability must a server declare to support UI resources?"
 prompt.distractors = [
-    "tools capability only",
-    "ui capability (new in MCP Apps)",
-    "experimental.ui capability flag"
+    "tools capability only for basic tool registration and discovery",
+    "ui capability (new in MCP Apps) specifically for user interfaces",
+    "experimental.ui capability flag to enable experimental UI features"
 ]
 answer.answer = "resources capability (UI resources are a type of resource)"
+answer.position = 0
 context = """
 UI resources are a specialized type of MCP resource, so servers must declare the
 resources capability in ServerCapabilities. This allows clients to discover and
@@ -171,11 +180,12 @@ id = "f20a1b2c-d3e4-5678-abcd-123456800011"
 type = "MultipleChoice"
 prompt.prompt = "What is the purpose of the request ID in postMessage communication?"
 prompt.distractors = [
-    "To authenticate the requesting user",
-    "To prioritize message processing order",
-    "To cache responses for performance"
+    "To authenticate the requesting user and validate their session token",
+    "To prioritize message processing order for time-sensitive operations",
+    "To cache responses for performance optimization across repeated calls"
 ]
 answer.answer = "To match responses to their original requests when making multiple calls"
+answer.position = 1
 context = """
 Since postMessage is asynchronous and UIs may make multiple tool calls, the request ID
 (the 'id' field in JSON-RPC) correlates responses with requests. When the host returns
@@ -188,11 +198,12 @@ id = "f20a1b2c-d3e4-5678-abcd-123456800013"
 type = "MultipleChoice"
 prompt.prompt = "What happens if a tool's .with_ui() URI doesn't match any declared UI resource?"
 prompt.distractors = [
-    "The server fails to start with an error",
-    "A default placeholder UI is automatically generated",
-    "The tool is automatically hidden from clients"
+    "The server fails to start with an error during initialization phase",
+    "A default placeholder UI is automatically generated for missing resources",
+    "The tool is automatically hidden from clients during capability negotiation"
 ]
 answer.answer = "The client receives the metadata but may fail or skip rendering when fetching the UI"
+answer.position = 2
 context = """
 PMCP doesn't validate at server startup that all ui:// references match declared resources
 (though this could be added). At runtime, if the client tries to fetch a non-existent
@@ -205,11 +216,12 @@ id = "f20a1b2c-d3e4-5678-abcd-123456800014"
 type = "MultipleChoice"
 prompt.prompt = "Which of these is a BAD practice for MCP UI development?"
 prompt.distractors = [
-    "Showing loading states while waiting for data",
-    "Using system fonts for host consistency",
-    "Handling the 'mcp-tool-result' message event"
+    "Showing loading states while waiting for data from tool calls",
+    "Using system fonts for host consistency and native appearance",
+    "Handling the 'mcp-tool-result' message event for tool responses"
 ]
 answer.answer = "Using localStorage for persistent data (may not work in sandboxed iframe)"
+answer.position = 3
 context = """
 Sandboxed iframes have restricted access - localStorage, cookies, and sessionStorage
 may not work or persist. UIs should: show loading states, use postMessage for data,

@@ -9,11 +9,12 @@ pass_threshold = 0.7
 type = "MultipleChoice"
 prompt.prompt = "Why is remote testing important when local tests already pass?"
 prompt.distractors = [
-    "Remote tests are faster than local tests",
-    "Local tests don't test real functionality",
-    "CI/CD requires all tests to be remote"
+    "Remote tests are faster than local tests due to better hardware infrastructure",
+    "Local tests don't test real functionality and only validate syntax errors",
+    "CI/CD requires all tests to be remote for compliance and audit purposes"
 ]
 answer.answer = "Production environments have variables like load balancers, network latency, and cold starts that local testing can't simulate"
+answer.position = 0
 context = """
 Production introduces factors absent locally: load balancers, network latency,
 connection pooling, resource limits, TLS termination, multiple replicas, and
@@ -26,11 +27,12 @@ id = "f12a2b3c-d4e5-6789-abcd-123456781201"
 type = "MultipleChoice"
 prompt.prompt = "What is a smoke test in the context of deployment testing?"
 prompt.distractors = [
-    "A performance test that stresses the server",
-    "A security test that checks for vulnerabilities",
-    "A load test with simulated traffic"
+    "A performance test that stresses the server under maximum load conditions",
+    "A security test that checks for vulnerabilities and potential exploits",
+    "A load test with simulated traffic to measure throughput and capacity"
 ]
 answer.answer = "A minimal test suite that quickly validates core functionality after deployment"
+answer.position = 1
 context = """
 Smoke tests are quick validation tests run immediately after deployment. They
 check critical paths (server responds, basic operations work) in seconds rather
@@ -43,11 +45,12 @@ id = "f12a2b3c-d4e5-6789-abcd-123456781202"
 type = "MultipleChoice"
 prompt.prompt = "What timeout configuration accounts for serverless cold starts?"
 prompt.distractors = [
-    "Retry count of 5 with 100ms delays",
-    "Connection timeout of 500ms",
-    "Read timeout of 1 second"
+    "Retry count of 5 with 100ms delays between each retry attempt",
+    "Connection timeout of 500ms with immediate failure on timeout",
+    "Read timeout of 1 second with no special handling for first request"
 ]
 answer.answer = "First request timeout of 30-60 seconds, then shorter timeouts for subsequent requests"
+answer.position = 2
 context = """
 Serverless platforms (Lambda, Cloud Run with min-instances=0) have cold starts
 that can take 30-60 seconds for Rust binaries. Configure a longer timeout for
@@ -60,11 +63,12 @@ id = "f12a2b3c-d4e5-6789-abcd-123456781204"
 type = "MultipleChoice"
 prompt.prompt = "What is the purpose of a canary deployment for MCP servers?"
 prompt.distractors = [
-    "Testing in a yellow/warning environment",
-    "Running tests that might fail",
-    "Deploying to a separate test cluster"
+    "Testing in a yellow/warning environment before promoting to production status",
+    "Running tests that might fail as part of exploratory testing procedures",
+    "Deploying to a separate test cluster that mirrors production configuration"
 ]
 answer.answer = "Deploying to a small percentage of traffic (e.g., 10%) to validate before full rollout"
+answer.position = 3
 context = """
 Canary deployment routes a small percentage of traffic (typically 5-10%) to the
 new version while the majority stays on the old version. If smoke tests pass
@@ -77,11 +81,12 @@ id = "f12a2b3c-d4e5-6789-abcd-123456781205"
 type = "MultipleChoice"
 prompt.prompt = "What is the main purpose of regression testing?"
 prompt.distractors = [
-    "Testing new features before release",
-    "Performance testing under load",
-    "Security vulnerability scanning"
+    "Testing new features before release to verify they work as expected",
+    "Performance testing under load to measure response times and throughput",
+    "Security vulnerability scanning to identify potential security weaknesses"
 ]
 answer.answer = "Ensuring that bug fixes stay fixed and new changes don't break existing functionality"
+answer.position = 0
 context = """
 Regression tests verify that previously fixed bugs don't reappear and new code
 doesn't break existing features. Every bug fix should include a regression test
@@ -94,11 +99,12 @@ id = "f12a2b3c-d4e5-6789-abcd-123456781206"
 type = "MultipleChoice"
 prompt.prompt = "When should regression tests be tagged with severity levels?"
 prompt.distractors = [
-    "Only for tests that have failed before",
-    "Only for performance-related tests",
-    "Only for tests affecting external systems"
+    "Only for tests that have failed before in previous CI/CD runs",
+    "Only for performance-related tests that measure response times",
+    "Only for tests affecting external systems or third-party integrations"
 ]
 answer.answer = "Always, to enable running critical regressions quickly and prioritizing test execution"
+answer.position = 1
 context = """
 Tagging regressions with severity (critical, medium, low) enables flexible test
 execution. Run only critical tests for quick validation, full suite for thorough
@@ -111,11 +117,12 @@ id = "f12a2b3c-d4e5-6789-abcd-123456781208"
 type = "MultipleChoice"
 prompt.prompt = "What GitHub Actions feature runs the same test job with different configurations?"
 prompt.distractors = [
-    "workflow_dispatch inputs",
-    "reusable workflows",
-    "composite actions"
+    "workflow_dispatch inputs for triggering workflows with custom parameters",
+    "reusable workflows for sharing common job definitions across repositories",
+    "composite actions for combining multiple steps into reusable units"
 ]
 answer.answer = "Matrix strategy which creates parallel jobs for each combination of values"
+answer.position = 2
 context = """
 Matrix strategy in GitHub Actions runs the same job multiple times with different
 variable combinations. Use for testing different scenario directories, environments,
@@ -128,11 +135,12 @@ id = "f12a2b3c-d4e5-6789-abcd-123456781209"
 type = "MultipleChoice"
 prompt.prompt = "What should you do when a regression test becomes obsolete due to component replacement?"
 prompt.distractors = [
-    "Delete it immediately to reduce test count",
-    "Convert it to a unit test",
-    "Move it to an archive folder"
+    "Delete it immediately to reduce test count and improve CI/CD speed",
+    "Convert it to a unit test that validates the new component behavior",
+    "Move it to an archive folder for future reference if needed"
 ]
 answer.answer = "Mark it as deprecated with skip: true and document the reason, keeping it for reference"
+answer.position = 3
 context = """
 Deprecated regression tests should be marked with skip: true and skip_reason
 explaining why. Keep the test for documentation and historical context until
@@ -145,11 +153,12 @@ id = "f12a2b3c-d4e5-6789-abcd-123456781210"
 type = "MultipleChoice"
 prompt.prompt = "What is the correct order for a staged CI/CD pipeline for MCP servers?"
 prompt.distractors = [
-    "Deploy → Test → Build → Release",
-    "Test → Build → Deploy → Monitor",
-    "Build → Deploy → Release → Test"
+    "Deploy → Test → Build → Release with rollback on failure at any stage",
+    "Test → Build → Deploy → Monitor with continuous feedback loop enabled",
+    "Build → Deploy → Release → Test with post-deployment validation checks"
 ]
 answer.answer = "Build → Unit Test → Integration Test → Deploy Staging → Test Staging → Deploy Production"
+answer.position = 0
 context = """
 A proper CI/CD pipeline is staged: Build and lint first, then unit tests (fast
 feedback), then integration tests with a running server, then deploy to staging,
@@ -162,11 +171,12 @@ id = "f12a2b3c-d4e5-6789-abcd-123456781211"
 type = "MultipleChoice"
 prompt.prompt = "What assertion validates that response time meets SLA requirements?"
 prompt.distractors = [
-    "timing.duration: 1000",
-    "performance.max_ms: 1000",
-    "latency.threshold: 1000"
+    "timing.duration: 1000 with automatic retry on timeout failure",
+    "performance.max_ms: 1000 including network overhead calculations",
+    "latency.threshold: 1000 with percentile-based measurement enabled"
 ]
 answer.answer = "response_time_ms.less_than: 1000"
+answer.position = 1
 context = """
 Use response_time_ms assertions to validate performance SLAs. Combine less_than
 and greater_than for ranges. Example: response_time_ms: { less_than: 1000,
@@ -179,11 +189,12 @@ id = "f12a2b3c-d4e5-6789-abcd-123456781213"
 type = "MultipleChoice"
 prompt.prompt = "What should a regression test include besides the test steps?"
 prompt.distractors = [
-    "Performance benchmarks and load testing",
-    "Code coverage requirements",
-    "Deployment instructions"
+    "Performance benchmarks and load testing metrics for the affected code",
+    "Code coverage requirements with minimum threshold percentages specified",
+    "Deployment instructions with environment-specific configuration details"
 ]
 answer.answer = "Context about the original bug, fix version, and why the test exists"
+answer.position = 2
 context = """
 Regression tests should include: description of the original bug, issue/PR
 references, version where fixed, root cause explanation, and tags for filtering.
@@ -196,11 +207,12 @@ id = "f12a2b3c-d4e5-6789-abcd-123456781214"
 type = "MultipleChoice"
 prompt.prompt = "How should you handle a test failure during canary deployment?"
 prompt.distractors = [
-    "Continue rollout and investigate later",
-    "Increase canary percentage to gather more data",
-    "Disable the failing test and proceed"
+    "Continue rollout and investigate later once full deployment completes",
+    "Increase canary percentage to gather more data and identify patterns",
+    "Disable the failing test and proceed with the deployment as planned"
 ]
 answer.answer = "Automatically rollback the canary deployment and alert the team"
+answer.position = 3
 context = """
 Canary deployment failures should trigger automatic rollback to the previous
 stable version. The small percentage affected by the canary minimizes impact.

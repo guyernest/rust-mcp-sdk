@@ -9,11 +9,12 @@ pass_threshold = 0.7
 type = "MultipleChoice"
 prompt.prompt = "What runtime technology enables Cloudflare Workers to achieve sub-5ms cold starts?"
 prompt.distractors = [
-    "Docker containers with pre-warmed images",
-    "Firecracker microVMs with snapshot restore",
-    "JIT-compiled JavaScript with caching"
+    "Docker containers with pre-warmed images for instant startup",
+    "Firecracker microVMs with snapshot restore for fast initialization",
+    "JIT-compiled JavaScript with caching for reduced parsing overhead"
 ]
 answer.answer = "V8 isolates that spin up in microseconds with shared V8 engine overhead"
+answer.position = 1
 context = """
 Workers uses V8 isolates, not containers. Multiple isolates share one V8 engine
 instance, eliminating per-request engine startup. An isolate is just a JavaScript
@@ -38,11 +39,12 @@ id = "c9d3e4f5-a6b7-8901-cdef-123456780902"
 type = "MultipleChoice"
 prompt.prompt = "Why can't standard async runtimes like tokio be used in Cloudflare Workers?"
 prompt.distractors = [
-    "Workers only supports synchronous code execution",
-    "tokio requires more than 128MB of memory",
-    "Workers uses JavaScript for all async operations"
+    "Workers only supports synchronous code execution for simplicity",
+    "tokio requires more than 128MB of memory to initialize properly",
+    "Workers uses JavaScript for all async operations through its API"
 ]
 answer.answer = "tokio relies on system calls (epoll/kqueue) that don't exist in the WASM sandbox"
+answer.position = 2
 context = """
 WASM runs in a sandboxed environment without access to OS system calls. tokio's
 I/O reactor uses epoll (Linux) or kqueue (macOS) for async I/O - these don't
@@ -55,11 +57,12 @@ id = "c9d3e4f5-a6b7-8901-cdef-123456780903"
 type = "MultipleChoice"
 prompt.prompt = "What Workers binding provides key-value storage for caching MCP results?"
 prompt.distractors = [
-    "R2 for large object storage",
-    "D1 for SQLite database queries",
-    "Durable Objects for coordination"
+    "R2 for large object storage with S3-compatible API access",
+    "D1 for SQLite database queries with SQL-based data access",
+    "Durable Objects for coordination and stateful operations"
 ]
 answer.answer = "KV (Workers KV) for globally distributed key-value storage with eventual consistency"
+answer.position = 3
 context = """
 Workers KV stores key-value pairs replicated across Cloudflare's edge network.
 Reads are fast (~10ms) from any edge location. Writes are eventually consistent
@@ -72,11 +75,12 @@ id = "c9d3e4f5-a6b7-8901-cdef-123456780904"
 type = "MultipleChoice"
 prompt.prompt = "What is the maximum memory available to a Cloudflare Worker?"
 prompt.distractors = [
-    "256 MB with paid plan",
-    "512 MB with Enterprise",
-    "1 GB with custom limits"
+    "256 MB with paid plan upgrade",
+    "512 MB with Enterprise contract",
+    "1 GB with custom limits negotiation"
 ]
 answer.answer = "128 MB for both free and paid plans"
+answer.position = 0
 context = """
 Workers have a hard 128MB memory limit - this cannot be increased on any plan.
 This constraint requires careful design: streaming large datasets instead of
@@ -89,11 +93,12 @@ id = "c9d3e4f5-a6b7-8901-cdef-123456780905"
 type = "MultipleChoice"
 prompt.prompt = "What Cargo.toml crate-type is required for Cloudflare Workers?"
 prompt.distractors = [
-    "staticlib for static linking",
-    "rlib for Rust library",
-    "bin for executable binary"
+    "staticlib for static linking into C programs",
+    "rlib for Rust library used by other crates",
+    "bin for executable binary applications"
 ]
 answer.answer = "cdylib for C-compatible dynamic library that compiles to WASM"
+answer.position = 1
 context = """
 WASM requires crate-type = ['cdylib'] in Cargo.toml. This produces a dynamic
 library with C-compatible exports that wasm-bindgen can process. The resulting
@@ -106,11 +111,12 @@ id = "c9d3e4f5-a6b7-8901-cdef-123456780907"
 type = "MultipleChoice"
 prompt.prompt = "What Workers binding connects to PostgreSQL databases?"
 prompt.distractors = [
-    "Workers KV with SQL adapter",
-    "D1 with PostgreSQL compatibility mode",
-    "Cloudflare Tunnel with direct connection"
+    "Workers KV with SQL adapter for query translation",
+    "D1 with PostgreSQL compatibility mode enabled",
+    "Cloudflare Tunnel with direct connection through VPN"
 ]
 answer.answer = "Hyperdrive, which provides connection pooling and caching for external databases"
+answer.position = 2
 context = """
 Hyperdrive connects Workers to external PostgreSQL, MySQL, or other databases.
 It maintains connection pools at Cloudflare's edge, eliminating per-request
@@ -123,11 +129,12 @@ id = "c9d3e4f5-a6b7-8901-cdef-123456780909"
 type = "MultipleChoice"
 prompt.prompt = "Why is binary size optimization critical for Cloudflare Workers?"
 prompt.distractors = [
-    "Workers charge per KB of deployed code",
-    "Large binaries exceed the 1MB WASM limit",
-    "Binary size affects monthly billing rates"
+    "Workers charge per KB of deployed code for storage costs",
+    "Large binaries exceed the 1MB WASM limit imposed by V8",
+    "Binary size affects monthly billing rates for compute usage"
 ]
 answer.answer = "Larger WASM binaries take longer to parse and compile, increasing cold start times"
+answer.position = 3
 context = """
 V8 must parse and compile WASM on first load. A 100KB binary parses in ~1ms;
 a 3MB binary takes ~12ms. While still fast, keeping binaries under 1MB ensures

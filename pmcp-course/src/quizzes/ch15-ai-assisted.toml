@@ -9,11 +9,12 @@ pass_threshold = 0.7
 type = "MultipleChoice"
 prompt.prompt = "Why is Rust particularly well-suited for AI-assisted code generation?"
 prompt.distractors = [
-    "Rust code is shorter than other languages",
-    "AI can only generate statically typed code",
-    "Rust requires less testing"
+    "Rust code is shorter than other languages for equivalent functionality",
+    "AI can only generate statically typed code with explicit annotations",
+    "Rust requires less testing due to its strong type system"
 ]
 answer.answer = "Rust's compiler provides detailed, structured error messages that AI can parse and use to iteratively fix code"
+answer.position = 0
 context = """
 Rust's compiler catches errors at compile time with detailed, actionable error messages.
 AI assistants can read these errors, understand what went wrong, and apply targeted fixes.
@@ -26,11 +27,12 @@ id = "f15a1b2c-d3e4-5678-abcd-123456780101"
 type = "MultipleChoice"
 prompt.prompt = "What is the primary purpose of the cargo-pmcp CLI tool in AI-assisted development?"
 prompt.distractors = [
-    "It trains the AI on MCP patterns",
-    "It runs AI models locally",
-    "It deploys servers to production"
+    "It trains the AI on MCP patterns from existing server implementations",
+    "It runs AI models locally for code generation and assistance",
+    "It deploys servers to production with zero-downtime updates"
 ]
 answer.answer = "It scaffolds complete server structures so AI only needs to implement business logic"
+answer.position = 1
 context = """
 cargo-pmcp generates the entire project structure - workspace, crates, Cargo.toml files,
 module organization, and transport setup. This eliminates boilerplate decisions, letting
@@ -43,11 +45,12 @@ id = "f15a1b2c-d3e4-5678-abcd-123456780102"
 type = "MultipleChoice"
 prompt.prompt = "What are the main components of the AI-compiler feedback loop?"
 prompt.distractors = [
-    "Design → Code → Deploy → Monitor",
-    "Write → Test → Refactor → Document",
-    "Plan → Execute → Review → Merge"
+    "Design → Code → Deploy → Monitor with continuous observability",
+    "Write → Test → Refactor → Document following TDD principles",
+    "Plan → Execute → Review → Merge using standard git workflow"
 ]
 answer.answer = "Generate → Compile → Parse Errors → Fix → Repeat until quality gates pass"
+answer.position = 2
 context = """
 The AI-compiler feedback loop has AI generate code, run cargo build, parse any errors,
 apply targeted fixes, and repeat until compilation succeeds. Then clippy warnings are
@@ -60,11 +63,12 @@ id = "f15a1b2c-d3e4-5678-abcd-123456780104"
 type = "MultipleChoice"
 prompt.prompt = "What is the difference between Error::validation() and Error::internal() in MCP tools?"
 prompt.distractors = [
-    "validation() is for unit tests, internal() is for production",
-    "validation() logs to file, internal() logs to console",
-    "validation() is async, internal() is sync"
+    "validation() is for unit tests, internal() is for production errors",
+    "validation() logs to file, internal() logs to console output",
+    "validation() is async for non-blocking, internal() is sync for immediate"
 ]
 answer.answer = "validation() is for user-fixable input errors, internal() is for system/server errors"
+answer.position = 3
 context = """
 Use Error::validation() when the user can fix the problem by changing their input (e.g.,
 'City name cannot be empty'). Use Error::internal() for server-side issues the user
@@ -77,11 +81,12 @@ id = "f15a1b2c-d3e4-5678-abcd-123456780106"
 type = "MultipleChoice"
 prompt.prompt = "How does Kiro's steering files approach differ from Claude Code's agents?"
 prompt.distractors = [
-    "Steering files require manual invocation each time",
-    "Kiro cannot connect to MCP servers",
-    "Steering files are written in a different language"
+    "Steering files require manual invocation each time they are needed",
+    "Kiro cannot connect to MCP servers for external tool access",
+    "Steering files are written in a different language than markdown"
 ]
 answer.answer = "Kiro's steering files are always-active persistent knowledge, while Claude Code agents are on-demand"
+answer.position = 0
 context = """
 Kiro's steering files in ~/.kiro/powers/ are read for every conversation automatically,
 providing persistent context (10,000+ lines). Claude Code agents are invoked on-demand
@@ -94,11 +99,12 @@ id = "f15a1b2c-d3e4-5678-abcd-123456780108"
 type = "MultipleChoice"
 prompt.prompt = "What advantage does compile-time error catching provide over runtime errors?"
 prompt.distractors = [
-    "Faster development because compilation is instant",
-    "Better performance in production",
-    "Smaller binary sizes"
+    "Faster development because compilation is instant with incremental builds",
+    "Better performance in production due to ahead-of-time optimization",
+    "Smaller binary sizes compared to interpreted language runtimes"
 ]
 answer.answer = "Errors are caught before deployment, and AI can iterate to fix them during development"
+answer.position = 1
 context = """
 Rust catches type errors, ownership issues, and many bugs at compile time - before
 the code ever runs. This means AI can generate code, immediately see what's wrong,
@@ -111,11 +117,12 @@ id = "f15a1b2c-d3e4-5678-abcd-123456780109"
 type = "MultipleChoice"
 prompt.prompt = "What derive macros are required for TypedTool input types?"
 prompt.distractors = [
-    "Debug, Clone, Default",
-    "Serialize, Clone, Copy",
-    "Debug, Display, FromStr"
+    "Debug, Clone, Default for standard Rust type implementations",
+    "Serialize, Clone, Copy for output serialization and memory efficiency",
+    "Debug, Display, FromStr for string conversion and formatting"
 ]
 answer.answer = "Debug, Deserialize, and JsonSchema"
+answer.position = 2
 context = """
 Input types need Debug for error messages, Deserialize for JSON parsing from MCP
 requests, and JsonSchema for automatic schema generation. Add #[schemars(deny_unknown_fields)]
@@ -127,11 +134,12 @@ id = "f15a1b2c-d3e4-5678-abcd-123456780110"
 type = "MultipleChoice"
 prompt.prompt = "Why should you never create Cargo.toml or project directories manually in cargo-pmcp projects?"
 prompt.distractors = [
-    "It violates the Rust license",
-    "cargo-pmcp will overwrite them anyway",
-    "Manual files cause compilation errors"
+    "It violates the Rust license agreement for commercial projects",
+    "cargo-pmcp will overwrite them anyway during the next build cycle",
+    "Manual files cause compilation errors due to missing dependencies"
 ]
 answer.answer = "Manual creation misses proven patterns, conventions, and scaffolding that cargo-pmcp provides"
+answer.position = 3
 context = """
 cargo-pmcp encodes best practices from production servers. Manual file creation leads
 to inconsistent structure, missing patterns (like transport setup), and wasted time
@@ -144,11 +152,12 @@ id = "f15a1b2c-d3e4-5678-abcd-123456780112"
 type = "MultipleChoice"
 prompt.prompt = "What is the typical convergence pattern for AI-assisted MCP tool development?"
 prompt.distractors = [
-    "AI generates perfect code on the first try",
-    "Complexity increases with each iteration",
-    "More iterations mean worse code quality"
+    "AI generates perfect code on the first try without compiler errors",
+    "Complexity increases with each iteration requiring manual intervention",
+    "More iterations mean worse code quality due to accumulated changes"
 ]
 answer.answer = "Simple tools: 1-2 iterations, Complex tools: 3-5 iterations, Integration issues: 5-10 iterations"
+answer.position = 0
 context = """
 The AI-compiler feedback loop converges because errors are finite and each fix is
 progress. Simple type mismatches fix in 1-2 tries. Complex lifetime or async issues
@@ -161,11 +170,12 @@ id = "f15a1b2c-d3e4-5678-abcd-123456780113"
 type = "MultipleChoice"
 prompt.prompt = "What configuration file does Cursor use for project-specific AI instructions?"
 prompt.distractors = [
-    ".cursor/settings.json",
-    ".github/cursor-instructions.md",
-    "cursor.config.yaml"
+    ".cursor/settings.json for IDE-level configuration options",
+    ".github/cursor-instructions.md for repository-wide guidelines",
+    "cursor.config.yaml for workspace and environment settings"
 ]
 answer.answer = ".cursorrules"
+answer.position = 1
 context = """
 Cursor uses .cursorrules in the project root for project-specific instructions.
 This file contains MCP development rules, cargo-pmcp workflow reminders, TypedTool

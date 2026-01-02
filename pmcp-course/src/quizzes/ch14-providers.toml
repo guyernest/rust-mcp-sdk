@@ -9,11 +9,12 @@ pass_threshold = 0.7
 type = "MultipleChoice"
 prompt.prompt = "What is the most important factor when choosing an OAuth provider for your MCP server?"
 prompt.distractors = [
-    "Which provider has the best documentation",
-    "Which provider offers the most features",
-    "Which provider is cheapest"
+    "Which provider has the best documentation and developer experience",
+    "Which provider offers the most features and integration options",
+    "Which provider is cheapest for your expected user volume"
 ]
 answer.answer = "Use the provider your organization already has - don't introduce a new IdP just for MCP"
+answer.position = 0
 context = """
 The best OAuth provider is the one your organization already uses. If you have
 Okta, use Okta. If you're a Microsoft 365 shop, use Entra ID. If you're AWS-native,
@@ -27,11 +28,12 @@ id = "f14a2b3c-d4e5-6789-abcd-123456781401"
 type = "MultipleChoice"
 prompt.prompt = "How does Auth0 differ from Cognito in its approach to permissions?"
 prompt.distractors = [
-    "Auth0 only supports API keys",
-    "Auth0 doesn't support custom permissions",
-    "Auth0 requires AWS IAM roles"
+    "Auth0 only supports API keys for machine-to-machine authentication",
+    "Auth0 doesn't support custom permissions beyond basic read/write scopes",
+    "Auth0 requires AWS IAM roles for all authorization decisions"
 ]
 answer.answer = "Auth0 uses RBAC with a 'permissions' array in tokens, while Cognito uses groups and custom scopes"
+answer.position = 1
 context = """
 Auth0's RBAC system places permissions directly in the 'permissions' array of
 access tokens when enabled. Cognito uses 'cognito:groups' for group membership
@@ -56,11 +58,12 @@ id = "f14a2b3c-d4e5-6789-abcd-123456781403"
 type = "MultipleChoice"
 prompt.prompt = "What claim should you use as the stable user identifier in Microsoft Entra ID?"
 prompt.distractors = [
-    "sub - the subject claim",
-    "preferred_username - the UPN",
-    "email - the user's email address"
+    "sub - the subject claim that varies across different applications",
+    "preferred_username - the UPN which can be changed by administrators",
+    "email - the user's email address which may change over time"
 ]
 answer.answer = "oid (Object ID) - the GUID that uniquely identifies the user across Microsoft services"
+answer.position = 2
 context = """
 In Entra ID, use 'oid' (Object ID) as the stable user identifier. The 'sub'
 claim may change across applications, and 'preferred_username' (UPN) can be
@@ -73,11 +76,12 @@ id = "f14a2b3c-d4e5-6789-abcd-123456781404"
 type = "MultipleChoice"
 prompt.prompt = "What is the format of the Auth0 'sub' claim?"
 prompt.distractors = [
-    "A UUID like Cognito",
-    "The user's email address",
-    "A numeric user ID"
+    "A UUID like Cognito generates for all user identifiers",
+    "The user's email address normalized to lowercase format",
+    "A numeric user ID that increments sequentially for each user"
 ]
 answer.answer = "provider|id format like 'auth0|123456' or 'google-oauth2|789'"
+answer.position = 3
 context = """
 Auth0's 'sub' claim uses the format 'provider|id' where provider is the identity
 source (auth0, google-oauth2, samlp, etc.) and id is the user's identifier from
@@ -103,11 +107,12 @@ id = "f14a2b3c-d4e5-6789-abcd-123456781407"
 type = "MultipleChoice"
 prompt.prompt = "How do you add custom claims in Auth0 tokens?"
 prompt.distractors = [
-    "Modify the JWT directly before sending",
-    "Configure them in the API settings",
-    "Set them in the client request"
+    "Modify the JWT directly before sending to include additional data",
+    "Configure them in the API settings under custom claim definitions",
+    "Set them in the client request headers during token exchange"
 ]
 answer.answer = "Use Auth0 Actions (or Rules) to add namespaced custom claims during authentication"
+answer.position = 0
 context = """
 Auth0 requires custom claims to use namespacing (e.g., 'https://myapp/department').
 Use Actions (modern) or Rules (legacy) to add these claims during the login flow.
@@ -120,11 +125,12 @@ id = "f14a2b3c-d4e5-6789-abcd-123456781408"
 type = "MultipleChoice"
 prompt.prompt = "When should you implement multi-tenancy for your MCP server?"
 prompt.distractors = [
-    "When you have multiple departments in your organization",
-    "When you need role-based access control",
-    "When you want to isolate dev/staging/prod environments"
+    "When you have multiple departments in your organization using different tools",
+    "When you need role-based access control for users within your company",
+    "When you want to isolate dev/staging/prod environments for deployment safety"
 ]
 answer.answer = "When building a SaaS platform serving multiple external organizations from shared infrastructure"
+answer.position = 1
 context = """
 Most organizations don't need multi-tenancy. If all users come from the same
 organization (even different departments), use your IdP's groups and roles instead.
@@ -138,11 +144,12 @@ id = "f14a2b3c-d4e5-6789-abcd-123456781410"
 type = "MultipleChoice"
 prompt.prompt = "How do Entra ID groups appear in JWT tokens compared to Auth0?"
 prompt.distractors = [
-    "Both use group names",
-    "Auth0 uses GUIDs, Entra uses names",
-    "Neither includes groups by default"
+    "Both use group names directly in the token claims array",
+    "Auth0 uses GUIDs for groups, Entra uses human-readable names",
+    "Neither includes groups by default without explicit configuration"
 ]
 answer.answer = "Entra uses GUIDs (requiring mapping to permissions), Auth0 uses organization features or custom claims"
+answer.position = 2
 context = """
 Entra ID includes group GUIDs in the 'groups' claim, not human-readable names.
 You must maintain a mapping from GUIDs to permissions. Auth0 uses Organizations
@@ -168,11 +175,12 @@ id = "f14a2b3c-d4e5-6789-abcd-123456781412"
 type = "MultipleChoice"
 prompt.prompt = "What is schema-per-tenant isolation?"
 prompt.distractors = [
-    "Different database servers per tenant",
-    "Separate tables within one schema",
-    "Different S3 buckets per tenant"
+    "Different database servers per tenant for maximum isolation",
+    "Separate tables within one schema using tenant prefix naming",
+    "Different S3 buckets per tenant for object storage isolation"
 ]
 answer.answer = "Each tenant gets a separate database schema with isolated tables within one database"
+answer.position = 3
 context = """
 Schema-per-tenant creates a database schema (namespace) for each tenant:
 tenant_abc.resources, tenant_xyz.resources. All tenants share one database
@@ -185,11 +193,12 @@ id = "f14a2b3c-d4e5-6789-abcd-123456781413"
 type = "MultipleChoice"
 prompt.prompt = "What PostgreSQL feature provides row-level tenant isolation in shared tables?"
 prompt.distractors = [
-    "Table partitioning",
-    "Foreign key constraints",
-    "Check constraints"
+    "Table partitioning to separate tenant data into physical segments",
+    "Foreign key constraints that enforce referential integrity between tenants",
+    "Check constraints that validate tenant_id values on insert operations"
 ]
 answer.answer = "Row Level Security (RLS) with policies that filter by tenant_id"
+answer.position = 0
 context = """
 PostgreSQL RLS creates policies that automatically filter queries by tenant.
 Enable with ALTER TABLE ENABLE ROW LEVEL SECURITY, then create a policy:
@@ -202,11 +211,12 @@ id = "f14a2b3c-d4e5-6789-abcd-123456781414"
 type = "MultipleChoice"
 prompt.prompt = "What is the On-Behalf-Of (OBO) flow in Entra ID?"
 prompt.distractors = [
-    "Admin impersonating a user",
-    "Service account authentication",
-    "User delegating to another user"
+    "Admin impersonating a user for troubleshooting and support purposes",
+    "Service account authentication for background jobs and scheduled tasks",
+    "User delegating to another user for temporary access permissions"
 ]
 answer.answer = "A service exchanging a user's token for a new token to call downstream APIs as that user"
+answer.position = 1
 context = """
 On-Behalf-Of flow allows Service A to call Service B using the original user's
 identity. Service A exchanges the user's token for a new token scoped to Service

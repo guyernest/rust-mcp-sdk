@@ -9,11 +9,12 @@ pass_threshold = 0.7
 type = "MultipleChoice"
 prompt.prompt = "What AWS service does Lambda Web Adapter enable MCP servers to use for HTTP handling?"
 prompt.distractors = [
-    "AWS AppSync for GraphQL",
-    "AWS ELB for load balancing",
-    "AWS CloudFront for CDN"
+    "AWS AppSync for GraphQL queries and real-time subscriptions",
+    "AWS ELB for load balancing across multiple Lambda instances",
+    "AWS CloudFront for CDN and edge caching of responses"
 ]
 answer.answer = "API Gateway for REST/HTTP endpoints, allowing standard web frameworks like axum to run on Lambda"
+answer.position = 1
 context = """
 Lambda Web Adapter is an AWS-provided extension that converts API Gateway events
 to standard HTTP requests. This lets you use axum, actix-web, or other Rust web
@@ -26,11 +27,12 @@ id = "b8c2d3e4-f5a6-7890-bcde-f12345670801"
 type = "MultipleChoice"
 prompt.prompt = "Why is the provided_al2023 runtime recommended for Rust Lambda functions?"
 prompt.distractors = [
-    "It includes the Rust compiler for JIT compilation",
-    "It has pre-installed AWS SDK libraries",
-    "It supports multi-threaded execution"
+    "It includes the Rust compiler for JIT compilation of handlers",
+    "It has pre-installed AWS SDK libraries for common service integrations",
+    "It supports multi-threaded execution with configurable thread pools"
 ]
 answer.answer = "It's a minimal Amazon Linux 2023 runtime for custom binaries with fast cold starts and small size"
+answer.position = 2
 context = """
 The provided.al2023 runtime is AWS's custom runtime for compiled languages. Unlike
 managed runtimes (Python, Node.js), it just executes your binary directly with
@@ -56,11 +58,12 @@ id = "b8c2d3e4-f5a6-7890-bcde-f12345670803"
 type = "MultipleChoice"
 prompt.prompt = "What is the purpose of placing a Lambda function in a VPC with private subnets?"
 prompt.distractors = [
-    "To reduce cold start times through connection pooling",
-    "To enable CloudWatch logging for security compliance",
-    "To automatically scale to more concurrent executions"
+    "To reduce cold start times through connection pooling and pre-warming",
+    "To enable CloudWatch logging for security compliance and auditing",
+    "To automatically scale to more concurrent executions without limits"
 ]
 answer.answer = "To access private resources like RDS databases that have no public internet exposure"
+answer.position = 3
 context = """
 VPC-attached Lambda functions can reach resources in private subnets that have
 no public IP addresses. Your RDS instance can be completely isolated from the
@@ -73,11 +76,12 @@ id = "b8c2d3e4-f5a6-7890-bcde-f12345670804"
 type = "MultipleChoice"
 prompt.prompt = "How should an MCP Lambda function handle database connections across warm invocations?"
 prompt.distractors = [
-    "Create a new connection for each request to avoid stale connections",
-    "Use environment variables to pass connection strings",
-    "Disable connection pooling since Lambda handles scaling"
+    "Create a new connection for each request to avoid stale connection issues",
+    "Use environment variables to pass connection strings between invocations",
+    "Disable connection pooling since Lambda handles scaling automatically"
 ]
 answer.answer = "Initialize the connection pool in a static OnceCell during cold start and reuse across invocations"
+answer.position = 0
 context = """
 Lambda warm invocations reuse the same execution environment. A connection pool
 initialized in a static OnceCell persists across requests - no reconnection
@@ -104,11 +108,12 @@ id = "b8c2d3e4-f5a6-7890-bcde-f12345670807"
 type = "MultipleChoice"
 prompt.prompt = "Why are Rust Lambda functions typically more cost-effective than Python equivalents?"
 prompt.distractors = [
-    "AWS offers discounted pricing for compiled languages",
-    "Rust functions can use smaller memory allocations",
-    "Python functions require additional Lambda layers"
+    "AWS offers discounted pricing for compiled languages like Rust and Go",
+    "Rust functions can use smaller memory allocations due to static typing",
+    "Python functions require additional Lambda layers for dependency management"
 ]
 answer.answer = "Rust's faster execution (3-10x) and lower memory usage means lower GB-second charges"
+answer.position = 1
 context = """
 Lambda bills per GB-second: memory allocated × execution time. Rust executes
 3-10x faster than Python for typical workloads and often needs less memory.
@@ -121,11 +126,12 @@ id = "b8c2d3e4-f5a6-7890-bcde-f12345670809"
 type = "MultipleChoice"
 prompt.prompt = "What is the OAuth flow that Claude Desktop uses to authenticate with Lambda MCP servers?"
 prompt.distractors = [
-    "Client credentials flow with API key",
-    "Implicit flow with access token in URL",
-    "Resource owner password flow"
+    "Client credentials flow with API key for machine-to-machine auth",
+    "Implicit flow with access token in URL for browser-based apps",
+    "Resource owner password flow with direct credential exchange"
 ]
 answer.answer = "Authorization code flow with PKCE for secure token exchange"
+answer.position = 2
 context = """
 Claude Desktop uses the authorization code flow with PKCE (Proof Key for Code
 Exchange). The user is redirected to your Cognito login page, authenticates,
@@ -138,11 +144,12 @@ id = "b8c2d3e4-f5a6-7890-bcde-f12345670811"
 type = "MultipleChoice"
 prompt.prompt = "How does Claude.ai connect to authenticated Lambda MCP servers differently than Claude Desktop?"
 prompt.distractors = [
-    "Claude.ai uses API keys while Desktop uses OAuth",
-    "Claude.ai connects via WebSocket while Desktop uses HTTP",
-    "Claude.ai requires enterprise accounts while Desktop is free"
+    "Claude.ai uses API keys while Desktop uses OAuth for authentication",
+    "Claude.ai connects via WebSocket while Desktop uses HTTP for transport",
+    "Claude.ai requires enterprise accounts while Desktop is available for free"
 ]
 answer.answer = "Claude.ai shows an OAuth consent screen in-browser; Desktop opens the system browser for OAuth"
+answer.position = 3
 context = """
 Both use OAuth, but the UX differs. Claude.ai renders the OAuth consent screen
 in an iframe within the web interface. Claude Desktop launches your system's
@@ -160,6 +167,7 @@ prompt.distractors = [
     "60 minutes"
 ]
 answer.answer = "15 minutes (900 seconds)"
+answer.position = 0
 context = """
 Lambda functions can run for up to 15 minutes per invocation. For MCP servers,
 this is usually sufficient since tool calls should be quick. If you need longer

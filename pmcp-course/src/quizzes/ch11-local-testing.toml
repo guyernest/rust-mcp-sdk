@@ -9,11 +9,12 @@ pass_threshold = 0.7
 type = "MultipleChoice"
 prompt.prompt = "What is the primary purpose of MCP Inspector?"
 prompt.distractors = [
-    "Running automated test suites in CI/CD",
-    "Generating test scenarios from schemas",
-    "Performance benchmarking MCP servers"
+    "Running automated test suites in CI/CD pipelines for regression testing",
+    "Generating test scenarios from schemas for comprehensive coverage",
+    "Performance benchmarking MCP servers under production-like load"
 ]
 answer.answer = "Interactive debugging and manual exploration of MCP server behavior during development"
+answer.position = 0
 context = """
 MCP Inspector is a visual debugging tool that connects to MCP servers and provides
 real-time protocol visibility, interactive tool execution, and schema exploration.
@@ -26,11 +27,12 @@ id = "e11a2b3c-d4e5-6789-abcd-123456781101"
 type = "MultipleChoice"
 prompt.prompt = "What testing approach does mcp-tester use to generate test scenarios?"
 prompt.distractors = [
-    "Manual test case definition only",
-    "Random fuzzing of all parameters",
-    "Record and playback of user sessions"
+    "Manual test case definition only with no automation support",
+    "Random fuzzing of all parameters without schema guidance",
+    "Record and playback of user sessions from production traffic"
 ]
 answer.answer = "Schema-driven test generation from the MCP server's JSON Schema"
+answer.position = 1
 context = """
 mcp-tester generates test scenarios by introspecting the MCP server's JSON Schema.
 It analyzes input schemas to automatically create valid inputs, invalid inputs,
@@ -43,11 +45,12 @@ id = "e11a2b3c-d4e5-6789-abcd-123456781102"
 type = "MultipleChoice"
 prompt.prompt = "In the testing pyramid for MCP servers, which tests should be most numerous?"
 prompt.distractors = [
-    "End-to-end tests with MCP Inspector",
-    "mcp-tester integration tests",
-    "Claude Desktop user acceptance tests"
+    "End-to-end tests with MCP Inspector for full protocol validation",
+    "mcp-tester integration tests for multi-tool workflow testing",
+    "Claude Desktop user acceptance tests for real-world scenarios"
 ]
 answer.answer = "Rust unit tests for tool logic and input validation"
+answer.position = 2
 context = """
 The testing pyramid for MCP servers has unit tests at the base, which should be
 the most numerous. These test tool logic in isolation and run fastest. mcp-tester
@@ -60,11 +63,12 @@ id = "e11a2b3c-d4e5-6789-abcd-123456781104"
 type = "MultipleChoice"
 prompt.prompt = "What Rust crate enables property-based testing with random inputs?"
 prompt.distractors = [
-    "quicktest for rapid iterations",
-    "fuzzcheck for coverage-guided fuzzing",
-    "criterion for benchmarking"
+    "quicktest for rapid iterations and fast feedback cycles",
+    "fuzzcheck for coverage-guided fuzzing with corpus management",
+    "criterion for benchmarking and performance regression testing"
 ]
 answer.answer = "proptest for generating random inputs that satisfy properties"
+answer.position = 3
 context = """
 The proptest crate enables property-based testing in Rust, generating random inputs
 that should satisfy invariants. It helps catch edge cases that manual tests miss.
@@ -77,11 +81,12 @@ id = "e11a2b3c-d4e5-6789-abcd-123456781105"
 type = "MultipleChoice"
 prompt.prompt = "What file format does mcp-tester use for test scenario definitions?"
 prompt.distractors = [
-    "JSON files with test cases",
-    "TOML files with assertions",
-    "Rust source files with test functions"
+    "JSON files with test cases and expected outcomes",
+    "TOML files with assertions and test metadata",
+    "Rust source files with test functions and macros"
 ]
 answer.answer = "YAML files with steps, inputs, and assertions"
+answer.position = 0
 context = """
 mcp-tester uses YAML format for test scenario files. Each file contains a name,
 description, tags, and a list of steps. Each step specifies a tool name, input
@@ -94,11 +99,12 @@ id = "e11a2b3c-d4e5-6789-abcd-123456781106"
 type = "MultipleChoice"
 prompt.prompt = "What is the purpose of variable capture in mcp-tester scenarios?"
 prompt.distractors = [
-    "Storing test results for later analysis",
-    "Caching responses to speed up tests",
-    "Recording session replays"
+    "Storing test results for later analysis and reporting",
+    "Caching responses to speed up tests and reduce server load",
+    "Recording session replays for debugging failed test runs"
 ]
 answer.answer = "Extracting values from responses to use in subsequent test steps"
+answer.position = 1
 context = """
 Variable capture allows extracting values from one step's response to use in
 later steps. Use capture: { var_name: '$.path.to.value' } with JSONPath syntax,
@@ -111,11 +117,12 @@ id = "e11a2b3c-d4e5-6789-abcd-123456781108"
 type = "MultipleChoice"
 prompt.prompt = "What test category is generated for boundary values like minimum and maximum integers?"
 prompt.distractors = [
-    "_valid tests for happy path scenarios",
-    "_invalid tests for error conditions",
-    "_types tests for type coercion"
+    "_valid tests for happy path scenarios with expected inputs",
+    "_invalid tests for error conditions and rejection cases",
+    "_types tests for type coercion and format validation"
 ]
 answer.answer = "_edge tests for boundary conditions and extreme values"
+answer.position = 2
 context = """
 Schema-driven generation creates _edge tests for boundary conditions including
 minimum/maximum values (integers at INT_MIN/INT_MAX), empty strings, maximum-length
@@ -128,11 +135,12 @@ id = "e11a2b3c-d4e5-6789-abcd-123456781110"
 type = "MultipleChoice"
 prompt.prompt = "What attribute marks a Rust function as an async test with tokio runtime?"
 prompt.distractors = [
-    "#[test] with async fn",
-    "#[async_test] from async-std",
-    "#[runtime::test] for multi-threaded"
+    "#[test] with async fn declaration for basic async support",
+    "#[async_test] from async-std for alternative runtime",
+    "#[runtime::test] for multi-threaded concurrent execution"
 ]
 answer.answer = "#[tokio::test] which sets up a tokio runtime for the test"
+answer.position = 3
 context = """
 Use #[tokio::test] to write async tests with the tokio runtime. This attribute
 creates a runtime for each test, handles .await calls, and supports async setup
@@ -145,11 +153,12 @@ id = "e11a2b3c-d4e5-6789-abcd-123456781111"
 type = "MultipleChoice"
 prompt.prompt = "When should you use MCP Inspector vs mcp-tester?"
 prompt.distractors = [
-    "Inspector for CI/CD, mcp-tester for development",
-    "Inspector for performance testing, mcp-tester for debugging",
-    "Inspector for regression testing, mcp-tester for exploration"
+    "Inspector for CI/CD automation, mcp-tester for local development",
+    "Inspector for performance testing, mcp-tester for interactive debugging",
+    "Inspector for regression testing, mcp-tester for codebase exploration"
 ]
 answer.answer = "Inspector for interactive debugging during development, mcp-tester for automated CI/CD testing"
+answer.position = 0
 context = """
 Use MCP Inspector during development for interactive debugging, exploring schemas,
 testing individual tools, and reproducing bugs. Use mcp-tester for automated
@@ -162,11 +171,12 @@ id = "e11a2b3c-d4e5-6789-abcd-123456781113"
 type = "MultipleChoice"
 prompt.prompt = "What output format should mcp-tester use for CI/CD integration?"
 prompt.distractors = [
-    "JSON for machine readability",
-    "TAP (Test Anything Protocol)",
-    "Plain text for human readability"
+    "JSON for machine readability and API consumption",
+    "TAP (Test Anything Protocol) for Unix compatibility",
+    "Plain text for human readability in terminal output"
 ]
 answer.answer = "JUnit XML format which is supported by all major CI systems"
+answer.position = 1
 context = """
 JUnit XML is the standard format for CI/CD test results. Use --format junit
 --output results.xml to generate JUnit format. GitHub Actions, GitLab CI,
@@ -179,11 +189,12 @@ id = "e11a2b3c-d4e5-6789-abcd-123456781114"
 type = "MultipleChoice"
 prompt.prompt = "What does the proptest macro prop_assert! do differently from assert!?"
 prompt.distractors = [
-    "It runs assertions in parallel for speed",
-    "It logs assertion failures to a file",
-    "It retries failed assertions automatically"
+    "It runs assertions in parallel for speed and concurrency",
+    "It logs assertion failures to a file for later analysis",
+    "It retries failed assertions automatically with backoff"
 ]
 answer.answer = "It reports failures as shrunk minimal test cases instead of panicking"
+answer.position = 2
 context = """
 prop_assert! works with proptest's shrinking mechanism. When an assertion fails,
 proptest automatically tries to find the smallest/simplest input that still
