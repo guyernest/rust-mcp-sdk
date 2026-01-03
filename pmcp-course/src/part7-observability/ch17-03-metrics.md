@@ -234,9 +234,40 @@ async fn handler(input: Input) -> Result<Output> {
 }
 ```
 
-## PMCP's MetricsMiddleware
+## PMCP's Built-in Observability Metrics
 
-PMCP includes a `MetricsMiddleware` that automatically tracks request metrics:
+PMCP v1.9.2+ includes a built-in observability module that automatically collects metrics without requiring manual middleware setup:
+
+```rust
+use pmcp::server::builder::ServerCoreBuilder;
+use pmcp::server::observability::ObservabilityConfig;
+
+// One line enables automatic metrics collection
+let server = ServerCoreBuilder::new()
+    .name("my-server")
+    .version("1.0.0")
+    .tool("weather", WeatherTool)
+    .with_observability(ObservabilityConfig::development())
+    .build()?;
+```
+
+### Standard Metrics (Built-in)
+
+The built-in observability automatically emits these metrics:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `mcp.request.duration` | Histogram (ms) | Request latency per tool |
+| `mcp.request.count` | Counter | Total requests processed |
+| `mcp.request.errors` | Counter | Error count by type |
+| `mcp.response.size` | Histogram (bytes) | Response payload sizes |
+| `mcp.composition.depth` | Gauge | Nesting depth for composed servers |
+
+For CloudWatch deployments, these are emitted as EMF (Embedded Metric Format) and automatically extracted as CloudWatch metrics under the configured namespace.
+
+### Custom MetricsMiddleware (Advanced)
+
+For custom metric backends (Prometheus, Datadog, etc.), you can still use the `MetricsMiddleware` directly:
 
 ```rust
 use pmcp::shared::MetricsMiddleware;
@@ -253,7 +284,7 @@ fn build_instrumented_chain() -> EnhancedMiddlewareChain {
 }
 ```
 
-### Recorded Metrics
+### Recorded Metrics (Custom MetricsMiddleware)
 
 The `MetricsMiddleware` automatically records:
 

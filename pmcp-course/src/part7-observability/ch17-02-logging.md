@@ -256,6 +256,33 @@ async fn handler(input: WeatherInput) -> Result<Weather> {
 
 ## Spans for Context
 
+### PMCP's Built-in TraceContext
+
+PMCP v1.9.2+ includes a `TraceContext` type that automatically handles distributed tracing when you use the built-in observability module. This provides trace correlation without manual span management:
+
+```rust
+use pmcp::server::observability::TraceContext;
+
+// TraceContext is automatically created and propagated by the middleware
+// But you can also create them manually for custom scenarios:
+
+let root = TraceContext::new_root();
+println!("trace_id: {}", root.trace_id);      // Full 32-char trace ID
+println!("short_id: {}", root.short_trace_id()); // 8-char for display
+
+let child = root.child();
+println!("parent_span: {:?}", child.parent_span_id); // Links to parent
+println!("depth: {}", child.depth);                   // Tracks nesting level
+```
+
+When using `.with_observability(config)`, the middleware automatically:
+- Creates a root `TraceContext` for each incoming request
+- Includes `trace_id` and `span_id` in all log events
+- Tracks composition depth for server-to-server calls
+- Propagates trace context through HTTP headers or Lambda payloads
+
+For custom tracing needs, you can use Rust's `tracing` crate with spans directly:
+
 ### What is a Span?
 
 If you're new to distributed tracing, a **span** represents a unit of work—like a function call, database query, or API request. Spans are essential in async and distributed systems because traditional stack traces don't work when execution jumps between tasks and services.
