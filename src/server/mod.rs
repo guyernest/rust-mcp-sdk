@@ -69,6 +69,10 @@ pub mod simple_tool;
 /// Tool middleware for cross-cutting concerns in tool execution.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tool_middleware;
+
+/// Observability infrastructure for tracing, metrics, and logging.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod observability;
 /// Workflow-based prompt system with type-safe handles and ergonomic builders.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod workflow;
@@ -2320,6 +2324,14 @@ impl ServerBuilder {
         // Register as a prompt
         self.prompts.insert(name, Arc::new(handler));
 
+        // Update capabilities to include prompts
+        // This ensures prompts/list returns the workflow prompts
+        if self.capabilities.prompts.is_none() {
+            self.capabilities.prompts = Some(crate::types::PromptCapabilities {
+                list_changed: Some(false),
+            });
+        }
+
         Ok(self)
     }
 
@@ -2662,6 +2674,125 @@ impl ServerBuilder {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn tool_middleware(mut self, middleware: Arc<dyn tool_middleware::ToolMiddleware>) -> Self {
         self.tool_middlewares.push(middleware);
+        self
+    }
+
+    /// Enable observability for this server.
+    ///
+    /// This adds observability middleware that provides:
+    /// - Distributed tracing with trace/span IDs
+    /// - Request/response event logging
+    /// - Metrics emission (duration, count, errors)
+    ///
+    /// The backend is automatically selected based on the configuration:
+    /// - "console" - Pretty or JSON output to stdout (development)
+    /// - "cloudwatch" - AWS `CloudWatch` EMF format (production)
+    /// - "null" - Discards all events (testing)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::Server;
+    /// use pmcp::server::observability::ObservabilityConfig;
+    ///
+    /// // Development: console output with pretty printing
+    /// let server = Server::builder()
+    ///     .name("my-server")
+    ///     .version("1.0.0")
+    ///     .with_observability(ObservabilityConfig::development())
+    ///     .build()?;
+    ///
+    /// // Production: CloudWatch with EMF metrics
+    /// let server = Server::builder()
+    ///     .name("my-server")
+    ///     .version("1.0.0")
+    ///     .with_observability(ObservabilityConfig::production())
+    ///     .build()?;
+    ///
+    /// // Auto-detect environment (Lambda vs local)
+    /// let config = if std::env::var("AWS_LAMBDA_FUNCTION_NAME").is_ok() {
+    ///     ObservabilityConfig::production()
+    /// } else {
+    ///     ObservabilityConfig::development()
+    /// };
+    /// let server = Server::builder()
+    ///     .name("my-server")
+    ///     .version("1.0.0")
+    ///     .with_observability(config)
+    ///     .build()?;
+    /// # Ok::<(), pmcp::Error>(())
+    /// ```
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_observability(mut self, config: observability::ObservabilityConfig) -> Self {
+        if !config.enabled {
+            return self;
+        }
+
+        // Create backend based on configuration
+        let backend: Arc<dyn observability::ObservabilityBackend> = match config.backend.as_str() {
+            "cloudwatch" => Arc::new(observability::CloudWatchBackend::new(
+                config.cloudwatch.clone(),
+            )),
+            "null" => Arc::new(observability::NullBackend),
+            _ => Arc::new(observability::ConsoleBackend::new(config.console.pretty)),
+        };
+
+        // Get server name for middleware (use placeholder if not yet set)
+        let server_name = self.name.clone().unwrap_or_else(|| "unknown".to_string());
+
+        // Create and add the observability middleware
+        let middleware =
+            observability::McpObservabilityMiddleware::new(server_name, config, backend);
+        self.tool_middlewares.push(Arc::new(middleware));
+
+        self
+    }
+
+    /// Enable observability with a custom backend.
+    ///
+    /// Use this when you need a custom backend implementation (e.g., Datadog, custom metrics).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use pmcp::Server;
+    /// use pmcp::server::observability::{ObservabilityConfig, ObservabilityBackend};
+    /// use std::sync::Arc;
+    ///
+    /// struct MyCustomBackend;
+    ///
+    /// #[async_trait]
+    /// impl ObservabilityBackend for MyCustomBackend {
+    ///     // ... custom implementation
+    /// }
+    ///
+    /// let server = Server::builder()
+    ///     .name("my-server")
+    ///     .version("1.0.0")
+    ///     .with_observability_backend(
+    ///         ObservabilityConfig::development(),
+    ///         Arc::new(MyCustomBackend),
+    ///     )
+    ///     .build()?;
+    /// ```
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_observability_backend(
+        mut self,
+        config: observability::ObservabilityConfig,
+        backend: Arc<dyn observability::ObservabilityBackend>,
+    ) -> Self {
+        if !config.enabled {
+            return self;
+        }
+
+        // Get server name for middleware (use placeholder if not yet set)
+        let server_name = self.name.clone().unwrap_or_else(|| "unknown".to_string());
+
+        // Create and add the observability middleware
+        let middleware =
+            observability::McpObservabilityMiddleware::new(server_name, config, backend);
+        self.tool_middlewares.push(Arc::new(middleware));
+
         self
     }
 
