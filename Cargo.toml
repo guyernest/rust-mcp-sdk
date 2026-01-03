@@ -1,6 +1,6 @@
 [package]
 name = "pmcp"
-version = "1.9.1"
+version = "1.9.3"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility"
@@ -56,6 +56,8 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 tokio-tungstenite = { version = "0.28", optional = true }
 hyper = { version = "1.6", features = ["full"], optional = true }
 hyper-util = { version = "0.1", features = ["full"], optional = true }
+hyper-rustls = { version = "0.27", features = ["http1", "http2", "tls12", "ring"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 axum = { version = "0.8.5", optional = true }
 
 # File watching dependencies (optional, feature-gated)
@@ -113,7 +115,7 @@ jwt-auth = ["dep:jsonwebtoken"]
 sse = ["dep:bytes"]
 websocket = ["dep:tokio-tungstenite"]
 http = ["dep:hyper", "dep:hyper-util", "dep:bytes"]
-streamable-http = ["dep:hyper", "dep:hyper-util", "dep:futures-util", "dep:bytes", "dep:axum"]
+streamable-http = ["dep:hyper", "dep:hyper-util", "dep:hyper-rustls", "dep:rustls", "dep:futures-util", "dep:bytes", "dep:axum"]
 validation = ["dep:jsonschema", "dep:garde"]
 resource-watcher = ["dep:notify", "dep:glob-match"]
 schema-generation = ["dep:schemars"]
