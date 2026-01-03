@@ -9,11 +9,12 @@ pass_threshold = 0.7
 type = "MultipleChoice"
 prompt.prompt = "When should an organization consider implementing server composition patterns?"
 prompt.distractors = [
-    "When building their first MCP server",
-    "When a single team owns all MCP servers",
-    "When servers only run in development environments"
+    "When building their first MCP server as a learning exercise",
+    "When a single team owns all MCP servers with unified codebase",
+    "When servers only run in development environments for testing purposes"
 ]
 answer.answer = "When they have 10+ MCP servers across teams with duplicated functionality"
+answer.position = 0
 context = """
 Server composition is an advanced pattern that adds complexity. It becomes valuable when you have
 many servers (10+), see duplicated code (like auth validation in every server), have discovery
@@ -26,11 +27,12 @@ id = "f19a1b2c-d3e4-5678-abcd-123456790001"
 type = "MultipleChoice"
 prompt.prompt = "What does the DRY principle mean in the context of MCP server development?"
 prompt.distractors = [
-    "Delete Redundant YAML - remove duplicate configuration files",
-    "Disable Remote Yields - prevent async operations",
-    "Direct Request Yielding - pass requests without processing"
+    "Delete Redundant YAML - remove duplicate configuration files from deployments",
+    "Disable Remote Yields - prevent async operations from blocking threads",
+    "Direct Request Yielding - pass requests without processing or validation"
 ]
 answer.answer = "Don't Repeat Yourself - write common functionality once in foundation servers, reuse everywhere"
+answer.position = 1
 context = """
 DRY (Don't Repeat Yourself) in MCP means writing shared functionality (authentication, database
 access, file operations) once in foundation servers instead of duplicating it across every domain
@@ -43,11 +45,12 @@ id = "f19a1b2c-d3e4-5678-abcd-123456790002"
 type = "MultipleChoice"
 prompt.prompt = "Which is NOT a characteristic of a good foundation server?"
 prompt.distractors = [
-    "Stable APIs that rarely change",
-    "Generic with no business-specific logic",
-    "Well-tested since bugs affect all consumers"
+    "Stable APIs that rarely change to avoid breaking downstream consumers",
+    "Generic with no business-specific logic keeping concerns separated cleanly",
+    "Well-tested since bugs affect all consumers throughout the organization"
 ]
 answer.answer = "Contains department-specific business rules and calculations"
+answer.position = 2
 context = """
 Foundation servers should be: STABLE (breaking changes affect all domains), GENERIC (no business
 logic), COMPOSABLE (combine easily with other foundations), WELL-TESTED (bugs cascade everywhere),
@@ -60,11 +63,12 @@ id = "f19a1b2c-d3e4-5678-abcd-123456790003"
 type = "MultipleChoice"
 prompt.prompt = "What is a good candidate for a foundation server?"
 prompt.distractors = [
-    "Budget forecasting calculations",
-    "Employee promotion workflows",
-    "Customer pricing rules"
+    "Budget forecasting calculations specific to the finance department needs",
+    "Employee promotion workflows managed by the human resources team",
+    "Customer pricing rules that vary by region and contract terms"
 ]
 answer.answer = "Authentication, database connectivity, and file system access"
+answer.position = 3
 context = """
 Good foundation candidates are cross-cutting infrastructure concerns: authentication/authorization,
 database connectivity, file system access, HTTP client operations, caching, logging/metrics. These
@@ -77,11 +81,12 @@ id = "f19a1b2c-d3e4-5678-abcd-123456790004"
 type = "MultipleChoice"
 prompt.prompt = "In the three-tier server composition hierarchy, what is the role of domain servers?"
 prompt.distractors = [
-    "Provide raw database and file access to all servers",
-    "Orchestrate complex workflows spanning multiple departments",
-    "Define authentication and authorization rules"
+    "Provide raw database and file access to all servers in the hierarchy",
+    "Orchestrate complex workflows spanning multiple departments and teams",
+    "Define authentication and authorization rules for the entire organization"
 ]
 answer.answer = "Build business-specific tools using foundation components for a specific department or capability"
+answer.position = 0
 context = """
 The three tiers are: Foundation (core building blocks like auth, database, files), Domain
 (business-specific servers for Finance, HR, Engineering that compose foundations), and
@@ -94,11 +99,12 @@ id = "f19a1b2c-d3e4-5678-abcd-123456790005"
 type = "MultipleChoice"
 prompt.prompt = "What security measure should a FileSystemFoundation implement to prevent directory traversal attacks?"
 prompt.distractors = [
-    "Check file extension only",
-    "Limit file size to 10MB",
-    "Require admin authentication"
+    "Check file extension only to block dangerous executable file types",
+    "Limit file size to 10MB to prevent resource exhaustion attacks",
+    "Require admin authentication before allowing any file system operations"
 ]
 answer.answer = "Validate that the canonical path starts with the allowed base path"
+answer.position = 1
 context = """
 Directory traversal attacks use '../' sequences to escape allowed directories (../../etc/passwd).
 FileSystemFoundation should canonicalize the requested path and verify it still starts_with the
@@ -111,11 +117,12 @@ id = "f19a1b2c-d3e4-5678-abcd-123456790006"
 type = "MultipleChoice"
 prompt.prompt = "What problem does cross-domain communication solve?"
 prompt.distractors = [
-    "Reducing network latency between servers",
-    "Enforcing consistent error messages",
-    "Minimizing database connection pools"
+    "Reducing network latency between servers through optimized routing paths",
+    "Enforcing consistent error messages across all domain server implementations",
+    "Minimizing database connection pools by sharing connections across domains"
 ]
 answer.answer = "Enabling tasks that require tools from multiple domains, like onboarding needing HR + Engineering + Finance"
+answer.position = 2
 context = """
 Some workflows span multiple domains: employee onboarding needs HR (create employee record),
 Engineering (provision accounts), and Finance (set up payroll). Cross-domain communication
@@ -128,11 +135,12 @@ id = "f19a1b2c-d3e4-5678-abcd-123456790009"
 type = "MultipleChoice"
 prompt.prompt = "What is the key difference between orchestration and direct tool calls?"
 prompt.distractors = [
-    "Orchestration is faster because it skips validation",
-    "Direct calls support more tool types",
-    "Orchestration only works with synchronous tools"
+    "Orchestration is faster because it skips validation and authorization checks",
+    "Direct calls support more tool types including streaming and async operations",
+    "Orchestration only works with synchronous tools and blocks on each step"
 ]
 answer.answer = "Orchestration defines workflows that execute server-side with guaranteed step sequencing"
+answer.position = 3
 context = """
 Direct tool calls: AI decides what to call, when, and in what order - flexible but unpredictable.
 Orchestration: predefined workflows execute server-side with deterministic step order. Workflows
@@ -145,11 +153,12 @@ id = "f19a1b2c-d3e4-5678-abcd-123456790011"
 type = "MultipleChoice"
 prompt.prompt = "When should you NOT use orchestration patterns?"
 prompt.distractors = [
-    "When workflows need guaranteed execution order",
-    "When audit trails are required for compliance",
-    "When multiple domains must coordinate"
+    "When workflows need guaranteed execution order for compliance requirements",
+    "When audit trails are required for compliance and regulatory reporting",
+    "When multiple domains must coordinate to complete a business transaction"
 ]
 answer.answer = "When the AI needs flexibility to explore different approaches based on intermediate results"
+answer.position = 0
 context = """
 Orchestration trades flexibility for predictability. Don't use it when: the AI should explore
 multiple approaches, steps depend heavily on context the AI discovered, workflows are highly
@@ -162,11 +171,12 @@ id = "f19a1b2c-d3e4-5678-abcd-123456790012"
 type = "MultipleChoice"
 prompt.prompt = "What is the purpose of domain-specific types in domain servers?"
 prompt.distractors = [
-    "To make JSON serialization faster",
-    "To reduce memory usage in large datasets",
-    "To enable automatic database schema generation"
+    "To make JSON serialization faster through optimized binary representations",
+    "To reduce memory usage in large datasets by using compact field layouts",
+    "To enable automatic database schema generation from Rust struct definitions"
 ]
 answer.answer = "To provide compile-time safety and clear contracts for domain concepts like Employee or Expense"
+answer.position = 1
 context = """
 Domain-specific types (struct Employee, struct ExpenseReport, enum ApprovalStatus) provide:
 compile-time validation (can't pass Order to employee tools), self-documenting APIs through
@@ -192,11 +202,12 @@ id = "f19a1b2c-d3e4-5678-abcd-123456790015"
 type = "MultipleChoice"
 prompt.prompt = "Why should foundations be thoroughly tested more than typical code?"
 prompt.distractors = [
-    "Foundation tests run faster than domain tests",
-    "Foundations are required to have 100% coverage by law",
-    "Testing foundations generates better documentation"
+    "Foundation tests run faster than domain tests due to simpler logic paths",
+    "Foundations are required to have 100% coverage by law for enterprise software",
+    "Testing foundations generates better documentation through doctest integration"
 ]
 answer.answer = "Bugs in foundations affect all consuming domain servers, cascading failures across the organization"
+answer.position = 2
 context = """
 A bug in AuthFoundation affects every domain server that composes it - potentially breaking all
 MCP servers in the organization simultaneously. Foundations need comprehensive tests: unit tests
@@ -210,11 +221,12 @@ id = "f19a1b2c-d3e4-5678-abcd-123456790016"
 type = "MultipleChoice"
 prompt.prompt = "In server composition, what ensures that a domain server has all required foundations at startup?"
 prompt.distractors = [
-    "Runtime duck typing - check if methods exist when called",
-    "Configuration files listing required services",
-    "Environment variables specifying foundation URLs"
+    "Runtime duck typing - check if methods exist when called at execution time",
+    "Configuration files listing required services that must be present at startup",
+    "Environment variables specifying foundation URLs for service discovery purposes"
 ]
 answer.answer = "Rust's type system - foundations are passed as typed parameters, missing ones cause compile errors"
+answer.position = 3
 context = """
 Domain servers take foundation parameters with explicit types: create_finance_server(auth:
 Arc<AuthFoundation>, db: Arc<DatabaseFoundation>). Missing a required foundation is a compile

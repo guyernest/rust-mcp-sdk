@@ -9,11 +9,12 @@ pass_threshold = 0.7
 type = "MultipleChoice"
 prompt.prompt = "Why should MCP database servers only allow SELECT queries by default?"
 prompt.distractors = [
-    "SELECT queries are faster than other queries",
-    "Other query types aren't supported by MCP",
-    "SELECT is the only SQL command that returns data"
+    "SELECT queries are faster than other query types in database execution",
+    "Other query types aren't supported by the MCP protocol specification",
+    "SELECT is the only SQL command type that returns data to the caller"
 ]
 answer.answer = "To prevent accidental or malicious data modification"
+answer.position = 0
 context = """
 Security is paramount in enterprise MCP servers. By restricting to SELECT queries,
 you prevent users (or AI) from accidentally or intentionally modifying or deleting data.
@@ -25,11 +26,12 @@ id = "43554326-22af-4c94-ae41-dfa5ef8b8d81"
 type = "MultipleChoice"
 prompt.prompt = "What is SQL injection and why is it dangerous?"
 prompt.distractors = [
-    "A way to speed up database queries",
-    "A technique to compress SQL statements",
-    "A method for caching database results"
+    "A way to speed up database queries through query optimization",
+    "A technique to compress SQL statements for network efficiency",
+    "A method for caching database results in memory for faster access"
 ]
 answer.answer = "An attack where malicious SQL is inserted into queries"
+answer.position = 1
 context = """
 SQL injection occurs when user input is directly concatenated into SQL queries.
 An attacker can craft input that changes the query's meaning, potentially
@@ -52,11 +54,12 @@ id = "5d5eb6e5-1dab-495f-8d9f-6dd5cffb55fa"
 type = "MultipleChoice"
 prompt.prompt = "What type of data is best suited for MCP Resources in a database server?"
 prompt.distractors = [
-    "Customer records like db://customers/12345",
-    "Dynamic search results from user queries",
-    "Aggregated analytics and reports"
+    "Customer records like db://customers/12345 for individual entity lookups",
+    "Dynamic search results from user queries that need filtering and pagination",
+    "Aggregated analytics and reports that require complex calculations and joins"
 ]
 answer.answer = "Schema documentation and reference data like db://schema or db://reference/genres"
+answer.position = 2
 context = """
 Resources are best for documentation and metadata: database schemas, reference lookup tables
 (genres, countries, status codes), and query examples. Entity lookups like db://customers/12345
@@ -68,11 +71,12 @@ id = "e428c402-a71d-462a-afc2-ee531ab77cf1"
 type = "MultipleChoice"
 prompt.prompt = "What should you always add to database queries to prevent memory issues?"
 prompt.distractors = [
-    "ORDER BY clause",
-    "DISTINCT keyword",
-    "GROUP BY clause"
+    "ORDER BY clause for sorting results",
+    "DISTINCT keyword to remove duplicates",
+    "GROUP BY clause for aggregating data"
 ]
 answer.answer = "LIMIT clause"
+answer.position = 3
 context = """
 Always add a LIMIT clause to prevent queries from returning millions of rows
 and exhausting server memory. A reasonable default (e.g., 100-1000 rows) with
@@ -84,11 +88,12 @@ id = "ad853d09-350f-4c86-8c33-3c653e62eda9"
 type = "MultipleChoice"
 prompt.prompt = "Why are Tools preferred over Resources for entity lookups like getting customer data?"
 prompt.distractors = [
-    "Resources can't return JSON data",
-    "Tools are faster than resources",
-    "Resources don't support caching"
+    "Resources can't return JSON data in the MCP protocol specification",
+    "Tools are faster than resources due to reduced protocol overhead",
+    "Resources don't support caching and must be fetched fresh each time"
 ]
 answer.answer = "Tools allow flexible queries with joins, aggregations, and filtering in one call"
+answer.position = 0
 context = """
 With tools, Claude can write a single query that joins customer data with orders,
 calculates totals, and filters results. With resources like db://customers/12345,
@@ -100,11 +105,12 @@ id = "b7c3d4e5-f6a7-4892-93b4-c5d6e7f8a9b0"
 type = "MultipleChoice"
 prompt.prompt = "What is a key benefit of exposing database schema as an MCP Resource?"
 prompt.distractors = [
-    "It makes queries run faster",
-    "It encrypts sensitive data",
-    "It automatically indexes tables"
+    "It makes queries run faster by enabling query plan optimization",
+    "It encrypts sensitive data columns to protect PII at rest",
+    "It automatically indexes tables based on access patterns detected"
 ]
 answer.answer = "Claude can understand the database structure before writing queries"
+answer.position = 1
 context = """
 When Claude reads db://schema, it learns all table names, column types, and relationships
 in one call. This reduces the need for exploratory queries like PRAGMA table_info()
@@ -116,11 +122,12 @@ id = "c8d9e0f1-2a3b-4c5d-6e7f-8a9b0c1d2e3f"
 type = "MultipleChoice"
 prompt.prompt = "Which pagination approach is better for consistent results when data is changing?"
 prompt.distractors = [
-    "OFFSET-based pagination with page numbers",
-    "LIMIT without any offset",
-    "Random sampling with ORDER BY RANDOM()"
+    "OFFSET-based pagination with page numbers for traditional pagination UX",
+    "LIMIT without any offset to always return the newest records first",
+    "Random sampling with ORDER BY RANDOM() to provide diverse result sets"
 ]
 answer.answer = "Cursor-based pagination using a stable column like timestamp or ID"
+answer.position = 2
 context = """
 Offset pagination can skip or duplicate rows when data changes between requests.
 Cursor-based pagination uses a WHERE clause with a stable column (e.g., WHERE id > last_id)
@@ -144,11 +151,12 @@ id = "e0f1a2b3-4c5d-6e7f-8a9b-0c1d2e3f4a5b"
 type = "MultipleChoice"
 prompt.prompt = "What is the recommended first layer of defense for SQL injection in a database MCP server?"
 prompt.distractors = [
-    "Encrypting all user input",
-    "Limiting query results to 100 rows",
-    "Running queries in a transaction"
+    "Encrypting all user input before passing it to the database engine",
+    "Limiting query results to 100 rows to reduce exposure of sensitive data",
+    "Running queries in a transaction so they can be rolled back if needed"
 ]
 answer.answer = "Only allowing SELECT statements through query parsing"
+answer.position = 3
 context = """
 The first defense layer is parsing the SQL to verify it's a SELECT statement.
 This prevents INSERT, UPDATE, DELETE, DROP, and other dangerous operations
@@ -160,11 +168,12 @@ id = "f1a2b3c4-5d6e-7f8a-9b0c-1d2e3f4a5b6c"
 type = "MultipleChoice"
 prompt.prompt = "When building a db-explorer MCP server, how should the database connection pool be shared?"
 prompt.distractors = [
-    "Create a new connection for each query",
-    "Store the pool in a global static variable",
-    "Pass the connection string to each tool"
+    "Create a new connection for each query to ensure isolation between requests",
+    "Store the pool in a global static variable accessible from anywhere in the code",
+    "Pass the connection string to each tool and let it establish its own connection"
 ]
 answer.answer = "Clone an Arc<SqlitePool> into each tool handler"
+answer.position = 0
 context = """
 Using Arc<SqlitePool> allows efficient sharing of the connection pool.
 Each tool can clone the Arc (cheap reference count increment) and access

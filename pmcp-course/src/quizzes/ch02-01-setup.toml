@@ -14,6 +14,7 @@ prompt.distractors = [
     "`rustup component add cargo-pmcp`"
 ]
 answer.answer = "`cargo install cargo-pmcp`"
+answer.position = 1
 context = """
 cargo-pmcp is a Rust crate, so it's installed using `cargo install`.
 This downloads the source from crates.io and compiles it locally.
@@ -24,11 +25,12 @@ id = "e1a43758-c97c-4962-92ea-f01cb2c899e0"
 type = "MultipleChoice"
 prompt.prompt = "What is the primary purpose of MCP Inspector?"
 prompt.distractors = [
-    "Compiling Rust code",
-    "Deploying MCP servers to production",
-    "Managing OAuth tokens"
+    "Compiling Rust code for MCP servers",
+    "Deploying MCP servers to production environments",
+    "Managing OAuth tokens and refresh cycles"
 ]
 answer.answer = "Debugging and testing MCP servers interactively"
+answer.position = 2
 context = """
 MCP Inspector is a debugging tool that lets you interactively call tools,
 view resources, and see the raw JSON-RPC messages exchanged with your server.
@@ -44,6 +46,7 @@ prompt.distractors = [
     "2.0.0"
 ]
 answer.answer = "1.82.0"
+answer.position = 0
 context = """
 PMCP SDK requires Rust 1.82.0 or later to take advantage of modern language
 features and ensure compatibility with async traits.
@@ -69,6 +72,7 @@ prompt.distractors = [
     "`cargo pmcp deploy`"
 ]
 answer.answer = "`cargo pmcp compile`"
+answer.position = 3
 context = """
 cargo-pmcp provides `new`, `add`, `test`, `deploy`, and other commands,
 but not `compile`. Standard Rust compilation is done with `cargo build`.

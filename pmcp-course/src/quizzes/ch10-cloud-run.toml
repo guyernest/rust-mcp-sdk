@@ -9,11 +9,12 @@ pass_threshold = 0.7
 type = "MultipleChoice"
 prompt.prompt = "What is the maximum execution timeout for Google Cloud Run services?"
 prompt.distractors = [
-    "15 minutes like AWS Lambda",
-    "30 minutes with enterprise plan",
-    "No timeout - runs indefinitely"
+    "15 minutes like AWS Lambda for consistency",
+    "30 minutes with enterprise plan upgrade",
+    "No timeout - runs indefinitely until completion"
 ]
 answer.answer = "60 minutes, making it suitable for long-running MCP operations"
+answer.position = 0
 context = """
 Cloud Run supports up to 60-minute request timeouts, compared to Lambda's 15 minutes.
 This makes it ideal for MCP servers with long-running operations like data processing,
@@ -26,11 +27,12 @@ id = "d10e4f5a-b6c7-8901-def0-123456781001"
 type = "MultipleChoice"
 prompt.prompt = "What container sandbox technology does Cloud Run use for isolation?"
 prompt.distractors = [
-    "Docker containerd with namespaces",
-    "Firecracker microVMs like Lambda",
-    "V8 isolates like Cloudflare Workers"
+    "Docker containerd with namespaces for process isolation",
+    "Firecracker microVMs like Lambda for lightweight virtualization",
+    "V8 isolates like Cloudflare Workers for JavaScript sandboxing"
 ]
 answer.answer = "gVisor, a user-space kernel that provides container isolation without VM overhead"
+answer.position = 1
 context = """
 Cloud Run uses gVisor, which intercepts system calls and implements them in user
 space. This provides stronger isolation than traditional containers (namespace-only)
@@ -56,11 +58,12 @@ id = "d10e4f5a-b6c7-8901-def0-123456781003"
 type = "MultipleChoice"
 prompt.prompt = "What is the purpose of multi-stage Docker builds for Rust MCP servers?"
 prompt.distractors = [
-    "To enable parallel compilation of dependencies",
-    "To support multiple CPU architectures",
-    "To cache Docker layers for faster pushes"
+    "To enable parallel compilation of dependencies for faster builds",
+    "To support multiple CPU architectures in a single image file",
+    "To cache Docker layers for faster pushes to the registry"
 ]
 answer.answer = "To separate the large build environment from the minimal runtime image, reducing final image size"
+answer.position = 2
 context = """
 Multi-stage builds use a rust:1.75 image for compilation (with cargo, rustc, etc.)
 then copy only the binary to a minimal runtime image (debian-slim or scratch).
@@ -73,11 +76,12 @@ id = "d10e4f5a-b6c7-8901-def0-123456781004"
 type = "MultipleChoice"
 prompt.prompt = "What Cloud Run configuration prevents cold starts but increases costs?"
 prompt.distractors = [
-    "Setting --cpu-boost for faster startup",
-    "Using --concurrency 1 for dedicated instances",
-    "Enabling --vpc-connector for faster networking"
+    "Setting --cpu-boost for faster startup during request handling",
+    "Using --concurrency 1 for dedicated instances per request",
+    "Enabling --vpc-connector for faster networking to databases"
 ]
 answer.answer = "Setting --min-instances to keep containers warm and ready for requests"
+answer.position = 3
 context = """
 Setting min-instances > 0 keeps that many containers running even with zero traffic.
 These warm instances respond immediately without cold starts. At min-instances=2,
@@ -90,11 +94,12 @@ id = "d10e4f5a-b6c7-8901-def0-123456781006"
 type = "MultipleChoice"
 prompt.prompt = "How does Cloud Run connect to Cloud SQL databases in private VPCs?"
 prompt.distractors = [
-    "Through public IP with SSL certificates",
-    "Using Cloud SQL Proxy as a separate service",
-    "Via IAM authentication without networking"
+    "Through public IP with SSL certificates for encrypted connections",
+    "Using Cloud SQL Proxy as a separate service handling auth and routing",
+    "Via IAM authentication without networking configuration required"
 ]
 answer.answer = "VPC connector that bridges Cloud Run to the VPC where Cloud SQL resides"
+answer.position = 0
 context = """
 Cloud Run is serverless and doesn't run in a VPC by default. A VPC connector
 (created with gcloud compute networks vpc-access connectors create) bridges
@@ -107,11 +112,12 @@ id = "d10e4f5a-b6c7-8901-def0-123456781008"
 type = "MultipleChoice"
 prompt.prompt = "What is the maximum memory available to a Cloud Run container?"
 prompt.distractors = [
-    "10 GB like AWS Lambda",
-    "16 GB with enterprise plan",
-    "64 GB with dedicated instances"
+    "10 GB like AWS Lambda for parity across platforms",
+    "16 GB with enterprise plan for larger workloads",
+    "64 GB with dedicated instances for extreme memory needs"
 ]
 answer.answer = "32 GB, making it suitable for memory-intensive ML and data processing workloads"
+answer.position = 1
 context = """
 Cloud Run supports up to 32GB memory per container - more than Lambda's 10GB.
 This enables loading large ML models, processing big datasets in memory, or
@@ -124,11 +130,12 @@ id = "d10e4f5a-b6c7-8901-def0-123456781009"
 type = "MultipleChoice"
 prompt.prompt = "What is the recommended Dockerfile base image for production Rust containers?"
 prompt.distractors = [
-    "rust:latest for complete toolchain",
-    "ubuntu:22.04 for compatibility",
-    "alpine:latest for smallest size"
+    "rust:latest for complete toolchain availability during development",
+    "ubuntu:22.04 for compatibility with standard Linux packages",
+    "alpine:latest for smallest size with musl libc support"
 ]
 answer.answer = "debian:bookworm-slim or gcr.io/distroless/cc-debian12 for minimal attack surface"
+answer.position = 2
 context = """
 debian-slim provides glibc compatibility with minimal packages (~80MB). Google's
 distroless images are even smaller and contain no shell or package manager -
@@ -141,11 +148,12 @@ id = "d10e4f5a-b6c7-8901-def0-123456781010"
 type = "MultipleChoice"
 prompt.prompt = "What concurrency setting determines how many requests one Cloud Run instance handles simultaneously?"
 prompt.distractors = [
-    "--max-instances for total scaling limit",
-    "--min-instances for warm containers",
-    "--cpu for allocated compute power"
+    "--max-instances for total scaling limit across all containers",
+    "--min-instances for warm containers kept always running",
+    "--cpu for allocated compute power per container instance"
 ]
 answer.answer = "--concurrency (default 80), which sets max concurrent requests per container"
+answer.position = 3
 context = """
 Concurrency defines how many simultaneous requests one container handles. At
 concurrency=80, one container serves up to 80 parallel requests before Cloud Run
@@ -158,11 +166,12 @@ id = "d10e4f5a-b6c7-8901-def0-123456781011"
 type = "MultipleChoice"
 prompt.prompt = "When should you choose Cloud Run over Lambda or Workers for an MCP server?"
 prompt.distractors = [
-    "When you need the lowest cold start times",
-    "When you want the lowest monthly costs",
-    "When you need global edge deployment"
+    "When you need the lowest cold start times for real-time responses",
+    "When you want the lowest monthly costs for budget-conscious projects",
+    "When you need global edge deployment for worldwide low latency"
 ]
 answer.answer = "When you need long timeouts (>15min), large memory (>10GB), or GPU access"
+answer.position = 0
 context = """
 Cloud Run excels at workloads that exceed Lambda/Workers limits: operations
 longer than 15 minutes, memory requirements over 10GB, or GPU-accelerated inference.
