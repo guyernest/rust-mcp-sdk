@@ -282,10 +282,16 @@ impl StreamableHttpTransportConfigBuilder {
 /// - Stateful: Optional session ID tracking for persistent sessions
 ///
 /// The transport can handle both JSON responses and SSE streams based on server response.
+///
+/// HTTPS is supported via rustls with the ring crypto provider, which is compatible
+/// with AWS Lambda and other serverless environments.
 #[derive(Clone)]
 pub struct StreamableHttpTransport {
     config: Arc<RwLock<StreamableHttpTransportConfig>>,
-    client: Client<hyper_util::client::legacy::connect::HttpConnector, Full<Bytes>>,
+    client: Client<
+        hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>,
+        Full<Bytes>,
+    >,
     /// Channel for receiving messages from SSE streams or responses
     receiver: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<TransportMessage>>>,
     /// Sender for messages
@@ -310,12 +316,27 @@ impl Debug for StreamableHttpTransport {
 
 impl StreamableHttpTransport {
     /// Creates a new `StreamableHttpTransport`.
+    ///
+    /// This automatically sets up HTTPS support using rustls with the ring crypto provider.
+    /// Both HTTP and HTTPS URLs are supported.
     pub fn new(config: StreamableHttpTransportConfig) -> Self {
-        let connector = hyper_util::client::legacy::connect::HttpConnector::new();
+        // Install ring crypto provider explicitly to avoid conflicts with aws-lc-rs
+        // in Lambda environments. This is idempotent - safe to call multiple times.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        // Create HTTPS connector that supports both HTTP and HTTPS
+        let https = hyper_rustls::HttpsConnectorBuilder::new()
+            .with_native_roots()
+            .expect("Failed to load native root certificates")
+            .https_or_http()
+            .enable_http1()
+            .enable_http2()
+            .build();
+
         let client = Client::builder(TokioExecutor::new())
             .pool_idle_timeout(std::time::Duration::from_secs(90))
             .pool_max_idle_per_host(10)
-            .build(connector);
+            .build(https);
 
         let (sender, receiver) = mpsc::unbounded_channel();
         Self {
