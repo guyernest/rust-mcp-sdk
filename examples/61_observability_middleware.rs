@@ -133,11 +133,20 @@ fn main() -> Result<()> {
 
     // Example 3: Custom configuration
     println!("3. Creating server with custom observability configuration:");
-    let mut custom_config = ObservabilityConfig::default();
-    custom_config.sample_rate = 0.5; // Sample 50% of requests
-    custom_config.fields.capture_arguments_hash = true;
-    custom_config.fields.capture_response_size = true;
-    custom_config.metrics.prefix = "myapp".to_string();
+    let default_config = ObservabilityConfig::default();
+    let custom_config = ObservabilityConfig {
+        sample_rate: 0.5, // Sample 50% of requests
+        fields: pmcp::server::observability::FieldsConfig {
+            capture_arguments_hash: true,
+            capture_response_size: true,
+            ..default_config.fields
+        },
+        metrics: pmcp::server::observability::MetricsConfig {
+            prefix: "myapp".to_string(),
+            ..default_config.metrics
+        },
+        ..default_config
+    };
 
     println!("   - Sample rate: 50%");
     println!("   - Capture arguments hash: true");
