@@ -179,3 +179,11 @@ impl AdvancedMiddleware for LoggingMiddleware {
     }
 }
 """
+
+[tutor.sdk_examples]
+description = "Explore these SDK examples for middleware patterns"
+examples = [
+    { name = "15_middleware.rs", description = "Basic middleware with timing and logging", run = "cargo run --example 15_middleware" },
+    { name = "30_enhanced_middleware.rs", description = "Advanced middleware patterns", run = "cargo run --example 30_enhanced_middleware --features full" },
+    { name = "55_server_middleware.rs", description = "Server-side middleware integration", run = "cargo run --example 55_server_middleware --features streamable-http" },
+]

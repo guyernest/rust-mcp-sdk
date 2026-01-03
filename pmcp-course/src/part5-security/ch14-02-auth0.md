@@ -2,29 +2,134 @@
 
 Auth0 is a flexible identity platform known for developer-friendly APIs and extensive customization. This chapter covers Auth0 integration for MCP servers.
 
+> **Note:** Auth0 is shown here as an example. If your organization already uses a different identity provider (Okta, Cognito, Entra ID, etc.), use that instead. The patterns in this chapter apply to any OIDC-compliant provider.
+
+## The Easy Way: `cargo pmcp` + CDK
+
+**The fastest path to production:** Use `cargo pmcp` to configure OAuth with Auth0. The deployment handles API and application setup.
+
+### Step 1: Initialize OAuth Configuration
+
+```bash
+# Initialize deployment with Auth0 OAuth
+cargo pmcp deploy init --target pmcp-run --oauth auth0
+
+# This creates/updates .pmcp/deploy.toml with:
+```
+
+```toml
+# .pmcp/deploy.toml
+[auth]
+enabled = true
+provider = "auth0"
+domain = "your-tenant.auth0.com"  # Set this to your Auth0 domain
+audience = "https://mcp.example.com"  # Your API identifier
+
+[auth.dcr]
+# Dynamic Client Registration for MCP clients
+enabled = true
+public_client_patterns = [
+    "claude",
+    "cursor",
+    "chatgpt",
+    "mcp-inspector",
+]
+default_scopes = [
+    "openid",
+    "email",
+    "read:tools",
+]
+allowed_scopes = [
+    "openid",
+    "email",
+    "profile",
+    "read:tools",
+    "execute:tools",
+    "read:resources",
+    "write:resources",
+    "admin",
+]
+```
+
+### Step 2: Configure Auth0 (One-Time Setup)
+
+Unlike Cognito, Auth0 isn't created by CDK—you configure it in Auth0 Dashboard. But `cargo pmcp` generates the correct values:
+
+```bash
+# After running deploy init, it outputs:
+#
+# Auth0 Setup Required:
+# 1. Create API in Auth0 Dashboard
+#    - Identifier: https://mcp.example.com
+#    - Permissions: read:tools, execute:tools, read:resources, write:resources, admin
+#
+# 2. Create Application (Regular Web Application)
+#    - Callback URLs: https://your-deployment.pmcp.run/callback
+#
+# 3. Set environment variables or update deploy.toml:
+#    AUTH0_DOMAIN=your-tenant.auth0.com
+#    AUTH0_AUDIENCE=https://mcp.example.com
+```
+
+### Step 3: Deploy
+
+```bash
+# Build and deploy
+cargo pmcp deploy
+
+# The deployment:
+# - Configures Lambda with Auth0 environment variables
+# - Sets up JWT validation middleware
+# - Your server validates Auth0 tokens automatically
+```
+
+### Step 4: Your Server Code
+
+Your Rust code is provider-agnostic—it just uses OAuth middleware:
+
+```rust
+use pmcp::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // OAuth configuration loaded from environment
+    // (AUTH0_DOMAIN, AUTH0_AUDIENCE set by deployment)
+    let server = ServerBuilder::new("my-server", "1.0.0")
+        .with_oauth_from_env()  // Works with any provider
+        .with_tool(MyTool)
+        .build()?;
+
+    server.serve().await
+}
+```
+
+## Manual Setup (When You Need Control)
+
+If you need more control over Auth0 configuration, or your organization has specific Auth0 requirements, you can configure it manually. The rest of this chapter covers manual setup.
+
 ## Auth0 Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                      Auth0 for MCP Servers                           │
+│                      Auth0 for MCP Servers                          │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  ┌─────────────────┐    ┌─────────────────┐                        │
-│  │   Application   │    │      API        │                        │
-│  │  (MCP Client)   │    │  (MCP Server)   │                        │
-│  └────────┬────────┘    └────────┬────────┘                        │
+│  ┌─────────────────┐    ┌─────────────────┐                         │
+│  │   Application   │    │      API        │                         │
+│  │  (MCP Client)   │    │  (MCP Server)   │                         │
+│  └────────┬────────┘    └────────┬────────┘                         │
 │           │                      │                                  │
 │           │ Auth Code Flow       │ Validates JWT                    │
 │           ▼                      │                                  │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │                         Auth0 Tenant                         │   │
-│  │  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐   │   │
-│  │  │  Connections  │  │    Rules/     │  │     RBAC      │   │   │
-│  │  │  (Database,   │  │   Actions     │  │ (Roles &      │   │   │
-│  │  │  Social,      │  │  (Customize   │  │  Permissions) │   │   │
-│  │  │  Enterprise)  │  │   tokens)     │  │               │   │   │
-│  │  └───────────────┘  └───────────────┘  └───────────────┘   │   │
-│  └─────────────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │                         Auth0 Tenant                        │    │
+│  │  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐    │    │
+│  │  │  Connections  │  │    Rules/     │  │     RBAC      │    │    │
+│  │  │  (Database,   │  │   Actions     │  │ (Roles &      │    │    │
+│  │  │  Social,      │  │  (Customize   │  │  Permissions) │    │    │
+│  │  │  Enterprise)  │  │   tokens)     │  │               │    │    │
+│  │  └───────────────┘  └───────────────┘  └───────────────┘    │    │
+│  └─────────────────────────────────────────────────────────────┘    │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -429,7 +534,9 @@ async fn get_auth0_token(config: &Auth0Config) -> Result<String> {
 
 ## Summary
 
-Auth0 integration provides:
+**Recommended approach:** Use `cargo pmcp deploy init --oauth auth0` to generate deployment configuration. You'll need to create the API and Application in Auth0 Dashboard (one-time setup), then `cargo pmcp deploy` handles the rest.
+
+**If you need manual setup**, Auth0 integration provides:
 
 1. **Applications** - OAuth clients for your MCP consumers
 2. **APIs** - Define audience and permissions
@@ -440,9 +547,11 @@ Auth0 integration provides:
 
 Key Auth0-specific considerations:
 - Permissions via RBAC appear in `permissions` array
-- Custom claims require namespacing
-- `sub` format: `provider|id` (e.g., `auth0|123`)
+- Custom claims require namespacing (e.g., `https://mcp.example.com/claim`)
+- `sub` format: `provider|id` (e.g., `auth0|123`, `google-oauth2|456`)
 - Actions for advanced token customization
+
+**Remember:** Auth0 is just one option. If your organization uses Okta, Cognito, Entra ID, or another provider, use that instead—the patterns are the same.
 
 ---
 

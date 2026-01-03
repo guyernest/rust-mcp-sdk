@@ -10,29 +10,29 @@ When an employee wants to use AI to analyze company data, here's what typically 
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    The Data Access Gauntlet                  │
+│                    The Data Access Gauntlet                 │
 ├─────────────────────────────────────────────────────────────┤
-│                                                              │
+│                                                             │
 │  1. REQUEST ACCESS                                          │
 │     └─→ Submit IT ticket                                    │
 │         └─→ Wait for approval (days/weeks)                  │
 │             └─→ Get credentials                             │
-│                                                              │
+│                                                             │
 │  2. LEARN THE TOOLS                                         │
 │     └─→ Figure out which database has the data              │
 │         └─→ Learn SQL or the reporting tool                 │
 │             └─→ Understand the schema                       │
-│                                                              │
+│                                                             │
 │  3. EXTRACT THE DATA                                        │
 │     └─→ Write the query                                     │
 │         └─→ Export to CSV                                   │
 │             └─→ Maybe clean it up in Excel                  │
-│                                                              │
+│                                                             │
 │  4. USE WITH AI                                             │
 │     └─→ Copy-paste into ChatGPT                             │
 │         └─→ Hope it's not too large                         │
 │             └─→ Repeat for every new question               │
-│                                                              │
+│                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -53,17 +53,17 @@ With a database MCP server, the workflow becomes:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    MCP Database Access                       │
+│                    MCP Database Access                      │
 ├─────────────────────────────────────────────────────────────┤
-│                                                              │
+│                                                             │
 │  User: "What were our top products last quarter?"           │
-│                                                              │
+│                                                             │
 │  Claude: [Calls list_tables to understand schema]           │
 │          [Calls query with appropriate SQL]                 │
 │          "Here are your top 10 products by revenue..."      │
-│                                                              │
+│                                                             │
 │  Time: ~2 seconds                                           │
-│                                                              │
+│                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -102,8 +102,8 @@ The MCP server acts as a security boundary:
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│                  Enterprise Network                     │
-│                                                         │
+│                  Enterprise Network                    │
+│                                                        │
 │  ┌─────────────┐      ┌─────────────────────────────┐  │
 │  │  Database   │◄────►│  Database MCP Server        │  │
 │  │  (Private)  │      │  - SELECT only              │  │
@@ -112,8 +112,8 @@ The MCP server acts as a security boundary:
 │                       │  - Audit logging            │  │
 │                       │  - OAuth authentication     │  │
 │                       └──────────────┬──────────────┘  │
-│                                      │                  │
-└──────────────────────────────────────┼──────────────────┘
+│                                      │                 │
+└──────────────────────────────────────┼─────────────────┘
                                        │ HTTPS + OAuth
                                        ▼
                               ┌─────────────────┐

@@ -2,7 +2,18 @@
 
 Enterprise MCP servers must authenticate users properly. API keys are not sufficient. This chapter covers OAuth 2.0 implementation.
 
+Authentication answers "who is making this request?" Authorization answers "are they allowed to do this?" OAuth 2.0 provides both, using industry-standard protocols that integrate with existing enterprise identity systems.
+
+**What you'll learn:**
+- Why API keys are insufficient for production
+- How OAuth 2.0 flow works with MCP
+- Implementing JWT validation in your server
+- Scope-based authorization for tools
+- Testing authenticated endpoints
+
 ## Why OAuth, Not API Keys
+
+API keys seem simple—generate a secret, include it in requests, check it on the server. But this simplicity hides serious problems that become critical in production environments.
 
 Many tutorials show API key authentication:
 
@@ -32,6 +43,10 @@ curl -H "X-API-Key: sk_live_abc123" http://mcp-server/tools
 | Audit trail | Every request tied to a user |
 
 ## OAuth 2.0 for MCP: Quick Overview
+
+OAuth 2.0 separates authentication (verifying identity) from your application. Users authenticate with a trusted Identity Provider (IdP) like AWS Cognito, Auth0, or Okta. The IdP issues tokens that your server validates. This means you never handle passwords—a significant security advantage.
+
+The flow below shows how an MCP client (like Claude Desktop) authenticates with your server through an IdP:
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
@@ -64,9 +79,11 @@ curl -H "X-API-Key: sk_live_abc123" http://mcp-server/tools
 
 ## Adding OAuth to Your Server
 
+Adding OAuth involves two parts: configuring your Identity Provider (outside your code) and adding validation middleware to your server (in your code). The middleware intercepts every request, extracts the JWT token, validates it, and makes user information available to your tools.
+
 ### Using cargo pmcp
 
-The easiest way to add OAuth:
+The easiest way to add OAuth—this generates the boilerplate configuration and middleware:
 
 ```bash
 # Initialize OAuth with Cognito
@@ -80,7 +97,7 @@ This generates the necessary configuration and middleware.
 
 ### Manual Setup
 
-For more control, add OAuth manually:
+For more control or custom IdP configurations, add OAuth manually. The key components are: a `ValidationConfig` that describes your IdP, a `JwtValidator` that uses that config, and middleware that applies validation to every request.
 
 ```rust
 // src/main.rs
@@ -112,6 +129,8 @@ async fn main() -> Result<()> {
 ```
 
 ### The OAuth Middleware
+
+The middleware runs before every request handler. It extracts the token from the `Authorization` header, validates it with the IdP's public key, and stores the validated claims in the request context. If validation fails, the request is rejected immediately—your tool code never runs.
 
 ```rust
 use pmcp::server::auth::{AuthContext, ServerHttpMiddleware};
@@ -151,6 +170,8 @@ impl ServerHttpMiddleware for OAuthMiddleware {
 
 ### Accessing User Info in Tools
 
+Once authentication succeeds, your tools can access user information through the context. This enables personalized behavior (fetch this user's data), authorization checks (does this user have permission?), and audit logging (who performed this action?).
+
 ```rust
 #[derive(TypedTool)]
 #[tool(name = "get_my_data", description = "Get data for the authenticated user")]
@@ -185,9 +206,13 @@ impl GetMyData {
 
 ## Token Validation
 
+JWT (JSON Web Token) validation is the core of OAuth security. A JWT is a signed JSON document—the IdP signs it with a private key, and your server verifies it with the corresponding public key. If the signature is valid and the claims are correct, you can trust the token's contents.
+
+**Why this matters:** Anyone can create a JSON document claiming to be "admin". The cryptographic signature proves the IdP created the token, and the claims (expiration, issuer, audience) prove it's valid for your server.
+
 ### JWT Structure
 
-A JWT token contains:
+A JWT has three parts (header, payload, signature), each Base64-encoded and separated by dots. Understanding this structure helps you debug authentication issues:
 
 ```json
 {
@@ -209,6 +234,15 @@ A JWT token contains:
 ```
 
 ### Validation Steps
+
+Each validation step catches a different type of attack or misconfiguration. Skipping any step creates a security vulnerability:
+
+1. **Decode header** → Get the key ID to find the right public key
+2. **Fetch JWKS** → Get the IdP's public keys (cached for performance)
+3. **Verify signature** → Prove the IdP issued this token
+4. **Check expiration** → Reject old tokens (prevents replay attacks)
+5. **Check issuer** → Ensure token came from your IdP (prevents cross-tenant attacks)
+6. **Check audience** → Ensure token was meant for your app (prevents token reuse)
 
 ```rust
 impl JwtValidator {
@@ -246,7 +280,14 @@ impl JwtValidator {
 
 ## Scope-Based Authorization
 
-Define tool permissions with scopes:
+Scopes are permission labels attached to tokens. When a user authenticates, the IdP includes scopes based on their role or permissions. Your tools check these scopes to decide what operations to allow.
+
+**Common scope patterns:**
+- `read:resource` / `write:resource` — Read/write separation
+- `admin:resource` — Administrative operations
+- `resource:action` — Fine-grained actions (e.g., `customers:delete`)
+
+Scopes let you implement least-privilege access: users get only the permissions they need.
 
 ```rust
 #[derive(TypedTool)]
@@ -284,7 +325,9 @@ impl DeleteCustomer {
 
 ## Multi-Tenant Configuration
 
-For servers supporting multiple organizations:
+Multi-tenant MCP servers serve multiple organizations, each with their own IdP. A SaaS product might support customers using Okta, Auth0, or their own enterprise IdP. The server must validate tokens from any of these issuers while ensuring users from one tenant can't access another tenant's data.
+
+The key insight: decode the token's issuer claim first (without full validation), then use the issuer to select the appropriate validator.
 
 ```rust
 pub struct MultiTenantValidator {
@@ -310,7 +353,15 @@ impl MultiTenantValidator {
 
 ## Error Handling
 
-Return proper OAuth errors:
+OAuth errors must be precise—clients need to know whether to retry with a new token (401) or inform the user they lack permissions (403). Getting this wrong frustrates users and makes debugging harder.
+
+**401 Unauthorized** — "I don't know who you are"
+- Missing token, expired token, invalid signature
+- Client should re-authenticate
+
+**403 Forbidden** — "I know who you are, but you can't do this"
+- Valid token but insufficient scopes
+- Client should inform user, not retry
 
 ```rust
 // 401 Unauthorized - missing or invalid credentials
@@ -326,7 +377,16 @@ HttpResponse::unauthorized()
 
 ## Testing OAuth
 
+Testing authenticated endpoints is tricky—you don't want tests depending on a real IdP. The solution: mock validators that simulate authentication without network calls. Your tests can create any user identity and scope combination.
+
+**Testing strategies:**
+- **Unit tests:** Mock validator with configurable users/scopes
+- **Integration tests:** Test against a local IdP (like Keycloak in Docker)
+- **E2E tests:** Test against your staging IdP with test accounts
+
 ### Mock Validator for Tests
+
+The mock validator lets you test any authentication scenario without real tokens:
 
 ```rust
 #[cfg(test)]
@@ -372,7 +432,9 @@ mod tests {
 
 ## Security Best Practices
 
-1. **Always validate tokens server-side** - Don't trust client claims
+These practices come from real-world OAuth incidents. Each addresses a specific attack vector:
+
+1. **Always validate tokens server-side** - Don't trust client claims. Clients can be compromised.
 2. **Use short-lived tokens** - 1 hour maximum for access tokens
 3. **Implement token refresh** - Don't force users to re-authenticate
 4. **Log authentication events** - For security auditing
@@ -380,7 +442,15 @@ mod tests {
 6. **Rotate signing keys** - Follow your IdP's key rotation schedule
 7. **Validate all claims** - issuer, audience, expiration, etc.
 
-## Exercises
+## Knowledge Check
+
+Test your understanding of OAuth for MCP:
+
+{{#quiz ../quizzes/ch13-oauth.toml}}
+
+## Practice Ideas
+
+These informal exercises help reinforce the concepts. For structured exercises with starter code and tests, see the chapter exercise pages.
 
 1. **Add OAuth to calculator**: Implement authentication for your calculator server
 

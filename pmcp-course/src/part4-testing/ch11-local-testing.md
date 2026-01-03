@@ -13,33 +13,48 @@ By the end of this chapter, you will:
 
 ## The Testing Pyramid for MCP Servers
 
+The testing pyramid is a mental model for balancing different types of tests. The key insight: **lower levels are faster and cheaper, higher levels are slower but more realistic**. A healthy test suite has many unit tests, fewer integration tests, and even fewer end-to-end tests.
+
+For MCP servers, this translates to:
+- **Unit tests (base):** Test your tool logic in isolation—fast, reliable, catch logic bugs
+- **Integration tests (middle):** Test MCP protocol interactions—catch format and schema bugs
+- **E2E tests (top):** Test with real clients—catch deployment and configuration bugs
+
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                    MCP Testing Pyramid                              │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│                          ┌─────────┐                               │
-│                         /  E2E     \         MCP Inspector         │
-│                        /  Testing   \        Claude Desktop        │
-│                       /─────────────\                              │
-│                      /   mcp-tester  \       Scenario files        │
-│                     /   Integration   \      API testing           │
-│                    /───────────────────\                           │
-│                   /    Rust Unit Tests  \    Tool logic            │
-│                  /   Property Tests      \   Input validation      │
-│                 /─────────────────────────\                        │
+│                          ┌─────────┐                                │
+│                         /  E2E     \         MCP Inspector          │
+│                        /  Testing   \        Claude Desktop         │
+│                       /──────────────\                              │
+│                      /   mcp-tester   \       Scenario files        │
+│                     /   Integration    \      API testing           │
+│                    /────────────────────\                           │
+│                   /    Rust Unit Tests   \    Tool logic            │
+│                  /   Property Tests       \   Input validation      │
+│                 /──────────────────────────\                        │
 │                                                                     │
-│  More tests at base, fewer at top                                  │
-│  Base runs fastest, top runs slowest                               │
+│  More tests at base, fewer at top                                   │
+│  Base runs fastest, top runs slowest                                │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Rust Unit Tests
 
-Before testing MCP protocol interactions, test your core tool logic with standard Rust tests.
+Before testing MCP protocol interactions, test your core tool logic with standard Rust tests. Unit tests are your first line of defense—they run in milliseconds, don't require a running server, and catch bugs at the source.
+
+**Why unit test first:**
+- Fast feedback loop (run in <1 second)
+- Precise error location (the failing test points to the broken function)
+- Easy to test edge cases (no network or database setup)
+- Serve as documentation (tests show how functions should be used)
 
 ### Testing Tool Logic
+
+Start by testing the pure functions that implement your tool's business logic. These functions should be independent of the MCP protocol.
 
 ```rust
 // src/tools/calculator.rs
@@ -94,6 +109,8 @@ mod tests {
 ```
 
 ### Testing Input Validation
+
+Input validation is critical for MCP servers—bad input can cause crashes, security vulnerabilities, or confusing errors. Test your validation logic thoroughly: valid inputs should pass, invalid inputs should fail with helpful messages.
 
 ```rust
 // src/tools/query.rs
@@ -189,6 +206,8 @@ mod tests {
 
 ### Testing MCP Response Formatting
 
+MCP has specific requirements for response format. These tests verify your server produces correctly structured responses that clients can parse.
+
 ```rust
 // src/mcp/response.rs
 use serde_json::{json, Value};
@@ -249,7 +268,13 @@ mod tests {
 
 ### Property-Based Testing with proptest
 
-For complex logic, property-based tests catch edge cases you might miss:
+Property-based testing takes a different approach: instead of testing specific inputs, you define *properties* that should hold for *all* inputs, and the framework generates thousands of random inputs to try to break those properties.
+
+**Why property-based testing matters:**
+- Catches edge cases you didn't think of
+- Tests with inputs you'd never manually write (extreme values, unicode, etc.)
+- Forces you to think about invariants, not just examples
+- Often finds bugs that manual tests miss
 
 ```rust
 // src/tools/calculator.rs
@@ -293,7 +318,12 @@ mod property_tests {
 
 ### Async Test Patterns
 
-For database tools and async operations:
+Most MCP tools perform async operations (database queries, HTTP calls, file I/O). Testing async code requires some extra setup, but the patterns are well-established.
+
+**Key considerations:**
+- Use `#[tokio::test]` instead of `#[test]` for async tests
+- Set up and tear down test data to avoid test pollution
+- Use test databases or mocks to avoid affecting production data
 
 ```rust
 // src/tools/database.rs
@@ -429,32 +459,32 @@ mcp-tester is the core of PMCP's testing strategy. It generates test scenarios f
 │     cargo pmcp test generate                                        │
 │           │                                                         │
 │           ▼                                                         │
-│     ┌─────────────┐     ┌─────────────┐                            │
-│     │ MCP Server  │────▶│   Schema    │                            │
-│     │ (running)   │     │  Introspect │                            │
-│     └─────────────┘     └──────┬──────┘                            │
+│     ┌─────────────┐     ┌─────────────┐                             │
+│     │ MCP Server  │────▶│   Schema    │                             │
+│     │ (running)   │     │  Introspect │                             │
+│     └─────────────┘     └──────┬──────┘                             │
 │                                │                                    │
 │                                ▼                                    │
-│     ┌──────────────────────────────────────────────────────┐       │
-│     │              Generated Scenario Files                 │       │
-│     │  tests/scenarios/                                     │       │
-│     │  ├── tool_name_valid.yaml      (happy paths)         │       │
-│     │  ├── tool_name_invalid.yaml    (error cases)         │       │
-│     │  ├── tool_name_edge.yaml       (boundary values)     │       │
-│     │  └── tool_name_types.yaml      (type validation)     │       │
-│     └──────────────────────────────────────────────────────┘       │
+│     ┌──────────────────────────────────────────────────────┐        │
+│     │              Generated Scenario Files                │        │
+│     │  tests/scenarios/                                    │        │
+│     │  ├── tool_name_valid.yaml      (happy paths)         │        │
+│     │  ├── tool_name_invalid.yaml    (error cases)         │        │
+│     │  ├── tool_name_edge.yaml       (boundary values)     │        │
+│     │  └── tool_name_types.yaml      (type validation)     │        │
+│     └──────────────────────────────────────────────────────┘        │
 │                                                                     │
 │  2. EDIT (optional)                                                 │
-│     Add custom scenarios, assertions, edge cases                   │
+│     Add custom scenarios, assertions, edge cases                    │
 │                                                                     │
 │  3. RUN                                                             │
 │     cargo pmcp test run                                             │
 │           │                                                         │
 │           ▼                                                         │
-│     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐       │
-│     │  Scenario   │────▶│ MCP Server  │────▶│   Assert    │       │
-│     │   Files     │     │  Execute    │     │   Results   │       │
-│     └─────────────┘     └─────────────┘     └─────────────┘       │
+│     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐         │
+│     │  Scenario   │────▶│ MCP Server  │────▶│   Assert    │         │
+│     │   Files     │     │  Execute    │     │   Results   │         │
+│     └─────────────┘     └─────────────┘     └─────────────┘         │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -578,7 +608,15 @@ Effective MCP server testing combines:
 
 The key insight: most MCP bugs occur at the protocol level (wrong JSON format, missing fields, invalid responses), not in business logic. mcp-tester catches these automatically.
 
-## Exercises
+## Knowledge Check
+
+Test your understanding of local MCP testing:
+
+{{#quiz ../quizzes/ch11-local-testing.toml}}
+
+## Practice Ideas
+
+These informal exercises help reinforce the concepts. For structured exercises with starter code and tests, see the chapter exercise pages.
 
 1. **Add unit tests** to an existing tool with 100% branch coverage
 2. **Generate scenarios** for the db-explorer server and review them

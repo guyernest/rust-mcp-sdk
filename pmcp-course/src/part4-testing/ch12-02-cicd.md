@@ -2,15 +2,24 @@
 
 Integrating MCP server testing into CI/CD pipelines ensures every change is tested before reaching production. This chapter covers patterns for GitHub Actions, GitLab CI, and other CI systems.
 
+**Why CI/CD matters for MCP servers:**
+- Catches bugs before they reach production
+- Ensures consistent quality across all changes
+- Provides confidence for rapid iteration
+- Documents the expected behavior through passing tests
+- Enables safe, automated deployments
+
 ## Pipeline Architecture
+
+A well-designed pipeline progresses through stages, with each stage adding more confidence. If any stage fails, deployment stops. This "fail fast" approach catches problems early when they're cheapest to fix.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    MCP Server CI/CD Pipeline                         │
+│                    MCP Server CI/CD Pipeline                        │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  ┌────────────────────────────────────────────────────────────────┐ │
-│  │                         COMMIT                                  │ │
+│  │                         COMMIT                                 │ │
 │  └─────────────────────────────┬──────────────────────────────────┘ │
 │                                │                                    │
 │                                ▼                                    │
@@ -26,7 +35,7 @@ Integrating MCP server testing into CI/CD pipelines ensures every change is test
 │  ┌────────────────────────────────────────────────────────────────┐ │
 │  │  STAGE 2: Integration Tests                                    │ │
 │  │  • Start local server with test database                       │ │
-│  │  • cargo pmcp test run (full suite)                           │ │
+│  │  • cargo pmcp test run (full suite)                            │ │
 │  │  • Generate coverage report                                    │ │
 │  │  ⏱ ~5-10 minutes                                               │ │
 │  └─────────────────────────────┬──────────────────────────────────┘ │
@@ -54,7 +63,7 @@ Integrating MCP server testing into CI/CD pipelines ensures every change is test
 │  │  STAGE 5: Production Deployment                                │ │
 │  │  • Canary deployment (10%)                                     │ │
 │  │  • Smoke tests on canary                                       │ │
-│  │  • Gradual rollout (25%, 50%, 100%)                           │ │
+│  │  • Gradual rollout (25%, 50%, 100%)                            │ │
 │  │  • Monitor for errors                                          │ │
 │  │  ⏱ ~15-30 minutes                                              │ │
 │  └────────────────────────────────────────────────────────────────┘ │
@@ -64,7 +73,11 @@ Integrating MCP server testing into CI/CD pipelines ensures every change is test
 
 ## GitHub Actions Configuration
 
+GitHub Actions is the most common CI/CD platform for Rust projects. The workflows below are production-ready templates you can adapt for your MCP server.
+
 ### Complete Workflow
+
+This workflow demonstrates a full pipeline from commit to production. Study each job to understand its purpose, then customize for your needs.
 
 ```yaml
 # .github/workflows/ci.yml
@@ -446,7 +459,11 @@ jobs:
 
 ## Test Result Reporting
 
+Good reporting makes the difference between "tests failed" and "tests failed and here's exactly what broke." CI systems can parse standardized formats like JUnit XML to display results inline with pull requests.
+
 ### JUnit Format for CI Systems
+
+JUnit XML is the universal format for test results. Almost every CI system can parse it to show test results, highlight failures, and track trends over time.
 
 ```bash
 # Generate JUnit XML for CI parsing
@@ -536,7 +553,11 @@ Expected content to contain 'updated', got: '{"status":"unchanged"}'
 
 ## Parallel Test Execution
 
+Large test suites can take a long time to run. Parallelization splits tests across multiple runners, dramatically reducing total time. The trade-off: more complex configuration and potential for resource contention.
+
 ### Matrix Strategy
+
+GitHub Actions' matrix feature runs the same job with different parameters. Use it to split tests by category (smoke, integration, security) or by test file.
 
 ```yaml
 jobs:
@@ -590,7 +611,11 @@ cargo pmcp test run \
 
 ## Caching Strategies
 
+Rust builds are notoriously slow because of the compilation model. Caching compiled dependencies between runs can cut build times from 10+ minutes to under 2 minutes. The key is caching the right things.
+
 ### Rust Build Cache
+
+The `rust-cache` action intelligently caches compiled dependencies while invalidating when Cargo.lock or Cargo.toml changes. This single action can save 5-10 minutes per CI run.
 
 ```yaml
 - name: Cache Rust
@@ -627,7 +652,9 @@ Effective CI/CD integration requires:
 5. **Caching** - Speed up builds with proper caching
 6. **Rollback strategy** - Auto-rollback on test failures
 
-## Exercises
+## Practice Ideas
+
+These informal exercises help reinforce the concepts. For structured exercises with starter code and tests, see the chapter exercise pages.
 
 1. **Set up GitHub Actions** - Create a complete CI pipeline for an MCP server
 2. **Add test reporting** - Configure JUnit reporting and GitHub annotations

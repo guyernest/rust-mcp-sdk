@@ -9,11 +9,12 @@ pass_threshold = 0.7
 type = "MultipleChoice"
 prompt.prompt = "What is the key difference between MCP Resources and Tools?"
 prompt.distractors = [
-    "Resources are faster than tools",
-    "Tools support JSON but resources don't",
-    "Resources require authentication but tools don't"
+    "Resources are faster than tools due to caching at the protocol level",
+    "Tools support JSON but resources only return plain text formats",
+    "Resources require authentication but tools can be called anonymously"
 ]
 answer.answer = "Resources provide stable, addressable data; Tools perform actions that may have side effects"
+answer.position = 0
 context = """
 Resources are like bookmarks - stable data with a URI identity (db://schema).
 Tools are like form submissions - actions with potential side effects. The AI
@@ -26,11 +27,12 @@ id = "d6a1b2c3-e5f6-7890-abcd-ef1234560601"
 type = "MultipleChoice"
 prompt.prompt = "Why are Prompts described as the 'primary mechanism for user-controlled workflows'?"
 prompt.distractors = [
-    "Prompts are faster than tools",
-    "Prompts bypass AI decision-making entirely",
-    "Prompts are required by MCP protocol"
+    "Prompts are faster than tools due to reduced round-trip overhead",
+    "Prompts bypass AI decision-making entirely and execute deterministically",
+    "Prompts are required by MCP protocol for all workflow-type operations"
 ]
 answer.answer = "Users explicitly invoke prompts to select a workflow, giving them predictable control over AI behavior"
+answer.position = 1
 context = """
 Unlike tools (AI decides when to use) and resources (AI reads for context),
 prompts are explicitly invoked by users. When a user types /quarterly-analysis,
@@ -43,11 +45,12 @@ id = "d6a1b2c3-e5f6-7890-abcd-ef1234560602"
 type = "MultipleChoice"
 prompt.prompt = "What should you use for database schema information - a Resource or a Tool?"
 prompt.distractors = [
-    "A tool called 'get_schema'",
-    "Either one works equally well",
-    "A prompt that fetches the schema"
+    "A tool called 'get_schema' that retrieves the current database structure",
+    "Either one works equally well since they're functionally equivalent",
+    "A prompt that fetches the schema when the user explicitly requests it"
 ]
 answer.answer = "A Resource like 'db://schema' because schemas are stable, addressable data"
+answer.position = 2
 context = """
 Schema information is stable reference data with a clear identity - perfect for
 a resource. The AI can read db://schema proactively for context without counting
@@ -60,11 +63,12 @@ id = "d6a1b2c3-e5f6-7890-abcd-ef1234560603"
 type = "MultipleChoice"
 prompt.prompt = "What is the guiding principle for choosing between soft and hard workflows?"
 prompt.distractors = [
-    "Use soft workflows by default because they're more flexible",
-    "Use hard workflows only for simple single-step operations",
-    "Let the AI decide which type of workflow to use"
+    "Use soft workflows by default because they're more flexible and adaptable",
+    "Use hard workflows only for simple single-step operations with no branching",
+    "Let the AI decide which type of workflow to use based on the context"
 ]
 answer.answer = "Do as much as possible on the server side, and allow the AI to complete the workflow if you can't"
+answer.position = 3
 context = """
 Hard workflows execute on the server in a single round-trip with deterministic
 results. Soft workflows require multiple round-trips with the AI interpreting
@@ -77,11 +81,12 @@ id = "d6a1b2c3-e5f6-7890-abcd-ef1234560604"
 type = "MultipleChoice"
 prompt.prompt = "What is the rule of thumb for deciding between Resources and Tools?"
 prompt.distractors = [
-    "Use resources for anything JSON-formatted",
-    "Use tools for anything requiring parameters",
-    "Use resources for read-only, tools for write"
+    "Use resources for anything JSON-formatted and tools for other formats",
+    "Use tools for anything requiring parameters and resources for static data",
+    "Use resources for read-only operations and tools for write operations"
 ]
 answer.answer = "If you'd bookmark it, use a Resource; if you'd submit a form, use a Tool"
+answer.position = 0
 context = """
 The bookmark/form metaphor captures the distinction well. Bookmarks point to
 stable, addressable content (resources). Forms submit data and trigger actions
@@ -93,11 +98,12 @@ id = "d6a1b2c3-e5f6-7890-abcd-ef1234560605"
 type = "MultipleChoice"
 prompt.prompt = "In a SequentialWorkflow, what is the difference between a step name and a binding name?"
 prompt.distractors = [
-    "They are the same thing - interchangeable terms",
-    "Step names are for tools, binding names are for resources",
-    "Binding names are automatically generated from step names"
+    "They are the same thing - interchangeable terms in the workflow API",
+    "Step names are for tools while binding names are specifically for resources",
+    "Binding names are automatically generated from step names by the SDK"
 ]
 answer.answer = "Step name identifies the step; binding name (from .bind()) is what other steps reference with from_step()"
+answer.position = 1
 context = """
 This is a critical distinction. WorkflowStep::new('analyze', ...).bind('analysis_result')
 creates step 'analyze' with binding 'analysis_result'. Other steps must use
@@ -122,11 +128,12 @@ id = "d6a1b2c3-e5f6-7890-abcd-ef1234560607"
 type = "MultipleChoice"
 prompt.prompt = "What are the main advantages of hard workflows over soft workflows?"
 prompt.distractors = [
-    "Hard workflows support more complex logic",
-    "Hard workflows work with more MCP clients",
-    "Hard workflows require less code to implement"
+    "Hard workflows support more complex logic with branching and conditionals",
+    "Hard workflows work with more MCP clients due to simpler protocol requirements",
+    "Hard workflows require less code to implement and are easier to maintain"
 ]
 answer.answer = "Single round-trip, deterministic execution, automatic data binding, and pure function testing"
+answer.position = 2
 context = """
 Hard workflows execute entirely server-side: one round-trip instead of 6+ for
 a 3-step soft workflow, deterministic order (server enforces it), automatic
@@ -139,11 +146,12 @@ id = "d6a1b2c3-e5f6-7890-abcd-ef1234560608"
 type = "MultipleChoice"
 prompt.prompt = "When does workflow validation occur in the PMCP SDK?"
 prompt.distractors = [
-    "Only when you explicitly call .validate()",
-    "At runtime when a user invokes the workflow",
-    "During cargo build compilation"
+    "Only when you explicitly call .validate() on the workflow builder",
+    "At runtime when a user invokes the workflow through a prompt",
+    "During cargo build compilation as part of the proc macro expansion"
 ]
 answer.answer = "Automatically when you register with .prompt_workflow() - if invalid, the server won't build"
+answer.position = 3
 context = """
 Workflow validation is automatic and fail-fast. When you call .prompt_workflow(workflow),
 the builder validates the workflow structure - checking for unknown bindings,
@@ -157,11 +165,12 @@ id = "d6a1b2c3-e5f6-7890-abcd-ef1234560611"
 type = "MultipleChoice"
 prompt.prompt = "When should you use a hybrid workflow instead of a fully hard workflow?"
 prompt.distractors = [
-    "When you want to reduce server load",
-    "When the workflow has more than 3 steps",
-    "When you need to support multiple MCP clients"
+    "When you want to reduce server load by offloading work to the client",
+    "When the workflow has more than 3 steps and becomes too complex",
+    "When you need to support multiple MCP clients with different capabilities"
 ]
 answer.answer = "When some steps require LLM judgment like fuzzy matching or context-dependent decisions"
+answer.position = 0
 context = """
 Hybrid workflows execute deterministic steps on the server, then hand off to the
 AI for steps requiring reasoning. For example, 'add task to project' might list

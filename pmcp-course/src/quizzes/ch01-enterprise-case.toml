@@ -9,11 +9,12 @@ pass_threshold = 0.7
 type = "MultipleChoice"
 prompt.prompt = "What is the 'copy-paste tax' described in the enterprise context?"
 prompt.distractors = [
-    "A licensing fee for using AI tools in enterprise",
-    "The cost of data storage for AI systems",
-    "A government regulation on AI usage"
+    "A licensing fee for using AI tools in enterprise environments",
+    "The cost of data storage and compute resources for AI systems",
+    "A government regulation on enterprise AI usage and data handling"
 ]
 answer.answer = "The time and errors from manually copying data between enterprise systems and AI tools"
+answer.position = 0
 context = """
 The copy-paste tax refers to the productivity loss when employees must manually
 copy data from enterprise systems (databases, CRMs, etc.) into AI assistants
@@ -25,11 +26,12 @@ id = "a1b2c3d4-e5f6-7890-abcd-ef1234567801"
 type = "MultipleChoice"
 prompt.prompt = "What is the key distinction between what LLMs excel at versus what they cannot do?"
 prompt.distractors = [
-    "LLMs excel at database queries but cannot write creative content",
-    "LLMs excel at real-time data but cannot reason about text",
-    "LLMs excel at arithmetic but cannot understand natural language"
+    "LLMs excel at database queries and API calls but cannot write creative content",
+    "LLMs excel at real-time data processing but cannot reason about textual information",
+    "LLMs excel at precise arithmetic calculations but cannot understand natural language"
 ]
 answer.answer = "LLMs excel at probabilistic pattern recognition but cannot perform deterministic symbolic computation"
+answer.position = 1
 context = """
 LLMs are statistical models trained on text patterns. They excel at understanding
 intent, synthesis, and reasoning. However, they cannot query databases, call APIs,
@@ -41,11 +43,12 @@ id = "a1b2c3d4-e5f6-7890-abcd-ef1234567802"
 type = "MultipleChoice"
 prompt.prompt = "Why is fine-tuning LLMs no longer recommended for enterprise data access?"
 prompt.distractors = [
-    "Fine-tuning is too fast and easy",
-    "Fine-tuning makes models too accurate",
-    "Fine-tuning is only available for open-source models"
+    "Fine-tuning is too fast and easy, making it impractical for enterprise workflows",
+    "Fine-tuning makes models too accurate and creates compliance concerns for auditors",
+    "Fine-tuning is only available for open-source models, not enterprise LLM providers"
 ]
 answer.answer = "Fine-tuning teaches language patterns, not data access—the model still cannot query your live data"
+answer.position = 2
 context = """
 Fine-tuning bakes knowledge into model weights during training. It cannot provide
 access to live, real-time enterprise data. Additionally, fine-tuned models become
@@ -57,11 +60,12 @@ id = "a1b2c3d4-e5f6-7890-abcd-ef1234567803"
 type = "MultipleChoice"
 prompt.prompt = "What is a key limitation of RAG (Retrieval-Augmented Generation) compared to MCP?"
 prompt.distractors = [
-    "RAG cannot work with any LLM",
-    "RAG requires fine-tuning first",
-    "RAG is more expensive than MCP"
+    "RAG cannot work with any LLM and requires specialized model architectures for retrieval",
+    "RAG requires fine-tuning first before it can retrieve any documents from your corpus",
+    "RAG is more expensive than MCP due to embedding generation and vector storage costs"
 ]
 answer.answer = "RAG retrieves documents but cannot perform actions like creating tickets or executing database queries"
+answer.position = 3
 context = """
 RAG excels at retrieving relevant text chunks for Q&A over document collections.
 However, it cannot execute SQL queries, call APIs with exact parameters, or
@@ -73,11 +77,12 @@ id = "a1b2c3d4-e5f6-7890-abcd-ef1234567804"
 type = "MultipleChoice"
 prompt.prompt = "What is the main problem with hand-written agent code that embeds API calls directly?"
 prompt.distractors = [
-    "It runs too fast",
-    "It requires no authentication",
-    "It only works with open-source LLMs"
+    "It runs too fast and creates rate limiting issues with downstream APIs and services",
+    "It requires no authentication, leaving enterprise systems exposed to unauthorized access",
+    "It only works with open-source LLMs and cannot integrate with proprietary AI providers"
 ]
 answer.answer = "Tight coupling, no reusability across applications, and maintenance burden that multiplies with each integration"
+answer.position = 0
 context = """
 Hand-written agents tightly couple business logic to specific APIs. Each AI application
 must maintain its own integrations, leading to 20 integrations × 5 apps = 100 maintenance
@@ -89,11 +94,12 @@ id = "a1b2c3d4-e5f6-7890-abcd-ef1234567805"
 type = "MultipleChoice"
 prompt.prompt = "In the MCP authentication flow, what happens when the AI assistant calls an MCP server?"
 prompt.distractors = [
-    "The MCP server uses its own admin credentials to access enterprise data",
-    "The user must manually approve each individual request",
-    "The AI assistant directly queries the enterprise system"
+    "The MCP server uses its own admin credentials to access enterprise data on behalf of users",
+    "The user must manually approve each individual request through a confirmation dialog box",
+    "The AI assistant directly queries the enterprise system bypassing the MCP server entirely"
 ]
 answer.answer = "The AI sends the user's access token, and the MCP server validates it and queries data with user permissions"
+answer.position = 1
 context = """
 MCP supports OAuth 2.0 delegated access. The user authenticates once, and the AI
 assistant includes the access token with tool calls. The MCP server validates the
@@ -106,11 +112,12 @@ id = "a1b2c3d4-e5f6-7890-abcd-ef1234567806"
 type = "MultipleChoice"
 prompt.prompt = "On the AI capability spectrum, which tasks are on the 'MCP Essential' side?"
 prompt.distractors = [
-    "Creative writing and sentiment analysis",
-    "Language translation and text summarization",
-    "Historical facts and scientific concepts"
+    "Creative writing, sentiment analysis, and generating marketing copy from prompts",
+    "Language translation, text summarization, and document reformatting tasks",
+    "Historical facts, scientific concepts, and explaining technical documentation"
 ]
 answer.answer = "Database queries, real-time data access, exact math, and code execution"
+answer.position = 2
 context = """
 The right side of the spectrum contains deterministic tasks that are impossible
 without external tools: database queries need database connections, real-time
@@ -134,11 +141,12 @@ id = "a1b2c3d4-e5f6-7890-abcd-ef1234567808"
 type = "MultipleChoice"
 prompt.prompt = "Why does MCP provide 'model flexibility' that fine-tuning does not?"
 prompt.distractors = [
-    "MCP only works with one specific model",
-    "MCP requires retraining when models update",
-    "MCP servers are written in the same language as LLMs"
+    "MCP only works with one specific model and requires vendor certification for compatibility",
+    "MCP requires retraining when models update, similar to fine-tuning but with less data",
+    "MCP servers are written in the same language as LLMs and share their neural architecture"
 ]
 answer.answer = "MCP servers work with any compliant client, so you can switch foundation models without changing integration code"
+answer.position = 3
 context = """
 When you fine-tune a model, your investment is frozen in that specific base model.
 MCP servers are model-agnostic—the same server works with Claude, GPT, Gemini, or
@@ -150,11 +158,12 @@ id = "a1b2c3d4-e5f6-7890-abcd-ef1234567809"
 type = "MultipleChoice"
 prompt.prompt = "Which organizations have adopted MCP for their AI products?"
 prompt.distractors = [
-    "Only Anthropic",
-    "Only open-source projects",
-    "Only enterprise software vendors"
+    "Only Anthropic, since they created the MCP protocol specification and reference implementation",
+    "Only open-source projects and independent developers building experimental AI tools",
+    "Only enterprise software vendors selling B2B solutions for regulated industries"
 ]
 answer.answer = "Anthropic, OpenAI, Google, Microsoft, and IDE vendors like Cursor and Windsurf"
+answer.position = 0
 context = """
 MCP, published by Anthropic in late 2024, has been widely adopted. Claude Desktop,
 ChatGPT desktop apps, Gemini integrations, GitHub Copilot, and various IDEs all

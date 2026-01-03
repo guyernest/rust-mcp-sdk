@@ -9,45 +9,45 @@ Building MCP servers with AI assistance transforms the development experience. T
 │              AI-Assisted MCP Development Stack                          │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                    AI Coding Assistant                          │   │
-│  │  (Claude Code, Kiro, Cursor, Copilot)                          │   │
-│  │                                                                  │   │
-│  │  • Understands requirements                                     │   │
-│  │  • Generates type-safe code                                     │   │
-│  │  • Interprets compiler feedback                                 │   │
-│  │  • Iterates until quality gates pass                           │   │
-│  └──────────────────────────┬──────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │                    AI Coding Assistant                          │    │
+│  │  (Claude Code, Kiro, Cursor, Copilot)                           │    │
+│  │                                                                 │    │
+│  │  • Understands requirements                                     │    │
+│  │  • Generates type-safe code                                     │    │
+│  │  • Interprets compiler feedback                                 │    │
+│  │  • Iterates until quality gates pass                            │    │
+│  └──────────────────────────┬──────────────────────────────────────┘    │
 │                             │                                           │
 │                             ▼                                           │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                    cargo-pmcp Toolkit                           │   │
-│  │                                                                  │   │
-│  │  • Scaffolds complete server structure                          │   │
-│  │  • Enforces proven patterns                                     │   │
-│  │  • Hot-reload development server                                │   │
-│  │  • Automated test generation                                    │   │
-│  └──────────────────────────┬──────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │                    cargo-pmcp Toolkit                           │    │
+│  │                                                                 │    │
+│  │  • Scaffolds complete server structure                          │    │
+│  │  • Enforces proven patterns                                     │    │
+│  │  • Hot-reload development server                                │    │
+│  │  • Automated test generation                                    │    │
+│  └──────────────────────────┬──────────────────────────────────────┘    │
 │                             │                                           │
 │                             ▼                                           │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                    Rust Compiler                                │   │
-│  │                                                                  │   │
-│  │  • Catches errors at compile time                               │   │
-│  │  • Provides actionable error messages                           │   │
-│  │  • Enforces memory safety                                       │   │
-│  │  • Type system prevents runtime bugs                            │   │
-│  └──────────────────────────┬──────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │                    Rust Compiler                                │    │
+│  │                                                                 │    │
+│  │  • Catches errors at compile time                               │    │
+│  │  • Provides actionable error messages                           │    │
+│  │  • Enforces memory safety                                       │    │
+│  │  • Type system prevents runtime bugs                            │    │
+│  └──────────────────────────┬──────────────────────────────────────┘    │
 │                             │                                           │
 │                             ▼                                           │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                Production MCP Server                            │   │
-│  │                                                                  │   │
-│  │  • Type-safe tools with JSON Schema                             │   │
-│  │  • Comprehensive error handling                                 │   │
-│  │  • 80%+ test coverage                                           │   │
-│  │  • Zero clippy warnings                                         │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │                Production MCP Server                            │    │
+│  │                                                                 │    │
+│  │  • Type-safe tools with JSON Schema                             │    │
+│  │  • Comprehensive error handling                                 │    │
+│  │  • 80%+ test coverage                                           │    │
+│  │  • Zero clippy warnings                                         │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -240,6 +240,12 @@ AI assistants armed with MCP knowledge can:
 - Pass all quality gates
 
 The combination of Rust's compiler, cargo-pmcp's scaffolding, and AI's code generation creates a development experience where you focus on *what* to build, not *how* to build it.
+
+## Knowledge Check
+
+Test your understanding of AI-assisted MCP development:
+
+{{#quiz ../quizzes/ch15-ai-assisted.toml}}
 
 ---
 

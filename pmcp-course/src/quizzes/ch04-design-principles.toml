@@ -9,11 +9,12 @@ pass_threshold = 0.7
 type = "MultipleChoice"
 prompt.prompt = "Why don't MCP server developers control which other servers are connected to the AI client?"
 prompt.distractors = [
-    "Because MCP servers are isolated in containers",
-    "Because the MCP protocol doesn't support multiple servers",
-    "Because server developers must register with a central authority"
+    "Because MCP servers are isolated in containers with no inter-server communication",
+    "Because the MCP protocol doesn't support multiple concurrent server connections",
+    "Because server developers must register with a central authority for approval"
 ]
 answer.answer = "Because users configure which MCP servers their AI client (like Claude Desktop) connects to"
+answer.position = 1
 context = """
 Users control their AI client's configuration, deciding which MCP servers to connect.
 A developer building a sales MCP server has no control over whether the user also
@@ -26,11 +27,12 @@ id = "d4a1b2c3-e5f6-7890-abcd-ef1234560401"
 type = "MultipleChoice"
 prompt.prompt = "What is the 'API-to-MCP trap' described in the anti-patterns chapter?"
 prompt.distractors = [
-    "Using REST APIs instead of MCP",
-    "Not implementing OAuth authentication",
-    "Forgetting to add error handling"
+    "Using REST APIs instead of MCP for all enterprise integrations",
+    "Not implementing OAuth authentication for secure access to tools",
+    "Forgetting to add error handling and validation to tool handlers"
 ]
 answer.answer = "Directly converting every REST endpoint into an MCP tool, creating tool sprawl"
+answer.position = 2
 context = """
 The API-to-MCP trap occurs when developers mechanically convert each REST endpoint
 into an MCP tool. A CRUD API becomes 5 tools per entity, leading to dozens of tools.
@@ -42,11 +44,12 @@ id = "d4a1b2c3-e5f6-7890-abcd-ef1234560402"
 type = "MultipleChoice"
 prompt.prompt = "What is the primary mechanism for users to control how AI uses your MCP tools?"
 prompt.distractors = [
-    "Tool annotations and hints",
-    "Schema validation rules",
-    "Server configuration files"
+    "Tool annotations and hints embedded in the tool schema definition",
+    "Schema validation rules that constrain how tools can be invoked",
+    "Server configuration files that define tool behavior and permissions"
 ]
 answer.answer = "Prompts - users explicitly invoke them to select a workflow"
+answer.position = 3
 context = """
 While tools give the AI capabilities and resources provide context, prompts are
 the only MCP primitive where users have explicit control. When a user invokes
@@ -59,11 +62,12 @@ id = "d4a1b2c3-e5f6-7890-abcd-ef1234560403"
 type = "MultipleChoice"
 prompt.prompt = "Why should MCP tool names use domain prefixes like 'sales_query' instead of generic names like 'query'?"
 prompt.distractors = [
-    "It's required by the MCP specification",
-    "Generic names are reserved for system tools",
-    "It improves query performance"
+    "It's required by the MCP specification for all tools to have prefixes",
+    "Generic names are reserved for system tools and cannot be used by servers",
+    "It improves query performance through better routing and caching"
 ]
 answer.answer = "To avoid collisions with tools from other servers and help AI distinguish your tools"
+answer.position = 0
 context = """
 In a multi-server environment, generic names like 'query' or 'search' may collide
 with tools from postgres-server, filesystem-server, or others. Domain prefixes like
@@ -76,11 +80,12 @@ id = "d4a1b2c3-e5f6-7890-abcd-ef1234560404"
 type = "MultipleChoice"
 prompt.prompt = "What is the '50 Tools Test' for evaluating MCP server design?"
 prompt.distractors = [
-    "Testing that your server can handle 50 concurrent tool calls",
-    "Ensuring each tool completes in under 50 milliseconds",
-    "Verifying your server has exactly 50 tools"
+    "Testing that your server can handle 50 concurrent tool calls without degradation",
+    "Ensuring each tool completes in under 50 milliseconds for responsive UX",
+    "Verifying your server has exactly 50 tools to match the recommended limit"
 ]
 answer.answer = "Listing your tools alongside common servers' tools and checking if AI can easily distinguish yours"
+answer.position = 1
 context = """
 The 50 Tools Test imagines your tools listed among 50+ tools from various servers.
 If your tools have generic names like 'query', 'list', 'get', they'll be confused
@@ -93,11 +98,12 @@ id = "d4a1b2c3-e5f6-7890-abcd-ef1234560405"
 type = "MultipleChoice"
 prompt.prompt = "What is the problem with 'swiss army knife' tools that do many things?"
 prompt.distractors = [
-    "They're slower than single-purpose tools",
-    "MCP doesn't support tools with multiple operations",
-    "They require more memory"
+    "They're slower than single-purpose tools due to additional branching logic",
+    "MCP doesn't support tools with multiple operations in the same handler",
+    "They require more memory and increase the server's resource footprint"
 ]
 answer.answer = "AI must understand multiple behaviors from one tool, causing decision paralysis and parameter confusion"
+answer.position = 2
 context = """
 A tool like 'data_operation' with 8 different operations forces the AI to reason
 about which operation to choose and which parameters apply. Different operations
@@ -123,11 +129,12 @@ id = "d4a1b2c3-e5f6-7890-abcd-ef1234560407"
 type = "MultipleChoice"
 prompt.prompt = "What does the 'One Sentence Rule' state about tool design?"
 prompt.distractors = [
-    "Each tool should be callable with a single parameter",
-    "Tool names should be one word only",
-    "Tool responses should fit in one sentence"
+    "Each tool should be callable with a single parameter for simplicity",
+    "Tool names should be one word only without any underscores or prefixes",
+    "Tool responses should fit in one sentence to minimize token usage"
 ]
 answer.answer = "If you can't describe what a tool does in one clear sentence, it's doing too much"
+answer.position = 3
 context = """
 The One Sentence Rule is a quick test for single responsibility. 'Execute read-only
 SQL queries against the database' passes. 'Perform data operations - query, insert,
@@ -140,11 +147,12 @@ id = "d4a1b2c3-e5f6-7890-abcd-ef1234560408"
 type = "MultipleChoice"
 prompt.prompt = "Why is consistent verb usage (get_, list_, create_) important across MCP tools?"
 prompt.distractors = [
-    "It's required by the MCP protocol specification",
-    "It reduces the size of tool schemas",
-    "It improves network latency"
+    "It's required by the MCP protocol specification for all compliant servers",
+    "It reduces the size of tool schemas through naming compression algorithms",
+    "It improves network latency by enabling more efficient request routing"
 ]
 answer.answer = "It helps AI predict tool names and understand relationships between tools"
+answer.position = 0
 context = """
 Inconsistent verbs like 'get_customer', 'fetch_orders', 'retrieve_products',
 'load_inventory' confuse the AI - all mean the same thing. Consistent verbs like
@@ -157,11 +165,12 @@ id = "d4a1b2c3-e5f6-7890-abcd-ef1234560409"
 type = "MultipleChoice"
 prompt.prompt = "What is a key benefit of composable, single-purpose tools over multi-purpose tools?"
 prompt.distractors = [
-    "They use less memory",
-    "They're easier to implement",
-    "They require fewer network calls"
+    "They use less memory and have smaller resource footprints on the server",
+    "They're easier to implement because each tool has simpler logic to write",
+    "They require fewer network calls due to more efficient batching strategies"
 ]
 answer.answer = "Users get exactly what they need - query without analysis, analysis without report, or any combination"
+answer.position = 1
 context = """
 Single-purpose tools compose flexibly. With separate 'db_query', 'data_analyze',
 and 'report_generate' tools, the AI can query without analysis, analyze without

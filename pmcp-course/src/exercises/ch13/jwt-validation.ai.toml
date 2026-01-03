@@ -174,3 +174,11 @@ pub async fn admin_tool(input: Input, context: &ToolContext) -> Result<Output> {
     // ... implement tool
 }
 """
+
+[tutor.sdk_examples]
+description = "Explore these SDK examples for OAuth and authentication patterns"
+examples = [
+    { name = "16_oauth_server.rs", description = "Complete OAuth 2.0 server with scoped tools", run = "cargo run --example 16_oauth_server" },
+    { name = "20_oidc_discovery.rs", description = "OIDC discovery and dynamic configuration", run = "cargo run --example 20_oidc_discovery" },
+    { name = "57_tool_middleware_oauth.rs", description = "OAuth middleware for tool protection", run = "cargo run --example 57_tool_middleware_oauth --features streamable-http" },
+]

@@ -572,13 +572,15 @@ async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
 The best platform is the one that matches your specific requirements while minimizing complexity and cost.
 
-## Exercises
+## Practice Ideas
 
-### Exercise 1: Platform Comparison
+These informal exercises help reinforce the concepts.
+
+### Practice 1: Platform Comparison
 Deploy the same MCP server to all three platforms and measure cold start times, response latency, and costs.
 
-### Exercise 2: Cost Analysis
+### Practice 2: Cost Analysis
 Calculate the monthly cost for your expected traffic pattern on each platform and identify the break-even points.
 
-### Exercise 3: Migration Plan
+### Practice 3: Migration Plan
 Create a migration plan for moving an existing MCP server from one platform to another, identifying all required changes.

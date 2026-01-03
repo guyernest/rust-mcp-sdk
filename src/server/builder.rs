@@ -5,6 +5,11 @@ use crate::runtime::RwLock;
 use crate::server::auth::{AuthProvider, ToolAuthorizer};
 use crate::server::core::ServerCore;
 #[cfg(not(target_arch = "wasm32"))]
+use crate::server::observability::{
+    CloudWatchBackend, ConsoleBackend, McpObservabilityMiddleware, NullBackend,
+    ObservabilityBackend, ObservabilityConfig,
+};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::server::tool_middleware::{ToolMiddleware, ToolMiddlewareChain};
 use crate::server::{PromptHandler, ResourceHandler, SamplingHandler, ToolHandler};
 use crate::shared::middleware::EnhancedMiddlewareChain;
@@ -357,6 +362,120 @@ impl ServerCoreBuilder {
         self
     }
 
+    /// Enable observability for this server.
+    ///
+    /// This adds observability middleware that provides:
+    /// - Distributed tracing with trace/span IDs
+    /// - Request/response event logging
+    /// - Metrics emission (duration, count, errors)
+    ///
+    /// The backend is selected based on the configuration:
+    /// - "console" - Pretty or JSON output to stdout (development)
+    /// - "cloudwatch" - AWS `CloudWatch` EMF format (production)
+    /// - "null" - Discards all events (testing)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::server::builder::ServerCoreBuilder;
+    /// use pmcp::server::observability::ObservabilityConfig;
+    ///
+    /// # fn example() -> pmcp::Result<()> {
+    /// // Development: console output with pretty printing
+    /// let server = ServerCoreBuilder::new()
+    ///     .name("my-server")
+    ///     .version("1.0.0")
+    ///     .with_observability(ObservabilityConfig::development())
+    ///     .build()?;
+    ///
+    /// // Production: CloudWatch with EMF metrics
+    /// let server = ServerCoreBuilder::new()
+    ///     .name("my-server")
+    ///     .version("1.0.0")
+    ///     .with_observability(ObservabilityConfig::production())
+    ///     .build()?;
+    ///
+    /// // Load from config file or environment
+    /// let config = ObservabilityConfig::load().unwrap_or_default();
+    /// let server = ServerCoreBuilder::new()
+    ///     .name("my-server")
+    ///     .version("1.0.0")
+    ///     .with_observability(config)
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_observability(mut self, config: ObservabilityConfig) -> Self {
+        if !config.enabled {
+            return self;
+        }
+
+        // Create backend based on configuration
+        let backend: Arc<dyn ObservabilityBackend> = match config.backend.as_str() {
+            "cloudwatch" => Arc::new(CloudWatchBackend::new(config.cloudwatch.clone())),
+            "null" => Arc::new(NullBackend),
+            _ => Arc::new(ConsoleBackend::new(config.console.pretty)),
+        };
+
+        // Get server name for middleware (use placeholder if not yet set)
+        let server_name = self.name.clone().unwrap_or_else(|| "unknown".to_string());
+
+        // Create and add the observability middleware
+        let middleware = McpObservabilityMiddleware::new(server_name, config, backend);
+        self.tool_middlewares.push(Arc::new(middleware));
+
+        self
+    }
+
+    /// Enable observability with a custom backend.
+    ///
+    /// Use this method when you need to provide a custom backend implementation,
+    /// such as sending events to a custom metrics platform or log aggregator.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use pmcp::server::builder::ServerCoreBuilder;
+    /// use pmcp::server::observability::{ObservabilityConfig, ObservabilityBackend};
+    /// use std::sync::Arc;
+    ///
+    /// struct MyCustomBackend;
+    ///
+    /// #[async_trait]
+    /// impl ObservabilityBackend for MyCustomBackend {
+    ///     // ... custom implementation
+    /// }
+    ///
+    /// let server = ServerCoreBuilder::new()
+    ///     .name("my-server")
+    ///     .version("1.0.0")
+    ///     .with_observability_backend(
+    ///         ObservabilityConfig::development(),
+    ///         Arc::new(MyCustomBackend),
+    ///     )
+    ///     .build()?;
+    /// ```
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_observability_backend(
+        mut self,
+        config: ObservabilityConfig,
+        backend: Arc<dyn ObservabilityBackend>,
+    ) -> Self {
+        if !config.enabled {
+            return self;
+        }
+
+        // Get server name for middleware (use placeholder if not yet set)
+        let server_name = self.name.clone().unwrap_or_else(|| "unknown".to_string());
+
+        // Create and add the observability middleware
+        let middleware = McpObservabilityMiddleware::new(server_name, config, backend);
+        self.tool_middlewares.push(Arc::new(middleware));
+
+        self
+    }
+
     /// Enable or disable stateless mode for serverless deployments.
     ///
     /// Stateless mode skips initialization state checking, allowing the server
@@ -501,6 +620,14 @@ impl ServerCoreBuilder {
 
         // Register as prompt
         self.prompts.insert(name, Arc::new(handler));
+
+        // Update capabilities to include prompts
+        // This ensures prompts/list returns the workflow prompts
+        if self.capabilities.prompts.is_none() {
+            self.capabilities.prompts = Some(crate::types::PromptCapabilities {
+                list_changed: Some(false),
+            });
+        }
 
         Ok(self)
     }

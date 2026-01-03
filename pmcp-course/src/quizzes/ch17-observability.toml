@@ -9,11 +9,12 @@ pass_threshold = 0.7
 type = "MultipleChoice"
 prompt.prompt = "What is the correct priority order for middleware execution in PMCP?"
 prompt.distractors = [
-    "Low → Normal → High → Critical",
-    "Logging → Validation → Security → Cleanup",
-    "Random order based on addition sequence"
+    "Low → Normal → High → Critical for ascending priority execution",
+    "Logging → Validation → Security → Cleanup based on concern type",
+    "Random order based on middleware addition sequence during setup"
 ]
 answer.answer = "Critical → High → Normal → Low → Lowest"
+answer.position = 0
 context = """
 PMCP middleware executes by priority: Critical (0) runs first for validation/security,
 High (1) for authentication/rate limiting, Normal (2) for business logic, Low (3) for
@@ -26,11 +27,12 @@ id = "f17a1b2c-d3e4-5678-abcd-123456780301"
 type = "MultipleChoice"
 prompt.prompt = "Why is structured logging with tracing preferred over println! in MCP servers?"
 prompt.distractors = [
-    "println! is slower than tracing",
-    "tracing uses less memory",
-    "println! only works in development mode"
+    "println! is slower than tracing for high-volume output operations",
+    "tracing uses less memory allocation per log statement than println",
+    "println! only works in development mode and is stripped in release builds"
 ]
 answer.answer = "Tracing provides structured output, async context propagation, and filtering by level/module"
+answer.position = 1
 context = """
 Structured logging with tracing provides machine-parseable JSON output, automatic context
 propagation across async calls via spans, log level filtering, per-module configuration,
@@ -55,11 +57,12 @@ id = "f17a1b2c-d3e4-5678-abcd-123456780303"
 type = "MultipleChoice"
 prompt.prompt = "What is the purpose of MiddlewareContext in PMCP?"
 prompt.distractors = [
-    "To store middleware configuration",
-    "To cache responses between requests",
-    "To authenticate users"
+    "To store middleware configuration settings and initialization parameters",
+    "To cache responses between requests for improved performance throughput",
+    "To authenticate users and validate their access credentials securely"
 ]
 answer.answer = "To share data between middleware layers and track request metrics"
+answer.position = 2
 context = """
 MiddlewareContext enables communication between middleware in the chain. It provides
 set_metadata/get_metadata for passing data (like user_id, correlation_id), record_metric
@@ -72,11 +75,12 @@ id = "f17a1b2c-d3e4-5678-abcd-123456780304"
 type = "MultipleChoice"
 prompt.prompt = "Which headers does ServerHttpLoggingMiddleware automatically redact?"
 prompt.distractors = [
-    "Content-Type, Accept, Host",
-    "User-Agent, Referer, Origin",
-    "Cache-Control, ETag, If-None-Match"
+    "Content-Type, Accept, Host headers for content negotiation",
+    "User-Agent, Referer, Origin headers for request tracking",
+    "Cache-Control, ETag, If-None-Match for caching behavior"
 ]
 answer.answer = "Authorization, Cookie, X-Api-Key"
+answer.position = 3
 context = """
 ServerHttpLoggingMiddleware automatically redacts sensitive headers that may contain
 credentials: Authorization (Bearer tokens, Basic auth), Cookie (session tokens), and
@@ -89,11 +93,12 @@ id = "f17a1b2c-d3e4-5678-abcd-123456780305"
 type = "MultipleChoice"
 prompt.prompt = "What is the main benefit of using the metrics crate facade pattern?"
 prompt.distractors = [
-    "Better performance than direct platform SDKs",
-    "Automatic dashboard generation",
-    "Built-in alerting capabilities"
+    "Better performance than direct platform SDKs with lower overhead costs",
+    "Automatic dashboard generation for all registered metrics and labels",
+    "Built-in alerting capabilities with configurable threshold notifications"
 ]
 answer.answer = "Write metrics once, choose the backend (Prometheus, Datadog, CloudWatch) at deployment time"
+answer.position = 0
 context = """
 The metrics crate provides a facade pattern - your code uses counter!, histogram!, gauge!
 macros regardless of destination. At runtime, you install an exporter (PrometheusBuilder,
@@ -119,11 +124,12 @@ id = "f17a1b2c-d3e4-5678-abcd-123456780307"
 type = "MultipleChoice"
 prompt.prompt = "Why should you avoid high-cardinality metric labels like user_id?"
 prompt.distractors = [
-    "They make queries slower",
-    "They violate privacy regulations",
-    "They are not supported by Prometheus"
+    "They make queries significantly slower due to the large index size required",
+    "They violate privacy regulations by storing personally identifiable information in metrics",
+    "They are not supported by Prometheus and will cause scrape failures"
 ]
 answer.answer = "They cause memory exhaustion because each unique label combination creates a new time series"
+answer.position = 1
 context = """
 Each unique label combination creates a separate time series in your metrics backend.
 With millions of users, counter!('requests', 'user_id' => user_id) creates millions of
@@ -136,11 +142,12 @@ id = "f17a1b2c-d3e4-5678-abcd-123456780308"
 type = "MultipleChoice"
 prompt.prompt = "What does RateLimitMiddleware do when limits are exceeded?"
 prompt.distractors = [
-    "Logs a warning and continues processing",
-    "Queues the request for later processing",
-    "Forwards to a fallback server"
+    "Logs a warning message and continues processing the request normally",
+    "Queues the request for later processing when capacity becomes available",
+    "Forwards to a fallback server configured for overflow traffic handling"
 ]
 answer.answer = "Returns Error::RateLimited, blocking the request before it reaches handlers"
+answer.position = 2
 context = """
 RateLimitMiddleware runs with High priority, blocking requests before they consume
 resources. It uses a token bucket algorithm with configurable rate (requests/second)
@@ -153,11 +160,12 @@ id = "f17a1b2c-d3e4-5678-abcd-123456780309"
 type = "MultipleChoice"
 prompt.prompt = "What is the recommended log output format for production MCP servers?"
 prompt.distractors = [
-    "Human-readable with colors (.pretty())",
-    "Plain text with timestamps",
-    "XML for enterprise compatibility"
+    "Human-readable with colors using .pretty() for visual clarity",
+    "Plain text with timestamps for simple log file consumption",
+    "XML for enterprise compatibility with legacy monitoring systems"
 ]
 answer.answer = "JSON format for machine parsing and log aggregation"
+answer.position = 3
 context = """
 Production servers should use tracing_subscriber::fmt().json() for structured output
 that log aggregation tools (CloudWatch Insights, Datadog, Elasticsearch) can parse and
@@ -170,11 +178,12 @@ id = "f17a1b2c-d3e4-5678-abcd-123456780311"
 type = "MultipleChoice"
 prompt.prompt = "What are the three states of a circuit breaker, and what triggers the transition from OPEN to HALF-OPEN?"
 prompt.distractors = [
-    "ACTIVE, INACTIVE, TESTING - triggered by manual reset",
-    "ON, OFF, STANDBY - triggered by successful request",
-    "RUNNING, STOPPED, PAUSED - triggered by admin command"
+    "ACTIVE, INACTIVE, TESTING - triggered by manual reset from operator",
+    "ON, OFF, STANDBY - triggered by a successful request completing",
+    "RUNNING, STOPPED, PAUSED - triggered by admin command execution"
 ]
 answer.answer = "CLOSED, OPEN, HALF-OPEN - triggered by recovery timeout expiring"
+answer.position = 0
 context = """
 Circuit breakers have three states: CLOSED (normal, requests pass through), OPEN (failing,
 requests rejected immediately), and HALF-OPEN (testing recovery). When failures exceed the
@@ -187,11 +196,12 @@ id = "f17a1b2c-d3e4-5678-abcd-123456780312"
 type = "MultipleChoice"
 prompt.prompt = "What is the correct approach for logging sensitive data like API tokens?"
 prompt.distractors = [
-    "Log the first 4 characters only",
-    "Hash the token before logging",
-    "Log it only at DEBUG level"
+    "Log the first 4 characters only for partial identification purposes",
+    "Hash the token before logging to enable correlation without exposure",
+    "Log it only at DEBUG level which is disabled in production environments"
 ]
 answer.answer = "Use Redacted<T> wrapper or #[serde(skip_serializing)] to never include it in logs"
+answer.position = 1
 context = """
 Sensitive data should never appear in logs regardless of level. Use the Redacted<T>
 wrapper that displays '[REDACTED]' in Display/Debug, or #[serde(skip_serializing)] on
@@ -204,11 +214,12 @@ id = "f17a1b2c-d3e4-5678-abcd-123456780313"
 type = "MultipleChoice"
 prompt.prompt = "Why are spans essential for debugging async MCP servers?"
 prompt.distractors = [
-    "They reduce memory usage in async code",
-    "They make async code run faster",
-    "They prevent race conditions in handlers"
+    "They reduce memory usage in async code by optimizing task allocations",
+    "They make async code run faster through improved scheduling efficiency",
+    "They prevent race conditions in handlers by synchronizing concurrent access"
 ]
 answer.answer = "They carry context through async boundaries where traditional call stacks don't work"
+answer.position = 2
 context = """
 In async code, execution jumps between tasks - when an error occurs, the traditional
 call stack doesn't show the original request context. Spans solve this by carrying
@@ -221,11 +232,12 @@ id = "f17a1b2c-d3e4-5678-abcd-123456780315"
 type = "MultipleChoice"
 prompt.prompt = "When choosing a log level, what question helps decide between ERROR and WARN?"
 prompt.distractors = [
-    "Is the message longer than 100 characters?",
-    "Is the code in a hot path?",
-    "Is the user an administrator?"
+    "Is the message longer than 100 characters requiring truncation treatment?",
+    "Is the code in a hot path where logging overhead matters significantly?",
+    "Is the user an administrator with elevated privileges and audit requirements?"
 ]
 answer.answer = "Would I want to be woken up at 3 AM for this? Yes = ERROR, Maybe tomorrow = WARN"
+answer.position = 3
 context = """
 The 'golden rule' for log levels: ERROR means something broke and needs immediate attention
 (wake up the on-call engineer). WARN means degraded operation that should be investigated
@@ -238,11 +250,12 @@ id = "f17a1b2c-d3e4-5678-abcd-123456780317"
 type = "MultipleChoice"
 prompt.prompt = "Why is P99 latency a better alerting metric than average latency?"
 prompt.distractors = [
-    "P99 is easier to calculate than average",
-    "P99 uses less memory to track",
-    "P99 is required by cloud providers"
+    "P99 is easier to calculate than average with streaming data algorithms",
+    "P99 uses less memory to track compared to full histogram buckets",
+    "P99 is required by cloud providers for service level agreement compliance"
 ]
 answer.answer = "Average hides outliers - P99 shows the worst experience that 1% of users face"
+answer.position = 0
 context = """
 With 100 requests where 99 take 50ms and 1 takes 5000ms, the average is 104ms ('looks fine!')
 but P99 is 5000ms (1% of users wait 5 seconds!). At scale, 1% means thousands of bad
@@ -254,11 +267,12 @@ id = "f17a1b2c-d3e4-5678-abcd-123456780318"
 type = "MultipleChoice"
 prompt.prompt = "What problem does middleware solve that would otherwise require duplicating code in every handler?"
 prompt.distractors = [
-    "Type conversion between JSON and Rust structs",
-    "Memory management and garbage collection",
-    "Compiling handlers to optimized machine code"
+    "Type conversion between JSON and Rust structs for serialization purposes",
+    "Memory management and garbage collection for request handler allocations",
+    "Compiling handlers to optimized machine code for better runtime performance"
 ]
 answer.answer = "Cross-cutting concerns like logging, authentication, rate limiting, and metrics"
+answer.position = 1
 context = """
 Cross-cutting concerns are functionality that applies across your entire application.
 Without middleware, every handler would need to: validate requests, check authentication,
