@@ -71,6 +71,176 @@ async fn handler(input: WeatherInput) -> Result<Weather> {
 }
 ```
 
+## Built-in Observability Module (Recommended)
+
+PMCP v1.9.2+ includes a **built-in observability module** that handles logging, metrics, and distributed tracing out of the box. For most use cases, this is the recommended approach—you get production-ready observability with a single method call.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    Built-in vs Custom Observability                     │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  Built-in Observability:              Custom Middleware:                │
+│  ═══════════════════════              ═════════════════                 │
+│                                                                         │
+│  ServerCoreBuilder::new()             ServerCoreBuilder::new()          │
+│      .name("my-server")                   .name("my-server")            │
+│      .tool("weather", WeatherTool)        .tool("weather", WeatherTool) │
+│      .with_observability(config)  ←       .with_tool_middleware(...)    │
+│      .build()                             .with_tool_middleware(...)    │
+│                                           .with_tool_middleware(...)    │
+│  One line, full observability!            .build()                      │
+│                                                                         │
+│  Use built-in when:                   Use custom when:                  │
+│  • Starting a new project             • Need custom metrics             │
+│  • Standard observability needs       • Complex business logic          │
+│  • Quick setup required               • Custom backends                 │
+│  • CloudWatch or console output       • Non-standard integrations       │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Quick Start with Built-in Observability
+
+```rust
+use pmcp::{
+    server::builder::ServerCoreBuilder,
+    server::observability::ObservabilityConfig,
+    ServerCapabilities,
+};
+
+fn main() -> pmcp::Result<()> {
+    // Development: Pretty console output
+    let config = ObservabilityConfig::development();
+
+    let server = ServerCoreBuilder::new()
+        .name("my-weather-server")
+        .version("1.0.0")
+        .tool("get_weather", GetWeatherTool)
+        .capabilities(ServerCapabilities::tools_only())
+        .with_observability(config)  // One line adds full observability!
+        .build()?;
+
+    Ok(())
+}
+```
+
+### Configuration Presets
+
+PMCP provides ready-to-use configuration presets:
+
+| Preset | Backend | Use Case |
+|--------|---------|----------|
+| `ObservabilityConfig::development()` | Console (pretty) | Local development |
+| `ObservabilityConfig::production()` | CloudWatch EMF | AWS production |
+| `ObservabilityConfig::disabled()` | None | Testing, minimal overhead |
+| `ObservabilityConfig::default()` | Console | General purpose |
+
+### TOML Configuration
+
+Configure observability via `.pmcp-config.toml`:
+
+```toml
+[observability]
+enabled = true
+backend = "console"  # or "cloudwatch"
+sample_rate = 1.0    # 1.0 = 100% of requests
+max_depth = 10       # Loop prevention for composed servers
+
+[observability.console]
+pretty = true
+verbose = false
+
+[observability.cloudwatch]
+namespace = "MyApp/MCP"
+emf_enabled = true   # CloudWatch Embedded Metric Format
+```
+
+### Environment Variable Overrides
+
+Override any configuration via environment variables:
+
+```bash
+# Master controls
+export PMCP_OBSERVABILITY_ENABLED=true
+export PMCP_OBSERVABILITY_BACKEND=cloudwatch
+export PMCP_OBSERVABILITY_SAMPLE_RATE=0.1  # Sample 10% in high-traffic
+
+# CloudWatch settings
+export PMCP_CLOUDWATCH_NAMESPACE="Production/MCPServers"
+export PMCP_CLOUDWATCH_EMF_ENABLED=true
+
+# Console settings
+export PMCP_CONSOLE_PRETTY=false  # JSON output for log aggregation
+```
+
+### TraceContext for Distributed Tracing
+
+The built-in module includes `TraceContext` for request correlation:
+
+```rust
+use pmcp::server::observability::TraceContext;
+
+// Create a root trace for a new request
+let root_trace = TraceContext::new_root();
+println!("trace_id: {}", root_trace.short_trace_id());
+println!("span_id: {}", &root_trace.span_id[..8]);
+
+// Create child spans for sub-operations
+let child_trace = root_trace.child();
+println!("parent_span_id: {}", child_trace.parent_span_id.as_ref().unwrap());
+println!("depth: {}", child_trace.depth);  // Increments for nested calls
+```
+
+### What Gets Captured
+
+The built-in observability middleware automatically captures:
+
+| Event Type | Data Captured |
+|------------|---------------|
+| **Request Events** | trace_id, span_id, server_name, method, tool_name, user_id, tenant_id |
+| **Response Events** | duration_ms, success/failure, error_code, response_size |
+| **Metrics** | request_count, request_duration, error_count, composition_depth |
+
+### CloudWatch EMF Integration
+
+For AWS deployments, CloudWatch Embedded Metric Format (EMF) enables automatic metric extraction from structured logs:
+
+```rust
+let config = ObservabilityConfig::production();
+// EMF logs automatically become CloudWatch metrics:
+// - MCP/RequestDuration
+// - MCP/RequestCount
+// - MCP/ErrorCount
+```
+
+### Full Example
+
+See the complete example at `examples/61_observability_middleware.rs`:
+
+```bash
+cargo run --example 61_observability_middleware
+```
+
+This demonstrates:
+- Development configuration (console output)
+- Production configuration (CloudWatch EMF)
+- Custom configuration (sampling, field capture)
+- Disabled observability (for testing)
+- Loading from file/environment
+- Trace context propagation
+
+### When to Use Custom Middleware Instead
+
+The built-in observability is sufficient for most use cases. Consider custom middleware when you need:
+
+- **Custom metric backends** (Prometheus, Datadog, Grafana Cloud)
+- **Business-specific metrics** (cache hit rates, API quotas)
+- **Custom log formats** (specific compliance requirements)
+- **Integration with existing observability infrastructure**
+
+The following sections cover building custom middleware for these advanced scenarios.
+
 ## PMCP Middleware Architecture
 
 PMCP provides a layered middleware system for both protocol-level and HTTP-level instrumentation:

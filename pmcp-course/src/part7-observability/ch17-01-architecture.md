@@ -424,6 +424,40 @@ fn build_observability_chain() -> EnhancedMiddlewareChain {
 }
 ```
 
+### Using Built-in Observability (Recommended)
+
+For standard observability needs, use the built-in module instead of building custom chains:
+
+```rust
+use pmcp::server::builder::ServerCoreBuilder;
+use pmcp::server::observability::ObservabilityConfig;
+
+// Using ServerCoreBuilder
+let server = ServerCoreBuilder::new()
+    .name("my-server")
+    .version("1.0.0")
+    .tool("echo", EchoTool)
+    .capabilities(ServerCapabilities::tools_only())
+    .with_observability(ObservabilityConfig::development())
+    .build()?;
+
+// Or using Server::builder() (same API)
+let server = Server::builder()
+    .name("my-server")
+    .version("1.0.0")
+    .tool("echo", EchoTool)
+    .with_observability(ObservabilityConfig::production())
+    .build()?;
+```
+
+This adds a pre-configured `McpObservabilityMiddleware` that handles:
+- Distributed tracing with `TraceContext`
+- Request/response event logging
+- Automatic metrics collection
+- Console or CloudWatch output
+
+See the [Built-in Observability Module](./ch17-middleware.md#built-in-observability-module-recommended) section for full configuration options.
+
 ### Integrating with ClientBuilder
 
 ```rust
