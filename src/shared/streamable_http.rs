@@ -319,19 +319,50 @@ impl StreamableHttpTransport {
     ///
     /// This automatically sets up HTTPS support using rustls with the ring crypto provider.
     /// Both HTTP and HTTPS URLs are supported.
+    ///
+    /// Note: Currently uses HTTP/1.1 only for maximum compatibility with various
+    /// MCP servers and API gateways. HTTP/2 can be enabled via `new_with_http2()`.
     pub fn new(config: StreamableHttpTransportConfig) -> Self {
+        Self::new_internal(config, false)
+    }
+
+    /// Creates a new `StreamableHttpTransport` with HTTP/2 support enabled.
+    ///
+    /// This enables both HTTP/1.1 and HTTP/2, with HTTP/2 being preferred via ALPN
+    /// negotiation when the server supports it.
+    ///
+    /// Note: Some servers or API gateways may have issues with HTTP/2. If you
+    /// experience empty responses or connection issues, try using `new()` instead
+    /// which uses HTTP/1.1 only.
+    pub fn new_with_http2(config: StreamableHttpTransportConfig) -> Self {
+        Self::new_internal(config, true)
+    }
+
+    /// Internal constructor with HTTP version control.
+    fn new_internal(config: StreamableHttpTransportConfig, enable_http2: bool) -> Self {
         // Install ring crypto provider explicitly to avoid conflicts with aws-lc-rs
         // in Lambda environments. This is idempotent - safe to call multiple times.
         let _ = rustls::crypto::ring::default_provider().install_default();
 
         // Create HTTPS connector that supports both HTTP and HTTPS
-        let https = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_native_roots()
-            .expect("Failed to load native root certificates")
-            .https_or_http()
-            .enable_http1()
-            .enable_http2()
-            .build();
+        let https = if enable_http2 {
+            tracing::debug!("Creating HTTPS connector with HTTP/1.1 and HTTP/2 support");
+            hyper_rustls::HttpsConnectorBuilder::new()
+                .with_native_roots()
+                .expect("Failed to load native root certificates")
+                .https_or_http()
+                .enable_http1()
+                .enable_http2()
+                .build()
+        } else {
+            tracing::debug!("Creating HTTPS connector with HTTP/1.1 only");
+            hyper_rustls::HttpsConnectorBuilder::new()
+                .with_native_roots()
+                .expect("Failed to load native root certificates")
+                .https_or_http()
+                .enable_http1()
+                .build()
+        };
 
         let client = Client::builder(TokioExecutor::new())
             .pool_idle_timeout(std::time::Duration::from_secs(90))
@@ -747,6 +778,15 @@ impl StreamableHttpTransport {
             .map_err(|e| Error::Transport(TransportError::Request(e.to_string())))?
             .to_bytes();
 
+        // Debug logging for response diagnostics
+        tracing::debug!(
+            status = %status_code,
+            content_type = %content_type,
+            content_length = ?content_length,
+            body_len = body_bytes.len(),
+            "HTTP response received"
+        );
+
         // Fast path: Check if middleware exists before creating temp response
         let modified_body = if self.config.read().http_middleware_chain.is_some() {
             // Run response middleware (create a minimal response for middleware processing)
@@ -804,6 +844,31 @@ impl StreamableHttpTransport {
         }
 
         if content_type.contains(APPLICATION_JSON) {
+            // Check for empty body with JSON content type
+            // Note: 202 Accepted with empty body is valid for notification acknowledgments
+            if modified_body.is_empty() {
+                if status_code == StatusCode::ACCEPTED {
+                    // 202 Accepted with empty body is valid (notification acknowledged)
+                    tracing::debug!(
+                        status = %status_code,
+                        "Notification acknowledged with 202 Accepted"
+                    );
+                    return Ok(());
+                }
+
+                // For other 2xx statuses, empty body with application/json is an error
+                tracing::warn!(
+                    status = %status_code,
+                    content_type = %content_type,
+                    "Server returned empty body with application/json content type"
+                );
+                return Err(Error::Transport(TransportError::Request(
+                    "Server returned empty response body with Content-Type: application/json. \
+                     This may indicate a server error or network issue."
+                        .to_string(),
+                )));
+            }
+
             // JSON response (single or batch)
             // Try to parse as array first (batch response - JSON-RPC 2.0)
             if let Ok(batch) = serde_json::from_slice::<Vec<serde_json::Value>>(&modified_body) {
