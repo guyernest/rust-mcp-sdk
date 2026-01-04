@@ -357,30 +357,31 @@ impl ServerCore {
             .map(|(name, handler)| {
                 // Use prompt metadata if provided, otherwise use defaults
                 if let Some(mut info) = handler.metadata() {
-                    // DEBUG: Log what metadata() returns
-                    eprintln!("[DEBUG] handle_list_prompts: Prompt '{}' metadata:", name);
-                    eprintln!("[DEBUG]   description: {:?}", info.description);
-                    eprintln!(
-                        "[DEBUG]   arguments count: {:?}",
-                        info.arguments.as_ref().map(|a| a.len())
+                    tracing::debug!(
+                        target: "mcp.prompts",
+                        prompt = %name,
+                        description = ?info.description,
+                        arguments_count = ?info.arguments.as_ref().map(|a| a.len()),
+                        "Prompt metadata retrieved"
                     );
 
                     // Ensure the name matches the registered name
                     info.name.clone_from(name);
 
-                    // DEBUG: Log the final PromptInfo before returning
-                    eprintln!(
-                        "[DEBUG]   Final PromptInfo - name: {}, desc present: {}, args present: {}",
-                        info.name,
-                        info.description.is_some(),
-                        info.arguments.is_some()
+                    tracing::debug!(
+                        target: "mcp.prompts",
+                        prompt = %info.name,
+                        has_description = info.description.is_some(),
+                        has_arguments = info.arguments.is_some(),
+                        "Final PromptInfo"
                     );
 
                     info
                 } else {
-                    eprintln!(
-                        "[DEBUG] handle_list_prompts: Prompt '{}' has NO metadata!",
-                        name
+                    tracing::debug!(
+                        target: "mcp.prompts",
+                        prompt = %name,
+                        "Prompt has no metadata"
                     );
                     PromptInfo {
                         name: name.clone(),
@@ -391,9 +392,10 @@ impl ServerCore {
             })
             .collect();
 
-        eprintln!(
-            "[DEBUG] handle_list_prompts: Returning {} prompts",
-            prompts.len()
+        tracing::debug!(
+            target: "mcp.prompts",
+            count = prompts.len(),
+            "Returning prompts"
         );
 
         Ok(ListPromptsResult {
