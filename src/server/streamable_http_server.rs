@@ -493,11 +493,12 @@ fn build_response(
             },
         };
 
-        // DEBUG: Log the serialized bytes
-        if let Ok(debug_str) = String::from_utf8(json_bytes.clone()) {
-            eprintln!("[DEBUG] build_response (JSON mode): Serialized bytes:");
-            eprintln!("{}", debug_str);
-        }
+        // Trace serialized bytes for debugging (single-line for CloudWatch compatibility)
+        tracing::debug!(
+            target: "mcp.http",
+            response = %String::from_utf8_lossy(&json_bytes),
+            "HTTP response serialized bytes"
+        );
 
         // Parse JSON bytes to Value for Json response
         let json_value: serde_json::Value = match serde_json::from_slice(&json_bytes) {
@@ -511,10 +512,12 @@ fn build_response(
             },
         };
 
-        eprintln!("[DEBUG] build_response (JSON mode): Final JSON value:");
-        if let Ok(pretty) = serde_json::to_string_pretty(&json_value) {
-            eprintln!("{}", pretty);
-        }
+        // Trace final JSON value (compact for CloudWatch compatibility)
+        tracing::debug!(
+            target: "mcp.http",
+            response = %serde_json::to_string(&json_value).unwrap_or_default(),
+            "HTTP response (JSON mode)"
+        );
 
         let mut resp = (StatusCode::OK, Json(json_value)).into_response();
         add_cors_headers(resp.headers_mut());
@@ -537,7 +540,7 @@ fn build_response(
                     // Use JSON-RPC compatibility layer for SSE messages
                     let json_bytes = crate::shared::StdioTransport::serialize_message(&msg)
                         .unwrap_or_else(|e| {
-                            eprintln!("Failed to serialize SSE message: {}", e);
+                            tracing::error!(target: "mcp.sse", error = %e, "Failed to serialize SSE message");
                             Vec::new()
                         });
                     let json_str =
@@ -836,11 +839,12 @@ async fn handle_post_fast_path(
             let server = state.server.lock().await;
             let json_response = server.handle_request(id, request, auth_context).await;
 
-            // DEBUG: Log response payload before building TransportMessage
-            eprintln!("[DEBUG] StreamableHttpServer: JSON response payload:");
-            if let Ok(json_str) = serde_json::to_string_pretty(&json_response) {
-                eprintln!("{}", json_str);
-            }
+            // Trace response payload (compact for CloudWatch compatibility)
+            tracing::debug!(
+                target: "mcp.http",
+                response = %serde_json::to_string(&json_response).unwrap_or_default(),
+                "StreamableHttpServer response"
+            );
 
             let response = TransportMessage::Response(json_response.clone());
 
