@@ -1481,8 +1481,7 @@ impl ServerTester {
                                 .map_err(|e| {
                                     pmcp::Error::Internal(format!(
                                         "Failed to parse CallToolResult: {}. Raw response: {}",
-                                        e,
-                                        result
+                                        e, result
                                     ))
                                 })
                         } else {
