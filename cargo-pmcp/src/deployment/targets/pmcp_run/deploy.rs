@@ -9,70 +9,64 @@ use crate::deployment::{
 
 use super::{auth, graphql};
 
-/// Extract the server version from Cargo.toml or workspace.
+/// Extract the server version from the Cargo workspace.
 ///
-/// This supports:
-/// 1. Workspace root: `[workspace.package] version = "1.0.0"`
-/// 2. Package: `[package] version = "1.0.0"`
-/// 3. Workspace inheritance: `version.workspace = true` (looks up workspace root)
+/// Uses `cargo metadata` which properly handles:
+/// 1. Workspace root versions
+/// 2. Package versions
+/// 3. Workspace inheritance (`version.workspace = true`)
 ///
 /// Returns None if version cannot be determined.
 fn extract_version_from_cargo(project_root: &Path) -> Option<String> {
-    let cargo_toml_path = project_root.join("Cargo.toml");
+    // Use cargo metadata to get package information - this handles all Cargo.toml formats
+    let output = std::process::Command::new("cargo")
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .current_dir(project_root)
+        .output()
+        .ok()?;
 
-    if !cargo_toml_path.exists() {
+    if !output.status.success() {
         return None;
     }
 
-    let content = std::fs::read_to_string(&cargo_toml_path).ok()?;
-    let cargo_toml: toml::Value = content.parse().ok()?;
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
 
-    // Try [workspace.package] version first (for workspace roots)
-    if let Some(version) = cargo_toml
-        .get("workspace")
-        .and_then(|w| w.get("package"))
-        .and_then(|p| p.get("version"))
-        .and_then(|v| v.as_str())
-    {
-        return Some(version.to_string());
-    }
+    // Get workspace root to find the "main" package
+    let workspace_root = metadata.get("workspace_root")?.as_str()?;
 
-    // Try [package] version
-    if let Some(package) = cargo_toml.get("package") {
-        // Check if version is a direct string
-        if let Some(version) = package.get("version").and_then(|v| v.as_str()) {
-            return Some(version.to_string());
-        }
+    // Find packages in the workspace
+    let packages = metadata.get("packages")?.as_array()?;
 
-        // Check if version.workspace = true (inherits from workspace)
-        if let Some(version_table) = package.get("version").and_then(|v| v.as_table()) {
-            if version_table.get("workspace").and_then(|v| v.as_bool()) == Some(true) {
-                // Look for workspace root Cargo.toml
-                // Walk up directories to find the workspace root
-                let mut current = project_root.to_path_buf();
-                while let Some(parent) = current.parent() {
-                    current = parent.to_path_buf();
-                    let parent_cargo = current.join("Cargo.toml");
-                    if parent_cargo.exists() {
-                        if let Ok(parent_content) = std::fs::read_to_string(&parent_cargo) {
-                            if let Ok(parent_toml) = parent_content.parse::<toml::Value>() {
-                                if let Some(version) = parent_toml
-                                    .get("workspace")
-                                    .and_then(|w| w.get("package"))
-                                    .and_then(|p| p.get("version"))
-                                    .and_then(|v| v.as_str())
-                                {
-                                    return Some(version.to_string());
-                                }
-                            }
-                        }
-                    }
-                }
+    // Strategy: prefer package at workspace root, then any package with version
+    let mut root_package_version: Option<String> = None;
+    let mut any_version: Option<String> = None;
+
+    for package in packages {
+        let version = match package.get("version").and_then(|v| v.as_str()) {
+            Some(v) => v,
+            None => continue,
+        };
+        let manifest_path = package
+            .get("manifest_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        // Check if this package's Cargo.toml is at workspace root
+        if !manifest_path.is_empty() && manifest_path.starts_with(workspace_root) {
+            let relative = &manifest_path[workspace_root.len()..];
+            // Package at root has manifest at /Cargo.toml (just one path component)
+            if relative == "/Cargo.toml" || relative.matches('/').count() == 1 {
+                root_package_version = Some(version.to_string());
             }
         }
+
+        if any_version.is_none() {
+            any_version = Some(version.to_string());
+        }
     }
 
-    None
+    // Prefer root package version, fallback to any package version
+    root_package_version.or(any_version)
 }
 
 /// Deploy to pmcp.run managed service using 3-step flow:
