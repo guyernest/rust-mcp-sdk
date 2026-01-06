@@ -183,6 +183,20 @@ impl<'a> ScenarioExecutor<'a> {
                 },
             };
 
+        // Dump full response when verbose mode is enabled
+        if self.verbose {
+            if let Some(ref resp) = response {
+                println!();
+                println!("      {} Response:", "↳".cyan());
+                // Pretty-print JSON with indentation for readability
+                if let Ok(formatted) = serde_json::to_string_pretty(resp) {
+                    for line in formatted.lines() {
+                        println!("        {}", line.dimmed());
+                    }
+                }
+            }
+        }
+
         // Store result if requested
         if let Some(var_name) = &step.store_result {
             if let Some(ref resp) = response {
@@ -215,6 +229,23 @@ impl<'a> ScenarioExecutor<'a> {
                             "✗".red(),
                             assertion.message.as_ref().unwrap_or(&assertion.assertion)
                         );
+                        // Show actual vs expected for easier debugging
+                        if let Some(ref expected) = assertion.expected_value {
+                            println!(
+                                "        {} {}",
+                                "Expected:".yellow(),
+                                format_value_compact(expected)
+                            );
+                        }
+                        if let Some(ref actual) = assertion.actual_value {
+                            println!(
+                                "        {} {}",
+                                "Actual:".yellow(),
+                                format_value_compact(actual)
+                            );
+                        } else {
+                            println!("        {} {}", "Actual:".yellow(), "null (path not found)");
+                        }
                     }
                 }
             }
@@ -239,56 +270,67 @@ impl<'a> ScenarioExecutor<'a> {
             Operation::ToolCall { tool, arguments } => {
                 // Call the tool directly to get raw response for assertions
                 match self.tester.transport_type {
-                    crate::tester::TransportType::Http => {
-                        if let Some(ref client) = self.tester.pmcp_client {
-                            match client.call_tool(tool.clone(), arguments).await {
-                                Ok(result) => {
-                                    // Extract the text content from the response
-                                    let content_text = result
-                                        .content
-                                        .into_iter()
-                                        .filter_map(|c| match c {
-                                            pmcp::types::Content::Text { text } => Some(text),
-                                            _ => None,
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join("\n");
+                    crate::tester::TransportType::Http
+                    | crate::tester::TransportType::JsonRpcHttp => {
+                        // For both HTTP and JSON-RPC transports, call the tool and extract content
+                        let call_result = self.tester.call_tool_raw(&tool, arguments).await;
 
-                                    // Check if the content indicates an error
-                                    if content_text.starts_with("Error:") {
-                                        Ok(json!({
-                                            "success": false,
-                                            "result": null,
-                                            "error": content_text
-                                        }))
-                                    } else {
-                                        Ok(json!({
-                                            "success": true,
-                                            "result": content_text,
-                                            "error": null
-                                        }))
-                                    }
-                                },
-                                Err(e) => Ok(json!({
-                                    "success": false,
-                                    "result": null,
-                                    "error": e.to_string()
-                                })),
-                            }
-                        } else {
-                            Ok(json!({
+                        match call_result {
+                            Ok(result) => {
+                                // Extract the text content from the response
+                                let content_text = result
+                                    .content
+                                    .into_iter()
+                                    .filter_map(|c| match c {
+                                        pmcp::types::Content::Text { text } => Some(text),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+
+                                // Check if the content indicates an error
+                                if content_text.starts_with("Error:") || result.is_error {
+                                    Ok(json!({
+                                        "success": false,
+                                        "result": content_text,
+                                        "parsed": null,
+                                        "error": content_text
+                                    }))
+                                } else {
+                                    // Try to parse the content as JSON for easier assertions
+                                    // This allows using paths like "parsed.result" instead of string matching
+                                    let parsed: Option<Value> =
+                                        serde_json::from_str(&content_text).ok();
+
+                                    Ok(json!({
+                                        "success": true,
+                                        "result": content_text,
+                                        "parsed": parsed,
+                                        "error": null
+                                    }))
+                                }
+                            },
+                            Err(e) => Ok(json!({
                                 "success": false,
                                 "result": null,
-                                "error": "Client not initialized"
-                            }))
+                                "parsed": null,
+                                "error": e.to_string()
+                            })),
                         }
                     },
-                    _ => {
-                        // Fall back to test_tool for other transport types
+                    crate::tester::TransportType::Stdio => {
+                        // Fall back to test_tool for stdio transport
                         let result = self.tester.test_tool(&tool, arguments).await?;
+                        // Try to parse the details as JSON if it's a string
+                        let parsed: Option<Value> = result
+                            .details
+                            .as_ref()
+                            .and_then(|d| serde_json::from_str(d).ok());
+
                         Ok(json!({
                             "success": result.status == crate::report::TestStatus::Passed,
                             "result": result.details,
+                            "parsed": parsed,
                             "error": result.error
                         }))
                     },
@@ -779,5 +821,35 @@ impl<'a> ScenarioExecutor<'a> {
         }
 
         println!("{}", "─".repeat(60));
+    }
+}
+
+/// Format a JSON value compactly for display in error messages.
+/// Truncates long strings and arrays for readability.
+fn format_value_compact(value: &Value) -> String {
+    match value {
+        Value::String(s) => {
+            if s.len() > 100 {
+                format!("\"{}...\" ({} chars)", &s[..100], s.len())
+            } else {
+                format!("{:?}", s)
+            }
+        },
+        Value::Array(arr) => {
+            if arr.len() > 5 {
+                format!("[{} items]", arr.len())
+            } else {
+                format!("{}", value)
+            }
+        },
+        Value::Object(obj) => {
+            let keys: Vec<&str> = obj.keys().take(5).map(|s| s.as_str()).collect();
+            if obj.len() > 5 {
+                format!("{{{}... ({} keys)}}", keys.join(", "), obj.len())
+            } else {
+                format!("{}", value)
+            }
+        },
+        _ => format!("{}", value),
     }
 }
