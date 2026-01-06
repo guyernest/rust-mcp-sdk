@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::deployment::{
@@ -8,6 +8,72 @@ use crate::deployment::{
 };
 
 use super::{auth, graphql};
+
+/// Extract the server version from Cargo.toml or workspace.
+///
+/// This supports:
+/// 1. Workspace root: `[workspace.package] version = "1.0.0"`
+/// 2. Package: `[package] version = "1.0.0"`
+/// 3. Workspace inheritance: `version.workspace = true` (looks up workspace root)
+///
+/// Returns None if version cannot be determined.
+fn extract_version_from_cargo(project_root: &Path) -> Option<String> {
+    let cargo_toml_path = project_root.join("Cargo.toml");
+
+    if !cargo_toml_path.exists() {
+        return None;
+    }
+
+    let content = std::fs::read_to_string(&cargo_toml_path).ok()?;
+    let cargo_toml: toml::Value = content.parse().ok()?;
+
+    // Try [workspace.package] version first (for workspace roots)
+    if let Some(version) = cargo_toml
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("version"))
+        .and_then(|v| v.as_str())
+    {
+        return Some(version.to_string());
+    }
+
+    // Try [package] version
+    if let Some(package) = cargo_toml.get("package") {
+        // Check if version is a direct string
+        if let Some(version) = package.get("version").and_then(|v| v.as_str()) {
+            return Some(version.to_string());
+        }
+
+        // Check if version.workspace = true (inherits from workspace)
+        if let Some(version_table) = package.get("version").and_then(|v| v.as_table()) {
+            if version_table.get("workspace").and_then(|v| v.as_bool()) == Some(true) {
+                // Look for workspace root Cargo.toml
+                // Walk up directories to find the workspace root
+                let mut current = project_root.to_path_buf();
+                while let Some(parent) = current.parent() {
+                    current = parent.to_path_buf();
+                    let parent_cargo = current.join("Cargo.toml");
+                    if parent_cargo.exists() {
+                        if let Ok(parent_content) = std::fs::read_to_string(&parent_cargo) {
+                            if let Ok(parent_toml) = parent_content.parse::<toml::Value>() {
+                                if let Some(version) = parent_toml
+                                    .get("workspace")
+                                    .and_then(|w| w.get("package"))
+                                    .and_then(|p| p.get("version"))
+                                    .and_then(|v| v.as_str())
+                                {
+                                    return Some(version.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
 
 /// Deploy to pmcp.run managed service using 3-step flow:
 /// 1. Get presigned S3 URLs
@@ -160,13 +226,21 @@ pub async fn deploy_to_pmcp_run(
     println!("✅ Files uploaded successfully to S3");
     println!();
 
-    // Step 7: Create deployment via GraphQL with composition settings
+    // Step 7: Create deployment via GraphQL with composition settings and version
     println!("🚀 Creating deployment...");
+
+    // Extract version from Cargo.toml (supports workspace inheritance)
+    let server_version = extract_version_from_cargo(&config.project_root);
+    if let Some(ref version) = server_version {
+        println!("   Version: {}", version);
+    }
+
     let composition = graphql::CompositionSettings {
         tier: config.composition.tier.clone(),
         allow_composition: config.composition.allow_composition,
         internal_only: config.composition.internal_only,
         description: config.composition.description.clone(),
+        server_version,
     };
     let deployment = graphql::create_deployment_from_s3_with_composition(
         &credentials.access_token,
