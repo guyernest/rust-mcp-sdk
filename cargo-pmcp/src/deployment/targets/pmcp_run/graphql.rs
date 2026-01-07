@@ -167,13 +167,15 @@ pub async fn upload_to_s3(url: &str, content: Vec<u8>, content_type: &str) -> Re
     Ok(())
 }
 
-/// Composition configuration for deployment
+/// Deployment settings including composition and versioning
 #[derive(Debug, Clone, Default)]
 pub struct CompositionSettings {
     pub tier: String,
     pub allow_composition: bool,
     pub internal_only: bool,
     pub description: Option<String>,
+    /// Server version from manifest (e.g., "1.2.3" from Cargo.toml)
+    pub server_version: Option<String>,
 }
 
 /// Create deployment from S3 files
@@ -207,6 +209,7 @@ pub async fn create_deployment_from_s3_with_composition(
             $runtime: String,
             $memorySize: Int,
             $timeout: Int,
+            $serverVersion: String,
             $tier: String,
             $allowComposition: Boolean,
             $internalOnly: Boolean,
@@ -219,6 +222,7 @@ pub async fn create_deployment_from_s3_with_composition(
                 runtime: $runtime,
                 memorySize: $memorySize,
                 timeout: $timeout,
+                serverVersion: $serverVersion,
                 tier: $tier,
                 allowComposition: $allowComposition,
                 internalOnly: $internalOnly,
@@ -239,6 +243,7 @@ pub async fn create_deployment_from_s3_with_composition(
         "runtime": "provided.al2023",
         "memorySize": 512,
         "timeout": 30,
+        "serverVersion": composition.server_version,
         "tier": composition.tier,
         "allowComposition": composition.allow_composition,
         "internalOnly": composition.internal_only,

@@ -2536,8 +2536,11 @@ impl ServerBuilder {
     /// ```
     pub fn tool_authorizer(mut self, authorizer: impl auth::ToolAuthorizer + 'static) -> Self {
         if !self.tool_protections.is_empty() {
-            // Log a warning or panic - for now we'll clear the protections with a warning
-            eprintln!("Warning: Setting a custom tool_authorizer clears any previous protect_tool() configurations");
+            // Log a warning - custom authorizer supersedes protect_tool() configurations
+            tracing::warn!(
+                target: "mcp.auth",
+                "Setting a custom tool_authorizer clears any previous protect_tool() configurations"
+            );
             self.tool_protections.clear();
         }
         self.tool_authorizer = Some(Arc::new(authorizer));

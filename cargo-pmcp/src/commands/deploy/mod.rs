@@ -214,32 +214,94 @@ pub enum SecretsAction {
     },
 }
 
+/// Default OAuth scopes for MCP servers
+const DEFAULT_OAUTH_SCOPES: &[&str] = &["openid", "email", "mcp/read"];
+
+/// Default public client patterns for MCP OAuth
+const DEFAULT_PUBLIC_CLIENT_PATTERNS: &[&str] =
+    &["claude", "cursor", "desktop", "mcp-inspector", "chatgpt"];
+
 #[derive(Debug, Parser)]
 pub enum OAuthAction {
     /// Enable OAuth for an MCP server on pmcp.run
+    ///
+    /// Configures OAuth authentication using AWS Cognito. When using --shared-pool
+    /// or --copy-from, multiple MCP servers can share the same user pool, enabling
+    /// Single Sign-On (SSO) across servers.
     Enable {
         /// Server ID (deployment ID) to enable OAuth for
         #[clap(long)]
         server: String,
 
-        /// OAuth scopes (comma-separated)
-        #[clap(long, value_delimiter = ',')]
+        /// Copy OAuth configuration from an existing server.
+        ///
+        /// Fetches OAuth settings (scopes, DCR, public clients, user pool) from
+        /// another server and applies them to this server. This is the easiest
+        /// way to enable SSO across multiple MCP servers.
+        ///
+        /// Example: --copy-from advanced-mcp-course
+        #[clap(long, value_name = "SERVER_ID")]
+        copy_from: Option<String>,
+
+        /// OAuth scopes for this server (comma-separated).
+        ///
+        /// Defines what permissions clients can request:
+        ///   - openid:    Required for OIDC (always include)
+        ///   - email:     Access to user's email address
+        ///   - mcp/read:  Read-only MCP operations
+        ///   - mcp/write: Read-write MCP operations
+        ///
+        /// Default: "openid,email,mcp/read"
+        ///
+        /// Note: When using --shared-pool, scopes are server-specific and
+        /// do NOT affect other servers sharing the same pool.
+        #[clap(long, value_delimiter = ',', value_name = "SCOPES")]
         scopes: Option<Vec<String>>,
 
-        /// Enable Dynamic Client Registration
+        /// Enable Dynamic Client Registration (RFC 7591).
+        ///
+        /// When enabled, MCP clients (Claude, Cursor, ChatGPT) can automatically
+        /// register themselves when users add your server URL.
+        ///
+        /// Default: true (recommended for MCP servers)
         #[clap(long, default_value = "true")]
         dcr: bool,
 
-        /// Public client patterns (comma-separated, e.g., claude,cursor)
-        #[clap(long, value_delimiter = ',')]
+        /// Public client patterns (comma-separated).
+        ///
+        /// Client names matching these patterns are treated as public OAuth
+        /// clients (no client_secret required). This is correct for desktop
+        /// and native apps that cannot securely store secrets.
+        ///
+        /// Default: "claude,cursor,desktop,mcp-inspector,chatgpt"
+        ///
+        /// Example: --public-clients "claude,cursor,my-app"
+        #[clap(long, value_delimiter = ',', value_name = "PATTERNS")]
         public_clients: Option<Vec<String>>,
 
-        /// Use a shared User Pool instead of per-server pool
-        #[clap(long)]
+        /// Use an existing Cognito User Pool instead of creating a new one.
+        ///
+        /// This enables Single Sign-On (SSO) across multiple MCP servers.
+        /// Users with accounts on other servers sharing this pool can
+        /// automatically access this server.
+        ///
+        /// Value can be:
+        ///   - Cognito User Pool ID (e.g., "us-east-1_TSTigvdHH")
+        ///   - Shared pool name from organization setup
+        ///
+        /// TIP: To find an existing pool ID, run:
+        ///   cargo pmcp deploy oauth status --server <existing-server>
+        ///
+        /// Note: Other parameters (--scopes, --dcr, --public-clients) configure
+        /// THIS server's OAuth behavior, not the shared pool itself.
+        #[clap(long, value_name = "POOL_ID_OR_NAME")]
         shared_pool: Option<String>,
     },
 
     /// Disable OAuth for an MCP server
+    ///
+    /// Disables OAuth authentication. The Cognito User Pool is NOT deleted,
+    /// so you can re-enable OAuth at any time.
     Disable {
         /// Server ID (deployment ID)
         #[clap(long)]
@@ -247,6 +309,10 @@ pub enum OAuthAction {
     },
 
     /// Show OAuth status and endpoints for an MCP server
+    ///
+    /// Displays current OAuth configuration including endpoints, scopes,
+    /// and Cognito User Pool details. Use this to find pool IDs for
+    /// sharing with other servers.
     Status {
         /// Server ID (deployment ID)
         #[clap(long)]
@@ -619,6 +685,7 @@ async fn handle_oauth_action(action: &OAuthAction) -> Result<()> {
     match action {
         OAuthAction::Enable {
             server,
+            copy_from,
             scopes,
             dcr,
             public_clients,
@@ -627,14 +694,48 @@ async fn handle_oauth_action(action: &OAuthAction) -> Result<()> {
             println!("🔐 Enabling OAuth for server: {}", server);
             println!();
 
+            // Resolve final configuration values
+            // Priority: explicit params > copied values > defaults
+            let (final_scopes, final_dcr, final_public_clients, final_shared_pool) =
+                resolve_oauth_config(
+                    &credentials.access_token,
+                    copy_from.as_deref(),
+                    scopes.clone(),
+                    *dcr,
+                    public_clients.clone(),
+                    shared_pool.clone(),
+                )
+                .await?;
+
+            // Display what configuration will be applied
+            if copy_from.is_some() || shared_pool.is_some() {
+                println!("📋 OAuth Configuration:");
+                println!("   Scopes:         {}", final_scopes.join(", "));
+                println!(
+                    "   DCR:            {}",
+                    if final_dcr { "enabled" } else { "disabled" }
+                );
+                println!(
+                    "   Public clients: {}",
+                    final_public_clients
+                        .as_ref()
+                        .map(|p| p.join(", "))
+                        .unwrap_or_else(|| "(default)".to_string())
+                );
+                if let Some(ref pool) = final_shared_pool {
+                    println!("   Shared pool:    {}", pool);
+                }
+                println!();
+            }
+
             let oauth_config = graphql::configure_server_oauth(
                 &credentials.access_token,
                 server,
                 true,
-                scopes.clone(),
-                Some(*dcr),
-                public_clients.clone(),
-                shared_pool.clone(),
+                Some(final_scopes),
+                Some(final_dcr),
+                final_public_clients,
+                final_shared_pool,
             )
             .await
             .context("Failed to configure OAuth")?;
@@ -660,6 +761,12 @@ async fn handle_oauth_action(action: &OAuthAction) -> Result<()> {
             }
             if let Some(ref region) = oauth_config.user_pool_region {
                 println!("   Region:        {}", region);
+            }
+
+            // Show helpful next steps for SSO
+            if copy_from.is_some() || shared_pool.is_some() {
+                println!();
+                println!("🔗 SSO enabled: Users from the shared pool can access this server");
             }
 
             Ok(())
@@ -737,4 +844,115 @@ async fn handle_oauth_action(action: &OAuthAction) -> Result<()> {
             Ok(())
         },
     }
+}
+
+/// Resolve OAuth configuration with priority: explicit params > copied values > defaults
+///
+/// This function implements the configuration resolution logic:
+/// 1. If `copy_from` is specified, fetch OAuth config from that server
+/// 2. Use explicit parameters to override copied values
+/// 3. Apply sensible defaults for any remaining unspecified values
+async fn resolve_oauth_config(
+    access_token: &str,
+    copy_from: Option<&str>,
+    explicit_scopes: Option<Vec<String>>,
+    explicit_dcr: bool,
+    explicit_public_clients: Option<Vec<String>>,
+    explicit_shared_pool: Option<String>,
+) -> Result<(Vec<String>, bool, Option<Vec<String>>, Option<String>)> {
+    use crate::deployment::targets::pmcp_run::graphql;
+
+    // Start with defaults
+    let default_scopes: Vec<String> = DEFAULT_OAUTH_SCOPES.iter().map(|s| s.to_string()).collect();
+    let default_public_clients: Vec<String> = DEFAULT_PUBLIC_CLIENT_PATTERNS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    // If copy_from is specified, fetch config from source server
+    let (copied_scopes, copied_dcr, copied_public_clients, copied_pool) =
+        if let Some(source_server) = copy_from {
+            println!("📥 Copying OAuth configuration from: {}", source_server);
+
+            match graphql::fetch_server_oauth_endpoints(access_token, source_server).await {
+                Ok(endpoints) => {
+                    if !endpoints.oauth_enabled {
+                        bail!(
+                            "Source server '{}' does not have OAuth enabled. \
+                         Cannot copy configuration from a server without OAuth.",
+                            source_server
+                        );
+                    }
+
+                    let pool_id = endpoints.user_pool_id.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Source server '{}' has OAuth enabled but no User Pool ID. \
+                         This is unexpected - please check the server configuration.",
+                            source_server
+                        )
+                    })?;
+
+                    println!("   Found User Pool: {}", pool_id);
+                    if let Some(ref scopes) = endpoints.scopes {
+                        println!("   Found scopes: {}", scopes.join(", "));
+                    }
+                    println!();
+
+                    (
+                        endpoints.scopes,
+                        endpoints.dcr_enabled,
+                        None, // Public client patterns not returned by status endpoint
+                        Some(pool_id),
+                    )
+                },
+                Err(e) => {
+                    bail!(
+                        "Failed to fetch OAuth configuration from '{}': {}\n\
+                     Make sure the server exists and has OAuth enabled.\n\
+                     You can check with: cargo pmcp deploy oauth status --server {}",
+                        source_server,
+                        e,
+                        source_server
+                    );
+                },
+            }
+        } else {
+            (None, None, None, None)
+        };
+
+    // Resolve final values with priority: explicit > copied > default
+    // For scopes: explicit provided OR copied from source OR default
+    let final_scopes = explicit_scopes.or(copied_scopes).unwrap_or(default_scopes);
+
+    // For DCR: explicit is always used (it has a default_value in clap)
+    // But if copying and explicit wasn't changed from default, prefer copied
+    let final_dcr = if copy_from.is_some() && explicit_dcr {
+        // User didn't override DCR (it's still the default true)
+        // Use copied value if available, otherwise use explicit (which is default true)
+        copied_dcr.unwrap_or(explicit_dcr)
+    } else {
+        explicit_dcr
+    };
+
+    // For public clients: explicit OR copied OR default (when using shared pool)
+    let final_public_clients = if explicit_public_clients.is_some() {
+        explicit_public_clients
+    } else if copied_public_clients.is_some() {
+        copied_public_clients
+    } else if copy_from.is_some() || explicit_shared_pool.is_some() {
+        // When using shared pool or copying, apply default public clients
+        Some(default_public_clients)
+    } else {
+        None // Let backend use its defaults
+    };
+
+    // For shared pool: explicit OR copied
+    let final_shared_pool = explicit_shared_pool.or(copied_pool);
+
+    Ok((
+        final_scopes,
+        final_dcr,
+        final_public_clients,
+        final_shared_pool,
+    ))
 }

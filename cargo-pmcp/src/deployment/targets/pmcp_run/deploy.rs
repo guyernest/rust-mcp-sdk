@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::deployment::{
@@ -8,6 +8,66 @@ use crate::deployment::{
 };
 
 use super::{auth, graphql};
+
+/// Extract the server version from the Cargo workspace.
+///
+/// Uses `cargo metadata` which properly handles:
+/// 1. Workspace root versions
+/// 2. Package versions
+/// 3. Workspace inheritance (`version.workspace = true`)
+///
+/// Returns None if version cannot be determined.
+fn extract_version_from_cargo(project_root: &Path) -> Option<String> {
+    // Use cargo metadata to get package information - this handles all Cargo.toml formats
+    let output = std::process::Command::new("cargo")
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .current_dir(project_root)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+
+    // Get workspace root to find the "main" package
+    let workspace_root = metadata.get("workspace_root")?.as_str()?;
+
+    // Find packages in the workspace
+    let packages = metadata.get("packages")?.as_array()?;
+
+    // Strategy: prefer package at workspace root, then any package with version
+    let mut root_package_version: Option<String> = None;
+    let mut any_version: Option<String> = None;
+
+    for package in packages {
+        let version = match package.get("version").and_then(|v| v.as_str()) {
+            Some(v) => v,
+            None => continue,
+        };
+        let manifest_path = package
+            .get("manifest_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        // Check if this package's Cargo.toml is at workspace root
+        if !manifest_path.is_empty() && manifest_path.starts_with(workspace_root) {
+            let relative = &manifest_path[workspace_root.len()..];
+            // Package at root has manifest at /Cargo.toml (just one path component)
+            if relative == "/Cargo.toml" || relative.matches('/').count() == 1 {
+                root_package_version = Some(version.to_string());
+            }
+        }
+
+        if any_version.is_none() {
+            any_version = Some(version.to_string());
+        }
+    }
+
+    // Prefer root package version, fallback to any package version
+    root_package_version.or(any_version)
+}
 
 /// Deploy to pmcp.run managed service using 3-step flow:
 /// 1. Get presigned S3 URLs
@@ -160,13 +220,21 @@ pub async fn deploy_to_pmcp_run(
     println!("✅ Files uploaded successfully to S3");
     println!();
 
-    // Step 7: Create deployment via GraphQL with composition settings
+    // Step 7: Create deployment via GraphQL with composition settings and version
     println!("🚀 Creating deployment...");
+
+    // Extract version from Cargo.toml (supports workspace inheritance)
+    let server_version = extract_version_from_cargo(&config.project_root);
+    if let Some(ref version) = server_version {
+        println!("   Version: {}", version);
+    }
+
     let composition = graphql::CompositionSettings {
         tier: config.composition.tier.clone(),
         allow_composition: config.composition.allow_composition,
         internal_only: config.composition.internal_only,
         description: config.composition.description.clone(),
+        server_version,
     };
     let deployment = graphql::create_deployment_from_s3_with_composition(
         &credentials.access_token,

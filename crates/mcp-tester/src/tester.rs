@@ -13,7 +13,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
-use tracing::debug;
+use tracing::{debug, info};
 use url::Url;
 
 use crate::report::{TestCategory, TestReport, TestResult, TestStatus};
@@ -182,6 +182,27 @@ impl ServerTester {
                 return Err(anyhow::anyhow!("Unsupported transport type: {}", transport))
             },
         };
+
+        // Log transport detection for visibility
+        let transport_name = match &transport_type {
+            TransportType::Http => "Streamable HTTP",
+            TransportType::Stdio => "Stdio",
+            TransportType::JsonRpcHttp => "JSON-RPC over HTTP",
+        };
+        let detection_mode = if force_transport.is_some() {
+            "forced"
+        } else {
+            "auto-detected"
+        };
+        info!(
+            target: "mcp.tester",
+            transport = transport_name,
+            mode = detection_mode,
+            url = url,
+            "Transport {} ({})",
+            detection_mode,
+            transport_name
+        );
 
         Ok(Self {
             url: url.to_string(),
@@ -1342,6 +1363,65 @@ impl ServerTester {
         }
     }
 
+    /// Call a tool and return the raw CallToolResult for scenario testing
+    /// This bypasses TestResult formatting to preserve the full response for assertions
+    pub async fn call_tool_raw(
+        &mut self,
+        tool_name: &str,
+        args: Value,
+    ) -> Result<pmcp::types::CallToolResult> {
+        match self.transport_type {
+            TransportType::Http => {
+                if let Some(ref client) = self.pmcp_client {
+                    client
+                        .call_tool(tool_name.to_string(), args)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("{}", e))
+                } else {
+                    Err(anyhow::anyhow!(
+                        "Client not initialized - please run initialize test first"
+                    ))
+                }
+            },
+            TransportType::JsonRpcHttp => {
+                // Send direct JSON-RPC request for tools/call
+                let request = JsonRpcRequest {
+                    jsonrpc: "2.0".to_string(),
+                    method: "tools/call".to_string(),
+                    params: Some(json!({
+                        "name": tool_name,
+                        "arguments": args
+                    })),
+                    id: Some(json!(3)),
+                };
+
+                match self.send_json_rpc_request(request).await {
+                    Ok(response) => {
+                        if let Some(error) = response.error {
+                            Err(anyhow::anyhow!("JSON-RPC error: {:?}", error))
+                        } else if let Some(result) = response.result {
+                            // Properly deserialize CallToolResult from JSON-RPC response
+                            serde_json::from_value::<pmcp::types::CallToolResult>(result.clone())
+                                .map_err(|e| {
+                                    anyhow::anyhow!(
+                                        "Failed to parse CallToolResult: {}. Raw response: {}",
+                                        e,
+                                        result
+                                    )
+                                })
+                        } else {
+                            Err(anyhow::anyhow!("No result in tool call response"))
+                        }
+                    },
+                    Err(e) => Err(anyhow::anyhow!("Transport error: {}", e)),
+                }
+            },
+            TransportType::Stdio => Err(anyhow::anyhow!(
+                "Stdio transport doesn't support direct tool calls in tester"
+            )),
+        }
+    }
+
     pub async fn test_tool(&mut self, tool_name: &str, args: Value) -> Result<TestResult> {
         let start = Instant::now();
         let name = format!("Tool: {}", tool_name);
@@ -1396,13 +1476,14 @@ impl ServerTester {
                                 error
                             )))
                         } else if let Some(result) = response.result {
-                            // For tool calls, we expect a CallToolResult structure
-                            Ok(pmcp::types::CallToolResult {
-                                content: vec![pmcp::types::Content::Text {
-                                    text: format!("{}", result),
-                                }],
-                                is_error: false,
-                            })
+                            // Properly deserialize CallToolResult from JSON-RPC response
+                            serde_json::from_value::<pmcp::types::CallToolResult>(result.clone())
+                                .map_err(|e| {
+                                    pmcp::Error::Internal(format!(
+                                        "Failed to parse CallToolResult: {}. Raw response: {}",
+                                        e, result
+                                    ))
+                                })
                         } else {
                             Err(pmcp::Error::Internal(
                                 "No result in tool call response".to_string(),
@@ -1418,17 +1499,27 @@ impl ServerTester {
 
         match result {
             Ok(result) => {
-                let full_response = format!("{:?}", result.content);
-                debug!("Tool {} full response: {}", tool_name, full_response);
+                // Extract text content from the response
+                let content_text: String = result
+                    .content
+                    .iter()
+                    .filter_map(|c| match c {
+                        pmcp::types::Content::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
 
-                // Truncate response to first 100 characters for display
-                let truncated_response = if full_response.len() > 100 {
+                debug!("Tool {} full response: {}", tool_name, content_text);
+
+                // Truncate response to first 200 characters for display
+                let truncated_response = if content_text.len() > 200 {
                     format!(
                         "{}... (use RUST_LOG=debug for full response)",
-                        &full_response[..100]
+                        &content_text[..200]
                     )
                 } else {
-                    full_response
+                    content_text
                 };
 
                 Ok(TestResult {
@@ -1437,7 +1528,7 @@ impl ServerTester {
                     status: TestStatus::Passed,
                     duration: start.elapsed(),
                     error: None,
-                    details: Some(format!("Response: {}", truncated_response)),
+                    details: Some(truncated_response),
                 })
             },
             Err(e) => {
@@ -2542,7 +2633,8 @@ impl ServerTester {
                     jsonrpc: "2.0".to_string(),
                     method: "resources/read".to_string(),
                     params: Some(json!({"uri": uri})),
-                    id: Some(json!(rand::random::<u64>())),
+                    // Use u32 to stay within JavaScript's safe integer range (2^53 - 1)
+                    id: Some(json!(rand::random::<u32>())),
                 };
 
                 match self.send_json_rpc_request(request).await {
@@ -2654,7 +2746,8 @@ impl ServerTester {
                         "name": name,
                         "arguments": arguments
                     })),
-                    id: Some(json!(rand::random::<u64>())),
+                    // Use u32 to stay within JavaScript's safe integer range (2^53 - 1)
+                    id: Some(json!(rand::random::<u32>())),
                 };
 
                 match self.send_json_rpc_request(request).await {
@@ -2690,7 +2783,8 @@ impl ServerTester {
                     jsonrpc: "2.0".to_string(),
                     method: method.to_string(),
                     params: Some(params),
-                    id: Some(json!(rand::random::<u64>())),
+                    // Use u32 to stay within JavaScript's safe integer range (2^53 - 1)
+                    id: Some(json!(rand::random::<u32>())),
                 };
 
                 match self.send_json_rpc_request(request).await {

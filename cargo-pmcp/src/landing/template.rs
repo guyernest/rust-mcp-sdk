@@ -32,7 +32,7 @@ pub const AVAILABLE_TEMPLATES: &[TemplateSource] = &[
 ];
 
 /// Git repository for cargo-pmcp (contains templates)
-const CARGO_PMCP_REPO: &str = "https://github.com/pmcp-io/rust-mcp-sdk.git";
+const CARGO_PMCP_REPO: &str = "https://github.com/paiml/rust-mcp-sdk.git";
 
 /// Clone a template from cargo-pmcp repository
 pub fn clone_template(template_name: &str, output_dir: &Path) -> Result<()> {
@@ -131,8 +131,10 @@ fn sparse_clone_template(temp_dir: &Path, template_path: &str) -> Result<()> {
     let git_dir = temp_dir;
 
     // Git clone with sparse checkout
+    // Use GIT_TERMINAL_PROMPT=0 to prevent interactive authentication prompts
+    // This avoids hanging when the repo requires auth that isn't configured
     let output = Command::new("git")
-        .args(&[
+        .args([
             "clone",
             "--depth",
             "1",
@@ -140,12 +142,32 @@ fn sparse_clone_template(temp_dir: &Path, template_path: &str) -> Result<()> {
             "--sparse",
             CARGO_PMCP_REPO,
         ])
+        .env("GIT_TERMINAL_PROMPT", "0")
         .current_dir(temp_dir)
         .output()
         .context("Failed to execute git clone")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // Check for authentication-related errors
+        if stderr.contains("Authentication failed")
+            || stderr.contains("could not read Username")
+            || stderr.contains("terminal prompts disabled")
+        {
+            anyhow::bail!(
+                "Git clone failed: Repository requires authentication.\n\n\
+                 The template repository at {} may be private or require credentials.\n\n\
+                 Options:\n\
+                 1. Configure git credentials: git config --global credential.helper store\n\
+                 2. Use SSH: git config --global url.\"git@github.com:\".insteadOf \"https://github.com/\"\n\
+                 3. Set CARGO_PMCP_DEV_DIR to use a local template directory\n\n\
+                 Error: {}",
+                CARGO_PMCP_REPO,
+                stderr.trim()
+            );
+        }
+
         anyhow::bail!("Git clone failed: {}", stderr);
     }
 
