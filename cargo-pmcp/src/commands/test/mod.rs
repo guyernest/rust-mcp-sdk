@@ -1,12 +1,14 @@
 //! Test MCP servers using mcp-tester library
 //!
 //! This module provides commands for testing MCP servers both locally and remotely:
+//! - `check`: Quick sanity check of MCP server connectivity and compliance
 //! - `run`: Run test scenarios against local or deployed servers
 //! - `generate`: Generate test scenarios from server capabilities
 //! - `upload`: Upload scenarios to pmcp.run for scheduled testing
 //! - `download`: Download scenarios from pmcp.run
 //! - `list`: List scenarios on pmcp.run
 
+mod check;
 mod download;
 mod generate;
 mod list;
@@ -19,6 +21,32 @@ use std::path::PathBuf;
 
 #[derive(Debug, Subcommand)]
 pub enum TestCommand {
+    /// Quick sanity check of an MCP server
+    ///
+    /// Verifies that an MCP server is reachable, responds correctly to the
+    /// initialize handshake, and reports its capabilities. This is the fastest
+    /// way to verify a server is working before running full test scenarios.
+    ///
+    /// Use --verbose to see raw JSON-RPC messages for debugging non-compliant servers.
+    Check {
+        /// URL of the MCP server to check
+        #[arg(long, required = true)]
+        url: String,
+
+        /// Transport type: http (SSE streaming), jsonrpc (simple POST), or stdio
+        /// Auto-detected by default based on URL patterns
+        #[arg(long)]
+        transport: Option<String>,
+
+        /// Show verbose output including raw JSON-RPC messages
+        #[arg(long, short)]
+        verbose: bool,
+
+        /// Connection timeout in seconds
+        #[arg(long, default_value = "30")]
+        timeout: u64,
+    },
+
     /// Run test scenarios against an MCP server
     ///
     /// Run tests against a local development server or a deployed remote server.
@@ -145,6 +173,16 @@ pub enum TestCommand {
 impl TestCommand {
     pub fn execute(self) -> Result<()> {
         match self {
+            TestCommand::Check {
+                url,
+                transport,
+                verbose,
+                timeout,
+            } => {
+                let runtime = tokio::runtime::Runtime::new()?;
+                runtime.block_on(check::execute(url, transport, verbose, timeout))
+            },
+
             TestCommand::Run {
                 server,
                 url,
