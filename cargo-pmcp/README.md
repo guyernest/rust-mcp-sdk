@@ -14,9 +14,10 @@ Production-grade MCP server development toolkit.
 - **Automated Testing**: Generate and run comprehensive test scenarios for your MCP servers
 - **Smart Test Generation**: Automatically creates meaningful test cases with realistic values
 - **Multi-Target Deployment**: Deploy to AWS Lambda, Google Cloud Run, or Cloudflare Workers with one command
+- **Secrets Management**: Multi-provider secret storage (local, pmcp.run, AWS Secrets Manager)
 - **WASM Support**: Automatic WASM compilation for edge deployments
 - **Infrastructure as Code**: CDK-based AWS deployment with complete stack management
-- **Deployment Management**: Logs, metrics, secrets, rollback, and destroy capabilities
+- **Deployment Management**: Logs, metrics, rollback, and destroy capabilities
 - **OAuth Authentication**: Production-ready OAuth 2.0 with AWS Cognito, supporting Dynamic Client Registration (DCR)
 
 ## Installation
@@ -205,9 +206,79 @@ cargo pmcp deploy destroy --target google-cloud-run --clean
 
 **Additional Commands:**
 - `deploy metrics --period 24h` - View deployment metrics
-- `deploy secrets set KEY --from-env ENV_VAR` - Manage secrets
 - `deploy test --verbose` - Test the deployment
 - `deploy outputs --format json` - Show deployment outputs
+
+### `secret`
+
+Manage secrets for MCP servers across multiple providers.
+
+**Supported Providers:**
+- `local` - Local filesystem storage for development (default)
+- `pmcp` - pmcp.run managed platform for production
+- `aws` - AWS Secrets Manager for self-hosted deployments
+
+**Secret Naming Convention:**
+Secrets are namespaced by server ID to avoid conflicts:
+```
+{server-id}/{SECRET_NAME}
+
+Examples:
+  chess/ANTHROPIC_API_KEY
+  london-tube/TFL_APP_KEY
+  my-api/DATABASE_URL
+```
+
+**Subcommands:**
+
+```bash
+# List secrets for a server
+cargo pmcp secret list --server myserver
+
+# Set a secret interactively (recommended - hidden input)
+cargo pmcp secret set myserver/API_KEY --prompt
+
+# Set from environment variable
+cargo pmcp secret set myserver/API_KEY --env MY_API_KEY
+
+# Set from file
+cargo pmcp secret set myserver/API_KEY --file ./secret.txt
+
+# Generate a random secret
+cargo pmcp secret set myserver/SESSION_SECRET --generate --length 64
+
+# Get a secret value
+cargo pmcp secret get myserver/API_KEY
+
+# Delete a secret
+cargo pmcp secret delete myserver/API_KEY
+
+# Show provider status
+cargo pmcp secret providers
+```
+
+**Target Selection:**
+```bash
+# Explicit target
+cargo pmcp secret list --server myserver --target pmcp
+cargo pmcp secret list --server myserver --target local
+cargo pmcp secret list --server myserver --target aws
+
+# Auto-detection (checks pmcp.run auth, then AWS, then local)
+cargo pmcp secret list --server myserver
+```
+
+**Verbose Mode:**
+```bash
+# Enable verbose output for debugging
+cargo pmcp -v secret set myserver/KEY --prompt --target pmcp
+```
+
+**Security Features:**
+- Secret values use `secrecy` crate with automatic memory zeroization
+- Local secrets stored with file permissions 0600
+- Debug/Display output shows `[REDACTED]` instead of actual values
+- Warns when outputting secrets to terminal
 
 ### OAuth Authentication
 

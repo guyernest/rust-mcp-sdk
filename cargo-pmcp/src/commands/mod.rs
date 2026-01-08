@@ -5,5 +5,6 @@ pub mod dev;
 pub mod landing;
 pub mod new;
 pub mod schema;
+pub mod secret;
 pub mod test;
 pub mod validate;
