@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::deployment::{
+    metadata::McpMetadata,
     r#trait::{BuildArtifact, DeploymentOutputs},
     DeployConfig,
 };
@@ -87,7 +88,26 @@ pub async fn deploy_to_pmcp_run(
     let deploy_dir = config.project_root.join("deploy");
     let cdk_out = deploy_dir.join("cdk.out");
 
-    // Step 1: Synthesize CloudFormation template (if not already done)
+    // Step 0: Extract MCP metadata for the CloudFormation template
+    println!("📋 Extracting MCP server metadata...");
+    let metadata = match McpMetadata::extract(&config.project_root) {
+        Ok(m) => {
+            println!("   Server: {} ({})", m.server_id, m.server_type);
+            if !m.resources.secrets.is_empty() {
+                println!("   Secrets: {}", m.resources.secrets.len());
+            }
+            if !m.capabilities.tools.is_empty() {
+                println!("   Tools: {}", m.capabilities.tools.len());
+            }
+            Some(m)
+        }
+        Err(_) => {
+            println!("   No metadata found (using defaults)");
+            None
+        }
+    };
+
+    // Step 1: Synthesize CloudFormation template with metadata context
     println!("📝 Synthesizing CloudFormation template...");
 
     // Use shell to run npx/cdk to ensure PATH is correctly set
@@ -102,10 +122,22 @@ pub async fn deploy_to_pmcp_run(
         "-c"
     };
 
+    // Build CDK synth command with metadata context
+    let cdk_context_args = metadata
+        .as_ref()
+        .map(|m| m.to_cdk_context().join(" "))
+        .unwrap_or_default();
+
+    let synth_command = if cdk_context_args.is_empty() {
+        "npx cdk synth --quiet".to_string()
+    } else {
+        format!("npx cdk synth --quiet {}", cdk_context_args)
+    };
+
     let synth_output = std::process::Command::new(shell_cmd)
         .current_dir(&deploy_dir)
         .arg(shell_arg)
-        .arg("npx cdk synth --quiet")
+        .arg(&synth_command)
         .output()
         .context("Failed to run cdk synth. Make sure Node.js and npm are installed")?;
 

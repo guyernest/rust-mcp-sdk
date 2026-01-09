@@ -506,6 +506,48 @@ export class McpServerStack extends cdk.Stack {{
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {{
     super(scope, id, props);
 
+    // ========================================================================
+    // MCP METADATA (for pmcp.run platform enrichment)
+    // Read from CDK context, passed by `cargo pmcp deploy`
+    // Platforms read this metadata to provision secrets, add IAM, etc.
+    // ========================================================================
+    const mcpVersion = this.node.tryGetContext('mcp:version') || '1.0';
+    const mcpServerType = this.node.tryGetContext('mcp:serverType') || 'custom';
+    const mcpServerId = this.node.tryGetContext('mcp:serverId');
+    const mcpTemplateId = this.node.tryGetContext('mcp:templateId');
+    const mcpTemplateVersion = this.node.tryGetContext('mcp:templateVersion');
+    const mcpResources = this.node.tryGetContext('mcp:resources');
+    const mcpCapabilities = this.node.tryGetContext('mcp:capabilities');
+
+    // Set CloudFormation template metadata
+    // This is ignored by vanilla CloudFormation but read by pmcp.run
+    const metadata: Record<string, any> = {{
+      'mcp:version': mcpVersion,
+      'mcp:serverType': mcpServerType,
+    }};
+    if (mcpServerId) metadata['mcp:serverId'] = mcpServerId;
+    if (mcpTemplateId) metadata['mcp:templateId'] = mcpTemplateId;
+    if (mcpTemplateVersion) metadata['mcp:templateVersion'] = mcpTemplateVersion;
+    if (mcpResources) {{
+      try {{
+        metadata['mcp:resources'] = typeof mcpResources === 'string'
+          ? JSON.parse(mcpResources)
+          : mcpResources;
+      }} catch (e) {{
+        metadata['mcp:resources'] = mcpResources;
+      }}
+    }}
+    if (mcpCapabilities) {{
+      try {{
+        metadata['mcp:capabilities'] = typeof mcpCapabilities === 'string'
+          ? JSON.parse(mcpCapabilities)
+          : mcpCapabilities;
+      }} catch (e) {{
+        metadata['mcp:capabilities'] = mcpCapabilities;
+      }}
+    }}
+    this.templateOptions.metadata = metadata;
+
     // Get configuration from context or environment
     // These can be overridden via CDK context: -c serverId=myserver
     const serverId = this.node.tryGetContext('serverId') || '{}';
