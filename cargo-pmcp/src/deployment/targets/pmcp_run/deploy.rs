@@ -330,7 +330,38 @@ pub async fn deploy_to_pmcp_run(
             },
         }
     } else {
-        None
+        // Even if local config doesn't enable OAuth, check if it's enabled on the backend
+        // (e.g., from a previous `cargo pmcp deploy oauth enable` command)
+        // Use server name (e.g., "true-agent") not deployment_id - OAuth is keyed by serverId
+        match graphql::fetch_server_oauth_endpoints(
+            &credentials.access_token,
+            &config.server.name,
+        )
+        .await
+        {
+            Ok(oauth) => {
+                if oauth.oauth_enabled {
+                    // Convert OAuthEndpoints to OAuthConfig
+                    Some(graphql::OAuthConfig {
+                        server_id: oauth.server_id,
+                        oauth_enabled: oauth.oauth_enabled,
+                        user_pool_id: oauth.user_pool_id,
+                        user_pool_region: oauth.user_pool_region,
+                        discovery_url: oauth.discovery_url,
+                        registration_endpoint: oauth.registration_endpoint,
+                        authorization_endpoint: oauth.authorization_endpoint,
+                        token_endpoint: oauth.token_endpoint,
+                    })
+                } else {
+                    eprintln!("   (OAuth query returned oauthEnabled=false for {})", config.server.name);
+                    None
+                }
+            }
+            Err(e) => {
+                eprintln!("   (OAuth status check failed for {}: {})", config.server.name, e);
+                None
+            }
+        }
     };
 
     // Use URL from server response (contains stable serverId-based URL)
