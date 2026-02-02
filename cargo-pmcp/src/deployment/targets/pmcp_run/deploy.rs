@@ -370,7 +370,13 @@ pub async fn deploy_to_pmcp_run(
         .url
         .clone()
         .unwrap_or_else(|| format!("https://api.pmcp.run/{}/mcp", deployment.deployment_id));
-    let health_url = mcp_url.replace("/mcp", "/health");
+    // Replace only the trailing /mcp path, not /mcp- in subdomains like mcp-reference
+    // e.g. https://mcp-reference.us-east.true-mcp.com/mcp → .../health
+    let health_url = if let Some(base) = mcp_url.strip_suffix("/mcp") {
+        format!("{}/health", base)
+    } else {
+        mcp_url.replace("/mcp", "/health")
+    };
 
     // Get server_id from the deployment outputs (projectName returned by backend)
     // This is the clean server name like "chess", not the full URL
