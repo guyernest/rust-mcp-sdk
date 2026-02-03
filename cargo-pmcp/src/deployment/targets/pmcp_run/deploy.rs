@@ -233,16 +233,19 @@ pub async fn deploy_to_pmcp_run(
     println!("⬆️  Uploading files to S3...");
 
     let template_bytes = template.into_bytes();
+    let bootstrap_label = if has_assets { "Package" } else { "Bootstrap" };
     let (template_result, bootstrap_result) = tokio::join!(
         graphql::upload_to_s3(
             &urls.template_upload_url,
             template_bytes,
-            "application/json"
+            "application/json",
+            "Template",
         ),
         graphql::upload_to_s3(
             &urls.bootstrap_upload_url,
             bootstrap_data,
-            bootstrap_content_type
+            bootstrap_content_type,
+            bootstrap_label,
         )
     );
 

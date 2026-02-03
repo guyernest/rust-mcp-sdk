@@ -116,15 +116,25 @@ pub async fn get_upload_urls(
     Ok(response.get_upload_urls)
 }
 
-/// Upload file directly to S3 using presigned URL
-pub async fn upload_to_s3(url: &str, content: Vec<u8>, content_type: &str) -> Result<()> {
-    let client = reqwest::Client::new();
+/// Upload file directly to S3 using presigned URL.
+///
+/// `label` is a human-readable name for the upload (e.g., "template", "bootstrap")
+/// used in progress and error messages instead of exposing the presigned URL.
+pub async fn upload_to_s3(url: &str, content: Vec<u8>, content_type: &str, label: &str) -> Result<()> {
+    let content_len = content.len();
+    let max_attempts: u32 = 5;
 
-    // Retry with exponential backoff for network failures
-    for attempt in 1..=3 {
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(300)) // 5 min for large binaries
+        .build()
+        .context("Failed to create HTTP client")?;
+
+    for attempt in 1..=max_attempts {
         let response = client
             .put(url)
             .header("Content-Type", content_type)
+            .header("Content-Length", content_len)
             .body(content.clone())
             .send()
             .await;
@@ -135,36 +145,83 @@ pub async fn upload_to_s3(url: &str, content: Vec<u8>, content_type: &str) -> Re
             },
             Ok(resp) => {
                 let status = resp.status();
-                let error_text = resp.text().await.unwrap_or_default();
+                let error_body = resp.text().await.unwrap_or_default();
+                // Extract meaningful S3 error (e.g., AccessDenied, RequestTimeout)
+                let s3_error = extract_s3_error(&error_body).unwrap_or(error_body.clone());
 
-                if attempt < 3 {
+                if attempt < max_attempts {
+                    let backoff = Duration::from_secs(2u64.pow(attempt));
                     eprintln!(
-                        "⚠️  S3 upload failed (attempt {}/3): {} - {}. Retrying...",
-                        attempt, status, error_text
+                        "   Retry {}/{}: {} upload got HTTP {} ({}), retrying in {}s...",
+                        attempt, max_attempts, label, status.as_u16(), s3_error, backoff.as_secs()
                     );
-                    tokio::time::sleep(Duration::from_secs(2u64.pow(attempt))).await;
+                    tokio::time::sleep(backoff).await;
                 } else {
                     bail!(
-                        "S3 upload failed after 3 attempts: {} - {}",
-                        status,
-                        error_text
+                        "{} upload failed after {} attempts: HTTP {} — {}",
+                        label, max_attempts, status.as_u16(), s3_error
                     );
                 }
             },
-            Err(e) if attempt < 3 => {
-                eprintln!(
-                    "⚠️  S3 upload failed (attempt {}/3): {}. Retrying...",
-                    attempt, e
-                );
-                tokio::time::sleep(Duration::from_secs(2u64.pow(attempt))).await;
-            },
             Err(e) => {
-                bail!("S3 upload failed after 3 attempts: {}", e);
+                let cause = describe_reqwest_error(&e);
+
+                if attempt < max_attempts {
+                    let backoff = Duration::from_secs(2u64.pow(attempt));
+                    eprintln!(
+                        "   Retry {}/{}: {} upload failed ({}), retrying in {}s...",
+                        attempt, max_attempts, label, cause, backoff.as_secs()
+                    );
+                    tokio::time::sleep(backoff).await;
+                } else {
+                    bail!(
+                        "{} upload failed after {} attempts: {}",
+                        label, max_attempts, cause
+                    );
+                }
             },
         }
     }
 
     Ok(())
+}
+
+/// Extract a human-readable error code/message from S3 XML error responses.
+fn extract_s3_error(body: &str) -> Option<String> {
+    // S3 returns XML like: <Error><Code>RequestTimeout</Code><Message>...</Message></Error>
+    if let Some(start) = body.find("<Code>") {
+        let after = &body[start + 6..];
+        if let Some(end) = after.find("</Code>") {
+            return Some(after[..end].to_string());
+        }
+    }
+    if body.trim().is_empty() {
+        return None;
+    }
+    // Return first 200 chars if not XML
+    Some(body.chars().take(200).collect())
+}
+
+/// Produce a concise description of a reqwest error without leaking the full URL.
+fn describe_reqwest_error(e: &reqwest::Error) -> String {
+    if e.is_timeout() {
+        "connection timed out".to_string()
+    } else if e.is_connect() {
+        "failed to connect to S3".to_string()
+    } else if e.is_body() {
+        "error sending request body".to_string()
+    } else {
+        // Strip the URL from the Display output to avoid leaking presigned credentials.
+        // reqwest errors format as "error sending request for url (https://...): cause"
+        let msg = e.to_string();
+        if msg.contains("error sending request for url") {
+            if let Some(end) = msg.find("): ") {
+                // Keep just the cause after "): "
+                return format!("network error: {}", &msg[end + 3..]);
+            }
+        }
+        format!("network error: {}", msg.chars().take(200).collect::<String>())
+    }
 }
 
 /// Deployment settings including composition and versioning
