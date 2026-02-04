@@ -1,22 +1,20 @@
 //! Standard I/O transport implementation.
 //!
-//! This transport uses stdin/stdout for communication, with length-prefixed
-//! framing to ensure message boundaries are preserved.
+//! This transport uses stdin/stdout for communication with newline-delimited
+//! JSON-RPC messages as per the MCP specification.
 
 use crate::error::{Result, TransportError};
 use crate::shared::transport::{Transport, TransportMessage};
 use async_trait::async_trait;
 #[cfg(not(target_arch = "wasm32"))]
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::Mutex;
 
-/// Line-delimited JSON framing header.
-const CONTENT_LENGTH_HEADER: &str = "Content-Length: ";
-
 /// stdio transport for MCP communication.
 ///
-/// Uses length-prefixed framing compatible with the TypeScript SDK.
+/// Uses newline-delimited JSON-RPC messages as per the MCP specification.
+/// Messages are written to stdout and read from stdin.
 ///
 /// # Examples
 ///
@@ -54,14 +52,6 @@ impl StdioTransport {
             closed: std::sync::atomic::AtomicBool::new(false),
         }
     }
-
-    /// Parse a content-length header.
-    ///
-    /// Parses lines like "Content-Length: 42" to extract the length.
-    fn parse_content_length(line: &str) -> Option<usize> {
-        line.strip_prefix(CONTENT_LENGTH_HEADER)
-            .and_then(|content| content.trim().parse().ok())
-    }
 }
 
 impl Default for StdioTransport {
@@ -86,8 +76,7 @@ impl Transport for StdioTransport {
             return Err(TransportError::ConnectionClosed.into());
         }
 
-        let content_length = self.read_headers().await?;
-        let buffer = self.read_message_body(content_length).await?;
+        let buffer = self.read_line().await?;
         Self::parse_message(&buffer)
     }
 
@@ -99,6 +88,11 @@ impl Transport for StdioTransport {
         let mut stdout = self.stdout.lock().await;
         stdout.flush().await.map_err(TransportError::from)?;
         drop(stdout);
+
+        // Note: To send EOF to the server, the spawning process should drop
+        // the child process handle or close the pipe. This is handled at the
+        // process/spawn level, not here. The server will see EOF on its stdin
+        // when the client process terminates or closes its end of the pipe.
 
         Ok(())
     }
@@ -140,20 +134,19 @@ impl StdioTransport {
         }
     }
 
-    /// Write framed message to stdout.
+    /// Write message to stdout with newline delimiter.
     async fn write_message(&self, json_bytes: &[u8]) -> Result<()> {
         let mut stdout = self.stdout.lock().await;
-
-        // Write content-length header
-        let header = format!("{}{}\r\n\r\n", CONTENT_LENGTH_HEADER, json_bytes.len());
-        stdout
-            .write_all(header.as_bytes())
-            .await
-            .map_err(TransportError::from)?;
 
         // Write message payload
         stdout
             .write_all(json_bytes)
+            .await
+            .map_err(TransportError::from)?;
+
+        // Write newline delimiter (MCP spec requirement)
+        stdout
+            .write_all(b"\n")
             .await
             .map_err(TransportError::from)?;
 
@@ -164,56 +157,36 @@ impl StdioTransport {
         Ok(())
     }
 
-    /// Read headers and extract content length.
-    async fn read_headers(&self) -> Result<usize> {
+    /// Read a line from stdin (newline-delimited JSON per MCP spec)
+    async fn read_line(&self) -> Result<Vec<u8>> {
         let mut stdin = self.stdin.lock().await;
         let mut line = String::new();
-        let mut content_length = None;
 
-        // Read headers until we find content-length
-        loop {
-            line.clear();
-            let bytes_read = stdin
-                .read_line(&mut line)
-                .await
-                .map_err(TransportError::from)?;
-
-            if bytes_read == 0 {
-                // EOF reached
-                drop(stdin);
-                self.closed
-                    .store(true, std::sync::atomic::Ordering::Release);
-                return Err(TransportError::ConnectionClosed.into());
-            }
-
-            let line = line.trim();
-
-            if line.is_empty() {
-                // End of headers
-                break;
-            }
-
-            if let Some(length) = Self::parse_content_length(line) {
-                content_length = Some(length);
-            }
-        }
-        drop(stdin);
-
-        content_length.ok_or_else(|| {
-            TransportError::InvalidMessage("Missing Content-Length header".to_string()).into()
-        })
-    }
-
-    /// Read message body with specified content length.
-    async fn read_message_body(&self, content_length: usize) -> Result<Vec<u8>> {
-        let mut stdin = self.stdin.lock().await;
-        let mut buffer = vec![0u8; content_length];
-        stdin
-            .read_exact(&mut buffer)
+        let bytes_read = stdin
+            .read_line(&mut line)
             .await
             .map_err(TransportError::from)?;
+
+        if bytes_read == 0 {
+            // EOF reached
+            drop(stdin);
+            self.closed
+                .store(true, std::sync::atomic::Ordering::Release);
+            return Err(TransportError::ConnectionClosed.into());
+        }
+
+        // Remove trailing newline and return as bytes
+        let line = line.trim_end_matches('\n').trim_end_matches('\r');
+
+        // Skip empty lines (per MCP spec: messages are delimited by newlines)
+        if line.is_empty() {
+            drop(stdin);
+            return Err(TransportError::InvalidMessage("Empty line received".to_string()).into());
+        }
+
+        let bytes = line.as_bytes().to_vec();
         drop(stdin);
-        Ok(buffer)
+        Ok(bytes)
     }
 
     /// Parse JSON message and determine its type.
@@ -270,45 +243,6 @@ impl StdioTransport {
 mod tests {
     use super::*;
 
-    #[test]
-    fn parse_content_length_valid() {
-        assert_eq!(
-            StdioTransport::parse_content_length("Content-Length: 42"),
-            Some(42)
-        );
-        assert_eq!(
-            StdioTransport::parse_content_length("Content-Length: 0"),
-            Some(0)
-        );
-        assert_eq!(
-            StdioTransport::parse_content_length("Content-Length: 999999"),
-            Some(999_999)
-        );
-        // With whitespace
-        assert_eq!(
-            StdioTransport::parse_content_length("Content-Length:  42  "),
-            Some(42)
-        );
-    }
-
-    #[test]
-    fn parse_content_length_invalid() {
-        assert_eq!(
-            StdioTransport::parse_content_length("Content-Type: application/json"),
-            None
-        );
-        assert_eq!(
-            StdioTransport::parse_content_length("Content-Length: abc"),
-            None
-        );
-        assert_eq!(StdioTransport::parse_content_length(""), None);
-        assert_eq!(
-            StdioTransport::parse_content_length("Content-Length: -42"),
-            None
-        );
-        assert_eq!(StdioTransport::parse_content_length("Content-Length"), None);
-    }
-
     #[tokio::test]
     async fn transport_properties() {
         let transport = StdioTransport::new();
@@ -323,5 +257,32 @@ mod tests {
 
         transport.close().await.unwrap();
         assert!(!transport.is_connected());
+    }
+
+    #[test]
+    fn test_newline_delimited_format() {
+        // Test that serialization produces valid JSON without Content-Length
+        let request = TransportMessage::Request {
+            id: crate::types::RequestId::Number(1),
+            request: crate::types::Request::Client(Box::new(
+                crate::types::ClientRequest::Initialize(crate::types::InitializeRequest {
+                    protocol_version: "2025-06-18".to_string(),
+                    capabilities: crate::types::ClientCapabilities::default(),
+                    client_info: crate::types::Implementation {
+                        name: "test".to_string(),
+                        version: "1.0.0".to_string(),
+                    },
+                }),
+            )),
+        };
+
+        let json_bytes = StdioTransport::serialize_message(&request).unwrap();
+        let json_str = String::from_utf8(json_bytes).unwrap();
+
+        // Should be valid JSON without Content-Length header
+        assert!(json_str.starts_with('{'));
+        assert!(json_str.contains("jsonrpc\":\"2.0\""));
+        assert!(!json_str.contains("Content-Length"));
+        assert!(!json_str.contains("\r\n"));
     }
 }
