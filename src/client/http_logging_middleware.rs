@@ -338,8 +338,7 @@ impl HttpLoggingMiddleware {
         let content_type = request.get_header("content-type");
         let should_log = self.should_log_body(content_type);
 
-        let body_info = if should_log && self.max_body_bytes.is_some() {
-            let max_bytes = self.max_body_bytes.unwrap();
+        let body_info = if let Some(max_bytes) = self.max_body_bytes.filter(|_| should_log) {
             let body_len = request.body.len();
             if body_len > 0 {
                 let preview_len = max_bytes.min(body_len);
@@ -407,8 +406,7 @@ impl HttpLoggingMiddleware {
         let content_type = response.get_header("content-type");
         let should_log = self.should_log_body(content_type);
 
-        let body_info = if should_log && self.max_body_bytes.is_some() {
-            let max_bytes = self.max_body_bytes.unwrap();
+        let body_info = if let Some(max_bytes) = self.max_body_bytes.filter(|_| should_log) {
             let body_len = response.body.len();
             if body_len > 0 {
                 let preview_len = max_bytes.min(body_len);
