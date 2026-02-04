@@ -192,6 +192,7 @@ fn bench_response_serialization(c: &mut Criterion) {
             },
         ],
         is_error: false,
+        ..Default::default()
     };
 
     group.bench_function("call_tool_response", |b| {
@@ -275,6 +276,7 @@ fn bench_large_messages(c: &mut Criterion) {
     let large_response = CallToolResult {
         content: large_content,
         is_error: false,
+        ..Default::default()
     };
 
     group.bench_function("large_tool_response_serialize", |b| {

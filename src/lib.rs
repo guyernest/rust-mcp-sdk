@@ -165,6 +165,7 @@ pub use types::{
 ///         text: "Operation completed successfully".to_string(),
 ///     }],
 ///     is_error: false,
+///     ..Default::default()
 /// };
 ///
 /// assert_eq!(result.content.len(), 1);
@@ -182,6 +183,7 @@ pub use types::{
 ///         text: "Tool execution failed: Invalid input parameter".to_string(),
 ///     }],
 ///     is_error: true,
+///     ..Default::default()
 /// };
 ///
 /// assert!(error_result.is_error);
@@ -200,6 +202,7 @@ pub use types::{
 ///         mime_type: Some("text/plain".to_string()),
 ///     }],
 ///     is_error: false,
+///     ..Default::default()
 /// };
 ///
 /// match &resource_result.content[0] {
@@ -222,6 +225,7 @@ pub use types::{
 ///         text: "Hello, MCP!".to_string(),
 ///     }],
 ///     is_error: false,
+///     ..Default::default()
 /// };
 ///
 /// // Serialize to JSON

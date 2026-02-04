@@ -14,11 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
-    
+
     - name: Get version from tag
       id: get_version
       run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-    
+
     - name: Read changelog
       id: changelog
       run: |
@@ -33,7 +33,7 @@ jobs:
         echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
         echo "$CHANGELOG" >> $GITHUB_OUTPUT
         echo "EOF" >> $GITHUB_OUTPUT
-    
+
     - name: Create Release
       id: create_release
       env:
@@ -51,7 +51,7 @@ jobs:
           echo "RELEASE_EXISTS=false" >> $GITHUB_OUTPUT
         fi
 
-  publish-crate:
+  publish-crates:
     name: Publish to crates.io
     runs-on: ubuntu-latest
     needs: create-release
@@ -61,15 +61,58 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
 
-    - name: Publish to crates.io
+    - name: Cache cargo
+      uses: actions/cache@v5
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-publish-${{ hashFiles('**/Cargo.lock') }}
+
+    # Publish order matters: dependencies must be published before dependents.
+    # Each crate needs time for crates.io to index before dependents can resolve it.
+
+    - name: Publish pmcp (core SDK)
       env:
         CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-      run: cargo publish
+      run: |
+        echo "Publishing pmcp..."
+        cargo publish -p pmcp || echo "pmcp already published or unchanged, continuing..."
+
+    - name: Wait for crates.io to index pmcp
+      run: sleep 30
+
+    - name: Publish mcp-tester
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      run: |
+        echo "Publishing mcp-tester..."
+        cargo publish -p mcp-tester || echo "mcp-tester already published or unchanged, continuing..."
+
+    - name: Publish mcp-preview
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      run: |
+        echo "Publishing mcp-preview..."
+        cargo publish -p mcp-preview || echo "mcp-preview already published or unchanged, continuing..."
+
+    - name: Wait for crates.io to index mcp-tester and mcp-preview
+      run: sleep 30
+
+    - name: Publish cargo-pmcp
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      run: |
+        echo "Publishing cargo-pmcp..."
+        cargo publish -p cargo-pmcp || echo "cargo-pmcp already published or unchanged, continuing..."
 
   publish-mcp:
     name: Publish to MCP Registry
     runs-on: ubuntu-latest
-    needs: publish-crate
+    needs: publish-crates
     permissions:
       id-token: write  # Required for OIDC authentication
       contents: read
@@ -78,7 +121,7 @@ jobs:
 
     - name: Wait for crates.io availability
       run: |
-        echo "Waiting 60 seconds for crates.io to index the package..."
+        echo "Waiting 60 seconds for crates.io to index all packages..."
         sleep 60
 
     - name: Install MCP Publisher

@@ -624,8 +624,14 @@ impl DeployCommand {
                             .custom
                             .get("server_id")
                             .and_then(|v| v.as_str())
-                            .or_else(|| outputs.custom.get("deployment_id").and_then(|v| v.as_str()))
-                            .ok_or_else(|| anyhow::anyhow!("Could not determine server ID from deployment outputs"))?;
+                            .or_else(|| {
+                                outputs.custom.get("deployment_id").and_then(|v| v.as_str())
+                            })
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "Could not determine server ID from deployment outputs"
+                                )
+                            })?;
 
                         // Configure OAuth with shared pool
                         let oauth_action = OAuthAction::Enable {
@@ -650,8 +656,13 @@ impl DeployCommand {
                             // Show hint about OAuth options only if not already configured
                             println!();
                             println!("💡 OAuth not configured. To add authentication:");
-                            if let Some(server_id) = outputs.custom.get("server_id").and_then(|v| v.as_str()) {
-                                println!("   cargo pmcp deploy oauth enable --server {}", server_id);
+                            if let Some(server_id) =
+                                outputs.custom.get("server_id").and_then(|v| v.as_str())
+                            {
+                                println!(
+                                    "   cargo pmcp deploy oauth enable --server {}",
+                                    server_id
+                                );
                                 println!("   cargo pmcp deploy oauth enable --server {} --shared-pool <name>", server_id);
                             } else {
                                 println!("   cargo pmcp deploy oauth enable --server <server_id>");

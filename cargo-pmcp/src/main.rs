@@ -130,6 +130,36 @@ enum Commands {
     /// Store and retrieve secrets across multiple providers (local, pmcp.run, AWS).
     /// Secrets are namespaced by server ID to avoid conflicts.
     Secret(commands::secret::SecretCommand),
+
+    /// Preview MCP Apps widgets in browser
+    ///
+    /// Launch a browser-based preview environment for testing MCP servers
+    /// that return widget UI. Simulates the ChatGPT Apps runtime.
+    Preview {
+        /// URL of the running MCP server
+        #[arg(long)]
+        url: String,
+
+        /// Port for the preview server
+        #[arg(long, default_value = "8765")]
+        port: u16,
+
+        /// Open browser automatically
+        #[arg(long)]
+        open: bool,
+
+        /// Auto-select this tool on start
+        #[arg(long)]
+        tool: Option<String>,
+
+        /// Initial theme (light/dark)
+        #[arg(long, default_value = "light")]
+        theme: String,
+
+        /// Initial locale
+        #[arg(long, default_value = "en-US")]
+        locale: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -253,6 +283,17 @@ fn execute_command(command: Commands) -> Result<()> {
         },
         Commands::Secret(secret_cmd) => {
             secret_cmd.execute()?;
+        },
+        Commands::Preview {
+            url,
+            port,
+            open,
+            tool,
+            theme,
+            locale,
+        } => {
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(commands::preview::execute(url, port, open, tool, theme, locale))?;
         },
     }
     Ok(())

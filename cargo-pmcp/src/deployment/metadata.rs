@@ -287,6 +287,9 @@ pub(crate) struct InstanceConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub(crate) struct InstanceServerSection {
+    /// Server ID (preferred for deployment naming)
+    pub id: Option<String>,
+    /// Server name/display name
     pub name: String,
     pub version: Option<String>,
     pub description: Option<String>,
@@ -438,9 +441,10 @@ impl McpMetadata {
         };
 
         // Extract server info
+        // Prefer server.id over server.name for deployment naming (id should be kebab-case)
         let server_id = instance_config
             .as_ref()
-            .map(|c| c.server.name.clone())
+            .map(|c| c.server.id.clone().unwrap_or_else(|| c.server.name.clone()))
             .unwrap_or_else(|| {
                 project_root
                     .file_name()
@@ -648,26 +652,26 @@ impl McpMetadata {
 
     /// Convert metadata to CDK context arguments.
     ///
-    /// Returns a vector of `-c key='value'` arguments for CDK commands.
-    /// JSON values are single-quoted to prevent shell interpretation.
+    /// Returns a vector of `-c 'key=value'` arguments for CDK commands.
+    /// All values are single-quoted to prevent shell interpretation of spaces/special chars.
     pub fn to_cdk_context(&self) -> Vec<String> {
+        // Quote all values to handle spaces and special characters safely
         let mut context = vec![
-            format!("-c mcp:version={}", self.version),
-            format!("-c mcp:serverType={}", self.server_type),
-            format!("-c mcp:serverId={}", self.server_id),
+            format!("-c 'mcp:version={}'", self.version),
+            format!("-c 'mcp:serverType={}'", self.server_type),
+            format!("-c 'mcp:serverId={}'", self.server_id),
         ];
 
         if let Some(ref template_id) = self.template_id {
-            context.push(format!("-c mcp:templateId={}", template_id));
+            context.push(format!("-c 'mcp:templateId={}'", template_id));
         }
 
         if let Some(ref template_version) = self.template_version {
-            context.push(format!("-c mcp:templateVersion={}", template_version));
+            context.push(format!("-c 'mcp:templateVersion={}'", template_version));
         }
 
         // Serialize resources as JSON with single quotes for shell safety
         if let Ok(resources_json) = serde_json::to_string(&self.resources) {
-            // Single-quote the JSON to prevent shell interpretation of special chars
             context.push(format!("-c 'mcp:resources={}'", resources_json));
         }
 

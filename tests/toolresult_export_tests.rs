@@ -18,6 +18,7 @@ fn test_toolresult_import() {
     let result: ToolResult = ToolResult {
         content,
         is_error: false,
+        ..Default::default()
     };
 
     assert_eq!(result.content.len(), 1);
@@ -35,12 +36,14 @@ fn test_toolresult_type_equivalence() {
     let call_result = CallToolResult {
         content: content.clone(),
         is_error: false,
+        ..Default::default()
     };
 
     // Create using ToolResult alias
     let tool_result: ToolResult = ToolResult {
         content,
         is_error: false,
+        ..Default::default()
     };
 
     // They should serialize identically
@@ -59,6 +62,7 @@ fn test_toolresult_content_types() {
             text: "text content".to_string(),
         }],
         is_error: false,
+        ..Default::default()
     };
 
     // Test with resource content
@@ -69,6 +73,7 @@ fn test_toolresult_content_types() {
             mime_type: Some("text/plain".to_string()),
         }],
         is_error: false,
+        ..Default::default()
     };
 
     assert!(!text_result.content.is_empty());
@@ -83,6 +88,7 @@ fn test_toolresult_error_cases() {
             text: "An error occurred".to_string(),
         }],
         is_error: true,
+        ..Default::default()
     };
 
     assert!(error_result.is_error);
@@ -96,6 +102,7 @@ fn test_toolresult_serde() {
             text: "serialization test".to_string(),
         }],
         is_error: false,
+        ..Default::default()
     };
 
     // Serialize to JSON
@@ -120,6 +127,7 @@ fn test_toolresult_function_compatibility() {
             text: "compatibility test".to_string(),
         }],
         is_error: false,
+        ..Default::default()
     };
 
     // This should work because ToolResult is an alias for CallToolResult
@@ -132,6 +140,7 @@ fn test_toolresult_default() {
     let default_result = ToolResult {
         content: vec![],
         is_error: false,
+        ..Default::default()
     };
 
     assert!(default_result.content.is_empty());
@@ -150,6 +159,7 @@ fn test_toolresult_generic() {
             text: "generic test".to_string(),
         }],
         is_error: false,
+        ..Default::default()
     };
 
     let wrapped = wrap_in_option(result);

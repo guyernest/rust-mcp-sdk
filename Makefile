@@ -273,6 +273,29 @@ test-integration:
 	RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test --test '*' --features "full"
 	@echo "$(GREEN)✓ Integration tests passed$(NC)"
 
+# Playwright UI Widget Tests
+.PHONY: test-playwright-setup
+test-playwright-setup:
+	@echo "$(BLUE)Setting up Playwright for widget testing...$(NC)"
+	@cd tests/playwright && npm install && npm run install:browsers
+	@echo "$(GREEN)✓ Playwright setup complete$(NC)"
+
+.PHONY: test-playwright
+test-playwright:
+	@echo "$(BLUE)Running Playwright widget tests...$(NC)"
+	@cd tests/playwright && npm test
+	@echo "$(GREEN)✓ Playwright widget tests passed$(NC)"
+
+.PHONY: test-playwright-headed
+test-playwright-headed:
+	@echo "$(BLUE)Running Playwright widget tests (headed mode)...$(NC)"
+	@cd tests/playwright && npm run test:headed
+
+.PHONY: test-playwright-ui
+test-playwright-ui:
+	@echo "$(BLUE)Running Playwright UI mode...$(NC)"
+	@cd tests/playwright && npm run test:ui
+
 .PHONY: test-all
 test-all: test-unit test-doc test-property test-examples test-integration
 	@echo "$(GREEN)✓ All test suites passed (ALWAYS requirements met)$(NC)"

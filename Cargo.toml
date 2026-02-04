@@ -1,6 +1,6 @@
 [package]
 name = "pmcp"
-version = "1.9.4"
+version = "1.10.0"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility"
@@ -109,8 +109,10 @@ dashmap = "6.1"  # Already in main deps but needed for examples
 
 [features]
 default = ["validation"]
-full = ["websocket", "http", "streamable-http", "sse", "validation", "resource-watcher", "rayon", "schema-generation", "jwt-auth", "composition"]
+full = ["websocket", "http", "streamable-http", "sse", "validation", "resource-watcher", "rayon", "schema-generation", "jwt-auth", "composition", "mcp-apps"]
 composition = ["streamable-http"]
+# MCP Apps Extension - Interactive UI support for ChatGPT Apps, MCP-UI, and standard MCP hosts
+mcp-apps = []
 jwt-auth = ["dep:jsonwebtoken"]
 sse = ["dep:bytes"]
 websocket = ["dep:tokio-tungstenite"]
@@ -381,9 +383,9 @@ required-features = ["schema-generation"]
 name = "comprehensive_benchmarks"
 harness = false
 [workspace]
-members = ["pmcp-macros", "crates/mcp-tester", "examples/25-oauth-basic", "examples/test-basic", "cargo-pmcp"]
-# WASM examples require wasm32-unknown-unknown target and are excluded from regular workspace tests
-exclude = ["fuzz", "examples/cloudflare-worker-mcp", "examples/26-server-tester", "examples/27-course-server-minimal", "examples/wasm-client"]
+members = ["pmcp-macros", "crates/mcp-tester", "crates/mcp-preview", "examples/25-oauth-basic", "examples/test-basic", "cargo-pmcp"]
+# WASM examples and standalone examples are excluded from regular workspace tests
+exclude = ["fuzz", "examples/cloudflare-worker-mcp", "examples/26-server-tester", "examples/27-course-server-minimal", "examples/wasm-client", "examples/mcp-apps-chess", "examples/mcp-apps-map"]
 
 [package.metadata.docs.rs]
 all-features = true

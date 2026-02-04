@@ -363,15 +363,111 @@ pub struct CallToolRequest {
 pub type CallToolParams = CallToolRequest;
 
 /// Tool call result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Supports three-tier response model for MCP Apps:
+/// - `content`: Model-focused narration (goes to model, optionally to widget)
+/// - `structured_content`: Structured data for both model and widget
+/// - `_meta`: Widget-only metadata (never sent to model)
+///
+/// # `ChatGPT` Apps Example
+///
+/// ```rust
+/// use pmcp::types::CallToolResult;
+/// use serde_json::json;
+///
+/// let result = CallToolResult::new(vec![])
+///     .with_structured_content(json!({
+///         "boardState": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR",
+///         "lastMove": { "from": "e2", "to": "e4" }
+///     }))
+///     .with_meta(json!({
+///         "widgetState": { "selectedSquare": null }
+///     }).as_object().unwrap().clone());
+/// ```
+///
+/// # Backward Compatibility
+///
+/// For struct initialization syntax, use `..Default::default()` to fill in the new optional fields:
+///
+/// ```rust
+/// use pmcp::types::{CallToolResult, Content};
+///
+/// let result = CallToolResult {
+///     content: vec![Content::Text { text: "Hello".to_string() }],
+///     is_error: false,
+///     ..Default::default()
+/// };
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CallToolResult {
-    /// Tool execution result
+    /// Tool execution result (model-focused narration).
+    ///
+    /// This content is primarily for the model to understand the result.
+    /// In `ChatGPT` Apps, this appears as text below the widget.
     #[serde(default)]
     pub content: Vec<Content>,
-    /// Whether the tool call represents an error
+
+    /// Whether the tool call represents an error.
     #[serde(default)]
     pub is_error: bool,
+
+    /// Structured data for both model and widget (`ChatGPT` Apps / MCP Apps Extension).
+    ///
+    /// Use this for data that should be accessible to both the AI model
+    /// (for reasoning) and the widget (for display). Examples:
+    /// - Game board state (chess position, game score)
+    /// - Query results (database rows, search results)
+    /// - Form data (user selections, validated input)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<Value>,
+
+    /// Widget-only metadata (`ChatGPT` Apps / MCP Apps Extension).
+    ///
+    /// Metadata that goes only to the widget, never to the model.
+    /// Use for widget display hints, UI state, and internal widget data.
+    /// Examples:
+    /// - `widgetState`: Persisted widget state (`ChatGPT` manages this)
+    /// - Display hints: colors, animations, layout preferences
+    /// - Internal IDs that the model doesn't need
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
+    pub _meta: Option<serde_json::Map<String, Value>>,
+}
+
+impl CallToolResult {
+    /// Create a new tool result with content.
+    pub fn new(content: Vec<Content>) -> Self {
+        Self {
+            content,
+            is_error: false,
+            structured_content: None,
+            _meta: None,
+        }
+    }
+
+    /// Create an error result.
+    pub fn error(content: Vec<Content>) -> Self {
+        Self {
+            content,
+            is_error: true,
+            structured_content: None,
+            _meta: None,
+        }
+    }
+
+    /// Add structured content for both model and widget.
+    pub fn with_structured_content(mut self, content: Value) -> Self {
+        self.structured_content = Some(content);
+        self
+    }
+
+    /// Add widget-only metadata.
+    #[allow(clippy::used_underscore_binding)] // _meta is valid MCP protocol field name
+    pub fn with_meta(mut self, meta: serde_json::Map<String, Value>) -> Self {
+        self._meta = Some(meta);
+        self
+    }
 }
 
 /// Message content type alias.
@@ -1277,5 +1373,113 @@ mod tests {
         let json = serde_json::to_value(&cancelled).unwrap();
         assert_eq!(json["requestId"], 123);
         assert_eq!(json["reason"], "User cancelled");
+    }
+
+    #[test]
+    fn test_call_tool_result_basic() {
+        let result = CallToolResult::new(vec![Content::Text {
+            text: "Move accepted".to_string(),
+        }]);
+
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["content"][0]["text"], "Move accepted");
+        assert_eq!(json["isError"], false);
+        assert!(json.get("structuredContent").is_none());
+        assert!(json.get("_meta").is_none());
+    }
+
+    #[test]
+    fn test_call_tool_result_with_structured_content() {
+        let result = CallToolResult::new(vec![Content::Text {
+            text: "Move e2-e4 played".to_string(),
+        }])
+        .with_structured_content(json!({
+            "boardState": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR",
+            "lastMove": { "from": "e2", "to": "e4" }
+        }));
+
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(
+            json["structuredContent"]["boardState"],
+            "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR"
+        );
+        assert_eq!(json["structuredContent"]["lastMove"]["from"], "e2");
+        assert_eq!(json["structuredContent"]["lastMove"]["to"], "e4");
+    }
+
+    #[test]
+    fn test_call_tool_result_with_meta() {
+        let mut meta = serde_json::Map::new();
+        meta.insert("widgetState".to_string(), json!({ "selectedSquare": "e4" }));
+        meta.insert("displayHints".to_string(), json!({ "animate": true }));
+
+        let result = CallToolResult::new(vec![]).with_meta(meta);
+
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["_meta"]["widgetState"]["selectedSquare"], "e4");
+        assert_eq!(json["_meta"]["displayHints"]["animate"], true);
+    }
+
+    #[test]
+    fn test_call_tool_result_full_three_tier() {
+        // Demonstrates the full three-tier response model for `ChatGPT` Apps
+        let mut meta = serde_json::Map::new();
+        meta.insert("widgetState".to_string(), json!({ "theme": "dark" }));
+
+        let result = CallToolResult::new(vec![Content::Text {
+            text: "Chess game started. White to move.".to_string(),
+        }])
+        .with_structured_content(json!({
+            "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "turn": "white",
+            "legalMoves": ["e2e4", "d2d4", "Nf3", "Nc3"]
+        }))
+        .with_meta(meta);
+
+        let json = serde_json::to_value(&result).unwrap();
+
+        // Content: narration for model
+        assert!(json["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Chess game started"));
+
+        // Structured content: data for model + widget
+        assert_eq!(json["structuredContent"]["turn"], "white");
+
+        // Meta: widget-only
+        assert_eq!(json["_meta"]["widgetState"]["theme"], "dark");
+    }
+
+    #[test]
+    fn test_call_tool_result_error() {
+        let result = CallToolResult::error(vec![Content::Text {
+            text: "Invalid move: e2-e5 is not legal".to_string(),
+        }]);
+
+        assert!(result.is_error);
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["isError"], true);
+    }
+
+    #[test]
+    #[allow(clippy::used_underscore_binding)] // _meta is valid MCP protocol field name
+    fn test_call_tool_result_deserialization() {
+        // Test deserializing a `ChatGPT` Apps-style response
+        let json_str = r#"{
+            "content": [{"type": "text", "text": "Move played"}],
+            "isError": false,
+            "structuredContent": {"position": "e4"},
+            "_meta": {"widgetState": {"selected": true}}
+        }"#;
+
+        let result: CallToolResult = serde_json::from_str(json_str).unwrap();
+        assert!(!result.is_error);
+        assert_eq!(result.content.len(), 1);
+        assert!(result.structured_content.is_some());
+        assert!(result._meta.is_some());
+
+        let meta_value = result._meta.unwrap();
+        assert_eq!(meta_value["widgetState"]["selected"], true);
     }
 }

@@ -35,7 +35,11 @@ fn toolresult_strategy() -> impl Strategy<Value = ToolResult> {
         prop::collection::vec(content_strategy(), 0..5),
         any::<bool>(),
     )
-        .prop_map(|(content, is_error)| ToolResult { content, is_error })
+        .prop_map(|(content, is_error)| ToolResult {
+            content,
+            is_error,
+            ..Default::default()
+        })
 }
 
 #[cfg(test)]
@@ -52,6 +56,7 @@ mod toolresult_properties {
             let call_result = CallToolResult {
                 content: tool_result.content.clone(),
                 is_error: tool_result.is_error,
+                ..Default::default()
             };
 
             // Serialize both
@@ -105,6 +110,7 @@ mod toolresult_properties {
             let empty_result = ToolResult {
                 content: vec![],
                 is_error,
+                ..Default::default()
             };
 
             // Empty content should serialize successfully
@@ -147,6 +153,7 @@ mod toolresult_properties {
             let result = ToolResult {
                 content,
                 is_error,
+                ..Default::default()
             };
 
             // The is_error flag should round-trip correctly
@@ -164,6 +171,7 @@ mod toolresult_properties {
             let result = ToolResult {
                 content,
                 is_error: false,
+                ..Default::default()
             };
 
             // Serialize and deserialize
@@ -228,6 +236,7 @@ mod toolresult_invariants {
             let call_result = CallToolResult {
                 content: tool_result.content.clone(),
                 is_error: tool_result.is_error,
+                ..Default::default()
             };
 
             // Memory size should be identical (they're the same type)

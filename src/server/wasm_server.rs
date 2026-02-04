@@ -179,6 +179,7 @@ impl WasmMcpServer {
                 let result = CallToolResult {
                     content,
                     is_error: false,
+                    ..Default::default()
                 };
                 serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
             },
@@ -188,6 +189,7 @@ impl WasmMcpServer {
                         text: format!("Error: {}", e),
                     }],
                     is_error: true,
+                    ..Default::default()
                 };
                 serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
             },
