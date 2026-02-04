@@ -100,11 +100,11 @@ pub async fn deploy_to_pmcp_run(
                 println!("   Tools: {}", m.capabilities.tools.len());
             }
             Some(m)
-        }
+        },
         Err(_) => {
             println!("   No metadata found (using defaults)");
             None
-        }
+        },
     };
 
     // Step 1: Synthesize CloudFormation template with metadata context
@@ -336,11 +336,8 @@ pub async fn deploy_to_pmcp_run(
         // Even if local config doesn't enable OAuth, check if it's enabled on the backend
         // (e.g., from a previous `cargo pmcp deploy oauth enable` command)
         // Use server name (e.g., "true-agent") not deployment_id - OAuth is keyed by serverId
-        match graphql::fetch_server_oauth_endpoints(
-            &credentials.access_token,
-            &config.server.name,
-        )
-        .await
+        match graphql::fetch_server_oauth_endpoints(&credentials.access_token, &config.server.name)
+            .await
         {
             Ok(oauth) => {
                 if oauth.oauth_enabled {
@@ -356,14 +353,20 @@ pub async fn deploy_to_pmcp_run(
                         token_endpoint: oauth.token_endpoint,
                     })
                 } else {
-                    eprintln!("   (OAuth query returned oauthEnabled=false for {})", config.server.name);
+                    eprintln!(
+                        "   (OAuth query returned oauthEnabled=false for {})",
+                        config.server.name
+                    );
                     None
                 }
-            }
+            },
             Err(e) => {
-                eprintln!("   (OAuth status check failed for {}: {})", config.server.name, e);
+                eprintln!(
+                    "   (OAuth status check failed for {}: {})",
+                    config.server.name, e
+                );
                 None
-            }
+            },
         }
     };
 

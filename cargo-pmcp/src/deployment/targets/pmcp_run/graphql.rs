@@ -120,7 +120,12 @@ pub async fn get_upload_urls(
 ///
 /// `label` is a human-readable name for the upload (e.g., "template", "bootstrap")
 /// used in progress and error messages instead of exposing the presigned URL.
-pub async fn upload_to_s3(url: &str, content: Vec<u8>, content_type: &str, label: &str) -> Result<()> {
+pub async fn upload_to_s3(
+    url: &str,
+    content: Vec<u8>,
+    content_type: &str,
+    label: &str,
+) -> Result<()> {
     let content_len = content.len();
     let max_attempts: u32 = 5;
 
@@ -153,13 +158,21 @@ pub async fn upload_to_s3(url: &str, content: Vec<u8>, content_type: &str, label
                     let backoff = Duration::from_secs(2u64.pow(attempt));
                     eprintln!(
                         "   Retry {}/{}: {} upload got HTTP {} ({}), retrying in {}s...",
-                        attempt, max_attempts, label, status.as_u16(), s3_error, backoff.as_secs()
+                        attempt,
+                        max_attempts,
+                        label,
+                        status.as_u16(),
+                        s3_error,
+                        backoff.as_secs()
                     );
                     tokio::time::sleep(backoff).await;
                 } else {
                     bail!(
                         "{} upload failed after {} attempts: HTTP {} — {}",
-                        label, max_attempts, status.as_u16(), s3_error
+                        label,
+                        max_attempts,
+                        status.as_u16(),
+                        s3_error
                     );
                 }
             },
@@ -170,13 +183,19 @@ pub async fn upload_to_s3(url: &str, content: Vec<u8>, content_type: &str, label
                     let backoff = Duration::from_secs(2u64.pow(attempt));
                     eprintln!(
                         "   Retry {}/{}: {} upload failed ({}), retrying in {}s...",
-                        attempt, max_attempts, label, cause, backoff.as_secs()
+                        attempt,
+                        max_attempts,
+                        label,
+                        cause,
+                        backoff.as_secs()
                     );
                     tokio::time::sleep(backoff).await;
                 } else {
                     bail!(
                         "{} upload failed after {} attempts: {}",
-                        label, max_attempts, cause
+                        label,
+                        max_attempts,
+                        cause
                     );
                 }
             },
@@ -220,7 +239,10 @@ fn describe_reqwest_error(e: &reqwest::Error) -> String {
                 return format!("network error: {}", &msg[end + 3..]);
             }
         }
-        format!("network error: {}", msg.chars().take(200).collect::<String>())
+        format!(
+            "network error: {}",
+            msg.chars().take(200).collect::<String>()
+        )
     }
 }
 

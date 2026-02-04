@@ -244,9 +244,14 @@ async fn upload_landing_via_graphql(
 
     // Step 2: Upload zip to S3
     println!("   Uploading to S3...");
-    graphql::upload_to_s3(&upload_info.upload_url, zip_bytes, "application/zip", "Landing page")
-        .await
-        .context("Failed to upload to S3")?;
+    graphql::upload_to_s3(
+        &upload_info.upload_url,
+        zip_bytes,
+        "application/zip",
+        "Landing page",
+    )
+    .await
+    .context("Failed to upload to S3")?;
 
     // Step 3: Deploy landing page via GraphQL
     println!("   Deploying landing page...");

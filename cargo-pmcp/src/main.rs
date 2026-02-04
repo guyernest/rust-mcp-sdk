@@ -293,7 +293,9 @@ fn execute_command(command: Commands) -> Result<()> {
             locale,
         } => {
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(commands::preview::execute(url, port, open, tool, theme, locale))?;
+            runtime.block_on(commands::preview::execute(
+                url, port, open, tool, theme, locale,
+            ))?;
         },
     }
     Ok(())
