@@ -1,6 +1,6 @@
 [package]
 name = "pmcp"
-version = "1.10.0"
+version = "1.10.1"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility"
@@ -12,6 +12,25 @@ readme = "README.md"
 keywords = ["mcp", "model-context", "sdk", "ai", "llm"]
 categories = ["api-bindings", "asynchronous", "network-programming"]
 rust-version = "1.82.0"
+exclude = [
+    "docs/",
+    "packages/",
+    "tests/playwright/",
+    "benches/*.bak",
+    "fuzz/",
+    "examples/mcp-apps-chess/",
+    "examples/mcp-apps-map/",
+    "examples/wasm-client/",
+    "examples/wasm-mcp-server/",
+    "examples/cloudflare-worker-mcp/",
+    "examples/26-server-tester/",
+    "examples/27-course-server-minimal/",
+    "examples/25-oauth-basic/",
+    "examples/test-basic/",
+    "examples/wasm/",
+    "pmcp-book/",
+    "pmcp-course/",
+]
 
 [dependencies]
 # Core dependencies
