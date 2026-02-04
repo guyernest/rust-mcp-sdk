@@ -22,7 +22,8 @@ indicatif = "0.18"
 dirs = "6"
 glob = "0.3"
 tokio = { version = "1", features = ["full", "rt-multi-thread"] }
-mcp-tester = { path = "../crates/mcp-tester" }
+mcp-tester = { version = "0.2.0", path = "../crates/mcp-tester" }
+mcp-preview = { version = "0.1.0", path = "../crates/mcp-preview" }
 urlencoding = "2"
 async-trait = "0.1.89"
 pathdiff = "0.2.3"
@@ -40,3 +41,21 @@ zip = "7.0"                             # Zip file creation for landing page dep
 # For schema discovery and code generation
 console = "0.16"                        # Terminal styling for schema commands
 thiserror = "2"                         # Error types for generated code
+
+# For secrets management
+secrecy = { version = "0.10", features = ["serde"] }  # Secure secret handling with zeroization
+zeroize = "1"                           # Secure memory clearing
+rand = "0.8"                            # Random secret generation
+atty = "0.2"                            # Terminal detection for security warnings
+regex = "1"                             # Secret reference parsing
+
+# AWS Secrets Manager (optional, for AWS provider)
+aws-config = { version = "1", optional = true }
+aws-sdk-secretsmanager = { version = "1", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+default = []
+aws-secrets = ["aws-config", "aws-sdk-secretsmanager"]

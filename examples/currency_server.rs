@@ -326,6 +326,7 @@ impl ToolHandler for GetRatesTool {
                 ),
             }],
             is_error: false,
+            ..Default::default()
         };
 
         Ok(serde_json::to_value(result)?)
@@ -448,6 +449,7 @@ impl ToolHandler for AnalyzeTrendTool {
         let result = CallToolResult {
             content: vec![Content::Text { text: analysis }],
             is_error: false,
+            ..Default::default()
         };
 
         Ok(serde_json::to_value(result)?)
@@ -472,6 +474,7 @@ impl ToolHandler for ListCurrenciesTool {
                 ),
             }],
             is_error: false,
+            ..Default::default()
         };
 
         Ok(serde_json::to_value(result)?)
@@ -520,6 +523,7 @@ impl ToolHandler for GetHistoricalTool {
                 ),
             }],
             is_error: false,
+            ..Default::default()
         };
 
         Ok(serde_json::to_value(result)?)

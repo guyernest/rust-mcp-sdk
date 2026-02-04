@@ -2229,6 +2229,7 @@ impl ServerTester {
                                     text: "Unexpected success".to_string(),
                                 }],
                                 is_error: false,
+                                ..Default::default()
                             })
                         }
                     },

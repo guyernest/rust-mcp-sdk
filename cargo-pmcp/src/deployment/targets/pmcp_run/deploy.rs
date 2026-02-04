@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::deployment::{
+    metadata::McpMetadata,
     r#trait::{BuildArtifact, DeploymentOutputs},
     DeployConfig,
 };
@@ -87,7 +88,26 @@ pub async fn deploy_to_pmcp_run(
     let deploy_dir = config.project_root.join("deploy");
     let cdk_out = deploy_dir.join("cdk.out");
 
-    // Step 1: Synthesize CloudFormation template (if not already done)
+    // Step 0: Extract MCP metadata for the CloudFormation template
+    println!("📋 Extracting MCP server metadata...");
+    let metadata = match McpMetadata::extract(&config.project_root) {
+        Ok(m) => {
+            println!("   Server: {} ({})", m.server_id, m.server_type);
+            if !m.resources.secrets.is_empty() {
+                println!("   Secrets: {}", m.resources.secrets.len());
+            }
+            if !m.capabilities.tools.is_empty() {
+                println!("   Tools: {}", m.capabilities.tools.len());
+            }
+            Some(m)
+        },
+        Err(_) => {
+            println!("   No metadata found (using defaults)");
+            None
+        },
+    };
+
+    // Step 1: Synthesize CloudFormation template with metadata context
     println!("📝 Synthesizing CloudFormation template...");
 
     // Use shell to run npx/cdk to ensure PATH is correctly set
@@ -102,10 +122,22 @@ pub async fn deploy_to_pmcp_run(
         "-c"
     };
 
+    // Build CDK synth command with metadata context
+    let cdk_context_args = metadata
+        .as_ref()
+        .map(|m| m.to_cdk_context().join(" "))
+        .unwrap_or_default();
+
+    let synth_command = if cdk_context_args.is_empty() {
+        "npx cdk synth --quiet".to_string()
+    } else {
+        format!("npx cdk synth --quiet {}", cdk_context_args)
+    };
+
     let synth_output = std::process::Command::new(shell_cmd)
         .current_dir(&deploy_dir)
         .arg(shell_arg)
-        .arg("npx cdk synth --quiet")
+        .arg(&synth_command)
         .output()
         .context("Failed to run cdk synth. Make sure Node.js and npm are installed")?;
 
@@ -201,16 +233,19 @@ pub async fn deploy_to_pmcp_run(
     println!("⬆️  Uploading files to S3...");
 
     let template_bytes = template.into_bytes();
+    let bootstrap_label = if has_assets { "Package" } else { "Bootstrap" };
     let (template_result, bootstrap_result) = tokio::join!(
         graphql::upload_to_s3(
             &urls.template_upload_url,
             template_bytes,
-            "application/json"
+            "application/json",
+            "Template",
         ),
         graphql::upload_to_s3(
             &urls.bootstrap_upload_url,
             bootstrap_data,
-            bootstrap_content_type
+            bootstrap_content_type,
+            bootstrap_label,
         )
     );
 
@@ -298,7 +333,41 @@ pub async fn deploy_to_pmcp_run(
             },
         }
     } else {
-        None
+        // Even if local config doesn't enable OAuth, check if it's enabled on the backend
+        // (e.g., from a previous `cargo pmcp deploy oauth enable` command)
+        // Use server name (e.g., "true-agent") not deployment_id - OAuth is keyed by serverId
+        match graphql::fetch_server_oauth_endpoints(&credentials.access_token, &config.server.name)
+            .await
+        {
+            Ok(oauth) => {
+                if oauth.oauth_enabled {
+                    // Convert OAuthEndpoints to OAuthConfig
+                    Some(graphql::OAuthConfig {
+                        server_id: oauth.server_id,
+                        oauth_enabled: oauth.oauth_enabled,
+                        user_pool_id: oauth.user_pool_id,
+                        user_pool_region: oauth.user_pool_region,
+                        discovery_url: oauth.discovery_url,
+                        registration_endpoint: oauth.registration_endpoint,
+                        authorization_endpoint: oauth.authorization_endpoint,
+                        token_endpoint: oauth.token_endpoint,
+                    })
+                } else {
+                    eprintln!(
+                        "   (OAuth query returned oauthEnabled=false for {})",
+                        config.server.name
+                    );
+                    None
+                }
+            },
+            Err(e) => {
+                eprintln!(
+                    "   (OAuth status check failed for {}: {})",
+                    config.server.name, e
+                );
+                None
+            },
+        }
     };
 
     // Use URL from server response (contains stable serverId-based URL)
@@ -307,7 +376,13 @@ pub async fn deploy_to_pmcp_run(
         .url
         .clone()
         .unwrap_or_else(|| format!("https://api.pmcp.run/{}/mcp", deployment.deployment_id));
-    let health_url = mcp_url.replace("/mcp", "/health");
+    // Replace only the trailing /mcp path, not /mcp- in subdomains like mcp-reference
+    // e.g. https://mcp-reference.us-east.true-mcp.com/mcp → .../health
+    let health_url = if let Some(base) = mcp_url.strip_suffix("/mcp") {
+        format!("{}/health", base)
+    } else {
+        mcp_url.replace("/mcp", "/health")
+    };
 
     // Get server_id from the deployment outputs (projectName returned by backend)
     // This is the clean server name like "chess", not the full URL

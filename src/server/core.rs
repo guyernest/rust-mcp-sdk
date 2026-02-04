@@ -346,6 +346,7 @@ impl ServerCore {
                 text: serde_json::to_string_pretty(&value)?,
             }],
             is_error: false,
+            ..Default::default()
         })
     }
 

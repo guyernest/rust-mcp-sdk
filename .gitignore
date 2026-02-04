@@ -41,6 +41,10 @@ proptest-regressions/
 # Mutation testing
 **/mutants.out*/
 tests/integration/typescript-interop/node_modules/
+
+# Node.js (widget-runtime and other packages)
+**/node_modules/
+packages/*/dist/
 examples/spin
 
 # MCP Registry tokens

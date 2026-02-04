@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 mod commands;
 mod deployment;
 mod landing;
+mod secrets;
 mod templates;
 mod utils;
 
@@ -19,6 +20,10 @@ mod utils;
 #[command(about = "Build production-ready MCP servers in Rust", long_about = None)]
 #[command(version)]
 struct Cli {
+    /// Enable verbose output for debugging
+    #[arg(long, short, global = true)]
+    verbose: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -119,6 +124,42 @@ enum Commands {
         #[command(subcommand)]
         command: commands::validate::ValidateCommand,
     },
+
+    /// Manage secrets for MCP servers
+    ///
+    /// Store and retrieve secrets across multiple providers (local, pmcp.run, AWS).
+    /// Secrets are namespaced by server ID to avoid conflicts.
+    Secret(commands::secret::SecretCommand),
+
+    /// Preview MCP Apps widgets in browser
+    ///
+    /// Launch a browser-based preview environment for testing MCP servers
+    /// that return widget UI. Simulates the ChatGPT Apps runtime.
+    Preview {
+        /// URL of the running MCP server
+        #[arg(long)]
+        url: String,
+
+        /// Port for the preview server
+        #[arg(long, default_value = "8765")]
+        port: u16,
+
+        /// Open browser automatically
+        #[arg(long)]
+        open: bool,
+
+        /// Auto-select this tool on start
+        #[arg(long)]
+        tool: Option<String>,
+
+        /// Initial theme (light/dark)
+        #[arg(long, default_value = "light")]
+        theme: String,
+
+        /// Initial locale
+        #[arg(long, default_value = "en-US")]
+        locale: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -166,19 +207,24 @@ fn main() -> Result<()> {
     // Handle cargo subcommand invocation
     // When called as `cargo pmcp`, cargo passes "pmcp" as the first argument
     let mut args = std::env::args();
-    if args.nth(1).as_deref() == Some("pmcp") {
+    let cli = if args.nth(1).as_deref() == Some("pmcp") {
         // Skip the "pmcp" argument when invoked as cargo subcommand
         let args_vec: Vec<String> = std::env::args()
             .enumerate()
             .filter_map(|(i, arg)| if i != 1 { Some(arg) } else { None })
             .collect();
-        let cli = Cli::parse_from(args_vec);
-        execute_command(cli.command)?;
+        Cli::parse_from(args_vec)
     } else {
         // Normal invocation as cargo-pmcp
-        let cli = Cli::parse();
-        execute_command(cli.command)?;
+        Cli::parse()
+    };
+
+    // Set verbose mode as environment variable for global access
+    if cli.verbose {
+        std::env::set_var("PMCP_VERBOSE", "1");
     }
+
+    execute_command(cli.command)?;
 
     Ok(())
 }
@@ -234,6 +280,22 @@ fn execute_command(command: Commands) -> Result<()> {
         },
         Commands::Validate { command } => {
             command.execute()?;
+        },
+        Commands::Secret(secret_cmd) => {
+            secret_cmd.execute()?;
+        },
+        Commands::Preview {
+            url,
+            port,
+            open,
+            tool,
+            theme,
+            locale,
+        } => {
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(commands::preview::execute(
+                url, port, open, tool, theme, locale,
+            ))?;
         },
     }
     Ok(())

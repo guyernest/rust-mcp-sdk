@@ -1391,6 +1391,7 @@ impl ServerTester {
                                     text: format!("{}", result),
                                 }],
                                 is_error: false,
+                                ..Default::default()
                             })
                         } else {
                             Err(pmcp::Error::Internal(
@@ -2127,6 +2128,7 @@ impl ServerTester {
                                     text: "Unexpected success".to_string(),
                                 }],
                                 is_error: false,
+                                ..Default::default()
                             })
                         }
                     },

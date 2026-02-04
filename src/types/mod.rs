@@ -13,6 +13,11 @@ pub mod protocol;
 /// UI resources for MCP Apps Extension (SEP-1865)
 pub mod ui;
 
+/// MCP Apps Extension types for interactive UI support (ChatGPT Apps, MCP-UI)
+#[cfg(feature = "mcp-apps")]
+#[cfg_attr(docsrs, doc(cfg(feature = "mcp-apps")))]
+pub mod mcp_apps;
+
 // Re-export transport message type
 pub use crate::shared::transport::TransportMessage;
 
@@ -43,3 +48,10 @@ pub use protocol::{
     ToolAnnotations, ToolInfo, UnsubscribeRequest,
 };
 pub use ui::{ToolUIMetadata, UIMimeType, UIResource, UIResourceContents};
+
+// MCP Apps Extension re-exports
+#[cfg(feature = "mcp-apps")]
+pub use mcp_apps::{
+    ChatGptToolMeta, ExtendedUIMimeType, HostType, NotifyLevel, RemoteDomFramework, ToolVisibility,
+    UIAction, UIContent, UIDimensions, UIMetadata, WidgetCSP, WidgetMeta, WidgetResponseMeta,
+};

@@ -236,6 +236,7 @@ fn bench_response_generation(c: &mut Criterion) {
                                 .to_string(),
                         }],
                         is_error: false,
+                        ..Default::default()
                     })
                     .unwrap(),
                 ),
@@ -408,6 +409,7 @@ fn bench_batch_operations(c: &mut Criterion) {
                 text: format!("Result for batch item {}: processed successfully", i),
             }],
             is_error: false,
+            ..Default::default()
         })
         .collect();
 

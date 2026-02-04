@@ -4,6 +4,8 @@ pub mod deploy;
 pub mod dev;
 pub mod landing;
 pub mod new;
+pub mod preview;
 pub mod schema;
+pub mod secret;
 pub mod test;
 pub mod validate;

@@ -1,0 +1,1082 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCP Apps Preview</title>
+  <style>
+    :root {
+      --bg-primary: #ffffff;
+      --bg-secondary: #f5f5f5;
+      --bg-tertiary: #e8e8e8;
+      --text-primary: #1a1a1a;
+      --text-secondary: #666666;
+      --border-color: #dddddd;
+      --accent-color: #0066cc;
+      --success-color: #22c55e;
+      --error-color: #ef4444;
+      --warning-color: #f59e0b;
+    }
+
+    [data-theme="dark"] {
+      --bg-primary: #1a1a1a;
+      --bg-secondary: #2d2d2d;
+      --bg-tertiary: #3d3d3d;
+      --text-primary: #ffffff;
+      --text-secondary: #a0a0a0;
+      --border-color: #444444;
+      --accent-color: #3b82f6;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 20px;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .header h1::before {
+      content: '';
+      width: 24px;
+      height: 24px;
+      background: linear-gradient(135deg, var(--accent-color), #8b5cf6);
+      border-radius: 6px;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--error-color);
+    }
+
+    .status-dot.connected {
+      background: var(--success-color);
+    }
+
+    .theme-toggle {
+      display: flex;
+      gap: 4px;
+      background: var(--bg-tertiary);
+      border-radius: 6px;
+      padding: 2px;
+    }
+
+    .theme-toggle button {
+      padding: 6px 12px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+
+    .theme-toggle button.active {
+      background: var(--bg-primary);
+      color: var(--text-primary);
+    }
+
+    /* Main Layout */
+    .main {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* Tool Panel */
+    .tool-panel {
+      width: 300px;
+      min-width: 300px;
+      background: var(--bg-secondary);
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .panel-header {
+      padding: 12px 16px;
+      font-weight: 600;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-secondary);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .tool-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+    }
+
+    .tool-item {
+      padding: 10px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      margin-bottom: 4px;
+      border: 1px solid transparent;
+    }
+
+    .tool-item:hover {
+      background: var(--bg-tertiary);
+    }
+
+    .tool-item.selected {
+      background: var(--accent-color);
+      color: white;
+    }
+
+    .tool-name {
+      font-weight: 500;
+      font-size: 14px;
+    }
+
+    .tool-description {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-top: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .tool-item.selected .tool-description {
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    /* Arguments Editor */
+    .args-section {
+      border-top: 1px solid var(--border-color);
+      padding: 12px;
+    }
+
+    .args-section label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      margin-bottom: 6px;
+      color: var(--text-secondary);
+    }
+
+    .args-editor {
+      width: 100%;
+      height: 120px;
+      padding: 10px;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 12px;
+      resize: vertical;
+    }
+
+    .execute-btn {
+      width: 100%;
+      padding: 10px;
+      margin-top: 10px;
+      border: none;
+      border-radius: 6px;
+      background: var(--accent-color);
+      color: white;
+      font-weight: 500;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    .execute-btn:hover {
+      opacity: 0.9;
+    }
+
+    .execute-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* Widget Preview Area */
+    .preview-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .preview-container {
+      flex: 1;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .widget-frame-container {
+      flex: 1;
+      background: var(--bg-secondary);
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .widget-frame-container.fullscreen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 1000;
+      border-radius: 0;
+    }
+
+    .widget-frame {
+      width: 100%;
+      height: 100%;
+      border: none;
+      background: white;
+    }
+
+    .widget-placeholder {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: var(--text-secondary);
+      font-size: 14px;
+    }
+
+    /* Environment Controls */
+    .env-controls {
+      display: flex;
+      gap: 16px;
+      padding: 12px 20px;
+      background: var(--bg-secondary);
+      border-top: 1px solid var(--border-color);
+      flex-wrap: wrap;
+    }
+
+    .env-control {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .env-control label {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .env-control select,
+    .env-control input[type="number"] {
+      padding: 4px 8px;
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      font-size: 12px;
+    }
+
+    /* DevTools Panel */
+    .devtools-panel {
+      width: 350px;
+      min-width: 350px;
+      background: var(--bg-secondary);
+      border-left: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .devtools-tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .devtools-tab {
+      flex: 1;
+      padding: 10px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .devtools-tab.active {
+      color: var(--accent-color);
+      border-bottom: 2px solid var(--accent-color);
+    }
+
+    .devtools-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+    }
+
+    .devtools-section {
+      display: none;
+    }
+
+    .devtools-section.active {
+      display: block;
+    }
+
+    .state-viewer {
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 11px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .state-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 4px;
+      margin-top: 12px;
+    }
+
+    .state-label:first-child {
+      margin-top: 0;
+    }
+
+    .state-value {
+      background: var(--bg-tertiary);
+      padding: 8px;
+      border-radius: 4px;
+      overflow-x: auto;
+    }
+
+    /* Console */
+    .console-log {
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 11px;
+    }
+
+    .console-entry {
+      padding: 4px 0;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .console-entry.log { color: var(--text-primary); }
+    .console-entry.warn { color: var(--warning-color); }
+    .console-entry.error { color: var(--error-color); }
+
+    .console-time {
+      color: var(--text-secondary);
+      margin-right: 8px;
+    }
+
+    /* Network Log */
+    .network-entry {
+      padding: 8px;
+      margin-bottom: 8px;
+      background: var(--bg-tertiary);
+      border-radius: 4px;
+      font-size: 11px;
+    }
+
+    .network-entry.success { border-left: 3px solid var(--success-color); }
+    .network-entry.error { border-left: 3px solid var(--error-color); }
+
+    .network-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+
+    .network-method {
+      font-weight: 600;
+    }
+
+    .network-time {
+      color: var(--text-secondary);
+    }
+
+    .network-body {
+      font-family: 'Monaco', 'Menlo', monospace;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 100px;
+      overflow-y: auto;
+    }
+
+    /* Events Log */
+    .event-entry {
+      padding: 4px 0;
+      font-size: 11px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .event-type {
+      color: var(--accent-color);
+      font-weight: 500;
+    }
+
+    /* Empty states */
+    .empty-state {
+      color: var(--text-secondary);
+      font-size: 12px;
+      text-align: center;
+      padding: 20px;
+    }
+  </style>
+</head>
+<body data-theme="light">
+  <header class="header">
+    <h1>MCP Apps Preview</h1>
+    <div class="status-indicator">
+      <span class="status-dot" id="status-dot"></span>
+      <span id="status-text">Connecting...</span>
+    </div>
+    <div class="theme-toggle">
+      <button class="active" data-theme="light">Light</button>
+      <button data-theme="dark">Dark</button>
+    </div>
+  </header>
+
+  <main class="main">
+    <!-- Tool Panel -->
+    <aside class="tool-panel">
+      <div class="panel-header">Tools</div>
+      <div class="tool-list" id="tool-list">
+        <div class="empty-state">Loading tools...</div>
+      </div>
+      <div class="args-section">
+        <label>Arguments (JSON)</label>
+        <textarea class="args-editor" id="args-editor">{}</textarea>
+        <button class="execute-btn" id="execute-btn" disabled>Execute Tool</button>
+      </div>
+    </aside>
+
+    <!-- Widget Preview -->
+    <section class="preview-area">
+      <div class="preview-container">
+        <div class="widget-frame-container" id="widget-container">
+          <div class="widget-placeholder" id="widget-placeholder">
+            Select a tool and click Execute to render the widget
+          </div>
+          <iframe class="widget-frame" id="widget-frame" style="display: none;"></iframe>
+        </div>
+      </div>
+      <div class="env-controls">
+        <div class="env-control">
+          <label>Display Mode</label>
+          <select id="display-mode">
+            <option value="inline">Inline</option>
+            <option value="pip">Picture-in-Picture</option>
+            <option value="fullscreen">Fullscreen</option>
+          </select>
+        </div>
+        <div class="env-control">
+          <label>Locale</label>
+          <select id="locale">
+            <option value="en-US">English (US)</option>
+            <option value="en-GB">English (UK)</option>
+            <option value="es-ES">Spanish</option>
+            <option value="fr-FR">French</option>
+            <option value="de-DE">German</option>
+            <option value="ja-JP">Japanese</option>
+            <option value="zh-CN">Chinese</option>
+          </select>
+        </div>
+        <div class="env-control">
+          <label>Max Height</label>
+          <input type="number" id="max-height" value="600" min="200" max="1200" step="50">
+          <span>px</span>
+        </div>
+        <div class="env-control">
+          <label>View</label>
+          <select id="view-type">
+            <option value="default">Default</option>
+            <option value="compact">Compact</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <!-- DevTools Panel -->
+    <aside class="devtools-panel">
+      <div class="devtools-tabs">
+        <button class="devtools-tab active" data-tab="state">State</button>
+        <button class="devtools-tab" data-tab="console">Console</button>
+        <button class="devtools-tab" data-tab="network">Network</button>
+        <button class="devtools-tab" data-tab="events">Events</button>
+      </div>
+      <div class="devtools-content">
+        <div class="devtools-section active" id="tab-state">
+          <div class="state-viewer">
+            <div class="state-label">Widget State</div>
+            <div class="state-value" id="state-widget">{}</div>
+            <div class="state-label">Tool Input</div>
+            <div class="state-value" id="state-input">{}</div>
+            <div class="state-label">Tool Output</div>
+            <div class="state-value" id="state-output">null</div>
+            <div class="state-label">Response Metadata</div>
+            <div class="state-value" id="state-meta">{}</div>
+          </div>
+        </div>
+        <div class="devtools-section" id="tab-console">
+          <div class="console-log" id="console-log">
+            <div class="empty-state">Console output will appear here</div>
+          </div>
+        </div>
+        <div class="devtools-section" id="tab-network">
+          <div id="network-log">
+            <div class="empty-state">Network requests will appear here</div>
+          </div>
+        </div>
+        <div class="devtools-section" id="tab-events">
+          <div id="events-log">
+            <div class="empty-state">Events will appear here</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    // Preview Runtime
+    class PreviewRuntime {
+      constructor() {
+        this.tools = [];
+        this.selectedTool = null;
+        this.widgetState = {};
+        this.toolInput = {};
+        this.toolOutput = null;
+        this.toolResponseMetadata = {};
+
+        // Environment
+        this.theme = 'light';
+        this.locale = 'en-US';
+        this.displayMode = 'inline';
+        this.maxHeight = 600;
+        this.safeArea = { top: 0, bottom: 0, left: 0, right: 0 };
+        this.view = 'default';
+
+        this.init();
+      }
+
+      async init() {
+        this.setupThemeToggle();
+        this.setupDevToolsTabs();
+        this.setupEnvironmentControls();
+        this.setupExecuteButton();
+        await this.loadConfig();
+        await this.loadTools();
+      }
+
+      async loadConfig() {
+        try {
+          const response = await fetch('/api/config');
+          const config = await response.json();
+          this.theme = config.theme || 'light';
+          this.locale = config.locale || 'en-US';
+
+          // Apply initial config
+          document.body.dataset.theme = this.theme;
+          document.querySelectorAll('.theme-toggle button').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.theme === this.theme);
+          });
+          document.getElementById('locale').value = this.locale;
+
+          if (config.initial_tool) {
+            this.initialTool = config.initial_tool;
+          }
+        } catch (e) {
+          console.error('Failed to load config:', e);
+        }
+      }
+
+      async loadTools() {
+        try {
+          const response = await fetch('/api/tools');
+          const data = await response.json();
+
+          if (data.error) {
+            this.setStatus(false, `Error: ${data.error}`);
+            document.getElementById('tool-list').innerHTML =
+              `<div class="empty-state">Error: ${data.error}</div>`;
+            return;
+          }
+
+          this.tools = data.tools;
+          this.setStatus(true, `Connected (${this.tools.length} tools)`);
+          this.renderToolList();
+
+          // Auto-select initial tool if specified
+          if (this.initialTool) {
+            const tool = this.tools.find(t => t.name === this.initialTool);
+            if (tool) this.selectTool(tool);
+          }
+        } catch (e) {
+          this.setStatus(false, 'Connection failed');
+          document.getElementById('tool-list').innerHTML =
+            `<div class="empty-state">Failed to connect to MCP server</div>`;
+        }
+      }
+
+      setStatus(connected, text) {
+        const dot = document.getElementById('status-dot');
+        const textEl = document.getElementById('status-text');
+        dot.classList.toggle('connected', connected);
+        textEl.textContent = text;
+      }
+
+      renderToolList() {
+        const container = document.getElementById('tool-list');
+        if (this.tools.length === 0) {
+          container.innerHTML = '<div class="empty-state">No tools available</div>';
+          return;
+        }
+
+        container.innerHTML = this.tools.map(tool => `
+          <div class="tool-item" data-name="${tool.name}">
+            <div class="tool-name">${tool.name}</div>
+            ${tool.description ? `<div class="tool-description">${tool.description}</div>` : ''}
+          </div>
+        `).join('');
+
+        // Add click handlers
+        container.querySelectorAll('.tool-item').forEach(item => {
+          item.addEventListener('click', () => {
+            const tool = this.tools.find(t => t.name === item.dataset.name);
+            if (tool) this.selectTool(tool);
+          });
+        });
+      }
+
+      selectTool(tool) {
+        this.selectedTool = tool;
+
+        // Update UI
+        document.querySelectorAll('.tool-item').forEach(item => {
+          item.classList.toggle('selected', item.dataset.name === tool.name);
+        });
+
+        // Update args editor with schema example
+        const args = this.generateExampleArgs(tool.inputSchema);
+        document.getElementById('args-editor').value = JSON.stringify(args, null, 2);
+        document.getElementById('execute-btn').disabled = false;
+      }
+
+      generateExampleArgs(schema) {
+        if (!schema || !schema.properties) return {};
+        const args = {};
+        for (const [key, prop] of Object.entries(schema.properties)) {
+          if (prop.type === 'string') args[key] = prop.default || '';
+          else if (prop.type === 'number') args[key] = prop.default || 0;
+          else if (prop.type === 'boolean') args[key] = prop.default || false;
+          else if (prop.type === 'object') args[key] = {};
+          else if (prop.type === 'array') args[key] = [];
+        }
+        return args;
+      }
+
+      setupThemeToggle() {
+        document.querySelectorAll('.theme-toggle button').forEach(btn => {
+          btn.addEventListener('click', () => {
+            this.setTheme(btn.dataset.theme);
+          });
+        });
+      }
+
+      setTheme(theme) {
+        this.theme = theme;
+        document.body.dataset.theme = theme;
+        document.querySelectorAll('.theme-toggle button').forEach(btn => {
+          btn.classList.toggle('active', btn.dataset.theme === theme);
+        });
+        this.emitGlobalsUpdate();
+        this.logEvent('themeChange', { theme });
+      }
+
+      setupDevToolsTabs() {
+        document.querySelectorAll('.devtools-tab').forEach(tab => {
+          tab.addEventListener('click', () => {
+            document.querySelectorAll('.devtools-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.devtools-section').forEach(s => s.classList.remove('active'));
+            tab.classList.add('active');
+            document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
+          });
+        });
+      }
+
+      setupEnvironmentControls() {
+        document.getElementById('display-mode').addEventListener('change', (e) => {
+          this.displayMode = e.target.value;
+          this.updateDisplayMode();
+          this.emitGlobalsUpdate();
+          this.logEvent('displayModeChange', { mode: this.displayMode });
+        });
+
+        document.getElementById('locale').addEventListener('change', (e) => {
+          this.locale = e.target.value;
+          this.emitGlobalsUpdate();
+          this.logEvent('localeChange', { locale: this.locale });
+        });
+
+        document.getElementById('max-height').addEventListener('change', (e) => {
+          this.maxHeight = parseInt(e.target.value, 10);
+          this.emitGlobalsUpdate();
+        });
+
+        document.getElementById('view-type').addEventListener('change', (e) => {
+          this.view = e.target.value;
+          this.emitGlobalsUpdate();
+        });
+      }
+
+      updateDisplayMode() {
+        const container = document.getElementById('widget-container');
+        container.classList.toggle('fullscreen', this.displayMode === 'fullscreen');
+      }
+
+      setupExecuteButton() {
+        document.getElementById('execute-btn').addEventListener('click', () => {
+          this.executeTool();
+        });
+      }
+
+      async executeTool() {
+        if (!this.selectedTool) return;
+
+        const argsText = document.getElementById('args-editor').value;
+        let args;
+        try {
+          args = JSON.parse(argsText);
+        } catch (e) {
+          this.logConsole('error', `Invalid JSON: ${e.message}`);
+          return;
+        }
+
+        this.toolInput = args;
+        this.updateStateView();
+
+        const startTime = Date.now();
+        this.logNetwork('request', this.selectedTool.name, args);
+
+        try {
+          const response = await fetch('/api/tools/call', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: this.selectedTool.name,
+              arguments: args
+            })
+          });
+
+          const result = await response.json();
+          const duration = Date.now() - startTime;
+
+          this.logNetwork('response', this.selectedTool.name, result, duration, result.success);
+
+          if (result.success && result.content) {
+            this.handleToolResponse(result);
+          } else if (result.error) {
+            this.logConsole('error', result.error);
+          }
+        } catch (e) {
+          this.logConsole('error', `Request failed: ${e.message}`);
+          this.logNetwork('response', this.selectedTool.name, { error: e.message }, 0, false);
+        }
+      }
+
+      handleToolResponse(result) {
+        this.toolOutput = result.content;
+        this.toolResponseMetadata = result.meta || {};
+        this.updateStateView();
+
+        // Find widget HTML in content
+        const widgetContent = result.content.find(c =>
+          c.content_type === 'resource' &&
+          c.mime_type &&
+          c.mime_type.includes('html')
+        );
+
+        if (widgetContent && widgetContent.text) {
+          this.loadWidget(widgetContent.text);
+        } else {
+          // Check for text content
+          const textContent = result.content.find(c => c.content_type === 'text');
+          if (textContent) {
+            this.logConsole('log', `Tool returned: ${textContent.text}`);
+          }
+        }
+
+        this.logEvent('toolResponse', { tool: this.selectedTool.name });
+      }
+
+      loadWidget(html) {
+        const placeholder = document.getElementById('widget-placeholder');
+        const frame = document.getElementById('widget-frame');
+
+        placeholder.style.display = 'none';
+        frame.style.display = 'block';
+
+        // Create wrapped HTML with bridge
+        const wrappedHtml = this.wrapWidgetHtml(html);
+        frame.srcdoc = wrappedHtml;
+
+        this.logEvent('widgetLoaded', {});
+      }
+
+      wrapWidgetHtml(html) {
+        return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { margin: 0; padding: 16px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+  </style>
+  <script>
+    // Bridge communication with parent
+    const preview = window.parent.previewRuntime;
+
+    // Full MCP Bridge implementation
+    window.mcpBridge = {
+      // Core
+      callTool: async (name, args) => {
+        preview.logConsole('log', 'callTool: ' + name);
+        preview.logEvent('bridgeCall', { method: 'callTool', name, args });
+
+        const response = await fetch('/api/tools/call', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, arguments: args || {} })
+        });
+        const result = await response.json();
+
+        if (result.success && result.content) {
+          // Handle widget response if HTML is returned
+          const widgetContent = result.content.find(c =>
+            c.content_type === 'resource' &&
+            c.mime_type &&
+            c.mime_type.includes('html')
+          );
+          if (widgetContent && widgetContent.text) {
+            preview.loadWidget(widgetContent.text);
+          }
+        }
+
+        return result;
+      },
+
+      getState: () => preview.widgetState,
+      setState: (state) => {
+        preview.widgetState = { ...preview.widgetState, ...state };
+        preview.updateStateView();
+        preview.logEvent('setState', state);
+      },
+
+      // Tool context
+      get toolInput() { return preview.toolInput; },
+      get toolOutput() { return preview.toolOutput; },
+      get toolResponseMetadata() { return preview.toolResponseMetadata; },
+
+      // Communication
+      sendMessage: (msg) => {
+        preview.logConsole('log', 'sendMessage: ' + msg);
+        preview.logEvent('sendMessage', { message: msg });
+      },
+      openExternal: (url) => {
+        preview.logEvent('openExternal', { url });
+        window.open(url, '_blank');
+      },
+
+      // File operations (simulated)
+      uploadFile: async (file) => {
+        preview.logEvent('uploadFile', { name: file.name, size: file.size });
+        return { fileId: 'mock-file-' + Date.now() };
+      },
+      getFileDownloadUrl: async (fileId) => {
+        preview.logEvent('getFileDownloadUrl', { fileId });
+        return { downloadUrl: '#mock-download' };
+      },
+
+      // Display modes
+      requestDisplayMode: async (mode) => {
+        preview.displayMode = mode;
+        document.getElementById('display-mode', window.parent.document).value = mode;
+        preview.updateDisplayMode();
+        preview.logEvent('requestDisplayMode', { mode });
+        return true;
+      },
+      requestClose: () => {
+        preview.logEvent('requestClose', {});
+        // Reset widget
+        document.getElementById('widget-placeholder', window.parent.document).style.display = 'flex';
+        document.getElementById('widget-frame', window.parent.document).style.display = 'none';
+      },
+      notifyIntrinsicHeight: (height) => {
+        preview.logEvent('notifyIntrinsicHeight', { height });
+      },
+      setOpenInAppUrl: (href) => {
+        preview.logEvent('setOpenInAppUrl', { href });
+      },
+
+      // Environment (reactive)
+      get theme() { return preview.theme; },
+      get locale() { return preview.locale; },
+      get displayMode() { return preview.displayMode; },
+      get maxHeight() { return preview.maxHeight; },
+      get safeArea() { return preview.safeArea; },
+      get view() { return preview.view; },
+      get userAgent() { return navigator.userAgent; },
+    };
+
+    // ChatGPT compatibility
+    window.openai = window.mcpBridge;
+
+    // Console capture
+    const originalConsole = { ...console };
+    ['log', 'warn', 'error', 'info'].forEach(method => {
+      console[method] = (...args) => {
+        originalConsole[method](...args);
+        preview.logConsole(method, args.map(a =>
+          typeof a === 'object' ? JSON.stringify(a) : String(a)
+        ).join(' '));
+      };
+    });
+
+    // Listen for globals updates
+    window.addEventListener('message', (e) => {
+      if (e.data && e.data.type === 'openai/setGlobals') {
+        window.dispatchEvent(new CustomEvent('openai/setGlobals', {
+          detail: e.data
+        }));
+      }
+    });
+
+    // Signal ready
+    setTimeout(() => {
+      preview.logEvent('widgetReady', {});
+    }, 100);
+  </script>
+</head>
+<body>
+${html}
+</body>
+</html>`;
+      }
+
+      emitGlobalsUpdate() {
+        const frame = document.getElementById('widget-frame');
+        if (frame.contentWindow) {
+          frame.contentWindow.postMessage({
+            type: 'openai/setGlobals',
+            globals: {
+              theme: this.theme,
+              locale: this.locale,
+              displayMode: this.displayMode,
+              maxHeight: this.maxHeight,
+              safeArea: this.safeArea,
+              view: this.view
+            }
+          }, '*');
+        }
+      }
+
+      updateStateView() {
+        document.getElementById('state-widget').textContent = JSON.stringify(this.widgetState, null, 2);
+        document.getElementById('state-input').textContent = JSON.stringify(this.toolInput, null, 2);
+        document.getElementById('state-output').textContent = JSON.stringify(this.toolOutput, null, 2);
+        document.getElementById('state-meta').textContent = JSON.stringify(this.toolResponseMetadata, null, 2);
+      }
+
+      logConsole(level, message) {
+        const container = document.getElementById('console-log');
+        if (container.querySelector('.empty-state')) {
+          container.innerHTML = '';
+        }
+
+        const time = new Date().toLocaleTimeString();
+        const entry = document.createElement('div');
+        entry.className = `console-entry ${level}`;
+        entry.innerHTML = `<span class="console-time">${time}</span>${message}`;
+        container.appendChild(entry);
+        container.scrollTop = container.scrollHeight;
+      }
+
+      logNetwork(type, method, data, duration = 0, success = true) {
+        const container = document.getElementById('network-log');
+        if (container.querySelector('.empty-state')) {
+          container.innerHTML = '';
+        }
+
+        const time = new Date().toLocaleTimeString();
+        const entry = document.createElement('div');
+        entry.className = `network-entry ${success ? 'success' : 'error'}`;
+        entry.innerHTML = `
+          <div class="network-header">
+            <span class="network-method">${type === 'request' ? '→' : '←'} ${method}</span>
+            <span class="network-time">${time}${duration ? ` (${duration}ms)` : ''}</span>
+          </div>
+          <div class="network-body">${JSON.stringify(data, null, 2)}</div>
+        `;
+        container.appendChild(entry);
+        container.scrollTop = container.scrollHeight;
+      }
+
+      logEvent(type, data) {
+        const container = document.getElementById('events-log');
+        if (container.querySelector('.empty-state')) {
+          container.innerHTML = '';
+        }
+
+        const time = new Date().toLocaleTimeString();
+        const entry = document.createElement('div');
+        entry.className = 'event-entry';
+        entry.innerHTML = `
+          <span class="console-time">${time}</span>
+          <span class="event-type">${type}</span>
+          ${Object.keys(data).length > 0 ? ` - ${JSON.stringify(data)}` : ''}
+        `;
+        container.appendChild(entry);
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+
+    // Initialize and expose to iframe
+    window.previewRuntime = new PreviewRuntime();
+  </script>
+</body>
+</html>

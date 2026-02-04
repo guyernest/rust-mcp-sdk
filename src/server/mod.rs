@@ -85,6 +85,13 @@ pub mod typed_tool;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ui;
 
+/// MCP Apps Extension - Interactive UI support for multiple MCP hosts.
+///
+/// Provides adapters for `ChatGPT` Apps, MCP Apps (SEP-1865), and MCP-UI.
+#[cfg(all(not(target_arch = "wasm32"), feature = "mcp-apps"))]
+#[cfg_attr(docsrs, doc(cfg(feature = "mcp-apps")))]
+pub mod mcp_apps;
+
 /// Validation helpers for typed tools.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod validation;
@@ -1106,6 +1113,7 @@ impl Server {
                 text: result.to_string(),
             }],
             is_error: false,
+            ..Default::default()
         })?)
     }
 
@@ -1857,6 +1865,14 @@ impl ServerBuilder {
 
         let tool = TypedTool::new(name_str.clone(), wrapped_handler);
         self.tools.insert(name_str, Arc::new(tool));
+
+        // Update capabilities to include tools
+        if self.capabilities.tools.is_none() {
+            self.capabilities.tools = Some(crate::types::ToolCapabilities {
+                list_changed: Some(false),
+            });
+        }
+
         self
     }
 
@@ -1924,6 +1940,14 @@ impl ServerBuilder {
 
         let tool = TypedTool::new(name_str.clone(), wrapped_handler).with_description(description);
         self.tools.insert(name_str, Arc::new(tool));
+
+        // Update capabilities to include tools
+        if self.capabilities.tools.is_none() {
+            self.capabilities.tools = Some(crate::types::ToolCapabilities {
+                list_changed: Some(false),
+            });
+        }
+
         self
     }
 
@@ -1980,6 +2004,14 @@ impl ServerBuilder {
         let name_str = name.into();
         let tool = TypedSyncTool::new(name_str.clone(), handler);
         self.tools.insert(name_str, Arc::new(tool));
+
+        // Update capabilities to include tools
+        if self.capabilities.tools.is_none() {
+            self.capabilities.tools = Some(crate::types::ToolCapabilities {
+                list_changed: Some(false),
+            });
+        }
+
         self
     }
 
@@ -2042,6 +2074,14 @@ impl ServerBuilder {
         let name_str = name.into();
         let tool = TypedSyncTool::new(name_str.clone(), handler).with_description(description);
         self.tools.insert(name_str, Arc::new(tool));
+
+        // Update capabilities to include tools
+        if self.capabilities.tools.is_none() {
+            self.capabilities.tools = Some(crate::types::ToolCapabilities {
+                list_changed: Some(false),
+            });
+        }
+
         self
     }
 
@@ -2110,6 +2150,14 @@ impl ServerBuilder {
         let name_str = name.into();
         let tool = TypedToolWithOutput::new(name_str.clone(), handler);
         self.tools.insert(name_str, Arc::new(tool));
+
+        // Update capabilities to include tools
+        if self.capabilities.tools.is_none() {
+            self.capabilities.tools = Some(crate::types::ToolCapabilities {
+                list_changed: Some(false),
+            });
+        }
+
         self
     }
 
@@ -2174,6 +2222,14 @@ impl ServerBuilder {
         let tool =
             TypedToolWithOutput::new(name_str.clone(), handler).with_description(description);
         self.tools.insert(name_str, Arc::new(tool));
+
+        // Update capabilities to include tools
+        if self.capabilities.tools.is_none() {
+            self.capabilities.tools = Some(crate::types::ToolCapabilities {
+                list_changed: Some(false),
+            });
+        }
+
         self
     }
 

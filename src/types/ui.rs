@@ -61,6 +61,38 @@ impl UIResource {
         }
     }
 
+    /// Create a new HTML UI resource with MCP mime type.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pmcp::types::ui::UIResource;
+    ///
+    /// let resource = UIResource::html_mcp(
+    ///     "ui://settings/form",
+    ///     "Settings Form",
+    /// );
+    /// ```
+    pub fn html_mcp(uri: impl Into<String>, name: impl Into<String>) -> Self {
+        Self::new(uri, name, UIMimeType::HtmlMcp)
+    }
+
+    /// Create a new HTML UI resource with `ChatGPT` Skybridge mime type.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pmcp::types::ui::UIResource;
+    ///
+    /// let resource = UIResource::html_skybridge(
+    ///     "ui://chess/board",
+    ///     "Chess Board",
+    /// );
+    /// ```
+    pub fn html_skybridge(uri: impl Into<String>, name: impl Into<String>) -> Self {
+        Self::new(uri, name, UIMimeType::HtmlSkybridge)
+    }
+
     /// Set the description
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
@@ -85,8 +117,14 @@ pub enum UIMimeType {
     /// HTML with MCP postMessage support (`text/html+mcp`)
     ///
     /// The UI is rendered in a sandboxed iframe and communicates with the host
-    /// via MCP JSON-RPC over postMessage.
+    /// via MCP JSON-RPC over postMessage. Used by standard MCP Apps (SEP-1865).
     HtmlMcp,
+
+    /// HTML with `ChatGPT` Skybridge support (`text/html+skybridge`)
+    ///
+    /// `ChatGPT` injects the `window.openai` API for widget communication.
+    /// Used exclusively by `ChatGPT` Apps (`OpenAI` Apps SDK).
+    HtmlSkybridge,
     // Future MIME types (commented out for Phase 1):
     // /// WebAssembly with MCP support (`application/wasm+mcp`)
     // WasmMcp,
@@ -100,7 +138,18 @@ impl UIMimeType {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::HtmlMcp => "text/html+mcp",
+            Self::HtmlSkybridge => "text/html+skybridge",
         }
+    }
+
+    /// Check if this is a `ChatGPT` Apps MIME type
+    pub fn is_chatgpt(&self) -> bool {
+        matches!(self, Self::HtmlSkybridge)
+    }
+
+    /// Check if this is a standard MCP Apps MIME type
+    pub fn is_mcp_apps(&self) -> bool {
+        matches!(self, Self::HtmlMcp)
     }
 }
 
@@ -116,6 +165,7 @@ impl std::str::FromStr for UIMimeType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "text/html+mcp" => Ok(Self::HtmlMcp),
+            "text/html+skybridge" => Ok(Self::HtmlSkybridge),
             _ => Err(format!("Unknown UI MIME type: {}", s)),
         }
     }
@@ -267,11 +317,24 @@ mod tests {
         use std::str::FromStr;
 
         assert_eq!(UIMimeType::HtmlMcp.as_str(), "text/html+mcp");
+        assert_eq!(UIMimeType::HtmlSkybridge.as_str(), "text/html+skybridge");
         assert_eq!(
             UIMimeType::from_str("text/html+mcp"),
             Ok(UIMimeType::HtmlMcp)
         );
+        assert_eq!(
+            UIMimeType::from_str("text/html+skybridge"),
+            Ok(UIMimeType::HtmlSkybridge)
+        );
         assert!(UIMimeType::from_str("invalid").is_err());
+    }
+
+    #[test]
+    fn test_mime_type_platform_checks() {
+        assert!(UIMimeType::HtmlSkybridge.is_chatgpt());
+        assert!(!UIMimeType::HtmlSkybridge.is_mcp_apps());
+        assert!(UIMimeType::HtmlMcp.is_mcp_apps());
+        assert!(!UIMimeType::HtmlMcp.is_chatgpt());
     }
 
     #[test]

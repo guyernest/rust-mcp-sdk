@@ -111,10 +111,10 @@ impl<'a> ScenarioExecutor<'a> {
         let success = scenario_error.is_none()
             && step_results.iter().all(|r| {
                 r.success
-                    || step_results
+                    || scenario
+                        .steps
                         .iter()
-                        .zip(scenario.steps.iter())
-                        .any(|(res, step)| res.step_name == step.name && step.continue_on_failure)
+                        .any(|step| step.name == r.step_name && step.continue_on_failure)
             });
 
         let result = ScenarioResult {

@@ -62,6 +62,7 @@ fn bench_message_formatting(c: &mut Criterion) {
             text: format!("This is a long piece of content for item {} that simulates a realistic response from an MCP tool with substantial data.", i),
         }).collect(),
         is_error: false,
+        ..Default::default()
     }).unwrap();
 
     let test_messages = [

@@ -69,6 +69,28 @@ pub struct DeployCommand {
     #[clap(long, global = true)]
     target: Option<String>,
 
+    /// Use shared OAuth pool for SSO (pmcp-run only).
+    ///
+    /// Enables OAuth authentication using an existing shared Cognito User Pool.
+    /// This enables Single Sign-On (SSO) with other MCP servers using the same pool.
+    ///
+    /// Example: --shared-pool agent-framework
+    ///
+    /// Equivalent to running:
+    ///   cargo pmcp deploy
+    ///   cargo pmcp deploy oauth enable --server <server> --shared-pool <name>
+    #[clap(long, value_name = "POOL_NAME")]
+    shared_pool: Option<String>,
+
+    /// Skip OAuth configuration during deployment.
+    ///
+    /// Deploy without OAuth first, then add it later with:
+    ///   cargo pmcp deploy oauth enable --server <server> [--shared-pool <name>]
+    ///
+    /// This is useful for testing the server before adding authentication.
+    #[clap(long)]
+    no_oauth: bool,
+
     #[clap(subcommand)]
     action: Option<DeployAction>,
 }
@@ -591,6 +613,62 @@ impl DeployCommand {
                 // Save deployment info for pmcp-run target (for landing page integration)
                 if target_id == "pmcp-run" {
                     Self::save_deployment_info(&project_root, &outputs)?;
+
+                    // Handle OAuth configuration if --shared-pool was provided
+                    if let Some(ref pool_name) = self.shared_pool {
+                        println!();
+                        println!("🔐 Configuring OAuth with shared pool: {}", pool_name);
+
+                        // Get the server ID from outputs
+                        let server_id = outputs
+                            .custom
+                            .get("server_id")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| {
+                                outputs.custom.get("deployment_id").and_then(|v| v.as_str())
+                            })
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "Could not determine server ID from deployment outputs"
+                                )
+                            })?;
+
+                        // Configure OAuth with shared pool
+                        let oauth_action = OAuthAction::Enable {
+                            server: server_id.to_string(),
+                            copy_from: None,
+                            scopes: None, // Use defaults
+                            dcr: true,
+                            public_clients: None, // Use defaults
+                            shared_pool: Some(pool_name.clone()),
+                        };
+
+                        handle_oauth_action(&oauth_action).await?;
+                    } else if !self.no_oauth {
+                        // Check if OAuth is already enabled (from backend query)
+                        let oauth_already_enabled = outputs
+                            .custom
+                            .get("oauth_enabled")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+
+                        if !oauth_already_enabled {
+                            // Show hint about OAuth options only if not already configured
+                            println!();
+                            println!("💡 OAuth not configured. To add authentication:");
+                            if let Some(server_id) =
+                                outputs.custom.get("server_id").and_then(|v| v.as_str())
+                            {
+                                println!(
+                                    "   cargo pmcp deploy oauth enable --server {}",
+                                    server_id
+                                );
+                                println!("   cargo pmcp deploy oauth enable --server {} --shared-pool <name>", server_id);
+                            } else {
+                                println!("   cargo pmcp deploy oauth enable --server <server_id>");
+                            }
+                        }
+                    }
                 }
 
                 Ok(())
