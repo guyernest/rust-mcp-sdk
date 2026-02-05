@@ -726,6 +726,7 @@ async fn run_prompts_test(
     tester.run_prompts_discovery().await
 }
 
+#[allow(dead_code)]
 async fn run_diagnostics(
     url: &str,
     network: bool,

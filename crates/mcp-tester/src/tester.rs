@@ -21,6 +21,7 @@ use crate::validators::Validator;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ToolUIInfo {
     pub tool_name: String,
     pub ui_resource_uri: String,
@@ -73,6 +74,7 @@ pub struct ServerTester {
     http_middleware_chain:
         Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
     // UI information for tools with associated UIs
+    #[allow(dead_code)]
     tool_uis: HashMap<String, ToolUIInfo>,
 }
 
@@ -469,6 +471,7 @@ impl ServerTester {
         self.run_tools_discovery_with_verbose(test_all, false).await
     }
 
+    #[allow(dead_code)]
     pub async fn run_resources_discovery(&mut self) -> Result<TestReport> {
         self.run_resources_discovery_with_verbose(false).await
     }
@@ -2809,6 +2812,7 @@ impl ServerTester {
     }
 
     /// Detect tools with UI metadata and extract UI resource URIs
+    #[allow(dead_code)]
     pub async fn discover_tool_uis(&mut self) -> Result<Vec<ToolUIInfo>> {
         let mut ui_tools = Vec::new();
 
@@ -2831,6 +2835,7 @@ impl ServerTester {
     }
 
     /// Fetch UI resource content for a given URI
+    #[allow(dead_code)]
     pub async fn fetch_ui_resource(&mut self, uri: &str) -> Result<String> {
         use pmcp::types::Content;
 
@@ -2859,6 +2864,7 @@ impl ServerTester {
     }
 
     /// Discover and fetch all tool UIs
+    #[allow(dead_code)]
     pub async fn load_all_tool_uis(&mut self) -> Result<()> {
         let ui_tools = self.discover_tool_uis().await?;
 
@@ -2881,11 +2887,13 @@ impl ServerTester {
     }
 
     /// Get UI information for all tools
+    #[allow(dead_code)]
     pub fn get_tool_uis(&self) -> &HashMap<String, ToolUIInfo> {
         &self.tool_uis
     }
 
     /// Render a tool's UI to an HTML file
+    #[allow(dead_code)]
     pub fn render_tool_ui(&self, tool_name: &str, output_path: &str) -> Result<()> {
         let ui_info = self
             .tool_uis
@@ -2915,6 +2923,7 @@ impl ServerTester {
     }
 
     /// Wrap HTML with postMessage bridge for MCP communication
+    #[allow(dead_code)]
     fn wrap_with_postmessage_bridge(&self, original_html: &str) -> String {
         let html_base64 = base64::Engine::encode(
             &base64::engine::general_purpose::STANDARD,
