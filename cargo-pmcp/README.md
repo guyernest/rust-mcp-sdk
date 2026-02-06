@@ -394,6 +394,108 @@ For detailed OAuth architecture and SDK design, see:
 - [docs/oauth-design.md](docs/oauth-design.md) - Infrastructure design
 - [docs/oauth-sdk-design.md](docs/oauth-sdk-design.md) - SDK integration
 
+### CI/CD Integration
+
+For automated deployments in CI/CD pipelines (GitHub Actions, GitLab CI, AWS CodeBuild, etc.), `cargo-pmcp` supports OAuth 2.0 client credentials flow (machine-to-machine authentication).
+
+#### Setup
+
+1. **Create a Cognito App Client** with `client_credentials` grant enabled:
+   - In AWS Console: Cognito → User Pools → App Clients → Create
+   - Enable "Client credentials" under OAuth 2.0 grant types
+   - Note the Client ID and generate a Client Secret
+
+2. **Store credentials securely** in your CI/CD environment:
+   - AWS CodeBuild: Use AWS Secrets Manager
+   - GitHub Actions: Use encrypted secrets
+   - GitLab CI: Use CI/CD variables (masked)
+
+3. **Set environment variables** in your CI/CD job:
+   ```bash
+   export PMCP_CLIENT_ID="your-client-id"
+   export PMCP_CLIENT_SECRET="your-client-secret"
+   ```
+
+#### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `PMCP_CLIENT_ID` | Cognito App Client ID (for client_credentials flow) |
+| `PMCP_CLIENT_SECRET` | Cognito App Client Secret |
+| `PMCP_ACCESS_TOKEN` | Direct access token (alternative to client credentials) |
+| `PMCP_ID_TOKEN` | Optional ID token (when using direct access token) |
+
+#### Example: GitHub Actions
+
+```yaml
+name: Deploy MCP Server
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Install cargo-pmcp
+        run: cargo install cargo-pmcp
+
+      - name: Deploy to pmcp.run
+        env:
+          PMCP_CLIENT_ID: ${{ secrets.PMCP_CLIENT_ID }}
+          PMCP_CLIENT_SECRET: ${{ secrets.PMCP_CLIENT_SECRET }}
+        run: cargo pmcp deploy --target pmcp-run
+```
+
+#### Example: AWS CodeBuild
+
+```yaml
+version: 0.2
+
+env:
+  secrets-manager:
+    PMCP_CLIENT_ID: pmcp-build-credentials:client_id
+    PMCP_CLIENT_SECRET: pmcp-build-credentials:client_secret
+
+phases:
+  install:
+    commands:
+      - cargo install cargo-pmcp
+  build:
+    commands:
+      - cargo pmcp deploy --target pmcp-run
+```
+
+#### Example: GitLab CI
+
+```yaml
+deploy:
+  stage: deploy
+  image: rust:latest
+  variables:
+    PMCP_CLIENT_ID: $PMCP_CLIENT_ID
+    PMCP_CLIENT_SECRET: $PMCP_CLIENT_SECRET
+  script:
+    - cargo install cargo-pmcp
+    - cargo pmcp deploy --target pmcp-run
+  only:
+    - main
+```
+
+#### How It Works
+
+1. When `PMCP_CLIENT_ID` and `PMCP_CLIENT_SECRET` are set, `cargo-pmcp` uses OAuth 2.0 client_credentials flow
+2. It exchanges the credentials for an access token via the Cognito token endpoint
+3. The access token is used to authenticate GraphQL API calls to pmcp.run
+4. No interactive login or browser-based flow is required
+
+This enables fully automated deployments without storing long-lived credentials or requiring human intervention.
+
 ## Test Scenarios
 
 Test scenarios are YAML files that define test steps and assertions for your MCP server.
