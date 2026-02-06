@@ -267,15 +267,54 @@ fn credentials_path() -> Result<PathBuf> {
     Ok(pmcp_dir.join("credentials.toml"))
 }
 
-/// Load credentials from file
+/// Load credentials from file or environment (for CI/CD)
+///
+/// This function supports two authentication methods:
+///
+/// 1. **Interactive (developers)**: Reads from `~/.pmcp/credentials.toml`
+///    after running `cargo pmcp deploy login --target pmcp-run`
+///
+/// 2. **Client Credentials (CI/CD)**: Uses OAuth 2.0 client_credentials flow
+///    when `PMCP_CLIENT_ID` and `PMCP_CLIENT_SECRET` environment variables are set.
+///    This is ideal for automated deployments in CI/CD pipelines like GitHub Actions,
+///    GitLab CI, AWS CodeBuild, etc.
+///
+/// For CI/CD setup, create a Cognito App Client with client_credentials grant enabled,
+/// then set the environment variables with your client credentials.
 pub async fn get_credentials() -> Result<Credentials> {
+    // Check for client credentials flow (M2M / service account for CI/CD)
+    if let (Ok(client_id), Ok(client_secret)) = (
+        std::env::var("PMCP_CLIENT_ID"),
+        std::env::var("PMCP_CLIENT_SECRET"),
+    ) {
+        return get_credentials_via_client_credentials(&client_id, &client_secret).await;
+    }
+
+    // Check for direct access token (alternative CI/CD method)
+    if let Ok(access_token) = std::env::var("PMCP_ACCESS_TOKEN") {
+        return Ok(Credentials {
+            access_token,
+            refresh_token: String::new(),
+            id_token: std::env::var("PMCP_ID_TOKEN").unwrap_or_default(),
+            expires_at: chrono::Utc::now()
+                .checked_add_signed(chrono::Duration::hours(1))
+                .unwrap()
+                .to_rfc3339(),
+        });
+    }
+
+    // Fall back to file-based credentials (interactive login)
     let path = credentials_path()?;
 
     if !path.exists() {
         bail!(
             "❌ Not authenticated with pmcp.run\n\n\
-             💡 Please login first:\n\
-             cargo pmcp deploy login --target pmcp-run\n"
+             💡 Authentication options:\n\n\
+             For interactive use (developers):\n\
+               cargo pmcp deploy login --target pmcp-run\n\n\
+             For CI/CD pipelines:\n\
+               Set PMCP_CLIENT_ID and PMCP_CLIENT_SECRET environment variables\n\
+               (requires a Cognito App Client with client_credentials grant)\n"
         );
     }
 
@@ -298,6 +337,78 @@ pub async fn get_credentials() -> Result<Credentials> {
     }
 
     Ok(credentials)
+}
+
+/// OAuth 2.0 client_credentials token response
+#[derive(Debug, Deserialize)]
+struct ClientCredentialsResponse {
+    access_token: String,
+    #[serde(default)]
+    id_token: Option<String>,
+    #[serde(default)]
+    expires_in: Option<u64>,
+    #[serde(default)]
+    token_type: Option<String>,
+}
+
+/// Get credentials using OAuth 2.0 client_credentials flow (M2M authentication)
+///
+/// This is used for CI/CD pipelines and automated deployments where interactive
+/// login is not possible. Requires a Cognito App Client configured with:
+/// - client_credentials grant type enabled
+/// - A client secret
+/// - Appropriate resource server scopes
+async fn get_credentials_via_client_credentials(
+    client_id: &str,
+    client_secret: &str,
+) -> Result<Credentials> {
+    let config = get_pmcp_config().await?;
+    let token_url = format!("https://{}/oauth2/token", config.cognito_domain);
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&token_url)
+        .basic_auth(client_id, Some(client_secret))
+        .form(&[("grant_type", "client_credentials")])
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .context("Failed to request access token via client_credentials")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        bail!(
+            "❌ Client credentials authentication failed\n\n\
+             Status: {}\n\
+             Response: {}\n\n\
+             💡 Verify that:\n\
+             1. PMCP_CLIENT_ID and PMCP_CLIENT_SECRET are correct\n\
+             2. The Cognito App Client has client_credentials grant enabled\n\
+             3. The client secret matches the App Client configuration\n",
+            status,
+            body
+        );
+    }
+
+    let token_response: ClientCredentialsResponse = response
+        .json()
+        .await
+        .context("Failed to parse token response")?;
+
+    let expires_at = chrono::Utc::now()
+        .checked_add_signed(chrono::Duration::seconds(
+            token_response.expires_in.unwrap_or(3600) as i64,
+        ))
+        .unwrap()
+        .to_rfc3339();
+
+    Ok(Credentials {
+        access_token: token_response.access_token,
+        refresh_token: String::new(), // client_credentials doesn't return refresh token
+        id_token: token_response.id_token.unwrap_or_default(),
+        expires_at,
+    })
 }
 
 /// Refresh access token using refresh token
