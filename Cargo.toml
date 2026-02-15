@@ -68,7 +68,7 @@ http-body-util = "0.1"
 # OAuth dependencies
 sha2 = "0.10"
 base64 = "0.22"
-jsonwebtoken = { version = "9.3", optional = true }
+jsonwebtoken = { version = "10.3", optional = true }
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 
 # Transport dependencies (optional, feature-gated)
