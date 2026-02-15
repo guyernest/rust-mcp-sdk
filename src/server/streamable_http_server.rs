@@ -718,10 +718,14 @@ fn extract_auth_from_proxy_headers(
         claims.insert("name".to_string(), serde_json::Value::String(name.clone()));
     }
     if let Some(ref groups) = groups {
-        claims.insert(
-            "groups".to_string(),
-            serde_json::Value::String(groups.clone()),
-        );
+        // Parse comma-separated groups into a JSON array so that
+        // AuthContext::groups() can deserialize it as Vec<String>.
+        let groups_array: Vec<serde_json::Value> = groups
+            .split(',')
+            .map(|g| serde_json::Value::String(g.trim().to_string()))
+            .filter(|v| v.as_str() != Some(""))
+            .collect();
+        claims.insert("groups".to_string(), serde_json::Value::Array(groups_array));
     }
     if let Some(ref tenant_id) = tenant_id {
         claims.insert(
