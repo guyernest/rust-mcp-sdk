@@ -104,7 +104,7 @@ web-sys = { version = "0.3", features = ["console", "Window", "Document", "WebSo
 js-sys = "0.3"
 futures-channel = "0.3"
 futures-locks = { version = "0.7", default-features = false }
-getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
 # Testing
