@@ -27,7 +27,7 @@ mcp-preview = { version = "0.1.0", path = "../crates/mcp-preview" }
 urlencoding = "2"
 async-trait = "0.1.89"
 pathdiff = "0.2.3"
-cargo_metadata = "0.19"
+cargo_metadata = "0.23"
 
 # For pmcp-run target and landing pages
 oauth2 = "5.0"                          # OAuth 2.0 authentication
@@ -36,7 +36,7 @@ tiny_http = "0.12"                      # OAuth callback server
 open = "5.0"                            # Browser launch
 chrono = "0.4"                          # Token expiry handling
 rpassword = "7.3"                       # Secret input (for other features)
-zip = "7.0"                             # Zip file creation for landing page deployment
+zip = "8.1"                             # Zip file creation for landing page deployment
 
 # For schema discovery and code generation
 console = "0.16"                        # Terminal styling for schema commands
