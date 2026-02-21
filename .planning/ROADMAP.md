@@ -30,11 +30,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. TaskStatus state machine rejects invalid transitions (e.g., completed -> working) and accepts all valid transitions
   4. TaskStore trait is defined with all methods including atomic `complete_with_result`, and TaskRecord struct is usable as the store's internal record type
   5. TaskWithVariables extends Task with a variable store, and variables serialize into `_meta` (not flattened at top level)
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 01-01: TBD
-- [ ] 01-02: TBD
+- [ ] 01-01-PLAN.md -- Crate scaffold, all wire types (Task, TaskStatus, params, capabilities, notification, execution), error enum, constants
+- [ ] 01-02-PLAN.md -- Domain types (TaskRecord, TaskWithVariables) and TaskStore async trait with pagination
+- [ ] 01-03-PLAN.md -- Serialization round-trip tests (TEST-01) and state machine transition tests (TEST-02)
 
 ### Phase 2: In-Memory Backend and Owner Security
 **Goal**: Developers can create, poll, update, and cancel tasks using an in-memory store with enforced owner isolation and security limits
@@ -107,7 +108,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation Types and Store Contract | 0/? | Not started | - |
+| 1. Foundation Types and Store Contract | 0/3 | Planning complete | - |
 | 2. In-Memory Backend and Owner Security | 0/? | Not started | - |
 | 3. Handler, Middleware, and Server Integration | 0/? | Not started | - |
 | 4. DynamoDB Backend and Deployment | 0/? | Not started | - |
