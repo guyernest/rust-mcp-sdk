@@ -10,12 +10,8 @@ pub mod notification;
 pub mod params;
 pub mod task;
 
-#[allow(unused_imports)]
 pub use capabilities::*;
-#[allow(unused_imports)]
 pub use execution::*;
-#[allow(unused_imports)]
 pub use notification::*;
-#[allow(unused_imports)]
 pub use params::*;
 pub use task::*;
