@@ -9,16 +9,16 @@ Requirements for initial release (`pmcp-tasks` v0.1.0). Each maps to roadmap pha
 
 ### Core Types
 
-- [ ] **TYPE-01**: Protocol types (Task, TaskStatus, CreateTaskResult, TaskParams) serialize to match MCP 2025-11-25 schema exactly
-- [ ] **TYPE-02**: TaskStatus enum supports all 5 states (working, input_required, completed, failed, cancelled) with serde snake_case serialization
-- [ ] **TYPE-03**: Task status state machine validates transitions: working -> {input_required, completed, failed, cancelled}, input_required -> {working, completed, failed, cancelled}, terminal states reject all transitions
-- [ ] **TYPE-04**: Related-task metadata helper produces correct `io.modelcontextprotocol/related-task` JSON
-- [ ] **TYPE-05**: Task capability types (ServerTaskCapabilities, ClientTaskCapabilities) with convenience constructors (full, tools_only)
-- [ ] **TYPE-06**: TaskGetParams, TaskResultParams, TaskListParams, TaskCancelParams request types match spec schema
-- [ ] **TYPE-07**: TaskStatusNotification type matches spec notification structure
-- [ ] **TYPE-08**: TaskSupport enum (forbidden/optional/required) with ToolExecution metadata for tools/list
-- [ ] **TYPE-09**: TaskError variants map to spec-compliant JSON-RPC error codes (-32602, -32603)
-- [ ] **TYPE-10**: ModelImmediateResponse meta key constant defined for `io.modelcontextprotocol/model-immediate-response`
+- [x] **TYPE-01**: Protocol types (Task, TaskStatus, CreateTaskResult, TaskParams) serialize to match MCP 2025-11-25 schema exactly
+- [x] **TYPE-02**: TaskStatus enum supports all 5 states (working, input_required, completed, failed, cancelled) with serde snake_case serialization
+- [x] **TYPE-03**: Task status state machine validates transitions: working -> {input_required, completed, failed, cancelled}, input_required -> {working, completed, failed, cancelled}, terminal states reject all transitions
+- [x] **TYPE-04**: Related-task metadata helper produces correct `io.modelcontextprotocol/related-task` JSON
+- [x] **TYPE-05**: Task capability types (ServerTaskCapabilities, ClientTaskCapabilities) with convenience constructors (full, tools_only)
+- [x] **TYPE-06**: TaskGetParams, TaskResultParams, TaskListParams, TaskCancelParams request types match spec schema
+- [x] **TYPE-07**: TaskStatusNotification type matches spec notification structure
+- [x] **TYPE-08**: TaskSupport enum (forbidden/optional/required) with ToolExecution metadata for tools/list
+- [x] **TYPE-09**: TaskError variants map to spec-compliant JSON-RPC error codes (-32602, -32603)
+- [x] **TYPE-10**: ModelImmediateResponse meta key constant defined for `io.modelcontextprotocol/model-immediate-response`
 
 ### Storage
 
@@ -133,16 +133,16 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| TYPE-01 | Phase 1 | Pending |
-| TYPE-02 | Phase 1 | Pending |
-| TYPE-03 | Phase 1 | Pending |
-| TYPE-04 | Phase 1 | Pending |
-| TYPE-05 | Phase 1 | Pending |
-| TYPE-06 | Phase 1 | Pending |
-| TYPE-07 | Phase 1 | Pending |
-| TYPE-08 | Phase 1 | Pending |
-| TYPE-09 | Phase 1 | Pending |
-| TYPE-10 | Phase 1 | Pending |
+| TYPE-01 | Phase 1 | Complete |
+| TYPE-02 | Phase 1 | Complete |
+| TYPE-03 | Phase 1 | Complete |
+| TYPE-04 | Phase 1 | Complete |
+| TYPE-05 | Phase 1 | Complete |
+| TYPE-06 | Phase 1 | Complete |
+| TYPE-07 | Phase 1 | Complete |
+| TYPE-08 | Phase 1 | Complete |
+| TYPE-09 | Phase 1 | Complete |
+| TYPE-10 | Phase 1 | Complete |
 | STOR-01 | Phase 1 | Pending |
 | STOR-02 | Phase 1 | Pending |
 | STOR-03 | Phase 1 | Pending |
