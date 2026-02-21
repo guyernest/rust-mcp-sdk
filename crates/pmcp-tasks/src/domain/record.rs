@@ -96,7 +96,13 @@ impl TaskRecord {
         let now = Utc::now();
         let now_str = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
 
-        let expires_at = ttl.map(|ms| now + Duration::milliseconds(ms as i64));
+        // Use checked arithmetic to avoid panics on extremely large TTL values.
+        // If the TTL overflows i64 milliseconds or the resulting DateTime overflows,
+        // we treat it as "never expires" (None).
+        let expires_at = ttl.and_then(|ms| {
+            let duration = Duration::try_milliseconds(ms as i64)?;
+            now.checked_add_signed(duration)
+        });
 
         let task = Task {
             task_id: Uuid::new_v4().to_string(),
