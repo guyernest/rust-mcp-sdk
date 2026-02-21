@@ -240,6 +240,7 @@ pub struct Task {
 
     /// Optional metadata map. Used for `_meta` on result responses
     /// (e.g., related-task metadata, variables injection).
+    #[serde(rename = "_meta")]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[allow(clippy::pub_underscore_fields)]
     pub _meta: Option<Map<String, Value>>,
@@ -281,6 +282,7 @@ pub struct CreateTaskResult {
     pub task: Task,
 
     /// Optional result-level metadata.
+    #[serde(rename = "_meta")]
     #[serde(skip_serializing_if = "Option::is_none")]
     #[allow(clippy::pub_underscore_fields)]
     pub _meta: Option<Map<String, Value>>,
