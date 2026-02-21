@@ -16,6 +16,8 @@
 //! # Module Organization
 //!
 //! - [`types`] - Spec-compliant wire types (Task, params, capabilities, etc.)
+//! - [`domain`] - Internal domain types (TaskRecord, TaskWithVariables)
+//! - [`store`] - TaskStore async trait and supporting types
 //! - [`error`] - Rich error types with JSON-RPC error code mapping
 //! - [`constants`] - Meta key and method name constants
 
@@ -26,12 +28,12 @@ pub mod types;
 /// Domain types (TaskRecord, TaskWithVariables) for internal task representation.
 pub mod domain;
 
-// Stub for future plans
-/// Task store trait and implementations - implemented in Plan 02.
-pub mod store {}
+/// Task store trait and supporting types (StoreConfig, ListTasksOptions, TaskPage).
+pub mod store;
 
 // Re-exports for ergonomic access
 pub use constants::*;
 pub use domain::{TaskRecord, TaskWithVariables};
 pub use error::TaskError;
+pub use store::{ListTasksOptions, StoreConfig, TaskPage, TaskStore};
 pub use types::*;
