@@ -22,10 +22,10 @@ Requirements for initial release (`pmcp-tasks` v0.1.0). Each maps to roadmap pha
 
 ### Storage
 
-- [ ] **STOR-01**: TaskStore async trait with create, get, update_status, set_variables, set_result, get_result, list, cancel, cleanup_expired methods
-- [ ] **STOR-02**: TaskStore trait includes atomic `complete_with_result` method (single operation for status + result)
-- [ ] **STOR-03**: TaskStore trait enforces configurable variable size limits across all backends
-- [ ] **STOR-04**: TaskRecord includes protocol task fields, owner_id, variables, result, and request_method
+- [x] **STOR-01**: TaskStore async trait with create, get, update_status, set_variables, set_result, get_result, list, cancel, cleanup_expired methods
+- [x] **STOR-02**: TaskStore trait includes atomic `complete_with_result` method (single operation for status + result)
+- [x] **STOR-03**: TaskStore trait enforces configurable variable size limits across all backends
+- [x] **STOR-04**: TaskRecord includes protocol task fields, owner_id, variables, result, and request_method
 - [ ] **STOR-05**: In-memory backend implements TaskStore with HashMap + synchronization
 - [ ] **STOR-06**: In-memory backend validates state machine transitions atomically
 - [ ] **STOR-07**: In-memory backend supports configurable poll interval and max TTL
@@ -38,7 +38,7 @@ Requirements for initial release (`pmcp-tasks` v0.1.0). Each maps to roadmap pha
 
 ### Handler Integration
 
-- [ ] **HNDL-01**: TaskWithVariables type extends Task with shared variable store (HashMap<String, Value>)
+- [x] **HNDL-01**: TaskWithVariables type extends Task with shared variable store (HashMap<String, Value>)
 - [ ] **HNDL-02**: Task variables surfaced to client via `_meta` in task responses
 - [ ] **HNDL-03**: Variable merge semantics: new keys added, existing keys overwritten, null deletes
 - [ ] **HNDL-04**: TaskContext provides get_variable, set_variable, set_variables, variables methods
@@ -143,10 +143,10 @@ Deferred to future release. Tracked but not in current roadmap.
 | TYPE-08 | Phase 1 | Complete |
 | TYPE-09 | Phase 1 | Complete |
 | TYPE-10 | Phase 1 | Complete |
-| STOR-01 | Phase 1 | Pending |
-| STOR-02 | Phase 1 | Pending |
-| STOR-03 | Phase 1 | Pending |
-| STOR-04 | Phase 1 | Pending |
+| STOR-01 | Phase 1 | Complete |
+| STOR-02 | Phase 1 | Complete |
+| STOR-03 | Phase 1 | Complete |
+| STOR-04 | Phase 1 | Complete |
 | STOR-05 | Phase 2 | Pending |
 | STOR-06 | Phase 2 | Pending |
 | STOR-07 | Phase 2 | Pending |
@@ -156,7 +156,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | STOR-11 | Phase 4 | Pending |
 | STOR-12 | Phase 4 | Pending |
 | STOR-13 | Phase 4 | Pending |
-| HNDL-01 | Phase 1 | Pending |
+| HNDL-01 | Phase 1 | Complete |
 | HNDL-02 | Phase 2 | Pending |
 | HNDL-03 | Phase 2 | Pending |
 | HNDL-04 | Phase 2 | Pending |

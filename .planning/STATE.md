@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-02-21)
 ## Current Position
 
 Phase: 1 of 5 (Foundation Types and Store Contract)
-Plan: 1 of 3 in current phase
+Plan: 2 of 3 in current phase
 Status: Executing
-Last activity: 2026-02-21 -- Completed Plan 01 (wire types, state machine, error enum, constants)
+Last activity: 2026-02-21 -- Completed Plan 02 (domain types, store trait)
 
-Progress: [#.........] 10%
+Progress: [##........] 20%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 1
-- Average duration: 8 min
-- Total execution time: 0.13 hours
+- Total plans completed: 2
+- Average duration: 6 min
+- Total execution time: 0.20 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01 | 1 | 8 min | 8 min |
+| 01 | 2 | 12 min | 6 min |
 
 **Recent Trend:**
-- Last 5 plans: 8min
-- Trend: baseline
+- Last 5 plans: 8min, 4min
+- Trend: improving
 
 *Updated after each plan completion*
 
@@ -48,6 +48,10 @@ Recent decisions affecting current work:
 - [01-01]: TaskError uses manual Display/Error impl for more control over conditional formatting
 - [01-01]: Wire types use camelCase serde rename, ttl serializes null when None (not omitted)
 - [01-01]: GetTaskResult/CancelTaskResult are flat type aliases; CreateTaskResult wraps in task field
+- [01-02]: Variables injected at top level of _meta (not nested under PMCP key) per locked design decision
+- [01-02]: TaskRecord fields all public for store implementor access
+- [01-02]: StoreConfig defaults: 1MB variable limit, 1h default TTL, 24h max TTL
+- [01-02]: TaskStore::config() is sync (not async) since it returns a reference
 
 ### Pending Todos
 
@@ -62,5 +66,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 01-01-PLAN.md (wire types, state machine, error enum, constants)
+Stopped at: Completed 01-02-PLAN.md (domain types, store trait)
 Resume file: None
