@@ -23,14 +23,15 @@ pub mod constants;
 pub mod error;
 pub mod types;
 
-// Stubs for future plans
-/// Domain types (TaskRecord, TaskWithVariables) - implemented in Plan 02.
-pub mod domain {}
+/// Domain types (TaskRecord, TaskWithVariables) for internal task representation.
+pub mod domain;
 
+// Stub for future plans
 /// Task store trait and implementations - implemented in Plan 02.
 pub mod store {}
 
 // Re-exports for ergonomic access
 pub use constants::*;
+pub use domain::{TaskRecord, TaskWithVariables};
 pub use error::TaskError;
 pub use types::*;
