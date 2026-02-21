@@ -200,10 +200,10 @@ Deferred to future release. Tracked but not in current roadmap.
 | EXMP-04 | Phase 4 | Pending |
 
 **Coverage:**
-- v1 requirements: 52 total
-- Mapped to phases: 52
+- v1 requirements: 65 total
+- Mapped to phases: 65
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-21*
-*Last updated: 2026-02-21 after initial definition*
+*Last updated: 2026-02-21 after roadmap creation*
