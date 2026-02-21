@@ -80,8 +80,8 @@ Requirements for initial release (`pmcp-tasks` v0.1.0). Each maps to roadmap pha
 
 ### Testing
 
-- [ ] **TEST-01**: Protocol type serialization tests (all types round-trip correctly)
-- [ ] **TEST-02**: State machine transition tests (valid and invalid transitions, terminal state enforcement)
+- [x] **TEST-01**: Protocol type serialization tests (all types round-trip correctly)
+- [x] **TEST-02**: State machine transition tests (valid and invalid transitions, terminal state enforcement)
 - [ ] **TEST-03**: TaskContext behavior tests (variable CRUD, status transitions, complete with result)
 - [ ] **TEST-04**: In-memory store tests (CRUD, pagination, TTL, concurrent access)
 - [ ] **TEST-05**: DynamoDB store integration tests (real cloud table in CI, conditional writes, GSI pagination)
@@ -186,8 +186,8 @@ Deferred to future release. Tracked but not in current roadmap.
 | WKFL-02 | Phase 5 | Pending |
 | WKFL-03 | Phase 5 | Pending |
 | WKFL-04 | Phase 5 | Pending |
-| TEST-01 | Phase 1 | Pending |
-| TEST-02 | Phase 1 | Pending |
+| TEST-01 | Phase 1 | Complete |
+| TEST-02 | Phase 1 | Complete |
 | TEST-03 | Phase 2 | Pending |
 | TEST-04 | Phase 2 | Pending |
 | TEST-05 | Phase 4 | Pending |
