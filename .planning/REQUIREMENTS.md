@@ -26,9 +26,9 @@ Requirements for initial release (`pmcp-tasks` v0.1.0). Each maps to roadmap pha
 - [x] **STOR-02**: TaskStore trait includes atomic `complete_with_result` method (single operation for status + result)
 - [x] **STOR-03**: TaskStore trait enforces configurable variable size limits across all backends
 - [x] **STOR-04**: TaskRecord includes protocol task fields, owner_id, variables, result, and request_method
-- [ ] **STOR-05**: In-memory backend implements TaskStore with HashMap + synchronization
-- [ ] **STOR-06**: In-memory backend validates state machine transitions atomically
-- [ ] **STOR-07**: In-memory backend supports configurable poll interval and max TTL
+- [x] **STOR-05**: In-memory backend implements TaskStore with HashMap + synchronization
+- [x] **STOR-06**: In-memory backend validates state machine transitions atomically
+- [x] **STOR-07**: In-memory backend supports configurable poll interval and max TTL
 - [ ] **STOR-08**: DynamoDB backend implements TaskStore behind `dynamodb` feature flag
 - [ ] **STOR-09**: DynamoDB backend uses conditional writes for atomic state transitions
 - [ ] **STOR-10**: DynamoDB backend uses native DynamoDB TTL + read-time expiry filtering
@@ -39,8 +39,8 @@ Requirements for initial release (`pmcp-tasks` v0.1.0). Each maps to roadmap pha
 ### Handler Integration
 
 - [x] **HNDL-01**: TaskWithVariables type extends Task with shared variable store (HashMap<String, Value>)
-- [ ] **HNDL-02**: Task variables surfaced to client via `_meta` in task responses
-- [ ] **HNDL-03**: Variable merge semantics: new keys added, existing keys overwritten, null deletes
+- [x] **HNDL-02**: Task variables surfaced to client via `_meta` in task responses
+- [x] **HNDL-03**: Variable merge semantics: new keys added, existing keys overwritten, null deletes
 - [x] **HNDL-04**: TaskContext provides get_variable, set_variable, set_variables, variables methods
 - [x] **HNDL-05**: TaskContext provides require_input, fail, complete convenience methods for status transitions
 - [x] **HNDL-06**: TaskContext is Clone and wraps Arc<dyn TaskStore> for sharing across async boundaries
@@ -62,14 +62,14 @@ Requirements for initial release (`pmcp-tasks` v0.1.0). Each maps to roadmap pha
 
 ### Security
 
-- [ ] **SEC-01**: Owner ID resolved from OAuth sub claim, client ID, or session ID (priority order)
-- [ ] **SEC-02**: Every task operation enforces owner matching (get, update, cancel, set_variables, set_result)
-- [ ] **SEC-03**: tasks/list scoped to requesting owner only
-- [ ] **SEC-04**: TaskSecurityConfig with configurable max_tasks_per_owner (default: 100)
-- [ ] **SEC-05**: TaskSecurityConfig with configurable max_ttl_ms (default: 24 hours)
-- [ ] **SEC-06**: TaskSecurityConfig with configurable default_ttl_ms (default: 1 hour)
-- [ ] **SEC-07**: TaskSecurityConfig with allow_anonymous toggle (default: false)
-- [ ] **SEC-08**: Task IDs use UUIDv4 (122 bits of entropy) to prevent guessing
+- [x] **SEC-01**: Owner ID resolved from OAuth sub claim, client ID, or session ID (priority order)
+- [x] **SEC-02**: Every task operation enforces owner matching (get, update, cancel, set_variables, set_result)
+- [x] **SEC-03**: tasks/list scoped to requesting owner only
+- [x] **SEC-04**: TaskSecurityConfig with configurable max_tasks_per_owner (default: 100)
+- [x] **SEC-05**: TaskSecurityConfig with configurable max_ttl_ms (default: 24 hours)
+- [x] **SEC-06**: TaskSecurityConfig with configurable default_ttl_ms (default: 1 hour)
+- [x] **SEC-07**: TaskSecurityConfig with allow_anonymous toggle (default: false)
+- [x] **SEC-08**: Task IDs use UUIDv4 (122 bits of entropy) to prevent guessing
 
 ### Workflow Integration
 
@@ -147,9 +147,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | STOR-02 | Phase 1 | Complete |
 | STOR-03 | Phase 1 | Complete |
 | STOR-04 | Phase 1 | Complete |
-| STOR-05 | Phase 2 | Pending |
-| STOR-06 | Phase 2 | Pending |
-| STOR-07 | Phase 2 | Pending |
+| STOR-05 | Phase 2 | Complete |
+| STOR-06 | Phase 2 | Complete |
+| STOR-07 | Phase 2 | Complete |
 | STOR-08 | Phase 4 | Pending |
 | STOR-09 | Phase 4 | Pending |
 | STOR-10 | Phase 4 | Pending |
@@ -157,8 +157,8 @@ Deferred to future release. Tracked but not in current roadmap.
 | STOR-12 | Phase 4 | Pending |
 | STOR-13 | Phase 4 | Pending |
 | HNDL-01 | Phase 1 | Complete |
-| HNDL-02 | Phase 2 | Pending |
-| HNDL-03 | Phase 2 | Pending |
+| HNDL-02 | Phase 2 | Complete |
+| HNDL-03 | Phase 2 | Complete |
 | HNDL-04 | Phase 2 | Complete |
 | HNDL-05 | Phase 2 | Complete |
 | HNDL-06 | Phase 2 | Complete |
@@ -174,14 +174,14 @@ Deferred to future release. Tracked but not in current roadmap.
 | INTG-10 | Phase 3 | Complete |
 | INTG-11 | Phase 3 | Complete |
 | INTG-12 | Phase 3 | Complete |
-| SEC-01 | Phase 2 | Pending |
-| SEC-02 | Phase 2 | Pending |
-| SEC-03 | Phase 2 | Pending |
-| SEC-04 | Phase 2 | Pending |
-| SEC-05 | Phase 2 | Pending |
-| SEC-06 | Phase 2 | Pending |
-| SEC-07 | Phase 2 | Pending |
-| SEC-08 | Phase 2 | Pending |
+| SEC-01 | Phase 2 | Complete |
+| SEC-02 | Phase 2 | Complete |
+| SEC-03 | Phase 2 | Complete |
+| SEC-04 | Phase 2 | Complete |
+| SEC-05 | Phase 2 | Complete |
+| SEC-06 | Phase 2 | Complete |
+| SEC-07 | Phase 2 | Complete |
+| SEC-08 | Phase 2 | Complete |
 | WKFL-01 | Phase 5 | Pending |
 | WKFL-02 | Phase 5 | Pending |
 | WKFL-03 | Phase 5 | Pending |
