@@ -5,32 +5,33 @@
 See: .planning/PROJECT.md (updated 2026-02-21)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state that persists across tool calls.
-**Current focus:** Phase 1 - Foundation Types and Store Contract
+**Current focus:** Phase 2 - In-Memory Backend and Owner Security
 
 ## Current Position
 
-Phase: 1 of 5 (Foundation Types and Store Contract) -- COMPLETE
-Plan: 3 of 3 in current phase
-Status: Phase Complete
-Last activity: 2026-02-21 -- Completed Plan 03 (serialization, state machine, and property tests)
+Phase: 2 of 5 (In-Memory Backend and Owner Security)
+Plan: 2 of 3 in current phase
+Status: In Progress
+Last activity: 2026-02-22 -- Completed Plan 02 (TaskContext ergonomic wrapper)
 
-Progress: [###.......] 30%
+Progress: [#####.....] 50%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 3
+- Total plans completed: 5
 - Average duration: 6 min
-- Total execution time: 0.32 hours
+- Total execution time: 0.50 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01 | 3 | 19 min | 6 min |
+| 02 | 2 | 11 min | 6 min |
 
 **Recent Trend:**
-- Last 5 plans: 8min, 4min, 7min
+- Last 5 plans: 8min, 4min, 7min, 7min, 4min
 - Trend: stable
 
 *Updated after each plan completion*
@@ -55,6 +56,12 @@ Recent decisions affecting current work:
 - [01-03]: Used proptest for both property testing and fuzz-style deserialization (no nightly Rust required)
 - [01-03]: Fixed _meta serde key: added explicit #[serde(rename = "_meta")] since rename_all = camelCase strips leading underscores
 - [01-03]: Fixed TaskRecord::new TTL overflow: use checked_add_signed to prevent DateTime panic on extreme values
+- [02-01]: DashMap for concurrent storage (matches SessionManager pattern)
+- [02-01]: Owner ID as structural key -- mismatch returns NotFound, never OwnerMismatch
+- [02-01]: TaskSecurityConfig separate from StoreConfig (security vs storage concerns)
+- [02-02]: Typed accessors return Ok(None) on type mismatch (not errors) -- consistent with task variable model
+- [02-02]: complete() delegates to complete_with_result for atomicity guarantee
+- [02-02]: Debug impl uses finish_non_exhaustive() since Arc<dyn TaskStore> is not Debug
 
 ### Pending Todos
 
@@ -68,6 +75,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-02-21
-Stopped at: Completed 01-03-PLAN.md (serialization, state machine, property tests) -- Phase 1 COMPLETE
+Last session: 2026-02-22
+Stopped at: Completed 02-02-PLAN.md (TaskContext ergonomic wrapper and integration tests)
 Resume file: None

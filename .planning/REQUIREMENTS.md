@@ -41,9 +41,9 @@ Requirements for initial release (`pmcp-tasks` v0.1.0). Each maps to roadmap pha
 - [x] **HNDL-01**: TaskWithVariables type extends Task with shared variable store (HashMap<String, Value>)
 - [ ] **HNDL-02**: Task variables surfaced to client via `_meta` in task responses
 - [ ] **HNDL-03**: Variable merge semantics: new keys added, existing keys overwritten, null deletes
-- [ ] **HNDL-04**: TaskContext provides get_variable, set_variable, set_variables, variables methods
-- [ ] **HNDL-05**: TaskContext provides require_input, fail, complete convenience methods for status transitions
-- [ ] **HNDL-06**: TaskContext is Clone and wraps Arc<dyn TaskStore> for sharing across async boundaries
+- [x] **HNDL-04**: TaskContext provides get_variable, set_variable, set_variables, variables methods
+- [x] **HNDL-05**: TaskContext provides require_input, fail, complete convenience methods for status transitions
+- [x] **HNDL-06**: TaskContext is Clone and wraps Arc<dyn TaskStore> for sharing across async boundaries
 
 ### Server Integration
 
@@ -82,7 +82,7 @@ Requirements for initial release (`pmcp-tasks` v0.1.0). Each maps to roadmap pha
 
 - [x] **TEST-01**: Protocol type serialization tests (all types round-trip correctly)
 - [x] **TEST-02**: State machine transition tests (valid and invalid transitions, terminal state enforcement)
-- [ ] **TEST-03**: TaskContext behavior tests (variable CRUD, status transitions, complete with result)
+- [x] **TEST-03**: TaskContext behavior tests (variable CRUD, status transitions, complete with result)
 - [ ] **TEST-04**: In-memory store tests (CRUD, pagination, TTL, concurrent access)
 - [ ] **TEST-05**: DynamoDB store integration tests (real cloud table in CI, conditional writes, GSI pagination)
 - [ ] **TEST-06**: Security tests (owner isolation, anonymous rejection, max tasks enforcement, UUID entropy)
@@ -159,9 +159,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | HNDL-01 | Phase 1 | Complete |
 | HNDL-02 | Phase 2 | Pending |
 | HNDL-03 | Phase 2 | Pending |
-| HNDL-04 | Phase 2 | Pending |
-| HNDL-05 | Phase 2 | Pending |
-| HNDL-06 | Phase 2 | Pending |
+| HNDL-04 | Phase 2 | Complete |
+| HNDL-05 | Phase 2 | Complete |
+| HNDL-06 | Phase 2 | Complete |
 | INTG-01 | Phase 3 | Pending |
 | INTG-02 | Phase 3 | Pending |
 | INTG-03 | Phase 3 | Pending |
@@ -188,7 +188,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | WKFL-04 | Phase 5 | Pending |
 | TEST-01 | Phase 1 | Complete |
 | TEST-02 | Phase 1 | Complete |
-| TEST-03 | Phase 2 | Pending |
+| TEST-03 | Phase 2 | Complete |
 | TEST-04 | Phase 2 | Pending |
 | TEST-05 | Phase 4 | Pending |
 | TEST-06 | Phase 2 | Pending |
