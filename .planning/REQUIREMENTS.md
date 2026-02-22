@@ -87,11 +87,11 @@ Requirements for initial release (`pmcp-tasks` v0.1.0). Each maps to roadmap pha
 - [ ] **TEST-05**: DynamoDB store integration tests (real cloud table in CI, conditional writes, GSI pagination)
 - [x] **TEST-06**: Security tests (owner isolation, anonymous rejection, max tasks enforcement, UUID entropy)
 - [x] **TEST-07**: Property tests (status transitions, variable merge, task ID uniqueness, owner isolation)
-- [ ] **TEST-08**: Full lifecycle integration tests (create -> poll -> complete -> get_result end-to-end)
+- [x] **TEST-08**: Full lifecycle integration tests (create -> poll -> complete -> get_result end-to-end)
 
 ### Examples
 
-- [ ] **EXMP-01**: Basic task-augmented tool call example (60_tasks_basic.rs)
+- [x] **EXMP-01**: Basic task-augmented tool call example (60_tasks_basic.rs)
 - [ ] **EXMP-02**: Tasks with SequentialWorkflow example (61_tasks_workflow.rs)
 - [ ] **EXMP-03**: Tasks with code mode example (62_tasks_code_mode.rs)
 - [ ] **EXMP-04**: Tasks with DynamoDB backend example (63_tasks_dynamodb.rs)
@@ -193,8 +193,8 @@ Deferred to future release. Tracked but not in current roadmap.
 | TEST-05 | Phase 4 | Pending |
 | TEST-06 | Phase 2 | Complete |
 | TEST-07 | Phase 2 | Complete |
-| TEST-08 | Phase 3 | Pending |
-| EXMP-01 | Phase 3 | Pending |
+| TEST-08 | Phase 3 | Complete |
+| EXMP-01 | Phase 3 | Complete |
 | EXMP-02 | Phase 5 | Pending |
 | EXMP-03 | Phase 5 | Pending |
 | EXMP-04 | Phase 4 | Pending |

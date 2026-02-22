@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-21)
 ## Current Position
 
 Phase: 3 of 5 (Handler, Middleware, and Server Integration)
-Plan: 2 of 3 in current phase
-Status: In Progress
-Last activity: 2026-02-22 -- Completed Plan 02 (TaskRouterImpl, task routing in ServerCore)
+Plan: 3 of 3 in current phase
+Status: Phase Complete
+Last activity: 2026-02-22 -- Completed Plan 03 (Integration tests and basic example)
 
 Progress: [########..] 80%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 8
+- Total plans completed: 9
 - Average duration: 7 min
-- Total execution time: 1.02 hours
+- Total execution time: 1.09 hours
 
 **By Phase:**
 
@@ -29,10 +29,10 @@ Progress: [########..] 80%
 |-------|-------|-------|----------|
 | 01 | 3 | 19 min | 6 min |
 | 02 | 3 | 18 min | 6 min |
-| 03 | 2 | 24 min | 12 min |
+| 03 | 3 | 28 min | 9 min |
 
 **Recent Trend:**
-- Last 5 plans: 7min, 4min, 7min, 15min, 9min
+- Last 5 plans: 4min, 7min, 15min, 9min, 4min
 - Trend: stable
 
 *Updated after each plan completion*
@@ -73,6 +73,9 @@ Recent decisions affecting current work:
 - [03-02]: TaskRouterImpl stores tool context (name, args, progressToken) as task variables for external service pickup
 - [03-02]: Task-augmented call interception in handle_request_internal BEFORE handle_call_tool (returns CreateTaskResult as Value)
 - [03-02]: Tasks not enabled returns -32601 consistent with 03-01 decision
+- [03-03]: Integration tests use stateless_mode(true) to skip initialize handshake for simpler test setup
+- [03-03]: Tests hold Arc<InMemoryTaskStore> alongside ServerCore for direct store manipulation
+- [03-03]: Example uses tokio::spawn + sleep per CONTEXT.md locked decision
 
 ### Pending Todos
 
@@ -87,5 +90,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 03-02-PLAN.md (TaskRouterImpl, task routing in ServerCore)
+Stopped at: Completed 03-03-PLAN.md (Integration tests and basic example -- Phase 3 complete)
 Resume file: None
