@@ -1,205 +1,333 @@
 # Pitfalls Research
 
-**Domain:** Async durable task/state machine system integrated into existing Rust protocol SDK (MCP Tasks for PMCP)
+**Domain:** Task-prompt bridge -- partial execution, structured prompt replies, variable schema, and backward compatibility when adding task-aware workflows to existing PMCP SDK
 **Researched:** 2026-02-21
-**Confidence:** HIGH (combination of codebase analysis, official docs, and well-documented Rust async ecosystem issues)
+**Confidence:** HIGH (codebase analysis of existing WorkflowPromptHandler, TaskContext, TaskStore, and SequentialWorkflow; domain research on state machine serialization, LLM prompt structuring, and Rust trait evolution)
 
 ## Critical Pitfalls
 
-### Pitfall 1: Non-Atomic `complete()` Creates a Window for Inconsistent Task State
+### Pitfall 1: Modifying WorkflowPromptHandler Breaks All Existing Non-Task Workflows
 
 **What goes wrong:**
-The design document's `TaskContext::complete()` method performs two sequential store operations: `update_status(Completed)` followed by `set_result(result)`. If the process crashes, the network fails, or the Lambda invocation times out between these two calls, the task is permanently stuck in `Completed` status with no result. Clients polling `tasks/result` will get `NotReady` forever on a task that claims to be `Completed`.
+The existing `WorkflowPromptHandler` implements `PromptHandler` with a signature `fn handle(&self, args: HashMap<String, String>, extra: RequestHandlerExtra) -> Result<GetPromptResult>`. It executes ALL steps server-side and returns a complete conversation trace. Adding task awareness directly into this handler (e.g., checking for a `TaskStore`, creating tasks, pausing mid-execution) means every existing workflow -- including ones that have no task association -- now runs through task-aware code paths. If the task-aware code path has even a subtle behavior change (different message ordering, different error propagation, different binding resolution), existing workflows silently break. Since workflows produce conversation traces consumed by LLMs, even a whitespace change in message formatting can alter LLM behavior.
 
 **Why it happens:**
-Developers naturally decompose "complete with result" into "set status" + "set result" because those are two conceptual operations and the `TaskStore` trait separates them. The two-step approach feels clean from an API perspective but violates the atomicity requirement of state machine transitions with associated data.
+The temptation is to add an `Option<Arc<dyn TaskStore>>` field to `WorkflowPromptHandler` and branch on `Some`/`None` in `handle()`. This is the "one handler to rule them all" anti-pattern. It couples two distinct execution modes (full-execution and partial-execution) into a single code path, making it impossible to test or reason about them independently. The existing `ExecutionContext` (in-memory `HashMap<BindingName, Value>`) is fundamentally different from `TaskContext` (durable store-backed), but the merge makes them share code that makes assumptions about one or the other.
 
 **How to avoid:**
-Add a `complete_with_result(task_id, owner_id, result) -> Result<TaskRecord>` method to the `TaskStore` trait that atomically sets status to `Completed` AND stores the result in a single operation. For in-memory: hold the write lock across both mutations. For DynamoDB: use a single `UpdateItem` that sets both `#status = :completed` AND `#result = :result_json` with a `ConditionExpression` validating the source status. Keep `update_status` and `set_result` as separate methods for other use cases, but make `complete()` on `TaskContext` use the atomic variant.
+Create a **separate** `TaskWorkflowPromptHandler` that composes with (not inherits from) `WorkflowPromptHandler`. The original handler remains unchanged and untouched. The task-aware handler delegates full-execution steps to the original handler's step execution logic, but owns the task lifecycle and partial execution decisions. The key insight: `SequentialWorkflow` is data (step definitions), not behavior. Both handlers consume the same `SequentialWorkflow`, but execute it differently.
+
+```
+SequentialWorkflow (data)
+    |
+    +--- WorkflowPromptHandler (full execution, returns conversation trace)
+    |     - Existing behavior, ZERO changes
+    |     - All steps executed server-side
+    |     - Returns complete trace
+    |
+    +--- TaskWorkflowPromptHandler (partial execution, returns structured guidance)
+          - Creates task, binds variables
+          - Executes resolvable steps
+          - Pauses on unresolvable steps
+          - Returns completed steps + remaining steps + task ID
+```
 
 **Warning signs:**
-- Integration tests that never test crash recovery between status update and result storage
-- `tasks/result` returning `NotReady` for tasks showing `Completed` in `tasks/get`
-- DynamoDB items with `status=completed` but no `result` attribute
+- `WorkflowPromptHandler` gaining new constructor parameters or fields
+- `#[cfg(feature = "tasks")]` guards inside `WorkflowPromptHandler::handle()`
+- Existing workflow tests needing modification to pass
+- `ExecutionContext` gaining an `Option<TaskContext>` field
 
 **Phase to address:**
-Phase 1 (Core Types + TaskStore trait design). Must be part of the trait definition before any backend implements it.
+Phase 1 (Architecture). Must decide handler composition pattern before writing any code. This is the most important architectural decision in the milestone.
 
 ---
 
-### Pitfall 2: Holding `parking_lot::RwLock` Across `.await` Points Causes Deadlocks
+### Pitfall 2: ExecutionContext and TaskContext Dual-Write Inconsistency
 
 **What goes wrong:**
-The existing codebase uses `parking_lot::RwLock` extensively (per MEMORY.md). The in-memory `TaskStore` design uses `parking_lot::RwLock<HashMap<String, TaskRecord>>`. If any `TaskStore` method implementation holds a `parking_lot` lock guard and then `.await`s (e.g., for logging, metrics, or calling another async method), the synchronous lock blocks the Tokio worker thread. Under load, this starves the thread pool and causes cascading deadlocks because other tasks waiting for the same lock can never make progress -- their executor threads are blocked.
+During partial execution, the task-aware handler must track step results in TWO places simultaneously: (1) the in-memory `ExecutionContext` (needed for resolving `DataSource::StepOutput` references in subsequent steps), and (2) the durable `TaskContext` / task variables (needed for persistence across client continuation calls). If a step result is stored in `ExecutionContext` but the `TaskContext::set_variable()` call fails (store error, variable size exceeded, task expired), the in-memory state diverges from the durable state. Subsequent steps execute successfully using the in-memory binding, but when the client resumes with a tool call, the task variables are missing the data from the failed write. The workflow proceeds with a "phantom step" whose result exists only in the ephemeral execution and is lost.
 
 **Why it happens:**
-`parking_lot::RwLock` guards implement `Send`, so Rust does not emit a compiler error when they are held across `.await` points. The code compiles and works under low concurrency, but deadlocks under load. This is especially insidious because the in-memory backend will primarily be used in tests and development, where concurrency is low, and the bug only manifests in production-like stress scenarios.
+`ExecutionContext` is a simple `HashMap<BindingName, Value>` with no error handling on `store_binding`. It always succeeds. `TaskContext::set_variable()` is async and fallible. Developers write the natural sequence: (1) execute step, (2) store in `ExecutionContext` for next step, (3) store in `TaskContext` for durability -- and don't handle the case where (3) fails but (1) and (2) succeeded. The existing `WorkflowPromptHandler` never faced this because there was only one storage path.
 
 **How to avoid:**
-For the `InMemoryTaskStore`, use `parking_lot::RwLock` but scope all lock acquisitions to synchronous blocks. Each async method should: (1) acquire the lock, (2) read/mutate the HashMap synchronously, (3) release the lock, (4) then perform any async work. The pattern is:
+Write to durable storage FIRST, then populate the in-memory context. If the durable write fails, the step is considered failed -- do not proceed to the next step with ephemeral-only data. The execution loop should be:
 
 ```rust
-async fn get(&self, task_id: &str, owner_id: &str) -> Result<TaskRecord, TaskError> {
-    // Lock is acquired and released synchronously -- no .await while held
-    let record = {
-        let tasks = self.tasks.read();
-        tasks.get(task_id).cloned()
-    };
-    // Now safe to do async work if needed
-    record.ok_or(TaskError::NotFound)
-}
+// Correct order: durable first, then ephemeral
+let result = execute_step(&step, &args, &extra).await?;
+
+// 1. Store durably (task variables)
+task_ctx.set_variable(&binding_name, result.clone()).await
+    .map_err(|e| /* mark step as failed, stop execution */)?;
+
+// 2. Only then store ephemerally (for next-step resolution)
+execution_ctx.store_binding(binding_name, result);
 ```
 
-Alternatively, use `tokio::sync::RwLock` if any method needs to hold the lock across async operations, but this is slower for the common case. Given that the in-memory store operations are purely synchronous (HashMap lookups), `parking_lot` is the right choice -- just enforce the scoping discipline.
+Additionally, implement a `SyncedExecutionContext` wrapper that writes to both stores atomically (durable first, ephemeral second) and provides rollback semantics (remove from ephemeral if durable fails).
 
 **Warning signs:**
-- Lock guards stored in local variables that span across `.await` points
-- `clippy::await_holding_lock` lint being suppressed
-- Stress tests hanging under concurrent task operations
+- Step results stored in `ExecutionContext` before `TaskContext`
+- No error handling on `task_ctx.set_variable()` calls in the execution loop
+- Tests that mock `TaskStore` to never fail -- no failure injection for variable writes
+- Client continuation seeing "step X not found" when the server reported it as completed
 
 **Phase to address:**
-Phase 2 (In-Memory Backend implementation). Add `#![deny(clippy::await_holding_lock)]` to the `pmcp-tasks` crate root.
+Phase 2 (Partial Execution Engine). The execution loop must be designed with dual-write semantics from the start.
 
 ---
 
-### Pitfall 3: `serde(flatten)` on `TaskWithVariables` Silently Eats Unknown Fields and Breaks Forward Compatibility
+### Pitfall 3: Structured Prompt Reply Too Rigid for Different LLM Clients
 
 **What goes wrong:**
-The design uses `#[serde(flatten)]` on `TaskWithVariables` to merge standard `Task` fields with the `variables` extension. When the MCP spec adds new fields to the Task type (which is expected -- the spec is experimental), those unknown fields get silently swallowed into the `variables` HashMap instead of being preserved or causing a clear error. A new spec field like `priority: "high"` would appear as a task variable instead of a protocol field, corrupting both the variable namespace and the protocol semantics.
+The prompt reply must convey: (a) what steps completed with their results, (b) what steps remain with enough context for the LLM to continue, (c) the task ID for polling. If the reply uses a highly structured JSON format embedded in a conversation message, different LLM clients (Claude, GPT-4, Gemini, open-source models) parse and follow it differently. Claude may follow a numbered step list precisely. GPT-4 may reinterpret the remaining steps and attempt them in a different order. Smaller models may ignore the structure entirely and hallucinate tool calls. The prompt reply becomes a de facto "instruction format" that only works with specific LLM families.
 
 **Why it happens:**
-`serde(flatten)` with a HashMap catch-all is a known footgun in Rust serialization. It is convenient for extensibility but creates ambiguity: any field not explicitly defined in the struct is captured by the HashMap. When the spec adds fields, the Rust struct lags behind, and the new fields silently become "variables." This is documented as a known issue in serde (serde-rs/serde#1346).
+Server developers design the prompt reply for the LLM they test with (usually Claude, given this is an MCP SDK). They assume the LLM will parse structured JSON from a conversation message, follow step ordering, and use the exact tool names and argument structures specified. But MCP is client-agnostic -- the spec makes no assumptions about the LLM powering the client. A reply that says `{"remaining_steps": [{"tool": "deploy", "args": {"config": "$config"}}]}` works if the client parses JSON from messages, but breaks if the client expects natural language instructions.
 
 **How to avoid:**
-Do NOT use `#[serde(flatten)]` on `TaskWithVariables`. Instead, make `TaskWithVariables` contain a `Task` as a named field and serialize/deserialize explicitly. Variables should live in a dedicated `_meta.pmcp:variables` namespace in the wire format, not at the top level. This matches the design doc's intent ("Variables are surfaced to the client through `_meta`") but the Rust type design contradicts it. The wire format should be:
+Use a hybrid approach for the prompt reply: (1) structured data in `_meta` (machine-readable, for smart clients that know how to parse it) AND (2) natural language in the conversation messages (human-readable, for any LLM client). The `_meta` carries the structured step list. The messages carry the same information as conversational text that any LLM can follow.
 
-```json
-{
-  "taskId": "...",
-  "status": "working",
-  "_meta": {
-    "pmcp:variables": { "region": "us-east-1" }
-  }
-}
 ```
+GetPromptResult {
+    description: "Deploy service (2 of 4 steps completed)",
+    messages: [
+        // Completed steps as conversation trace (same as existing WorkflowPromptHandler)
+        user("I want to deploy service 'my-api' to us-east-1"),
+        assistant("Step 1: Validated config - region: us-east-1 [DONE]"),
+        user("Validation result: { valid: true, config: {...} }"),
+        assistant("Step 2: Provisioned infrastructure [DONE]"),
+        user("Provisioned: { vpc_id: 'vpc-123', subnet: 'sub-456' }"),
+        // Remaining steps as natural language guidance
+        assistant("Next steps to complete this workflow:
+            3. Call 'approve_deployment' to get deployment approval
+            4. Call 'deploy_service' with the config and infrastructure details above
 
-Not:
-```json
-{
-  "taskId": "...",
-  "status": "working",
-  "variables": { "region": "us-east-1" }
-}
-```
-
-This keeps protocol fields and PMCP extensions cleanly separated and forward-compatible.
-
-**Warning signs:**
-- Deserialization tests that only test the current spec fields
-- No test for "unknown fields in Task JSON are preserved, not captured as variables"
-- Variables appearing that nobody set (they are actually new spec fields)
-
-**Phase to address:**
-Phase 1 (Core Protocol Types). Must be correct before any serialization tests are written.
-
----
-
-### Pitfall 4: Background Task Execution Orphans When Lambda/Server Shuts Down
-
-**What goes wrong:**
-The `TaskMiddleware` design spawns background execution of tool handlers via `tokio::spawn` after returning `CreateTaskResult` to the client. In Lambda, the runtime freezes after the response is sent, killing the spawned task. In long-running servers, if the server shuts down gracefully, `tokio::spawn`ed tasks are detached (not cancelled) when the `JoinHandle` is dropped. The task's status remains `Working` forever with no process executing it -- a zombie task.
-
-**Why it happens:**
-Developers assume `tokio::spawn` tasks run to completion, but (a) Lambda freezes the process after the HTTP response, (b) dropping a `JoinHandle` detaches the task silently (no cancellation), and (c) there is no built-in mechanism to track or await spawned background tasks during shutdown. The MCP design makes this worse because the middleware MUST return `CreateTaskResult` immediately, creating a forced split between "respond" and "execute."
-
-**How to avoid:**
-For Lambda: Do NOT spawn background tasks. Instead, use a two-invocation pattern: (1) first invocation creates the task and enqueues the work (e.g., via SQS or a DynamoDB work item), (2) second invocation (triggered by SQS/DynamoDB Stream) performs the actual work. This matches Lambda's execution model. For long-running servers: maintain a `TaskSet` (from `tokio::task::JoinSet`) that tracks all spawned task executions, and drain it during graceful shutdown. Register abort handles so cancellation propagates. Add a `task_runner` component that owns the `JoinSet` and provides `shutdown()`:
-
-```rust
-pub struct TaskRunner {
-    tasks: JoinSet<()>,
-    shutdown_signal: CancellationToken,
-}
-
-impl TaskRunner {
-    pub async fn shutdown(&mut self) {
-        self.shutdown_signal.cancel();
-        while let Some(result) = self.tasks.join_next().await {
-            if let Err(e) = result {
-                tracing::warn!("Task failed during shutdown: {}", e);
-            }
+            The task ID is 'task-abc-123'. After completing all steps,
+            the task will be marked complete."),
+    ],
+    _meta: {
+        "pmcp:task_id": "task-abc-123",
+        "pmcp:workflow_progress": {
+            "completed": ["validate_config", "provision_infra"],
+            "remaining": [
+                {"step": "approve_deployment", "tool": "approve_deployment", "args": {}},
+                {"step": "deploy_service", "tool": "deploy_service", "args": {"config": "..."}}
+            ]
         }
     }
 }
 ```
 
+This way, smart clients can parse `_meta` for machine-readable guidance, while any LLM can follow the natural language instructions in the messages.
+
 **Warning signs:**
-- Tasks stuck in `Working` status after server restart
-- Lambda invocations timing out without the background work completing
-- No `JoinSet` or equivalent tracking mechanism for spawned tasks
-- Tests that do not simulate process interruption during task execution
+- Prompt reply contains ONLY structured JSON, no natural language
+- Reply tested with only one LLM client (e.g., only Claude Code)
+- Remaining steps lack human-readable descriptions of what to do
+- No `_meta` section -- all guidance is in message text (no machine path)
 
 **Phase to address:**
-Phase 3 (TaskMiddleware + Server Integration). Design the execution model BEFORE implementing the middleware. Lambda vs long-running server should be a configuration choice, not an afterthought.
+Phase 3 (Structured Prompt Reply). Design the reply format before implementing, and test with at least two different clients (Claude Code + a simple test client that only reads text).
 
 ---
 
-### Pitfall 5: DynamoDB Conditional Write Retries Silently Violate State Machine Invariants
+### Pitfall 4: Variable Schema Becomes an Implicit API That Can't Evolve
 
 **What goes wrong:**
-DynamoDB conditional writes use `ConditionExpression` to enforce valid state transitions (e.g., `#status IN (:working)` when transitioning to `completed`). When a `ConditionalCheckFailedException` occurs, the AWS SDK's default retry policy may retry the request. If the condition failed because another writer already moved the task to a different state, retrying is incorrect -- the state has legitimately changed. Worse, the `ReturnValuesOnConditionCheckFailure` parameter (which returns the current item on failure) is not used by default, so the error gives no information about the actual current state.
+Task variables store step progress with a schema like `{ "step.validate.result": {...}, "step.deploy.status": "pending", "workflow.current_step": 2 }`. Both server-side step execution and client-side continuation tool calls read and write these variables. The variable key names become an implicit API contract between: (a) the partial execution engine, (b) each tool handler, and (c) the LLM client following the prompt reply. If the schema changes (rename `step.validate.result` to `steps.validate.output`), every component breaks simultaneously with no compile-time safety net. Variables are `HashMap<String, Value>` -- there is zero type safety, no schema validation, and no versioning.
 
 **Why it happens:**
-The AWS SDK for Rust has built-in retry logic that treats `ConditionalCheckFailedException` as a retryable error by default. Developers who implement conditional writes without customizing retry behavior get silent retries that mask the true failure reason. Additionally, many implementations catch `ConditionalCheckFailedException` and return a generic "invalid transition" error without inspecting what the current state actually is, making debugging impossible.
+`serde_json::Value` is the type of choice for flexibility ("any JSON value"), but flexibility is the enemy of contracts. Each developer writes tool handlers that assume specific variable key patterns without realizing they are creating a cross-component API. The prompt reply generator reads variables to build the structured guidance. The client's tool calls write variables that the server's continuation logic reads. None of these contracts are enforced anywhere -- they are scattered across code as string literals.
 
 **How to avoid:**
-(1) Disable automatic retries for conditional write operations or configure the retry policy to NOT retry `ConditionalCheckFailedException`. (2) Always use `ReturnValuesOnConditionCheckFailure::ALL_OLD` to get the actual item state when the condition fails. (3) Map the DynamoDB error to a specific `TaskError::InvalidTransition { current_status, attempted_status }` that tells the caller exactly why the transition failed:
+Define a `WorkflowVariableSchema` struct that formally specifies the variable keys, their types, and their semantics. Use this struct for both serialization and deserialization. Variables written by the partial execution engine go through this schema. Variables expected by the prompt reply generator go through this schema. Tool handlers interact with a typed API, not raw string keys.
 
 ```rust
-.return_values_on_condition_check_failure(ReturnValuesOnConditionCheckFailure::AllOld)
+/// Standard variable schema for task-backed workflows.
+///
+/// This schema is the contract between the partial execution engine,
+/// tool handlers, and the prompt reply generator.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowProgress {
+    /// The workflow name that created this task
+    pub workflow_name: String,
+    /// Goal description for the LLM
+    pub goal: String,
+    /// Steps that have completed, with their results
+    pub completed_steps: Vec<CompletedStep>,
+    /// Steps remaining, with their expected tool calls
+    pub remaining_steps: Vec<RemainingStep>,
+    /// Index of the current step (0-based)
+    pub current_step_index: usize,
+}
 ```
 
-Then in the error handler:
+Include a `schema_version: u32` field so the variable format can evolve without breaking existing tasks. The schema struct is defined once in `pmcp-tasks` and used by all components.
+
+**Warning signs:**
+- Variable keys as string literals in more than one module
+- Different components using different key naming conventions (`step.X.result` vs `steps[0].result` vs `x_result`)
+- No documentation of what variables a workflow produces
+- Client-side code guessing at variable structure from prompt reply text
+
+**Phase to address:**
+Phase 1 (Variable Schema Design). Define the schema struct before implementing partial execution, because the schema shapes everything downstream.
+
+---
+
+### Pitfall 5: Partial Execution "Pause Point" Logic Becomes a Second Workflow Engine
+
+**What goes wrong:**
+The partial execution engine must decide, for each step, whether it can execute server-side or must be deferred to the client. The simplest rule is "execute if the step has no `DataSource::StepOutput` dependencies on non-yet-executed steps." But this is a simplification. Real pause criteria include: (a) the step needs LLM reasoning (guidance text present), (b) the step needs user input (elicitation), (c) the step's tool is not registered on the server (external tool), (d) the step references a resource that requires client-side fetching, (e) a previous step failed and recovery requires client judgment. As more pause criteria accumulate, the "should I execute this step?" decision tree grows into a second workflow engine embedded inside the first one, with its own state, its own error handling, and its own bugs.
+
+**Why it happens:**
+Developers start with a clean "execute all, pause on first unresolvable" loop. Then product requirements add nuance: "skip steps that need user input," "execute steps even if a previous step failed (for non-critical steps)," "allow the workflow author to mark steps as client-only." Each requirement adds a branch to the pause logic, and the branches interact in unexpected ways. The result is a workflow-within-a-workflow that is harder to understand than either system alone.
+
+**How to avoid:**
+Make the pause decision a SIMPLE, EXPLICIT property of each `WorkflowStep`, not an inferred decision. Add an execution mode enum to `WorkflowStep`:
+
 ```rust
-Err(SdkError::ServiceError(err)) if err.err().is_conditional_check_failed_exception() => {
-    let current = err.err().item().and_then(|item| extract_status(item));
-    Err(TaskError::InvalidTransition {
-        task_id: task_id.to_string(),
-        current_status: current,
-        attempted_status: new_status,
-    })
+#[derive(Clone, Debug, Default)]
+pub enum StepExecution {
+    /// Execute server-side during partial execution (default)
+    #[default]
+    ServerSide,
+    /// Always defer to client (step needs LLM reasoning or user input)
+    ClientSide,
+    /// Execute server-side, but defer to client if server execution fails
+    BestEffort,
+}
+```
+
+The partial execution engine has exactly ONE decision: check `step.execution()`. If `ServerSide`, execute it. If `ClientSide`, stop and add to remaining. If `BestEffort`, try and fall back. No inference, no heuristics, no "does this step have guidance? then it probably needs the client" guessing. The workflow author explicitly declares intent.
+
+The existing `with_guidance()` method on `WorkflowStep` already signals "this step may need client reasoning." But it is currently used for rendering, not for execution decisions. Do not overload its semantics. Keep `guidance` for rendering and `execution` for control flow.
+
+**Warning signs:**
+- The pause loop checking for `step.guidance().is_some()` to decide server vs client
+- More than 3 conditions in the "should I execute?" decision
+- Steps executing server-side that should have been deferred (wrong pause logic)
+- The pause decision referencing anything outside the step's own properties (e.g., inspecting task variables to decide whether to pause)
+
+**Phase to address:**
+Phase 1 (WorkflowStep extension). Add `StepExecution` before implementing the partial execution loop. Validate with the workflow author, not inferred at runtime.
+
+---
+
+### Pitfall 6: Error During Partial Execution Leaves Task in Inconsistent Half-Completed State
+
+**What goes wrong:**
+The partial execution engine runs steps 1, 2, 3 in sequence. Step 2 succeeds. Step 3 fails (tool error, timeout, variable size exceeded). The task now has variables from steps 1 and 2, but step 3's failure is ambiguous: did the tool execute and fail (effect already applied, e.g., database row inserted)? Or did the tool execution error out before any side effects (safe to retry)? The task variables say steps 1-2 completed, but the prompt reply must communicate step 3's failure in a way the client can act on. If step 3's failure is reported as a generic "step failed," the client has no basis for deciding whether to retry step 3 or skip it. If the task status remains `Working`, the client may not even know something went wrong.
+
+**Why it happens:**
+The existing `WorkflowPromptHandler` treats any step failure as a terminal error -- it returns an error from `handle()` and the entire prompt fails. But in partial execution, step failure is not necessarily terminal. The workflow should be able to communicate "steps 1-2 done, step 3 failed with error X, remaining steps 4-5 still needed" and let the client decide. This requires a richer error model than "success or failure" -- it needs "partial success with failure details."
+
+**How to avoid:**
+Each step in the progress schema should have a status field, not just "completed" or "remaining":
+
+```rust
+pub enum StepStatus {
+    Completed { result: Value },
+    Failed { error: String, retryable: bool },
+    Skipped { reason: String },
+    Remaining { tool: String, args: Value },
+}
+```
+
+When a step fails during partial execution:
+1. Store the failure in task variables (`step.X.status = "failed"`, `step.X.error = "..."`)
+2. Set `retryable` based on whether the tool handler indicates idempotency
+3. Continue to the NEXT step only if the failed step was non-critical (opt-in via `WorkflowStep`)
+4. By default, stop execution on first failure and report all remaining steps
+5. Set task status to `Working` (not `Failed`) -- the task is still in progress, just needs client intervention
+6. The prompt reply includes the failure details in both `_meta` and natural language
+
+Never set the task to `Failed` during partial execution unless ALL steps have failed or the workflow is unrecoverable. The task state machine has `Working` and `InputRequired` for exactly this situation -- the task needs client action but is not terminal.
+
+**Warning signs:**
+- Step failure causing the entire task to transition to `Failed`
+- No `retryable` flag on step failures
+- Client receiving a `Failed` task with no information about which steps succeeded
+- Steps after a failed step being silently skipped with no record in task variables
+
+**Phase to address:**
+Phase 2 (Partial Execution Engine) and Phase 3 (Prompt Reply). Error handling must be designed alongside the execution loop, not bolted on after.
+
+---
+
+### Pitfall 7: Resumption Semantics -- Client Continuation Tools Don't Know About Workflow Context
+
+**What goes wrong:**
+After partial execution, the prompt reply tells the client "call `approve_deployment` next." The client (LLM) calls `tools/call approve_deployment` as a regular tool call. But the tool handler for `approve_deployment` doesn't know it is being called as part of a workflow, doesn't know the task ID, and doesn't know to update the workflow progress variables. The tool executes correctly but the workflow state in task variables is stale -- it still shows `approve_deployment` as "remaining." The server has no way to advance the workflow because tool calls and workflow state are disconnected.
+
+**Why it happens:**
+MCP tool calls are stateless by design. `tools/call` receives a tool name and arguments -- there is no built-in concept of "this call is part of workflow X, task Y, step Z." The v1.0 task system solved this for task-augmented tools (via `params.task`), but the prompt-driven workflow continuation is different: the client is calling tools directly based on the prompt reply, not via task-augmented requests. There is no mechanism to bind a regular `tools/call` back to a workflow task.
+
+**How to avoid:**
+Two options, choose one:
+
+**Option A (recommended): Embed task ID in the prompt reply tool arguments.** The remaining steps in the prompt reply include a `_task_id` argument that the LLM passes through when calling the tool. The server's tool middleware detects `_task_id`, loads the task, and provides the `TaskContext` to the handler. This is the least invasive approach -- it works with any MCP client because the task ID is just another argument.
+
+```json
+// In prompt reply:
+"remaining": [
+    {"tool": "approve_deployment", "args": {"_task_id": "task-abc-123", "config": "..."}}
+]
+```
+
+**Option B: Use task-augmented tool calls.** The prompt reply instructs the client to use `params.task` with the task ID when calling tools. This requires the client to support MCP Tasks, which most clients don't yet. Not recommended as the primary mechanism.
+
+In either case, the server needs a `WorkflowStepMiddleware` that intercepts tool calls with a `_task_id` argument, loads the task, provides the `TaskContext`, and after the tool completes, updates the workflow progress variables (marking the step as completed, advancing `current_step_index`).
+
+**Warning signs:**
+- Prompt reply listing remaining tools without any task ID reference
+- Tool handlers that don't update workflow progress variables
+- Client calling tools that complete successfully but the task variables are stale
+- No middleware that connects a regular `tools/call` back to its workflow task
+
+**Phase to address:**
+Phase 3 (Client Continuation Pattern). This is the core of the "bridge" -- connecting prompt-driven guidance back to task state. Design the continuation mechanism before implementing the prompt reply, because the reply's format depends on how continuation works.
+
+---
+
+### Pitfall 8: SequentialWorkflow Validation Does Not Account for Partial Execution Dependencies
+
+**What goes wrong:**
+The existing `SequentialWorkflow::validate()` checks that all `DataSource::StepOutput` references point to earlier steps with explicit bindings. This is correct for full execution (all steps run). But in partial execution, some steps are deferred to the client. If step 3 (client-side) depends on step 2's output via `DataSource::StepOutput { step: "step2_result" }`, and step 2 was executed server-side, the dependency is satisfied by task variables. But if step 2 is ALSO client-side, the dependency is between two client-executed steps -- the prompt reply must communicate this dependency so the client executes them in order. The current validation does not distinguish between server-resolved and client-resolved dependencies, and does not flag the case where a client-side step depends on another client-side step's output.
+
+**Why it happens:**
+The existing `validate()` method treats all steps equally -- it does not know about `StepExecution::ServerSide` vs `StepExecution::ClientSide`. When partial execution is added, the validation becomes split-brain: some bindings are resolved by the server (available in task variables) and some must be resolved by the client (available only in the LLM's context window). The validation needs to verify that client-side step dependencies can actually be communicated through the prompt reply.
+
+**How to avoid:**
+Extend validation to be aware of step execution modes. Add a `validate_for_partial_execution()` method that:
+1. Separates steps into server-side and client-side groups
+2. Verifies all server-side step dependencies are on other server-side steps (or prompt args)
+3. For client-side step dependencies on server-side steps, verifies the server step has a binding (so the result is stored in task variables and available in the prompt reply)
+4. For client-side step dependencies on other client-side steps, verifies the dependent step comes AFTER the dependency in the step list and includes the dependency information in the prompt reply
+
+```rust
+impl SequentialWorkflow {
+    pub fn validate_for_partial_execution(&self) -> Result<PartialExecutionPlan, WorkflowError> {
+        // Returns a plan that explicitly states:
+        // - Which steps run server-side
+        // - Which steps are deferred
+        // - Which deferred steps depend on server results (via task variables)
+        // - Which deferred steps depend on other deferred steps (via prompt ordering)
+    }
 }
 ```
 
 **Warning signs:**
-- Generic "conditional check failed" errors in logs with no state context
-- Status transitions succeeding when they should not (due to retries)
-- DynamoDB `ConditionalCheckFailedException` counts higher than expected in CloudWatch
+- Existing `validate()` passing for workflows that would fail during partial execution
+- Client-side steps referencing bindings that are never stored in task variables
+- Prompt reply listing steps in an order that violates data dependencies
+- `DataSource::StepOutput` references to steps that were deferred but whose results aren't in the prompt context
 
 **Phase to address:**
-Phase 4 (DynamoDB Backend). Must be addressed during DynamoDB `TaskStore` implementation, not retrofitted.
-
----
-
-### Pitfall 6: Spec Drift Couples Experimental Crate to Unstable Protocol Surface
-
-**What goes wrong:**
-The MCP Tasks spec is experimental (2025-11-25). The protocol has already had multiple breaking changes (batching removed in June 2025, auth overhauled in March 2025). The `pmcp-tasks` crate types are a 1:1 mapping of the spec schema. When the spec changes (field renames, new required fields, removed concepts), every type, every serialization test, every integration test, and every example breaks simultaneously. If the crate has been published to crates.io, downstream users face a cascade of breaking changes.
-
-**Why it happens:**
-Mapping protocol types 1:1 feels correct (spec compliance), but it couples the crate's API surface directly to an unstable external specification. Each spec revision becomes a semver-breaking release of the crate. The design doc acknowledges this risk ("Migration & Compatibility" section) but the mitigation is vague ("migration guide").
-
-**How to avoid:**
-(1) Keep `pmcp-tasks` at `0.x` semver to signal instability -- never publish `1.0` while the spec is experimental. (2) Add an internal abstraction layer: protocol types (`wire::Task`) are separate from domain types (`Task`). Wire types handle serialization/deserialization and change with the spec. Domain types are what the SDK user interacts with and change less frequently. Conversion between them is explicit. (3) Version-gate the wire types: `mod wire_2025_11_25` so multiple spec versions can coexist during migration. (4) Pin the spec version in the crate metadata and CI: test against a specific schema revision, not "latest."
-
-**Warning signs:**
-- Crate version `1.x` while the spec is still experimental
-- Wire types and domain types are the same structs
-- No spec version pinned in tests or documentation
-- Users importing `pmcp_tasks::Task` and using it for both serialization and business logic
-
-**Phase to address:**
-Phase 1 (Core Protocol Types). The type layering decision must be made before any types are published.
+Phase 2 (Partial Execution Engine). Validation must be extended before the execution loop is implemented, because the execution plan comes from validation.
 
 ---
 
@@ -209,22 +337,24 @@ Shortcuts that seem reasonable but create long-term problems.
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Using `HashMap<String, String>` for `RequestHandlerExtra::metadata` to pass `TaskContext` | No new types needed, fits existing API | Type safety lost, metadata key collisions with other middleware, no compile-time guarantee that TaskContext is present | Never -- add `Option<TaskContext>` as a proper field on `RequestHandlerExtra` or use a typed extension map |
-| Skipping variable size validation in in-memory store | Faster implementation, "it's just for dev" | In-memory and DynamoDB backends behave differently. Code tested against in-memory passes with 1MB variables, then fails in production against DynamoDB's 400KB limit | Only acceptable if in-memory store enforces the same configurable limit as DynamoDB |
-| Single `TaskStore` trait with all methods required | Simple trait, one implementation per backend | Backends that do not support all operations (e.g., a read-only cache layer, or a store that does not support `cleanup_expired`) must provide dummy implementations | Never -- split into `TaskStore` (core CRUD) and optional `TaskStoreMaintenance` (cleanup) traits |
-| Polling-only without exponential backoff guidance | Simpler initial implementation | Clients hammer the server with polls at `pollInterval` even when the task is clearly long-running, wasting DynamoDB read capacity | Acceptable for MVP, but document recommended polling strategies and provide a `poll_interval` that increases over time |
+| Reusing `ExecutionContext` for both full and partial execution | Less code, one execution path | Two fundamentally different state management models (ephemeral vs durable) share code that makes assumptions about one or the other. Adding durable semantics to an ephemeral struct is a category error. | Never -- create a separate `TaskExecutionContext` that wraps `TaskContext` |
+| Hardcoding variable key patterns as string literals | Fast to implement, easy to read | Keys drift across modules, no refactoring safety, key typos cause silent bugs. `"step.validate.result"` in the execution engine vs `"steps.validate.result"` in the prompt generator = silent data loss. | Only in tests -- production code must use constants or the typed schema struct |
+| Skipping `_meta` in prompt reply (only natural language) | Simpler implementation, works with current LLMs | Smart clients that could parse structured guidance are forced to parse natural language, which is unreliable. Adding `_meta` later requires changing the reply format, breaking existing client integrations. | Never -- include `_meta` from day one, even if minimal |
+| Making all steps `ServerSide` by default with no client-side option | Simpler execution loop, backward compatible | Steps that genuinely need LLM reasoning (fuzzy matching, user-facing decisions) are forced server-side and fail because the server has no LLM. Forces awkward workarounds like "skip steps that have guidance." | Acceptable for MVP only if a `ClientSide` option is planned for the next iteration |
+| Using `PromptHandler` trait directly for task-aware prompts (no new trait) | Fits existing server registration, no API changes | `PromptHandler::handle()` returns `GetPromptResult` synchronously -- it has no way to signal "I created a task, here's the ID" as a side channel. Task creation becomes invisible to the server framework. | Never -- at minimum, extend `GetPromptResult` with optional `_meta` for task association |
 
 ## Integration Gotchas
 
-Common mistakes when connecting to external services and the existing SDK.
+Common mistakes when connecting the task-prompt bridge to existing systems.
 
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| DynamoDB TTL | Relying solely on DynamoDB TTL for expiration enforcement. DynamoDB TTL deletion is eventual (up to 48 hours delay). Tasks appear in `tasks/list` and `tasks/get` long after their TTL expires. | Always check expiration on read: `if now > created_at + ttl { return NotFound }`. Use DynamoDB TTL as background cleanup only, not as the primary enforcement mechanism. |
-| Cargo workspace feature unification | Enabling the `dynamodb` feature in `pmcp-tasks` causes `aws-sdk-dynamodb` and `aws-config` to be compiled for ALL workspace members during `cargo test`, even those that do not need it, bloating compile times. | Use `resolver = "2"` in workspace `Cargo.toml` (already standard). Test the `dynamodb` feature with `--package pmcp-tasks --features dynamodb` explicitly, not with `--workspace`. Add a CI job specifically for DynamoDB tests. |
-| Existing `ToolMiddleware` trait | The current `ToolMiddleware::on_request` returns `Result<()>`. To short-circuit with a `CreateTaskResult`, the middleware would need to return the result value, but the trait signature does not support this. Forcing it through `Result<Err>` conflates "task created successfully" with "middleware error." | Extend the middleware trait with a `MiddlewareAction` enum: `Continue`, `ShortCircuit(Value)`, or `Error(Error)`. Or add a dedicated `TaskMiddleware` that runs before regular middleware and can intercept the request entirely. |
-| `RequestHandlerExtra` metadata for passing `TaskContext` | Using `extra.metadata` (which is `HashMap<String, String>`) to pass a `TaskContext` requires serializing/deserializing the context, losing type safety and adding overhead. | Add `pub task_context: Option<TaskContext>` directly to `RequestHandlerExtra`. This is a field addition (non-breaking for struct construction via builder pattern) and provides compile-time type safety. |
-| Owner ID resolution fallback chain | The fallback to `"anonymous"` when no auth context exists creates a shared namespace where all unauthenticated users see each other's tasks. In multi-tenant deployments, this is a data leak. | Default `allow_anonymous` to `false` in `TaskSecurityConfig`. When anonymous is not allowed and no owner can be resolved, return an authentication error rather than using a shared anonymous identity. |
+| `WorkflowPromptHandler` + `TaskContext` | Passing `TaskContext` via `RequestHandlerExtra::metadata` (a `HashMap<String, String>`) which requires serialization and loses type safety | Add `task_context: Option<TaskContext>` as a proper typed field on a workflow-specific execution context, not smuggled through generic metadata |
+| `SequentialWorkflow` step execution in partial mode | Calling the existing `WorkflowPromptHandler::execute_step()` method which assumes all bindings are in-memory and available | Extract step execution into a standalone function that accepts either `ExecutionContext` or `TaskContext` for binding resolution, keeping the resolution mechanism pluggable |
+| `PromptHandler` return type for task association | Returning a `GetPromptResult` with no indication that a task was created -- the server framework has no way to auto-include the task ID in the response | Ensure `GetPromptResult._meta` includes `pmcp:task_id` so the client can discover the task association. The existing `_meta: Option<Map<String, Value>>` on `GetPromptResult` is sufficient -- do NOT modify the trait |
+| Existing middleware chain during partial execution | Executing tools during `prompts/get` without going through the middleware chain (auth, logging, rate limiting). The existing handler uses `MiddlewareExecutor` but the task-aware handler might bypass it for "simplicity." | Always use the `MiddlewareExecutor` for tool execution, even during partial workflow execution. Tools inside workflows are not special -- they must go through the same auth and logging as direct tool calls. |
+| Task store cleanup for workflow tasks | Treating workflow tasks the same as tool-augmented tasks for TTL and cleanup. Workflow tasks may span hours (user thinking time between steps), while tool tasks complete in seconds. | Use workflow-specific TTL defaults (e.g., 4 hours vs 1 hour for tool tasks). Consider making TTL configurable per workflow via `SequentialWorkflow::with_ttl()`. |
+| `DataSource::StepOutput` resolution from task variables | Assuming step outputs in task variables have the same shape as in-memory bindings. In-memory bindings store the raw `Value` from the tool result. Task variables may be serialized differently (e.g., string-encoded JSON if the variable schema uses string values). | Define a clear contract: step results stored in task variables use the same `serde_json::Value` representation as in-memory bindings. Test round-trip: in-memory result -> task variable -> resolution produces identical values. |
 
 ## Performance Traps
 
@@ -232,36 +362,46 @@ Patterns that work at small scale but fail as usage grows.
 
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| `InMemoryTaskStore` with unbounded HashMap | Memory usage grows without limit; OOM kills the process | Enforce `max_tasks_per_owner` AND a global `max_total_tasks` limit. Run `cleanup_expired` on a timer (e.g., every 60 seconds), not just lazily on access. | ~10K tasks in memory without cleanup |
-| `tasks/list` full table scan on DynamoDB | GSI query returns all tasks for an owner; response grows linearly with task count. Eventually exceeds DynamoDB's 1MB query response limit. | Enforce `limit` parameter with a reasonable default (e.g., 50). Always paginate. Add GSI sort key on `CREATED#timestamp` to enable time-range queries. | ~1K tasks per owner |
-| Per-variable `set_variable` calls from handler code | Each `TaskContext::set_variable()` call hits the store (DynamoDB write). A handler setting 10 variables makes 10 DynamoDB writes. | Provide `set_variables(HashMap)` for batch updates. Document that `set_variable` is for convenience/single updates; use `set_variables` for multi-variable updates. Internally buffer within a single handler call. | ~5 variables per tool call at scale |
-| DynamoDB `GetItem` on every `TaskContext::get_variable()` | Each variable read is a full item fetch from DynamoDB. Reading 5 variables in a handler makes 5 identical `GetItem` calls. | Cache the `TaskRecord` within `TaskContext` for the duration of a single handler invocation. Invalidate on write. This is safe because a single handler invocation is the only writer during its execution. | Immediately noticeable in Lambda cold starts |
+| Re-reading all task variables on every step during partial execution | Each step calls `task_ctx.variables()` which fetches the full task record from the store. For a 10-step workflow, that is 10 full reads of an increasingly large variable payload. | Read task variables ONCE at the start of partial execution. Cache in the `TaskExecutionContext`. Only write-through on `set_variable`. | ~5 steps with non-trivial variable payloads on DynamoDB |
+| Storing full tool results in task variables | A tool returning a 100KB JSON response stored as a variable. After 5 steps, the task has 500KB of variables, approaching the 1MB limit and slowing every read/write. | Store only the fields needed by subsequent steps, not the entire tool result. Use `DataSource::StepOutput { field: Some("id") }` to extract specific fields and store those. Document a "lean variables" pattern. | ~3-4 steps with large tool responses |
+| Prompt reply re-rendering for every `tasks/get` poll | If the client polls `tasks/get` and the server re-generates the prompt reply each time (re-executing the prompt handler to build the message trace), each poll becomes as expensive as the original `prompts/get` call. | The prompt reply is generated ONCE during `prompts/get` and the result is stored in the task variables or task result. Subsequent `tasks/get` returns the stored state without re-rendering. | Any polling frequency under 10 seconds |
+| Linear scan of completed steps to build prompt reply | Building the "completed steps" section of the prompt reply by iterating over all task variables and matching key patterns. As variables accumulate, this becomes O(n) string matching. | Use the typed `WorkflowProgress` schema with a `completed_steps: Vec<CompletedStep>` that is directly serialized/deserialized, not reconstructed from flat key scans. | ~20+ variables in a task |
 
 ## Security Mistakes
 
-Domain-specific security issues beyond general web security.
+Domain-specific security issues for the task-prompt bridge.
 
 | Mistake | Risk | Prevention |
 |---------|------|------------|
-| Task ID as sole access control (no owner enforcement) | Anyone who guesses or observes a task ID can read its variables, result, and status. UUIDv4 has 122 bits of entropy but is not a security boundary -- task IDs may appear in logs, URLs, or client-side storage. | Always enforce owner_id matching on every store operation. Task ID is for identification, owner_id is for authorization. Both are required for access. |
-| Storing sensitive data in task variables without encryption | Task variables are stored as plaintext JSON in DynamoDB. Variables like API keys, PII, or credentials are visible to anyone with DynamoDB table access (ops, support, compromised IAM roles). | Document that task variables are NOT a secure store. Recommend storing sensitive data in Secrets Manager/Parameter Store and putting only references in variables. Consider adding an optional `EncryptedVariableStore` wrapper that uses KMS envelope encryption. |
-| Session ID fallback for owner_id in multi-tenant environments | Session IDs are ephemeral and transport-specific. If the transport reconnects with a new session ID, the user loses access to their tasks. If session IDs are reused (e.g., sticky sessions), tasks leak across users. | Require OAuth `sub` or client ID for multi-tenant deployments. Session ID fallback should only be allowed in single-tenant mode (`TaskSecurityConfig::allow_session_fallback = false` by default). |
-| No rate limiting on `tasks/create` | A single client can create thousands of tasks, exhausting DynamoDB write capacity and storage. `max_tasks_per_owner` is enforced per owner, but checking the count requires a query on every create -- which itself consumes read capacity. | Implement token-bucket rate limiting at the middleware layer (before the store). Cache the task count per owner in memory with a TTL. Combine with DynamoDB's provisioned capacity alarms. |
+| Prompt reply leaking internal tool arguments in natural language | The prompt reply says "Call deploy_service with database_password='hunter2'". The LLM client includes this in its conversation context, potentially leaking it to the user or to other tools. | Never include sensitive argument values in the natural language portion of the prompt reply. Use argument references (`"use the config from step 2"`) not literal values. Store sensitive values in task variables accessed by reference, not inlined in messages. |
+| Task ID in prompt reply enables unauthorized task access | The prompt reply includes the task ID in plain text. A malicious user seeing the prompt output could use the task ID to access the task via `tasks/get` without proper authentication. | Task access is always gated by `owner_id` enforcement (already implemented in v1.0). The task ID alone is not sufficient for access. However, ensure the prompt reply makes this clear and does not encourage the client to share task IDs. |
+| Client-side tool calls bypassing workflow step ordering | The prompt reply lists steps 3, 4, 5 as remaining. The client calls step 5 first, skipping 3 and 4. If step 5 has side effects (e.g., deploying without approval), the workflow's intended sequencing is bypassed. | The `WorkflowStepMiddleware` should validate that the step being called is the NEXT expected step in the workflow, not an arbitrary step. Reject out-of-order tool calls with a clear error: "Step 'deploy' requires 'approve' to complete first." |
+| Workflow progress variables writable by the client | Task variables are a shared scratchpad. A malicious client could write `workflow.current_step_index = 99` to skip all remaining steps, or overwrite `step.validate.result` to inject false data. | Prefix server-managed workflow variables with a reserved namespace (e.g., `_workflow.`) and reject client-side writes to that namespace. Or make workflow progress variables read-only for clients (write-only for the server execution engine). |
+
+## UX Pitfalls
+
+Common user experience mistakes for workflow authors and LLM clients.
+
+| Pitfall | User Impact | Better Approach |
+|---------|-------------|-----------------|
+| Prompt reply says "call tool X" without explaining WHY or WHAT it accomplishes | LLM makes the tool call but does not understand its purpose, leading to poor argument choices or unnecessary calls | Include a description with each remaining step: "Call 'approve_deployment' to get human approval for deploying to production. This step requires user confirmation." |
+| No clear signal when all steps are done | Client keeps calling tools after the workflow is complete because the prompt didn't say "when done, the task will be marked complete" | Include explicit completion criteria in the prompt reply: "After completing all steps above, call `tasks/result` with task ID X to verify the workflow completed successfully." |
+| Workflow error shows task-internal error codes | Client receives `TaskError::InvalidTransition` which is meaningless to the LLM and user | Map task-internal errors to workflow-level messages: "Cannot call deploy_service because the approval step has not been completed yet." |
 
 ## "Looks Done But Isn't" Checklist
 
 Things that appear complete but are missing critical pieces.
 
-- [ ] **TaskStore trait:** Often missing atomic `complete_with_result` -- verify that status + result can be set in a single operation
-- [ ] **In-memory backend:** Often missing TTL enforcement timer -- verify that `cleanup_expired` is called periodically, not just lazily
-- [ ] **DynamoDB backend:** Often missing read-time expiration check -- verify that `get()` filters expired items even before DynamoDB TTL deletes them
-- [ ] **Owner isolation:** Often missing owner check on `set_result` and `get_result` -- verify ALL seven store methods enforce owner_id
-- [ ] **State machine tests:** Often missing concurrent transition tests -- verify two threads racing to complete the same task (only one should succeed)
-- [ ] **Variable merge semantics:** Often missing `Value::Null` deletion behavior -- verify that setting a variable to `null` removes it
-- [ ] **Error types:** Often missing `InvalidTransition` with current+attempted states -- verify the error carries enough context for debugging
-- [ ] **Middleware integration:** Often missing `ToolMiddleware` return type extension -- verify the middleware can short-circuit with `CreateTaskResult` without using error path
-- [ ] **Lambda compatibility:** Often missing test for "task execution completes before Lambda freezes" -- verify the execution model works for serverless
-- [ ] **Capability negotiation:** Often missing test for "client does not support tasks" -- verify graceful degradation when client lacks task capabilities
+- [ ] **Task-aware prompt handler:** Often missing fallback to full execution when no task store is configured -- verify that `TaskWorkflowPromptHandler` degrades gracefully to `WorkflowPromptHandler` behavior when tasks are not available
+- [ ] **Variable schema:** Often missing `schema_version` field -- verify that the variable format can be upgraded without breaking existing in-progress tasks
+- [ ] **Prompt reply:** Often missing `_meta` section -- verify that structured guidance is available for machine consumption, not just natural language
+- [ ] **Partial execution:** Often missing step failure handling -- verify that a mid-execution step failure produces a valid prompt reply with failure details, not an error
+- [ ] **Client continuation:** Often missing task ID propagation -- verify that remaining steps in the prompt reply include the task ID so the client can bind subsequent tool calls to the task
+- [ ] **Resumption:** Often missing "where did I leave off" logic -- verify that a client calling a remaining-step tool updates the workflow progress variables and the server can determine the next step
+- [ ] **Backward compatibility:** Often missing existing workflow tests run against new code -- verify that the entire existing workflow test suite passes WITHOUT modification
+- [ ] **Step ordering:** Often missing client-side step dependency validation -- verify that out-of-order tool calls are rejected with a clear error
+- [ ] **TTL:** Often missing workflow-specific TTL -- verify that workflow tasks don't expire during normal user think time (minutes to hours between steps)
+- [ ] **Cleanup:** Often missing orphaned workflow task reaping -- verify that workflow tasks stuck in `Working` for longer than TTL are eventually cleaned up
 
 ## Recovery Strategies
 
@@ -269,12 +409,12 @@ When pitfalls occur despite prevention, how to recover.
 
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| Non-atomic complete (zombie completed-no-result tasks) | MEDIUM | Write a one-time migration script that scans for `status=completed` tasks with no `result` attribute, and either transitions them to `failed` with a "recovery: result lost" message, or re-runs the original tool call if the request is stored. |
-| parking_lot deadlock in production | LOW | Restart the process. Then add `#![deny(clippy::await_holding_lock)]` and fix all violations. No data loss because tasks are in DynamoDB. |
-| serde(flatten) field capture (variables contain spec fields) | HIGH | Requires migrating all stored tasks: extract spec fields from `variables`, add them as proper fields, and re-serialize. Requires a schema version bump and migration tooling. |
-| Orphaned background tasks (zombies in Working status) | MEDIUM | Add a "stale task reaper" that transitions tasks stuck in `Working` for longer than `max_execution_time` to `Failed` with a "timeout: execution exceeded limit" message. Run as a scheduled Lambda or periodic timer. |
-| DynamoDB retry masking state transitions | LOW | Disable retries for conditional writes. Review CloudWatch metrics for `ConditionalCheckFailedException` counts. No data corruption occurs (the condition prevents invalid writes), but the wrong error is returned to clients. |
-| Spec drift breaking published crate | HIGH | If types were published as `1.x`, must follow semver and release `2.0` for breaking changes. If `0.x`, can release `0.next` with migration notes. Prevention (staying on `0.x`) is far cheaper than recovery. |
+| Existing workflows broken by handler modification | HIGH | Revert to original `WorkflowPromptHandler` (it must be untouched). If already merged and deployed, hotfix by restoring the original handler and creating the task-aware handler as a separate class. This is why the "separate handler" architecture is critical -- the original is always available as a fallback. |
+| Dual-write inconsistency (ephemeral has data, durable doesn't) | MEDIUM | For in-progress tasks, read task variables to determine which steps actually persisted. Re-execute from the last durably-persisted step. For completed tasks with missing variable data, mark affected steps as "unknown" and let the client re-do them. |
+| Prompt reply format doesn't work with a specific LLM client | LOW | Since both `_meta` (machine) and natural language (human) are present, clients that can't parse `_meta` still work via natural language. Only the `_meta` format needs updating for new clients, which is backward compatible. |
+| Variable schema migration needed | MEDIUM | Add a migration function that reads `schema_version` from task variables and upgrades the schema in-place. Run the migration lazily on first access (check version, upgrade if needed, write back). Never delete old schema support -- always support reading old versions. |
+| Client calling tools out of order | LOW | The `WorkflowStepMiddleware` rejects the call. The client receives a clear error and can retry with the correct step. No data corruption occurs because the middleware validates before executing. |
+| Task expired during user think time | LOW | Client receives a `TaskError::Expired` on the next tool call. Create a new task and re-execute the workflow from scratch. Consider extending default TTL for workflow tasks to minimize this. |
 
 ## Pitfall-to-Phase Mapping
 
@@ -282,41 +422,44 @@ How roadmap phases should address these pitfalls.
 
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| Non-atomic complete | Phase 1: Core Types + TaskStore trait | Trait has `complete_with_result` method; integration test simulates crash between status and result writes |
-| parking_lot deadlock | Phase 2: In-Memory Backend | `#![deny(clippy::await_holding_lock)]` in crate root; stress test with 100 concurrent tasks |
-| serde(flatten) field capture | Phase 1: Core Protocol Types | Deserialization test: JSON with unknown fields does NOT capture them as variables; variables live in `_meta` |
-| Orphaned background tasks | Phase 3: TaskMiddleware + Integration | Lambda execution model test; `JoinSet` tracking for long-running servers; shutdown drains all tasks |
-| DynamoDB conditional write retries | Phase 4: DynamoDB Backend | `ConditionalCheckFailedException` is NOT retried; error includes current state via `ReturnValuesOnConditionCheckFailure` |
-| Spec drift | Phase 1: Core Protocol Types | Wire types separate from domain types; crate version is `0.x`; spec version pinned in CI |
-| Owner isolation gaps | Phase 2: Security Tests | Property test: random owner pairs never cross boundaries on any of the 7 store methods |
-| Variable size limits inconsistent | Phase 2: In-Memory Backend | In-memory store enforces same configurable limit as DynamoDB; test that 500KB variable is rejected by both |
-| DynamoDB TTL stale reads | Phase 4: DynamoDB Backend | Test that `get()` returns `NotFound` for an expired task even before DynamoDB TTL deletes the item |
-| RequestHandlerExtra metadata type safety | Phase 3: Server Integration | `TaskContext` is a typed field on `RequestHandlerExtra`, not smuggled through `HashMap<String, String>` |
+| Handler modification breaking existing workflows | Phase 1: Architecture | `WorkflowPromptHandler` source file has zero diff; all existing workflow tests pass unchanged |
+| Dual-write inconsistency | Phase 2: Partial Execution Engine | Integration test: inject `TaskStore::set_variables` failure mid-execution; verify prompt reply shows partial progress correctly |
+| Prompt reply too rigid for LLMs | Phase 3: Structured Prompt Reply | Test with two different clients (Claude Code + simple test client); both correctly follow remaining steps |
+| Variable schema as implicit API | Phase 1: Variable Schema Design | All variable keys defined in `WorkflowProgress` struct; no string literal keys in production code outside the schema module |
+| Pause logic becoming second engine | Phase 1: WorkflowStep extension | `StepExecution` enum on `WorkflowStep`; pause loop is a simple match on `step.execution()` |
+| Error during partial execution | Phase 2: Partial Execution Engine | Step failure produces valid prompt reply; task stays in `Working` not `Failed`; failure details in both `_meta` and messages |
+| Client continuation disconnected from task | Phase 3: Client Continuation | Tool calls with `_task_id` argument update workflow progress variables; verified by integration test |
+| Validation not accounting for partial execution | Phase 2: Validation Extension | `validate_for_partial_execution()` catches dependencies between two client-side steps; test case for this specific scenario |
+| Workflow progress variables writable by client | Phase 3: Security | `_workflow.` prefix variables rejected on client write; integration test attempts write and verifies rejection |
+| Existing prompt handler return type | Phase 1: Architecture | `GetPromptResult._meta` used for task association; no trait modification needed |
 
 ## Sources
 
-- [Common mistakes with Async Rust](https://www.elias.sh/posts/common_mistakes_with_async_rust) -- blocking in async, cancellation, lock pitfalls
-- [Rust Concurrency: Common Async Pitfalls Explained](https://leapcell.medium.com/rust-concurrency-common-async-pitfalls-explained-8f80d90b9a43) -- runtime lock-in, recursive futures
-- [Cancellation and Async State Machines](https://theincredibleholk.org/blog/2023/11/08/cancellation-async-state-machines/) -- drop semantics during state transitions
-- [Tokio Shared State tutorial](https://tokio.rs/tokio/tutorial/shared-state) -- parking_lot vs tokio::sync guidance
-- [Tokio RwLock Deadlock Mystery](https://www.techedubyte.com/tokio-rwlock-deadlock-blockon-hangs/) -- block_on causing silent hangs
-- [parking_lot RwLock docs](https://amanieu.github.io/parking_lot/parking_lot/struct.RwLock.html) -- recursive read lock deadlock warning
-- [Understanding DynamoDB Condition Expressions](https://www.alexdebrie.com/posts/dynamodb-condition-expressions/) -- conditional writes for state machines
-- [Handle conditional write errors in high concurrency](https://aws.amazon.com/blogs/database/handle-conditional-write-errors-in-high-concurrency-scenarios-with-amazon-dynamodb/) -- ReturnValuesOnConditionCheckFailure pattern
-- [Using Improved Conditional Writes in DynamoDB](https://aws.amazon.com/blogs/developer/using-improved-conditional-writes-in-dynamodb/) -- 2024 improvements
-- [Large object storage strategies for DynamoDB](https://aws.amazon.com/blogs/database/large-object-storage-strategies-for-amazon-dynamodb/) -- 400KB limit workarounds
-- [DynamoDB TTL docs](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/howitworks-ttl.html) -- 48-hour deletion delay
-- [Analysis of DynamoDB's TTL delay](https://medium.com/@michabahr/analysis-of-dynamodbs-ttl-delay-de878e2c6d47) -- real-world TTL behavior
-- [Cargo Workspace Feature Unification Pitfall](https://nickb.dev/blog/cargo-workspace-and-the-feature-unification-pitfall/) -- feature flag cross-contamination
-- [serde flatten issues (serde-rs/serde#1346)](https://github.com/serde-rs/serde/issues/1346) -- flatten + map interaction
-- [Rust tokio task cancellation patterns](https://cybernetist.com/2024/04/19/rust-tokio-task-cancellation-patterns/) -- JoinHandle drop behavior
-- [tokio-rs/tokio#1830: JoinHandle cancel on drop](https://github.com/tokio-rs/tokio/issues/1830) -- why dropped handles don't cancel
-- [MCP 2025-11-25 spec changelog](https://modelcontextprotocol.io/specification/2025-11-25/changelog) -- breaking changes history
-- [MCP 2025-11-25 Tasks announcement](https://workos.com/blog/mcp-2025-11-25-spec-update) -- experimental status
-- [Google Cloud Tasks common pitfalls](https://cloud.google.com/tasks/docs/common-pitfalls) -- duplicate execution, ordering guarantees
-- [async_trait crate docs](https://docs.rs/async-trait) -- Send bounds and dyn compatibility
-- [Dyn async traits, part 10](https://smallcultfollowing.com/babysteps/blog/2025/03/24/box-box-box/) -- 2025 language evolution for async traits
+- [State Machine Executor Part 2 -- Fault Tolerance](https://blog.adamfurmanek.pl/2025/10/13/state-machine-executor-part-2/) -- serialization pitfalls in paused state machines, backward/forward compatibility
+- [Towards Serialization-free State Transfer in Serverless Workflows](https://doi.org/10.1145/3725986) -- performance costs of state serialization in workflow engines
+- [QCon SF: Database-Backed Workflow Orchestration](https://www.infoq.com/news/2025/11/database-backed-workflow/) -- challenges in durable workflow state management
+- [Using a Rust async function as a polled state machine](https://jeffmcbride.net/blog/2025/05/16/rust-async-functions-as-state-machines/) -- Rust async state machine fundamentals
+- [Serde async state machine (Rust Forum)](https://users.rust-lang.org/t/serde-async-state-machine/99648) -- challenges serializing async state
+- [Rust Concurrency: Common Async Pitfalls](https://leapcell.medium.com/rust-concurrency-common-async-pitfalls-explained-8f80d90b9a43) -- blocking in async, runtime considerations
+- [Future proofing - Rust API Guidelines](https://rust-lang.github.io/api-guidelines/future-proofing.html) -- sealed traits, non_exhaustive, backward compatible changes
+- [RFC 1105: API Evolution](https://rust-lang.github.io/rfcs/1105-api-evolution.html) -- what constitutes a breaking change in Rust
+- [Effective Rust: Default implementations](https://effective-rust.com/default-impl.html) -- minimizing required trait methods for evolution
+- [MCP 2025-11-25 Specification](https://modelcontextprotocol.io/specification/2025-11-25) -- Tasks primitive, prompt semantics
+- [MCP's Next Phase: November 2025 Spec](https://medium.com/@dave-patten/mcps-next-phase-inside-the-november-2025-specification-49f298502b03) -- async tasks, prompt-driven workflows
+- [A Year of MCP: 2025 Review](https://www.pento.ai/blog/a-year-of-mcp-2025-review) -- MCP ecosystem evolution, client diversity
+- [MCP 2025-11-25 Spec Update (WorkOS)](https://workos.com/blog/mcp-2025-11-25-spec-update) -- experimental tasks status
+- [MCP Tool Descriptions Are Smelly (arxiv)](https://arxiv.org/html/2602.14878v1) -- tool description quality impacts on LLM behavior
+- [LLM Limitations: When Models Make Mistakes](https://learnprompting.org/docs/basics/pitfalls) -- structured prompt interpretation failure modes
+- [MIT: Shortcoming makes LLMs less reliable](https://news.mit.edu/2025/shortcoming-makes-llms-less-reliable-1126) -- LLM instruction following reliability
+- [Palantir: Best practices for LLM prompt engineering](https://www.palantir.com/docs/foundry/aip/best-practices-prompt-engineering) -- structuring prompts for reliable tool use
+- Codebase analysis: `src/server/workflow/prompt_handler.rs` (WorkflowPromptHandler, ExecutionContext)
+- Codebase analysis: `src/server/workflow/sequential.rs` (SequentialWorkflow, validation)
+- Codebase analysis: `src/server/workflow/workflow_step.rs` (WorkflowStep, DataSource, guidance)
+- Codebase analysis: `crates/pmcp-tasks/src/context.rs` (TaskContext, typed variable accessors)
+- Codebase analysis: `crates/pmcp-tasks/src/router.rs` (TaskRouterImpl, task-augmented tool calls)
+- Codebase analysis: `crates/pmcp-tasks/src/store/mod.rs` (TaskStore trait, atomicity guarantees)
+- Codebase analysis: `crates/pmcp-tasks/src/domain/record.rs` (TaskRecord, variable injection)
 
 ---
-*Pitfalls research for: MCP Tasks implementation in PMCP SDK (Rust async durable task system)*
+*Pitfalls research for: Task-prompt bridge -- partial execution and client continuation for PMCP SDK v1.1*
 *Researched: 2026-02-21*

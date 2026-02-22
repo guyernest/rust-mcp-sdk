@@ -1,478 +1,612 @@
-# Architecture Patterns
+# Architecture Research: Task-Prompt Bridge Integration
 
-**Domain:** Durable task system for async Rust protocol SDK (MCP Tasks for PMCP)
+**Domain:** Task-aware workflow prompts with partial execution for PMCP SDK
 **Researched:** 2026-02-21
-**Confidence:** HIGH (based on existing codebase analysis, official MCP Tasks spec, and established Rust patterns)
+**Confidence:** HIGH (based entirely on existing codebase analysis -- all components already exist, this research maps how they connect)
 
-## Recommended Architecture
+## System Overview: Current vs. Proposed
 
-A **layered crate** (`pmcp-tasks`) within the existing workspace, following the dependency inversion principle: upper layers depend on trait abstractions defined in lower layers. The crate integrates with the host SDK through two narrow interfaces: a `ToolMiddleware` implementation for intercepting task-augmented `tools/call` requests, and a `TaskHandler` for routing `tasks/*` JSON-RPC methods.
-
-```
-                          External (pmcp crate)
-                    +---------------------------------+
-                    |  ServerCore request router      |
-                    |  ServerCoreBuilder              |
-                    |  ToolMiddlewareChain            |
-                    +-----------+-----+---------------+
-                                |     |
-              +-----------------+     +------------------+
-              |                                          |
-              v                                          v
-    +--------------------+                  +------------------------+
-    | TaskMiddleware     |                  |  TaskHandler           |
-    | (ToolMiddleware    |                  |  (tasks/get, result,   |
-    |  impl, priority 5) |                  |   list, cancel)        |
-    +--------+-----------+                  +-----------+------------+
-             |                                          |
-             +-------------------+----------------------+
-                                 |
-                                 v
-                    +------------------------+
-                    |  Layer 3: TaskContext   |  <-- handler-facing API
-                    |  (get/set variables,   |
-                    |   status transitions)  |
-                    +-----------+------------+
-                                |
-                                v
-                    +------------------------+
-                    |  Layer 2: TaskStore    |  <-- storage trait
-                    |  (async trait: create, |
-                    |   get, update, list,   |
-                    |   cancel, cleanup)     |
-                    +-----------+------------+
-                       |                  |
-                       v                  v
-             +----------------+  +------------------+
-             | InMemoryTask   |  | DynamoDbTask     |
-             | Store          |  | Store            |
-             | (always)       |  | (feature-gated)  |
-             +----------------+  +------------------+
-                                          ^
-                                          |
-                    +------------------------+
-                    |  Layer 1: Protocol     |  <-- types only
-                    |  Types                 |
-                    |  (Task, TaskStatus,    |
-                    |   CreateTaskResult,    |
-                    |   capabilities, etc.)  |
-                    +------------------------+
-```
-
-### Component Boundaries
-
-| Component | Responsibility | Communicates With | Crate/Module |
-|-----------|---------------|-------------------|--------------|
-| **Protocol Types** (Layer 1) | Serde-serializable types matching MCP 2025-11-25 spec. Task, TaskStatus, CreateTaskResult, TaskParams, capabilities, error codes. Zero business logic. | All other layers (data structures only) | `pmcp-tasks/src/types.rs`, `capabilities.rs`, `error.rs` |
-| **TaskStore trait** (Layer 2) | Async trait defining CRUD + state machine operations on tasks. Owns the contract for atomic status transitions, owner enforcement, TTL, and variable merge semantics. | Implemented by backends; consumed by TaskContext and TaskHandler | `pmcp-tasks/src/store.rs` |
-| **TaskContext** (Layer 3) | Ergonomic handle passed to tool handlers. Wraps `Arc<dyn TaskStore>` with a pinned `task_id` and `owner_id`. Exposes `get_variable`, `set_variable`, `require_input`, `fail`, `complete`. | TaskStore (reads/writes), tool handlers (passed to them) | `pmcp-tasks/src/context.rs` |
-| **InMemoryTaskStore** (Layer 4a) | `HashMap<String, TaskRecord>` behind `parking_lot::RwLock`. Validates state transitions inline. Lazy TTL cleanup on read. | TaskStore trait (implements it) | `pmcp-tasks/src/backends/memory.rs` |
-| **DynamoDbTaskStore** (Layer 4b) | DynamoDB client with conditional writes for atomic transitions. Uses native DynamoDB TTL + read-time expiry check. GSI for owner-scoped listing. | TaskStore trait (implements it), AWS SDK | `pmcp-tasks/src/backends/dynamodb.rs` |
-| **TaskHandler** | Routes `tasks/get`, `tasks/result`, `tasks/list`, `tasks/cancel` JSON-RPC methods. Resolves owner ID from `RequestHandlerExtra`. Delegates to TaskStore. | TaskStore, RequestHandlerExtra (owner resolution), ServerCore (registered as handler) | `pmcp-tasks/src/handler.rs` |
-| **TaskMiddleware** | `ToolMiddleware` implementation that intercepts `tools/call` requests containing `params.task`. Creates task in store, returns `CreateTaskResult` immediately, spawns background execution. | TaskStore, ToolMiddlewareChain (registered into), RequestHandlerExtra (owner + metadata injection) | `pmcp-tasks/src/middleware.rs` |
-| **TaskSecurityConfig** | Configuration struct: max tasks per owner, max TTL, default TTL, allow_anonymous. Validated at construction time. | TaskStore backends (enforced there), ServerCoreBuilder (configured there) | `pmcp-tasks/src/security.rs` |
-
-### Data Flow
-
-#### Flow 1: Task-Augmented tools/call (create + background execute)
+### Current Architecture (v1.0) -- Two Disconnected Paths
 
 ```
-Client                          ServerCore                    TaskMiddleware              TaskStore         ToolHandler
-  |                                |                              |                        |                 |
-  |-- tools/call {task: {ttl}} --> |                              |                        |                 |
-  |                                |-- process_request ---------> |                        |                 |
-  |                                |                              |-- resolve_owner_id()   |                 |
-  |                                |                              |-- store.create() ----> |                 |
-  |                                |                              |<-- TaskRecord --------- |                 |
-  |                                |                              |                        |                 |
-  |                                |                              |   [return CreateTaskResult immediately]   |
-  |<---- CreateTaskResult ---------|<-----------------------------|                        |                 |
-  |                                |                              |                        |                 |
-  |                                |                              |-- tokio::spawn ------->|                 |
-  |                                |                              |   [background task]    |                 |
-  |                                |                              |                        |-- call_tool --> |
-  |                                |                              |                        |                 |
-  |                                |                              |                        |   [tool uses    |
-  |                                |                              |                        |    TaskContext   |
-  |                                |                              |                        |    to r/w vars]  |
-  |                                |                              |                        |                 |
-  |                                |                              |                        |<-- result ------|
-  |                                |                              |                        |                 |
-  |                                |                              |-- store.set_result --> |                 |
-  |                                |                              |-- store.update_status  |                 |
-  |                                |                              |   (completed/failed)   |                 |
+PATH 1: prompts/get                    PATH 2: tools/call with task
+
+  prompts/get request                    tools/call {task: {ttl: 60000}}
+          |                                      |
+          v                                      v
+  +---------------------------+          +---------------------------+
+  | WorkflowPromptHandler     |          | ServerCore                |
+  | implements PromptHandler  |          | detects task field        |
+  +---------------------------+          +---------------------------+
+          |                                      |
+          | for each step:                       v
+          |   resolve -> execute -> bind  +---------------------------+
+          v                              | Arc<dyn TaskRouter>       |
+  +---------------------------+          | (trait in pmcp core)      |
+  | ExecutionContext           |          +---------------------------+
+  | bindings: HashMap<        |                  |
+  |   BindingName, Value>     |                  v
+  +---------------------------+          +---------------------------+
+          |                              | TaskRouterImpl            |
+          v                              | (in pmcp-tasks crate)     |
+  GetPromptResult {                      +---------------------------+
+    messages: [PromptMessage]                    |
+    // full conversation trace                   v
+  }                                      +---------------------------+
+                                         | TaskStore                 |
+                                         | InMemoryTaskStore         |
+                                         +---------------------------+
+                                                 |
+                                                 v
+                                         CreateTaskResult { task }
 ```
 
-**Key design decision:** The middleware returns `CreateTaskResult` synchronously and spawns a `tokio::spawn` for the actual tool execution. This decouples the response time from tool execution time. The spawned task holds an `Arc<dyn TaskStore>` and writes the result when complete.
+These paths are completely disconnected. Workflows execute all steps during `prompts/get` and return a full trace. Tasks manage long-running `tools/call` operations. The v1.1 bridge connects them.
 
-#### Flow 2: Client polls with tasks/get
-
-```
-Client                          ServerCore                    TaskHandler               TaskStore
-  |                                |                              |                        |
-  |-- tasks/get {taskId} -------> |                              |                        |
-  |                                |-- route to TaskHandler ----> |                        |
-  |                                |                              |-- resolve_owner_id()   |
-  |                                |                              |-- store.get() -------> |
-  |                                |                              |<-- TaskRecord --------- |
-  |                                |                              |-- convert to Task      |
-  |<---- Task (status, etc.) -----|<-----------------------------|                        |
-```
-
-#### Flow 3: Client retrieves result with tasks/result
+### Proposed Architecture (v1.1 Task-Prompt Bridge)
 
 ```
-Client                          ServerCore                    TaskHandler               TaskStore
-  |                                |                              |                        |
-  |-- tasks/result {taskId} ----> |                              |                        |
-  |                                |-- route to TaskHandler ----> |                        |
-  |                                |                              |-- resolve_owner_id()   |
-  |                                |                              |-- store.get_result() -> |
-  |                                |                              |<-- Value (or NotReady) |
-  |                                |                              |                        |
-  |                                |                              |   [if NotReady: block  |
-  |                                |                              |    until terminal, per  |
-  |                                |                              |    spec requirement]    |
-  |                                |                              |                        |
-  |<---- CallToolResult + meta ---|<-----------------------------|                        |
+  prompts/get request
+          |
+          v
+  +------------------------------------+
+  | WorkflowPromptHandler              |
+  | (MODIFIED: optional task_router)   |
+  +------------------------------------+
+          |
+          | 1. Create task via TaskRouter.create_workflow_task()
+          | 2. For each step:
+          |    a. resolve params from ExecutionContext
+          |    b. CAN execute? yes: execute, bind, sync to task vars
+          |    c. CAN execute? no:  record remaining steps, BREAK
+          | 3. Build structured reply with task_id + step guidance
+          |
+          v
+  +--------------------+     +---------------------------+
+  | ExecutionContext    |     | Arc<dyn TaskRouter>       |
+  | (local bindings,   | --> |  .set_task_variables()    |
+  |  unchanged type)   |     |  syncs bindings to task   |
+  +--------------------+     +---------------------------+
+          |                              |
+          v                              v
+  GetPromptResult {              +---------------------------+
+    messages: [                  | TaskStore                 |
+      ...executed steps...,     |  variables: {             |
+      ...structured guidance    |    "wf.goal": "...",      |
+         with task_id,          |    "wf.steps.0.status":   |
+         completed steps,       |      "completed",         |
+         remaining steps...     |    "wf.steps.1.status":   |
+    ]                           |      "pending",           |
+  }                             |    "wf.steps.1.tool":     |
+                                |      "provision_infra"    |
+                                |  }                        |
+                                +---------------------------+
+                                         |
+                                         v
+                                Client reads task vars via tasks/get,
+                                follows step guidance,
+                                calls tools directly,
+                                polls tasks/get for progress
 ```
 
-**Spec note:** `tasks/result` MUST block until terminal status. For Lambda (stateless), this means polling-only behavior with immediate return and `NotReady` error. For long-running servers, the handler can await a `tokio::sync::watch` channel that the background task signals on completion.
+## Integration Points: New vs. Modified vs. Unchanged
 
-#### Flow 4: Task variable accumulation across workflow steps
+### New Components
 
-```
-Workflow Step 1                    TaskContext                   TaskStore
-  |                                   |                            |
-  |-- ctx.set_variable("region", ...) |                            |
-  |                                   |-- store.set_variables() -> |
-  |                                   |                            |
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| 3 new methods on `TaskRouter` trait | `src/server/tasks.rs` | `create_workflow_task`, `set_task_variables`, `complete_workflow_task` -- bridge pmcp core to pmcp-tasks without circular dependency |
+| Structured reply builder | `src/server/workflow/prompt_handler.rs` (internal to handler) | Constructs the final assistant message with task_id, completed/remaining steps |
+| Workflow variable schema | Convention only (no new type) | `wf.goal`, `wf.steps.{idx}.status`, etc. -- flat keys with `wf.` prefix |
 
-Workflow Step 2                    TaskContext                   TaskStore
-  |                                   |                            |
-  |-- ctx.get_variable("region") ---> |                            |
-  |                                   |-- store.get() -----------> |
-  |                                   |<-- record.variables ------- |
-  |<-- Some("us-east-1") ------------|                            |
-  |                                   |                            |
-  |-- ctx.set_variable("vpc_id", ..)  |                            |
-  |                                   |-- store.set_variables() -> |
-```
+### Modified Components
 
-### Integration Points with Existing SDK
+| Component | File | Change |
+|-----------|------|--------|
+| `TaskRouter` trait | `src/server/tasks.rs` | +3 methods with default impls returning errors (non-breaking) |
+| `TaskRouterImpl` | `crates/pmcp-tasks/src/router.rs` | Implement 3 new methods delegating to `TaskStore` |
+| `WorkflowPromptHandler` | `src/server/workflow/prompt_handler.rs` | +`task_router: Option<Arc<dyn TaskRouter>>` field; task creation on entry; binding-to-variable sync; structured reply |
+| `SequentialWorkflow` | `src/server/workflow/sequential.rs` | +`task_support: bool` field with builder method (opt-in) |
+| `ServerCoreBuilder` | `src/server/builder.rs` | `prompt_workflow()` passes `task_router.clone()` to handler when configured |
 
-#### 1. ServerCoreBuilder: Adding task support
+### Unchanged Components (and Why)
 
-The builder gains new methods, but existing API surface is unchanged:
+| Component | Why Unchanged |
+|-----------|---------------|
+| `TaskRouter` existing 7 methods | Task CRUD routing is complete; bridge creates tasks through new methods |
+| `TaskStore` trait | Already has `create`, `set_variables`, `complete_with_result` -- all ops the bridge needs |
+| `TaskContext` (pmcp-tasks) | Bridge uses `TaskRouter` trait boundary, not `TaskContext` directly (avoids circular dep) |
+| `DataSource` enum | `PromptArg`, `StepOutput`, `Constant` resolve from `ExecutionContext` which is unchanged |
+| `ExecutionContext` struct | Still stores bindings during execution; sync to task vars is a post-binding side effect |
+| `MiddlewareExecutor` trait | Tool execution path is unchanged; steps still execute through middleware |
+| `ServerCore` request routing | `prompts/get` already routes to `PromptHandler`; `tasks/*` already routes to `TaskRouter` |
+| `InMemoryTaskStore` | No new store operations needed; existing methods cover all bridge requirements |
+| `WorkflowStep` | Step definition is unchanged; the handler decides whether to execute or defer |
 
+## Detailed Design: Where Things Happen
+
+### 1. Task Creation in WorkflowPromptHandler
+
+**Location:** `WorkflowPromptHandler::handle()`, before the step loop.
+
+**Current flow (prompt_handler.rs lines 757-774):**
 ```rust
-// New builder method (additive, non-breaking)
-ServerCoreBuilder::new()
-    .name("my-server")
-    .version("1.0.0")
-    .tool("slow_analysis", AnalysisTool)
-    .task_store(Arc::new(InMemoryTaskStore::new()))      // NEW
-    .task_security(TaskSecurityConfig::default())          // NEW
-    .build()
-```
-
-Internally, `task_store` does three things:
-1. Creates a `TaskMiddleware` and adds it to the `ToolMiddlewareChain` at priority 5 (before auth at 10)
-2. Creates a `TaskHandler` and registers routes for `tasks/get`, `tasks/result`, `tasks/list`, `tasks/cancel`
-3. Adds task capabilities to `ServerCapabilities.experimental` (or `.tasks` post-stabilization)
-
-#### 2. ClientRequest enum: Routing new methods
-
-The `ClientRequest` enum in `src/types/protocol.rs` needs four new variants:
-
-```rust
-pub enum ClientRequest {
-    // ... existing variants ...
-    #[serde(rename = "tasks/get")]
-    TaskGet(TaskGetParams),
-    #[serde(rename = "tasks/result")]
-    TaskResult(TaskResultParams),
-    #[serde(rename = "tasks/list")]
-    TaskList(TaskListParams),
-    #[serde(rename = "tasks/cancel")]
-    TaskCancel(TaskCancelParams),
+async fn handle(&self, args: HashMap<String, String>, extra: RequestHandlerExtra)
+    -> Result<GetPromptResult>
+{
+    let mut messages = Vec::new();
+    let mut execution_context = ExecutionContext::new();
+    messages.push(self.create_user_intent(&args));
+    messages.push(self.create_assistant_plan()?);
+    // ... step loop (lines 785-961) ...
+    Ok(GetPromptResult { description, messages })
 }
 ```
 
-**This is the one place where the core pmcp crate MUST change.** The `ClientRequest` enum must know how to deserialize these methods. The actual handling logic stays in `pmcp-tasks`.
+**Proposed flow:**
+```rust
+async fn handle(&self, args: HashMap<String, String>, extra: RequestHandlerExtra)
+    -> Result<GetPromptResult>
+{
+    let mut messages = Vec::new();
+    let mut execution_context = ExecutionContext::new();
 
-**Alternative (to avoid core changes):** Use `serde_json::Value` catch-all with `#[serde(other)]` in the enum, and route unknown methods through a generic handler extension point. This keeps the enum stable but adds complexity. The design doc favors direct enum variants because the task methods are part of the official MCP spec, not a custom extension.
+    // NEW: Create task if task_router configured AND workflow has task_support
+    let task_state = if self.workflow.task_support() {
+        if let Some(ref router) = self.task_router {
+            let owner_id = self.resolve_owner(&extra);
+            let task_json = router.create_workflow_task(
+                &owner_id,
+                self.workflow.name(),
+                self.workflow.steps().len(),
+                serde_json::to_value(&args).unwrap_or(Value::Null),
+            ).await?;
+            let task_id = task_json["taskId"].as_str()
+                .ok_or_else(|| crate::Error::internal("missing taskId"))?
+                .to_string();
+            Some(WorkflowTaskState { router: router.clone(), task_id, owner_id })
+        } else { None }
+    } else { None };
 
-#### 3. ToolMiddleware: Where TaskMiddleware plugs in
+    messages.push(self.create_user_intent(&args));
+    messages.push(self.create_assistant_plan()?);
+    // ... step loop with task_state passed through ...
+    // ... structured reply construction ...
+    Ok(GetPromptResult { description, messages })
+}
+```
 
-The existing `ToolMiddleware` trait already has the right shape:
+**Why `TaskRouter`, not `TaskStore` directly:** The `WorkflowPromptHandler` lives in `pmcp` core. `TaskStore` is defined in `pmcp-tasks`. Using `TaskStore` directly would create a circular dependency (`pmcp-tasks` depends on `pmcp`). The `TaskRouter` trait in `pmcp` core uses `serde_json::Value` to avoid this, same as the existing v1.0 design for `handle_task_call`.
+
+### 2. TaskRouter Trait Extension (Minimal)
+
+**Current trait (src/server/tasks.rs):** 7 methods for tools/call task lifecycle + owner resolution + capabilities.
+
+**3 new methods:**
 
 ```rust
 #[async_trait]
-pub trait ToolMiddleware: Send + Sync {
-    async fn on_request(
+pub trait TaskRouter: Send + Sync {
+    // ... existing 7 methods unchanged ...
+
+    /// Create a task for a workflow prompt execution.
+    ///
+    /// Returns a JSON object with at minimum { "taskId": "..." }.
+    /// Called by WorkflowPromptHandler on prompts/get entry.
+    async fn create_workflow_task(
         &self,
-        tool_name: &str,
-        args: &mut Value,
-        extra: &mut RequestHandlerExtra,
-        context: &ToolContext,
-    ) -> Result<()>;
-    // ...
-}
-```
-
-`TaskMiddleware` implements this. In `on_request`, it checks `args["task"]`. If present, it:
-1. Extracts `TaskParams` from `args.task`
-2. Creates a task in the store
-3. Injects `TaskContext` into `extra.metadata` (serialized as a metadata key)
-4. Returns `Err` with a special "short-circuit" signal that the middleware executor interprets as "return this response instead of calling the tool"
-
-**Problem:** The current `ToolMiddleware::on_request` returns `Result<()>`. There is no mechanism for a middleware to short-circuit with a custom response value. This needs a design decision:
-
-**Option A (recommended):** Add a `MiddlewareResult` enum:
-```rust
-pub enum MiddlewareAction {
-    Continue,                      // proceed to next middleware / tool
-    ShortCircuit(Value),           // return this value as the response
-}
-```
-
-**Option B:** Have the middleware spawn the background task, set the result in `extra.metadata`, and have the core check for it after middleware completes.
-
-**Option C:** Don't use the middleware chain at all. Instead, check for `task` in `ServerCore::handle_call_tool` before dispatching to the tool handler, and delegate to `TaskHandler` if present.
-
-Recommendation: **Option C** for initial implementation. It is simpler, avoids middleware trait changes, and keeps the task interception logic co-located. The design doc's `TaskMiddleware` concept is the logical boundary; the implementation mechanism can be a direct check in `handle_call_tool` rather than a formal `ToolMiddleware` impl. Revisit middleware integration once the base works.
-
-#### 4. RequestHandlerExtra: Owner resolution
-
-Owner ID resolution uses fields already present on `RequestHandlerExtra`:
-
-```rust
-pub fn resolve_owner_id(extra: &RequestHandlerExtra) -> String {
-    // 1. OAuth subject (highest trust)
-    if let Some(auth_ctx) = &extra.auth_context {
-        return auth_ctx.subject.clone();
+        owner_id: &str,
+        workflow_name: &str,
+        step_count: usize,
+        prompt_args: Value,
+    ) -> Result<Value> {
+        // Default impl: tasks not supported
+        Err(crate::Error::internal("task router does not support workflow tasks"))
     }
-    // 2. Client ID from auth info
-    if let Some(auth_info) = &extra.auth_info {
-        if let Some(client_id) = &auth_info.client_id {
-            return client_id.clone();
-        }
+
+    /// Set variables on a task (used by workflow handler to sync step results).
+    ///
+    /// Variables is a JSON object of flat key-value pairs.
+    async fn set_task_variables(
+        &self,
+        task_id: &str,
+        owner_id: &str,
+        variables: Value,
+    ) -> Result<()> {
+        let _ = (task_id, owner_id, variables);
+        Err(crate::Error::internal("task router does not support variable sync"))
     }
-    // 3. Session ID (fallback)
-    extra.session_id.clone().unwrap_or_else(|| "anonymous".to_string())
-}
-```
 
-No changes to `RequestHandlerExtra` required. The auth context fields (`auth_context`, `auth_info`, `session_id`) already carry what we need.
-
-## Patterns to Follow
-
-### Pattern 1: Layered Dependency Inversion
-
-**What:** Each layer depends only on the layer below it via traits, never on concrete implementations. Layer 1 (types) has zero dependencies on business logic. Layer 2 (store trait) defines the contract. Layer 3 (context) consumes the trait. Layer 4 (backends) implements the trait.
-
-**When:** Always, for all components in `pmcp-tasks`.
-
-**Why:** This is the standard Rust crate layering pattern (used by hashbrown, tauri-core, embedded-storage). It enables:
-- Testing with mock stores
-- Swapping backends without changing handler code
-- Compiling without optional backends (feature flags work cleanly)
-
-**Example:**
-```rust
-// Layer 2: trait (no concrete backend knowledge)
-#[async_trait]
-pub trait TaskStore: Send + Sync {
-    async fn create(&self, owner_id: &str, ...) -> Result<TaskRecord, TaskError>;
-}
-
-// Layer 3: consumes trait (no concrete backend knowledge)
-pub struct TaskContext {
-    store: Arc<dyn TaskStore>,  // dynamic dispatch, backend-agnostic
-    task_id: String,
-    owner_id: String,
-}
-
-// Layer 4: implements trait
-pub struct InMemoryTaskStore { ... }
-impl TaskStore for InMemoryTaskStore { ... }
-```
-
-### Pattern 2: State Machine Enforcement at the Store Level
-
-**What:** The `TaskStore` trait contract requires atomic status transitions with validation. Backends enforce the state machine invariant, not callers.
-
-**When:** Every status update.
-
-**Why:** Prevents invalid transitions regardless of how many code paths update status. DynamoDB uses `ConditionExpression` for atomicity; in-memory uses lock-protected checks.
-
-**Example:**
-```rust
-// Store validates internally - caller just says "go to completed"
-async fn update_status(&self, task_id: &str, owner_id: &str,
-    new_status: TaskStatus, message: Option<String>
-) -> Result<TaskRecord, TaskError> {
-    let record = self.get_internal(task_id)?;
-    if !record.task.status.can_transition_to(&new_status) {
-        return Err(TaskError::InvalidTransition {
-            from: record.task.status,
-            to: new_status,
-        });
+    /// Complete a workflow task with the structured result.
+    async fn complete_workflow_task(
+        &self,
+        task_id: &str,
+        owner_id: &str,
+        result: Value,
+    ) -> Result<()> {
+        let _ = (task_id, owner_id, result);
+        Err(crate::Error::internal("task router does not support workflow completion"))
     }
-    // ... perform update atomically
 }
 ```
 
-### Pattern 3: Owner Binding as a Store-Level Concern
+**Non-breaking:** Default implementations return errors. Existing `TaskRouterImpl` continues to compile without changes until Phase 2 implements the new methods.
 
-**What:** Owner enforcement is baked into the store trait. Every operation takes `owner_id`. The store is responsible for rejecting cross-owner access.
+**Value-based interface:** Same rationale as existing methods -- avoids importing `pmcp-tasks` types into `pmcp` core.
 
-**When:** Every store operation.
+### 3. Partial Execution: How the Handler Flow Changes
 
-**Why:** Security invariant cannot be bypassed by caller error. DynamoDB uses the sort key `OWNER#{owner_id}` so a wrong-owner `GetItem` simply returns no item (treated as NotFound). In-memory store checks explicitly.
+**Current behavior (prompt_handler.rs lines 785-961):** Execute ALL steps in sequence. On parameter resolution failure, `break`. On tool execution error, `break`. On schema mismatch, `break`.
 
-### Pattern 4: Feature-Gated Backends
+**Key insight:** The current code already implements partial execution. When it `break`s out of the step loop, it returns whatever messages have been built so far. The task-prompt bridge makes this _explicit_ by recording progress in task variables.
 
-**What:** Optional backends (DynamoDB) are behind Cargo feature flags. The core crate compiles with zero optional dependencies by default.
-
-**When:** Any backend with heavy dependencies (AWS SDK, Redis, etc.).
-
-**Example:**
-```toml
-[features]
-default = []
-dynamodb = ["aws-sdk-dynamodb", "aws-config"]
-```
+**Modified step loop (pseudocode showing only changes):**
 
 ```rust
-#[cfg(feature = "dynamodb")]
-pub mod dynamodb;
+let mut completed_steps: Vec<StepSummary> = Vec::new();
+let mut remaining_steps: Vec<StepSummary> = Vec::new();
+
+for (step_index, step) in self.workflow.steps().iter().enumerate() {
+    // ... existing: cancellation check, progress report, guidance ...
+
+    // Tool execution attempt (logic unchanged from current code)
+    match self.create_tool_call_announcement(step, &args, &execution_context) {
+        Ok(announcement) => {
+            // ... existing: schema check, execute tool ...
+            match self.execute_tool_step(step, &args, &execution_context, &extra).await {
+                Ok(result) => {
+                    // ... existing: add result message, store binding ...
+
+                    // NEW: sync to task variables
+                    if let Some(ref ts) = task_state {
+                        let mut vars = serde_json::Map::new();
+                        vars.insert(
+                            format!("wf.steps.{}.status", step_index),
+                            json!("completed"),
+                        );
+                        vars.insert(
+                            format!("wf.steps.{}.binding", step_index),
+                            json!(step.binding().map(|b| b.as_str())),
+                        );
+                        // Store key result fields (not full result to avoid size limits)
+                        if let Some(binding) = step.binding() {
+                            vars.insert(
+                                format!("wf.steps.{}.result_summary", step_index),
+                                summarize_result(&result),
+                            );
+                        }
+                        let _ = ts.router.set_task_variables(
+                            &ts.task_id, &ts.owner_id, Value::Object(vars),
+                        ).await; // Non-critical; log warning on failure
+                    }
+                    completed_steps.push(StepSummary::completed(step, step_index));
+                },
+                Err(e) => {
+                    // ... existing: error message, break ...
+                    // NEW: record this step as failed
+                    remaining_steps.push(StepSummary::failed(step, step_index, &e));
+                    // Record all subsequent steps as pending
+                    for (j, s) in self.workflow.steps().iter().enumerate().skip(step_index + 1) {
+                        remaining_steps.push(StepSummary::pending(s, j));
+                    }
+                    break;
+                },
+            }
+        },
+        Err(_) => {
+            // Cannot resolve parameters -- same break as today
+            // NEW: record this and remaining steps
+            for (j, s) in self.workflow.steps().iter().enumerate().skip(step_index) {
+                remaining_steps.push(StepSummary::pending(s, j));
+            }
+            break;
+        },
+    }
+}
 ```
 
-### Pattern 5: Builder Integration via Extension Trait
+### 4. Step State Storage in Task Variables
 
-**What:** Rather than modifying `ServerCoreBuilder` directly, `pmcp-tasks` provides an extension trait that adds task-specific builder methods.
+**Schema (flat keys with `wf.` prefix):**
 
-**When:** Integrating the separate crate with the main SDK's builder.
+```json
+{
+    "wf.goal": "Deploy a service",
+    "wf.total_steps": 3,
+    "wf.completed_count": 1,
+    "wf.prompt_args": {"region": "us-east-1", "service": "my-api"},
 
-**Why:** Keeps `pmcp-tasks` changes self-contained. The main crate only needs to conditionally use the extension.
+    "wf.steps.0.name": "validate_config",
+    "wf.steps.0.status": "completed",
+    "wf.steps.0.tool": "validate_config",
+    "wf.steps.0.binding": "config",
+    "wf.steps.0.result_summary": {"valid": true},
 
-**Example:**
+    "wf.steps.1.name": "provision_infra",
+    "wf.steps.1.status": "pending",
+    "wf.steps.1.tool": "provision_infra",
+    "wf.steps.1.guidance": "Provision with the validated config",
+
+    "wf.steps.2.name": "deploy",
+    "wf.steps.2.status": "pending",
+    "wf.steps.2.tool": "deploy_service",
+    "wf.steps.2.guidance": "Deploy using the provisioned infrastructure"
+}
+```
+
+**Why flat keys:** Matches the validated v1.0 decision (PROJECT.md: "flat keys with convention recommendation in docs"). DynamoDB attribute-level operations work better with flat keys. Individual step updates are independent operations.
+
+**Why `result_summary` not full result:** Task variables have a 1MB limit (StoreConfig.max_variable_size_bytes). Full tool results can be large. The summary stores only key output fields needed by subsequent steps. The full result is already in the conversation trace (messages array) and in the ExecutionContext bindings.
+
+### 5. Structured Prompt Reply
+
+**Constraint:** `GetPromptResult { description: Option<String>, messages: Vec<PromptMessage> }` is an MCP protocol type. We cannot add fields without a breaking change.
+
+**Solution:** Embed structured guidance as the final assistant message in the messages array. This is both human-readable (for the LLM) and machine-parseable (JSON block for task-aware clients).
+
 ```rust
-// In pmcp-tasks crate
-pub trait TaskBuilderExt {
-    fn task_store(self, store: Arc<dyn TaskStore>) -> Self;
-    fn task_security(self, config: TaskSecurityConfig) -> Self;
-}
+// After the step loop, if task is active:
+if let Some(ref ts) = task_state {
+    let structured = json!({
+        "task_id": ts.task_id,
+        "status": if remaining_steps.is_empty() { "all_completed" } else { "partial" },
+        "completed": completed_steps.iter().map(|s| json!({
+            "name": s.name,
+            "tool": s.tool_name,
+            "binding": s.binding_name,
+        })).collect::<Vec<_>>(),
+        "remaining": remaining_steps.iter().map(|s| json!({
+            "index": s.index,
+            "name": s.name,
+            "tool": s.tool_name,
+            "guidance": s.guidance,
+        })).collect::<Vec<_>>(),
+        "continuation": format!(
+            "Call each remaining tool in order. \
+             Poll tasks/get with taskId '{}' to check variable accumulation.",
+            ts.task_id,
+        ),
+    });
 
-// In pmcp crate (behind feature flag)
-#[cfg(feature = "tasks")]
-impl TaskBuilderExt for ServerCoreBuilder {
-    fn task_store(self, store: Arc<dyn TaskStore>) -> Self { ... }
-    fn task_security(self, config: TaskSecurityConfig) -> Self { ... }
+    messages.push(PromptMessage {
+        role: Role::Assistant,
+        content: MessageContent::Text {
+            text: format!(
+                "## Workflow Progress\n\n\
+                 Task ID: `{}`\n\
+                 Completed: {}/{} steps\n\n\
+                 {}\n\n\
+                 ```json\n{}\n```",
+                ts.task_id,
+                completed_steps.len(),
+                completed_steps.len() + remaining_steps.len(),
+                remaining_steps_text,
+                serde_json::to_string_pretty(&structured).unwrap(),
+            ),
+        },
+    });
+
+    // If ALL steps completed, mark task as completed
+    if remaining_steps.is_empty() {
+        let _ = ts.router.complete_workflow_task(
+            &ts.task_id,
+            &ts.owner_id,
+            serde_json::to_value(&completed_steps).unwrap_or(Value::Null),
+        ).await;
+    }
+    // Otherwise task stays in "working" -- client continues
 }
 ```
+
+**Why this differs from current full-trace reply:** Today, the reply is an opaque conversation trace. The LLM reads it and decides what to do. With the bridge, the reply includes explicit machine-readable guidance: here is the task ID, here are the steps you still need to do, here are the tools to call. This transforms the prompt from "here's what happened" to "here's what happened AND here's what to do next."
+
+### 6. Does TaskRouter Need Changes? -- YES, Minimal
+
+**Added methods (3):**
+
+| Method | Params (Value-based) | Implementation in TaskRouterImpl |
+|--------|---------------------|----------------------------------|
+| `create_workflow_task` | owner_id, workflow_name, step_count, prompt_args | `store.create(owner_id, "prompts/get", None)` + `store.set_variables(task_id, owner_id, {wf.goal, wf.total_steps, wf.prompt_args})` |
+| `set_task_variables` | task_id, owner_id, variables (JSON object) | `store.set_variables(task_id, owner_id, convert_json_to_hashmap(variables))` |
+| `complete_workflow_task` | task_id, owner_id, result | `store.complete_with_result(task_id, owner_id, Completed, None, result)` |
+
+**Existing methods unchanged:** `handle_task_call`, `handle_tasks_get`, `handle_tasks_result`, `handle_tasks_list`, `handle_tasks_cancel`, `resolve_owner`, `tool_requires_task`, `task_capabilities` -- all remain exactly as they are.
+
+**Why not modify `handle_task_call`:** That method is for `tools/call` with task augmentation. Workflow task creation has different semantics: it stores workflow metadata (goal, steps, args), not tool context (tool_name, arguments, progress_token).
+
+## Data Flow: Complete Lifecycle
+
+```
+CLIENT                    SERVER (prompts/get handler)         TaskRouter/Store
+  |                              |                                  |
+  |--- prompts/get "deploy" --->|                                  |
+  |                              |                                  |
+  |                              |--- create_workflow_task() ------>|
+  |                              |<-- {taskId: "t-123"} -----------|
+  |                              |                                  |
+  |                              |--- set_task_variables ---------->|
+  |                              |    {wf.goal, wf.total_steps}    |
+  |                              |                                  |
+  |                              |  STEP LOOP:                      |
+  |                              |  step 0: validate_config         |
+  |                              |    resolve params -> OK          |
+  |                              |    execute tool -> OK            |
+  |                              |    store binding "config"        |
+  |                              |--- set_task_variables ---------->|
+  |                              |    {wf.steps.0.status:completed} |
+  |                              |                                  |
+  |                              |  step 1: provision_infra         |
+  |                              |    resolve params -> FAIL        |
+  |                              |    (needs LLM reasoning)         |
+  |                              |--- set_task_variables ---------->|
+  |                              |    {wf.steps.1.status:pending,   |
+  |                              |     wf.steps.2.status:pending}   |
+  |                              |  BREAK                           |
+  |                              |                                  |
+  |<-- GetPromptResult ---------|                                  |
+  |    messages: [               |                                  |
+  |      user intent,            |                                  |
+  |      assistant plan,         |                                  |
+  |      assistant: calling      |                                  |
+  |        validate_config,      |                                  |
+  |      user: tool result,      |                                  |
+  |      assistant: structured   |                                  |
+  |        guidance {            |                                  |
+  |          task_id: "t-123",   |                                  |
+  |          completed: [0],     |                                  |
+  |          remaining: [1, 2]   |                                  |
+  |        }                     |                                  |
+  |    ]                         |                                  |
+  |                              |                                  |
+  |                              |                                  |
+  |--- tools/call provision_infra (direct, no task field) -------->|
+  |<-- result -----------------------------------------------------|
+  |                              |                                  |
+  |--- tasks/get {taskId: "t-123"} ---->|                          |
+  |                              |--- store.get("t-123") --------->|
+  |<-- task with variables ------|<-- TaskRecord with wf.steps.* --|
+  |                              |                                  |
+  |--- tools/call deploy_service (direct) ----------------------->|
+  |<-- result -----------------------------------------------------|
+```
+
+## Build Order (Dependency-Aware)
+
+### Phase 1: TaskRouter trait extension (pmcp core, ~30 LOC)
+
+**File:** `src/server/tasks.rs`
+
+Add 3 new methods with default implementations returning errors. Non-breaking -- existing `TaskRouterImpl` compiles unchanged.
+
+**Why first:** Everything downstream depends on this interface. It is the smallest change and the one that all other phases import.
+
+### Phase 2: TaskRouterImpl new methods (pmcp-tasks, ~80 LOC)
+
+**File:** `crates/pmcp-tasks/src/router.rs`
+
+Implement the 3 new methods:
+- `create_workflow_task` -> `store.create()` + `store.set_variables()` for initial workflow metadata
+- `set_task_variables` -> convert `Value` to `HashMap<String, Value>` + `store.set_variables()`
+- `complete_workflow_task` -> `store.complete_with_result()`
+
+**Why second:** Provides the concrete implementation the handler tests against.
+
+### Phase 3: WorkflowPromptHandler modifications (pmcp core, ~150 LOC)
+
+**File:** `src/server/workflow/prompt_handler.rs`
+
+1. Add `task_router: Option<Arc<dyn TaskRouter>>` field
+2. Add `with_task_router()` constructor (parallel to existing `with_middleware_executor()`)
+3. Add helper struct `WorkflowTaskState { router, task_id, owner_id }`
+4. Add helper struct `StepSummary { name, tool_name, binding_name, index, status, guidance }`
+5. Modify `handle()`: task creation, step sync, structured reply
+
+**Why third:** Depends on Phase 1 (trait) and tested against Phase 2 (impl).
+
+### Phase 4: SequentialWorkflow opt-in flag (pmcp core, ~15 LOC)
+
+**File:** `src/server/workflow/sequential.rs`
+
+Add `task_support: bool` field (default false) with builder method `with_task_support(bool) -> Self`. When false, handler skips task creation even if router is configured.
+
+**Why fourth:** Simple field addition. Depends on nothing, but Phase 3 reads this flag.
+
+### Phase 5: ServerCoreBuilder wiring (pmcp core, ~10 LOC)
+
+**File:** `src/server/builder.rs`
+
+Modify the `prompt_workflow()` method to pass `self.task_router.clone()` to `WorkflowPromptHandler::with_task_router()` when the task router is configured.
+
+**Why fifth:** Simple wiring. Depends on Phase 3 (handler accepts router) and Phase 4 (workflow has flag).
+
+### Phase 6: Example and tests
+
+**Files:** `examples/62_tasks_workflow.rs`, tests in `prompt_handler.rs` and `crates/pmcp-tasks/src/router.rs`
+
+End-to-end: define workflow with `with_task_support(true)`, configure task store + router, invoke prompt, verify task created, verify variables populated, verify structured reply content.
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern 1: Leaking Store Implementation Details into Handlers
+### Anti-Pattern 1: Importing TaskStore in pmcp Core
 
-**What:** Tool handlers directly importing `DynamoDbTaskStore` or checking backend-specific behavior.
+**What people do:** Import `TaskStore` or `TaskContext` from `pmcp-tasks` directly in workflow handler code.
+**Why wrong:** `pmcp-tasks` depends on `pmcp`. If `pmcp` imports from `pmcp-tasks`, circular dependency.
+**Do instead:** All task operations from `pmcp` core go through `Arc<dyn TaskRouter>` with `serde_json::Value`. This is the established pattern from v1.0.
 
-**Why bad:** Breaks portability. Tool handlers work with `TaskContext` only. They must never know or care which backend is in use.
+### Anti-Pattern 2: Storing Full Tool Results in Task Variables
 
-**Instead:** Tool handlers receive `Option<TaskContext>` and interact exclusively through its methods. Backend selection happens at server construction time.
+**What people do:** Store the complete tool output JSON as a task variable for each step.
+**Why wrong:** Task variables have a 1MB limit. Accumulating full results across steps can exceed this.
+**Do instead:** Store summaries or key fields in task variables. Full results are in the conversation trace (messages array) and the execution context bindings.
 
-### Anti-Pattern 2: Checking Task Status in Tool Handlers
+### Anti-Pattern 3: Making Task Creation Mandatory
 
-**What:** Tool handlers polling their own task's status or trying to manage the task lifecycle directly.
+**What people do:** Every `prompts/get` creates a task, even for simple 1-step workflows.
+**Why wrong:** Simple workflows that always execute fully server-side gain nothing. Extra latency, extra storage.
+**Do instead:** Task creation is opt-in via `SequentialWorkflow.with_task_support(true)`. Default is false.
 
-**Why bad:** The middleware/handler manages lifecycle. Tool handlers just do their work and optionally call `ctx.set_variable()`, `ctx.require_input()`, or `ctx.fail()`. The middleware wraps the tool result in the proper task lifecycle.
+### Anti-Pattern 4: Adding Fields to GetPromptResult
 
-**Instead:** Tool handlers return their result normally. The middleware/handler catches the result and stores it, then transitions the task to `completed` or `failed`.
+**What people do:** Add `task_id`, `completed_steps`, `remaining_steps` fields to `GetPromptResult`.
+**Why wrong:** `GetPromptResult` is an MCP protocol type. Adding fields is a spec violation.
+**Do instead:** Embed structured guidance as the final assistant message text. Both human-readable and machine-parseable via JSON block.
 
-### Anti-Pattern 3: Blocking the Middleware Chain for Background Tasks
+### Anti-Pattern 5: Blocking prompts/get on Task Completion
 
-**What:** Having `TaskMiddleware::on_request` await the entire tool execution before returning.
+**What people do:** Create a task and wait for it to complete before returning the prompt result.
+**Why wrong:** The point is partial execution. Return immediately with what the server could do.
+**Do instead:** Execute steps synchronously (as today), record progress, return immediately. Task stays in `working` state for client continuation.
 
-**Why bad:** Defeats the purpose of tasks. The spec requires immediate return of `CreateTaskResult`.
-
-**Instead:** Create the task record, return immediately with `CreateTaskResult`, and `tokio::spawn` the actual tool execution.
-
-### Anti-Pattern 4: Coupling Types to Storage
-
-**What:** Putting DynamoDB attribute annotations or storage-specific serialization on the protocol types.
-
-**Why bad:** Layer 1 types are pure spec representations. They serialize to JSON for the wire protocol. Storage serialization is a separate concern.
-
-**Instead:** Use `TaskRecord` (a store-level struct) that contains a `Task` plus storage-specific fields (`owner_id`, `result`, `variables`). Backends convert between `TaskRecord` and their storage format.
-
-### Anti-Pattern 5: Variable Size Enforcement in the Context
-
-**What:** Checking variable sizes in `TaskContext` rather than in the store.
-
-**Why bad:** Variable size limits are a security/resource concern that must be enforced consistently regardless of access path. If someone calls `store.set_variables()` directly (e.g., in tests or internal code), the limit must still be enforced.
-
-**Instead:** Enforce variable size limits in the `TaskStore` trait (as a documented requirement) and in each backend implementation.
-
-## Build Order (Dependency Chain)
-
-The layers form a strict dependency chain that determines build order. Each layer can be implemented and tested independently once its dependencies exist.
+## Component Boundary Summary
 
 ```
-Phase 1: Types + Error (zero business deps)
-    |
-    v
-Phase 2: TaskStore trait + TaskRecord (depends on types)
-    |
-    v
-Phase 3: InMemoryTaskStore (depends on store trait)
-    |     (this gives us a testable backend immediately)
-    |
-    +-- Phase 4a: TaskContext (depends on store trait)
-    |     (can test against InMemoryTaskStore)
-    |
-    +-- Phase 4b: TaskSecurityConfig (depends on types)
-    |
-    v
-Phase 5: TaskHandler + TaskMiddleware (depends on context, store, security)
-    |     (integration with ServerCore routing)
-    |
-    v
-Phase 6: DynamoDB backend (depends on store trait, feature-gated)
-    |     (independent of handler/middleware)
-    |
-    v
-Phase 7: Workflow integration (depends on handler, context)
-    |     (connects SequentialWorkflow to TaskContext)
-    |
-    v
-Phase 8: Examples + docs (depends on everything)
++--- pmcp (core crate) --------------------------------------------------+
+|                                                                         |
+|  TaskRouter trait              WorkflowPromptHandler                    |
+|  (src/server/tasks.rs)         (src/server/workflow/prompt_handler.rs)  |
+|  +3 new methods:               +task_router: Option<Arc<dyn TaskRouter>>|
+|  - create_workflow_task()      +with_task_router() constructor          |
+|  - set_task_variables()        Modified handle(): task create, sync,    |
+|  - complete_workflow_task()      structured reply                       |
+|                                                                         |
+|  SequentialWorkflow            ServerCoreBuilder                        |
+|  +task_support: bool           passes task_router to handler            |
+|  +with_task_support()                                                   |
+|                                                                         |
++--- pmcp-tasks (separate crate, one-way dep on pmcp) -------------------+
+|                                                                         |
+|  TaskRouterImpl                TaskStore trait (UNCHANGED)               |
+|  (src/router.rs)               (src/store/mod.rs)                       |
+|  +3 new method impls           InMemoryTaskStore (UNCHANGED)            |
+|   delegates to store                                                    |
+|                                                                         |
+|  TaskContext (UNCHANGED)                                                |
+|  (src/context.rs)                                                       |
+|  Used internally by router                                              |
+|                                                                         |
++-------------------------------------------------------------------------+
 ```
-
-**Critical dependency:** Phase 5 (handler/middleware) requires changes to the core `pmcp` crate (`ClientRequest` enum + `ServerCore` routing + `ServerCoreBuilder`). This is the highest-risk integration point and should be designed carefully before implementation begins.
-
-**Parallelizable:** Phases 4a and 4b can run in parallel. Phase 6 (DynamoDB) can run in parallel with Phase 7 (workflow integration) since both only depend on the store trait.
-
-## Scalability Considerations
-
-| Concern | Single-process (dev) | Lambda/Serverless | Multi-instance (ECS/K8s) |
-|---------|---------------------|-------------------|--------------------------|
-| Task storage | InMemoryTaskStore, tasks lost on restart | DynamoDbTaskStore, tasks persist across invocations | DynamoDbTaskStore, shared state across instances |
-| Concurrency | `parking_lot::RwLock` (no contention in dev) | Single-threaded Lambda, no lock contention | DynamoDB conditional writes prevent races |
-| TTL cleanup | Lazy on read + periodic timer | DynamoDB native TTL (async ~48h) + read-time check | DynamoDB native TTL + read-time check |
-| Owner isolation | Session ID (single user) | OAuth sub from API Gateway | OAuth sub from load balancer |
-| Result blocking (`tasks/result`) | `tokio::sync::watch` channel | Immediate return (polling-only) | DynamoDB polling loop or SNS notification |
-| Task listing pagination | In-memory cursor (offset) | DynamoDB GSI `ExclusiveStartKey` | DynamoDB GSI `ExclusiveStartKey` |
 
 ## Sources
 
-- [MCP Tasks Specification (2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks) - Official spec, HIGH confidence
-- [MCP Spec Anniversary Blog Post](http://blog.modelcontextprotocol.io/posts/2025-11-25-first-mcp-anniversary/) - Context on experimental status
-- [WorkOS MCP 2025-11-25 Analysis](https://workos.com/blog/mcp-2025-11-25-spec-update) - Ecosystem context
-- [Agnost: Long Running Tasks in MCP](https://agnost.ai/blog/long-running-tasks-mcp/) - Implementation patterns
-- Existing PMCP SDK codebase analysis (traits.rs, tool_middleware.rs, cancellation.rs, workflow/, core.rs, builder.rs) - HIGH confidence
-- PMCP Tasks Design Document (`docs/design/tasks-feature-design.md`) - HIGH confidence
-- [Layered DDD in Rust](https://leapcell.io/blog/crafting-maintainable-rust-web-apps-with-layered-ddd) - Architecture pattern reference
-- [Tauri Core Crates Architecture](https://deepwiki.com/tauri-apps/tauri/9.3-core-crates-overview) - Multi-crate layering reference
+All findings derived from direct codebase analysis:
+
+- `src/server/workflow/prompt_handler.rs` -- WorkflowPromptHandler, ExecutionContext, step loop, break behavior
+- `src/server/tasks.rs` -- TaskRouter trait definition (7 existing methods)
+- `src/server/builder.rs` -- ServerCoreBuilder.with_task_store(), prompt_workflow()
+- `src/server/core.rs` -- ServerCore request routing, task_router field usage
+- `src/server/middleware_executor.rs` -- MiddlewareExecutor trait
+- `src/server/workflow/sequential.rs` -- SequentialWorkflow struct, validate()
+- `src/server/workflow/workflow_step.rs` -- WorkflowStep, DataSource resolution
+- `src/server/workflow/data_source.rs` -- DataSource enum (PromptArg, StepOutput, Constant)
+- `crates/pmcp-tasks/src/router.rs` -- TaskRouterImpl, handle_task_call, store delegation
+- `crates/pmcp-tasks/src/context.rs` -- TaskContext, variable accessors, status transitions
+- `crates/pmcp-tasks/src/store/mod.rs` -- TaskStore trait, StoreConfig, TaskPage
+- `crates/pmcp-tasks/src/domain/record.rs` -- TaskRecord, to_wire_task_with_variables
+- `crates/pmcp-tasks/src/lib.rs` -- pmcp-tasks module organization
+- `docs/design/tasks-feature-design.md` -- Design document for tasks feature
+- `.planning/PROJECT.md` -- v1.1 milestone definition, requirements, constraints
+
+---
+*Architecture research for: Task-Prompt Bridge Integration in PMCP SDK*
+*Researched: 2026-02-21*
