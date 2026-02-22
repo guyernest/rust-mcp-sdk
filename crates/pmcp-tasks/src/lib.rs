@@ -38,11 +38,15 @@ pub mod security;
 /// Ergonomic task context for tool handlers.
 pub mod context;
 
+/// TaskRouter implementation bridging pmcp's TaskRouter trait to TaskStore.
+pub mod router;
+
 // Re-exports for ergonomic access
 pub use constants::*;
 pub use context::TaskContext;
 pub use domain::{TaskRecord, TaskWithVariables};
 pub use error::TaskError;
+pub use router::TaskRouterImpl;
 pub use security::{resolve_owner_id, TaskSecurityConfig, DEFAULT_LOCAL_OWNER};
 pub use store::memory::InMemoryTaskStore;
 pub use store::{ListTasksOptions, StoreConfig, TaskPage, TaskStore};
