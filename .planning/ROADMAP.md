@@ -64,12 +64,12 @@ Plans:
   3. tasks/get returns current task state, tasks/result returns the operation result for terminal tasks, tasks/list returns paginated owner-scoped results, and tasks/cancel transitions non-terminal tasks to cancelled
   4. A full lifecycle integration test passes: create task via tools/call -> poll via tasks/get until terminal -> retrieve result via tasks/result
   5. The basic tasks example (`60_tasks_basic.rs`) compiles and runs successfully, demonstrating the complete task lifecycle
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
-- [ ] 03-03: TBD
+- [ ] 03-01-PLAN.md -- Protocol types (task field on CallToolRequest, execution on ToolInfo, ClientRequest task variants), TaskRouter trait, builder with_task_store()
+- [ ] 03-02-PLAN.md -- TaskRouterImpl in pmcp-tasks, task routing and interception in ServerCore handle_request_internal
+- [ ] 03-03-PLAN.md -- Full lifecycle integration tests (TEST-08), basic tasks example 60_tasks_basic.rs (EXMP-01)
 
 ### Phase 4: DynamoDB Backend and Deployment
 **Goal**: Developers can use a production-ready DynamoDB storage backend for tasks in serverless environments, provisioned via cargo-pmcp deployment
@@ -111,6 +111,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 |-------|----------------|--------|-----------|
 | 1. Foundation Types and Store Contract | 0/3 | Complete    | 2026-02-21 |
 | 2. In-Memory Backend and Owner Security | 0/3 | Complete    | 2026-02-22 |
-| 3. Handler, Middleware, and Server Integration | 0/? | Not started | - |
+| 3. Handler, Middleware, and Server Integration | 0/3 | Not started | - |
 | 4. DynamoDB Backend and Deployment | 0/? | Not started | - |
 | 5. Workflow Integration and Examples | 0/? | Not started | - |
