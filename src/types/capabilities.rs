@@ -381,6 +381,7 @@ impl ServerCapabilities {
     /// #                 role: Role::System,
     /// #                 content: Content::Text { text: "Hello!".to_string() },
     /// #             }],
+    /// #             _meta: None,
     /// #         })
     /// #     }
     /// # }

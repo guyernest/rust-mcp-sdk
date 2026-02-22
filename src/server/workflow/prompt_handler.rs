@@ -832,6 +832,7 @@ impl PromptHandler for WorkflowPromptHandler {
                     return Ok(GetPromptResult {
                         description: Some(self.workflow.description().to_string()),
                         messages,
+                        _meta: None,
                     });
                 }
             }
@@ -864,6 +865,7 @@ impl PromptHandler for WorkflowPromptHandler {
                     return Ok(GetPromptResult {
                         description: Some(self.workflow.description().to_string()),
                         messages,
+                        _meta: None,
                     });
                 }
 
@@ -973,6 +975,7 @@ impl PromptHandler for WorkflowPromptHandler {
         Ok(GetPromptResult {
             description: Some(self.workflow.description().to_string()),
             messages,
+            _meta: None,
         })
     }
 

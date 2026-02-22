@@ -2275,6 +2275,7 @@ impl ServerBuilder {
     ///                     text: format!("Please review this {} code:", language),
     ///                 },
     ///             }],
+    ///             _meta: None,
     ///         })
     ///     }
     /// }
@@ -3303,6 +3304,7 @@ mod tests {
         let prompt_result = crate::types::GetPromptResult {
             description: Some("Test prompt".to_string()),
             messages: vec![],
+            _meta: None,
         };
 
         let resource_content = crate::types::ReadResourceResult {
@@ -3446,6 +3448,7 @@ mod tests {
         let prompt_result = crate::types::GetPromptResult {
             description: Some("Test prompt".to_string()),
             messages: vec![],
+            _meta: None,
         };
 
         let server = Server::builder()
@@ -3477,6 +3480,7 @@ mod tests {
         let prompt_result = crate::types::GetPromptResult {
             description: Some("Test prompt".to_string()),
             messages: vec![],
+            _meta: None,
         };
 
         let server = Server::builder()
@@ -3921,6 +3925,7 @@ mod tests {
                 MockPrompt::new(crate::types::GetPromptResult {
                     description: None,
                     messages: vec![],
+                    _meta: None,
                 }),
             )
             .resources(MockResource::new())

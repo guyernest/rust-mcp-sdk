@@ -657,6 +657,16 @@ pub struct GetPromptResult {
     pub description: Option<String>,
     /// Prompt messages
     pub messages: Vec<PromptMessage>,
+    /// Optional metadata for task-aware workflows (PMCP extension).
+    ///
+    /// When a workflow prompt is backed by a task, this field contains
+    /// task state information (task_id, status, step plan) that
+    /// task-aware MCP clients can use for structured continuation.
+    /// Omitted from serialized JSON when `None`.
+    #[serde(rename = "_meta")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(clippy::pub_underscore_fields)]
+    pub _meta: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// Message in a prompt.
@@ -1588,5 +1598,90 @@ mod tests {
 
         let json = serde_json::to_value(&tool).unwrap();
         assert!(json.get("execution").is_none());
+    }
+
+    #[test]
+    fn get_prompt_result_without_meta_omits_field() {
+        let result = GetPromptResult {
+            description: Some("Test".to_string()),
+            messages: vec![],
+            _meta: None,
+        };
+
+        let json = serde_json::to_value(&result).unwrap();
+        assert!(
+            json.get("_meta").is_none(),
+            "_meta should be omitted when None"
+        );
+        assert_eq!(json["description"], "Test");
+    }
+
+    #[test]
+    fn get_prompt_result_with_meta_includes_field() {
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "taskId".to_string(),
+            serde_json::Value::String("task-123".to_string()),
+        );
+
+        let result = GetPromptResult {
+            description: None,
+            messages: vec![],
+            _meta: Some(meta),
+        };
+
+        let json = serde_json::to_value(&result).unwrap();
+        assert!(json.get("_meta").is_some(), "_meta should be present");
+        assert_eq!(json["_meta"]["taskId"], "task-123");
+    }
+
+    #[test]
+    fn get_prompt_result_deserialize_without_meta_backward_compat() {
+        let json_str = r#"{"messages": [], "description": "Test"}"#;
+        let result: GetPromptResult = serde_json::from_str(json_str).unwrap();
+        assert!(
+            result._meta.is_none(),
+            "Missing _meta should deserialize as None"
+        );
+        assert_eq!(result.description.as_deref(), Some("Test"));
+    }
+
+    #[test]
+    fn get_prompt_result_serde_round_trip_with_meta() {
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "taskId".to_string(),
+            serde_json::Value::String("task-456".to_string()),
+        );
+        meta.insert(
+            "status".to_string(),
+            serde_json::Value::String("working".to_string()),
+        );
+
+        let result = GetPromptResult {
+            description: Some("Workflow result".to_string()),
+            messages: vec![PromptMessage {
+                role: Role::User,
+                content: Content::Text {
+                    text: "Hello".to_string(),
+                },
+            }],
+            _meta: Some(meta),
+        };
+
+        let json = serde_json::to_value(&result).unwrap();
+        let round_trip: GetPromptResult = serde_json::from_value(json).unwrap();
+
+        assert_eq!(
+            round_trip.description.as_deref(),
+            Some("Workflow result")
+        );
+        assert_eq!(round_trip.messages.len(), 1);
+        assert!(round_trip._meta.is_some());
+        let rt_meta = round_trip._meta.unwrap();
+        assert_eq!(
+            rt_meta.get("taskId").unwrap(),
+            &serde_json::Value::String("task-456".to_string())
+        );
     }
 }

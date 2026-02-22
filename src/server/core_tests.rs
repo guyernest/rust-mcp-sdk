@@ -96,6 +96,7 @@ mod tests {
                         text: format!("Prompt with args: {:?}", args),
                     },
                 }],
+                _meta: None,
             })
         }
     }

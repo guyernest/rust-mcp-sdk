@@ -118,6 +118,7 @@ impl PromptHandler for AnalysisWorkflowPrompt {
                     ),
                 },
             }],
+            _meta: None,
         })
     }
 }
