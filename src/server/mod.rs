@@ -66,6 +66,9 @@ pub mod simple_resources;
 /// Simple tool implementations with schema support.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simple_tool;
+/// Task routing trait for MCP Tasks integration.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tasks;
 /// Tool middleware for cross-cutting concerns in tool execution.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tool_middleware;
