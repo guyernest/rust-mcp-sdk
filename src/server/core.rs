@@ -32,6 +32,8 @@ use super::roots::RootsManager;
 #[cfg(not(target_arch = "wasm32"))]
 use super::subscriptions::SubscriptionManager;
 #[cfg(not(target_arch = "wasm32"))]
+use super::tasks::TaskRouter;
+#[cfg(not(target_arch = "wasm32"))]
 use super::tool_middleware::{ToolContext, ToolMiddlewareChain};
 use super::{PromptHandler, ResourceHandler, SamplingHandler, ToolHandler};
 
@@ -151,6 +153,11 @@ pub struct ServerCore {
     #[cfg(not(target_arch = "wasm32"))]
     tool_middleware: Arc<RwLock<ToolMiddlewareChain>>,
 
+    /// Task router for experimental MCP Tasks support (optional)
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(dead_code)] // Will be used by Plan 02 for task routing
+    task_router: Option<Arc<dyn TaskRouter>>,
+
     /// Stateless mode flag for serverless deployments
     ///
     /// When true, the server skips initialization state checking, allowing
@@ -177,6 +184,7 @@ impl ServerCore {
         tool_authorizer: Option<Arc<dyn ToolAuthorizer>>,
         protocol_middleware: Arc<RwLock<EnhancedMiddlewareChain>>,
         #[cfg(not(target_arch = "wasm32"))] tool_middleware: Arc<RwLock<ToolMiddlewareChain>>,
+        #[cfg(not(target_arch = "wasm32"))] task_router: Option<Arc<dyn TaskRouter>>,
         stateless_mode: bool,
     ) -> Self {
         Self {
@@ -196,6 +204,8 @@ impl ServerCore {
             protocol_middleware,
             #[cfg(not(target_arch = "wasm32"))]
             tool_middleware,
+            #[cfg(not(target_arch = "wasm32"))]
+            task_router,
             stateless_mode,
         }
     }
@@ -798,6 +808,7 @@ mod tests {
             None,
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             Arc::new(RwLock::new(ToolMiddlewareChain::new())),
+            None,  // task_router
             false, // stateless_mode
         );
 
@@ -846,6 +857,7 @@ mod tests {
             None,
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             Arc::new(RwLock::new(ToolMiddlewareChain::new())),
+            None,  // task_router
             false, // stateless_mode
         );
 
@@ -903,6 +915,7 @@ mod tests {
             None,
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             Arc::new(RwLock::new(ToolMiddlewareChain::new())),
+            None, // task_router
             true, // stateless_mode enabled
         );
 
@@ -951,6 +964,7 @@ mod tests {
             None,
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             Arc::new(RwLock::new(ToolMiddlewareChain::new())),
+            None,  // task_router
             false, // stateless_mode disabled (normal mode)
         );
 

@@ -9,6 +9,7 @@ use crate::server::observability::{
     CloudWatchBackend, ConsoleBackend, McpObservabilityMiddleware, NullBackend,
     ObservabilityBackend, ObservabilityConfig,
 };
+use crate::server::tasks::TaskRouter;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::server::tool_middleware::{ToolMiddleware, ToolMiddlewareChain};
 use crate::server::{PromptHandler, ResourceHandler, SamplingHandler, ToolHandler};
@@ -64,6 +65,9 @@ pub struct ServerCoreBuilder {
     protocol_middleware: Arc<RwLock<EnhancedMiddlewareChain>>,
     #[cfg(not(target_arch = "wasm32"))]
     tool_middlewares: Vec<Arc<dyn ToolMiddleware>>,
+    /// Task router for experimental MCP Tasks support (optional)
+    #[cfg(not(target_arch = "wasm32"))]
+    task_router: Option<Arc<dyn TaskRouter>>,
     /// Stateless mode for serverless deployments (None = auto-detect)
     stateless_mode: Option<bool>,
 }
@@ -90,6 +94,8 @@ impl ServerCoreBuilder {
             protocol_middleware: Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             #[cfg(not(target_arch = "wasm32"))]
             tool_middlewares: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            task_router: None,
             stateless_mode: None, // Auto-detect by default
         }
     }
@@ -519,6 +525,45 @@ impl ServerCoreBuilder {
         self
     }
 
+    /// Enable experimental MCP Tasks support with a task router.
+    ///
+    /// The task router handles task lifecycle operations (`tasks/get`, `tasks/result`,
+    /// `tasks/list`, `tasks/cancel`) and task-augmented `tools/call` requests.
+    ///
+    /// This method:
+    /// - Stores the task router for use during request handling
+    /// - Auto-configures `experimental.tasks` in server capabilities so clients
+    ///   know the server supports the tasks protocol extension
+    ///
+    /// The `router` parameter is typically created by the `pmcp-tasks` crate,
+    /// which wraps a `TaskStore` with routing logic.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use pmcp::server::builder::ServerCoreBuilder;
+    /// use pmcp_tasks::TaskRouterImpl;
+    ///
+    /// let task_router = TaskRouterImpl::new(store);
+    /// let server = ServerCoreBuilder::new()
+    ///     .name("task-server")
+    ///     .version("1.0.0")
+    ///     .with_task_store(Arc::new(task_router))
+    ///     .build()?;
+    /// ```
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_task_store(mut self, router: Arc<dyn TaskRouter>) -> Self {
+        // Auto-configure experimental.tasks capability
+        let experimental = self
+            .capabilities
+            .experimental
+            .get_or_insert_with(HashMap::new);
+        experimental.insert("tasks".to_string(), router.task_capabilities());
+
+        self.task_router = Some(router);
+        self
+    }
+
     /// Detect if running in a stateless/serverless environment.
     ///
     /// Checks for environment variables that indicate serverless platforms:
@@ -675,6 +720,8 @@ impl ServerCoreBuilder {
             self.protocol_middleware,
             #[cfg(not(target_arch = "wasm32"))]
             tool_middleware,
+            #[cfg(not(target_arch = "wasm32"))]
+            self.task_router,
             stateless_mode,
         ))
     }
@@ -774,5 +821,92 @@ mod tests {
             .unwrap();
 
         assert_eq!(server.capabilities().tools, custom_caps.tools);
+    }
+
+    #[test]
+    fn test_builder_with_task_store_sets_capabilities() {
+        use crate::server::tasks::TaskRouter;
+
+        /// Mock task router for testing.
+        struct MockTaskRouter;
+
+        #[async_trait]
+        impl TaskRouter for MockTaskRouter {
+            async fn handle_task_call(
+                &self,
+                _tool_name: &str,
+                _arguments: Value,
+                _task_params: Value,
+                _owner_id: &str,
+                _progress_token: Option<Value>,
+            ) -> Result<Value> {
+                Ok(Value::Null)
+            }
+            async fn handle_tasks_get(&self, _params: Value, _owner_id: &str) -> Result<Value> {
+                Ok(Value::Null)
+            }
+            async fn handle_tasks_result(&self, _params: Value, _owner_id: &str) -> Result<Value> {
+                Ok(Value::Null)
+            }
+            async fn handle_tasks_list(&self, _params: Value, _owner_id: &str) -> Result<Value> {
+                Ok(Value::Null)
+            }
+            async fn handle_tasks_cancel(&self, _params: Value, _owner_id: &str) -> Result<Value> {
+                Ok(Value::Null)
+            }
+            fn resolve_owner(
+                &self,
+                _subject: Option<&str>,
+                _client_id: Option<&str>,
+                _session_id: Option<&str>,
+            ) -> String {
+                "test-owner".to_string()
+            }
+            fn tool_requires_task(
+                &self,
+                _tool_name: &str,
+                _tool_execution: Option<&Value>,
+            ) -> bool {
+                false
+            }
+            fn task_capabilities(&self) -> Value {
+                serde_json::json!({
+                    "supported": true,
+                    "maxTtl": 86400000
+                })
+            }
+        }
+
+        let router = Arc::new(MockTaskRouter);
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .with_task_store(router)
+            .build()
+            .unwrap();
+
+        // Verify experimental.tasks capability was set
+        let caps = server.capabilities();
+        let experimental = caps
+            .experimental
+            .as_ref()
+            .expect("experimental should be set");
+        let tasks_cap = experimental
+            .get("tasks")
+            .expect("tasks capability should be set");
+        assert_eq!(tasks_cap["supported"], true);
+        assert_eq!(tasks_cap["maxTtl"], 86400000);
+    }
+
+    #[test]
+    fn test_builder_without_task_store_has_no_experimental() {
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .build()
+            .unwrap();
+
+        // No experimental capabilities by default
+        assert!(server.capabilities().experimental.is_none());
     }
 }
