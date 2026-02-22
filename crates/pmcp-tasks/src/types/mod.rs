@@ -9,9 +9,11 @@ pub mod execution;
 pub mod notification;
 pub mod params;
 pub mod task;
+pub mod workflow;
 
 pub use capabilities::*;
 pub use execution::*;
 pub use notification::*;
 pub use params::*;
 pub use task::*;
+pub use workflow::*;
