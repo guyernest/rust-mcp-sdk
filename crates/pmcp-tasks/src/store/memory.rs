@@ -969,7 +969,7 @@ mod tests {
             .set_variables(&created.task.task_id, "owner-1", vars)
             .await
             .unwrap();
-        assert!(updated.variables.get("key1").is_none());
+        assert!(!updated.variables.contains_key("key1"));
     }
 
     #[tokio::test]
