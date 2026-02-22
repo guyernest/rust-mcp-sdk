@@ -47,11 +47,12 @@ Plans:
   3. TaskSecurityConfig limits are enforced: max tasks per owner rejects creation beyond limit, TTL defaults and maximums are applied, anonymous access is rejected when allow_anonymous is false
   4. TaskContext provides ergonomic variable access (get/set/delete via null) and status transition convenience methods (require_input, fail, complete) that work correctly against the in-memory store
   5. Property tests verify state machine transition invariants, variable merge semantics (including null-deletion), task ID uniqueness, and owner isolation under concurrent access
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
+- [ ] 02-01-PLAN.md -- InMemoryTaskStore implementation, TaskSecurityConfig, owner resolution function
+- [ ] 02-02-PLAN.md -- TaskContext ergonomic wrapper and context integration tests (TEST-03)
+- [ ] 02-03-PLAN.md -- Store tests (TEST-04), security tests (TEST-06), and property tests (TEST-07)
 
 ### Phase 3: Handler, Middleware, and Server Integration
 **Goal**: A PMCP server can advertise task support, intercept task-augmented tool calls, route all four task endpoints, and run a complete create-poll-complete lifecycle end to end
@@ -109,7 +110,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation Types and Store Contract | 0/3 | Complete    | 2026-02-21 |
-| 2. In-Memory Backend and Owner Security | 0/? | Not started | - |
+| 2. In-Memory Backend and Owner Security | 0/3 | Not started | - |
 | 3. Handler, Middleware, and Server Integration | 0/? | Not started | - |
 | 4. DynamoDB Backend and Deployment | 0/? | Not started | - |
 | 5. Workflow Integration and Examples | 0/? | Not started | - |
