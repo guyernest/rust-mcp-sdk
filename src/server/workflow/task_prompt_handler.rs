@@ -1,0 +1,599 @@
+//! Task-aware composition layer for workflow prompt handlers.
+//!
+//! [`TaskWorkflowPromptHandler`] wraps a [`WorkflowPromptHandler`] to add
+//! task lifecycle management. When a workflow prompt is invoked, this handler:
+//!
+//! 1. Creates a task via the [`TaskRouter`]
+//! 2. Delegates execution to the inner [`WorkflowPromptHandler`]
+//! 3. Infers step statuses from the returned message trace
+//! 4. Updates task variables with step results and progress
+//! 5. Enriches the [`GetPromptResult`] with `_meta` containing task state
+//!
+//! This composition is purely additive -- [`WorkflowPromptHandler`] is never
+//! modified. The entire task layer is opt-in via
+//! [`SequentialWorkflow::with_task_support`].
+//!
+//! # Graceful Degradation
+//!
+//! If task creation fails, the handler logs the error and falls back to
+//! returning the inner handler's result without `_meta`. The workflow still
+//! executes; only task tracking is lost.
+
+use super::prompt_handler::WorkflowPromptHandler;
+use super::sequential::SequentialWorkflow;
+use crate::error::Result;
+use crate::server::cancellation::RequestHandlerExtra;
+use crate::server::tasks::TaskRouter;
+use crate::server::PromptHandler;
+use crate::types::{GetPromptResult, PromptInfo, PromptMessage, Role};
+use async_trait::async_trait;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+/// Task-aware wrapper for [`WorkflowPromptHandler`].
+///
+/// Composes with the inner handler via delegation: all prompt metadata
+/// and execution logic is delegated unchanged. This handler adds task
+/// creation, progress tracking, and `_meta` enrichment on top.
+///
+/// # Construction
+///
+/// Created by the builder when a [`SequentialWorkflow`] has task support
+/// enabled and a [`TaskRouter`] is configured on the server.
+///
+/// ```rust,ignore
+/// let handler = TaskWorkflowPromptHandler::new(
+///     inner_handler,
+///     task_router.clone(),
+///     workflow.clone(),
+/// );
+/// ```
+pub struct TaskWorkflowPromptHandler {
+    /// The inner workflow handler that does actual step execution.
+    inner: WorkflowPromptHandler,
+    /// Task router for creating/managing workflow tasks.
+    task_router: Arc<dyn TaskRouter>,
+    /// The workflow definition (needed for step metadata to build WorkflowProgress).
+    workflow: SequentialWorkflow,
+}
+
+impl std::fmt::Debug for TaskWorkflowPromptHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TaskWorkflowPromptHandler")
+            .field("workflow", &self.workflow.name())
+            .field("inner", &"WorkflowPromptHandler")
+            .finish()
+    }
+}
+
+impl TaskWorkflowPromptHandler {
+    /// Create a new task-aware workflow prompt handler.
+    ///
+    /// # Arguments
+    ///
+    /// * `inner` - The workflow prompt handler that performs actual step execution.
+    /// * `task_router` - Task router for creating and managing workflow tasks.
+    /// * `workflow` - The workflow definition (used for step metadata).
+    pub fn new(
+        inner: WorkflowPromptHandler,
+        task_router: Arc<dyn TaskRouter>,
+        workflow: SequentialWorkflow,
+    ) -> Self {
+        Self {
+            inner,
+            task_router,
+            workflow,
+        }
+    }
+
+    /// Build the initial [`WorkflowProgress`] from the workflow definition.
+    ///
+    /// Each step starts as `Pending`. The goal is derived from the workflow
+    /// name and description.
+    fn build_initial_progress(&self) -> Value {
+        let steps: Vec<Value> = self
+            .workflow
+            .steps()
+            .iter()
+            .map(|step| {
+                let mut step_obj = serde_json::Map::new();
+                step_obj.insert("name".to_string(), Value::String(step.name().to_string()));
+                if let Some(tool) = step.tool() {
+                    step_obj.insert("tool".to_string(), Value::String(tool.name().to_string()));
+                }
+                step_obj.insert("status".to_string(), Value::String("pending".to_string()));
+                Value::Object(step_obj)
+            })
+            .collect();
+
+        let goal = format!("{}: {}", self.workflow.name(), self.workflow.description());
+
+        serde_json::json!({
+            "goal": goal,
+            "steps": steps,
+            "schemaVersion": 1
+        })
+    }
+
+    /// Infer step statuses from the message trace returned by the inner handler.
+    ///
+    /// Scans the message list for assistant/user message pairs that represent
+    /// tool calls and results. Each such pair corresponds to a completed step.
+    /// Steps beyond the last completed pair remain `"pending"`.
+    ///
+    /// This is inherently heuristic: it counts assistant messages that look like
+    /// tool invocations (role=Assistant) followed by user messages (role=User)
+    /// with tool result content, matching the pattern generated by
+    /// [`WorkflowPromptHandler`].
+    fn infer_step_statuses(messages: &[PromptMessage], step_count: usize) -> Vec<String> {
+        // Count tool-call/result pairs in the message trace.
+        // The pattern from WorkflowPromptHandler is:
+        //   Assistant (tool call announcement) -> User (tool result)
+        // We skip the initial user-intent and assistant-plan messages (first 2).
+        let execution_messages = if messages.len() > 2 {
+            &messages[2..]
+        } else {
+            &[]
+        };
+
+        let mut completed_steps = 0usize;
+        let mut i = 0;
+        while i < execution_messages.len() {
+            let msg = &execution_messages[i];
+            // Look for an assistant message followed by a user message (tool result)
+            if msg.role == Role::Assistant {
+                // Check if next message is a user message (tool result)
+                if i + 1 < execution_messages.len()
+                    && execution_messages[i + 1].role == Role::User
+                {
+                    completed_steps += 1;
+                    i += 2;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+
+        // Clamp to step_count
+        let completed = completed_steps.min(step_count);
+
+        let mut statuses = Vec::with_capacity(step_count);
+        for idx in 0..step_count {
+            if idx < completed {
+                statuses.push("completed".to_string());
+            } else {
+                statuses.push("pending".to_string());
+            }
+        }
+        statuses
+    }
+
+    /// Build the `_meta` map for the enriched [`GetPromptResult`].
+    ///
+    /// Contains `task_id`, `task_status`, and a summary `steps` array.
+    fn build_meta_map(
+        task_id: &str,
+        step_names: &[String],
+        statuses: &[String],
+    ) -> serde_json::Map<String, Value> {
+        let steps: Vec<Value> = step_names
+            .iter()
+            .zip(statuses.iter())
+            .map(|(name, status)| {
+                serde_json::json!({
+                    "name": name,
+                    "status": status,
+                })
+            })
+            .collect();
+
+        let mut meta = serde_json::Map::new();
+        meta.insert("task_id".to_string(), Value::String(task_id.to_string()));
+        meta.insert(
+            "task_status".to_string(),
+            Value::String("working".to_string()),
+        );
+        meta.insert("steps".to_string(), Value::Array(steps));
+        meta
+    }
+
+    /// Resolve the owner ID from the request's auth context.
+    ///
+    /// Follows the same pattern as `ServerCore::resolve_task_owner`:
+    /// delegates to `TaskRouter::resolve_owner` with available auth fields.
+    fn resolve_owner(&self, extra: &RequestHandlerExtra) -> String {
+        match &extra.auth_context {
+            Some(ctx) => {
+                self.task_router
+                    .resolve_owner(Some(&ctx.subject), ctx.client_id.as_deref(), None)
+            }
+            None => self.task_router.resolve_owner(None, None, None),
+        }
+    }
+}
+
+#[async_trait]
+impl PromptHandler for TaskWorkflowPromptHandler {
+    /// Generate the workflow prompt with task lifecycle management.
+    ///
+    /// Orchestration flow:
+    /// 1. Resolve owner from auth context
+    /// 2. Build initial progress from workflow definition
+    /// 3. Create task via task router (graceful degradation on failure)
+    /// 4. Delegate to inner handler for actual execution
+    /// 5. Infer step statuses from message trace
+    /// 6. Update task variables with progress
+    /// 7. Enrich result with `_meta`
+    async fn handle(
+        &self,
+        args: HashMap<String, String>,
+        extra: RequestHandlerExtra,
+    ) -> Result<GetPromptResult> {
+        // 1. Resolve owner
+        let owner_id = self.resolve_owner(&extra);
+
+        // 2. Build initial progress
+        let progress = self.build_initial_progress();
+
+        // 3. Create task (graceful degradation on failure)
+        let task_id = match self
+            .task_router
+            .create_workflow_task(self.workflow.name(), &owner_id, progress.clone())
+            .await
+        {
+            Ok(value) => {
+                // Extract task_id from CreateTaskResult
+                value
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Task creation failed for workflow '{}', proceeding without task tracking: {}",
+                    self.workflow.name(),
+                    e
+                );
+                None
+            }
+        };
+
+        // 4. Delegate to inner handler
+        let mut result = self.inner.handle(args, extra).await?;
+
+        // If no task was created, return result as-is (graceful degradation)
+        let task_id = match task_id {
+            Some(id) => id,
+            None => return Ok(result),
+        };
+
+        // 5. Infer step statuses from message trace
+        let step_count = self.workflow.steps().len();
+        let statuses = Self::infer_step_statuses(&result.messages, step_count);
+
+        // 6. Update task variables with progress
+        let step_names: Vec<String> = self
+            .workflow
+            .steps()
+            .iter()
+            .map(|s| s.name().to_string())
+            .collect();
+
+        let mut updated_progress = progress;
+        if let Some(steps) = updated_progress.get_mut("steps").and_then(|s| s.as_array_mut()) {
+            for (i, step) in steps.iter_mut().enumerate() {
+                if let Some(status) = statuses.get(i) {
+                    if let Some(obj) = step.as_object_mut() {
+                        obj.insert("status".to_string(), Value::String(status.clone()));
+                    }
+                }
+            }
+        }
+
+        let variables = serde_json::json!({
+            "_workflow.progress": updated_progress,
+        });
+
+        if let Err(e) = self
+            .task_router
+            .set_task_variables(&task_id, &owner_id, variables)
+            .await
+        {
+            tracing::warn!(
+                "Failed to update task variables for workflow '{}': {}",
+                self.workflow.name(),
+                e
+            );
+        }
+
+        // 7. Enrich result with _meta
+        let meta = Self::build_meta_map(&task_id, &step_names, &statuses);
+        result._meta = Some(meta);
+
+        Ok(result)
+    }
+
+    /// Delegate metadata to the inner handler unchanged.
+    fn metadata(&self) -> Option<PromptInfo> {
+        self.inner.metadata()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn infer_step_statuses_all_pending_with_empty_messages() {
+        let messages = vec![];
+        let statuses = TaskWorkflowPromptHandler::infer_step_statuses(&messages, 3);
+        assert_eq!(statuses, vec!["pending", "pending", "pending"]);
+    }
+
+    #[test]
+    fn infer_step_statuses_all_pending_with_only_header_messages() {
+        // Only user-intent and assistant-plan (first 2 messages)
+        let messages = vec![
+            PromptMessage {
+                role: Role::User,
+                content: crate::types::MessageContent::Text {
+                    text: "intent".to_string(),
+                },
+            },
+            PromptMessage {
+                role: Role::Assistant,
+                content: crate::types::MessageContent::Text {
+                    text: "plan".to_string(),
+                },
+            },
+        ];
+        let statuses = TaskWorkflowPromptHandler::infer_step_statuses(&messages, 3);
+        assert_eq!(statuses, vec!["pending", "pending", "pending"]);
+    }
+
+    #[test]
+    fn infer_step_statuses_partial_completion() {
+        // 2 header messages + 1 completed step (assistant + user pair)
+        let messages = vec![
+            PromptMessage {
+                role: Role::User,
+                content: crate::types::MessageContent::Text {
+                    text: "intent".to_string(),
+                },
+            },
+            PromptMessage {
+                role: Role::Assistant,
+                content: crate::types::MessageContent::Text {
+                    text: "plan".to_string(),
+                },
+            },
+            // Step 1: tool call
+            PromptMessage {
+                role: Role::Assistant,
+                content: crate::types::MessageContent::Text {
+                    text: "calling tool".to_string(),
+                },
+            },
+            // Step 1: tool result
+            PromptMessage {
+                role: Role::User,
+                content: crate::types::MessageContent::Text {
+                    text: "result".to_string(),
+                },
+            },
+        ];
+        let statuses = TaskWorkflowPromptHandler::infer_step_statuses(&messages, 3);
+        assert_eq!(statuses, vec!["completed", "pending", "pending"]);
+    }
+
+    #[test]
+    fn infer_step_statuses_all_completed() {
+        // 2 header messages + 3 completed steps
+        let messages = vec![
+            PromptMessage {
+                role: Role::User,
+                content: crate::types::MessageContent::Text {
+                    text: "intent".to_string(),
+                },
+            },
+            PromptMessage {
+                role: Role::Assistant,
+                content: crate::types::MessageContent::Text {
+                    text: "plan".to_string(),
+                },
+            },
+            // Step 1
+            PromptMessage {
+                role: Role::Assistant,
+                content: crate::types::MessageContent::Text {
+                    text: "calling tool 1".to_string(),
+                },
+            },
+            PromptMessage {
+                role: Role::User,
+                content: crate::types::MessageContent::Text {
+                    text: "result 1".to_string(),
+                },
+            },
+            // Step 2
+            PromptMessage {
+                role: Role::Assistant,
+                content: crate::types::MessageContent::Text {
+                    text: "calling tool 2".to_string(),
+                },
+            },
+            PromptMessage {
+                role: Role::User,
+                content: crate::types::MessageContent::Text {
+                    text: "result 2".to_string(),
+                },
+            },
+            // Step 3
+            PromptMessage {
+                role: Role::Assistant,
+                content: crate::types::MessageContent::Text {
+                    text: "calling tool 3".to_string(),
+                },
+            },
+            PromptMessage {
+                role: Role::User,
+                content: crate::types::MessageContent::Text {
+                    text: "result 3".to_string(),
+                },
+            },
+        ];
+        let statuses = TaskWorkflowPromptHandler::infer_step_statuses(&messages, 3);
+        assert_eq!(statuses, vec!["completed", "completed", "completed"]);
+    }
+
+    #[test]
+    fn infer_step_statuses_zero_steps() {
+        let messages = vec![];
+        let statuses = TaskWorkflowPromptHandler::infer_step_statuses(&messages, 0);
+        assert!(statuses.is_empty());
+    }
+
+    #[test]
+    fn infer_step_statuses_more_pairs_than_steps() {
+        // More assistant/user pairs than actual steps -- should clamp
+        let messages = vec![
+            PromptMessage {
+                role: Role::User,
+                content: crate::types::MessageContent::Text {
+                    text: "intent".to_string(),
+                },
+            },
+            PromptMessage {
+                role: Role::Assistant,
+                content: crate::types::MessageContent::Text {
+                    text: "plan".to_string(),
+                },
+            },
+            // 3 pairs but only 2 steps
+            PromptMessage {
+                role: Role::Assistant,
+                content: crate::types::MessageContent::Text {
+                    text: "tool 1".to_string(),
+                },
+            },
+            PromptMessage {
+                role: Role::User,
+                content: crate::types::MessageContent::Text {
+                    text: "result 1".to_string(),
+                },
+            },
+            PromptMessage {
+                role: Role::Assistant,
+                content: crate::types::MessageContent::Text {
+                    text: "tool 2".to_string(),
+                },
+            },
+            PromptMessage {
+                role: Role::User,
+                content: crate::types::MessageContent::Text {
+                    text: "result 2".to_string(),
+                },
+            },
+            PromptMessage {
+                role: Role::Assistant,
+                content: crate::types::MessageContent::Text {
+                    text: "tool 3".to_string(),
+                },
+            },
+            PromptMessage {
+                role: Role::User,
+                content: crate::types::MessageContent::Text {
+                    text: "result 3".to_string(),
+                },
+            },
+        ];
+        let statuses = TaskWorkflowPromptHandler::infer_step_statuses(&messages, 2);
+        assert_eq!(statuses, vec!["completed", "completed"]);
+    }
+
+    #[test]
+    fn build_meta_map_basic() {
+        let step_names = vec![
+            "validate".to_string(),
+            "deploy".to_string(),
+            "notify".to_string(),
+        ];
+        let statuses = vec![
+            "completed".to_string(),
+            "pending".to_string(),
+            "pending".to_string(),
+        ];
+
+        let meta = TaskWorkflowPromptHandler::build_meta_map("task-123", &step_names, &statuses);
+
+        assert_eq!(meta["task_id"], "task-123");
+        assert_eq!(meta["task_status"], "working");
+
+        let steps = meta["steps"].as_array().expect("steps should be an array");
+        assert_eq!(steps.len(), 3);
+        assert_eq!(steps[0]["name"], "validate");
+        assert_eq!(steps[0]["status"], "completed");
+        assert_eq!(steps[1]["name"], "deploy");
+        assert_eq!(steps[1]["status"], "pending");
+        assert_eq!(steps[2]["name"], "notify");
+        assert_eq!(steps[2]["status"], "pending");
+    }
+
+    #[test]
+    fn build_meta_map_empty_steps() {
+        let meta = TaskWorkflowPromptHandler::build_meta_map("task-456", &[], &[]);
+
+        assert_eq!(meta["task_id"], "task-456");
+        assert_eq!(meta["task_status"], "working");
+
+        let steps = meta["steps"].as_array().expect("steps should be an array");
+        assert!(steps.is_empty());
+    }
+
+    #[test]
+    fn infer_step_statuses_guidance_messages_counted_correctly() {
+        // WorkflowPromptHandler may emit guidance messages (assistant role)
+        // before the tool call. The pattern is:
+        //   Assistant (guidance) -> Assistant (tool call) -> User (result)
+        // This tests that consecutive assistant messages don't double-count.
+        let messages = vec![
+            PromptMessage {
+                role: Role::User,
+                content: crate::types::MessageContent::Text {
+                    text: "intent".to_string(),
+                },
+            },
+            PromptMessage {
+                role: Role::Assistant,
+                content: crate::types::MessageContent::Text {
+                    text: "plan".to_string(),
+                },
+            },
+            // Guidance message (assistant, not followed by user)
+            PromptMessage {
+                role: Role::Assistant,
+                content: crate::types::MessageContent::Text {
+                    text: "guidance for step 1".to_string(),
+                },
+            },
+            // Tool call (assistant)
+            PromptMessage {
+                role: Role::Assistant,
+                content: crate::types::MessageContent::Text {
+                    text: "calling tool 1".to_string(),
+                },
+            },
+            // Tool result (user)
+            PromptMessage {
+                role: Role::User,
+                content: crate::types::MessageContent::Text {
+                    text: "result 1".to_string(),
+                },
+            },
+        ];
+        // Only 1 step should be completed (the guidance + tool call + result = 1 pair)
+        let statuses = TaskWorkflowPromptHandler::infer_step_statuses(&messages, 2);
+        assert_eq!(statuses, vec!["completed", "pending"]);
+    }
+}
