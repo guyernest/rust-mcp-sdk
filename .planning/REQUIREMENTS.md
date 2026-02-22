@@ -49,16 +49,16 @@ Requirements for initial release (`pmcp-tasks` v0.1.0). Each maps to roadmap pha
 
 - [x] **INTG-01**: Server task capabilities advertised via `experimental.tasks` field during initialization
 - [x] **INTG-02**: Tool-level task support declared via `execution.taskSupport` in tools/list response
-- [ ] **INTG-03**: TaskMiddleware intercepts tools/call requests containing `task` field and creates task
-- [ ] **INTG-04**: TaskMiddleware returns CreateTaskResult immediately and spawns background tool execution
-- [ ] **INTG-05**: tasks/get endpoint returns current task state for polling
-- [ ] **INTG-06**: tasks/result endpoint returns the operation result for terminal tasks
-- [ ] **INTG-07**: tasks/list endpoint returns paginated tasks scoped to owner's authorization context
-- [ ] **INTG-08**: tasks/cancel endpoint transitions non-terminal tasks to cancelled status
-- [ ] **INTG-09**: TTL enforcement: receivers respect requested TTL, can override with max, clean up expired tasks
+- [x] **INTG-03**: TaskMiddleware intercepts tools/call requests containing `task` field and creates task
+- [x] **INTG-04**: TaskMiddleware returns CreateTaskResult immediately and spawns background tool execution
+- [x] **INTG-05**: tasks/get endpoint returns current task state for polling
+- [x] **INTG-06**: tasks/result endpoint returns the operation result for terminal tasks
+- [x] **INTG-07**: tasks/list endpoint returns paginated tasks scoped to owner's authorization context
+- [x] **INTG-08**: tasks/cancel endpoint transitions non-terminal tasks to cancelled status
+- [x] **INTG-09**: TTL enforcement: receivers respect requested TTL, can override with max, clean up expired tasks
 - [x] **INTG-10**: JSON-RPC routing handles tasks/get, tasks/result, tasks/list, tasks/cancel methods
-- [ ] **INTG-11**: progressToken from original request threaded through to background task execution
-- [ ] **INTG-12**: Model immediate response supported via optional `_meta` field in CreateTaskResult
+- [x] **INTG-11**: progressToken from original request threaded through to background task execution
+- [x] **INTG-12**: Model immediate response supported via optional `_meta` field in CreateTaskResult
 
 ### Security
 
@@ -164,16 +164,16 @@ Deferred to future release. Tracked but not in current roadmap.
 | HNDL-06 | Phase 2 | Complete |
 | INTG-01 | Phase 3 | Complete |
 | INTG-02 | Phase 3 | Complete |
-| INTG-03 | Phase 3 | Pending |
-| INTG-04 | Phase 3 | Pending |
-| INTG-05 | Phase 3 | Pending |
-| INTG-06 | Phase 3 | Pending |
-| INTG-07 | Phase 3 | Pending |
-| INTG-08 | Phase 3 | Pending |
-| INTG-09 | Phase 3 | Pending |
+| INTG-03 | Phase 3 | Complete |
+| INTG-04 | Phase 3 | Complete |
+| INTG-05 | Phase 3 | Complete |
+| INTG-06 | Phase 3 | Complete |
+| INTG-07 | Phase 3 | Complete |
+| INTG-08 | Phase 3 | Complete |
+| INTG-09 | Phase 3 | Complete |
 | INTG-10 | Phase 3 | Complete |
-| INTG-11 | Phase 3 | Pending |
-| INTG-12 | Phase 3 | Pending |
+| INTG-11 | Phase 3 | Complete |
+| INTG-12 | Phase 3 | Complete |
 | SEC-01 | Phase 2 | Pending |
 | SEC-02 | Phase 2 | Pending |
 | SEC-03 | Phase 2 | Pending |

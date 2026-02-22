@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-21)
 ## Current Position
 
 Phase: 3 of 5 (Handler, Middleware, and Server Integration)
-Plan: 1 of 3 in current phase
+Plan: 2 of 3 in current phase
 Status: In Progress
-Last activity: 2026-02-22 -- Completed Plan 01 (protocol types, TaskRouter, builder integration)
+Last activity: 2026-02-22 -- Completed Plan 02 (TaskRouterImpl, task routing in ServerCore)
 
-Progress: [#######...] 70%
+Progress: [########..] 80%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7
+- Total plans completed: 8
 - Average duration: 7 min
-- Total execution time: 0.87 hours
+- Total execution time: 1.02 hours
 
 **By Phase:**
 
@@ -29,11 +29,11 @@ Progress: [#######...] 70%
 |-------|-------|-------|----------|
 | 01 | 3 | 19 min | 6 min |
 | 02 | 3 | 18 min | 6 min |
-| 03 | 1 | 15 min | 15 min |
+| 03 | 2 | 24 min | 12 min |
 
 **Recent Trend:**
-- Last 5 plans: 7min, 7min, 4min, 7min, 15min
-- Trend: stable (plan 03-01 larger due to cross-codebase struct updates)
+- Last 5 plans: 7min, 4min, 7min, 15min, 9min
+- Trend: stable
 
 *Updated after each plan completion*
 
@@ -70,6 +70,9 @@ Recent decisions affecting current work:
 - [03-01]: TaskRouter trait defined in pmcp (not pmcp-tasks) so builder can reference it
 - [03-01]: Task ClientRequest variants return METHOD_NOT_FOUND when no task router configured
 - [03-01]: with_task_store() method name per CONTEXT.md locked decision (parameter is Arc<dyn TaskRouter>)
+- [03-02]: TaskRouterImpl stores tool context (name, args, progressToken) as task variables for external service pickup
+- [03-02]: Task-augmented call interception in handle_request_internal BEFORE handle_call_tool (returns CreateTaskResult as Value)
+- [03-02]: Tasks not enabled returns -32601 consistent with 03-01 decision
 
 ### Pending Todos
 
@@ -84,5 +87,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 03-01-PLAN.md (protocol types, TaskRouter, builder integration)
+Stopped at: Completed 03-02-PLAN.md (TaskRouterImpl, task routing in ServerCore)
 Resume file: None
