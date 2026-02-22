@@ -14,9 +14,11 @@
 //! # Backend Implementations
 //!
 //! This module defines the trait only. Implementations are provided
-//! by separate modules:
-//! - In-memory backend (Phase 2)
+//! by submodules:
+//! - `InMemoryTaskStore` (in `memory` submodule) - Thread-safe in-memory backend using DashMap.
 //! - DynamoDB backend (Phase 4)
+
+pub mod memory;
 
 use std::collections::HashMap;
 
@@ -182,15 +184,17 @@ pub trait TaskStore: Send + Sync {
 
     /// Retrieves a task by ID, scoped to the given owner.
     ///
-    /// Returns the current state of the task. If the task exists but has
-    /// expired past its TTL, returns an `Expired` error instead of the
-    /// task data.
+    /// Returns the current state of the task, including expired tasks
+    /// (callers can check [`TaskRecord::is_expired()`] to detect expiry).
+    /// Expired tasks remain readable until [`cleanup_expired`](TaskStore::cleanup_expired)
+    /// removes them, allowing clients to inspect state and retry with a
+    /// longer TTL if needed.
     ///
     /// # Errors
     ///
-    /// - [`TaskError::NotFound`] if no task with the given ID exists.
-    /// - [`TaskError::Expired`] if the task's TTL has elapsed.
-    /// - [`TaskError::OwnerMismatch`] if the task belongs to a different owner.
+    /// - [`TaskError::NotFound`] if no task with the given ID exists
+    ///   (or if the task belongs to a different owner -- owner mismatch
+    ///   is indistinguishable from not found for security).
     /// - [`TaskError::StoreError`] on backend failures.
     async fn get(
         &self,

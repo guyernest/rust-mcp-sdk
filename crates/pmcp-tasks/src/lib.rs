@@ -17,7 +17,8 @@
 //!
 //! - [`types`] - Spec-compliant wire types (Task, params, capabilities, etc.)
 //! - [`domain`] - Internal domain types (TaskRecord, TaskWithVariables)
-//! - [`store`] - TaskStore async trait and supporting types
+//! - [`store`] - TaskStore async trait, supporting types, and backend implementations
+//! - [`security`] - Security configuration and owner resolution
 //! - [`error`] - Rich error types with JSON-RPC error code mapping
 //! - [`constants`] - Meta key and method name constants
 
@@ -39,5 +40,6 @@ pub use constants::*;
 pub use domain::{TaskRecord, TaskWithVariables};
 pub use error::TaskError;
 pub use security::{resolve_owner_id, TaskSecurityConfig, DEFAULT_LOCAL_OWNER};
+pub use store::memory::InMemoryTaskStore;
 pub use store::{ListTasksOptions, StoreConfig, TaskPage, TaskStore};
 pub use types::*;
