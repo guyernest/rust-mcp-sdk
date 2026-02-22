@@ -5,13 +5,15 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state that persists across tool calls.
-**Current focus:** v1.1 Task-Prompt Bridge — defining requirements
+**Current focus:** v1.1 Task-Prompt Bridge — Phase 4 ready to plan
 
 ## Current Position
 
 Milestone: v1.1 Task-Prompt Bridge
-Status: Defining requirements
-Last activity: 2026-02-22 — Milestone v1.1 started
+Phase: 4 of 7 (Foundation Types and Contracts)
+Plan: 0 of ? in current phase
+Status: Ready to plan
+Last activity: 2026-02-22 — Roadmap created for v1.1
 
 Progress: [░░░░░░░░░░] 0% (v1.1)
 
@@ -37,7 +39,12 @@ Progress: [░░░░░░░░░░] 0% (v1.1)
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
-All v1.0 decisions have outcomes marked — see PROJECT.md for full table.
+
+Key decisions for v1.1:
+- TaskWorkflowPromptHandler composes with (not modifies) WorkflowPromptHandler
+- Durable-first write order: task variables persisted before in-memory ExecutionContext
+- WorkflowProgress struct with schema_version prevents implicit API drift
+- Hybrid handoff format: _meta JSON + natural language for LLM compatibility
 
 ### Pending Todos
 
@@ -45,10 +52,11 @@ None.
 
 ### Blockers/Concerns
 
-None.
+- Verify `GetPromptResult._meta` field exists before Phase 6 (research gap)
+- WorkflowStepMiddleware design needs decision in Phase 6 planning (intercept point TBD)
 
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Starting v1.1 milestone — defining requirements
+Stopped at: v1.1 roadmap created — Phase 4 ready to plan
 Resume file: None

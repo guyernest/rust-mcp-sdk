@@ -67,31 +67,31 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FNDX-01 | — | Pending |
-| FNDX-02 | — | Pending |
-| FNDX-03 | — | Pending |
-| FNDX-04 | — | Pending |
-| FNDX-05 | — | Pending |
-| EXEC-01 | — | Pending |
-| EXEC-02 | — | Pending |
-| EXEC-03 | — | Pending |
-| EXEC-04 | — | Pending |
-| HAND-01 | — | Pending |
-| HAND-02 | — | Pending |
-| HAND-03 | — | Pending |
-| CONT-01 | — | Pending |
-| CONT-02 | — | Pending |
-| CONT-03 | — | Pending |
-| INTG-01 | — | Pending |
-| INTG-02 | — | Pending |
-| INTG-03 | — | Pending |
-| INTG-04 | — | Pending |
+| FNDX-01 | Phase 4 | Pending |
+| FNDX-02 | Phase 4 | Pending |
+| FNDX-03 | Phase 4 | Pending |
+| FNDX-04 | Phase 4 | Pending |
+| FNDX-05 | Phase 4 | Pending |
+| EXEC-01 | Phase 5 | Pending |
+| EXEC-02 | Phase 5 | Pending |
+| EXEC-03 | Phase 5 | Pending |
+| EXEC-04 | Phase 5 | Pending |
+| HAND-01 | Phase 6 | Pending |
+| HAND-02 | Phase 6 | Pending |
+| HAND-03 | Phase 6 | Pending |
+| CONT-01 | Phase 6 | Pending |
+| CONT-02 | Phase 6 | Pending |
+| CONT-03 | Phase 6 | Pending |
+| INTG-01 | Phase 7 | Pending |
+| INTG-02 | Phase 7 | Pending |
+| INTG-03 | Phase 7 | Pending |
+| INTG-04 | Phase 7 | Pending |
 
 **Coverage:**
 - v1.1 requirements: 19 total
-- Mapped to phases: 0
-- Unmapped: 19 (roadmap pending)
+- Mapped to phases: 19
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-22*
-*Last updated: 2026-02-22 after initial definition*
+*Last updated: 2026-02-22 after roadmap creation*

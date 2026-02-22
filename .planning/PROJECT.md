@@ -55,6 +55,7 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 - [ ] DynamoDB GSI for owner-scoped listing with cursor-based pagination
 - [ ] CloudFormation template integrating with cargo-pmcp deployment plugin system
 - [ ] Integration with cargo-pmcp deployment plugin system (DynamoDB table via CFN stack)
+- [ ] Cross-server task sharing on pmcp.run — shared TaskStore backend + OAuth sub owner binding enables multi-server workflow continuity
 - [ ] Examples: code mode, DynamoDB backend
 
 ### Out of Scope
