@@ -8,6 +8,17 @@ A separate crate (`pmcp-tasks`) that implements the MCP Tasks specification (202
 
 Tool handlers can manage long-running operations through a durable task lifecycle (create, poll, complete) with shared variable state that persists across tool calls — giving servers memory without an LLM.
 
+## Current Milestone: v1.1 Task-Prompt Bridge
+
+**Goal:** A workflow prompt can create a task, execute steps it can server-side, store progress in task variables, and return structured guidance so the LLM client knows what's done and what to do next.
+
+**Target features:**
+- Task-aware workflow prompts — a prompt creates a task and binds step progress to it
+- Partial server-side execution — workflow runs steps until it can't continue (needs client/user/external input)
+- Structured prompt reply with step guidance — completed results + remaining steps + task ID
+- Client continuation via tools + task polling — client follows the step list, polls tasks/result for progress
+- Step state tracking in task variables — standard variable schema for workflow progress
+
 ## Requirements
 
 ### Validated
@@ -29,14 +40,22 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ### Active
 
+- [ ] Task-aware workflow prompts that create tasks and bind step progress
+- [ ] Partial server-side execution with automatic pause on unresolvable steps
+- [ ] Structured prompt reply conveying completed steps, remaining steps, and task ID
+- [ ] Step state tracking in task variables (standard schema: goal, steps, completed, remaining)
+- [ ] Client continuation pattern via direct tool calls guided by prompt reply
+- [ ] Working example demonstrating task-prompt bridge with multi-step workflow
+
+### Future
+
 - [ ] DynamoDB storage backend behind `dynamodb` feature flag
 - [ ] DynamoDB conditional writes for atomic state transitions
 - [ ] DynamoDB TTL + read-time expiry filtering
 - [ ] DynamoDB GSI for owner-scoped listing with cursor-based pagination
 - [ ] CloudFormation template integrating with cargo-pmcp deployment plugin system
-- [ ] Integration with existing SequentialWorkflow system (task-backed workflows)
 - [ ] Integration with cargo-pmcp deployment plugin system (DynamoDB table via CFN stack)
-- [ ] Examples: workflow integration, code mode, DynamoDB backend
+- [ ] Examples: code mode, DynamoDB backend
 
 ### Out of Scope
 
@@ -55,7 +74,8 @@ Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, park
 
 - The MCP Tasks spec is experimental (2025-11-25). Most MCP clients don't support it yet, so the feature is optional and isolated in `pmcp-tasks`.
 - PMCP extends the minimal spec with task variables — a shared scratchpad visible to both client and server via `_meta`. This is the key innovation for servers without LLM capabilities.
-- The SDK already has a workflow system (`SequentialWorkflow`) that benefits from task-backed durable state.
+- The existing `SequentialWorkflow` system executes all steps server-side during `prompts/get`, returning a full conversation trace. v1.1 bridges this with tasks so workflows can pause mid-execution and let the client continue.
+- The workflow-as-prompt model: domain experts design MCP prompts that chain tools and resources. The prompt defines steps, the server executes what it can, the task tracks what's done, and the LLM client picks up the rest.
 - `cargo-pmcp` has pluggable deployment targets (Lambda+CFN, Google Run+Docker, Cloudflare Workers+wrangler). Task storage backends should follow the same plugin pattern, starting with DynamoDB+CFN.
 - Detailed design document: `docs/design/tasks-feature-design.md`
 
@@ -84,4 +104,4 @@ Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, park
 | TaskRouter in pmcp, impl in pmcp-tasks | One-directional dependency, builder accepts Arc\<dyn TaskRouter\> | ✓ Good — example only needs pmcp-tasks imports |
 
 ---
-*Last updated: 2026-02-22 after v1.0 milestone*
+*Last updated: 2026-02-22 after v1.1 milestone start*

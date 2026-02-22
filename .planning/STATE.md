@@ -5,15 +5,15 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state that persists across tool calls.
-**Current focus:** Planning next milestone
+**Current focus:** v1.1 Task-Prompt Bridge — defining requirements
 
 ## Current Position
 
-Milestone: v1.0 MCP Tasks Foundation — SHIPPED 2026-02-22
-Status: Milestone Complete
-Last activity: 2026-02-22 — Completed milestone archival and PROJECT.md evolution
+Milestone: v1.1 Task-Prompt Bridge
+Status: Defining requirements
+Last activity: 2026-02-22 — Milestone v1.1 started
 
-Progress: [##########] 100% (v1.0)
+Progress: [░░░░░░░░░░] 0% (v1.1)
 
 ## Performance Metrics
 
@@ -45,10 +45,10 @@ None.
 
 ### Blockers/Concerns
 
-None for v1.0 (shipped).
+None.
 
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed v1.0 milestone archival
+Stopped at: Starting v1.1 milestone — defining requirements
 Resume file: None
