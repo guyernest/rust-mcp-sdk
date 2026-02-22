@@ -22,7 +22,7 @@ See: `.planning/milestones/v1.0-ROADMAP.md` for full phase details
 
 **Milestone Goal:** A workflow prompt can create a task, execute steps server-side, store progress in task variables, and return structured guidance so the LLM client knows what's done and what to do next.
 
-- [ ] **Phase 4: Foundation Types and Contracts** - Schema, trait extension, step execution mode, and handler composition boundary
+- [x] **Phase 4: Foundation Types and Contracts** - Schema, trait extension, step execution mode, and handler composition boundary — completed 2026-02-22
 - [ ] **Phase 5: Partial Execution Engine** - Task creation, durable step sync, pause on client-deferred steps, failure handling
 - [ ] **Phase 6: Structured Handoff and Client Continuation** - Hybrid prompt reply format and tool-call-to-task reconnection
 - [ ] **Phase 7: Integration and End-to-End Validation** - Builder wiring, backward compatibility, working example, integration tests
@@ -34,15 +34,15 @@ See: `.planning/milestones/v1.0-ROADMAP.md` for full phase details
 **Depends on**: Phase 3 (v1.0 server integration)
 **Requirements**: FNDX-01, FNDX-02, FNDX-03, FNDX-04, FNDX-05
 **Success Criteria** (what must be TRUE):
-  1. `WorkflowProgress` struct with typed fields (`goal`, `steps`, `completed`, `remaining`) and `schema_version` serializes to/from task variable JSON without data loss
+  1. `WorkflowProgress` struct with typed fields (`goal`, `steps: Vec<WorkflowStepProgress>`, `schema_version`) serializes to/from task variable JSON without data loss (proptest + unit tests)
   2. `TaskRouter` trait has 3 new methods (`create_workflow_task`, `set_task_variables`, `complete_workflow_task`) with default error implementations — all existing `TaskRouterImpl` code compiles without modification
-  3. `WorkflowStep` accepts a `StepExecution` enum (`ServerSide`, `ClientDeferred`) that controls whether the step runs server-side or is deferred to the client
-  4. `TaskWorkflowPromptHandler` struct exists, composes with `WorkflowPromptHandler` internals, and the original `WorkflowPromptHandler` file has zero diff from v1.0
+  3. ~~`StepExecution` enum~~ DROPPED — steps execute best-effort at runtime; `StepStatus` enum (Pending/Completed/Failed/Skipped) tracks outcome per step
+  4. `TaskWorkflowPromptHandler` struct exists, composes with `WorkflowPromptHandler` via delegation, and the original `WorkflowPromptHandler` has zero behavioral changes (only `_meta: None` field additions)
   5. All existing workflow tests pass without modification (backward compatibility proven)
 **Plans:** 2 plans
 Plans:
-- [ ] 04-01-PLAN.md — Foundation types (WorkflowProgress, TaskRouter extension, GetPromptResult _meta)
-- [ ] 04-02-PLAN.md — TaskWorkflowPromptHandler composition and opt-in mechanism
+- [x] 04-01-PLAN.md — Foundation types (WorkflowProgress, TaskRouter extension, GetPromptResult _meta)
+- [x] 04-02-PLAN.md — TaskWorkflowPromptHandler composition and opt-in mechanism
 
 ### Phase 5: Partial Execution Engine
 **Goal**: Task-aware workflows create a task on invocation and execute server-mode steps with durable progress tracking, pausing cleanly at client-deferred steps
@@ -84,7 +84,7 @@ Plans:
 | 1. Foundation Types and Store Contract | v1.0 | 3/3 | Complete | 2026-02-21 |
 | 2. In-Memory Backend and Owner Security | v1.0 | 3/3 | Complete | 2026-02-22 |
 | 3. Handler, Middleware, and Server Integration | v1.0 | 3/3 | Complete | 2026-02-22 |
-| 4. Foundation Types and Contracts | v1.1 | 0/2 | Planned | - |
+| 4. Foundation Types and Contracts | v1.1 | 2/2 | Complete | 2026-02-22 |
 | 5. Partial Execution Engine | v1.1 | 0/? | Not started | - |
 | 6. Structured Handoff and Client Continuation | v1.1 | 0/? | Not started | - |
 | 7. Integration and End-to-End Validation | v1.1 | 0/? | Not started | - |
