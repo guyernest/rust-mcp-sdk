@@ -52,11 +52,12 @@ None.
 
 ### Blockers/Concerns
 
-- Verify `GetPromptResult._meta` field exists before Phase 6 (research gap)
+- ~~Verify `GetPromptResult._meta` field exists~~ — RESOLVED: field doesn't exist, will add it in Phase 4
 - WorkflowStepMiddleware design needs decision in Phase 6 planning (intercept point TBD)
+- StepExecution enum dropped — runtime best-effort execution replaces it (decided in Phase 4 context)
 
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: v1.1 roadmap created — Phase 4 ready to plan
-Resume file: None
+Stopped at: Phase 4 context gathered
+Resume file: .planning/phases/04-foundation-types-and-contracts/04-CONTEXT.md
