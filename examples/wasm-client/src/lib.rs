@@ -249,6 +249,7 @@ impl WasmClient {
                             name,
                             arguments,
                             _meta: None,
+                            task: None,
                         }),
                     )),
                 };

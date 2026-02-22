@@ -251,6 +251,13 @@ pub struct ToolInfo {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
     pub _meta: Option<serde_json::Map<String, Value>>,
+    /// Execution metadata declaring task support level (experimental MCP Tasks).
+    ///
+    /// Uses `serde_json::Value` to avoid circular crate dependency
+    /// (`pmcp-tasks` depends on `pmcp`). Tools set this via
+    /// `serde_json::to_value(ToolExecution { .. })`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution: Option<Value>,
 }
 
 impl ToolInfo {
@@ -262,6 +269,7 @@ impl ToolInfo {
             input_schema,
             annotations: None,
             _meta: None,
+            execution: None,
         }
     }
 
@@ -307,6 +315,7 @@ impl ToolInfo {
             input_schema,
             annotations: Some(annotations),
             _meta: None,
+            execution: None,
         }
     }
 
@@ -329,6 +338,7 @@ impl ToolInfo {
             input_schema,
             annotations: None,
             _meta: Some(meta),
+            execution: None,
         }
     }
 }
@@ -357,6 +367,13 @@ pub struct CallToolRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
     pub _meta: Option<RequestMeta>,
+    /// Task augmentation parameters (experimental MCP Tasks).
+    ///
+    /// When present, the server creates a task and returns `CreateTaskResult`
+    /// instead of `CallToolResult`. Uses `serde_json::Value` to avoid circular
+    /// crate dependency (`pmcp-tasks` depends on `pmcp`).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub task: Option<Value>,
 }
 
 /// Tool call parameters (legacy name).
@@ -1008,6 +1025,18 @@ pub enum ClientRequest {
     /// Response to elicitation request
     #[serde(rename = "elicitation/response")]
     ElicitInputResponse(crate::types::elicitation::ElicitInputResponse),
+    /// Get task status (experimental MCP Tasks).
+    #[serde(rename = "tasks/get")]
+    TasksGet(Value),
+    /// Get task result (experimental MCP Tasks).
+    #[serde(rename = "tasks/result")]
+    TasksResult(Value),
+    /// List tasks (experimental MCP Tasks).
+    #[serde(rename = "tasks/list")]
+    TasksList(Value),
+    /// Cancel a task (experimental MCP Tasks).
+    #[serde(rename = "tasks/cancel")]
+    TasksCancel(Value),
 }
 
 /// Server request types.
@@ -1481,5 +1510,83 @@ mod tests {
 
         let meta_value = result._meta.unwrap();
         assert_eq!(meta_value["widgetState"]["selected"], true);
+    }
+
+    #[test]
+    fn test_task_client_request_variants() {
+        // TasksGet
+        let json_str = r#"{"method": "tasks/get", "params": {"taskId": "abc"}}"#;
+        let req: ClientRequest = serde_json::from_str(json_str).unwrap();
+        assert!(matches!(req, ClientRequest::TasksGet(_)));
+
+        // TasksResult
+        let json_str = r#"{"method": "tasks/result", "params": {"taskId": "abc"}}"#;
+        let req: ClientRequest = serde_json::from_str(json_str).unwrap();
+        assert!(matches!(req, ClientRequest::TasksResult(_)));
+
+        // TasksList
+        let json_str = r#"{"method": "tasks/list", "params": {}}"#;
+        let req: ClientRequest = serde_json::from_str(json_str).unwrap();
+        assert!(matches!(req, ClientRequest::TasksList(_)));
+
+        // TasksCancel
+        let json_str = r#"{"method": "tasks/cancel", "params": {"taskId": "abc"}}"#;
+        let req: ClientRequest = serde_json::from_str(json_str).unwrap();
+        assert!(matches!(req, ClientRequest::TasksCancel(_)));
+    }
+
+    #[test]
+    fn test_task_client_request_roundtrip() {
+        // Verify serialization round-trip for task variants
+        let req = ClientRequest::TasksGet(json!({"taskId": "t-123"}));
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["method"], "tasks/get");
+        assert_eq!(json["params"]["taskId"], "t-123");
+
+        let deserialized: ClientRequest = serde_json::from_value(json).unwrap();
+        assert!(matches!(deserialized, ClientRequest::TasksGet(_)));
+    }
+
+    #[test]
+    fn test_call_tool_request_with_task() {
+        let json_str = r#"{"name": "my_tool", "arguments": {}, "task": {"ttl": 60000}}"#;
+        let req: CallToolRequest = serde_json::from_str(json_str).unwrap();
+        assert!(req.task.is_some());
+        assert_eq!(req.task.unwrap()["ttl"], 60000);
+    }
+
+    #[test]
+    fn test_call_tool_request_without_task_backward_compat() {
+        // Existing JSON without the task field still works
+        let json_str = r#"{"name": "my_tool", "arguments": {}}"#;
+        let req: CallToolRequest = serde_json::from_str(json_str).unwrap();
+        assert!(req.task.is_none());
+        assert_eq!(req.name, "my_tool");
+    }
+
+    #[test]
+    fn test_tool_info_with_execution() {
+        let mut tool = ToolInfo::new(
+            "task-tool",
+            Some("A task-enabled tool".to_string()),
+            json!({"type": "object"}),
+        );
+        tool.execution = Some(json!({"taskSupport": "required"}));
+
+        let json = serde_json::to_value(&tool).unwrap();
+        assert_eq!(json["name"], "task-tool");
+        assert_eq!(json["execution"]["taskSupport"], "required");
+    }
+
+    #[test]
+    fn test_tool_info_without_execution_omits_field() {
+        let tool = ToolInfo::new(
+            "normal-tool",
+            Some("A normal tool".to_string()),
+            json!({"type": "object"}),
+        );
+
+        let json = serde_json::to_value(&tool).unwrap();
+        assert!(json.get("execution").is_none());
     }
 }

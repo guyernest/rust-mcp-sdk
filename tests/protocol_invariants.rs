@@ -223,6 +223,7 @@ proptest! {
                 name: tool_name,
                 arguments: args,
                 _meta: None,
+                task: None,
             }),
             3 => ClientRequest::ListPrompts(ListPromptsParams { cursor: cursor.clone() }),
             4 => ClientRequest::GetPrompt(GetPromptParams {

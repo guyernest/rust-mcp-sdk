@@ -413,6 +413,7 @@ impl<T: Transport> Client<T> {
             name,
             arguments,
             _meta: None,
+            task: None,
         })));
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;

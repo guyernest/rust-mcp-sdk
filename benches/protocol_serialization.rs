@@ -36,6 +36,7 @@ fn bench_request_serialization(c: &mut Criterion) {
     // Call tool request with complex arguments
     let call_tool = ClientRequest::CallTool(CallToolParams {
         name: "complex_tool".to_string(),
+        task: None,
         arguments: json!({
             "query": "rust programming language",
             "filters": {

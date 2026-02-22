@@ -107,6 +107,7 @@ async fn main() -> Result<()> {
         _meta: Some(RequestMeta {
             progress_token: Some(ProgressToken::String("countdown-1".to_string())),
         }),
+        task: None,
     };
 
     println!("Calling countdown tool with progress token 'countdown-1'...\n");
@@ -135,6 +136,7 @@ async fn main() -> Result<()> {
         _meta: Some(RequestMeta {
             progress_token: Some(ProgressToken::String("countdown-2".to_string())),
         }),
+        task: None,
     };
 
     println!("Calling countdown from 10 with cancellation after 3 seconds...\n");

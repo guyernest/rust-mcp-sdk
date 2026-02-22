@@ -306,6 +306,7 @@ async fn main() -> Result<()> {
                 "endpoint": "/api/users"
             }),
             _meta: None,
+            task: None,
         },
     )));
 
@@ -330,6 +331,7 @@ async fn main() -> Result<()> {
                 "endpoint": "/api/public"
             }),
             _meta: None,
+            task: None,
         },
     )));
 
@@ -354,6 +356,7 @@ async fn main() -> Result<()> {
                 "endpoint": "/api/data"
             }),
             _meta: None,
+            task: None,
         },
     )));
 

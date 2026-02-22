@@ -927,6 +927,14 @@ impl Server {
                 }
                 Ok(serde_json::json!({}))
             },
+            // Task requests (experimental MCP Tasks) -- routing handled in Plan 02
+            ClientRequest::TasksGet(_)
+            | ClientRequest::TasksResult(_)
+            | ClientRequest::TasksList(_)
+            | ClientRequest::TasksCancel(_) => Err(crate::Error::protocol(
+                crate::ErrorCode::METHOD_NOT_FOUND,
+                "Tasks not supported: no task router configured",
+            )),
         }
     }
 
@@ -3386,6 +3394,7 @@ mod tests {
             name: "test-tool".to_string(),
             arguments: json!({"input": "test"}),
             _meta: None,
+            task: None,
         })));
 
         let response = server
@@ -3414,6 +3423,7 @@ mod tests {
             name: "nonexistent-tool".to_string(),
             arguments: json!({}),
             _meta: None,
+            task: None,
         })));
 
         let response = server
@@ -3688,6 +3698,7 @@ mod tests {
             name: "test_tool".to_string(),
             arguments: json!({}),
             _meta: None,
+            task: None,
         })));
 
         let response = server
@@ -3755,6 +3766,7 @@ mod tests {
             name: "test_tool".to_string(),
             arguments: json!({}),
             _meta: None,
+            task: None,
         })));
 
         let _response = server
@@ -3826,6 +3838,7 @@ mod tests {
             name: "typed_tool".to_string(),
             arguments: json!({}),
             _meta: None,
+            task: None,
         })));
 
         let response = server
@@ -3876,6 +3889,7 @@ mod tests {
             name: "test_tool".to_string(),
             arguments: json!({}),
             _meta: None,
+            task: None,
         })));
 
         let response = server
