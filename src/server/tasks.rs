@@ -82,4 +82,83 @@ pub trait TaskRouter: Send + Sync {
     /// This is inserted into the server's capabilities during initialization
     /// so clients know the server supports the tasks protocol extension.
     fn task_capabilities(&self) -> Value;
+
+    // --- Workflow task methods (Phase 4: Task-Prompt Bridge) ---
+
+    /// Create a workflow-backed task. Returns `CreateTaskResult` as `Value`.
+    ///
+    /// Called by `TaskWorkflowPromptHandler` when a task-aware workflow prompt
+    /// is invoked. The implementation creates a task with the workflow's
+    /// initial progress stored in task variables.
+    ///
+    /// # Arguments
+    ///
+    /// * `workflow_name` - Name of the workflow (becomes the task title).
+    /// * `owner_id` - Owner identity for the new task.
+    /// * `progress` - Serialized [`WorkflowProgress`] to store in task variables.
+    ///
+    /// # Default
+    ///
+    /// Returns an error indicating workflow tasks are not supported.
+    async fn create_workflow_task(
+        &self,
+        _workflow_name: &str,
+        _owner_id: &str,
+        _progress: Value,
+    ) -> Result<Value> {
+        Err(crate::error::Error::internal(
+            "workflow tasks not supported by this router",
+        ))
+    }
+
+    /// Update task variables with workflow step results.
+    ///
+    /// Called after each step completes to persist the step result
+    /// and updated progress to the task's variable store.
+    ///
+    /// # Arguments
+    ///
+    /// * `task_id` - ID of the task to update.
+    /// * `owner_id` - Owner identity for authorization.
+    /// * `variables` - JSON object of key-value pairs to set on the task.
+    ///
+    /// # Default
+    ///
+    /// Returns an error indicating workflow tasks are not supported.
+    async fn set_task_variables(
+        &self,
+        _task_id: &str,
+        _owner_id: &str,
+        _variables: Value,
+    ) -> Result<()> {
+        Err(crate::error::Error::internal(
+            "workflow tasks not supported by this router",
+        ))
+    }
+
+    /// Complete a workflow task with final result.
+    ///
+    /// Called when all steps have been executed (or the workflow determines
+    /// completion). Sets the task status to `Completed` and stores the
+    /// final result.
+    ///
+    /// # Arguments
+    ///
+    /// * `task_id` - ID of the task to complete.
+    /// * `owner_id` - Owner identity for authorization.
+    /// * `result` - Final result value to store on the task.
+    ///
+    /// # Default
+    ///
+    /// Returns an error indicating workflow tasks are not supported.
+    async fn complete_workflow_task(
+        &self,
+        _task_id: &str,
+        _owner_id: &str,
+        _result: Value,
+    ) -> Result<Value> {
+        Err(crate::error::Error::internal(
+            "workflow tasks not supported by this router",
+        ))
+    }
 }

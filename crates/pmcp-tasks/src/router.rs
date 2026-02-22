@@ -293,6 +293,101 @@ impl TaskRouter for TaskRouterImpl {
         serde_json::to_value(ServerTaskCapabilities::full())
             .expect("ServerTaskCapabilities serialization should never fail")
     }
+
+    /// Create a workflow-backed task with initial progress in variables.
+    ///
+    /// The `workflow_name` becomes the task's origin method identifier.
+    /// The `progress` value (a serialized [`WorkflowProgress`]) is stored
+    /// under the [`WORKFLOW_PROGRESS_KEY`] task variable.
+    async fn create_workflow_task(
+        &self,
+        workflow_name: &str,
+        owner_id: &str,
+        progress: Value,
+    ) -> PmcpResult<Value> {
+        // Validate progress is a JSON object
+        if !progress.is_object() {
+            return Err(PmcpError::invalid_params(
+                "workflow progress must be a JSON object",
+            ));
+        }
+
+        let record = self
+            .store
+            .create(owner_id, workflow_name, None)
+            .await
+            .map_err(task_error_to_pmcp)?;
+
+        let task_id = record.task.task_id.clone();
+
+        // Store initial progress under the workflow progress key
+        let mut vars = HashMap::new();
+        vars.insert(
+            crate::types::workflow::WORKFLOW_PROGRESS_KEY.to_string(),
+            progress,
+        );
+
+        self.store
+            .set_variables(&task_id, owner_id, vars)
+            .await
+            .map_err(task_error_to_pmcp)?;
+
+        let result = CreateTaskResult {
+            task: record.task,
+            _meta: None,
+        };
+
+        serde_json::to_value(result)
+            .map_err(|e| PmcpError::internal(format!("failed to serialize CreateTaskResult: {e}")))
+    }
+
+    /// Update task variables with workflow step results.
+    ///
+    /// Deserializes `variables` as a JSON object and sets each key-value
+    /// pair on the task's variable store.
+    async fn set_task_variables(
+        &self,
+        task_id: &str,
+        owner_id: &str,
+        variables: Value,
+    ) -> PmcpResult<()> {
+        let vars_map: HashMap<String, Value> = serde_json::from_value(variables)
+            .map_err(|e| PmcpError::invalid_params(format!("invalid variables object: {e}")))?;
+
+        self.store
+            .set_variables(task_id, owner_id, vars_map)
+            .await
+            .map_err(task_error_to_pmcp)?;
+
+        Ok(())
+    }
+
+    /// Complete a workflow task with final result.
+    ///
+    /// Transitions the task to `Completed` status and stores the result
+    /// atomically.
+    async fn complete_workflow_task(
+        &self,
+        task_id: &str,
+        owner_id: &str,
+        result: Value,
+    ) -> PmcpResult<Value> {
+        let record = self
+            .store
+            .complete_with_result(
+                task_id,
+                owner_id,
+                crate::types::task::TaskStatus::Completed,
+                None,
+                result,
+            )
+            .await
+            .map_err(task_error_to_pmcp)?;
+
+        let wire_task = record.to_wire_task_with_variables();
+        serde_json::to_value(wire_task)
+            .map_err(|e| PmcpError::internal(format!("failed to serialize task: {e}")))
+    }
 }
 
 #[cfg(test)]
@@ -622,5 +717,171 @@ mod tests {
         let router = TaskRouterImpl::with_security(store, config);
         assert_eq!(router.security_config().max_tasks_per_owner, 50);
         assert!(router.security_config().allow_anonymous);
+    }
+
+    // --- Workflow task method tests ---
+
+    #[tokio::test]
+    async fn create_workflow_task_creates_task_with_progress() {
+        let router = make_router();
+        let progress = serde_json::json!({
+            "goal": "Deploy service",
+            "steps": [
+                { "name": "validate", "tool": "validate_config", "status": "pending" }
+            ],
+            "schemaVersion": 1
+        });
+
+        let result = router
+            .create_workflow_task("deploy-workflow", "owner-1", progress.clone())
+            .await
+            .unwrap();
+
+        assert!(result.get("task").is_some());
+        let task = &result["task"];
+        assert_eq!(task["status"], "working");
+
+        // Verify progress stored in variables
+        let task_id = task["taskId"].as_str().unwrap();
+        let record = router.store().get(task_id, "owner-1").await.unwrap();
+        assert_eq!(
+            record
+                .variables
+                .get(crate::types::workflow::WORKFLOW_PROGRESS_KEY)
+                .unwrap(),
+            &progress
+        );
+    }
+
+    #[tokio::test]
+    async fn create_workflow_task_rejects_non_object_progress() {
+        let router = make_router();
+
+        let err = router
+            .create_workflow_task("wf", "owner-1", serde_json::json!("not an object"))
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("must be a JSON object"));
+    }
+
+    #[tokio::test]
+    async fn set_task_variables_updates_variables() {
+        let router = make_router();
+
+        // Create a task first
+        let record = router
+            .store()
+            .create("owner-1", "tools/call", None)
+            .await
+            .unwrap();
+        let task_id = record.task.task_id.clone();
+
+        let variables = serde_json::json!({
+            "_workflow.result.validate": { "output": "valid" },
+            "_workflow.progress": { "goal": "test", "steps": [], "schemaVersion": 1 }
+        });
+
+        router
+            .set_task_variables(&task_id, "owner-1", variables)
+            .await
+            .unwrap();
+
+        let updated = router.store().get(&task_id, "owner-1").await.unwrap();
+        assert!(updated.variables.contains_key("_workflow.result.validate"));
+        assert!(updated.variables.contains_key("_workflow.progress"));
+    }
+
+    #[tokio::test]
+    async fn set_task_variables_rejects_invalid_json() {
+        let router = make_router();
+
+        let record = router
+            .store()
+            .create("owner-1", "tools/call", None)
+            .await
+            .unwrap();
+        let task_id = record.task.task_id.clone();
+
+        // Pass a non-object value (array)
+        let err = router
+            .set_task_variables(&task_id, "owner-1", serde_json::json!([1, 2, 3]))
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("invalid variables"));
+    }
+
+    #[tokio::test]
+    async fn set_task_variables_rejects_unknown_task() {
+        let router = make_router();
+
+        let err = router
+            .set_task_variables("nonexistent", "owner-1", serde_json::json!({}))
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn complete_workflow_task_transitions_to_completed() {
+        let router = make_router();
+
+        let record = router
+            .store()
+            .create("owner-1", "tools/call", None)
+            .await
+            .unwrap();
+        let task_id = record.task.task_id.clone();
+
+        let result_value = serde_json::json!({ "summary": "all steps done" });
+        let response = router
+            .complete_workflow_task(&task_id, "owner-1", result_value)
+            .await
+            .unwrap();
+
+        assert_eq!(response["taskId"], task_id);
+        assert_eq!(response["status"], "completed");
+    }
+
+    #[tokio::test]
+    async fn complete_workflow_task_rejects_unknown_task() {
+        let router = make_router();
+
+        let err = router
+            .complete_workflow_task("nonexistent", "owner-1", serde_json::json!({}))
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn complete_workflow_task_rejects_already_terminal() {
+        let router = make_router();
+
+        let record = router
+            .store()
+            .create("owner-1", "tools/call", None)
+            .await
+            .unwrap();
+        let task_id = record.task.task_id.clone();
+
+        // Complete once
+        router
+            .complete_workflow_task(&task_id, "owner-1", serde_json::json!({}))
+            .await
+            .unwrap();
+
+        // Try to complete again
+        let err = router
+            .complete_workflow_task(&task_id, "owner-1", serde_json::json!({}))
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.to_string().contains("invalid transition") || err.to_string().contains("terminal")
+        );
     }
 }
