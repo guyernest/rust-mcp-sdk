@@ -66,5 +66,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 04-02-PLAN.md (Phase 4 complete)
-Resume file: .planning/phases/04-foundation-types-and-contracts/04-02-SUMMARY.md
+Stopped at: Phase 5 context gathered
+Resume file: .planning/phases/05-partial-execution-engine/05-CONTEXT.md
