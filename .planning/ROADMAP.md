@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation Types and Store Contract** - Spec-compliant protocol types, TaskStore trait, state machine, error types, and serialization tests (completed 2026-02-21)
 - [x] **Phase 2: In-Memory Backend and Owner Security** - Working in-memory storage with atomic transitions, owner isolation, security config, TaskContext, and property tests (completed 2026-02-22)
-- [ ] **Phase 3: Handler, Middleware, and Server Integration** - TaskHandler routing, TaskMiddleware for tools/call interception, capability negotiation, end-to-end lifecycle with basic example
+- [x] **Phase 3: Handler, Middleware, and Server Integration** - TaskHandler routing, TaskMiddleware for tools/call interception, capability negotiation, end-to-end lifecycle with basic example (completed 2026-02-22)
 - [ ] **Phase 4: DynamoDB Backend and Deployment** - Production DynamoDB storage with conditional writes, TTL, GSI pagination, CloudFormation template, and cargo-pmcp integration
 - [ ] **Phase 5: Workflow Integration and Examples** - SequentialWorkflow backed by tasks, task variables in workflow steps, and remaining examples (workflow, code mode, DynamoDB)
 
@@ -111,6 +111,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 |-------|----------------|--------|-----------|
 | 1. Foundation Types and Store Contract | 0/3 | Complete    | 2026-02-21 |
 | 2. In-Memory Backend and Owner Security | 0/3 | Complete    | 2026-02-22 |
-| 3. Handler, Middleware, and Server Integration | 0/3 | Not started | - |
+| 3. Handler, Middleware, and Server Integration | 0/3 | Complete    | 2026-02-22 |
 | 4. DynamoDB Backend and Deployment | 0/? | Not started | - |
 | 5. Workflow Integration and Examples | 0/? | Not started | - |
