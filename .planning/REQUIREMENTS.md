@@ -17,10 +17,10 @@ Requirements for the Task-Prompt Bridge milestone. Each maps to roadmap phases.
 
 ### Execution
 
-- [ ] **EXEC-01**: Server executes server-mode steps sequentially, storing each result in task variables (durable-first write order)
-- [ ] **EXEC-02**: Execution pauses at client-deferred steps without failing the task (task remains Working)
-- [ ] **EXEC-03**: Step failure during partial execution keeps task in Working state and records error details in task variables
-- [ ] **EXEC-04**: Extended validation checks that client-deferred steps don't depend on outputs of other client-deferred steps
+- [x] **EXEC-01**: Server executes server-mode steps sequentially, storing each result in task variables (durable-first write order)
+- [x] **EXEC-02**: Execution pauses at client-deferred steps without failing the task (task remains Working)
+- [x] **EXEC-03**: Step failure during partial execution keeps task in Working state and records error details in task variables
+- [x] **EXEC-04**: Extended validation checks that client-deferred steps don't depend on outputs of other client-deferred steps
 
 ### Handoff
 
@@ -72,10 +72,10 @@ Deferred to future release. Tracked but not in current roadmap.
 | FNDX-03 | Phase 4 | Complete |
 | FNDX-04 | Phase 4 | Complete |
 | FNDX-05 | Phase 4 | Complete |
-| EXEC-01 | Phase 5 | Pending |
-| EXEC-02 | Phase 5 | Pending |
-| EXEC-03 | Phase 5 | Pending |
-| EXEC-04 | Phase 5 | Pending |
+| EXEC-01 | Phase 5 | Complete |
+| EXEC-02 | Phase 5 | Complete |
+| EXEC-03 | Phase 5 | Complete |
+| EXEC-04 | Phase 5 | Complete |
 | HAND-01 | Phase 6 | Pending |
 | HAND-02 | Phase 6 | Pending |
 | HAND-03 | Phase 6 | Pending |
