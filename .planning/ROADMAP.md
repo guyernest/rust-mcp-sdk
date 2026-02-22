@@ -53,7 +53,10 @@ Plans:
   2. Execution pauses at the first client-deferred step without failing the task — the task remains in `Working` status and task variables reflect all completed steps
   3. When a server-mode step fails during partial execution, the task stays `Working`, the error details are recorded in task variables, and the step is marked as failed with a `retryable` flag
   4. Validation rejects workflows where a client-deferred step depends on the output of another client-deferred step, producing a clear error before execution begins
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 05-01-PLAN.md — PauseReason types, retryable field, pub(crate) visibility on WorkflowPromptHandler internals
+- [ ] 05-02-PLAN.md — Active execution engine with step loop, batch write, auto-complete
 
 ### Phase 6: Structured Handoff and Client Continuation
 **Goal**: After partial execution, the prompt reply tells the LLM client exactly what was done and what to do next, and follow-up tool calls reconnect to the workflow task
@@ -85,6 +88,6 @@ Plans:
 | 2. In-Memory Backend and Owner Security | v1.0 | 3/3 | Complete | 2026-02-22 |
 | 3. Handler, Middleware, and Server Integration | v1.0 | 3/3 | Complete | 2026-02-22 |
 | 4. Foundation Types and Contracts | v1.1 | 2/2 | Complete | 2026-02-22 |
-| 5. Partial Execution Engine | v1.1 | 0/? | Not started | - |
+| 5. Partial Execution Engine | v1.1 | 0/2 | Planned | - |
 | 6. Structured Handoff and Client Continuation | v1.1 | 0/? | Not started | - |
 | 7. Integration and End-to-End Validation | v1.1 | 0/? | Not started | - |
