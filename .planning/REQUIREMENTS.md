@@ -83,10 +83,10 @@ Requirements for initial release (`pmcp-tasks` v0.1.0). Each maps to roadmap pha
 - [x] **TEST-01**: Protocol type serialization tests (all types round-trip correctly)
 - [x] **TEST-02**: State machine transition tests (valid and invalid transitions, terminal state enforcement)
 - [x] **TEST-03**: TaskContext behavior tests (variable CRUD, status transitions, complete with result)
-- [ ] **TEST-04**: In-memory store tests (CRUD, pagination, TTL, concurrent access)
+- [x] **TEST-04**: In-memory store tests (CRUD, pagination, TTL, concurrent access)
 - [ ] **TEST-05**: DynamoDB store integration tests (real cloud table in CI, conditional writes, GSI pagination)
-- [ ] **TEST-06**: Security tests (owner isolation, anonymous rejection, max tasks enforcement, UUID entropy)
-- [ ] **TEST-07**: Property tests (status transitions, variable merge, task ID uniqueness, owner isolation)
+- [x] **TEST-06**: Security tests (owner isolation, anonymous rejection, max tasks enforcement, UUID entropy)
+- [x] **TEST-07**: Property tests (status transitions, variable merge, task ID uniqueness, owner isolation)
 - [ ] **TEST-08**: Full lifecycle integration tests (create -> poll -> complete -> get_result end-to-end)
 
 ### Examples
@@ -189,10 +189,10 @@ Deferred to future release. Tracked but not in current roadmap.
 | TEST-01 | Phase 1 | Complete |
 | TEST-02 | Phase 1 | Complete |
 | TEST-03 | Phase 2 | Complete |
-| TEST-04 | Phase 2 | Pending |
+| TEST-04 | Phase 2 | Complete |
 | TEST-05 | Phase 4 | Pending |
-| TEST-06 | Phase 2 | Pending |
-| TEST-07 | Phase 2 | Pending |
+| TEST-06 | Phase 2 | Complete |
+| TEST-07 | Phase 2 | Complete |
 | TEST-08 | Phase 3 | Pending |
 | EXMP-01 | Phase 3 | Pending |
 | EXMP-02 | Phase 5 | Pending |
