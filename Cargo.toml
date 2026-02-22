@@ -125,6 +125,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 clap = { version = "4.5", features = ["derive"] }
 env_logger = "0.11"
 dashmap = "6.1"  # Already in main deps but needed for examples
+pmcp-tasks = { path = "crates/pmcp-tasks" }  # For task examples (60_tasks_*)
 
 [features]
 default = ["validation"]
@@ -397,6 +398,10 @@ required-features = ["schema-generation"]
 name = "hotel_gallery"
 path = "examples/hotel_gallery.rs"
 required-features = ["schema-generation"]
+
+[[example]]
+name = "60_tasks_basic"
+path = "examples/60_tasks_basic.rs"
 
 [[bench]]
 name = "comprehensive_benchmarks"
