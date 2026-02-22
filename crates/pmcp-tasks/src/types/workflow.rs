@@ -11,6 +11,7 @@
 //! Workflow-related task variables use the `_workflow.` prefix:
 //! - `_workflow.progress` -- the full [`WorkflowProgress`] struct
 //! - `_workflow.result.<step_name>` -- per-step tool result (raw JSON)
+//! - `_workflow.pause_reason` -- the [`PauseReason`] when execution pauses
 //!
 //! # Schema Versioning
 //!
@@ -34,6 +35,22 @@ use serde::{Deserialize, Serialize};
 /// assert_eq!(WORKFLOW_PROGRESS_KEY, "_workflow.progress");
 /// ```
 pub const WORKFLOW_PROGRESS_KEY: &str = "_workflow.progress";
+
+/// Task variable key for the pause reason when workflow execution pauses.
+///
+/// The value stored under this key is a serialized [`PauseReason`] that
+/// describes why the execution engine stopped before completing all steps.
+/// Clients inspect this value to decide what corrective action to take
+/// (e.g., calling a suggested tool, providing missing parameters).
+///
+/// # Examples
+///
+/// ```
+/// use pmcp_tasks::types::workflow::WORKFLOW_PAUSE_REASON_KEY;
+///
+/// assert_eq!(WORKFLOW_PAUSE_REASON_KEY, "_workflow.pause_reason");
+/// ```
+pub const WORKFLOW_PAUSE_REASON_KEY: &str = "_workflow.pause_reason";
 
 /// Prefix for per-step result variable keys.
 ///
@@ -197,6 +214,159 @@ pub enum StepStatus {
     Failed,
     /// Step was skipped (server couldn't execute, client should continue).
     Skipped,
+}
+
+// === Pause Reason Types ===
+
+/// Describes why the partial execution engine paused before completing all
+/// workflow steps.
+///
+/// When the execution engine encounters a condition that prevents further
+/// progress, it stores a `PauseReason` in the task's variable store under
+/// [`WORKFLOW_PAUSE_REASON_KEY`]. The client inspects this value to decide
+/// what corrective action to take before resuming execution.
+///
+/// # Serialization
+///
+/// Variants are internally tagged with `"type"` and all field names use
+/// `camelCase`:
+///
+/// ```
+/// use pmcp_tasks::types::workflow::PauseReason;
+///
+/// let reason = PauseReason::ToolError {
+///     failed_step: "deploy".to_string(),
+///     error: "connection timeout".to_string(),
+///     retryable: true,
+///     suggested_tool: "deploy_service".to_string(),
+/// };
+///
+/// let json = serde_json::to_value(&reason).unwrap();
+/// assert_eq!(json["type"], "toolError");
+/// assert_eq!(json["failedStep"], "deploy");
+/// assert_eq!(json["retryable"], true);
+/// ```
+///
+/// # Variant Selection Guide
+///
+/// | Condition | Variant |
+/// |-----------|---------|
+/// | Step parameter cannot be resolved from context | [`UnresolvableParams`](PauseReason::UnresolvableParams) |
+/// | Resolved parameters miss required schema fields | [`SchemaMismatch`](PauseReason::SchemaMismatch) |
+/// | Tool execution returned an error | [`ToolError`](PauseReason::ToolError) |
+/// | Step depends on a failed or skipped step's output | [`UnresolvedDependency`](PauseReason::UnresolvedDependency) |
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum PauseReason {
+    /// A step's parameters could not be resolved from the available execution
+    /// context (prompt arguments, step bindings, constants).
+    ///
+    /// The client should call the `suggested_tool` to produce the missing
+    /// value, then resume execution.
+    ///
+    /// # JSON Shape
+    ///
+    /// ```json
+    /// {
+    ///   "type": "unresolvableParams",
+    ///   "blockedStep": "add_task",
+    ///   "missingParam": "project_id",
+    ///   "suggestedTool": "list_projects"
+    /// }
+    /// ```
+    #[serde(rename_all = "camelCase")]
+    UnresolvableParams {
+        /// Name of the step that could not proceed.
+        blocked_step: String,
+        /// The parameter name that could not be resolved.
+        missing_param: String,
+        /// Tool the client should call to produce the missing value.
+        suggested_tool: String,
+    },
+
+    /// A step's resolved parameters do not satisfy the target tool's input
+    /// schema (one or more required fields are missing).
+    ///
+    /// The client should call the `suggested_tool` with the resolved
+    /// parameters to obtain the missing fields, then resume execution.
+    ///
+    /// # JSON Shape
+    ///
+    /// ```json
+    /// {
+    ///   "type": "schemaMismatch",
+    ///   "blockedStep": "add_task",
+    ///   "missingFields": ["project_path", "task_format"],
+    ///   "suggestedTool": "get_project_config"
+    /// }
+    /// ```
+    #[serde(rename_all = "camelCase")]
+    SchemaMismatch {
+        /// Name of the step that could not proceed.
+        blocked_step: String,
+        /// Required schema fields that are missing from resolved parameters.
+        missing_fields: Vec<String>,
+        /// Tool the client should call to produce the missing fields.
+        suggested_tool: String,
+    },
+
+    /// A tool execution returned an error.
+    ///
+    /// If `retryable` is `true`, the client may retry the same tool call
+    /// (the failure was likely transient). Otherwise, the client should call
+    /// the `suggested_tool` for an alternative approach.
+    ///
+    /// # JSON Shape
+    ///
+    /// ```json
+    /// {
+    ///   "type": "toolError",
+    ///   "failedStep": "deploy",
+    ///   "error": "connection timeout",
+    ///   "retryable": true,
+    ///   "suggestedTool": "deploy_service"
+    /// }
+    /// ```
+    #[serde(rename_all = "camelCase")]
+    ToolError {
+        /// Name of the step that failed.
+        failed_step: String,
+        /// Human-readable error message from the tool.
+        error: String,
+        /// Whether the error is transient and the step can be retried.
+        retryable: bool,
+        /// Tool the client should call (retry or alternative).
+        suggested_tool: String,
+    },
+
+    /// A step depends on output from a step that was failed or skipped,
+    /// making its own execution impossible.
+    ///
+    /// The client should call the `suggested_tool` (typically the producing
+    /// step's tool) to generate the missing output, then resume execution.
+    ///
+    /// # JSON Shape
+    ///
+    /// ```json
+    /// {
+    ///   "type": "unresolvedDependency",
+    ///   "blockedStep": "add_task",
+    ///   "missingOutput": "project_info",
+    ///   "producingStep": "verify_project",
+    ///   "suggestedTool": "verify_project"
+    /// }
+    /// ```
+    #[serde(rename_all = "camelCase")]
+    UnresolvedDependency {
+        /// Name of the step that could not proceed.
+        blocked_step: String,
+        /// The binding name of the missing output.
+        missing_output: String,
+        /// Name of the step that was supposed to produce the output.
+        producing_step: String,
+        /// Tool the client should call to produce the missing output.
+        suggested_tool: String,
+    },
 }
 
 #[cfg(test)]
@@ -365,6 +535,122 @@ mod tests {
         assert!(step.tool.is_none());
         assert_eq!(step.status, StepStatus::Pending);
     }
+
+    // --- PauseReason tests ---
+
+    #[test]
+    fn pause_reason_unresolvable_params_serde_round_trip() {
+        let reason = PauseReason::UnresolvableParams {
+            blocked_step: "add_task".to_string(),
+            missing_param: "project_id".to_string(),
+            suggested_tool: "list_projects".to_string(),
+        };
+
+        let json = serde_json::to_value(&reason).unwrap();
+        let round_trip: PauseReason = serde_json::from_value(json).unwrap();
+        assert_eq!(reason, round_trip);
+    }
+
+    #[test]
+    fn pause_reason_schema_mismatch_serde_round_trip() {
+        let reason = PauseReason::SchemaMismatch {
+            blocked_step: "add_task".to_string(),
+            missing_fields: vec!["project_path".to_string(), "task_format".to_string()],
+            suggested_tool: "get_project_config".to_string(),
+        };
+
+        let json = serde_json::to_value(&reason).unwrap();
+        let round_trip: PauseReason = serde_json::from_value(json).unwrap();
+        assert_eq!(reason, round_trip);
+    }
+
+    #[test]
+    fn pause_reason_tool_error_serde_round_trip() {
+        let reason = PauseReason::ToolError {
+            failed_step: "deploy".to_string(),
+            error: "connection timeout".to_string(),
+            retryable: true,
+            suggested_tool: "deploy_service".to_string(),
+        };
+
+        let json = serde_json::to_value(&reason).unwrap();
+        let round_trip: PauseReason = serde_json::from_value(json).unwrap();
+        assert_eq!(reason, round_trip);
+    }
+
+    #[test]
+    fn pause_reason_unresolved_dependency_serde_round_trip() {
+        let reason = PauseReason::UnresolvedDependency {
+            blocked_step: "add_task".to_string(),
+            missing_output: "project_info".to_string(),
+            producing_step: "verify_project".to_string(),
+            suggested_tool: "verify_project".to_string(),
+        };
+
+        let json = serde_json::to_value(&reason).unwrap();
+        let round_trip: PauseReason = serde_json::from_value(json).unwrap();
+        assert_eq!(reason, round_trip);
+    }
+
+    #[test]
+    fn pause_reason_json_shape_uses_camel_case() {
+        // UnresolvableParams
+        let reason = PauseReason::UnresolvableParams {
+            blocked_step: "step_a".to_string(),
+            missing_param: "param_x".to_string(),
+            suggested_tool: "tool_y".to_string(),
+        };
+        let json = serde_json::to_value(&reason).unwrap();
+        assert_eq!(json["type"], "unresolvableParams");
+        assert_eq!(json["blockedStep"], "step_a");
+        assert_eq!(json["missingParam"], "param_x");
+        assert_eq!(json["suggestedTool"], "tool_y");
+
+        // SchemaMismatch
+        let reason = PauseReason::SchemaMismatch {
+            blocked_step: "step_b".to_string(),
+            missing_fields: vec!["field_1".to_string()],
+            suggested_tool: "tool_z".to_string(),
+        };
+        let json = serde_json::to_value(&reason).unwrap();
+        assert_eq!(json["type"], "schemaMismatch");
+        assert_eq!(json["blockedStep"], "step_b");
+        assert_eq!(json["missingFields"], serde_json::json!(["field_1"]));
+        assert_eq!(json["suggestedTool"], "tool_z");
+
+        // ToolError
+        let reason = PauseReason::ToolError {
+            failed_step: "deploy".to_string(),
+            error: "timeout".to_string(),
+            retryable: true,
+            suggested_tool: "deploy_service".to_string(),
+        };
+        let json = serde_json::to_value(&reason).unwrap();
+        assert_eq!(json["type"], "toolError");
+        assert_eq!(json["failedStep"], "deploy");
+        assert_eq!(json["error"], "timeout");
+        assert_eq!(json["retryable"], true);
+        assert_eq!(json["suggestedTool"], "deploy_service");
+
+        // UnresolvedDependency
+        let reason = PauseReason::UnresolvedDependency {
+            blocked_step: "step_c".to_string(),
+            missing_output: "data".to_string(),
+            producing_step: "step_a".to_string(),
+            suggested_tool: "fetch_data".to_string(),
+        };
+        let json = serde_json::to_value(&reason).unwrap();
+        assert_eq!(json["type"], "unresolvedDependency");
+        assert_eq!(json["blockedStep"], "step_c");
+        assert_eq!(json["missingOutput"], "data");
+        assert_eq!(json["producingStep"], "step_a");
+        assert_eq!(json["suggestedTool"], "fetch_data");
+    }
+
+    #[test]
+    fn pause_reason_key_constant() {
+        assert_eq!(WORKFLOW_PAUSE_REASON_KEY, "_workflow.pause_reason");
+    }
 }
 
 #[cfg(test)]
@@ -403,12 +689,78 @@ mod proptest_workflow {
             })
     }
 
+    fn arb_pause_reason() -> impl Strategy<Value = PauseReason> {
+        prop_oneof![
+            (
+                "[a-zA-Z0-9_]{1,30}",
+                "[a-zA-Z0-9_]{1,30}",
+                "[a-zA-Z0-9_]{1,30}",
+            )
+                .prop_map(|(blocked_step, missing_param, suggested_tool)| {
+                    PauseReason::UnresolvableParams {
+                        blocked_step,
+                        missing_param,
+                        suggested_tool,
+                    }
+                }),
+            (
+                "[a-zA-Z0-9_]{1,30}",
+                prop::collection::vec("[a-zA-Z0-9_]{1,30}", 1..5),
+                "[a-zA-Z0-9_]{1,30}",
+            )
+                .prop_map(|(blocked_step, missing_fields, suggested_tool)| {
+                    PauseReason::SchemaMismatch {
+                        blocked_step,
+                        missing_fields,
+                        suggested_tool,
+                    }
+                }),
+            (
+                "[a-zA-Z0-9_]{1,30}",
+                ".{0,100}",
+                proptest::bool::ANY,
+                "[a-zA-Z0-9_]{1,30}",
+            )
+                .prop_map(|(failed_step, error, retryable, suggested_tool)| {
+                    PauseReason::ToolError {
+                        failed_step,
+                        error,
+                        retryable,
+                        suggested_tool,
+                    }
+                }),
+            (
+                "[a-zA-Z0-9_]{1,30}",
+                "[a-zA-Z0-9_]{1,30}",
+                "[a-zA-Z0-9_]{1,30}",
+                "[a-zA-Z0-9_]{1,30}",
+            )
+                .prop_map(
+                    |(blocked_step, missing_output, producing_step, suggested_tool)| {
+                        PauseReason::UnresolvedDependency {
+                            blocked_step,
+                            missing_output,
+                            producing_step,
+                            suggested_tool,
+                        }
+                    }
+                ),
+        ]
+    }
+
     proptest! {
         #[test]
         fn serde_round_trip(progress in arb_workflow_progress()) {
             let value = serde_json::to_value(&progress).unwrap();
             let round_trip: WorkflowProgress = serde_json::from_value(value).unwrap();
             prop_assert_eq!(progress, round_trip);
+        }
+
+        #[test]
+        fn pause_reason_serde_round_trip(reason in arb_pause_reason()) {
+            let value = serde_json::to_value(&reason).unwrap();
+            let round_trip: PauseReason = serde_json::from_value(value).unwrap();
+            prop_assert_eq!(reason, round_trip);
         }
     }
 }
