@@ -35,8 +35,12 @@ pub mod store;
 /// Security configuration and owner resolution.
 pub mod security;
 
+/// Ergonomic task context for tool handlers.
+pub mod context;
+
 // Re-exports for ergonomic access
 pub use constants::*;
+pub use context::TaskContext;
 pub use domain::{TaskRecord, TaskWithVariables};
 pub use error::TaskError;
 pub use security::{resolve_owner_id, TaskSecurityConfig, DEFAULT_LOCAL_OWNER};
