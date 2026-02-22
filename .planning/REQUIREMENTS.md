@@ -9,11 +9,11 @@ Requirements for the Task-Prompt Bridge milestone. Each maps to roadmap phases.
 
 ### Foundation
 
-- [ ] **FNDX-01**: Workflow prompt can create a task when invoked, binding the task to the prompt execution
+- [x] **FNDX-01**: Workflow prompt can create a task when invoked, binding the task to the prompt execution
 - [x] **FNDX-02**: WorkflowStep declares execution mode (server-executable vs client-deferred) via StepExecution enum
 - [x] **FNDX-03**: Typed WorkflowProgress schema struct tracks goal, completed steps, remaining steps, and intermediate outputs in task variables
 - [x] **FNDX-04**: TaskRouter trait extended with workflow-specific methods (create_workflow_task, set_task_variables, complete_workflow_task)
-- [ ] **FNDX-05**: TaskWorkflowPromptHandler composes with (not modifies) existing WorkflowPromptHandler
+- [x] **FNDX-05**: TaskWorkflowPromptHandler composes with (not modifies) existing WorkflowPromptHandler
 
 ### Execution
 
@@ -67,11 +67,11 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FNDX-01 | Phase 4 | Pending |
+| FNDX-01 | Phase 4 | Complete |
 | FNDX-02 | Phase 4 | Complete |
 | FNDX-03 | Phase 4 | Complete |
 | FNDX-04 | Phase 4 | Complete |
-| FNDX-05 | Phase 4 | Pending |
+| FNDX-05 | Phase 4 | Complete |
 | EXEC-01 | Phase 5 | Pending |
 | EXEC-02 | Phase 5 | Pending |
 | EXEC-03 | Phase 5 | Pending |

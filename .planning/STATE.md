@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state that persists across tool calls.
-**Current focus:** v1.1 Task-Prompt Bridge — Phase 4 executing
+**Current focus:** v1.1 Task-Prompt Bridge — Phase 4 complete
 
 ## Current Position
 
 Milestone: v1.1 Task-Prompt Bridge
-Phase: 4 of 7 (Foundation Types and Contracts)
-Plan: 1 of 2 in current phase
-Status: Executing
-Last activity: 2026-02-22 — Completed 04-01 Foundation Types
+Phase: 4 of 7 (Foundation Types and Contracts) -- COMPLETE
+Plan: 2 of 2 in current phase
+Status: Phase Complete
+Last activity: 2026-02-22 — Completed 04-02 TaskWorkflowPromptHandler Composition
 
-Progress: [=░░░░░░░░░] 10% (v1.1)
+Progress: [==░░░░░░░░] 20% (v1.1)
 
 ## Performance Metrics
 
@@ -31,7 +31,7 @@ Progress: [=░░░░░░░░░] 10% (v1.1)
 | 01 | 3 | 19 min | 6 min |
 | 02 | 3 | 18 min | 6 min |
 | 03 | 3 | 28 min | 9 min |
-| 04 | 1 | 20 min | 20 min |
+| 04 | 2 | 29 min | 14 min |
 
 *Updated after each plan completion*
 
@@ -49,6 +49,9 @@ Key decisions for v1.1:
 - StepStatus uses derive(Default) with #[default] on Pending (04-01)
 - Zero-diff interpreted as behavior-identical; _meta: None is non-behavioral (04-01)
 - No StepExecution enum; runtime best-effort replaces static classification (04-01)
+- Step-status inference uses assistant/user message pair counting after header skip (04-02)
+- Graceful degradation: task creation failure returns inner result without _meta (04-02)
+- Build-time fail-fast: task_support=true without task_router errors at prompt_workflow() (04-02)
 
 ### Pending Todos
 
@@ -63,5 +66,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 04-01-PLAN.md
-Resume file: .planning/phases/04-foundation-types-and-contracts/04-01-SUMMARY.md
+Stopped at: Completed 04-02-PLAN.md (Phase 4 complete)
+Resume file: .planning/phases/04-foundation-types-and-contracts/04-02-SUMMARY.md
