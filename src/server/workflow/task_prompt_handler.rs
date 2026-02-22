@@ -1,41 +1,188 @@
-//! Task-aware composition layer for workflow prompt handlers.
+//! Active execution engine for task-backed workflow prompts.
 //!
 //! [`TaskWorkflowPromptHandler`] wraps a [`WorkflowPromptHandler`] to add
-//! task lifecycle management. When a workflow prompt is invoked, this handler:
+//! task lifecycle management with durable progress tracking. When a workflow
+//! prompt is invoked, this handler:
 //!
 //! 1. Creates a task via the [`TaskRouter`]
-//! 2. Delegates execution to the inner [`WorkflowPromptHandler`]
-//! 3. Infers step statuses from the returned message trace
-//! 4. Updates task variables with step results and progress
-//! 5. Enriches the [`GetPromptResult`] with `_meta` containing task state
+//! 2. Runs its own step loop using the inner handler's `pub(crate)` helpers
+//! 3. Accumulates step results in memory during execution
+//! 4. Classifies failures into typed [`PauseReason`] variants
+//! 5. Batch-writes all state (progress, results, pause reason) to the task store
+//! 6. Auto-completes the task when all steps succeed
+//! 7. Enriches the [`GetPromptResult`] with `_meta` containing task state
 //!
-//! This composition is purely additive -- [`WorkflowPromptHandler`] is never
-//! modified. The entire task layer is opt-in via
-//! [`SequentialWorkflow::with_task_support`].
+//! The execution loop stops at the first unresolvable step without failing
+//! the task -- the task stays Working with completed steps having results
+//! and remaining steps staying Pending.
 //!
 //! # Graceful Degradation
 //!
 //! If task creation fails, the handler logs the error and falls back to
-//! returning the inner handler's result without `_meta`. The workflow still
-//! executes; only task tracking is lost.
+//! returning the inner handler's result without `_meta`. If the batch write
+//! to the task store fails, the prompt result is returned anyway with `_meta`
+//! constructed from in-memory state.
+//!
+//! # Architecture Note
+//!
+//! The typed [`PauseReason`], [`StepStatus`], and workflow progress types
+//! are defined in the `pmcp-tasks` crate. Because `pmcp-tasks` depends on
+//! `pmcp` (not the reverse), this module uses local mirror types that produce
+//! identical JSON. The task variable key constants are duplicated here to
+//! maintain the `_workflow.*` convention.
 
-use super::prompt_handler::WorkflowPromptHandler;
+use super::data_source::DataSource;
+use super::prompt_handler::{ExecutionContext, WorkflowPromptHandler};
 use super::sequential::SequentialWorkflow;
+use super::workflow_step::WorkflowStep;
 use crate::error::Result;
 use crate::server::cancellation::RequestHandlerExtra;
 use crate::server::tasks::TaskRouter;
 use crate::server::PromptHandler;
-use crate::types::{GetPromptResult, PromptInfo, PromptMessage, Role};
+use crate::types::{GetPromptResult, MessageContent, PromptInfo, PromptMessage, Role};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+// === Task variable key constants (mirrors pmcp_tasks::types::workflow) ===
+
+/// Task variable key for the structured workflow progress object.
+const WORKFLOW_PROGRESS_KEY: &str = "_workflow.progress";
+
+/// Task variable key for the pause reason when workflow execution pauses.
+const WORKFLOW_PAUSE_REASON_KEY: &str = "_workflow.pause_reason";
+
+/// Builds the task variable key for a step's tool result.
+fn workflow_result_key(step_name: &str) -> String {
+    format!("_workflow.result.{step_name}")
+}
+
+// === Step status (mirrors pmcp_tasks::types::workflow::StepStatus) ===
+
+/// Runtime outcome of a workflow step.
+///
+/// Mirrors `pmcp_tasks::types::workflow::StepStatus` to avoid circular
+/// dependency. Serializes to the same `snake_case` strings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum StepStatus {
+    /// Step has not been attempted yet.
+    #[default]
+    Pending,
+    /// Step completed successfully.
+    Completed,
+    /// Step failed (error recorded in variables).
+    Failed,
+    /// Step was skipped.
+    Skipped,
+}
+
+impl StepStatus {
+    /// Convert to the string representation used in JSON.
+    fn as_str(&self) -> &'static str {
+        match self {
+            StepStatus::Pending => "pending",
+            StepStatus::Completed => "completed",
+            StepStatus::Failed => "failed",
+            StepStatus::Skipped => "skipped",
+        }
+    }
+}
+
+// === Pause reason (mirrors pmcp_tasks::types::workflow::PauseReason) ===
+
+/// Describes why the partial execution engine paused before completing all
+/// workflow steps.
+///
+/// Mirrors `pmcp_tasks::types::workflow::PauseReason`. Each variant produces
+/// the same JSON shape with `"type"` tag and `camelCase` field names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PauseReason {
+    /// A step's parameters could not be resolved from available context.
+    UnresolvableParams {
+        blocked_step: String,
+        missing_param: String,
+        suggested_tool: String,
+    },
+    /// Resolved parameters miss required schema fields.
+    SchemaMismatch {
+        blocked_step: String,
+        missing_fields: Vec<String>,
+        suggested_tool: String,
+    },
+    /// Tool execution returned an error.
+    ToolError {
+        failed_step: String,
+        error: String,
+        retryable: bool,
+        suggested_tool: String,
+    },
+    /// Step depends on output from a failed or skipped step.
+    UnresolvedDependency {
+        blocked_step: String,
+        missing_output: String,
+        producing_step: String,
+        suggested_tool: String,
+    },
+}
+
+impl PauseReason {
+    /// Serialize to a JSON [`Value`] matching the `pmcp-tasks` serde format.
+    fn to_value(&self) -> Value {
+        match self {
+            PauseReason::UnresolvableParams {
+                blocked_step,
+                missing_param,
+                suggested_tool,
+            } => serde_json::json!({
+                "type": "unresolvableParams",
+                "blockedStep": blocked_step,
+                "missingParam": missing_param,
+                "suggestedTool": suggested_tool,
+            }),
+            PauseReason::SchemaMismatch {
+                blocked_step,
+                missing_fields,
+                suggested_tool,
+            } => serde_json::json!({
+                "type": "schemaMismatch",
+                "blockedStep": blocked_step,
+                "missingFields": missing_fields,
+                "suggestedTool": suggested_tool,
+            }),
+            PauseReason::ToolError {
+                failed_step,
+                error,
+                retryable,
+                suggested_tool,
+            } => serde_json::json!({
+                "type": "toolError",
+                "failedStep": failed_step,
+                "error": error,
+                "retryable": retryable,
+                "suggestedTool": suggested_tool,
+            }),
+            PauseReason::UnresolvedDependency {
+                blocked_step,
+                missing_output,
+                producing_step,
+                suggested_tool,
+            } => serde_json::json!({
+                "type": "unresolvedDependency",
+                "blockedStep": blocked_step,
+                "missingOutput": missing_output,
+                "producingStep": producing_step,
+                "suggestedTool": suggested_tool,
+            }),
+        }
+    }
+}
+
 /// Task-aware wrapper for [`WorkflowPromptHandler`].
 ///
-/// Composes with the inner handler via delegation: all prompt metadata
-/// and execution logic is delegated unchanged. This handler adds task
-/// creation, progress tracking, and `_meta` enrichment on top.
+/// Composes with the inner handler via its `pub(crate)` helpers: all prompt
+/// metadata and step execution logic is reused from the inner handler, while
+/// this handler owns the step loop, progress tracking, and task lifecycle.
 ///
 /// # Construction
 ///
@@ -50,7 +197,7 @@ use std::sync::Arc;
 /// );
 /// ```
 pub struct TaskWorkflowPromptHandler {
-    /// The inner workflow handler that does actual step execution.
+    /// The inner workflow handler that provides step execution helpers.
     inner: WorkflowPromptHandler,
     /// Task router for creating/managing workflow tasks.
     task_router: Arc<dyn TaskRouter>,
@@ -72,7 +219,7 @@ impl TaskWorkflowPromptHandler {
     ///
     /// # Arguments
     ///
-    /// * `inner` - The workflow prompt handler that performs actual step execution.
+    /// * `inner` - The workflow prompt handler that provides step execution helpers.
     /// * `task_router` - Task router for creating and managing workflow tasks.
     /// * `workflow` - The workflow definition (used for step metadata).
     pub fn new(
@@ -89,9 +236,9 @@ impl TaskWorkflowPromptHandler {
 
     /// Build the initial [`WorkflowProgress`] from the workflow definition.
     ///
-    /// Each step starts as `Pending`. The goal is derived from the workflow
-    /// name and description.
-    fn build_initial_progress(&self) -> Value {
+    /// Returns a JSON [`Value`] with all steps set to `"pending"`, matching
+    /// the `WorkflowProgress` schema in `pmcp-tasks`.
+    fn build_initial_progress_typed(&self) -> Value {
         let steps: Vec<Value> = self
             .workflow
             .steps()
@@ -102,7 +249,10 @@ impl TaskWorkflowPromptHandler {
                 if let Some(tool) = step.tool() {
                     step_obj.insert("tool".to_string(), Value::String(tool.name().to_string()));
                 }
-                step_obj.insert("status".to_string(), Value::String("pending".to_string()));
+                step_obj.insert(
+                    "status".to_string(),
+                    Value::String("pending".to_string()),
+                );
                 Value::Object(step_obj)
             })
             .collect();
@@ -116,74 +266,24 @@ impl TaskWorkflowPromptHandler {
         })
     }
 
-    /// Infer step statuses from the message trace returned by the inner handler.
-    ///
-    /// Scans the message list for assistant/user message pairs that represent
-    /// tool calls and results. Each such pair corresponds to a completed step.
-    /// Steps beyond the last completed pair remain `"pending"`.
-    ///
-    /// This is inherently heuristic: it counts assistant messages that look like
-    /// tool invocations (role=Assistant) followed by user messages (role=User)
-    /// with tool result content, matching the pattern generated by
-    /// [`WorkflowPromptHandler`].
-    fn infer_step_statuses(messages: &[PromptMessage], step_count: usize) -> Vec<String> {
-        // Count tool-call/result pairs in the message trace.
-        // The pattern from WorkflowPromptHandler is:
-        //   Assistant (tool call announcement) -> User (tool result)
-        // We skip the initial user-intent and assistant-plan messages (first 2).
-        let execution_messages = if messages.len() > 2 {
-            &messages[2..]
-        } else {
-            &[]
-        };
-
-        let mut completed_steps = 0usize;
-        let mut i = 0;
-        while i < execution_messages.len() {
-            let msg = &execution_messages[i];
-            // Look for an assistant message followed by a user message (tool result)
-            if msg.role == Role::Assistant {
-                // Check if next message is a user message (tool result)
-                if i + 1 < execution_messages.len()
-                    && execution_messages[i + 1].role == Role::User
-                {
-                    completed_steps += 1;
-                    i += 2;
-                    continue;
-                }
-            }
-            i += 1;
-        }
-
-        // Clamp to step_count
-        let completed = completed_steps.min(step_count);
-
-        let mut statuses = Vec::with_capacity(step_count);
-        for idx in 0..step_count {
-            if idx < completed {
-                statuses.push("completed".to_string());
-            } else {
-                statuses.push("pending".to_string());
-            }
-        }
-        statuses
-    }
-
     /// Build the `_meta` map for the enriched [`GetPromptResult`].
     ///
-    /// Contains `task_id`, `task_status`, and a summary `steps` array.
+    /// Contains `task_id`, `task_status`, a summary `steps` array, and
+    /// optionally the `pause_reason` when execution paused.
     fn build_meta_map(
         task_id: &str,
+        task_status: &str,
         step_names: &[String],
-        statuses: &[String],
+        step_statuses: &[StepStatus],
+        pause_reason: Option<&PauseReason>,
     ) -> serde_json::Map<String, Value> {
         let steps: Vec<Value> = step_names
             .iter()
-            .zip(statuses.iter())
+            .zip(step_statuses.iter())
             .map(|(name, status)| {
                 serde_json::json!({
                     "name": name,
-                    "status": status,
+                    "status": status.as_str(),
                 })
             })
             .collect();
@@ -192,9 +292,14 @@ impl TaskWorkflowPromptHandler {
         meta.insert("task_id".to_string(), Value::String(task_id.to_string()));
         meta.insert(
             "task_status".to_string(),
-            Value::String("working".to_string()),
+            Value::String(task_status.to_string()),
         );
         meta.insert("steps".to_string(), Value::Array(steps));
+
+        if let Some(reason) = pause_reason {
+            meta.insert("pause_reason".to_string(), reason.to_value());
+        }
+
         meta
     }
 
@@ -213,17 +318,101 @@ impl TaskWorkflowPromptHandler {
     }
 }
 
+/// Classify a parameter resolution failure into a typed [`PauseReason`].
+///
+/// When parameter resolution fails for a step, this function inspects the
+/// step's arguments to determine if the failure is due to a dependency on
+/// a failed or skipped producing step ([`PauseReason::UnresolvedDependency`])
+/// or a generic resolution failure ([`PauseReason::UnresolvableParams`]).
+fn classify_resolution_failure(
+    step: &WorkflowStep,
+    all_steps: &[WorkflowStep],
+    step_statuses: &[StepStatus],
+) -> PauseReason {
+    let blocked_step = step.name().to_string();
+    let suggested_tool = step
+        .tool()
+        .map(|t| t.name().to_string())
+        .unwrap_or_default();
+
+    // Check each argument to see if it depends on a failed/skipped step
+    for (_arg_name, data_source) in step.arguments() {
+        if let DataSource::StepOutput {
+            step: binding_name, ..
+        } = data_source
+        {
+            // Find the producing step by matching its binding name
+            for (idx, producing_step) in all_steps.iter().enumerate() {
+                if let Some(binding) = producing_step.binding() {
+                    if binding.as_str() == binding_name.as_str() {
+                        // Found the producer -- check its status
+                        if let Some(status) = step_statuses.get(idx) {
+                            if *status == StepStatus::Failed || *status == StepStatus::Skipped {
+                                let producing_tool = producing_step
+                                    .tool()
+                                    .map(|t| t.name().to_string())
+                                    .unwrap_or_default();
+                                return PauseReason::UnresolvedDependency {
+                                    blocked_step,
+                                    missing_output: binding_name.to_string(),
+                                    producing_step: producing_step.name().to_string(),
+                                    suggested_tool: producing_tool,
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // No dependency issue found -- generic unresolvable params
+    let missing_param = step
+        .arguments()
+        .keys()
+        .next()
+        .map(|k| k.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    PauseReason::UnresolvableParams {
+        blocked_step,
+        missing_param,
+        suggested_tool,
+    }
+}
+
+/// Build an updated progress JSON value from step statuses.
+///
+/// Takes the initial progress (with goal and step metadata) and updates
+/// each step's status from the actual execution results.
+fn build_updated_progress(initial: &Value, step_statuses: &[StepStatus]) -> Value {
+    let mut progress = initial.clone();
+    if let Some(steps) = progress.get_mut("steps").and_then(|s| s.as_array_mut()) {
+        for (i, step) in steps.iter_mut().enumerate() {
+            if let Some(status) = step_statuses.get(i) {
+                if let Some(obj) = step.as_object_mut() {
+                    obj.insert(
+                        "status".to_string(),
+                        Value::String(status.as_str().to_string()),
+                    );
+                }
+            }
+        }
+    }
+    progress
+}
+
 #[async_trait]
 impl PromptHandler for TaskWorkflowPromptHandler {
-    /// Generate the workflow prompt with task lifecycle management.
+    /// Execute the workflow with active step tracking and task lifecycle.
     ///
     /// Orchestration flow:
     /// 1. Resolve owner from auth context
     /// 2. Build initial progress from workflow definition
     /// 3. Create task via task router (graceful degradation on failure)
-    /// 4. Delegate to inner handler for actual execution
-    /// 5. Infer step statuses from message trace
-    /// 6. Update task variables with progress
+    /// 4. Run active step loop using inner handler's helpers
+    /// 5. Batch-write progress, results, and pause reason to task store
+    /// 6. Auto-complete if all steps succeeded
     /// 7. Enrich result with `_meta`
     async fn handle(
         &self,
@@ -233,17 +422,16 @@ impl PromptHandler for TaskWorkflowPromptHandler {
         // 1. Resolve owner
         let owner_id = self.resolve_owner(&extra);
 
-        // 2. Build initial progress
-        let progress = self.build_initial_progress();
+        // 2. Build initial progress (typed)
+        let initial_progress = self.build_initial_progress_typed();
 
         // 3. Create task (graceful degradation on failure)
         let task_id = match self
             .task_router
-            .create_workflow_task(self.workflow.name(), &owner_id, progress.clone())
+            .create_workflow_task(self.workflow.name(), &owner_id, initial_progress.clone())
             .await
         {
             Ok(value) => {
-                // Extract task_id from CreateTaskResult
                 value
                     .get("id")
                     .and_then(|v| v.as_str())
@@ -259,20 +447,288 @@ impl PromptHandler for TaskWorkflowPromptHandler {
             }
         };
 
-        // 4. Delegate to inner handler
-        let mut result = self.inner.handle(args, extra).await?;
-
-        // If no task was created, return result as-is (graceful degradation)
+        // If no task was created, delegate to inner handler (graceful degradation)
         let task_id = match task_id {
             Some(id) => id,
-            None => return Ok(result),
+            None => {
+                let result = self.inner.handle(args, extra).await?;
+                return Ok(result);
+            }
         };
 
-        // 5. Infer step statuses from message trace
+        // 4. Active execution loop
         let step_count = self.workflow.steps().len();
-        let statuses = Self::infer_step_statuses(&result.messages, step_count);
+        let total_steps = step_count;
+        let mut messages: Vec<PromptMessage> = Vec::new();
+        let mut execution_context = ExecutionContext::new();
+        let mut step_results: Vec<(String, Value)> = Vec::new();
+        let mut step_statuses: Vec<StepStatus> = vec![StepStatus::Pending; step_count];
+        let mut pause_reason: Option<PauseReason> = None;
 
-        // 6. Update task variables with progress
+        // Add header messages
+        messages.push(self.inner.create_user_intent(&args));
+        messages.push(self.inner.create_assistant_plan()?);
+
+        for (idx, step) in self.workflow.steps().iter().enumerate() {
+            // Check cancellation
+            if extra.is_cancelled() {
+                tracing::warn!("Workflow cancelled at step: {}", step.name());
+                return Err(crate::Error::internal(format!(
+                    "Workflow '{}' cancelled at step {}",
+                    self.workflow.name(),
+                    step.name()
+                )));
+            }
+
+            // Report progress
+            let progress_message =
+                format!("Step {}/{}: {}", idx + 1, total_steps, step.name());
+            if let Err(e) = extra
+                .report_count(idx + 1, total_steps, Some(progress_message))
+                .await
+            {
+                tracing::warn!("Failed to report workflow progress: {}", e);
+            }
+
+            // Add guidance message if step has guidance
+            if let Some(guidance_template) = step.guidance() {
+                let guidance_text =
+                    WorkflowPromptHandler::substitute_arguments(guidance_template, &args);
+                messages.push(PromptMessage {
+                    role: Role::Assistant,
+                    content: MessageContent::Text {
+                        text: guidance_text,
+                    },
+                });
+            }
+
+            // Fetch pre-tool resources (those not depending on step outputs)
+            let fetch_resources_after_tool =
+                WorkflowPromptHandler::template_bindings_use_step_outputs(
+                    step.template_bindings(),
+                );
+
+            if !fetch_resources_after_tool
+                && !step.resources().is_empty()
+                && self
+                    .inner
+                    .fetch_step_resources(step, &args, &execution_context, &extra, &mut messages)
+                    .await
+                    .is_err()
+            {
+                break;
+            }
+
+            // Handle resource-only steps
+            if step.is_resource_only() {
+                messages.push(PromptMessage {
+                    role: Role::Assistant,
+                    content: MessageContent::Text {
+                        text: format!(
+                            "I'll fetch the required resources for {}...",
+                            step.name()
+                        ),
+                    },
+                });
+
+                if fetch_resources_after_tool
+                    && self
+                        .inner
+                        .fetch_step_resources(
+                            step,
+                            &args,
+                            &execution_context,
+                            &extra,
+                            &mut messages,
+                        )
+                        .await
+                        .is_err()
+                {
+                    break;
+                }
+
+                step_statuses[idx] = StepStatus::Completed;
+                step_results.push((step.name().to_string(), Value::Null));
+                continue;
+            }
+
+            // Tool steps: attempt to resolve parameters and execute
+            match self
+                .inner
+                .create_tool_call_announcement(step, &args, &execution_context)
+            {
+                Err(_) => {
+                    pause_reason = Some(classify_resolution_failure(
+                        step,
+                        self.workflow.steps(),
+                        &step_statuses,
+                    ));
+                    break;
+                }
+                Ok(announcement) => {
+                    let params = match self
+                        .inner
+                        .resolve_tool_parameters(step, &args, &execution_context)
+                    {
+                        Ok(p) => p,
+                        Err(_) => break,
+                    };
+
+                    match self.inner.params_satisfy_tool_schema(step, &params) {
+                        Err(_) => break,
+                        Ok(false) => {
+                            let suggested_tool = step
+                                .tool()
+                                .map(|t| t.name().to_string())
+                                .unwrap_or_default();
+                            pause_reason = Some(PauseReason::SchemaMismatch {
+                                blocked_step: step.name().to_string(),
+                                missing_fields: vec!["unknown".to_string()],
+                                suggested_tool,
+                            });
+                            break;
+                        }
+                        Ok(true) => {
+                            messages.push(announcement);
+
+                            match self
+                                .inner
+                                .execute_tool_step(step, &args, &execution_context, &extra)
+                                .await
+                            {
+                                Ok(result) => {
+                                    messages.push(PromptMessage {
+                                        role: Role::User,
+                                        content: MessageContent::Text {
+                                            text: format!(
+                                                "Tool result:\n{}",
+                                                serde_json::to_string_pretty(&result)
+                                                    .unwrap_or_else(|_| format!("{:?}", result))
+                                            ),
+                                        },
+                                    });
+
+                                    step_results.push((
+                                        step.name().to_string(),
+                                        result.clone(),
+                                    ));
+                                    step_statuses[idx] = StepStatus::Completed;
+
+                                    if let Some(binding) = step.binding() {
+                                        execution_context
+                                            .store_binding(binding.clone(), result);
+                                    }
+
+                                    if fetch_resources_after_tool
+                                        && self
+                                            .inner
+                                            .fetch_step_resources(
+                                                step,
+                                                &args,
+                                                &execution_context,
+                                                &extra,
+                                                &mut messages,
+                                            )
+                                            .await
+                                            .is_err()
+                                    {
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    messages.push(PromptMessage {
+                                        role: Role::User,
+                                        content: MessageContent::Text {
+                                            text: format!("Error executing tool: {}", e),
+                                        },
+                                    });
+
+                                    let step_name = step.name().to_string();
+                                    step_results.push((
+                                        step_name.clone(),
+                                        serde_json::json!({"error": e.to_string()}),
+                                    ));
+                                    step_statuses[idx] = StepStatus::Failed;
+
+                                    let suggested_tool = step
+                                        .tool()
+                                        .map(|t| t.name().to_string())
+                                        .unwrap_or_default();
+                                    pause_reason = Some(PauseReason::ToolError {
+                                        failed_step: step_name,
+                                        error: e.to_string(),
+                                        retryable: step.is_retryable(),
+                                        suggested_tool,
+                                    });
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 5. Batch write to task store
+        let updated_progress = build_updated_progress(&initial_progress, &step_statuses);
+
+        let mut batch: HashMap<String, Value> = HashMap::new();
+        batch.insert(WORKFLOW_PROGRESS_KEY.to_string(), updated_progress);
+
+        for (step_name, result) in &step_results {
+            batch.insert(workflow_result_key(step_name), result.clone());
+        }
+
+        if let Some(ref reason) = pause_reason {
+            batch.insert(WORKFLOW_PAUSE_REASON_KEY.to_string(), reason.to_value());
+        }
+
+        let batch_value = serde_json::to_value(&batch).unwrap_or_else(|_| serde_json::json!({}));
+
+        if let Err(e) = self
+            .task_router
+            .set_task_variables(&task_id, &owner_id, batch_value)
+            .await
+        {
+            tracing::warn!(
+                "Failed to batch-write task variables for workflow '{}': {}",
+                self.workflow.name(),
+                e
+            );
+        }
+
+        // 6. Auto-complete if all steps succeeded
+        let mut task_status = "working";
+        let all_completed = pause_reason.is_none()
+            && step_statuses
+                .iter()
+                .all(|s| *s == StepStatus::Completed);
+
+        if all_completed {
+            let completion_result = serde_json::json!({
+                "completed": true,
+                "steps_completed": step_count,
+            });
+
+            match self
+                .task_router
+                .complete_workflow_task(&task_id, &owner_id, completion_result)
+                .await
+            {
+                Ok(_) => {
+                    task_status = "completed";
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to auto-complete task for workflow '{}': {}",
+                        self.workflow.name(),
+                        e
+                    );
+                }
+            }
+        }
+
+        // 7. Build _meta and return
         let step_names: Vec<String> = self
             .workflow
             .steps()
@@ -280,35 +736,28 @@ impl PromptHandler for TaskWorkflowPromptHandler {
             .map(|s| s.name().to_string())
             .collect();
 
-        let mut updated_progress = progress;
-        if let Some(steps) = updated_progress.get_mut("steps").and_then(|s| s.as_array_mut()) {
-            for (i, step) in steps.iter_mut().enumerate() {
-                if let Some(status) = statuses.get(i) {
-                    if let Some(obj) = step.as_object_mut() {
-                        obj.insert("status".to_string(), Value::String(status.clone()));
-                    }
-                }
-            }
-        }
+        let meta = Self::build_meta_map(
+            &task_id,
+            task_status,
+            &step_names,
+            &step_statuses,
+            pause_reason.as_ref(),
+        );
 
-        let variables = serde_json::json!({
-            "_workflow.progress": updated_progress,
-        });
+        // Report final workflow completion
+        let _ = extra
+            .report_count(
+                total_steps,
+                total_steps,
+                Some("Workflow execution complete".to_string()),
+            )
+            .await;
 
-        if let Err(e) = self
-            .task_router
-            .set_task_variables(&task_id, &owner_id, variables)
-            .await
-        {
-            tracing::warn!(
-                "Failed to update task variables for workflow '{}': {}",
-                self.workflow.name(),
-                e
-            );
-        }
-
-        // 7. Enrich result with _meta
-        let meta = Self::build_meta_map(&task_id, &step_names, &statuses);
+        let mut result = GetPromptResult {
+            description: Some(self.workflow.description().to_string()),
+            messages,
+            _meta: None,
+        };
         result._meta = Some(meta);
 
         Ok(result)
@@ -325,226 +774,109 @@ mod tests {
     use super::*;
 
     #[test]
-    fn infer_step_statuses_all_pending_with_empty_messages() {
-        let messages = vec![];
-        let statuses = TaskWorkflowPromptHandler::infer_step_statuses(&messages, 3);
-        assert_eq!(statuses, vec!["pending", "pending", "pending"]);
+    fn build_meta_map_working_with_pause_reason() {
+        let step_names = vec!["validate".to_string(), "deploy".to_string()];
+        let step_statuses = vec![StepStatus::Completed, StepStatus::Pending];
+        let pause = PauseReason::ToolError {
+            failed_step: "deploy".to_string(),
+            error: "timeout".to_string(),
+            retryable: true,
+            suggested_tool: "deploy_service".to_string(),
+        };
+
+        let meta = TaskWorkflowPromptHandler::build_meta_map(
+            "task-123",
+            "working",
+            &step_names,
+            &step_statuses,
+            Some(&pause),
+        );
+
+        assert_eq!(meta["task_id"], "task-123");
+        assert_eq!(meta["task_status"], "working");
+
+        let pr = meta.get("pause_reason").expect("should have pause_reason");
+        assert_eq!(pr["type"], "toolError");
+        assert_eq!(pr["failedStep"], "deploy");
+        assert_eq!(pr["retryable"], true);
+
+        let steps = meta["steps"].as_array().unwrap();
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0]["status"], "completed");
+        assert_eq!(steps[1]["status"], "pending");
     }
 
     #[test]
-    fn infer_step_statuses_all_pending_with_only_header_messages() {
-        // Only user-intent and assistant-plan (first 2 messages)
-        let messages = vec![
-            PromptMessage {
-                role: Role::User,
-                content: crate::types::MessageContent::Text {
-                    text: "intent".to_string(),
-                },
-            },
-            PromptMessage {
-                role: Role::Assistant,
-                content: crate::types::MessageContent::Text {
-                    text: "plan".to_string(),
-                },
-            },
-        ];
-        let statuses = TaskWorkflowPromptHandler::infer_step_statuses(&messages, 3);
-        assert_eq!(statuses, vec!["pending", "pending", "pending"]);
-    }
-
-    #[test]
-    fn infer_step_statuses_partial_completion() {
-        // 2 header messages + 1 completed step (assistant + user pair)
-        let messages = vec![
-            PromptMessage {
-                role: Role::User,
-                content: crate::types::MessageContent::Text {
-                    text: "intent".to_string(),
-                },
-            },
-            PromptMessage {
-                role: Role::Assistant,
-                content: crate::types::MessageContent::Text {
-                    text: "plan".to_string(),
-                },
-            },
-            // Step 1: tool call
-            PromptMessage {
-                role: Role::Assistant,
-                content: crate::types::MessageContent::Text {
-                    text: "calling tool".to_string(),
-                },
-            },
-            // Step 1: tool result
-            PromptMessage {
-                role: Role::User,
-                content: crate::types::MessageContent::Text {
-                    text: "result".to_string(),
-                },
-            },
-        ];
-        let statuses = TaskWorkflowPromptHandler::infer_step_statuses(&messages, 3);
-        assert_eq!(statuses, vec!["completed", "pending", "pending"]);
-    }
-
-    #[test]
-    fn infer_step_statuses_all_completed() {
-        // 2 header messages + 3 completed steps
-        let messages = vec![
-            PromptMessage {
-                role: Role::User,
-                content: crate::types::MessageContent::Text {
-                    text: "intent".to_string(),
-                },
-            },
-            PromptMessage {
-                role: Role::Assistant,
-                content: crate::types::MessageContent::Text {
-                    text: "plan".to_string(),
-                },
-            },
-            // Step 1
-            PromptMessage {
-                role: Role::Assistant,
-                content: crate::types::MessageContent::Text {
-                    text: "calling tool 1".to_string(),
-                },
-            },
-            PromptMessage {
-                role: Role::User,
-                content: crate::types::MessageContent::Text {
-                    text: "result 1".to_string(),
-                },
-            },
-            // Step 2
-            PromptMessage {
-                role: Role::Assistant,
-                content: crate::types::MessageContent::Text {
-                    text: "calling tool 2".to_string(),
-                },
-            },
-            PromptMessage {
-                role: Role::User,
-                content: crate::types::MessageContent::Text {
-                    text: "result 2".to_string(),
-                },
-            },
-            // Step 3
-            PromptMessage {
-                role: Role::Assistant,
-                content: crate::types::MessageContent::Text {
-                    text: "calling tool 3".to_string(),
-                },
-            },
-            PromptMessage {
-                role: Role::User,
-                content: crate::types::MessageContent::Text {
-                    text: "result 3".to_string(),
-                },
-            },
-        ];
-        let statuses = TaskWorkflowPromptHandler::infer_step_statuses(&messages, 3);
-        assert_eq!(statuses, vec!["completed", "completed", "completed"]);
-    }
-
-    #[test]
-    fn infer_step_statuses_zero_steps() {
-        let messages = vec![];
-        let statuses = TaskWorkflowPromptHandler::infer_step_statuses(&messages, 0);
-        assert!(statuses.is_empty());
-    }
-
-    #[test]
-    fn infer_step_statuses_more_pairs_than_steps() {
-        // More assistant/user pairs than actual steps -- should clamp
-        let messages = vec![
-            PromptMessage {
-                role: Role::User,
-                content: crate::types::MessageContent::Text {
-                    text: "intent".to_string(),
-                },
-            },
-            PromptMessage {
-                role: Role::Assistant,
-                content: crate::types::MessageContent::Text {
-                    text: "plan".to_string(),
-                },
-            },
-            // 3 pairs but only 2 steps
-            PromptMessage {
-                role: Role::Assistant,
-                content: crate::types::MessageContent::Text {
-                    text: "tool 1".to_string(),
-                },
-            },
-            PromptMessage {
-                role: Role::User,
-                content: crate::types::MessageContent::Text {
-                    text: "result 1".to_string(),
-                },
-            },
-            PromptMessage {
-                role: Role::Assistant,
-                content: crate::types::MessageContent::Text {
-                    text: "tool 2".to_string(),
-                },
-            },
-            PromptMessage {
-                role: Role::User,
-                content: crate::types::MessageContent::Text {
-                    text: "result 2".to_string(),
-                },
-            },
-            PromptMessage {
-                role: Role::Assistant,
-                content: crate::types::MessageContent::Text {
-                    text: "tool 3".to_string(),
-                },
-            },
-            PromptMessage {
-                role: Role::User,
-                content: crate::types::MessageContent::Text {
-                    text: "result 3".to_string(),
-                },
-            },
-        ];
-        let statuses = TaskWorkflowPromptHandler::infer_step_statuses(&messages, 2);
-        assert_eq!(statuses, vec!["completed", "completed"]);
-    }
-
-    #[test]
-    fn build_meta_map_basic() {
+    fn build_meta_map_completed_no_pause_reason() {
         let step_names = vec![
             "validate".to_string(),
             "deploy".to_string(),
             "notify".to_string(),
         ];
-        let statuses = vec![
-            "completed".to_string(),
-            "pending".to_string(),
-            "pending".to_string(),
+        let step_statuses = vec![
+            StepStatus::Completed,
+            StepStatus::Completed,
+            StepStatus::Completed,
         ];
 
-        let meta = TaskWorkflowPromptHandler::build_meta_map("task-123", &step_names, &statuses);
+        let meta = TaskWorkflowPromptHandler::build_meta_map(
+            "task-456",
+            "completed",
+            &step_names,
+            &step_statuses,
+            None,
+        );
 
-        assert_eq!(meta["task_id"], "task-123");
-        assert_eq!(meta["task_status"], "working");
+        assert_eq!(meta["task_id"], "task-456");
+        assert_eq!(meta["task_status"], "completed");
+        assert!(
+            meta.get("pause_reason").is_none(),
+            "completed task should not have pause_reason"
+        );
 
-        let steps = meta["steps"].as_array().expect("steps should be an array");
+        let steps = meta["steps"].as_array().unwrap();
         assert_eq!(steps.len(), 3);
-        assert_eq!(steps[0]["name"], "validate");
+        for step in steps {
+            assert_eq!(step["status"], "completed");
+        }
+    }
+
+    #[test]
+    fn build_meta_map_with_step_statuses() {
+        let step_names = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+        ];
+        let step_statuses = vec![
+            StepStatus::Completed,
+            StepStatus::Failed,
+            StepStatus::Skipped,
+            StepStatus::Pending,
+        ];
+
+        let meta = TaskWorkflowPromptHandler::build_meta_map(
+            "task-789",
+            "working",
+            &step_names,
+            &step_statuses,
+            None,
+        );
+
+        let steps = meta["steps"].as_array().unwrap();
         assert_eq!(steps[0]["status"], "completed");
-        assert_eq!(steps[1]["name"], "deploy");
-        assert_eq!(steps[1]["status"], "pending");
-        assert_eq!(steps[2]["name"], "notify");
-        assert_eq!(steps[2]["status"], "pending");
+        assert_eq!(steps[1]["status"], "failed");
+        assert_eq!(steps[2]["status"], "skipped");
+        assert_eq!(steps[3]["status"], "pending");
     }
 
     #[test]
     fn build_meta_map_empty_steps() {
-        let meta = TaskWorkflowPromptHandler::build_meta_map("task-456", &[], &[]);
+        let meta =
+            TaskWorkflowPromptHandler::build_meta_map("task-000", "working", &[], &[], None);
 
-        assert_eq!(meta["task_id"], "task-456");
+        assert_eq!(meta["task_id"], "task-000");
         assert_eq!(meta["task_status"], "working");
 
         let steps = meta["steps"].as_array().expect("steps should be an array");
@@ -552,48 +884,277 @@ mod tests {
     }
 
     #[test]
-    fn infer_step_statuses_guidance_messages_counted_correctly() {
-        // WorkflowPromptHandler may emit guidance messages (assistant role)
-        // before the tool call. The pattern is:
-        //   Assistant (guidance) -> Assistant (tool call) -> User (result)
-        // This tests that consecutive assistant messages don't double-count.
-        let messages = vec![
-            PromptMessage {
-                role: Role::User,
-                content: crate::types::MessageContent::Text {
-                    text: "intent".to_string(),
-                },
-            },
-            PromptMessage {
-                role: Role::Assistant,
-                content: crate::types::MessageContent::Text {
-                    text: "plan".to_string(),
-                },
-            },
-            // Guidance message (assistant, not followed by user)
-            PromptMessage {
-                role: Role::Assistant,
-                content: crate::types::MessageContent::Text {
-                    text: "guidance for step 1".to_string(),
-                },
-            },
-            // Tool call (assistant)
-            PromptMessage {
-                role: Role::Assistant,
-                content: crate::types::MessageContent::Text {
-                    text: "calling tool 1".to_string(),
-                },
-            },
-            // Tool result (user)
-            PromptMessage {
-                role: Role::User,
-                content: crate::types::MessageContent::Text {
-                    text: "result 1".to_string(),
-                },
-            },
+    fn build_initial_progress_typed_all_pending() {
+        use super::super::handles::ToolHandle;
+
+        let workflow = SequentialWorkflow::new("test_wf", "Test workflow")
+            .step(WorkflowStep::new("validate", ToolHandle::new("checker")))
+            .step(WorkflowStep::new("deploy", ToolHandle::new("deployer")))
+            .step(
+                WorkflowStep::fetch_resources("read_guide")
+                    .with_resource("docs://guide")
+                    .expect("valid URI"),
+            );
+
+        let inner = WorkflowPromptHandler::new(
+            SequentialWorkflow::new("dummy", "dummy"),
+            HashMap::new(),
+            HashMap::new(),
+            None,
+        );
+        let task_router: Arc<dyn TaskRouter> = Arc::new(DummyTaskRouter);
+        let handler = TaskWorkflowPromptHandler::new(inner, task_router, workflow);
+
+        let progress = handler.build_initial_progress_typed();
+
+        assert_eq!(progress["goal"], "test_wf: Test workflow");
+        assert_eq!(progress["schemaVersion"], 1);
+
+        let steps = progress["steps"].as_array().unwrap();
+        assert_eq!(steps.len(), 3);
+
+        // All steps should be Pending
+        for step in steps {
+            assert_eq!(step["status"], "pending");
+        }
+
+        // Verify step names and tools
+        assert_eq!(steps[0]["name"], "validate");
+        assert_eq!(steps[0]["tool"], "checker");
+        assert_eq!(steps[1]["name"], "deploy");
+        assert_eq!(steps[1]["tool"], "deployer");
+        assert_eq!(steps[2]["name"], "read_guide");
+        assert!(
+            steps[2].get("tool").is_none(),
+            "resource-only step should not have tool"
+        );
+    }
+
+    #[test]
+    fn classify_resolution_failure_unresolved_dependency() {
+        use super::super::handles::ToolHandle;
+
+        let step_a = WorkflowStep::new("produce", ToolHandle::new("fetcher")).bind("data_out");
+        let step_b = WorkflowStep::new("consume", ToolHandle::new("processor"))
+            .arg("input", DataSource::from_step("data_out"));
+
+        let all_steps = vec![step_a, step_b.clone()];
+        let statuses = vec![StepStatus::Failed, StepStatus::Pending];
+
+        let result = classify_resolution_failure(&step_b, &all_steps, &statuses);
+
+        match result {
+            PauseReason::UnresolvedDependency {
+                blocked_step,
+                missing_output,
+                producing_step,
+                suggested_tool,
+            } => {
+                assert_eq!(blocked_step, "consume");
+                assert_eq!(missing_output, "data_out");
+                assert_eq!(producing_step, "produce");
+                assert_eq!(suggested_tool, "fetcher");
+            }
+            other => panic!("Expected UnresolvedDependency, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn classify_resolution_failure_generic_unresolvable() {
+        use super::super::handles::ToolHandle;
+
+        let step = WorkflowStep::new("do_thing", ToolHandle::new("tool_x"))
+            .arg("name", DataSource::prompt_arg("missing_arg"));
+
+        let all_steps = vec![step.clone()];
+        let statuses = vec![StepStatus::Pending];
+
+        let result = classify_resolution_failure(&step, &all_steps, &statuses);
+
+        match result {
+            PauseReason::UnresolvableParams {
+                blocked_step,
+                missing_param,
+                suggested_tool,
+            } => {
+                assert_eq!(blocked_step, "do_thing");
+                assert_eq!(missing_param, "name");
+                assert_eq!(suggested_tool, "tool_x");
+            }
+            other => panic!("Expected UnresolvableParams, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn classify_resolution_failure_skipped_producer() {
+        use super::super::handles::ToolHandle;
+
+        let step_a = WorkflowStep::new("gather", ToolHandle::new("gatherer")).bind("info");
+        let step_b = WorkflowStep::new("analyze", ToolHandle::new("analyzer"))
+            .arg("data", DataSource::from_step("info"));
+
+        let all_steps = vec![step_a, step_b.clone()];
+        let statuses = vec![StepStatus::Skipped, StepStatus::Pending];
+
+        let result = classify_resolution_failure(&step_b, &all_steps, &statuses);
+
+        match result {
+            PauseReason::UnresolvedDependency {
+                blocked_step,
+                missing_output,
+                producing_step,
+                suggested_tool,
+            } => {
+                assert_eq!(blocked_step, "analyze");
+                assert_eq!(missing_output, "info");
+                assert_eq!(producing_step, "gather");
+                assert_eq!(suggested_tool, "gatherer");
+            }
+            other => panic!("Expected UnresolvedDependency, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn pause_reason_to_value_all_variants() {
+        // UnresolvableParams
+        let reason = PauseReason::UnresolvableParams {
+            blocked_step: "step_a".to_string(),
+            missing_param: "param_x".to_string(),
+            suggested_tool: "tool_y".to_string(),
+        };
+        let val = reason.to_value();
+        assert_eq!(val["type"], "unresolvableParams");
+        assert_eq!(val["blockedStep"], "step_a");
+        assert_eq!(val["missingParam"], "param_x");
+        assert_eq!(val["suggestedTool"], "tool_y");
+
+        // SchemaMismatch
+        let reason = PauseReason::SchemaMismatch {
+            blocked_step: "step_b".to_string(),
+            missing_fields: vec!["f1".to_string(), "f2".to_string()],
+            suggested_tool: "tool_z".to_string(),
+        };
+        let val = reason.to_value();
+        assert_eq!(val["type"], "schemaMismatch");
+        assert_eq!(val["blockedStep"], "step_b");
+        assert_eq!(val["missingFields"], serde_json::json!(["f1", "f2"]));
+
+        // ToolError
+        let reason = PauseReason::ToolError {
+            failed_step: "deploy".to_string(),
+            error: "connection refused".to_string(),
+            retryable: false,
+            suggested_tool: "deploy_service".to_string(),
+        };
+        let val = reason.to_value();
+        assert_eq!(val["type"], "toolError");
+        assert_eq!(val["failedStep"], "deploy");
+        assert_eq!(val["error"], "connection refused");
+        assert_eq!(val["retryable"], false);
+
+        // UnresolvedDependency
+        let reason = PauseReason::UnresolvedDependency {
+            blocked_step: "step_c".to_string(),
+            missing_output: "data".to_string(),
+            producing_step: "step_a".to_string(),
+            suggested_tool: "fetch_data".to_string(),
+        };
+        let val = reason.to_value();
+        assert_eq!(val["type"], "unresolvedDependency");
+        assert_eq!(val["blockedStep"], "step_c");
+        assert_eq!(val["missingOutput"], "data");
+        assert_eq!(val["producingStep"], "step_a");
+        assert_eq!(val["suggestedTool"], "fetch_data");
+    }
+
+    #[test]
+    fn workflow_result_key_produces_correct_keys() {
+        assert_eq!(workflow_result_key("validate"), "_workflow.result.validate");
+        assert_eq!(workflow_result_key("deploy"), "_workflow.result.deploy");
+    }
+
+    #[test]
+    fn build_updated_progress_applies_statuses() {
+        let initial = serde_json::json!({
+            "goal": "Test",
+            "steps": [
+                {"name": "a", "tool": "tool_a", "status": "pending"},
+                {"name": "b", "tool": "tool_b", "status": "pending"},
+                {"name": "c", "status": "pending"}
+            ],
+            "schemaVersion": 1
+        });
+
+        let statuses = vec![
+            StepStatus::Completed,
+            StepStatus::Failed,
+            StepStatus::Pending,
         ];
-        // Only 1 step should be completed (the guidance + tool call + result = 1 pair)
-        let statuses = TaskWorkflowPromptHandler::infer_step_statuses(&messages, 2);
-        assert_eq!(statuses, vec!["completed", "pending"]);
+
+        let updated = build_updated_progress(&initial, &statuses);
+
+        let steps = updated["steps"].as_array().unwrap();
+        assert_eq!(steps[0]["status"], "completed");
+        assert_eq!(steps[1]["status"], "failed");
+        assert_eq!(steps[2]["status"], "pending");
+
+        // Goal and schemaVersion unchanged
+        assert_eq!(updated["goal"], "Test");
+        assert_eq!(updated["schemaVersion"], 1);
+    }
+
+    // --- Dummy TaskRouter for tests ---
+
+    struct DummyTaskRouter;
+
+    #[async_trait]
+    impl TaskRouter for DummyTaskRouter {
+        async fn handle_task_call(
+            &self,
+            _tool_name: &str,
+            _arguments: Value,
+            _task_params: Value,
+            _owner_id: &str,
+            _progress_token: Option<Value>,
+        ) -> Result<Value> {
+            unimplemented!()
+        }
+
+        async fn handle_tasks_get(&self, _params: Value, _owner_id: &str) -> Result<Value> {
+            unimplemented!()
+        }
+
+        async fn handle_tasks_result(&self, _params: Value, _owner_id: &str) -> Result<Value> {
+            unimplemented!()
+        }
+
+        async fn handle_tasks_list(&self, _params: Value, _owner_id: &str) -> Result<Value> {
+            unimplemented!()
+        }
+
+        async fn handle_tasks_cancel(&self, _params: Value, _owner_id: &str) -> Result<Value> {
+            unimplemented!()
+        }
+
+        fn resolve_owner(
+            &self,
+            _subject: Option<&str>,
+            _client_id: Option<&str>,
+            _session_id: Option<&str>,
+        ) -> String {
+            "owner".to_string()
+        }
+
+        fn tool_requires_task(
+            &self,
+            _tool_name: &str,
+            _tool_execution: Option<&Value>,
+        ) -> bool {
+            false
+        }
+
+        fn task_capabilities(&self) -> Value {
+            serde_json::json!({})
+        }
     }
 }
