@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-21)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state that persists across tool calls.
-**Current focus:** Phase 2 - In-Memory Backend and Owner Security
+**Current focus:** Phase 3 - Handler, Middleware, and Server Integration
 
 ## Current Position
 
-Phase: 2 of 5 (In-Memory Backend and Owner Security) -- COMPLETE
-Plan: 3 of 3 in current phase
-Status: Phase Complete
-Last activity: 2026-02-22 -- Completed Plan 03 (store, security, and property tests)
+Phase: 3 of 5 (Handler, Middleware, and Server Integration)
+Plan: 1 of 3 in current phase
+Status: In Progress
+Last activity: 2026-02-22 -- Completed Plan 01 (protocol types, TaskRouter, builder integration)
 
-Progress: [######....] 60%
+Progress: [#######...] 70%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
-- Average duration: 6 min
-- Total execution time: 0.62 hours
+- Total plans completed: 7
+- Average duration: 7 min
+- Total execution time: 0.87 hours
 
 **By Phase:**
 
@@ -29,10 +29,11 @@ Progress: [######....] 60%
 |-------|-------|-------|----------|
 | 01 | 3 | 19 min | 6 min |
 | 02 | 3 | 18 min | 6 min |
+| 03 | 1 | 15 min | 15 min |
 
 **Recent Trend:**
-- Last 5 plans: 4min, 7min, 7min, 4min, 7min
-- Trend: stable
+- Last 5 plans: 7min, 7min, 4min, 7min, 15min
+- Trend: stable (plan 03-01 larger due to cross-codebase struct updates)
 
 *Updated after each plan completion*
 
@@ -65,6 +66,10 @@ Recent decisions affecting current work:
 - [02-03]: Property tests use tokio::runtime::Runtime::new().block_on() inside proptest closures for async store operations
 - [02-03]: Used 1ms TTL with tokio::time::sleep for expiry tests (real expiry, not mocked time)
 - [02-03]: arb_owner() strategy excludes DEFAULT_LOCAL_OWNER to avoid anonymous access confusion
+- [03-01]: serde_json::Value for TaskRouter params/returns to avoid circular crate dependency
+- [03-01]: TaskRouter trait defined in pmcp (not pmcp-tasks) so builder can reference it
+- [03-01]: Task ClientRequest variants return METHOD_NOT_FOUND when no task router configured
+- [03-01]: with_task_store() method name per CONTEXT.md locked decision (parameter is Arc<dyn TaskRouter>)
 
 ### Pending Todos
 
@@ -79,5 +84,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 02-03-PLAN.md (store, security, property tests) -- Phase 2 COMPLETE
+Stopped at: Completed 03-01-PLAN.md (protocol types, TaskRouter, builder integration)
 Resume file: None

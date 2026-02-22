@@ -47,8 +47,8 @@ Requirements for initial release (`pmcp-tasks` v0.1.0). Each maps to roadmap pha
 
 ### Server Integration
 
-- [ ] **INTG-01**: Server task capabilities advertised via `experimental.tasks` field during initialization
-- [ ] **INTG-02**: Tool-level task support declared via `execution.taskSupport` in tools/list response
+- [x] **INTG-01**: Server task capabilities advertised via `experimental.tasks` field during initialization
+- [x] **INTG-02**: Tool-level task support declared via `execution.taskSupport` in tools/list response
 - [ ] **INTG-03**: TaskMiddleware intercepts tools/call requests containing `task` field and creates task
 - [ ] **INTG-04**: TaskMiddleware returns CreateTaskResult immediately and spawns background tool execution
 - [ ] **INTG-05**: tasks/get endpoint returns current task state for polling
@@ -56,7 +56,7 @@ Requirements for initial release (`pmcp-tasks` v0.1.0). Each maps to roadmap pha
 - [ ] **INTG-07**: tasks/list endpoint returns paginated tasks scoped to owner's authorization context
 - [ ] **INTG-08**: tasks/cancel endpoint transitions non-terminal tasks to cancelled status
 - [ ] **INTG-09**: TTL enforcement: receivers respect requested TTL, can override with max, clean up expired tasks
-- [ ] **INTG-10**: JSON-RPC routing handles tasks/get, tasks/result, tasks/list, tasks/cancel methods
+- [x] **INTG-10**: JSON-RPC routing handles tasks/get, tasks/result, tasks/list, tasks/cancel methods
 - [ ] **INTG-11**: progressToken from original request threaded through to background task execution
 - [ ] **INTG-12**: Model immediate response supported via optional `_meta` field in CreateTaskResult
 
@@ -162,8 +162,8 @@ Deferred to future release. Tracked but not in current roadmap.
 | HNDL-04 | Phase 2 | Complete |
 | HNDL-05 | Phase 2 | Complete |
 | HNDL-06 | Phase 2 | Complete |
-| INTG-01 | Phase 3 | Pending |
-| INTG-02 | Phase 3 | Pending |
+| INTG-01 | Phase 3 | Complete |
+| INTG-02 | Phase 3 | Complete |
 | INTG-03 | Phase 3 | Pending |
 | INTG-04 | Phase 3 | Pending |
 | INTG-05 | Phase 3 | Pending |
@@ -171,7 +171,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | INTG-07 | Phase 3 | Pending |
 | INTG-08 | Phase 3 | Pending |
 | INTG-09 | Phase 3 | Pending |
-| INTG-10 | Phase 3 | Pending |
+| INTG-10 | Phase 3 | Complete |
 | INTG-11 | Phase 3 | Pending |
 | INTG-12 | Phase 3 | Pending |
 | SEC-01 | Phase 2 | Pending |
