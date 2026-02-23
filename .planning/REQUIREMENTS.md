@@ -30,9 +30,9 @@ Requirements for the Task-Prompt Bridge milestone. Each maps to roadmap phases.
 
 ### Continuation
 
-- [ ] **CONT-01**: Follow-up tool calls can reference the workflow task via _task_id in request _meta
-- [ ] **CONT-02**: Task variables are updated with step results when tool calls include _task_id binding
-- [ ] **CONT-03**: Client can poll tasks/result to check overall workflow completion status
+- [x] **CONT-01**: Follow-up tool calls can reference the workflow task via _task_id in request _meta
+- [x] **CONT-02**: Task variables are updated with step results when tool calls include _task_id binding
+- [x] **CONT-03**: Client can poll tasks/result to check overall workflow completion status
 
 ### Integration
 
@@ -79,9 +79,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | HAND-01 | Phase 6 | Complete |
 | HAND-02 | Phase 6 | Complete |
 | HAND-03 | Phase 6 | Complete |
-| CONT-01 | Phase 6 | Pending |
-| CONT-02 | Phase 6 | Pending |
-| CONT-03 | Phase 6 | Pending |
+| CONT-01 | Phase 6 | Complete |
+| CONT-02 | Phase 6 | Complete |
+| CONT-03 | Phase 6 | Complete |
 | INTG-01 | Phase 7 | Pending |
 | INTG-02 | Phase 7 | Pending |
 | INTG-03 | Phase 7 | Pending |

@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state that persists across tool calls.
-**Current focus:** v1.1 Task-Prompt Bridge — Phase 6 in progress
+**Current focus:** v1.1 Task-Prompt Bridge — Phase 6 complete
 
 ## Current Position
 
 Milestone: v1.1 Task-Prompt Bridge
 Phase: 6 of 7 (Structured Handoff and Client Continuation)
-Plan: 1 of 2 in current phase
-Status: Executing
-Last activity: 2026-02-23 — Completed 06-01-PLAN.md
+Plan: 2 of 2 in current phase (COMPLETE)
+Status: Phase complete
+Last activity: 2026-02-23 — Completed 06-02-PLAN.md (Phase 6 complete)
 
-Progress: [██████░░░░] 60% (v1.1)
+Progress: [███████░░░] 70% (v1.1)
 
 ## Performance Metrics
 
@@ -33,7 +33,7 @@ Progress: [██████░░░░] 60% (v1.1)
 | 03 | 3 | 28 min | 9 min |
 | 04 | 2 | 29 min | 14 min |
 | 05 | 2 | 15 min | 7 min |
-| 06 | 1 | 3 min | 3 min |
+| 06 | 2 | 10 min | 5 min |
 
 *Updated after each plan completion*
 
@@ -63,6 +63,10 @@ Key decisions for v1.1:
 - build_placeholder_args as static method since it only needs step metadata and args (06-01)
 - Retryable failed steps appear first in remaining steps list for immediate retry guidance (06-01)
 - DataSource::Field adapted to DataSource::StepOutput { field: Some(f) } since Field variant does not exist (06-01)
+- Fire-and-forget pattern: continuation recording never fails the tool call (06-02)
+- First-match-wins step matching: first pending/failed step with matching tool name selected (06-02)
+- Cancel-as-completion: tasks/cancel with result transitions to Completed, not Cancelled (06-02)
+- Pause reason cleared on any continuation call since client is making progress (06-02)
 
 ### Pending Todos
 
@@ -77,5 +81,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Completed 06-01-PLAN.md
-Resume file: 06-02-PLAN.md
+Stopped at: Completed 06-02-PLAN.md (Phase 6 complete)
+Resume file: Next phase planning needed
