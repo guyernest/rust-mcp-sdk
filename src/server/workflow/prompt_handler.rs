@@ -341,7 +341,9 @@ impl WorkflowPromptHandler {
     ///
     /// Returns true if any binding uses `DataSource::StepOutput`, meaning the
     /// resource must be fetched AFTER tool execution.
-    pub(crate) fn template_bindings_use_step_outputs(bindings: &HashMap<String, DataSource>) -> bool {
+    pub(crate) fn template_bindings_use_step_outputs(
+        bindings: &HashMap<String, DataSource>,
+    ) -> bool {
         bindings
             .values()
             .any(|source| matches!(source, DataSource::StepOutput { .. }))
@@ -561,7 +563,11 @@ impl WorkflowPromptHandler {
     ///
     /// Returns true if the params object contains all required fields defined in the tool's schema.
     /// This prevents attempting to execute tools with incomplete parameters.
-    pub(crate) fn params_satisfy_tool_schema(&self, step: &WorkflowStep, params: &Value) -> Result<bool> {
+    pub(crate) fn params_satisfy_tool_schema(
+        &self,
+        step: &WorkflowStep,
+        params: &Value,
+    ) -> Result<bool> {
         let tool_handle = step.tool().ok_or_else(|| {
             crate::Error::Internal(format!(
                 "Cannot check schema for resource-only step '{}'",

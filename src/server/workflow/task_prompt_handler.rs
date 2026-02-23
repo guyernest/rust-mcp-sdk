@@ -249,10 +249,7 @@ impl TaskWorkflowPromptHandler {
                 if let Some(tool) = step.tool() {
                     step_obj.insert("tool".to_string(), Value::String(tool.name().to_string()));
                 }
-                step_obj.insert(
-                    "status".to_string(),
-                    Value::String("pending".to_string()),
-                );
+                step_obj.insert("status".to_string(), Value::String("pending".to_string()));
                 Value::Object(step_obj)
             })
             .collect();
@@ -303,6 +300,208 @@ impl TaskWorkflowPromptHandler {
         meta
     }
 
+    /// Build placeholder argument strings for a step whose parameters cannot
+    /// be fully resolved.
+    ///
+    /// For each argument in the step:
+    /// - `DataSource::PromptArg(name)` uses the actual prompt arg value if
+    ///   available, otherwise `<prompt arg {name}>`.
+    /// - `DataSource::StepOutput { step: binding, field: None }` produces
+    ///   `<output from {binding}>`.
+    /// - `DataSource::StepOutput { step: binding, field: Some(f) }` produces
+    ///   `<field '{f}' from {binding}>`.
+    /// - `DataSource::Constant(val)` serializes the value to a string.
+    ///
+    /// Returns a JSON-formatted string of the placeholder argument map.
+    fn build_placeholder_args(step: &WorkflowStep, args: &HashMap<String, String>) -> String {
+        let mut map = serde_json::Map::new();
+
+        for (arg_name, data_source) in step.arguments() {
+            let value = match data_source {
+                DataSource::PromptArg(name) => {
+                    if let Some(val) = args.get(name.as_str()) {
+                        Value::String(val.clone())
+                    } else {
+                        Value::String(format!("<prompt arg {}>", name))
+                    }
+                },
+                DataSource::StepOutput {
+                    step: binding,
+                    field: None,
+                } => Value::String(format!("<output from {}>", binding)),
+                DataSource::StepOutput {
+                    step: binding,
+                    field: Some(f),
+                } => Value::String(format!("<field '{}' from {}>", f, binding)),
+                DataSource::Constant(val) => val.clone(),
+            };
+            map.insert(arg_name.to_string(), value);
+        }
+
+        serde_json::to_string(&Value::Object(map)).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// Build the handoff assistant message narrating what happened and what
+    /// steps remain for the client to execute.
+    ///
+    /// The message has two sections:
+    /// 1. **What happened** -- derived from the [`PauseReason`] variant.
+    /// 2. **Remaining steps** -- a numbered list of pending steps with tool
+    ///    names, resolved (or placeholder) arguments, and guidance text.
+    ///
+    /// # Important Invariants
+    ///
+    /// - The task ID never appears in the narrative text (it belongs in `_meta`).
+    /// - Completed steps are not re-summarized (they are already in the
+    ///   conversation trace as tool-call/result message pairs).
+    /// - When a step's arguments cannot be resolved, placeholder syntax is
+    ///   used (e.g., `<output from deploy_result>`).
+    /// - If the pause is a retryable `ToolError`, the failed step appears as
+    ///   the first item in the remaining steps list.
+    fn build_handoff_message(
+        &self,
+        step_statuses: &[StepStatus],
+        pause_reason: &PauseReason,
+        args: &HashMap<String, String>,
+        execution_context: &ExecutionContext,
+    ) -> PromptMessage {
+        let mut text = String::new();
+
+        // Section 1: What happened (from pause_reason)
+        match pause_reason {
+            PauseReason::ToolError {
+                failed_step,
+                error,
+                retryable,
+                ..
+            } => {
+                text.push_str(&format!("Step '{}' failed: {}.", failed_step, error));
+                if *retryable {
+                    text.push_str(" This step is retryable.");
+                }
+            },
+            PauseReason::UnresolvableParams {
+                blocked_step,
+                missing_param,
+                ..
+            } => {
+                text.push_str(&format!(
+                    "Could not resolve parameter '{}' for step '{}'.",
+                    missing_param, blocked_step
+                ));
+            },
+            PauseReason::SchemaMismatch {
+                blocked_step,
+                missing_fields,
+                ..
+            } => {
+                let fields = missing_fields.join(", ");
+                text.push_str(&format!(
+                    "Step '{}' has missing required fields: {}.",
+                    blocked_step, fields
+                ));
+            },
+            PauseReason::UnresolvedDependency {
+                blocked_step,
+                missing_output,
+                producing_step,
+                ..
+            } => {
+                text.push_str(&format!(
+                    "Step '{}' depends on output '{}' from step '{}', which did not complete.",
+                    blocked_step, missing_output, producing_step
+                ));
+            },
+        }
+
+        // Section 2: Remaining steps
+        text.push_str("\n\nTo continue the workflow, make these tool calls:\n\n");
+
+        let mut step_num = 1;
+
+        // If the pause is a retryable ToolError, include the failed step first
+        if let PauseReason::ToolError {
+            failed_step,
+            retryable: true,
+            ..
+        } = pause_reason
+        {
+            for (idx, step) in self.workflow.steps().iter().enumerate() {
+                if step_statuses.get(idx) == Some(&StepStatus::Failed)
+                    && step.name().as_str() == failed_step.as_str()
+                {
+                    let tool_name = step
+                        .tool()
+                        .map(|t| t.name().to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+
+                    let args_str =
+                        match self
+                            .inner
+                            .resolve_tool_parameters(step, args, execution_context)
+                        {
+                            Ok(resolved) => serde_json::to_string(&resolved)
+                                .unwrap_or_else(|_| "{}".to_string()),
+                            Err(_) => Self::build_placeholder_args(step, args),
+                        };
+
+                    text.push_str(&format!(
+                        "{}. Call {} with {}\n",
+                        step_num, tool_name, args_str
+                    ));
+
+                    if let Some(guidance) = step.guidance() {
+                        let guidance_text =
+                            WorkflowPromptHandler::substitute_arguments(guidance, args);
+                        text.push_str(&format!("   Note: {}\n", guidance_text));
+                    }
+
+                    step_num += 1;
+                    break;
+                }
+            }
+        }
+
+        // List pending steps
+        for (idx, step) in self.workflow.steps().iter().enumerate() {
+            if step_statuses.get(idx) != Some(&StepStatus::Pending) {
+                continue;
+            }
+
+            let tool_name = step
+                .tool()
+                .map(|t| t.name().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            let args_str = match self
+                .inner
+                .resolve_tool_parameters(step, args, execution_context)
+            {
+                Ok(resolved) => {
+                    serde_json::to_string(&resolved).unwrap_or_else(|_| "{}".to_string())
+                },
+                Err(_) => Self::build_placeholder_args(step, args),
+            };
+
+            text.push_str(&format!(
+                "{}. Call {} with {}\n",
+                step_num, tool_name, args_str
+            ));
+
+            if let Some(guidance) = step.guidance() {
+                let guidance_text = WorkflowPromptHandler::substitute_arguments(guidance, args);
+                text.push_str(&format!("   Note: {}\n", guidance_text));
+            }
+
+            step_num += 1;
+        }
+
+        PromptMessage {
+            role: Role::Assistant,
+            content: MessageContent::Text { text },
+        }
+    }
+
     /// Resolve the owner ID from the request's auth context.
     ///
     /// Follows the same pattern as `ServerCore::resolve_task_owner`:
@@ -312,7 +511,7 @@ impl TaskWorkflowPromptHandler {
             Some(ctx) => {
                 self.task_router
                     .resolve_owner(Some(&ctx.subject), ctx.client_id.as_deref(), None)
-            }
+            },
             None => self.task_router.resolve_owner(None, None, None),
         }
     }
@@ -431,12 +630,7 @@ impl PromptHandler for TaskWorkflowPromptHandler {
             .create_workflow_task(self.workflow.name(), &owner_id, initial_progress.clone())
             .await
         {
-            Ok(value) => {
-                value
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-            }
+            Ok(value) => value.get("id").and_then(|v| v.as_str()).map(String::from),
             Err(e) => {
                 tracing::warn!(
                     "Task creation failed for workflow '{}', proceeding without task tracking: {}",
@@ -444,7 +638,7 @@ impl PromptHandler for TaskWorkflowPromptHandler {
                     e
                 );
                 None
-            }
+            },
         };
 
         // If no task was created, delegate to inner handler (graceful degradation)
@@ -453,7 +647,7 @@ impl PromptHandler for TaskWorkflowPromptHandler {
             None => {
                 let result = self.inner.handle(args, extra).await?;
                 return Ok(result);
-            }
+            },
         };
 
         // 4. Active execution loop
@@ -481,8 +675,7 @@ impl PromptHandler for TaskWorkflowPromptHandler {
             }
 
             // Report progress
-            let progress_message =
-                format!("Step {}/{}: {}", idx + 1, total_steps, step.name());
+            let progress_message = format!("Step {}/{}: {}", idx + 1, total_steps, step.name());
             if let Err(e) = extra
                 .report_count(idx + 1, total_steps, Some(progress_message))
                 .await
@@ -504,9 +697,7 @@ impl PromptHandler for TaskWorkflowPromptHandler {
 
             // Fetch pre-tool resources (those not depending on step outputs)
             let fetch_resources_after_tool =
-                WorkflowPromptHandler::template_bindings_use_step_outputs(
-                    step.template_bindings(),
-                );
+                WorkflowPromptHandler::template_bindings_use_step_outputs(step.template_bindings());
 
             if !fetch_resources_after_tool
                 && !step.resources().is_empty()
@@ -524,10 +715,7 @@ impl PromptHandler for TaskWorkflowPromptHandler {
                 messages.push(PromptMessage {
                     role: Role::Assistant,
                     content: MessageContent::Text {
-                        text: format!(
-                            "I'll fetch the required resources for {}...",
-                            step.name()
-                        ),
+                        text: format!("I'll fetch the required resources for {}...", step.name()),
                     },
                 });
 
@@ -564,15 +752,16 @@ impl PromptHandler for TaskWorkflowPromptHandler {
                         &step_statuses,
                     ));
                     break;
-                }
+                },
                 Ok(announcement) => {
-                    let params = match self
-                        .inner
-                        .resolve_tool_parameters(step, &args, &execution_context)
-                    {
-                        Ok(p) => p,
-                        Err(_) => break,
-                    };
+                    let params =
+                        match self
+                            .inner
+                            .resolve_tool_parameters(step, &args, &execution_context)
+                        {
+                            Ok(p) => p,
+                            Err(_) => break,
+                        };
 
                     match self.inner.params_satisfy_tool_schema(step, &params) {
                         Err(_) => break,
@@ -587,7 +776,7 @@ impl PromptHandler for TaskWorkflowPromptHandler {
                                 suggested_tool,
                             });
                             break;
-                        }
+                        },
                         Ok(true) => {
                             messages.push(announcement);
 
@@ -608,15 +797,11 @@ impl PromptHandler for TaskWorkflowPromptHandler {
                                         },
                                     });
 
-                                    step_results.push((
-                                        step.name().to_string(),
-                                        result.clone(),
-                                    ));
+                                    step_results.push((step.name().to_string(), result.clone()));
                                     step_statuses[idx] = StepStatus::Completed;
 
                                     if let Some(binding) = step.binding() {
-                                        execution_context
-                                            .store_binding(binding.clone(), result);
+                                        execution_context.store_binding(binding.clone(), result);
                                     }
 
                                     if fetch_resources_after_tool
@@ -634,7 +819,7 @@ impl PromptHandler for TaskWorkflowPromptHandler {
                                     {
                                         break;
                                     }
-                                }
+                                },
                                 Err(e) => {
                                     messages.push(PromptMessage {
                                         role: Role::User,
@@ -661,12 +846,19 @@ impl PromptHandler for TaskWorkflowPromptHandler {
                                         suggested_tool,
                                     });
                                     break;
-                                }
+                                },
                             }
-                        }
+                        },
                     }
-                }
+                },
             }
+        }
+
+        // 4b. Append handoff message when execution paused
+        if let Some(ref reason) = pause_reason {
+            let handoff =
+                self.build_handoff_message(&step_statuses, reason, &args, &execution_context);
+            messages.push(handoff);
         }
 
         // 5. Batch write to task store
@@ -699,10 +891,8 @@ impl PromptHandler for TaskWorkflowPromptHandler {
 
         // 6. Auto-complete if all steps succeeded
         let mut task_status = "working";
-        let all_completed = pause_reason.is_none()
-            && step_statuses
-                .iter()
-                .all(|s| *s == StepStatus::Completed);
+        let all_completed =
+            pause_reason.is_none() && step_statuses.iter().all(|s| *s == StepStatus::Completed);
 
         if all_completed {
             let completion_result = serde_json::json!({
@@ -717,14 +907,14 @@ impl PromptHandler for TaskWorkflowPromptHandler {
             {
                 Ok(_) => {
                     task_status = "completed";
-                }
+                },
                 Err(e) => {
                     tracing::warn!(
                         "Failed to auto-complete task for workflow '{}': {}",
                         self.workflow.name(),
                         e
                     );
-                }
+                },
             }
         }
 
@@ -873,8 +1063,7 @@ mod tests {
 
     #[test]
     fn build_meta_map_empty_steps() {
-        let meta =
-            TaskWorkflowPromptHandler::build_meta_map("task-000", "working", &[], &[], None);
+        let meta = TaskWorkflowPromptHandler::build_meta_map("task-000", "working", &[], &[], None);
 
         assert_eq!(meta["task_id"], "task-000");
         assert_eq!(meta["task_status"], "working");
@@ -954,7 +1143,7 @@ mod tests {
                 assert_eq!(missing_output, "data_out");
                 assert_eq!(producing_step, "produce");
                 assert_eq!(suggested_tool, "fetcher");
-            }
+            },
             other => panic!("Expected UnresolvedDependency, got: {:?}", other),
         }
     }
@@ -980,7 +1169,7 @@ mod tests {
                 assert_eq!(blocked_step, "do_thing");
                 assert_eq!(missing_param, "name");
                 assert_eq!(suggested_tool, "tool_x");
-            }
+            },
             other => panic!("Expected UnresolvableParams, got: {:?}", other),
         }
     }
@@ -1009,7 +1198,7 @@ mod tests {
                 assert_eq!(missing_output, "info");
                 assert_eq!(producing_step, "gather");
                 assert_eq!(suggested_tool, "gatherer");
-            }
+            },
             other => panic!("Expected UnresolvedDependency, got: {:?}", other),
         }
     }
@@ -1145,16 +1334,328 @@ mod tests {
             "owner".to_string()
         }
 
-        fn tool_requires_task(
-            &self,
-            _tool_name: &str,
-            _tool_execution: Option<&Value>,
-        ) -> bool {
+        fn tool_requires_task(&self, _tool_name: &str, _tool_execution: Option<&Value>) -> bool {
             false
         }
 
         fn task_capabilities(&self) -> Value {
             serde_json::json!({})
         }
+    }
+
+    /// Helper: build a handler with a given workflow for handoff tests.
+    fn make_handler(workflow: SequentialWorkflow) -> TaskWorkflowPromptHandler {
+        let inner =
+            WorkflowPromptHandler::new(workflow.clone(), HashMap::new(), HashMap::new(), None);
+        let task_router: Arc<dyn TaskRouter> = Arc::new(DummyTaskRouter);
+        TaskWorkflowPromptHandler::new(inner, task_router, workflow)
+    }
+
+    // === Handoff message tests ===
+
+    #[test]
+    fn handoff_message_tool_error_retryable() {
+        use super::super::handles::ToolHandle;
+
+        let workflow = SequentialWorkflow::new("deploy_wf", "Deploy workflow")
+            .step(WorkflowStep::new("validate", ToolHandle::new("checker")))
+            .step(
+                WorkflowStep::new("deploy", ToolHandle::new("deploy_service"))
+                    .arg("region", DataSource::prompt_arg("region"))
+                    .retryable(true),
+            )
+            .step(
+                WorkflowStep::new("notify", ToolHandle::new("notify_team"))
+                    .arg("result", DataSource::from_step("deploy_out")),
+            );
+
+        let handler = make_handler(workflow);
+
+        let step_statuses = vec![
+            StepStatus::Completed,
+            StepStatus::Failed,
+            StepStatus::Pending,
+        ];
+        let pause = PauseReason::ToolError {
+            failed_step: "deploy".to_string(),
+            error: "connection timeout".to_string(),
+            retryable: true,
+            suggested_tool: "deploy_service".to_string(),
+        };
+
+        let mut args = HashMap::new();
+        args.insert("region".to_string(), "us-east-1".to_string());
+
+        let ctx = ExecutionContext::new();
+
+        let msg = handler.build_handoff_message(&step_statuses, &pause, &args, &ctx);
+
+        assert_eq!(msg.role, Role::Assistant);
+        let text = match &msg.content {
+            MessageContent::Text { text } => text.as_str(),
+            _ => panic!("Expected text content"),
+        };
+
+        // Section 1: What happened
+        assert!(
+            text.contains("Step 'deploy' failed: connection timeout."),
+            "should contain failure description"
+        );
+        assert!(
+            text.contains("This step is retryable."),
+            "should note retryable"
+        );
+
+        // Section 2: Remaining steps
+        assert!(
+            text.contains("To continue the workflow, make these tool calls:"),
+            "should contain continuation header"
+        );
+
+        // The failed retryable step should appear as item 1
+        assert!(
+            text.contains("1. Call deploy_service with"),
+            "retryable failed step should be first"
+        );
+
+        // The pending step should appear as item 2
+        assert!(
+            text.contains("2. Call notify_team with"),
+            "pending step should follow"
+        );
+    }
+
+    #[test]
+    fn handoff_message_unresolvable_params() {
+        use super::super::handles::ToolHandle;
+
+        let workflow = SequentialWorkflow::new("wf", "Workflow").step(
+            WorkflowStep::new("step_a", ToolHandle::new("tool_a"))
+                .arg("x", DataSource::prompt_arg("missing")),
+        );
+
+        let handler = make_handler(workflow);
+
+        let step_statuses = vec![StepStatus::Pending];
+        let pause = PauseReason::UnresolvableParams {
+            blocked_step: "step_a".to_string(),
+            missing_param: "x".to_string(),
+            suggested_tool: "tool_a".to_string(),
+        };
+
+        let msg = handler.build_handoff_message(
+            &step_statuses,
+            &pause,
+            &HashMap::new(),
+            &ExecutionContext::new(),
+        );
+
+        let text = match &msg.content {
+            MessageContent::Text { text } => text.as_str(),
+            _ => panic!("Expected text content"),
+        };
+
+        assert!(
+            text.contains("Could not resolve parameter 'x' for step 'step_a'."),
+            "should describe unresolvable param. Got: {}",
+            text
+        );
+        assert!(
+            text.contains("1. Call tool_a with"),
+            "should list remaining step"
+        );
+    }
+
+    #[test]
+    fn handoff_message_unresolved_dependency() {
+        use super::super::handles::ToolHandle;
+
+        let workflow = SequentialWorkflow::new("wf", "Workflow")
+            .step(WorkflowStep::new("produce", ToolHandle::new("fetcher")).bind("data"))
+            .step(
+                WorkflowStep::new("consume", ToolHandle::new("processor"))
+                    .arg("input", DataSource::from_step("data")),
+            );
+
+        let handler = make_handler(workflow);
+
+        let step_statuses = vec![StepStatus::Failed, StepStatus::Pending];
+        let pause = PauseReason::UnresolvedDependency {
+            blocked_step: "consume".to_string(),
+            missing_output: "data".to_string(),
+            producing_step: "produce".to_string(),
+            suggested_tool: "fetcher".to_string(),
+        };
+
+        let msg = handler.build_handoff_message(
+            &step_statuses,
+            &pause,
+            &HashMap::new(),
+            &ExecutionContext::new(),
+        );
+
+        let text = match &msg.content {
+            MessageContent::Text { text } => text.as_str(),
+            _ => panic!("Expected text content"),
+        };
+
+        assert!(
+            text.contains("Step 'consume' depends on output 'data' from step 'produce', which did not complete."),
+            "should mention dependency. Got: {}",
+            text
+        );
+        assert!(text.contains("produce"), "should mention producing step");
+    }
+
+    #[test]
+    fn handoff_message_schema_mismatch() {
+        use super::super::handles::ToolHandle;
+
+        let workflow = SequentialWorkflow::new("wf", "Workflow")
+            .step(WorkflowStep::new("step_b", ToolHandle::new("tool_z")));
+
+        let handler = make_handler(workflow);
+
+        let step_statuses = vec![StepStatus::Pending];
+        let pause = PauseReason::SchemaMismatch {
+            blocked_step: "step_b".to_string(),
+            missing_fields: vec!["field_1".to_string(), "field_2".to_string()],
+            suggested_tool: "tool_z".to_string(),
+        };
+
+        let msg = handler.build_handoff_message(
+            &step_statuses,
+            &pause,
+            &HashMap::new(),
+            &ExecutionContext::new(),
+        );
+
+        let text = match &msg.content {
+            MessageContent::Text { text } => text.as_str(),
+            _ => panic!("Expected text content"),
+        };
+
+        assert!(
+            text.contains("Step 'step_b' has missing required fields: field_1, field_2."),
+            "should list missing fields. Got: {}",
+            text
+        );
+    }
+
+    #[test]
+    fn handoff_message_no_task_id_in_text() {
+        use super::super::handles::ToolHandle;
+
+        let workflow = SequentialWorkflow::new("wf", "Workflow")
+            .step(WorkflowStep::new("s1", ToolHandle::new("t1")))
+            .step(WorkflowStep::new("s2", ToolHandle::new("t2")));
+
+        let handler = make_handler(workflow);
+
+        let step_statuses = vec![StepStatus::Completed, StepStatus::Pending];
+        let pause = PauseReason::ToolError {
+            failed_step: "s1".to_string(),
+            error: "oops".to_string(),
+            retryable: false,
+            suggested_tool: "t1".to_string(),
+        };
+
+        let msg = handler.build_handoff_message(
+            &step_statuses,
+            &pause,
+            &HashMap::new(),
+            &ExecutionContext::new(),
+        );
+
+        let text = match &msg.content {
+            MessageContent::Text { text } => text.as_str(),
+            _ => panic!("Expected text content"),
+        };
+
+        // The narrative should never contain "task_id", "task-", or any UUID-like pattern
+        assert!(
+            !text.contains("task_id"),
+            "narrative should not contain task_id"
+        );
+        assert!(
+            !text.contains("task-"),
+            "narrative should not contain task- prefix"
+        );
+    }
+
+    #[test]
+    fn placeholder_args_step_output() {
+        use super::super::handles::ToolHandle;
+
+        let step = WorkflowStep::new("consume", ToolHandle::new("processor"))
+            .arg("data", DataSource::from_step("result_binding"))
+            .arg("name", DataSource::prompt_arg("user_name"))
+            .arg("flag", DataSource::constant(serde_json::json!(true)))
+            .arg(
+                "detail",
+                DataSource::from_step_field("other_binding", "nested_field"),
+            );
+
+        let mut args = HashMap::new();
+        args.insert("user_name".to_string(), "Alice".to_string());
+
+        let result = TaskWorkflowPromptHandler::build_placeholder_args(&step, &args);
+
+        let parsed: serde_json::Value = serde_json::from_str(&result).expect("valid JSON");
+        let obj = parsed.as_object().expect("should be an object");
+
+        assert_eq!(
+            obj["data"], "<output from result_binding>",
+            "StepOutput without field should use placeholder"
+        );
+        assert_eq!(
+            obj["name"], "Alice",
+            "PromptArg with available value should resolve"
+        );
+        assert_eq!(obj["flag"], true, "Constant should serialize as-is");
+        assert_eq!(
+            obj["detail"], "<field 'nested_field' from other_binding>",
+            "StepOutput with field should use field placeholder"
+        );
+    }
+
+    #[test]
+    fn handoff_includes_guidance() {
+        use super::super::handles::ToolHandle;
+
+        let workflow = SequentialWorkflow::new("wf", "Workflow")
+            .step(WorkflowStep::new("validate", ToolHandle::new("checker")))
+            .step(
+                WorkflowStep::new("deploy", ToolHandle::new("deploy_service"))
+                    .arg("region", DataSource::prompt_arg("region"))
+                    .with_guidance("Deploy to the '{region}' region with validated config"),
+            );
+
+        let handler = make_handler(workflow);
+
+        let step_statuses = vec![StepStatus::Completed, StepStatus::Pending];
+        let pause = PauseReason::ToolError {
+            failed_step: "validate".to_string(),
+            error: "check failed".to_string(),
+            retryable: false,
+            suggested_tool: "checker".to_string(),
+        };
+
+        let mut args = HashMap::new();
+        args.insert("region".to_string(), "us-west-2".to_string());
+
+        let msg =
+            handler.build_handoff_message(&step_statuses, &pause, &args, &ExecutionContext::new());
+
+        let text = match &msg.content {
+            MessageContent::Text { text } => text.as_str(),
+            _ => panic!("Expected text content"),
+        };
+
+        assert!(
+            text.contains("Note: Deploy to the 'us-west-2' region with validated config"),
+            "should include guidance with substituted args. Got: {}",
+            text
+        );
     }
 }

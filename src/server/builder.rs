@@ -674,11 +674,8 @@ impl ServerCoreBuilder {
                 ))
             })?;
 
-            let task_handler = workflow::TaskWorkflowPromptHandler::new(
-                handler,
-                task_router.clone(),
-                workflow,
-            );
+            let task_handler =
+                workflow::TaskWorkflowPromptHandler::new(handler, task_router.clone(), workflow);
             self.prompts.insert(name, Arc::new(task_handler));
         } else {
             self.prompts.insert(name, Arc::new(handler));
@@ -963,11 +960,7 @@ mod tests {
         ) -> String {
             "test-owner".to_string()
         }
-        fn tool_requires_task(
-            &self,
-            _tool_name: &str,
-            _tool_execution: Option<&Value>,
-        ) -> bool {
+        fn tool_requires_task(&self, _tool_name: &str, _tool_execution: Option<&Value>) -> bool {
             false
         }
         fn task_capabilities(&self) -> Value {
