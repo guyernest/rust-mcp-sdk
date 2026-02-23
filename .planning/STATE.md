@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state that persists across tool calls.
-**Current focus:** v1.1 Task-Prompt Bridge — Phase 6 complete
+**Current focus:** v1.1 Task-Prompt Bridge — Phase 7 in progress
 
 ## Current Position
 
 Milestone: v1.1 Task-Prompt Bridge
-Phase: 6 of 7 (Structured Handoff and Client Continuation)
-Plan: 2 of 2 in current phase (COMPLETE)
-Status: Phase complete
-Last activity: 2026-02-23 — Completed 06-02-PLAN.md (Phase 6 complete)
+Phase: 7 of 7 (Integration and End-to-End Validation)
+Plan: 1 of 2 in current phase (COMPLETE)
+Status: Plan 07-01 complete
+Last activity: 2026-02-23 — Completed 07-01-PLAN.md
 
-Progress: [███████░░░] 70% (v1.1)
+Progress: [████████░░] 85% (v1.1)
 
 ## Performance Metrics
 
@@ -34,6 +34,7 @@ Progress: [███████░░░] 70% (v1.1)
 | 04 | 2 | 29 min | 14 min |
 | 05 | 2 | 15 min | 7 min |
 | 06 | 2 | 10 min | 5 min |
+| 07 | 1 | 5 min | 5 min |
 
 *Updated after each plan completion*
 
@@ -67,6 +68,9 @@ Key decisions for v1.1:
 - First-match-wins step matching: first pending/failed step with matching tool name selected (06-02)
 - Cancel-as-completion: tasks/cancel with result transitions to Completed, not Cancelled (06-02)
 - Pause reason cleared on any continuation call since client is making progress (06-02)
+- Fix task_id extraction as first task since entire lifecycle depends on it (07-01)
+- Failing tool variant pattern for error-path integration testing (07-01)
+- Handler-level testing via ServerCore::handle_request -- not transport layer (07-01)
 
 ### Pending Todos
 
@@ -81,5 +85,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Completed 06-02-PLAN.md (Phase 6 complete)
-Resume file: Next phase planning needed
+Stopped at: Completed 07-01-PLAN.md
+Resume file: .planning/phases/07-integration-and-end-to-end-validation/07-02-PLAN.md

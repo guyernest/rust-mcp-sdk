@@ -36,10 +36,10 @@ Requirements for the Task-Prompt Bridge milestone. Each maps to roadmap phases.
 
 ### Integration
 
-- [ ] **INTG-01**: ServerCoreBuilder provides API to register task-aware workflow prompts
-- [ ] **INTG-02**: Existing non-task workflows continue to work unchanged (backward compatibility)
+- [x] **INTG-01**: ServerCoreBuilder provides API to register task-aware workflow prompts
+- [x] **INTG-02**: Existing non-task workflows continue to work unchanged (backward compatibility)
 - [ ] **INTG-03**: Working example (62_tasks_workflow.rs) demonstrates complete task-prompt bridge lifecycle
-- [ ] **INTG-04**: Integration tests validate create-execute-handoff-continue-complete flow through real ServerCore
+- [x] **INTG-04**: Integration tests validate create-execute-handoff-continue-complete flow through real ServerCore
 
 ## v2 Requirements
 
@@ -82,10 +82,10 @@ Deferred to future release. Tracked but not in current roadmap.
 | CONT-01 | Phase 6 | Complete |
 | CONT-02 | Phase 6 | Complete |
 | CONT-03 | Phase 6 | Complete |
-| INTG-01 | Phase 7 | Pending |
-| INTG-02 | Phase 7 | Pending |
+| INTG-01 | Phase 7 | Complete |
+| INTG-02 | Phase 7 | Complete |
 | INTG-03 | Phase 7 | Pending |
-| INTG-04 | Phase 7 | Pending |
+| INTG-04 | Phase 7 | Complete |
 
 **Coverage:**
 - v1.1 requirements: 19 total
