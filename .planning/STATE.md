@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state that persists across tool calls.
-**Current focus:** v1.1 Task-Prompt Bridge — Phase 7 in progress
+**Current focus:** v1.1 Task-Prompt Bridge — Phase 7 COMPLETE
 
 ## Current Position
 
 Milestone: v1.1 Task-Prompt Bridge
 Phase: 7 of 7 (Integration and End-to-End Validation)
-Plan: 1 of 2 in current phase (COMPLETE)
-Status: Plan 07-01 complete
-Last activity: 2026-02-23 — Completed 07-01-PLAN.md
+Plan: 2 of 2 in current phase (COMPLETE)
+Status: Phase 07 complete -- all plans finished
+Last activity: 2026-02-23 — Completed 07-02-PLAN.md
 
-Progress: [████████░░] 85% (v1.1)
+Progress: [██████████] 100% (v1.1)
 
 ## Performance Metrics
 
@@ -34,7 +34,7 @@ Progress: [████████░░] 85% (v1.1)
 | 04 | 2 | 29 min | 14 min |
 | 05 | 2 | 15 min | 7 min |
 | 06 | 2 | 10 min | 5 min |
-| 07 | 1 | 5 min | 5 min |
+| 07 | 2 | 9 min | 4 min |
 
 *Updated after each plan completion*
 
@@ -71,6 +71,9 @@ Key decisions for v1.1:
 - Fix task_id extraction as first task since entire lifecycle depends on it (07-01)
 - Failing tool variant pattern for error-path integration testing (07-01)
 - Handler-level testing via ServerCore::handle_request -- not transport layer (07-01)
+- FetchDataTool always fails to trigger handoff naturally (no runtime toggle) (07-02)
+- Synchronous fn main() with block_on for example consistency (07-02)
+- Stage-labeled lifecycle examples with heavy inline comments for teaching clarity (07-02)
 
 ### Pending Todos
 
@@ -85,5 +88,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Completed 07-01-PLAN.md
-Resume file: .planning/phases/07-integration-and-end-to-end-validation/07-02-PLAN.md
+Stopped at: Completed 07-02-PLAN.md (Phase 7 complete, v1.1 milestone complete)
+Resume file: None -- all phases complete
