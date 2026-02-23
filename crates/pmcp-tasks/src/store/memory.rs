@@ -14,7 +14,7 @@
 //!
 //! # Concurrency
 //!
-//! DashMap provides fine-grained locking at the shard level. Mutation
+//! `DashMap` provides fine-grained locking at the shard level. Mutation
 //! operations use [`DashMap::get_mut`] which holds the entry lock for the
 //! duration of the update, ensuring atomic state transitions.
 //!
@@ -49,7 +49,7 @@ use super::{ListTasksOptions, StoreConfig, TaskPage, TaskStore};
 /// Implements all 11 [`TaskStore`] methods with:
 /// - Structural owner isolation (mismatch returns `NotFound`)
 /// - Configurable security limits via [`TaskSecurityConfig`]
-/// - Atomic state transitions within DashMap entry locks
+/// - Atomic state transitions within `DashMap` entry locks
 /// - Cursor-based pagination for task listing
 /// - TTL enforcement with hard reject (no silent clamping)
 ///
@@ -213,9 +213,7 @@ impl TaskStore for InMemoryTaskStore {
         let owner_task_count = self.count_owner_tasks(owner_id);
         if owner_task_count >= self.security.max_tasks_per_owner {
             return Err(TaskError::ResourceExhausted {
-                suggested_action: Some(
-                    "Cancel or wait for existing tasks to expire".to_string(),
-                ),
+                suggested_action: Some("Cancel or wait for existing tasks to expire".to_string()),
             });
         }
 
@@ -250,17 +248,10 @@ impl TaskStore for InMemoryTaskStore {
     ///
     /// Returns the task even if expired (callers check `is_expired()`).
     /// Owner mismatch returns `NotFound` for security.
-    async fn get(
-        &self,
-        task_id: &str,
-        owner_id: &str,
-    ) -> Result<TaskRecord, TaskError> {
-        let entry = self
-            .tasks
-            .get(task_id)
-            .ok_or_else(|| TaskError::NotFound {
-                task_id: task_id.to_string(),
-            })?;
+    async fn get(&self, task_id: &str, owner_id: &str) -> Result<TaskRecord, TaskError> {
+        let entry = self.tasks.get(task_id).ok_or_else(|| TaskError::NotFound {
+            task_id: task_id.to_string(),
+        })?;
 
         let record = entry.value();
 
@@ -285,7 +276,7 @@ impl TaskStore for InMemoryTaskStore {
     /// Transitions a task to a new status with atomic validation.
     ///
     /// Validates owner, expiry, and state machine transition within the
-    /// DashMap entry lock for atomicity.
+    /// `DashMap` entry lock for atomicity.
     async fn update_status(
         &self,
         task_id: &str,
@@ -390,9 +381,8 @@ impl TaskStore for InMemoryTaskStore {
         }
 
         // Check merged size against limit
-        let serialized = serde_json::to_vec(&merged).map_err(|e| {
-            TaskError::StoreError(format!("failed to serialize variables: {e}"))
-        })?;
+        let serialized = serde_json::to_vec(&merged)
+            .map_err(|e| TaskError::StoreError(format!("failed to serialize variables: {e}")))?;
 
         if serialized.len() > self.config.max_variable_size_bytes {
             return Err(TaskError::VariableSizeExceeded {
@@ -456,17 +446,10 @@ impl TaskStore for InMemoryTaskStore {
     /// Retrieves the stored result for a completed task.
     ///
     /// Returns `NotReady` if the task has not reached a terminal state.
-    async fn get_result(
-        &self,
-        task_id: &str,
-        owner_id: &str,
-    ) -> Result<Value, TaskError> {
-        let entry = self
-            .tasks
-            .get(task_id)
-            .ok_or_else(|| TaskError::NotFound {
-                task_id: task_id.to_string(),
-            })?;
+    async fn get_result(&self, task_id: &str, owner_id: &str) -> Result<Value, TaskError> {
+        let entry = self.tasks.get(task_id).ok_or_else(|| TaskError::NotFound {
+            task_id: task_id.to_string(),
+        })?;
 
         let record = entry.value();
 
@@ -491,7 +474,7 @@ impl TaskStore for InMemoryTaskStore {
             });
         }
 
-        record.result.clone().ok_or(TaskError::NotReady {
+        record.result.clone().ok_or_else(|| TaskError::NotReady {
             task_id: task_id.to_string(),
             current_status: record.task.status,
         })
@@ -500,7 +483,7 @@ impl TaskStore for InMemoryTaskStore {
     /// Atomically transitions to a terminal status AND stores the result.
     ///
     /// Both the status transition and result storage happen within a single
-    /// DashMap entry lock, guaranteeing atomicity.
+    /// `DashMap` entry lock, guaranteeing atomicity.
     async fn complete_with_result(
         &self,
         task_id: &str,
@@ -540,10 +523,7 @@ impl TaskStore for InMemoryTaskStore {
         }
 
         // Validate state machine transition
-        record
-            .task
-            .status
-            .validate_transition(task_id, &status)?;
+        record.task.status.validate_transition(task_id, &status)?;
 
         // Atomically apply status + result (within DashMap entry lock)
         record.task.status = status;
@@ -559,10 +539,7 @@ impl TaskStore for InMemoryTaskStore {
     ///
     /// Results are sorted by creation time (newest first). The cursor is
     /// the task ID of the last item in the previous page.
-    async fn list(
-        &self,
-        options: ListTasksOptions,
-    ) -> Result<TaskPage, TaskError> {
+    async fn list(&self, options: ListTasksOptions) -> Result<TaskPage, TaskError> {
         // Collect and filter by owner
         let mut tasks: Vec<TaskRecord> = self
             .tasks
@@ -579,8 +556,7 @@ impl TaskStore for InMemoryTaskStore {
             tasks
                 .iter()
                 .position(|t| t.task.task_id == *cursor)
-                .map(|i| i + 1)
-                .unwrap_or(0)
+                .map_or(0, |i| i + 1)
         } else {
             0
         };
@@ -610,11 +586,7 @@ impl TaskStore for InMemoryTaskStore {
     ///
     /// Delegates to [`update_status`](TaskStore::update_status) with
     /// `TaskStatus::Cancelled`.
-    async fn cancel(
-        &self,
-        task_id: &str,
-        owner_id: &str,
-    ) -> Result<TaskRecord, TaskError> {
+    async fn cancel(&self, task_id: &str, owner_id: &str) -> Result<TaskRecord, TaskError> {
         self.update_status(task_id, owner_id, TaskStatus::Cancelled, None)
             .await
     }
@@ -744,10 +716,7 @@ mod tests {
         let store = InMemoryTaskStore::new(); // allow_anonymous = false (default)
         let result = store.create("local", "tools/call", None).await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("anonymous access"));
+        assert!(result.unwrap_err().to_string().contains("anonymous access"));
     }
 
     #[tokio::test]
@@ -778,7 +747,7 @@ mod tests {
         match result.unwrap_err() {
             TaskError::ResourceExhausted { suggested_action } => {
                 assert!(suggested_action.is_some());
-            }
+            },
             other => panic!("expected ResourceExhausted, got: {other}"),
         }
     }
@@ -800,10 +769,7 @@ mod tests {
     async fn get_returns_created_task() {
         let store = test_store();
         let created = store.create("owner-1", "tools/call", None).await.unwrap();
-        let fetched = store
-            .get(&created.task.task_id, "owner-1")
-            .await
-            .unwrap();
+        let fetched = store.get(&created.task.task_id, "owner-1").await.unwrap();
         assert_eq!(fetched.task.task_id, created.task.task_id);
     }
 
@@ -833,15 +799,11 @@ mod tests {
 
         // Force the task to be expired
         let mut entry = store.tasks.get_mut(&created.task.task_id).unwrap();
-        entry.value_mut().expires_at =
-            Some(chrono::Utc::now() - chrono::Duration::seconds(10));
+        entry.value_mut().expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(10));
         drop(entry);
 
         // Get should still succeed (expired tasks are readable)
-        let fetched = store
-            .get(&created.task.task_id, "owner-1")
-            .await
-            .unwrap();
+        let fetched = store.get(&created.task.task_id, "owner-1").await.unwrap();
         assert!(fetched.is_expired());
     }
 
@@ -880,12 +842,7 @@ mod tests {
             .unwrap();
         // Try to transition from terminal state
         let result = store
-            .update_status(
-                &created.task.task_id,
-                "owner-1",
-                TaskStatus::Working,
-                None,
-            )
+            .update_status(&created.task.task_id, "owner-1", TaskStatus::Working, None)
             .await;
         assert!(matches!(result, Err(TaskError::InvalidTransition { .. })));
     }
@@ -900,8 +857,7 @@ mod tests {
 
         // Force expiry
         let mut entry = store.tasks.get_mut(&created.task.task_id).unwrap();
-        entry.value_mut().expires_at =
-            Some(chrono::Utc::now() - chrono::Duration::seconds(10));
+        entry.value_mut().expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(10));
         drop(entry);
 
         let result = store
@@ -1025,10 +981,7 @@ mod tests {
         ));
 
         // Verify original variables are unchanged (clone-check-commit)
-        let record = store
-            .get(&created.task.task_id, "owner-1")
-            .await
-            .unwrap();
+        let record = store.get(&created.task.task_id, "owner-1").await.unwrap();
         assert!(record.variables.contains_key("a"));
         assert!(!record.variables.contains_key("b"));
     }
@@ -1055,8 +1008,7 @@ mod tests {
 
         // Force expiry
         let mut entry = store.tasks.get_mut(&created.task.task_id).unwrap();
-        entry.value_mut().expires_at =
-            Some(chrono::Utc::now() - chrono::Duration::seconds(10));
+        entry.value_mut().expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(10));
         drop(entry);
 
         let mut vars = HashMap::new();
@@ -1078,10 +1030,7 @@ mod tests {
             .await
             .unwrap();
 
-        let record = store
-            .get(&created.task.task_id, "owner-1")
-            .await
-            .unwrap();
+        let record = store.get(&created.task.task_id, "owner-1").await.unwrap();
         assert_eq!(record.result, Some(json!({"answer": 42})));
     }
 
@@ -1125,9 +1074,7 @@ mod tests {
     async fn get_result_not_ready_for_working_task() {
         let store = test_store();
         let created = store.create("owner-1", "tools/call", None).await.unwrap();
-        let result = store
-            .get_result(&created.task.task_id, "owner-1")
-            .await;
+        let result = store.get_result(&created.task.task_id, "owner-1").await;
         assert!(matches!(result, Err(TaskError::NotReady { .. })));
     }
 
@@ -1145,9 +1092,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let result = store
-            .get_result(&created.task.task_id, "owner-b")
-            .await;
+        let result = store.get_result(&created.task.task_id, "owner-b").await;
         assert!(matches!(result, Err(TaskError::NotFound { .. })));
     }
 
@@ -1170,10 +1115,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(completed.task.status, TaskStatus::Completed);
-        assert_eq!(
-            completed.task.status_message.as_deref(),
-            Some("All done")
-        );
+        assert_eq!(completed.task.status_message.as_deref(), Some("All done"));
         assert_eq!(completed.result, Some(json!({"data": true})));
     }
 
@@ -1352,8 +1294,7 @@ mod tests {
 
         // Force expiry
         let mut entry = store.tasks.get_mut(&created.task.task_id).unwrap();
-        entry.value_mut().expires_at =
-            Some(chrono::Utc::now() - chrono::Duration::seconds(10));
+        entry.value_mut().expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(10));
         drop(entry);
 
         let removed = store.cleanup_expired().await.unwrap();

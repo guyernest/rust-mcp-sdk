@@ -9,15 +9,14 @@ use std::collections::{HashMap, HashSet};
 
 use pmcp_tasks::security::{TaskSecurityConfig, DEFAULT_LOCAL_OWNER};
 use pmcp_tasks::store::memory::InMemoryTaskStore;
-use pmcp_tasks::store::{StoreConfig, TaskStore, ListTasksOptions};
+use pmcp_tasks::store::{ListTasksOptions, StoreConfig, TaskStore};
 use pmcp_tasks::types::task::TaskStatus;
 use pmcp_tasks::TaskError;
 use serde_json::json;
 
 /// Creates a store with anonymous access enabled for test convenience.
 fn test_store() -> InMemoryTaskStore {
-    InMemoryTaskStore::new()
-        .with_security(TaskSecurityConfig::default().with_allow_anonymous(true))
+    InMemoryTaskStore::new().with_security(TaskSecurityConfig::default().with_allow_anonymous(true))
 }
 
 /// Creates a store with a specific max tasks limit and anonymous access enabled.
@@ -108,9 +107,7 @@ mod owner_isolation_tests {
             .await
             .unwrap();
         // owner-b tries to get result
-        let result = store
-            .get_result(&created.task.task_id, "owner-b")
-            .await;
+        let result = store.get_result(&created.task.task_id, "owner-b").await;
         assert!(
             matches!(result, Err(TaskError::NotFound { .. })),
             "expected NotFound, got: {result:?}"
@@ -206,9 +203,7 @@ mod anonymous_access_tests {
     async fn test_anonymous_rejected_when_not_allowed() {
         // Default config has allow_anonymous = false
         let store = InMemoryTaskStore::new();
-        let result = store
-            .create(DEFAULT_LOCAL_OWNER, "tools/call", None)
-            .await;
+        let result = store.create(DEFAULT_LOCAL_OWNER, "tools/call", None).await;
         assert!(result.is_err(), "anonymous access should be rejected");
         assert!(
             result.unwrap_err().to_string().contains("anonymous"),
@@ -227,9 +222,7 @@ mod anonymous_access_tests {
     async fn test_anonymous_allowed_when_configured() {
         let store = InMemoryTaskStore::new()
             .with_security(TaskSecurityConfig::default().with_allow_anonymous(true));
-        let result = store
-            .create(DEFAULT_LOCAL_OWNER, "tools/call", None)
-            .await;
+        let result = store.create(DEFAULT_LOCAL_OWNER, "tools/call", None).await;
         assert!(
             result.is_ok(),
             "anonymous access should be allowed: {result:?}"
@@ -268,7 +261,7 @@ mod resource_limit_tests {
         match result.unwrap_err() {
             TaskError::ResourceExhausted { suggested_action } => {
                 assert!(suggested_action.is_some());
-            }
+            },
             other => panic!("expected ResourceExhausted, got: {other}"),
         }
     }
@@ -370,12 +363,8 @@ mod uuid_entropy_tests {
             .create("test-owner", "tools/call", None)
             .await
             .unwrap();
-        let parsed = uuid::Uuid::parse_str(&record.task.task_id)
-            .expect("task_id should be a valid UUID");
-        assert_eq!(
-            parsed.get_version_num(),
-            4,
-            "task_id should be UUID v4"
-        );
+        let parsed =
+            uuid::Uuid::parse_str(&record.task.task_id).expect("task_id should be a valid UUID");
+        assert_eq!(parsed.get_version_num(), 4, "task_id should be UUID v4");
     }
 }

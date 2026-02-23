@@ -170,9 +170,7 @@ mod variable_tests {
         let (_store, ctx) = create_store_and_context().await;
 
         // Set a variable first
-        ctx.set_variable("to_delete", json!("value"))
-            .await
-            .unwrap();
+        ctx.set_variable("to_delete", json!("value")).await.unwrap();
         assert!(ctx.get_variable("to_delete").await.unwrap().is_some());
 
         // Delete via null-deletion semantics
@@ -313,7 +311,7 @@ mod transition_tests {
                 assert_eq!(from, TaskStatus::Completed);
                 assert_eq!(to, TaskStatus::Failed);
                 assert_eq!(task_id, ctx.task_id());
-            }
+            },
             other => panic!("expected InvalidTransition, got: {other}"),
         }
     }
@@ -354,10 +352,7 @@ mod transition_tests {
         let msg = String::from("dynamic error");
         let record = ctx.fail(msg).await.unwrap();
         assert_eq!(record.task.status, TaskStatus::Failed);
-        assert_eq!(
-            record.task.status_message.as_deref(),
-            Some("dynamic error")
-        );
+        assert_eq!(record.task.status_message.as_deref(), Some("dynamic error"));
     }
 
     #[tokio::test]

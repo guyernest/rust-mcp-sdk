@@ -15,8 +15,7 @@ use serde_json::{json, Value};
 
 /// Creates a store with anonymous access enabled for test convenience.
 fn test_store() -> InMemoryTaskStore {
-    InMemoryTaskStore::new()
-        .with_security(TaskSecurityConfig::default().with_allow_anonymous(true))
+    InMemoryTaskStore::new().with_security(TaskSecurityConfig::default().with_allow_anonymous(true))
 }
 
 // ─── CRUD Tests ─────────────────────────────────────────────────────────────
@@ -28,7 +27,10 @@ mod crud_tests {
     #[tokio::test]
     async fn test_create_returns_working_task() {
         let store = test_store();
-        let record = store.create("test-owner", "tools/call", None).await.unwrap();
+        let record = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
         assert_eq!(record.task.status, TaskStatus::Working);
         assert_eq!(record.owner_id, "test-owner");
         assert!(!record.task.task_id.is_empty());
@@ -37,7 +39,10 @@ mod crud_tests {
     #[tokio::test]
     async fn test_create_assigns_uuid_v4_task_id() {
         let store = test_store();
-        let record = store.create("test-owner", "tools/call", None).await.unwrap();
+        let record = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
         // UUID v4 format: 8-4-4-4-12 hex chars = 36 total with hyphens
         assert_eq!(record.task.task_id.len(), 36);
         assert!(record.task.task_id.contains('-'));
@@ -49,20 +54,29 @@ mod crud_tests {
     #[tokio::test]
     async fn test_create_sets_poll_interval() {
         let store = test_store();
-        let record = store.create("test-owner", "tools/call", None).await.unwrap();
+        let record = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
         // Default poll interval is 5000ms
         assert_eq!(record.task.poll_interval, Some(5000));
 
         // Custom poll interval
         let store = test_store().with_poll_interval(3000);
-        let record = store.create("test-owner", "tools/call", None).await.unwrap();
+        let record = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
         assert_eq!(record.task.poll_interval, Some(3000));
     }
 
     #[tokio::test]
     async fn test_get_returns_created_task() {
         let store = test_store();
-        let created = store.create("test-owner", "tools/call", None).await.unwrap();
+        let created = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
         let fetched = store
             .get(&created.task.task_id, "test-owner")
             .await
@@ -82,7 +96,10 @@ mod crud_tests {
     #[tokio::test]
     async fn test_update_status_working_to_completed() {
         let store = test_store();
-        let created = store.create("test-owner", "tools/call", None).await.unwrap();
+        let created = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
         let original_updated_at = created.task.last_updated_at.clone();
 
         // Small delay to ensure timestamp changes
@@ -104,7 +121,10 @@ mod crud_tests {
     #[tokio::test]
     async fn test_update_status_with_message() {
         let store = test_store();
-        let created = store.create("test-owner", "tools/call", None).await.unwrap();
+        let created = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
         let updated = store
             .update_status(
                 &created.task.task_id,
@@ -123,7 +143,10 @@ mod crud_tests {
     #[tokio::test]
     async fn test_update_status_invalid_transition_rejected() {
         let store = test_store();
-        let created = store.create("test-owner", "tools/call", None).await.unwrap();
+        let created = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
         // Complete the task
         store
             .update_status(
@@ -149,7 +172,10 @@ mod crud_tests {
     #[tokio::test]
     async fn test_set_variables_stores_values() {
         let store = test_store();
-        let created = store.create("test-owner", "tools/call", None).await.unwrap();
+        let created = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
 
         let mut vars = HashMap::new();
         vars.insert("key1".to_string(), json!("value1"));
@@ -166,7 +192,10 @@ mod crud_tests {
     #[tokio::test]
     async fn test_set_variables_null_deletes_key() {
         let store = test_store();
-        let created = store.create("test-owner", "tools/call", None).await.unwrap();
+        let created = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
 
         // Set initial variable
         let mut vars = HashMap::new();
@@ -189,7 +218,10 @@ mod crud_tests {
     #[tokio::test]
     async fn test_set_variables_merges_with_existing() {
         let store = test_store();
-        let created = store.create("test-owner", "tools/call", None).await.unwrap();
+        let created = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
 
         // Set first batch
         let mut vars = HashMap::new();
@@ -214,7 +246,10 @@ mod crud_tests {
     #[tokio::test]
     async fn test_set_result_and_get_result() {
         let store = test_store();
-        let created = store.create("test-owner", "tools/call", None).await.unwrap();
+        let created = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
 
         // Complete with result atomically
         store
@@ -238,17 +273,21 @@ mod crud_tests {
     #[tokio::test]
     async fn test_get_result_not_ready_for_working_task() {
         let store = test_store();
-        let created = store.create("test-owner", "tools/call", None).await.unwrap();
-        let result = store
-            .get_result(&created.task.task_id, "test-owner")
-            .await;
+        let created = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
+        let result = store.get_result(&created.task.task_id, "test-owner").await;
         assert!(matches!(result, Err(TaskError::NotReady { .. })));
     }
 
     #[tokio::test]
     async fn test_complete_with_result_atomic() {
         let store = test_store();
-        let created = store.create("test-owner", "tools/call", None).await.unwrap();
+        let created = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
 
         let completed = store
             .complete_with_result(
@@ -283,7 +322,10 @@ mod crud_tests {
     #[tokio::test]
     async fn test_cancel_transitions_to_cancelled() {
         let store = test_store();
-        let created = store.create("test-owner", "tools/call", None).await.unwrap();
+        let created = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
         let cancelled = store
             .cancel(&created.task.task_id, "test-owner")
             .await
@@ -294,7 +336,10 @@ mod crud_tests {
     #[tokio::test]
     async fn test_cancel_terminal_task_rejected() {
         let store = test_store();
-        let created = store.create("test-owner", "tools/call", None).await.unwrap();
+        let created = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
         // Complete first
         store
             .update_status(
@@ -357,7 +402,10 @@ mod pagination_tests {
     async fn test_list_with_limit() {
         let store = test_store();
         for _ in 0..5 {
-            store.create("test-owner", "tools/call", None).await.unwrap();
+            store
+                .create("test-owner", "tools/call", None)
+                .await
+                .unwrap();
         }
 
         let page = store
@@ -376,7 +424,10 @@ mod pagination_tests {
     async fn test_list_pagination_with_cursor() {
         let store = test_store();
         for _ in 0..5 {
-            store.create("test-owner", "tools/call", None).await.unwrap();
+            store
+                .create("test-owner", "tools/call", None)
+                .await
+                .unwrap();
             // Small delay for ordering
             tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         }
@@ -406,8 +457,16 @@ mod pagination_tests {
         assert!(page2.next_cursor.is_some());
 
         // No overlap between pages
-        let page1_ids: Vec<&str> = page1.tasks.iter().map(|t| t.task.task_id.as_str()).collect();
-        let page2_ids: Vec<&str> = page2.tasks.iter().map(|t| t.task.task_id.as_str()).collect();
+        let page1_ids: Vec<&str> = page1
+            .tasks
+            .iter()
+            .map(|t| t.task.task_id.as_str())
+            .collect();
+        let page2_ids: Vec<&str> = page2
+            .tasks
+            .iter()
+            .map(|t| t.task.task_id.as_str())
+            .collect();
         for id in &page1_ids {
             assert!(
                 !page2_ids.contains(id),
@@ -431,9 +490,15 @@ mod pagination_tests {
     #[tokio::test]
     async fn test_list_sorted_newest_first() {
         let store = test_store();
-        let first = store.create("test-owner", "tools/call", None).await.unwrap();
+        let first = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        let second = store.create("test-owner", "tools/call", None).await.unwrap();
+        let second = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
 
         let page = store
             .list(ListTasksOptions {
@@ -455,7 +520,10 @@ mod pagination_tests {
         let store = test_store();
         // Create 3 tasks (less than default limit of 50)
         for _ in 0..3 {
-            store.create("test-owner", "tools/call", None).await.unwrap();
+            store
+                .create("test-owner", "tools/call", None)
+                .await
+                .unwrap();
         }
 
         let page = store
@@ -481,7 +549,10 @@ mod ttl_tests {
     #[tokio::test]
     async fn test_create_with_default_ttl() {
         let store = test_store();
-        let record = store.create("test-owner", "tools/call", None).await.unwrap();
+        let record = store
+            .create("test-owner", "tools/call", None)
+            .await
+            .unwrap();
         // Default TTL from StoreConfig is 3_600_000 (1 hour)
         assert_eq!(record.task.ttl, Some(3_600_000));
         assert!(record.expires_at.is_some());
@@ -530,10 +601,7 @@ mod ttl_tests {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         // Expired task should still be readable via get() (per locked decision)
-        let fetched = store
-            .get(&record.task.task_id, "test-owner")
-            .await
-            .unwrap();
+        let fetched = store.get(&record.task.task_id, "test-owner").await.unwrap();
         assert_eq!(fetched.task.task_id, record.task.task_id);
         assert!(fetched.is_expired());
     }
@@ -740,7 +808,10 @@ mod concurrency_tests {
             let task_id = task_id.clone();
             handles.push(tokio::spawn(async move {
                 let result = store.get(&task_id, "test-owner").await;
-                assert!(result.is_ok(), "read should not fail during concurrent writes");
+                assert!(
+                    result.is_ok(),
+                    "read should not fail during concurrent writes"
+                );
             }));
         }
 

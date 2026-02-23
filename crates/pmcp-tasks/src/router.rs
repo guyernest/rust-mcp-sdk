@@ -99,6 +99,7 @@ impl TaskRouterImpl {
 
 /// Converts a [`TaskError`] into a [`pmcp::error::Error`] using the error code
 /// from the task error and its display message.
+#[allow(clippy::needless_pass_by_value)] // Used in .map_err() which passes by value
 fn task_error_to_pmcp(err: TaskError) -> PmcpError {
     let code = err.error_code();
     let message = err.to_string();

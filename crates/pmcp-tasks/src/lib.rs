@@ -1,3 +1,6 @@
+// MCP protocol uses underscore-prefixed fields (_meta, _task_id) that are required by spec.
+#![allow(clippy::used_underscore_binding)]
+
 //! MCP Tasks support for the PMCP SDK (experimental).
 //!
 //! This crate implements the MCP 2025-11-25 Tasks specification, providing
@@ -16,8 +19,8 @@
 //! # Module Organization
 //!
 //! - [`types`] - Spec-compliant wire types (Task, params, capabilities, etc.)
-//! - [`domain`] - Internal domain types (TaskRecord, TaskWithVariables)
-//! - [`store`] - TaskStore async trait, supporting types, and backend implementations
+//! - [`domain`] - Internal domain types (`TaskRecord`, `TaskWithVariables`)
+//! - [`store`] - `TaskStore` async trait, supporting types, and backend implementations
 //! - [`security`] - Security configuration and owner resolution
 //! - [`error`] - Rich error types with JSON-RPC error code mapping
 //! - [`constants`] - Meta key and method name constants

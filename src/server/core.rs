@@ -674,7 +674,7 @@ impl ServerCore {
     /// available, it delegates to [`TaskRouter::resolve_owner`] which uses
     /// the priority chain: OAuth subject > client ID > session ID > "local".
     #[cfg(not(target_arch = "wasm32"))]
-    fn resolve_task_owner(&self, auth_context: &Option<AuthContext>) -> Option<String> {
+    fn resolve_task_owner(&self, auth_context: Option<&AuthContext>) -> Option<String> {
         let router = self.task_router.as_ref()?;
         Some(match auth_context {
             Some(ctx) => router.resolve_owner(Some(&ctx.subject), ctx.client_id.as_deref(), None),
@@ -736,10 +736,11 @@ impl ServerCore {
                                     .tool_requires_task(&req.name, tool_execution.as_ref());
                             if needs_task {
                                 let owner_id = self
-                                    .resolve_task_owner(&auth_context)
+                                    .resolve_task_owner(auth_context.as_ref())
                                     .unwrap_or_else(|| "local".to_string());
                                 let task_params =
                                     req.task.clone().unwrap_or_else(|| serde_json::json!({}));
+                                #[allow(clippy::used_underscore_binding)]
                                 let progress_token = req
                                     ._meta
                                     .as_ref()
@@ -763,6 +764,7 @@ impl ServerCore {
                         // Normal tool call path (no task augmentation)
                         // Extract continuation context before the handler call
                         #[cfg(not(target_arch = "wasm32"))]
+                        #[allow(clippy::used_underscore_binding)]
                         let continuation_ctx = req
                             ._meta
                             .as_ref()
@@ -777,7 +779,7 @@ impl ServerCore {
                                     (continuation_ctx, &self.task_router)
                                 {
                                     let owner_id = self
-                                        .resolve_task_owner(&auth_context)
+                                        .resolve_task_owner(auth_context.as_ref())
                                         .unwrap_or_else(|| "local".to_string());
                                     let tool_result_value =
                                         serde_json::to_value(&result).unwrap_or_default();
@@ -845,7 +847,7 @@ impl ServerCore {
                     ClientRequest::TasksGet(params) => {
                         if let Some(ref task_router) = self.task_router {
                             let owner_id = self
-                                .resolve_task_owner(&auth_context)
+                                .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
                                 .handle_tasks_get(params.clone(), &owner_id)
@@ -862,7 +864,7 @@ impl ServerCore {
                     ClientRequest::TasksResult(params) => {
                         if let Some(ref task_router) = self.task_router {
                             let owner_id = self
-                                .resolve_task_owner(&auth_context)
+                                .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
                                 .handle_tasks_result(params.clone(), &owner_id)
@@ -879,7 +881,7 @@ impl ServerCore {
                     ClientRequest::TasksList(params) => {
                         if let Some(ref task_router) = self.task_router {
                             let owner_id = self
-                                .resolve_task_owner(&auth_context)
+                                .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
                                 .handle_tasks_list(params.clone(), &owner_id)
@@ -896,7 +898,7 @@ impl ServerCore {
                     ClientRequest::TasksCancel(params) => {
                         if let Some(ref task_router) = self.task_router {
                             let owner_id = self
-                                .resolve_task_owner(&auth_context)
+                                .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
                                 .handle_tasks_cancel(params.clone(), &owner_id)

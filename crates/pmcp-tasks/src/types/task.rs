@@ -109,7 +109,7 @@ impl TaskStatus {
     /// assert!(!TaskStatus::Completed.can_transition_to(&TaskStatus::Working));
     /// assert!(!TaskStatus::Working.can_transition_to(&TaskStatus::Working));
     /// ```
-    pub fn can_transition_to(&self, next: &TaskStatus) -> bool {
+    pub fn can_transition_to(&self, next: &Self) -> bool {
         if self == next {
             return false;
         }
@@ -149,11 +149,7 @@ impl TaskStatus {
     /// );
     /// assert!(result.is_err());
     /// ```
-    pub fn validate_transition(
-        &self,
-        task_id: &str,
-        next: &TaskStatus,
-    ) -> Result<(), TaskError> {
+    pub fn validate_transition(&self, task_id: &str, next: &Self) -> Result<(), TaskError> {
         if self.can_transition_to(next) {
             Ok(())
         } else {
@@ -358,7 +354,10 @@ mod tests {
 
     #[test]
     fn task_status_serializes_snake_case() {
-        assert_eq!(serde_json::to_value(TaskStatus::Working).unwrap(), "working");
+        assert_eq!(
+            serde_json::to_value(TaskStatus::Working).unwrap(),
+            "working"
+        );
         assert_eq!(
             serde_json::to_value(TaskStatus::InputRequired).unwrap(),
             "input_required"
@@ -464,10 +463,7 @@ mod tests {
         let json = serde_json::to_value(&task).unwrap();
         assert_eq!(json["taskId"], "786512e2-9e0d-44bd-8f29-789f320fe840");
         assert_eq!(json["status"], "working");
-        assert_eq!(
-            json["statusMessage"],
-            "The operation is now in progress."
-        );
+        assert_eq!(json["statusMessage"], "The operation is now in progress.");
         assert_eq!(json["createdAt"], "2025-11-25T10:30:00Z");
         assert_eq!(json["lastUpdatedAt"], "2025-11-25T10:40:00Z");
         assert_eq!(json["ttl"], 60000);
@@ -602,7 +598,10 @@ mod tests {
         };
 
         let json = serde_json::to_value(&result).unwrap();
-        assert_eq!(json["task"]["taskId"], "786512e2-9e0d-44bd-8f29-789f320fe840");
+        assert_eq!(
+            json["task"]["taskId"],
+            "786512e2-9e0d-44bd-8f29-789f320fe840"
+        );
         assert_eq!(json["task"]["status"], "working");
         assert_eq!(json["task"]["ttl"], 60000);
         assert_eq!(json["task"]["pollInterval"], 5000);

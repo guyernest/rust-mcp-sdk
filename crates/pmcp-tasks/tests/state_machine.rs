@@ -358,7 +358,7 @@ mod error_quality {
                     action.contains("terminal"),
                     "suggested_action should mention terminal, got: {action}"
                 );
-            }
+            },
             other => panic!("expected InvalidTransition, got: {other:?}"),
         }
     }
@@ -388,7 +388,7 @@ mod error_quality {
                     action.contains("already"),
                     "suggested_action should mention 'already', got: {action}"
                 );
-            }
+            },
             other => panic!("expected InvalidTransition, got: {other:?}"),
         }
     }
@@ -417,11 +417,7 @@ mod task_record {
         // Parse as UUID to verify validity
         let parsed = uuid::Uuid::parse_str(id);
         assert!(parsed.is_ok(), "should parse as valid UUID: {id}");
-        assert_eq!(
-            parsed.unwrap().get_version_num(),
-            4,
-            "should be UUID v4"
-        );
+        assert_eq!(parsed.unwrap().get_version_num(), 4, "should be UUID v4");
     }
 
     #[test]
@@ -435,15 +431,17 @@ mod task_record {
 
     #[test]
     fn is_expired_false_for_fresh_task_with_ttl() {
-        let record =
-            TaskRecord::new("owner".to_string(), "tools/call".to_string(), Some(60_000));
+        let record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), Some(60_000));
         assert!(!record.is_expired());
     }
 
     #[test]
     fn is_expired_false_for_none_ttl() {
         let record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
-        assert!(!record.is_expired(), "task with None TTL should never expire");
+        assert!(
+            !record.is_expired(),
+            "task with None TTL should never expire"
+        );
     }
 }
 
@@ -460,16 +458,16 @@ mod task_with_variables {
         let wire = twv.to_wire_task();
 
         // No variables, so _meta should remain None
-        assert!(wire._meta.is_none(), "_meta should be None when no variables");
+        assert!(
+            wire._meta.is_none(),
+            "_meta should be None when no variables"
+        );
     }
 
     #[test]
     fn to_wire_task_with_variables_produces_meta() {
-        let mut record =
-            TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
-        record
-            .variables
-            .insert("progress".to_string(), json!(42));
+        let mut record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
+        record.variables.insert("progress".to_string(), json!(42));
         record
             .variables
             .insert("stage".to_string(), json!("building"));
@@ -484,8 +482,7 @@ mod task_with_variables {
 
     #[test]
     fn variables_appear_in_meta_not_as_separate_field() {
-        let mut record =
-            TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
+        let mut record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
         record
             .variables
             .insert("my_var".to_string(), json!("value"));
@@ -505,8 +502,7 @@ mod task_with_variables {
 
     #[test]
     fn null_value_variables_preserved_in_meta() {
-        let mut record =
-            TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
+        let mut record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
         record
             .variables
             .insert("to_delete".to_string(), serde_json::Value::Null);

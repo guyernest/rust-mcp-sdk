@@ -62,7 +62,9 @@ struct FailingFetchDataTool;
 #[async_trait]
 impl pmcp::ToolHandler for FailingFetchDataTool {
     async fn handle(&self, _args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
-        Err(pmcp::Error::internal("connection refused: source unreachable"))
+        Err(pmcp::Error::internal(
+            "connection refused: source unreachable",
+        ))
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
@@ -121,10 +123,7 @@ struct TransformDataTool;
 #[async_trait]
 impl pmcp::ToolHandler for TransformDataTool {
     async fn handle(&self, args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
-        let input = args
-            .get("input")
-            .and_then(|v| v.as_str())
-            .unwrap_or("none");
+        let input = args.get("input").and_then(|v| v.as_str()).unwrap_or("none");
         Ok(json!({ "transformed": true, "input": input }))
     }
 
@@ -399,10 +398,7 @@ async fn test_task_workflow_creates_task_with_meta() {
     let meta = result
         .get("_meta")
         .expect("task workflow should have _meta");
-    assert!(
-        !meta.is_null(),
-        "task workflow _meta should not be null"
-    );
+    assert!(!meta.is_null(), "task workflow _meta should not be null");
 
     // _meta should contain task_id
     let task_id = meta
@@ -435,10 +431,7 @@ async fn test_task_workflow_creates_task_with_meta() {
         "all steps should succeed with FetchDataTool"
     );
     for step in steps {
-        assert_eq!(
-            step["status"], "completed",
-            "each step should be completed"
-        );
+        assert_eq!(step["status"], "completed", "each step should be completed");
     }
 }
 
@@ -500,13 +493,9 @@ async fn test_full_lifecycle_happy_path() {
     assert_eq!(steps[2]["status"], "pending");
 
     // Messages should include a handoff narrative
-    let messages = result["messages"]
-        .as_array()
-        .expect("should have messages");
+    let messages = result["messages"].as_array().expect("should have messages");
     let last_message = messages.last().expect("should have at least one message");
-    let text = last_message["content"]["text"]
-        .as_str()
-        .unwrap_or("");
+    let text = last_message["content"]["text"].as_str().unwrap_or("");
     assert!(
         text.contains("fetch"),
         "handoff should mention the failed step"
@@ -520,11 +509,7 @@ async fn test_full_lifecycle_happy_path() {
     // ConditionalFetchDataTool succeeds when source != "non_existent_key".
     // The continuation intercept in ServerCore fires after the tool handler returns
     // success, recording the result against the workflow task (fire-and-forget).
-    let req = continuation_call_request(
-        "fetch_data",
-        json!({ "source": "existing_key" }),
-        task_id,
-    );
+    let req = continuation_call_request("fetch_data", json!({ "source": "existing_key" }), task_id);
     let response = server
         .handle_request(RequestId::from(2i64), req, None)
         .await;
@@ -534,10 +519,7 @@ async fn test_full_lifecycle_happy_path() {
     let content = continuation_result["content"]
         .as_array()
         .expect("should have content array");
-    assert!(
-        !content.is_empty(),
-        "tool call should return content"
-    );
+    assert!(!content.is_empty(), "tool call should return content");
 
     // Verify task store was updated by the continuation intercept.
     // The fire-and-forget recording completes within the handle_request await chain.
@@ -564,8 +546,8 @@ async fn test_full_lifecycle_happy_path() {
     let fetch_text = fetch_content[0]["text"]
         .as_str()
         .expect("fetch result content should have text");
-    let tool_output: Value = serde_json::from_str(fetch_text)
-        .expect("fetch result text should be valid JSON");
+    let tool_output: Value =
+        serde_json::from_str(fetch_text).expect("fetch result text should be valid JSON");
     assert_eq!(
         tool_output["data"], "raw_content",
         "tool output should contain raw_content"
@@ -643,10 +625,7 @@ async fn test_full_lifecycle_happy_path() {
 
     // Verify through direct store access
     let record = store.get(task_id, "local").await.unwrap();
-    assert_eq!(
-        record.task.status,
-        pmcp_tasks::task::TaskStatus::Completed
-    );
+    assert_eq!(record.task.status, pmcp_tasks::task::TaskStatus::Completed);
 }
 
 // INTG-04 (cancel-with-result): Cancel with result transitions to Completed.
@@ -747,7 +726,9 @@ async fn test_both_workflows_coexist() {
     );
 
     // Task: has _meta with task_id
-    let task_meta = task_result.get("_meta").expect("task workflow should have _meta");
+    let task_meta = task_result
+        .get("_meta")
+        .expect("task workflow should have _meta");
     assert!(!task_meta.is_null(), "task _meta should not be null");
     assert!(
         task_meta.get("task_id").is_some(),
@@ -775,11 +756,8 @@ async fn test_continuation_with_task_id() {
     // Client continuation: call fetch_data with _task_id in _meta
     // Note: FailingFetchDataTool still fails, but the continuation recording
     // is fire-and-forget. The tool call result is returned regardless.
-    let req = continuation_call_request(
-        "fetch_data",
-        json!({ "source": "retry_endpoint" }),
-        task_id,
-    );
+    let req =
+        continuation_call_request("fetch_data", json!({ "source": "retry_endpoint" }), task_id);
     let response = server
         .handle_request(RequestId::from(2i64), req, None)
         .await;

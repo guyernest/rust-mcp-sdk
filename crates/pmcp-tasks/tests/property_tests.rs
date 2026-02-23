@@ -38,11 +38,11 @@ fn arb_task() -> impl Strategy<Value = Task> {
     (
         "[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}", // uuid-like
         arb_task_status(),
-        proptest::option::of("[a-zA-Z0-9 ]{0,100}"),    // status_message
+        proptest::option::of("[a-zA-Z0-9 ]{0,100}"), // status_message
         "2025-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", // created_at
         "2025-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", // last_updated_at
-        proptest::option::of(0u64..=86_400_000u64),      // ttl
-        proptest::option::of(1000u64..=60_000u64),       // poll_interval
+        proptest::option::of(0u64..=86_400_000u64),  // ttl
+        proptest::option::of(1000u64..=60_000u64),   // poll_interval
     )
         .prop_map(
             |(task_id, status, status_message, created_at, last_updated_at, ttl, poll_interval)| {
@@ -219,26 +219,24 @@ fn arb_valid_transition_sequence() -> impl Strategy<Value = Vec<TaskStatus>> {
     ];
 
     // Generate 0..5 transitions, each valid from the current state
-    proptest::collection::vec(
-        prop::sample::select(non_terminal_targets),
-        0..5,
-    )
-    .prop_map(|targets| {
-        let mut sequence = Vec::new();
-        let mut current = TaskStatus::Working;
+    proptest::collection::vec(prop::sample::select(non_terminal_targets), 0..5).prop_map(
+        |targets| {
+            let mut sequence = Vec::new();
+            let mut current = TaskStatus::Working;
 
-        for target in targets {
-            if current.can_transition_to(&target) {
-                sequence.push(target);
-                current = target;
+            for target in targets {
+                if current.can_transition_to(&target) {
+                    sequence.push(target);
+                    current = target;
+                }
+                // If terminal, stop adding transitions
+                if current.is_terminal() {
+                    break;
+                }
             }
-            // If terminal, stop adding transitions
-            if current.is_terminal() {
-                break;
-            }
-        }
-        sequence
-    })
+            sequence
+        },
+    )
 }
 
 /// Helper: creates a store with anonymous access enabled and high task limit.

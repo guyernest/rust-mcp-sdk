@@ -896,8 +896,7 @@ impl PromptHandler for WorkflowPromptHandler {
                     };
 
                     // Check if resolved params satisfy tool's required fields
-                    let Ok(ref missing) = self.params_satisfy_tool_schema(step, &params)
-                    else {
+                    let Ok(ref missing) = self.params_satisfy_tool_schema(step, &params) else {
                         // Schema check error (tool not found, etc.)
                         break;
                     };

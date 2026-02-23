@@ -127,14 +127,9 @@ mod tests {
 
     #[test]
     fn from_record_copies_task_and_variables() {
-        let mut record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            Some(60_000),
-        );
-        record
-            .variables
-            .insert("key1".to_string(), json!("value1"));
+        let mut record =
+            TaskRecord::new("owner".to_string(), "tools/call".to_string(), Some(60_000));
+        record.variables.insert("key1".to_string(), json!("value1"));
 
         let twv = TaskWithVariables::from_record(&record);
         assert_eq!(twv.task.task_id, record.task.task_id);
@@ -145,11 +140,7 @@ mod tests {
 
     #[test]
     fn to_wire_task_empty_variables() {
-        let record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            None,
-        );
+        let record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
         let twv = TaskWithVariables::from_record(&record);
         let wire = twv.to_wire_task();
         assert!(wire._meta.is_none());
@@ -157,11 +148,7 @@ mod tests {
 
     #[test]
     fn to_wire_task_injects_variables_at_top_level() {
-        let mut record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            None,
-        );
+        let mut record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
         record
             .variables
             .insert("server.stage".to_string(), json!("processing"));
@@ -177,11 +164,7 @@ mod tests {
 
     #[test]
     fn to_wire_task_merges_with_existing_meta() {
-        let mut record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            None,
-        );
+        let mut record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
         // Pre-populate _meta
         let mut existing_meta = serde_json::Map::new();
         existing_meta.insert("existing".to_string(), json!(true));
@@ -201,11 +184,7 @@ mod tests {
 
     #[test]
     fn to_wire_task_variables_overwrite_meta_on_conflict() {
-        let mut record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            None,
-        );
+        let mut record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
         let mut existing_meta = serde_json::Map::new();
         existing_meta.insert("shared_key".to_string(), json!("original"));
         record.task._meta = Some(existing_meta);
@@ -223,11 +202,7 @@ mod tests {
 
     #[test]
     fn debug_and_clone() {
-        let record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            None,
-        );
+        let record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
         let twv = TaskWithVariables::from_record(&record);
         let cloned = twv.clone();
         assert_eq!(cloned.task.task_id, twv.task.task_id);

@@ -297,10 +297,7 @@ impl TaskContext {
     /// assert_eq!(point, Some(Point { x: 10, y: 20 }));
     /// # });
     /// ```
-    pub async fn get_typed<T: DeserializeOwned>(
-        &self,
-        key: &str,
-    ) -> Result<Option<T>, TaskError> {
+    pub async fn get_typed<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>, TaskError> {
         let record = self.store.get(&self.task_id, &self.owner_id).await?;
         Ok(record
             .variables
@@ -387,10 +384,7 @@ impl TaskContext {
     /// # Errors
     ///
     /// Returns [`TaskError::NotFound`] if the task does not exist.
-    pub async fn delete_variable(
-        &self,
-        key: impl Into<String>,
-    ) -> Result<TaskRecord, TaskError> {
+    pub async fn delete_variable(&self, key: impl Into<String>) -> Result<TaskRecord, TaskError> {
         let mut vars = HashMap::new();
         vars.insert(key.into(), Value::Null);
         self.store
@@ -502,10 +496,7 @@ impl TaskContext {
     /// assert_eq!(waiting.task.status, pmcp_tasks::TaskStatus::InputRequired);
     /// # });
     /// ```
-    pub async fn require_input(
-        &self,
-        message: impl Into<String>,
-    ) -> Result<TaskRecord, TaskError> {
+    pub async fn require_input(&self, message: impl Into<String>) -> Result<TaskRecord, TaskError> {
         self.store
             .update_status(
                 &self.task_id,
@@ -528,12 +519,7 @@ impl TaskContext {
     /// Returns [`TaskError::Expired`] if the task has expired.
     pub async fn resume(&self) -> Result<TaskRecord, TaskError> {
         self.store
-            .update_status(
-                &self.task_id,
-                &self.owner_id,
-                TaskStatus::Working,
-                None,
-            )
+            .update_status(&self.task_id, &self.owner_id, TaskStatus::Working, None)
             .await
     }
 

@@ -79,12 +79,12 @@ pub(crate) enum StepStatus {
 
 impl StepStatus {
     /// Convert to the string representation used in JSON.
-    fn as_str(&self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
-            StepStatus::Pending => "pending",
-            StepStatus::Completed => "completed",
-            StepStatus::Failed => "failed",
-            StepStatus::Skipped => "skipped",
+            Self::Pending => "pending",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Skipped => "skipped",
         }
     }
 }
@@ -130,7 +130,7 @@ impl PauseReason {
     /// Serialize to a JSON [`Value`] matching the `pmcp-tasks` serde format.
     fn to_value(&self) -> Value {
         match self {
-            PauseReason::UnresolvableParams {
+            Self::UnresolvableParams {
                 blocked_step,
                 missing_param,
                 suggested_tool,
@@ -140,7 +140,7 @@ impl PauseReason {
                 "missingParam": missing_param,
                 "suggestedTool": suggested_tool,
             }),
-            PauseReason::SchemaMismatch {
+            Self::SchemaMismatch {
                 blocked_step,
                 missing_fields,
                 suggested_tool,
@@ -150,7 +150,7 @@ impl PauseReason {
                 "missingFields": missing_fields,
                 "suggestedTool": suggested_tool,
             }),
-            PauseReason::ToolError {
+            Self::ToolError {
                 failed_step,
                 error,
                 retryable,
@@ -162,7 +162,7 @@ impl PauseReason {
                 "retryable": retryable,
                 "suggestedTool": suggested_tool,
             }),
-            PauseReason::UnresolvedDependency {
+            Self::UnresolvedDependency {
                 blocked_step,
                 missing_output,
                 producing_step,
@@ -201,7 +201,7 @@ pub struct TaskWorkflowPromptHandler {
     inner: WorkflowPromptHandler,
     /// Task router for creating/managing workflow tasks.
     task_router: Arc<dyn TaskRouter>,
-    /// The workflow definition (needed for step metadata to build WorkflowProgress).
+    /// The workflow definition (needed for step metadata to build `WorkflowProgress`).
     workflow: SequentialWorkflow,
 }
 
@@ -432,8 +432,7 @@ impl TaskWorkflowPromptHandler {
                 {
                     let tool_name = step
                         .tool()
-                        .map(|t| t.name().to_string())
-                        .unwrap_or_else(|| "unknown".to_string());
+                        .map_or_else(|| "unknown".to_string(), |t| t.name().to_string());
 
                     let args_str =
                         match self
@@ -470,8 +469,7 @@ impl TaskWorkflowPromptHandler {
 
             let tool_name = step
                 .tool()
-                .map(|t| t.name().to_string())
-                .unwrap_or_else(|| "unknown".to_string());
+                .map_or_else(|| "unknown".to_string(), |t| t.name().to_string());
 
             let args_str = match self
                 .inner
@@ -570,8 +568,7 @@ fn classify_resolution_failure(
         .arguments()
         .keys()
         .next()
-        .map(|k| k.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+        .map_or_else(|| "unknown".to_string(), |k| k.to_string());
 
     PauseReason::UnresolvableParams {
         blocked_step,
@@ -646,12 +643,9 @@ impl PromptHandler for TaskWorkflowPromptHandler {
         };
 
         // If no task was created, delegate to inner handler (graceful degradation)
-        let task_id = match task_id {
-            Some(id) => id,
-            None => {
-                let result = self.inner.handle(args, extra).await?;
-                return Ok(result);
-            },
+        let Some(task_id) = task_id else {
+            let result = self.inner.handle(args, extra).await?;
+            return Ok(result);
         };
 
         // 4. Active execution loop
@@ -758,26 +752,22 @@ impl PromptHandler for TaskWorkflowPromptHandler {
                     break;
                 },
                 Ok(announcement) => {
-                    let params =
-                        match self
-                            .inner
+                    let Ok(params) =
+                        self.inner
                             .resolve_tool_parameters(step, &args, &execution_context)
-                        {
-                            Ok(p) => p,
-                            Err(_) => {
-                                tracing::warn!(
-                                    "resolve_tool_parameters failed unexpectedly for step '{}' \
-                                     after announcement succeeded",
-                                    step.name()
-                                );
-                                pause_reason = Some(classify_resolution_failure(
-                                    step,
-                                    self.workflow.steps(),
-                                    &step_statuses,
-                                ));
-                                break;
-                            },
-                        };
+                    else {
+                        tracing::warn!(
+                            "resolve_tool_parameters failed unexpectedly for step '{}' \
+                             after announcement succeeded",
+                            step.name()
+                        );
+                        pause_reason = Some(classify_resolution_failure(
+                            step,
+                            self.workflow.steps(),
+                            &step_statuses,
+                        ));
+                        break;
+                    };
 
                     match self.inner.params_satisfy_tool_schema(step, &params) {
                         Err(e) => {

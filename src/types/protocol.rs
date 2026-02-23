@@ -660,7 +660,7 @@ pub struct GetPromptResult {
     /// Optional metadata for task-aware workflows (PMCP extension).
     ///
     /// When a workflow prompt is backed by a task, this field contains
-    /// task state information (task_id, status, step plan) that
+    /// task state information (`task_id`, status, step plan) that
     /// task-aware MCP clients can use for structured continuation.
     /// Omitted from serialized JSON when `None`.
     #[serde(rename = "_meta")]
@@ -1278,6 +1278,7 @@ pub enum LogLevel {
 }
 
 #[cfg(test)]
+#[allow(clippy::used_underscore_binding)] // MCP protocol fields use underscore prefix (_meta, _task_id)
 mod tests {
     use super::*;
     use serde_json::json;

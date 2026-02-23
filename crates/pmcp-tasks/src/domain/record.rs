@@ -64,7 +64,7 @@ pub struct TaskRecord {
 impl TaskRecord {
     /// Creates a new task record in the `Working` state.
     ///
-    /// Generates a UUIDv4 task ID, sets timestamps to the current UTC time,
+    /// Generates a `UUIDv4` task ID, sets timestamps to the current UTC time,
     /// and computes `expires_at` from `ttl` (milliseconds from now). If `ttl`
     /// is `None`, the task does not expire.
     ///
@@ -220,21 +220,13 @@ mod tests {
 
     #[test]
     fn new_record_is_working_status() {
-        let record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            None,
-        );
+        let record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
         assert_eq!(record.task.status, TaskStatus::Working);
     }
 
     #[test]
     fn new_record_timestamps_are_set() {
-        let record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            None,
-        );
+        let record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
         assert!(!record.task.created_at.is_empty());
         assert!(!record.task.last_updated_at.is_empty());
         assert_eq!(record.task.created_at, record.task.last_updated_at);
@@ -242,44 +234,28 @@ mod tests {
 
     #[test]
     fn new_record_with_ttl_has_expiry() {
-        let record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            Some(60_000),
-        );
+        let record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), Some(60_000));
         assert!(record.expires_at.is_some());
         assert_eq!(record.task.ttl, Some(60_000));
     }
 
     #[test]
     fn new_record_without_ttl_has_no_expiry() {
-        let record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            None,
-        );
+        let record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
         assert!(record.expires_at.is_none());
         assert!(record.task.ttl.is_none());
     }
 
     #[test]
     fn new_record_has_empty_variables_and_no_result() {
-        let record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            None,
-        );
+        let record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
         assert!(record.variables.is_empty());
         assert!(record.result.is_none());
     }
 
     #[test]
     fn is_expired_returns_false_for_no_ttl() {
-        let record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            None,
-        );
+        let record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
         assert!(!record.is_expired());
     }
 
@@ -295,11 +271,7 @@ mod tests {
 
     #[test]
     fn is_expired_returns_true_for_past_expiry() {
-        let mut record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            Some(1),
-        );
+        let mut record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), Some(1));
         // Force the expiry into the past
         record.expires_at = Some(Utc::now() - Duration::seconds(10));
         assert!(record.is_expired());
@@ -307,11 +279,7 @@ mod tests {
 
     #[test]
     fn to_wire_task_returns_clone() {
-        let record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            None,
-        );
+        let record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
         let wire = record.to_wire_task();
         assert_eq!(wire.task_id, record.task.task_id);
         assert_eq!(wire.status, record.task.status);
@@ -319,11 +287,7 @@ mod tests {
 
     #[test]
     fn to_wire_task_with_variables_empty_vars() {
-        let record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            None,
-        );
+        let record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
         let wire = record.to_wire_task_with_variables();
         // No variables, so _meta should be unchanged (None)
         assert!(wire._meta.is_none());
@@ -331,12 +295,10 @@ mod tests {
 
     #[test]
     fn to_wire_task_with_variables_injects_at_top_level() {
-        let mut record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            None,
-        );
-        record.variables.insert("server.progress".to_string(), json!(75));
+        let mut record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
+        record
+            .variables
+            .insert("server.progress".to_string(), json!(75));
         record
             .variables
             .insert("client.note".to_string(), json!("test note"));
@@ -349,11 +311,7 @@ mod tests {
 
     #[test]
     fn to_wire_task_with_variables_merges_existing_meta() {
-        let mut record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            None,
-        );
+        let mut record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
         // Set existing _meta
         let mut existing = serde_json::Map::new();
         existing.insert("existing_key".to_string(), json!("existing_value"));
@@ -372,11 +330,7 @@ mod tests {
 
     #[test]
     fn to_wire_task_with_variables_overwrites_on_conflict() {
-        let mut record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            None,
-        );
+        let mut record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
         // Set existing _meta with key that will conflict
         let mut existing = serde_json::Map::new();
         existing.insert("conflict_key".to_string(), json!("old_value"));
@@ -395,11 +349,7 @@ mod tests {
 
     #[test]
     fn owner_id_and_request_method_preserved() {
-        let record = TaskRecord::new(
-            "session-xyz".to_string(),
-            "tools/call".to_string(),
-            None,
-        );
+        let record = TaskRecord::new("session-xyz".to_string(), "tools/call".to_string(), None);
         assert_eq!(record.owner_id, "session-xyz");
         assert_eq!(record.request_method, "tools/call");
     }

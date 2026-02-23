@@ -887,7 +887,7 @@ mod tests {
             fn task_capabilities(&self) -> Value {
                 serde_json::json!({
                     "supported": true,
-                    "maxTtl": 86400000
+                    "maxTtl": 86_400_000
                 })
             }
         }
@@ -910,7 +910,7 @@ mod tests {
             .get("tasks")
             .expect("tasks capability should be set");
         assert_eq!(tasks_cap["supported"], true);
-        assert_eq!(tasks_cap["maxTtl"], 86400000);
+        assert_eq!(tasks_cap["maxTtl"], 86_400_000);
     }
 
     #[test]
@@ -966,7 +966,7 @@ mod tests {
         fn task_capabilities(&self) -> Value {
             serde_json::json!({
                 "supported": true,
-                "maxTtl": 86400000
+                "maxTtl": 86_400_000
             })
         }
     }

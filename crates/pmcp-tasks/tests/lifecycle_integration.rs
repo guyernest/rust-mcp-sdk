@@ -98,7 +98,12 @@ fn build_task_server() -> (pmcp::server::core::ServerCore, Arc<InMemoryTaskStore
     let server = ServerCoreBuilder::new()
         .name("test-tasks")
         .version("1.0.0")
-        .tool("long_running_tool", TestTool { store: store.clone() })
+        .tool(
+            "long_running_tool",
+            TestTool {
+                store: store.clone(),
+            },
+        )
         .tool("required_task_tool", RequiredTaskTool)
         .tool("normal_tool", NormalTool)
         .with_task_store(router)
@@ -185,19 +190,26 @@ async fn full_lifecycle_create_poll_complete_result() {
         json!({ "query": "test" }),
         json!({ "ttl": 60000 }),
     );
-    let response = server.handle_request(RequestId::from(1i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(1i64), req, None)
+        .await;
     let create_result = unwrap_result(response);
 
     // Validate CreateTaskResult structure
     let task = &create_result["task"];
-    assert_eq!(task["status"], "working", "new task should be in working state");
+    assert_eq!(
+        task["status"], "working",
+        "new task should be in working state"
+    );
     let task_id = task["taskId"].as_str().expect("taskId should be a string");
     assert!(!task_id.is_empty(), "taskId should not be empty");
     assert_eq!(task["ttl"], 60000);
 
     // Step 2: Poll via tasks/get -- should still be working
     let req = tasks_get_request(task_id);
-    let response = server.handle_request(RequestId::from(2i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(2i64), req, None)
+        .await;
     let get_result = unwrap_result(response);
     assert_eq!(get_result["status"], "working");
     assert_eq!(get_result["taskId"], task_id);
@@ -220,13 +232,17 @@ async fn full_lifecycle_create_poll_complete_result() {
 
     // Step 4: Poll again -- should be completed
     let req = tasks_get_request(task_id);
-    let response = server.handle_request(RequestId::from(3i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(3i64), req, None)
+        .await;
     let get_result = unwrap_result(response);
     assert_eq!(get_result["status"], "completed");
 
     // Step 5: Get result via tasks/result
     let req = tasks_result_request(task_id);
-    let response = server.handle_request(RequestId::from(4i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(4i64), req, None)
+        .await;
     let result_response = unwrap_result(response);
 
     assert_eq!(result_response["result"], result_data);
@@ -254,7 +270,9 @@ async fn tasks_list_returns_owner_scoped_tasks() {
         json!({ "query": "first" }),
         json!({ "ttl": 60000 }),
     );
-    let response = server.handle_request(RequestId::from(1i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(1i64), req, None)
+        .await;
     let _ = unwrap_result(response);
 
     // Create second task
@@ -263,15 +281,21 @@ async fn tasks_list_returns_owner_scoped_tasks() {
         json!({ "query": "second" }),
         json!({ "ttl": 60000 }),
     );
-    let response = server.handle_request(RequestId::from(2i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(2i64), req, None)
+        .await;
     let _ = unwrap_result(response);
 
     // List all tasks
     let req = tasks_list_request();
-    let response = server.handle_request(RequestId::from(3i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(3i64), req, None)
+        .await;
     let list_result = unwrap_result(response);
 
-    let tasks = list_result["tasks"].as_array().expect("tasks should be an array");
+    let tasks = list_result["tasks"]
+        .as_array()
+        .expect("tasks should be an array");
     assert_eq!(tasks.len(), 2, "should have exactly 2 tasks");
 
     // Each task should have a taskId and status
@@ -295,25 +319,33 @@ async fn tasks_cancel_transitions_to_cancelled() {
         json!({ "query": "to_cancel" }),
         json!({ "ttl": 60000 }),
     );
-    let response = server.handle_request(RequestId::from(1i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(1i64), req, None)
+        .await;
     let create_result = unwrap_result(response);
     let task_id = create_result["task"]["taskId"].as_str().unwrap();
 
     // Cancel the task
     let req = tasks_cancel_request(task_id);
-    let response = server.handle_request(RequestId::from(2i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(2i64), req, None)
+        .await;
     let cancel_result = unwrap_result(response);
     assert_eq!(cancel_result["status"], "cancelled");
 
     // Verify it is still cancelled via tasks/get
     let req = tasks_get_request(task_id);
-    let response = server.handle_request(RequestId::from(3i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(3i64), req, None)
+        .await;
     let get_result = unwrap_result(response);
     assert_eq!(get_result["status"], "cancelled");
 
     // Cancelling again should fail (already terminal)
     let req = tasks_cancel_request(task_id);
-    let response = server.handle_request(RequestId::from(4i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(4i64), req, None)
+        .await;
     let err = unwrap_error(response);
     assert!(
         err.message.contains("invalid transition") || err.message.contains("terminal"),
@@ -332,7 +364,9 @@ async fn auto_task_for_required_tool() {
 
     // Call the required_task_tool WITHOUT a task field
     let req = normal_call_request("required_task_tool", json!({}));
-    let response = server.handle_request(RequestId::from(1i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(1i64), req, None)
+        .await;
     let result = unwrap_result(response);
 
     // Should get a CreateTaskResult (auto-created) with a task wrapper
@@ -354,7 +388,9 @@ async fn normal_tool_call_unaffected_by_task_system() {
 
     // Call normal_tool without task field
     let req = normal_call_request("normal_tool", json!({}));
-    let response = server.handle_request(RequestId::from(1i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(1i64), req, None)
+        .await;
     let result = unwrap_result(response);
 
     // Should get a normal CallToolResult (content array), NOT a CreateTaskResult
@@ -379,7 +415,9 @@ async fn tasks_get_nonexistent_returns_error() {
 
     // Try to get a task that does not exist
     let req = tasks_get_request("nonexistent-task-id");
-    let response = server.handle_request(RequestId::from(1i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(1i64), req, None)
+        .await;
     let err = unwrap_error(response);
     assert!(
         err.message.contains("not found"),
@@ -402,13 +440,17 @@ async fn tasks_result_on_working_task_returns_error() {
         json!({ "query": "still_working" }),
         json!({ "ttl": 60000 }),
     );
-    let response = server.handle_request(RequestId::from(1i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(1i64), req, None)
+        .await;
     let create_result = unwrap_result(response);
     let task_id = create_result["task"]["taskId"].as_str().unwrap();
 
     // Try to get result before completion
     let req = tasks_result_request(task_id);
-    let response = server.handle_request(RequestId::from(2i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(2i64), req, None)
+        .await;
     let err = unwrap_error(response);
     assert!(
         err.message.contains("not in terminal state") || err.message.contains("not ready"),
@@ -431,7 +473,9 @@ async fn ttl_respected_from_task_params() {
         json!({ "query": "expiring" }),
         json!({ "ttl": 1 }),
     );
-    let response = server.handle_request(RequestId::from(1i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(1i64), req, None)
+        .await;
     let create_result = unwrap_result(response);
     let task_id = create_result["task"]["taskId"].as_str().unwrap();
 
@@ -441,7 +485,10 @@ async fn ttl_respected_from_task_params() {
     // The task should still be readable (get works on expired tasks)
     // but mutations should fail
     let record = store.get(task_id, "local").await.unwrap();
-    assert!(record.is_expired(), "task should be expired after TTL elapses");
+    assert!(
+        record.is_expired(),
+        "task should be expired after TTL elapses"
+    );
 
     // Attempting to complete an expired task should fail
     let err = store
@@ -470,10 +517,14 @@ async fn tasks_list_empty_when_no_tasks() {
     let (server, _store) = build_task_server();
 
     let req = tasks_list_request();
-    let response = server.handle_request(RequestId::from(1i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(1i64), req, None)
+        .await;
     let list_result = unwrap_result(response);
 
-    let tasks = list_result["tasks"].as_array().expect("tasks should be an array");
+    let tasks = list_result["tasks"]
+        .as_array()
+        .expect("tasks should be an array");
     assert!(tasks.is_empty(), "should have no tasks initially");
 }
 
@@ -494,25 +545,33 @@ async fn task_endpoints_without_router_return_method_not_found() {
 
     // Try tasks/get
     let req = tasks_get_request("some-id");
-    let response = server.handle_request(RequestId::from(1i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(1i64), req, None)
+        .await;
     let err = unwrap_error(response);
     assert_eq!(err.code, -32601, "should return METHOD_NOT_FOUND (-32601)");
 
     // Try tasks/list
     let req = tasks_list_request();
-    let response = server.handle_request(RequestId::from(2i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(2i64), req, None)
+        .await;
     let err = unwrap_error(response);
     assert_eq!(err.code, -32601);
 
     // Try tasks/cancel
     let req = tasks_cancel_request("some-id");
-    let response = server.handle_request(RequestId::from(3i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(3i64), req, None)
+        .await;
     let err = unwrap_error(response);
     assert_eq!(err.code, -32601);
 
     // Try tasks/result
     let req = tasks_result_request("some-id");
-    let response = server.handle_request(RequestId::from(4i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(4i64), req, None)
+        .await;
     let err = unwrap_error(response);
     assert_eq!(err.code, -32601);
 }
@@ -527,7 +586,9 @@ async fn task_call_stores_tool_context_variables() {
 
     let args = json!({ "query": "context_test", "limit": 100 });
     let req = task_call_request("long_running_tool", args.clone(), json!({ "ttl": 60000 }));
-    let response = server.handle_request(RequestId::from(1i64), req, None).await;
+    let response = server
+        .handle_request(RequestId::from(1i64), req, None)
+        .await;
     let create_result = unwrap_result(response);
     let task_id = create_result["task"]["taskId"].as_str().unwrap();
 

@@ -147,7 +147,7 @@ pub struct TaskPage {
 
 /// Async trait defining the task storage contract.
 ///
-/// All task storage backends (in-memory, DynamoDB, etc.) implement this
+/// All task storage backends (in-memory, `DynamoDB`, etc.) implement this
 /// trait. Methods return [`Result<_, TaskError>`] with specific error
 /// variants documented on each method.
 ///
@@ -196,11 +196,7 @@ pub trait TaskStore: Send + Sync {
     ///   (or if the task belongs to a different owner -- owner mismatch
     ///   is indistinguishable from not found for security).
     /// - [`TaskError::StoreError`] on backend failures.
-    async fn get(
-        &self,
-        task_id: &str,
-        owner_id: &str,
-    ) -> Result<TaskRecord, TaskError>;
+    async fn get(&self, task_id: &str, owner_id: &str) -> Result<TaskRecord, TaskError>;
 
     /// Transitions a task to a new status.
     ///
@@ -282,11 +278,7 @@ pub trait TaskStore: Send + Sync {
     /// - [`TaskError::OwnerMismatch`] if the task belongs to a different owner.
     /// - [`TaskError::NotReady`] if the task has not reached a terminal state.
     /// - [`TaskError::StoreError`] on backend failures.
-    async fn get_result(
-        &self,
-        task_id: &str,
-        owner_id: &str,
-    ) -> Result<Value, TaskError>;
+    async fn get_result(&self, task_id: &str, owner_id: &str) -> Result<Value, TaskError>;
 
     /// Atomically transitions to a terminal status AND stores the result.
     ///
@@ -329,10 +321,7 @@ pub trait TaskStore: Send + Sync {
     /// # Errors
     ///
     /// - [`TaskError::StoreError`] on backend failures.
-    async fn list(
-        &self,
-        options: ListTasksOptions,
-    ) -> Result<TaskPage, TaskError>;
+    async fn list(&self, options: ListTasksOptions) -> Result<TaskPage, TaskError>;
 
     /// Cancels a non-terminal task.
     ///
@@ -348,11 +337,7 @@ pub trait TaskStore: Send + Sync {
     /// - [`TaskError::InvalidTransition`] if the task is already in a
     ///   terminal state.
     /// - [`TaskError::StoreError`] on backend failures.
-    async fn cancel(
-        &self,
-        task_id: &str,
-        owner_id: &str,
-    ) -> Result<TaskRecord, TaskError>;
+    async fn cancel(&self, task_id: &str, owner_id: &str) -> Result<TaskRecord, TaskError>;
 
     /// Removes expired tasks from storage.
     ///
@@ -449,11 +434,7 @@ mod tests {
 
     #[test]
     fn task_page_with_records() {
-        let record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            Some(60_000),
-        );
+        let record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), Some(60_000));
         let page = TaskPage {
             tasks: vec![record],
             next_cursor: Some("next-page-cursor".to_string()),
@@ -464,20 +445,13 @@ mod tests {
 
     #[test]
     fn task_page_clone() {
-        let record = TaskRecord::new(
-            "owner".to_string(),
-            "tools/call".to_string(),
-            None,
-        );
+        let record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
         let page = TaskPage {
             tasks: vec![record],
             next_cursor: None,
         };
         let cloned = page.clone();
         assert_eq!(cloned.tasks.len(), 1);
-        assert_eq!(
-            cloned.tasks[0].task.task_id,
-            page.tasks[0].task.task_id
-        );
+        assert_eq!(cloned.tasks[0].task.task_id, page.tasks[0].task.task_id);
     }
 }
