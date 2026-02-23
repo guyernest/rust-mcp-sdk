@@ -26,7 +26,7 @@ See: `.planning/milestones/v1.0-ROADMAP.md` for full phase details
 - [x] **Phase 5: Partial Execution Engine** - Task creation, durable step sync, pause on client-deferred steps, failure handling — completed 2026-02-23
 - [x] **Phase 6: Structured Handoff and Client Continuation** - Hybrid prompt reply format and tool-call-to-task reconnection (completed 2026-02-23)
 - [x] **Phase 7: Integration and End-to-End Validation** - Builder wiring, backward compatibility, working example, integration tests — completed 2026-02-23
-- [ ] **Phase 8: Quality Polish and Test Coverage** - Gap closure from milestone audit: SchemaMismatch field accuracy, PauseReason coverage, clippy fix, property test fix, E2E continuation test
+- [x] **Phase 8: Quality Polish and Test Coverage** - Gap closure from milestone audit: SchemaMismatch field accuracy, PauseReason coverage, clippy fix, property test fix, E2E continuation test — completed 2026-02-23
 
 ## Phase Details
 
@@ -100,8 +100,8 @@ Plans:
   5. Integration test exercises E2E continuation with a succeeding tool through `ServerCore::handle_request` and verifies store update
 **Plans:** 2 plans
 Plans:
-- [ ] 08-01-PLAN.md — SchemaMismatch diagnostic accuracy and silent break fix
-- [ ] 08-02-PLAN.md — Clippy fix, property test TTL overflow, and E2E continuation test
+- [x] 08-01-PLAN.md — SchemaMismatch diagnostic accuracy and silent break fix
+- [x] 08-02-PLAN.md — Clippy fix, property test TTL overflow, and E2E continuation test
 
 ## Progress
 
@@ -114,4 +114,4 @@ Plans:
 | 5. Partial Execution Engine | v1.1 | 2/2 | Complete | 2026-02-23 |
 | 6. Structured Handoff and Client Continuation | v1.1 | Complete    | 2026-02-23 | - |
 | 7. Integration and End-to-End Validation | v1.1 | 2/2 | Complete | 2026-02-23 |
-| 8. Quality Polish and Test Coverage | v1.1 | 0/2 | Not started | - |
+| 8. Quality Polish and Test Coverage | v1.1 | 2/2 | Complete | 2026-02-23 |
