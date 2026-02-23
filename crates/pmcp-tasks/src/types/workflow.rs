@@ -59,6 +59,20 @@ pub const WORKFLOW_PAUSE_REASON_KEY: &str = "_workflow.pause_reason";
 /// the full key.
 pub const WORKFLOW_RESULT_PREFIX: &str = "_workflow.result.";
 
+/// Prefix for extra tool call variable keys (unmatched tools).
+///
+/// When a tool call with `_task_id` does not match any workflow step,
+/// the result is stored under `_workflow.extra.<tool_name>` for observability.
+///
+/// # Examples
+///
+/// ```
+/// use pmcp_tasks::types::workflow::WORKFLOW_EXTRA_PREFIX;
+///
+/// assert_eq!(WORKFLOW_EXTRA_PREFIX, "_workflow.extra.");
+/// ```
+pub const WORKFLOW_EXTRA_PREFIX: &str = "_workflow.extra.";
+
 /// Builds the task variable key for a step's tool result.
 ///
 /// # Examples
@@ -71,6 +85,19 @@ pub const WORKFLOW_RESULT_PREFIX: &str = "_workflow.result.";
 /// ```
 pub fn workflow_result_key(step_name: &str) -> String {
     format!("{WORKFLOW_RESULT_PREFIX}{step_name}")
+}
+
+/// Builds the task variable key for an unmatched tool call result.
+///
+/// # Examples
+///
+/// ```
+/// use pmcp_tasks::types::workflow::workflow_extra_key;
+///
+/// assert_eq!(workflow_extra_key("debug_tool"), "_workflow.extra.debug_tool");
+/// ```
+pub fn workflow_extra_key(tool_name: &str) -> String {
+    format!("{WORKFLOW_EXTRA_PREFIX}{tool_name}")
 }
 
 // === Workflow Progress Types ===
@@ -650,6 +677,20 @@ mod tests {
     #[test]
     fn pause_reason_key_constant() {
         assert_eq!(WORKFLOW_PAUSE_REASON_KEY, "_workflow.pause_reason");
+    }
+
+    #[test]
+    fn workflow_extra_prefix_constant() {
+        assert_eq!(WORKFLOW_EXTRA_PREFIX, "_workflow.extra.");
+    }
+
+    #[test]
+    fn workflow_extra_key_format() {
+        assert_eq!(workflow_extra_key("my_tool"), "_workflow.extra.my_tool");
+        assert_eq!(
+            workflow_extra_key("debug_tool"),
+            "_workflow.extra.debug_tool"
+        );
     }
 }
 

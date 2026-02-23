@@ -981,6 +981,15 @@ pub struct RequestMeta {
     /// The receiver is not obligated to provide these notifications.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub progress_token: Option<ProgressToken>,
+
+    /// Task ID for workflow continuation (PMCP extension).
+    ///
+    /// When present on a `tools/call` request, the server records the tool
+    /// result against the referenced workflow task after normal execution.
+    /// The tool call itself proceeds as normal; the recording is best-effort.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "_task_id")]
+    #[allow(clippy::pub_underscore_fields)]
+    pub _task_id: Option<String>,
 }
 
 /// Client request types.
@@ -1647,6 +1656,42 @@ mod tests {
     }
 
     #[test]
+    fn request_meta_task_id_serializes_as_underscore() {
+        let meta = RequestMeta {
+            progress_token: None,
+            _task_id: Some("abc".to_string()),
+        };
+        let json = serde_json::to_value(&meta).unwrap();
+        // Must serialize as "_task_id" (underscore-separated), not "_taskId" (camelCase)
+        assert_eq!(json["_task_id"], "abc");
+        assert!(
+            json.get("_taskId").is_none(),
+            "_task_id must not be camelCased"
+        );
+    }
+
+    #[test]
+    fn request_meta_task_id_omitted_when_none() {
+        let meta = RequestMeta {
+            progress_token: None,
+            _task_id: None,
+        };
+        let json = serde_json::to_value(&meta).unwrap();
+        assert!(
+            json.get("_task_id").is_none(),
+            "_task_id should be omitted when None"
+        );
+    }
+
+    #[test]
+    fn request_meta_task_id_deserialization() {
+        let json_str = r#"{"_task_id": "task-xyz"}"#;
+        let meta: RequestMeta = serde_json::from_str(json_str).unwrap();
+        assert_eq!(meta._task_id.as_deref(), Some("task-xyz"));
+        assert!(meta.progress_token.is_none());
+    }
+
+    #[test]
     fn get_prompt_result_serde_round_trip_with_meta() {
         let mut meta = serde_json::Map::new();
         meta.insert(
@@ -1672,10 +1717,7 @@ mod tests {
         let json = serde_json::to_value(&result).unwrap();
         let round_trip: GetPromptResult = serde_json::from_value(json).unwrap();
 
-        assert_eq!(
-            round_trip.description.as_deref(),
-            Some("Workflow result")
-        );
+        assert_eq!(round_trip.description.as_deref(), Some("Workflow result"));
         assert_eq!(round_trip.messages.len(), 1);
         assert!(round_trip._meta.is_some());
         let rt_meta = round_trip._meta.unwrap();

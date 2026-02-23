@@ -136,6 +136,28 @@ pub trait TaskRouter: Send + Sync {
         ))
     }
 
+    /// Record a tool call result against a workflow task.
+    ///
+    /// Called by `ServerCore` when a `tools/call` includes `_task_id` in `_meta`.
+    /// The implementation matches the tool name to a remaining workflow step
+    /// and updates task variables with the step result and updated progress.
+    ///
+    /// Best-effort: if the tool does not match any step, the result is stored
+    /// under `_workflow.extra.<tool_name>` for observability.
+    ///
+    /// # Default
+    ///
+    /// Returns `Ok(())` -- no-op for routers that don't support workflow continuation.
+    async fn handle_workflow_continuation(
+        &self,
+        _task_id: &str,
+        _tool_name: &str,
+        _tool_result: Value,
+        _owner_id: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Complete a workflow task with final result.
     ///
     /// Called when all steps have been executed (or the workflow determines
