@@ -35,14 +35,28 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ### Active
 
-(None — start `/gsd:new-milestone` to define next milestone requirements)
+<!-- Current milestone: v1.2 Pluggable Storage Backends -->
+
+- [ ] Lower-level KV storage backend trait for pluggable persistence
+- [ ] GenericTaskStore that delegates to any StorageBackend implementation
+- [ ] InMemoryBackend refactored from existing InMemoryTaskStore
+- [ ] DynamoDB backend behind `dynamodb` feature flag (cloud-only tests)
+- [ ] Redis backend behind `redis` feature flag (proving the trait)
+- [ ] TaskStore trait simplified to leverage KV backend pattern
+
+## Current Milestone: v1.2 Pluggable Storage Backends
+
+**Goal:** Introduce a pluggable KV storage backend layer, refactor TaskStore to delegate to it, and validate with DynamoDB + Redis implementations.
+
+**Target features:**
+- StorageBackend trait — lower-level KV operations
+- GenericTaskStore<B: StorageBackend> — implements TaskStore via backend delegation
+- InMemoryBackend — refactored from existing InMemoryTaskStore
+- DynamoDbBackend — full implementation (feature-flagged, cloud-only CI tests)
+- RedisBackend — implementation proving the trait handles Redis's storage model
 
 ### Future
 
-- [ ] DynamoDB storage backend behind `dynamodb` feature flag
-- [ ] DynamoDB conditional writes for atomic state transitions
-- [ ] DynamoDB TTL + read-time expiry filtering
-- [ ] DynamoDB GSI for owner-scoped listing with cursor-based pagination
 - [ ] CloudFormation template integrating with cargo-pmcp deployment plugin system
 - [ ] Integration with cargo-pmcp deployment plugin system (DynamoDB table via CFN stack)
 - [ ] Cross-server task sharing on pmcp.run — shared TaskStore backend + OAuth sub owner binding enables multi-server workflow continuity
@@ -63,6 +77,7 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 - Automatic client execution — MCP clients decide when/how to call tools; server cannot drive client
 - Per-step task statuses — single task status with variable-level step tracking suffices (validated by v1.1)
 - Workflow branching/conditionals — sequential-only; branching is a different workflow engine
+- DynamoDB Local / docker-based testing — cloud-only DynamoDB in CI
 
 ## Context
 
@@ -107,4 +122,4 @@ Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, park
 | Runtime best-effort execution (v1.1) | Dropped StepExecution enum; steps execute what they can at runtime | ✓ Good — simpler than static classification; PauseReason captures why stops |
 
 ---
-*Last updated: 2026-02-23 after v1.1 milestone completion*
+*Last updated: 2026-02-23 after v1.2 milestone start*

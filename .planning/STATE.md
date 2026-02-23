@@ -9,12 +9,11 @@ See: .planning/PROJECT.md (updated 2026-02-23)
 
 ## Current Position
 
-Milestone: v1.1 Task-Prompt Bridge — SHIPPED 2026-02-23
-Phase: All complete (8 of 8)
-Status: Milestone archived
-Last activity: 2026-02-23 — v1.1 milestone completed and archived
-
-Progress: [██████████] 100% (v1.1)
+Milestone: v1.2 Pluggable Storage Backends
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-02-23 — Milestone v1.2 started
 
 ## Performance Metrics
 
