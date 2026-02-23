@@ -98,7 +98,10 @@ Plans:
   3. `cargo clippy --package pmcp-tasks -- -D warnings` passes with zero warnings
   4. Property test `fresh_task_record_is_not_expired` passes (TTL overflow fixed)
   5. Integration test exercises E2E continuation with a succeeding tool through `ServerCore::handle_request` and verifies store update
-**Plans:** TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 08-01-PLAN.md — SchemaMismatch diagnostic accuracy and silent break fix
+- [ ] 08-02-PLAN.md — Clippy fix, property test TTL overflow, and E2E continuation test
 
 ## Progress
 
@@ -111,4 +114,4 @@ Plans:
 | 5. Partial Execution Engine | v1.1 | 2/2 | Complete | 2026-02-23 |
 | 6. Structured Handoff and Client Continuation | v1.1 | Complete    | 2026-02-23 | - |
 | 7. Integration and End-to-End Validation | v1.1 | 2/2 | Complete | 2026-02-23 |
-| 8. Quality Polish and Test Coverage | v1.1 | 0/? | Not started | - |
+| 8. Quality Polish and Test Coverage | v1.1 | 0/2 | Not started | - |
