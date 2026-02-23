@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state that persists across tool calls.
-**Current focus:** v1.1 Task-Prompt Bridge — Phase 6 ready to plan
+**Current focus:** v1.1 Task-Prompt Bridge — Phase 6 in progress
 
 ## Current Position
 
 Milestone: v1.1 Task-Prompt Bridge
 Phase: 6 of 7 (Structured Handoff and Client Continuation)
-Plan: 0 of ? in current phase
-Status: Ready to plan
-Last activity: 2026-02-23 — Phase 5 verified and complete
+Plan: 1 of 2 in current phase
+Status: Executing
+Last activity: 2026-02-23 — Completed 06-01-PLAN.md
 
-Progress: [█████░░░░░] 50% (v1.1)
+Progress: [██████░░░░] 60% (v1.1)
 
 ## Performance Metrics
 
@@ -33,6 +33,7 @@ Progress: [█████░░░░░] 50% (v1.1)
 | 03 | 3 | 28 min | 9 min |
 | 04 | 2 | 29 min | 14 min |
 | 05 | 2 | 15 min | 7 min |
+| 06 | 1 | 3 min | 3 min |
 
 *Updated after each plan completion*
 
@@ -59,6 +60,9 @@ Key decisions for v1.1:
 - Local mirror types for PauseReason/StepStatus to avoid circular pmcp<->pmcp-tasks dependency (05-02)
 - classify_resolution_failure as free function for testability (05-02)
 - Tasks 1+2 coalesced when both modify same file and tests verify the implementation (05-02)
+- build_placeholder_args as static method since it only needs step metadata and args (06-01)
+- Retryable failed steps appear first in remaining steps list for immediate retry guidance (06-01)
+- DataSource::Field adapted to DataSource::StepOutput { field: Some(f) } since Field variant does not exist (06-01)
 
 ### Pending Todos
 
@@ -72,6 +76,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-22
-Stopped at: Completed 05-02-PLAN.md (Phase 5 complete)
-Resume file: Next phase planning needed
+Last session: 2026-02-23
+Stopped at: Completed 06-01-PLAN.md
+Resume file: 06-02-PLAN.md

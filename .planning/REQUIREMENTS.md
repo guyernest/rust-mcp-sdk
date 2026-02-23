@@ -24,9 +24,9 @@ Requirements for the Task-Prompt Bridge milestone. Each maps to roadmap phases.
 
 ### Handoff
 
-- [ ] **HAND-01**: Prompt reply includes structured handoff as final assistant message with task ID, completed steps with results, and remaining steps with guidance
-- [ ] **HAND-02**: Handoff format is hybrid: JSON block for machine parsing plus natural language for LLM clients
-- [ ] **HAND-03**: Each remaining step in handoff includes tool name, expected arguments (with resolved values where available), and guidance text
+- [x] **HAND-01**: Prompt reply includes structured handoff as final assistant message with task ID, completed steps with results, and remaining steps with guidance
+- [x] **HAND-02**: Handoff format is hybrid: JSON block for machine parsing plus natural language for LLM clients
+- [x] **HAND-03**: Each remaining step in handoff includes tool name, expected arguments (with resolved values where available), and guidance text
 
 ### Continuation
 
@@ -76,9 +76,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | EXEC-02 | Phase 5 | Complete |
 | EXEC-03 | Phase 5 | Complete |
 | EXEC-04 | Phase 5 | Complete |
-| HAND-01 | Phase 6 | Pending |
-| HAND-02 | Phase 6 | Pending |
-| HAND-03 | Phase 6 | Pending |
+| HAND-01 | Phase 6 | Complete |
+| HAND-02 | Phase 6 | Complete |
+| HAND-03 | Phase 6 | Complete |
 | CONT-01 | Phase 6 | Pending |
 | CONT-02 | Phase 6 | Pending |
 | CONT-03 | Phase 6 | Pending |
