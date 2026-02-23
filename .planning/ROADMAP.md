@@ -67,7 +67,10 @@ Plans:
   2. The handoff format is hybrid: a `_meta` JSON block for machine parsing and natural language narrative for LLM clients that cannot parse structured data
   3. A follow-up `tools/call` request with `_task_id` in `_meta` updates the workflow's task variables with the step result and advances the workflow progress
   4. A client can poll `tasks/result` at any time to check overall workflow completion status and see all step results accumulated in task variables
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 06-01-PLAN.md — Handoff message generation with argument resolution and placeholder fallback
+- [ ] 06-02-PLAN.md — Tool-to-task reconnection, continuation recording, and cancel-with-result completion
 
 ### Phase 7: Integration and End-to-End Validation
 **Goal**: The task-prompt bridge is wired into `ServerCoreBuilder` with a clean API, validated end-to-end, and demonstrated with a working example
@@ -89,5 +92,5 @@ Plans:
 | 3. Handler, Middleware, and Server Integration | v1.0 | 3/3 | Complete | 2026-02-22 |
 | 4. Foundation Types and Contracts | v1.1 | 2/2 | Complete | 2026-02-22 |
 | 5. Partial Execution Engine | v1.1 | 2/2 | Complete | 2026-02-23 |
-| 6. Structured Handoff and Client Continuation | v1.1 | 0/? | Not started | - |
+| 6. Structured Handoff and Client Continuation | v1.1 | 0/2 | Not started | - |
 | 7. Integration and End-to-End Validation | v1.1 | 0/? | Not started | - |
