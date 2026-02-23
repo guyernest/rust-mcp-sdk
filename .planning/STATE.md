@@ -5,15 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-23)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state that persists across tool calls.
-**Current focus:** Planning next milestone
+**Current focus:** Phase 9 - Storage Abstraction Layer
 
 ## Current Position
 
 Milestone: v1.2 Pluggable Storage Backends
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-02-23 — Milestone v1.2 started
+Phase: 9 of 13 (Storage Abstraction Layer)
+Plan: — (not yet planned)
+Status: Ready to plan
+Last activity: 2026-02-23 — Roadmap created for v1.2
+
+Progress: [░░░░░░░░░░] 0% (0/~11 estimated plans)
 
 ## Performance Metrics
 
@@ -45,6 +47,11 @@ Last activity: 2026-02-23 — Milestone v1.2 started
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
+Recent decisions affecting current work:
+
+- [v1.2]: CAS (put_if_version) must be part of StorageBackend trait from day one -- retrofitting after backends exist would require rewriting every backend
+- [v1.2]: Canonical JSON serialization in GenericTaskStore prevents format divergence across backends
+- [v1.2]: DynamoDB primary production target; Redis proves trait generality
 
 ### Pending Todos
 
@@ -52,10 +59,10 @@ None.
 
 ### Blockers/Concerns
 
-None.
+- CI setup for cloud DynamoDB tests needs IAM + table configuration before Phase 11
 
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: v1.1 milestone archived
-Resume file: None — run `/gsd:new-milestone` to start next milestone
+Stopped at: v1.2 roadmap created
+Resume file: None -- run `/gsd:plan-phase 9` to start first phase

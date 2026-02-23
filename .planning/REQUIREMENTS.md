@@ -79,34 +79,34 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ABST-01 | — | Pending |
-| ABST-02 | — | Pending |
-| ABST-03 | — | Pending |
-| ABST-04 | — | Pending |
-| IMEM-01 | — | Pending |
-| IMEM-02 | — | Pending |
-| IMEM-03 | — | Pending |
-| DYNA-01 | — | Pending |
-| DYNA-02 | — | Pending |
-| DYNA-03 | — | Pending |
-| DYNA-04 | — | Pending |
-| DYNA-05 | — | Pending |
-| DYNA-06 | — | Pending |
-| RDIS-01 | — | Pending |
-| RDIS-02 | — | Pending |
-| RDIS-03 | — | Pending |
-| RDIS-04 | — | Pending |
-| RDIS-05 | — | Pending |
-| TEST-01 | — | Pending |
-| TEST-02 | — | Pending |
-| TEST-03 | — | Pending |
-| TEST-04 | — | Pending |
+| ABST-01 | Phase 9 | Pending |
+| ABST-02 | Phase 9 | Pending |
+| ABST-03 | Phase 9 | Pending |
+| ABST-04 | Phase 9 | Pending |
+| IMEM-01 | Phase 10 | Pending |
+| IMEM-02 | Phase 10 | Pending |
+| IMEM-03 | Phase 10 | Pending |
+| DYNA-01 | Phase 11 | Pending |
+| DYNA-02 | Phase 11 | Pending |
+| DYNA-03 | Phase 11 | Pending |
+| DYNA-04 | Phase 11 | Pending |
+| DYNA-05 | Phase 11 | Pending |
+| DYNA-06 | Phase 11 | Pending |
+| RDIS-01 | Phase 12 | Pending |
+| RDIS-02 | Phase 12 | Pending |
+| RDIS-03 | Phase 12 | Pending |
+| RDIS-04 | Phase 12 | Pending |
+| RDIS-05 | Phase 12 | Pending |
+| TEST-01 | Phase 10 | Pending |
+| TEST-02 | Phase 11 | Pending |
+| TEST-03 | Phase 12 | Pending |
+| TEST-04 | Phase 13 | Pending |
 
 **Coverage:**
 - v1.2 requirements: 22 total
-- Mapped to phases: 0
-- Unmapped: 22 (pending roadmap creation)
+- Mapped to phases: 22
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-23*
-*Last updated: 2026-02-23 after initial definition*
+*Last updated: 2026-02-23 after roadmap creation*
