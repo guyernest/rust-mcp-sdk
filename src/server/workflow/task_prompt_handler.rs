@@ -764,7 +764,19 @@ impl PromptHandler for TaskWorkflowPromptHandler {
                             .resolve_tool_parameters(step, &args, &execution_context)
                         {
                             Ok(p) => p,
-                            Err(_) => break,
+                            Err(_) => {
+                                tracing::warn!(
+                                    "resolve_tool_parameters failed unexpectedly for step '{}' \
+                                     after announcement succeeded",
+                                    step.name()
+                                );
+                                pause_reason = Some(classify_resolution_failure(
+                                    step,
+                                    self.workflow.steps(),
+                                    &step_statuses,
+                                ));
+                                break;
+                            },
                         };
 
                     match self.inner.params_satisfy_tool_schema(step, &params) {
