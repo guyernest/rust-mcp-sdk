@@ -561,13 +561,15 @@ impl WorkflowPromptHandler {
 
     /// Check if resolved parameters satisfy the tool's input schema
     ///
-    /// Returns true if the params object contains all required fields defined in the tool's schema.
-    /// This prevents attempting to execute tools with incomplete parameters.
+    /// Returns a list of missing required field names. An empty vec means all
+    /// required fields are present. This collects ALL missing fields rather
+    /// than short-circuiting on the first one, giving callers complete
+    /// diagnostic information.
     pub(crate) fn params_satisfy_tool_schema(
         &self,
         step: &WorkflowStep,
         params: &Value,
-    ) -> Result<bool> {
+    ) -> Result<Vec<String>> {
         let tool_handle = step.tool().ok_or_else(|| {
             crate::Error::Internal(format!(
                 "Cannot check schema for resource-only step '{}'",
@@ -583,6 +585,8 @@ impl WorkflowPromptHandler {
             ))
         })?;
 
+        let mut missing_fields = Vec::new();
+
         // Check if params object has all required fields from schema
         if let Some(schema_obj) = tool_info.input_schema.as_object() {
             if let Some(required) = schema_obj.get("required").and_then(|r| r.as_array()) {
@@ -591,20 +595,22 @@ impl WorkflowPromptHandler {
                     for req_field in required {
                         if let Some(field_name) = req_field.as_str() {
                             if !params_obj.contains_key(field_name) {
-                                // Missing required field - params don't satisfy schema
-                                return Ok(false);
+                                missing_fields.push(field_name.to_string());
                             }
                         }
                     }
                 } else if !required.is_empty() {
-                    // Params is not an object, but schema requires fields
-                    return Ok(false);
+                    // Params is not an object but schema requires fields -- all are missing
+                    for req_field in required {
+                        if let Some(field_name) = req_field.as_str() {
+                            missing_fields.push(field_name.to_string());
+                        }
+                    }
                 }
             }
         }
 
-        // All required fields present (or no required fields/schema)
-        Ok(true)
+        Ok(missing_fields)
     }
 
     /// Execute a workflow step by calling the actual tool handler
@@ -890,13 +896,13 @@ impl PromptHandler for WorkflowPromptHandler {
                     };
 
                     // Check if resolved params satisfy tool's required fields
-                    let Ok(satisfies_schema) = self.params_satisfy_tool_schema(step, &params)
+                    let Ok(ref missing) = self.params_satisfy_tool_schema(step, &params)
                     else {
                         // Schema check error (tool not found, etc.)
                         break;
                     };
 
-                    if !satisfies_schema {
+                    if !missing.is_empty() {
                         // Params resolved but incomplete (missing required fields)
                         // This is a graceful handoff - client should provide missing params
                         // Guidance message (if present) was already added above

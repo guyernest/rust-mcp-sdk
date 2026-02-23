@@ -768,20 +768,35 @@ impl PromptHandler for TaskWorkflowPromptHandler {
                         };
 
                     match self.inner.params_satisfy_tool_schema(step, &params) {
-                        Err(_) => break,
-                        Ok(false) => {
+                        Err(e) => {
+                            tracing::warn!(
+                                "params_satisfy_tool_schema error for step '{}': {}",
+                                step.name(),
+                                e
+                            );
+                            pause_reason = Some(PauseReason::UnresolvableParams {
+                                blocked_step: step.name().to_string(),
+                                missing_param: "unknown".to_string(),
+                                suggested_tool: step
+                                    .tool()
+                                    .map(|t| t.name().to_string())
+                                    .unwrap_or_default(),
+                            });
+                            break;
+                        },
+                        Ok(ref missing) if !missing.is_empty() => {
                             let suggested_tool = step
                                 .tool()
                                 .map(|t| t.name().to_string())
                                 .unwrap_or_default();
                             pause_reason = Some(PauseReason::SchemaMismatch {
                                 blocked_step: step.name().to_string(),
-                                missing_fields: vec!["unknown".to_string()],
+                                missing_fields: missing.clone(),
                                 suggested_tool,
                             });
                             break;
                         },
-                        Ok(true) => {
+                        Ok(_) => {
                             messages.push(announcement);
 
                             match self

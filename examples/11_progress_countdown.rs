@@ -106,6 +106,7 @@ async fn main() -> Result<()> {
         arguments: json!({ "from": 5 }),
         _meta: Some(RequestMeta {
             progress_token: Some(ProgressToken::String("countdown-1".to_string())),
+            _task_id: None,
         }),
         task: None,
     };
@@ -135,6 +136,7 @@ async fn main() -> Result<()> {
         arguments: json!({ "from": 10 }),
         _meta: Some(RequestMeta {
             progress_token: Some(ProgressToken::String("countdown-2".to_string())),
+            _task_id: None,
         }),
         task: None,
     };

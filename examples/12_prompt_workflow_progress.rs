@@ -152,6 +152,7 @@ async fn main() -> Result<()> {
         arguments: HashMap::from([("topic".to_string(), "Machine Learning".to_string())]),
         _meta: Some(RequestMeta {
             progress_token: Some(ProgressToken::String("workflow-1".to_string())),
+            _task_id: None,
         }),
     };
 
@@ -177,6 +178,7 @@ async fn main() -> Result<()> {
         arguments: HashMap::from([("topic".to_string(), "Data Science".to_string())]),
         _meta: Some(RequestMeta {
             progress_token: Some(ProgressToken::String("workflow-2".to_string())),
+            _task_id: None,
         }),
     };
 
