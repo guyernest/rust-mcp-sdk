@@ -3,7 +3,7 @@
 ## Milestones
 
 - ✅ **v1.0 MCP Tasks Foundation** — Phases 1-3 (shipped 2026-02-22)
-- 🚧 **v1.1 Task-Prompt Bridge** — Phases 4-7 (in progress)
+- 🚧 **v1.1 Task-Prompt Bridge** — Phases 4-8 (in progress)
 
 ## Phases
 
@@ -25,7 +25,8 @@ See: `.planning/milestones/v1.0-ROADMAP.md` for full phase details
 - [x] **Phase 4: Foundation Types and Contracts** - Schema, trait extension, step execution mode, and handler composition boundary — completed 2026-02-22
 - [x] **Phase 5: Partial Execution Engine** - Task creation, durable step sync, pause on client-deferred steps, failure handling — completed 2026-02-23
 - [x] **Phase 6: Structured Handoff and Client Continuation** - Hybrid prompt reply format and tool-call-to-task reconnection (completed 2026-02-23)
-- [ ] **Phase 7: Integration and End-to-End Validation** - Builder wiring, backward compatibility, working example, integration tests
+- [x] **Phase 7: Integration and End-to-End Validation** - Builder wiring, backward compatibility, working example, integration tests — completed 2026-02-23
+- [ ] **Phase 8: Quality Polish and Test Coverage** - Gap closure from milestone audit: SchemaMismatch field accuracy, PauseReason coverage, clippy fix, property test fix, E2E continuation test
 
 ## Phase Details
 
@@ -69,8 +70,8 @@ Plans:
   4. A client can poll `tasks/result` at any time to check overall workflow completion status and see all step results accumulated in task variables
 **Plans:** 2/2 plans complete
 Plans:
-- [ ] 06-01-PLAN.md — Handoff message generation with argument resolution and placeholder fallback
-- [ ] 06-02-PLAN.md — Tool-to-task reconnection, continuation recording, and cancel-with-result completion
+- [x] 06-01-PLAN.md — Handoff message generation with argument resolution and placeholder fallback
+- [x] 06-02-PLAN.md — Tool-to-task reconnection, continuation recording, and cancel-with-result completion
 
 ### Phase 7: Integration and End-to-End Validation
 **Goal**: The task-prompt bridge is wired into `ServerCoreBuilder` with a clean API, validated end-to-end, and demonstrated with a working example
@@ -83,8 +84,21 @@ Plans:
   4. Integration tests validate the full create-execute-handoff-continue-complete flow through a real `ServerCore` instance with `InMemoryTaskStore`
 **Plans:** 2 plans
 Plans:
-- [ ] 07-01-PLAN.md — Bug fix (task_id extraction) + integration tests (builder API, backward compatibility, full lifecycle)
-- [ ] 07-02-PLAN.md — Lifecycle example (62_task_workflow_lifecycle.rs) replacing opt-in example
+- [x] 07-01-PLAN.md — Bug fix (task_id extraction) + integration tests (builder API, backward compatibility, full lifecycle)
+- [x] 07-02-PLAN.md — Lifecycle example (62_task_workflow_lifecycle.rs) replacing opt-in example
+
+### Phase 8: Quality Polish and Test Coverage
+**Goal**: Close all tech debt and integration findings from the v1.1 milestone audit — accurate SchemaMismatch diagnostics, complete PauseReason coverage, zero clippy warnings, and full E2E continuation test coverage
+**Depends on**: Phase 7
+**Requirements**: None (quality polish — no new requirements)
+**Gap Closure**: Closes FINDING-01, FINDING-02, and 5 tech debt items from v1.1-MILESTONE-AUDIT.md
+**Success Criteria** (what must be TRUE):
+  1. `PauseReason::SchemaMismatch.missing_fields` contains actual missing field names (not `["unknown"]`)
+  2. All execution break paths in `task_prompt_handler.rs` produce a `PauseReason` (no silent breaks)
+  3. `cargo clippy --package pmcp-tasks -- -D warnings` passes with zero warnings
+  4. Property test `fresh_task_record_is_not_expired` passes (TTL overflow fixed)
+  5. Integration test exercises E2E continuation with a succeeding tool through `ServerCore::handle_request` and verifies store update
+**Plans:** TBD
 
 ## Progress
 
@@ -96,4 +110,5 @@ Plans:
 | 4. Foundation Types and Contracts | v1.1 | 2/2 | Complete | 2026-02-22 |
 | 5. Partial Execution Engine | v1.1 | 2/2 | Complete | 2026-02-23 |
 | 6. Structured Handoff and Client Continuation | v1.1 | Complete    | 2026-02-23 | - |
-| 7. Integration and End-to-End Validation | v1.1 | 0/2 | Not started | - |
+| 7. Integration and End-to-End Validation | v1.1 | 2/2 | Complete | 2026-02-23 |
+| 8. Quality Polish and Test Coverage | v1.1 | 0/? | Not started | - |
