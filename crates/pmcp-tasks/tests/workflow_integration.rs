@@ -80,6 +80,41 @@ impl pmcp::ToolHandler for FailingFetchDataTool {
     }
 }
 
+/// A data-fetching tool that fails for specific bad keys and succeeds otherwise.
+///
+/// Used for E2E continuation testing: workflow invokes with a bad key (fails),
+/// client retries with a good key (succeeds). Same tool, different arguments.
+struct ConditionalFetchDataTool;
+
+#[async_trait]
+impl pmcp::ToolHandler for ConditionalFetchDataTool {
+    async fn handle(&self, args: Value, _extra: RequestHandlerExtra) -> pmcp::Result<Value> {
+        let source = args
+            .get("source")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        if source == "non_existent_key" {
+            Err(pmcp::Error::internal("key not found: non_existent_key"))
+        } else {
+            Ok(json!({ "data": "raw_content", "source": source }))
+        }
+    }
+
+    fn metadata(&self) -> Option<ToolInfo> {
+        Some(ToolInfo::new(
+            "fetch_data",
+            Some("Fetch raw data from a source".to_string()),
+            json!({
+                "type": "object",
+                "properties": {
+                    "source": { "type": "string" }
+                },
+                "required": ["source"]
+            }),
+        ))
+    }
+}
+
 /// A transformation tool that processes input data.
 struct TransformDataTool;
 
@@ -212,6 +247,37 @@ fn build_failing_test_server() -> (pmcp::server::core::ServerCore, Arc<InMemoryT
         .name("test-workflow-failing")
         .version("1.0.0")
         .tool("fetch_data", FailingFetchDataTool)
+        .tool("transform_data", TransformDataTool)
+        .tool("store_data", StoreDataTool)
+        .with_task_store(router)
+        .prompt_workflow(task_workflow())
+        .expect("task workflow should register")
+        .prompt_workflow(non_task_workflow())
+        .expect("non-task workflow should register")
+        .stateless_mode(true)
+        .build()
+        .expect("server should build");
+
+    (server, store)
+}
+
+/// Build a server with a conditional fetch tool for E2E continuation testing.
+///
+/// Uses `ConditionalFetchDataTool` which fails for `source == "non_existent_key"`
+/// and succeeds for any other source value. The workflow uses `source` from prompt
+/// args, so passing `"non_existent_key"` triggers failure; the client then retries
+/// with a good key via continuation.
+fn build_conditional_test_server() -> (pmcp::server::core::ServerCore, Arc<InMemoryTaskStore>) {
+    let store = Arc::new(
+        InMemoryTaskStore::new()
+            .with_security(TaskSecurityConfig::default().with_allow_anonymous(true)),
+    );
+    let router = Arc::new(TaskRouterImpl::new(store.clone()));
+
+    let server = ServerCoreBuilder::new()
+        .name("test-workflow-conditional")
+        .version("1.0.0")
+        .tool("fetch_data", ConditionalFetchDataTool)
         .tool("transform_data", TransformDataTool)
         .tool("store_data", StoreDataTool)
         .with_task_store(router)
@@ -376,13 +442,14 @@ async fn test_task_workflow_creates_task_with_meta() {
     }
 }
 
-// INTG-04: Full lifecycle with handoff -- step failure triggers pause.
+// INTG-04: Full lifecycle with handoff and continuation -- step failure triggers
+// pause, client continuation with succeeding args records result in task store.
 #[tokio::test]
 async fn test_full_lifecycle_happy_path() {
-    let (server, store) = build_failing_test_server();
+    let (server, store) = build_conditional_test_server();
 
-    // Stage 1: Invoke workflow prompt -- fetch_data will fail
-    let args = HashMap::from([("source".to_string(), "api_endpoint".to_string())]);
+    // Stage 1: Invoke workflow prompt -- fetch_data will fail with "non_existent_key"
+    let args = HashMap::from([("source".to_string(), "non_existent_key".to_string())]);
     let req = get_prompt_request("data_pipeline", args);
     let response = server
         .handle_request(RequestId::from(1i64), req, None)
@@ -449,12 +516,81 @@ async fn test_full_lifecycle_happy_path() {
         "handoff should contain continuation guidance"
     );
 
-    // Stage 2: Client continuation -- call fetch_data with _task_id
-    // This is a fire-and-forget recording; the tool call itself proceeds normally
-    // but the server records the result against the workflow task.
-    // Note: the FailingFetchDataTool always fails, but the continuation recording
-    // is best-effort. For this test we verify the recording path works.
-    // The tool call result (success or failure) is returned to the client regardless.
+    // Stage 2: Client continuation -- call fetch_data with _task_id and good args.
+    // ConditionalFetchDataTool succeeds when source != "non_existent_key".
+    // The continuation intercept in ServerCore fires after the tool handler returns
+    // success, recording the result against the workflow task (fire-and-forget).
+    let req = continuation_call_request(
+        "fetch_data",
+        json!({ "source": "existing_key" }),
+        task_id,
+    );
+    let response = server
+        .handle_request(RequestId::from(2i64), req, None)
+        .await;
+    let continuation_result = unwrap_result(response);
+
+    // The tool call should succeed (ConditionalFetchDataTool returns data for "existing_key")
+    let content = continuation_result["content"]
+        .as_array()
+        .expect("should have content array");
+    assert!(
+        !content.is_empty(),
+        "tool call should return content"
+    );
+
+    // Verify task store was updated by the continuation intercept.
+    // The fire-and-forget recording completes within the handle_request await chain.
+    let record = store.get(task_id, "local").await.unwrap();
+
+    // Check _workflow.result.fetch exists with the CallToolResult wrapper.
+    // The continuation intercept stores the serialized CallToolResult (not raw tool output).
+    // CallToolResult has { content: [{type: "text", text: "<json>"}], isError: false }.
+    let fetch_result = record
+        .variables
+        .get("_workflow.result.fetch")
+        .expect("_workflow.result.fetch should exist after successful continuation");
+
+    // Verify the result has content array (CallToolResult format)
+    let fetch_content = fetch_result["content"]
+        .as_array()
+        .expect("fetch result should have content array (CallToolResult format)");
+    assert!(
+        !fetch_content.is_empty(),
+        "fetch result content should not be empty"
+    );
+
+    // The text field contains the pretty-printed JSON of the tool output
+    let fetch_text = fetch_content[0]["text"]
+        .as_str()
+        .expect("fetch result content should have text");
+    let tool_output: Value = serde_json::from_str(fetch_text)
+        .expect("fetch result text should be valid JSON");
+    assert_eq!(
+        tool_output["data"], "raw_content",
+        "tool output should contain raw_content"
+    );
+    assert_eq!(
+        tool_output["source"], "existing_key",
+        "tool output should contain the source used in continuation"
+    );
+
+    // Check _workflow.progress shows fetch step as completed
+    let progress = record
+        .variables
+        .get("_workflow.progress")
+        .expect("_workflow.progress should exist");
+    let progress_steps = progress["steps"]
+        .as_array()
+        .expect("progress should have steps array");
+    assert_eq!(
+        progress_steps[0]["name"], "fetch",
+        "first step should be fetch"
+    );
+    assert_eq!(
+        progress_steps[0]["status"], "completed",
+        "fetch step should be completed after successful continuation"
+    );
 
     // Stage 3: Verify task state via tasks/result polling
     // The task is still "working" (not terminal), so tasks/result should error
