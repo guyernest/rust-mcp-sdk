@@ -630,7 +630,11 @@ impl PromptHandler for TaskWorkflowPromptHandler {
             .create_workflow_task(self.workflow.name(), &owner_id, initial_progress.clone())
             .await
         {
-            Ok(value) => value.get("id").and_then(|v| v.as_str()).map(String::from),
+            Ok(value) => value
+                .get("task")
+                .and_then(|t| t.get("taskId"))
+                .and_then(|v| v.as_str())
+                .map(String::from),
             Err(e) => {
                 tracing::warn!(
                     "Task creation failed for workflow '{}', proceeding without task tracking: {}",
