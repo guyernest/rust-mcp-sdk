@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state that persists across tool calls.
-**Current focus:** v1.1 Task-Prompt Bridge — Phase 7 COMPLETE
+**Current focus:** v1.1 Quality Polish — Phase 8 in progress
 
 ## Current Position
 
 Milestone: v1.1 Task-Prompt Bridge
-Phase: 7 of 7 (Integration and End-to-End Validation)
-Plan: 2 of 2 in current phase (COMPLETE)
-Status: Phase 07 complete -- all plans finished
-Last activity: 2026-02-23 — Completed 07-02-PLAN.md
+Phase: 8 of 8 (Quality Polish and Test Coverage)
+Plan: 1 of 2 in current phase
+Status: Plan 08-01 complete -- SchemaMismatch diagnostics and silent break fixes
+Last activity: 2026-02-23 — Completed 08-01-PLAN.md
 
-Progress: [██████████] 100% (v1.1)
+Progress: [█████████░] 93% (v1.1)
 
 ## Performance Metrics
 
@@ -35,6 +35,7 @@ Progress: [██████████] 100% (v1.1)
 | 05 | 2 | 15 min | 7 min |
 | 06 | 2 | 10 min | 5 min |
 | 07 | 2 | 9 min | 4 min |
+| 08 | 1 | 8 min | 8 min |
 
 *Updated after each plan completion*
 
@@ -74,6 +75,8 @@ Key decisions for v1.1:
 - FetchDataTool always fails to trigger handoff naturally (no runtime toggle) (07-02)
 - Synchronous fn main() with block_on for example consistency (07-02)
 - Stage-labeled lifecycle examples with heavy inline comments for teaching clarity (07-02)
+- Route resolve_tool_parameters failure through classify_resolution_failure for accurate diagnostics (08-01)
+- Direct PauseReason::UnresolvableParams for params_satisfy_tool_schema Err (schema lookup error) (08-01)
 
 ### Pending Todos
 
@@ -88,5 +91,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Completed 07-02-PLAN.md (Phase 7 complete, v1.1 milestone complete)
-Resume file: None -- all phases complete
+Stopped at: Completed 08-01-PLAN.md
+Resume file: .planning/phases/08-quality-polish-and-test-coverage/08-02-PLAN.md
