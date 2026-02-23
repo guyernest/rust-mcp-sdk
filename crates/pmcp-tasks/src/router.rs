@@ -551,7 +551,7 @@ mod tests {
             &Value::String("my-tool".to_string())
         );
         assert_eq!(record.variables.get("arguments").unwrap(), &arguments);
-        assert!(record.variables.get("progress_token").is_none());
+        assert!(!record.variables.contains_key("progress_token"));
     }
 
     #[tokio::test]

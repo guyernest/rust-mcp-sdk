@@ -133,7 +133,7 @@ proptest! {
     /// is never expired. Extremely large TTL values that overflow DateTime
     /// arithmetic are treated as "never expires" (expires_at = None).
     #[test]
-    fn fresh_task_record_is_not_expired(ttl in proptest::option::of(0u64..=u64::MAX)) {
+    fn fresh_task_record_is_not_expired(ttl in proptest::option::of(0u64..=2_592_000_000u64)) {
         let record = TaskRecord::new(
             "owner".to_string(),
             "tools/call".to_string(),

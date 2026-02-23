@@ -100,7 +100,8 @@ impl TaskRecord {
         // If the TTL overflows i64 milliseconds or the resulting DateTime overflows,
         // we treat it as "never expires" (None).
         let expires_at = ttl.and_then(|ms| {
-            let duration = Duration::try_milliseconds(ms as i64)?;
+            let ms_i64 = i64::try_from(ms).ok()?;
+            let duration = Duration::try_milliseconds(ms_i64)?;
             now.checked_add_signed(duration)
         });
 
