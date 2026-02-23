@@ -130,23 +130,47 @@ pub struct TaskListParams {
 
 /// Parameters for `tasks/cancel` requests.
 ///
+/// When `result` is `None`, the task transitions to `Cancelled` status
+/// (standard cancel). When `result` is `Some(value)`, the task transitions
+/// to `Completed` status with the provided result (workflow completion).
+///
 /// # Examples
 ///
 /// ```
 /// use pmcp_tasks::TaskCancelParams;
 /// use serde_json;
 ///
+/// // Standard cancel (no result)
 /// let params = TaskCancelParams {
 ///     task_id: "cancel-me".to_string(),
+///     result: None,
 /// };
 /// let json = serde_json::to_value(&params).unwrap();
 /// assert_eq!(json["taskId"], "cancel-me");
+/// assert!(json.get("result").is_none());
+///
+/// // Workflow completion via cancel (with result)
+/// let params = TaskCancelParams {
+///     task_id: "complete-me".to_string(),
+///     result: Some(serde_json::json!({"summary": "all steps done"})),
+/// };
+/// let json = serde_json::to_value(&params).unwrap();
+/// assert_eq!(json["taskId"], "complete-me");
+/// assert_eq!(json["result"]["summary"], "all steps done");
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskCancelParams {
-    /// The task ID to cancel.
+    /// The task ID to cancel or complete.
     pub task_id: String,
+
+    /// Optional result value for workflow completion.
+    ///
+    /// When present, completes the task (transitions to `Completed` status)
+    /// instead of cancelling it. Used by workflow clients to signal explicit
+    /// completion after executing remaining steps.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
 }
 
 #[cfg(test)]
@@ -217,9 +241,34 @@ mod tests {
     fn task_cancel_params_serialization() {
         let params = TaskCancelParams {
             task_id: "cancel-me".to_string(),
+            result: None,
         };
         let json = serde_json::to_value(&params).unwrap();
         assert_eq!(json["taskId"], "cancel-me");
+        assert!(json.get("result").is_none());
+    }
+
+    #[test]
+    fn task_cancel_params_with_result() {
+        // With result: completes the task
+        let params = TaskCancelParams {
+            task_id: "complete-me".to_string(),
+            result: Some(serde_json::json!({"summary": "done"})),
+        };
+        let json = serde_json::to_value(&params).unwrap();
+        assert_eq!(json["taskId"], "complete-me");
+        assert_eq!(json["result"]["summary"], "done");
+
+        // Round-trip
+        let back: TaskCancelParams = serde_json::from_value(json).unwrap();
+        assert_eq!(back.task_id, "complete-me");
+        assert!(back.result.is_some());
+
+        // Without result: backward compatible
+        let json_no_result = serde_json::json!({"taskId": "cancel-me"});
+        let back: TaskCancelParams = serde_json::from_value(json_no_result).unwrap();
+        assert_eq!(back.task_id, "cancel-me");
+        assert!(back.result.is_none());
     }
 
     #[test]

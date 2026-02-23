@@ -761,8 +761,42 @@ impl ServerCore {
                             }
                         }
                         // Normal tool call path (no task augmentation)
+                        // Extract continuation context before the handler call
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let continuation_ctx = req
+                            ._meta
+                            .as_ref()
+                            .and_then(|m| m._task_id.clone())
+                            .map(|task_id| (task_id, req.name.clone()));
+
                         match self.handle_call_tool(req, auth_context.clone()).await {
                             Ok(result) => {
+                                // Fire-and-forget workflow continuation recording
+                                #[cfg(not(target_arch = "wasm32"))]
+                                if let (Some((task_id, tool_name)), Some(ref task_router)) =
+                                    (continuation_ctx, &self.task_router)
+                                {
+                                    let owner_id = self
+                                        .resolve_task_owner(&auth_context)
+                                        .unwrap_or_else(|| "local".to_string());
+                                    let tool_result_value =
+                                        serde_json::to_value(&result).unwrap_or_default();
+                                    if let Err(e) = task_router
+                                        .handle_workflow_continuation(
+                                            &task_id,
+                                            &tool_name,
+                                            tool_result_value,
+                                            &owner_id,
+                                        )
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            "Workflow continuation recording failed for task {}: {}",
+                                            task_id,
+                                            e
+                                        );
+                                    }
+                                }
                                 Self::success_response(id, serde_json::to_value(result).unwrap())
                             },
                             Err(e) => Self::error_response(id, -32603, e.to_string()),

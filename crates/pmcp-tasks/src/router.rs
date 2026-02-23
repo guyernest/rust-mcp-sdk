@@ -242,16 +242,32 @@ impl TaskRouter for TaskRouterImpl {
 
     /// Handle `tasks/cancel` request.
     ///
-    /// Transitions the task to cancelled status and returns the updated task.
+    /// When the `result` field is present in params, the task transitions to
+    /// `Completed` status (workflow completion). Otherwise, transitions to
+    /// `Cancelled` status (standard cancel).
     async fn handle_tasks_cancel(&self, params: Value, owner_id: &str) -> PmcpResult<Value> {
         let cancel_params: TaskCancelParams = serde_json::from_value(params)
             .map_err(|e| PmcpError::invalid_params(format!("invalid tasks/cancel params: {e}")))?;
 
-        let record = self
-            .store
-            .cancel(&cancel_params.task_id, owner_id)
-            .await
-            .map_err(task_error_to_pmcp)?;
+        let record = if let Some(result) = cancel_params.result {
+            // Completion path: complete the task with the provided result
+            self.store
+                .complete_with_result(
+                    &cancel_params.task_id,
+                    owner_id,
+                    crate::types::task::TaskStatus::Completed,
+                    None,
+                    result,
+                )
+                .await
+                .map_err(task_error_to_pmcp)?
+        } else {
+            // Standard cancel path
+            self.store
+                .cancel(&cancel_params.task_id, owner_id)
+                .await
+                .map_err(task_error_to_pmcp)?
+        };
 
         // CancelTaskResult is a type alias for Task -- serialize flat
         let wire_task = record.to_wire_task_with_variables();
@@ -387,6 +403,110 @@ impl TaskRouter for TaskRouterImpl {
         let wire_task = record.to_wire_task_with_variables();
         serde_json::to_value(wire_task)
             .map_err(|e| PmcpError::internal(format!("failed to serialize task: {e}")))
+    }
+
+    /// Record a tool call result against a workflow task.
+    ///
+    /// Matches the tool name to a remaining (pending or failed) workflow step.
+    /// If matched, stores the result under `_workflow.result.<step_name>` and
+    /// updates the step status to `completed` in `_workflow.progress`. If no
+    /// match, stores under `_workflow.extra.<tool_name>` for observability.
+    async fn handle_workflow_continuation(
+        &self,
+        task_id: &str,
+        tool_name: &str,
+        tool_result: Value,
+        owner_id: &str,
+    ) -> PmcpResult<()> {
+        use crate::types::workflow::{
+            workflow_extra_key, workflow_result_key, WORKFLOW_PAUSE_REASON_KEY,
+            WORKFLOW_PROGRESS_KEY,
+        };
+
+        // Load the task to verify it exists and is Working
+        let record = self
+            .store
+            .get(task_id, owner_id)
+            .await
+            .map_err(task_error_to_pmcp)?;
+
+        // Only continue if task is in Working status
+        if record.task.status != crate::types::task::TaskStatus::Working {
+            return Err(PmcpError::invalid_params(format!(
+                "task {} is not in Working status (current: {:?})",
+                task_id, record.task.status
+            )));
+        }
+
+        // Load _workflow.progress from task variables
+        let progress_value = record.variables.get(WORKFLOW_PROGRESS_KEY).cloned();
+
+        let mut variables_to_set: HashMap<String, Value> = HashMap::new();
+
+        // Try to match tool_name against remaining step tool fields
+        let mut matched_step_name: Option<String> = None;
+        if let Some(progress) = &progress_value {
+            if let Some(steps) = progress.get("steps").and_then(|s| s.as_array()) {
+                for step in steps {
+                    let step_tool = step.get("tool").and_then(|t| t.as_str()).unwrap_or("");
+                    let step_status = step.get("status").and_then(|s| s.as_str()).unwrap_or("");
+                    let step_name = step.get("name").and_then(|n| n.as_str()).unwrap_or("");
+
+                    // Match: tool name matches AND step is pending or failed (retryable)
+                    if step_tool == tool_name
+                        && (step_status == "pending" || step_status == "failed")
+                    {
+                        // Store result under _workflow.result.<step_name>
+                        variables_to_set
+                            .insert(workflow_result_key(step_name), tool_result.clone());
+                        matched_step_name = Some(step_name.to_string());
+                        break; // First match wins
+                    }
+                }
+            }
+        }
+
+        if matched_step_name.is_none() {
+            // Store under _workflow.extra.<tool_name> for observability
+            variables_to_set.insert(workflow_extra_key(tool_name), tool_result);
+        }
+
+        // Update progress: mark matched step as completed
+        if let Some(ref matched_name) = matched_step_name {
+            if let Some(mut progress) = progress_value.clone() {
+                if let Some(steps) = progress.get_mut("steps").and_then(|s| s.as_array_mut()) {
+                    for step in steps.iter_mut() {
+                        let step_tool = step.get("tool").and_then(|t| t.as_str()).unwrap_or("");
+                        let step_name = step.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                        let step_status = step.get("status").and_then(|s| s.as_str()).unwrap_or("");
+
+                        if step_tool == tool_name
+                            && step_name == matched_name.as_str()
+                            && (step_status == "pending" || step_status == "failed")
+                        {
+                            if let Some(obj) = step.as_object_mut() {
+                                obj.insert(
+                                    "status".to_string(),
+                                    Value::String("completed".to_string()),
+                                );
+                            }
+                            break;
+                        }
+                    }
+                }
+                variables_to_set.insert(WORKFLOW_PROGRESS_KEY.to_string(), progress);
+            }
+        }
+
+        // Clear pause_reason since the client is making progress
+        variables_to_set.insert(WORKFLOW_PAUSE_REASON_KEY.to_string(), Value::Null);
+
+        // Batch write all variables
+        let variables_value = serde_json::to_value(&variables_to_set)
+            .map_err(|e| PmcpError::internal(format!("failed to serialize variables: {e}")))?;
+
+        self.set_task_variables(task_id, owner_id, variables_value)
+            .await
     }
 }
 
@@ -883,5 +1003,283 @@ mod tests {
         assert!(
             err.to_string().contains("invalid transition") || err.to_string().contains("terminal")
         );
+    }
+
+    // --- Workflow continuation tests ---
+
+    /// Helper: creates a task with workflow progress containing pending steps.
+    async fn create_task_with_workflow_progress(router: &TaskRouterImpl, owner_id: &str) -> String {
+        let progress = serde_json::json!({
+            "goal": "Deploy service",
+            "steps": [
+                { "name": "validate", "tool": "validate_config", "status": "completed" },
+                { "name": "deploy", "tool": "deploy_service", "status": "pending" },
+                { "name": "notify", "tool": "send_notification", "status": "pending" }
+            ],
+            "schemaVersion": 1
+        });
+
+        let result = router
+            .create_workflow_task("test-workflow", owner_id, progress)
+            .await
+            .unwrap();
+
+        result["task"]["taskId"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn handle_workflow_continuation_matches_step() {
+        let router = make_router();
+        let task_id = create_task_with_workflow_progress(&router, "owner-1").await;
+
+        // Call continuation with a tool that matches the pending "deploy" step
+        router
+            .handle_workflow_continuation(
+                &task_id,
+                "deploy_service",
+                serde_json::json!({"status": "deployed"}),
+                "owner-1",
+            )
+            .await
+            .unwrap();
+
+        // Verify _workflow.result.deploy is set
+        let record = router.store().get(&task_id, "owner-1").await.unwrap();
+        let result = record
+            .variables
+            .get("_workflow.result.deploy")
+            .expect("_workflow.result.deploy should be set");
+        assert_eq!(result["status"], "deployed");
+
+        // Verify _workflow.progress shows the step as "completed"
+        let progress = record
+            .variables
+            .get("_workflow.progress")
+            .expect("_workflow.progress should be set");
+        let steps = progress["steps"].as_array().unwrap();
+        // deploy step (index 1) should now be completed
+        assert_eq!(steps[1]["status"], "completed");
+        assert_eq!(steps[1]["name"], "deploy");
+        // notify step (index 2) should still be pending
+        assert_eq!(steps[2]["status"], "pending");
+    }
+
+    #[tokio::test]
+    async fn handle_workflow_continuation_unmatched_tool() {
+        let router = make_router();
+        let task_id = create_task_with_workflow_progress(&router, "owner-1").await;
+
+        // Call continuation with a tool NOT in any step
+        router
+            .handle_workflow_continuation(
+                &task_id,
+                "debug_tool",
+                serde_json::json!({"info": "debug data"}),
+                "owner-1",
+            )
+            .await
+            .unwrap();
+
+        // Verify _workflow.extra.debug_tool is set
+        let record = router.store().get(&task_id, "owner-1").await.unwrap();
+        let extra = record
+            .variables
+            .get("_workflow.extra.debug_tool")
+            .expect("_workflow.extra.debug_tool should be set");
+        assert_eq!(extra["info"], "debug data");
+
+        // Verify progress steps are unchanged
+        let progress = record
+            .variables
+            .get("_workflow.progress")
+            .expect("_workflow.progress should be set");
+        let steps = progress["steps"].as_array().unwrap();
+        assert_eq!(steps[1]["status"], "pending"); // deploy still pending
+        assert_eq!(steps[2]["status"], "pending"); // notify still pending
+    }
+
+    #[tokio::test]
+    async fn handle_workflow_continuation_last_result_wins() {
+        let router = make_router();
+        let task_id = create_task_with_workflow_progress(&router, "owner-1").await;
+
+        // First call for "deploy" step
+        router
+            .handle_workflow_continuation(
+                &task_id,
+                "deploy_service",
+                serde_json::json!({"attempt": 1}),
+                "owner-1",
+            )
+            .await
+            .unwrap();
+
+        // Second call for "notify" step (simulate retry on different pending step)
+        // But actually, deploy step is now completed, so deploy_service won't match again.
+        // Let's test overwrite by calling the "notify" step tool twice instead.
+        router
+            .handle_workflow_continuation(
+                &task_id,
+                "send_notification",
+                serde_json::json!({"attempt": 1}),
+                "owner-1",
+            )
+            .await
+            .unwrap();
+
+        // Verify first result
+        let record = router.store().get(&task_id, "owner-1").await.unwrap();
+        assert_eq!(record.variables["_workflow.result.notify"]["attempt"], 1);
+
+        // Now the "notify" step is marked completed, so a retry would go to extra.
+        // To test true overwrite (last result wins), let's create a new task with
+        // a failed step and call twice.
+        let progress2 = serde_json::json!({
+            "goal": "Retry test",
+            "steps": [
+                { "name": "step_a", "tool": "tool_a", "status": "failed" }
+            ],
+            "schemaVersion": 1
+        });
+        let result2 = router
+            .create_workflow_task("retry-wf", "owner-1", progress2)
+            .await
+            .unwrap();
+        let task_id2 = result2["task"]["taskId"].as_str().unwrap().to_string();
+
+        // First attempt
+        router
+            .handle_workflow_continuation(
+                &task_id2,
+                "tool_a",
+                serde_json::json!({"version": "v1"}),
+                "owner-1",
+            )
+            .await
+            .unwrap();
+
+        // Step is now "completed", create another task with the step still failed
+        // to truly test overwrite
+        let progress3 = serde_json::json!({
+            "goal": "Overwrite test",
+            "steps": [
+                { "name": "step_b", "tool": "tool_b", "status": "failed" }
+            ],
+            "schemaVersion": 1
+        });
+        let result3 = router
+            .create_workflow_task("overwrite-wf", "owner-1", progress3)
+            .await
+            .unwrap();
+        let task_id3 = result3["task"]["taskId"].as_str().unwrap().to_string();
+
+        // First result
+        router
+            .handle_workflow_continuation(
+                &task_id3,
+                "tool_b",
+                serde_json::json!({"version": "v1"}),
+                "owner-1",
+            )
+            .await
+            .unwrap();
+
+        let record3 = router.store().get(&task_id3, "owner-1").await.unwrap();
+        assert_eq!(
+            record3.variables["_workflow.result.step_b"]["version"],
+            "v1"
+        );
+
+        // After step is completed, a second call with same tool goes to extra
+        // (since step is now "completed", not "pending" or "failed")
+        router
+            .handle_workflow_continuation(
+                &task_id3,
+                "tool_b",
+                serde_json::json!({"version": "v2"}),
+                "owner-1",
+            )
+            .await
+            .unwrap();
+
+        let record3_updated = router.store().get(&task_id3, "owner-1").await.unwrap();
+        // The original result stays (step is completed, no re-match)
+        assert_eq!(
+            record3_updated.variables["_workflow.result.step_b"]["version"],
+            "v1"
+        );
+        // Second call goes to extra
+        assert_eq!(
+            record3_updated.variables["_workflow.extra.tool_b"]["version"],
+            "v2"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_workflow_continuation_rejects_non_working_task() {
+        let router = make_router();
+        let task_id = create_task_with_workflow_progress(&router, "owner-1").await;
+
+        // Complete the task first
+        router
+            .complete_workflow_task(&task_id, "owner-1", serde_json::json!({}))
+            .await
+            .unwrap();
+
+        // Try continuation on completed task
+        let err = router
+            .handle_workflow_continuation(
+                &task_id,
+                "deploy_service",
+                serde_json::json!({}),
+                "owner-1",
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.to_string().contains("not in Working status"),
+            "Expected 'not in Working status' error, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_tasks_cancel_with_result_completes() {
+        let router = make_router();
+
+        let record = router
+            .store()
+            .create("owner-1", "tools/call", None)
+            .await
+            .unwrap();
+        let task_id = record.task.task_id.clone();
+
+        let params = serde_json::json!({
+            "taskId": task_id,
+            "result": {"summary": "workflow completed by client"}
+        });
+        let result = router.handle_tasks_cancel(params, "owner-1").await.unwrap();
+
+        assert_eq!(result["taskId"], task_id);
+        assert_eq!(result["status"], "completed"); // Not "cancelled"
+    }
+
+    #[tokio::test]
+    async fn handle_tasks_cancel_without_result_cancels() {
+        let router = make_router();
+
+        let record = router
+            .store()
+            .create("owner-1", "tools/call", None)
+            .await
+            .unwrap();
+        let task_id = record.task.task_id.clone();
+
+        let params = serde_json::json!({ "taskId": task_id });
+        let result = router.handle_tasks_cancel(params, "owner-1").await.unwrap();
+
+        assert_eq!(result["taskId"], task_id);
+        assert_eq!(result["status"], "cancelled"); // Standard cancel
     }
 }

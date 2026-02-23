@@ -421,7 +421,10 @@ mod tests {
 
     #[test]
     fn step_status_serializes_snake_case() {
-        assert_eq!(serde_json::to_value(StepStatus::Pending).unwrap(), "pending");
+        assert_eq!(
+            serde_json::to_value(StepStatus::Pending).unwrap(),
+            "pending"
+        );
         assert_eq!(
             serde_json::to_value(StepStatus::Completed).unwrap(),
             "completed"
@@ -499,10 +502,7 @@ mod tests {
 
     #[test]
     fn workflow_result_key_produces_correct_keys() {
-        assert_eq!(
-            workflow_result_key("validate"),
-            "_workflow.result.validate"
-        );
+        assert_eq!(workflow_result_key("validate"), "_workflow.result.validate");
         assert_eq!(workflow_result_key("deploy"), "_workflow.result.deploy");
         assert_eq!(
             workflow_result_key("check-config"),
@@ -543,7 +543,10 @@ mod tests {
         };
 
         let json = serde_json::to_value(&step).unwrap();
-        assert!(json.get("tool").is_none(), "tool should be omitted when None");
+        assert!(
+            json.get("tool").is_none(),
+            "tool should be omitted when None"
+        );
 
         let round_trip: WorkflowStepProgress = serde_json::from_value(json).unwrap();
         assert_eq!(step, round_trip);

@@ -6,24 +6,25 @@
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+use pmcp_tasks::constants::{
+    METHOD_TASKS_CANCEL, METHOD_TASKS_GET, METHOD_TASKS_LIST, METHOD_TASKS_RESULT,
+    METHOD_TASKS_STATUS_NOTIFICATION,
+};
+use pmcp_tasks::{related_task_meta, MODEL_IMMEDIATE_RESPONSE_META_KEY, RELATED_TASK_META_KEY};
 use pmcp_tasks::{
     ClientTaskCapabilities, CreateTaskResult, EmptyObject, ServerTaskCapabilities, Task,
     TaskCancelParams, TaskGetParams, TaskListParams, TaskParams, TaskResultParams, TaskStatus,
     TaskStatusNotification, TaskSupport, ToolExecution,
-};
-use pmcp_tasks::{
-    related_task_meta, MODEL_IMMEDIATE_RESPONSE_META_KEY, RELATED_TASK_META_KEY,
-};
-use pmcp_tasks::constants::{
-    METHOD_TASKS_CANCEL, METHOD_TASKS_GET, METHOD_TASKS_LIST, METHOD_TASKS_RESULT,
-    METHOD_TASKS_STATUS_NOTIFICATION,
 };
 
 // ─── TaskStatus Serialization ───────────────────────────────────────────────
 
 #[test]
 fn test_task_status_serializes_snake_case() {
-    assert_eq!(serde_json::to_value(TaskStatus::Working).unwrap(), "working");
+    assert_eq!(
+        serde_json::to_value(TaskStatus::Working).unwrap(),
+        "working"
+    );
     assert_eq!(
         serde_json::to_value(TaskStatus::InputRequired).unwrap(),
         "input_required"
@@ -57,7 +58,10 @@ fn test_task_status_round_trip() {
 #[test]
 fn test_task_status_unknown_string_errors() {
     let result = serde_json::from_value::<TaskStatus>(json!("unknown_status"));
-    assert!(result.is_err(), "unknown status string should produce error");
+    assert!(
+        result.is_err(),
+        "unknown status string should produce error"
+    );
 }
 
 // ─── Task Serialization (critical spec compliance) ──────────────────────────
@@ -156,7 +160,10 @@ fn test_task_meta_included_when_present() {
     };
 
     let json = serde_json::to_value(&task).unwrap();
-    assert!(json.get("_meta").is_some(), "_meta should be included when Some");
+    assert!(
+        json.get("_meta").is_some(),
+        "_meta should be included when Some"
+    );
     assert_eq!(json["_meta"]["custom_key"], "custom_value");
 }
 
@@ -274,7 +281,10 @@ fn test_create_task_result_meta_omitted_when_none() {
     };
 
     let json = serde_json::to_value(&result).unwrap();
-    assert!(json.get("_meta").is_none(), "_meta should be omitted when None");
+    assert!(
+        json.get("_meta").is_none(),
+        "_meta should be omitted when None"
+    );
 }
 
 #[test]
@@ -295,10 +305,7 @@ fn test_create_task_result_round_trip_spec_example() {
 
     let json_str = serde_json::to_string(&result).unwrap();
     let back: CreateTaskResult = serde_json::from_str(&json_str).unwrap();
-    assert_eq!(
-        back.task.task_id,
-        "786512e2-9e0d-44bd-8f29-789f320fe840"
-    );
+    assert_eq!(back.task.task_id, "786512e2-9e0d-44bd-8f29-789f320fe840");
     assert_eq!(back.task.status, TaskStatus::Working);
     assert_eq!(back.task.ttl, Some(60000));
     assert_eq!(back.task.poll_interval, Some(5000));
@@ -422,12 +429,14 @@ fn test_task_list_params_cursor_included_when_some() {
 fn test_task_cancel_params_round_trip() {
     let params = TaskCancelParams {
         task_id: "cancel-me".to_string(),
+        result: None,
     };
     let json = serde_json::to_value(&params).unwrap();
     assert_eq!(json, json!({"taskId": "cancel-me"}));
 
     let back: TaskCancelParams = serde_json::from_value(json).unwrap();
     assert_eq!(back.task_id, "cancel-me");
+    assert!(back.result.is_none());
 }
 
 // ─── Capability Types ───────────────────────────────────────────────────────
@@ -525,7 +534,10 @@ fn test_notification_ttl_null_not_omitted() {
     let json = serde_json::to_value(&notification).unwrap();
     assert!(json.get("ttl").is_some(), "ttl must be present");
     assert!(json["ttl"].is_null(), "ttl must be null when None");
-    assert!(json.get("pollInterval").is_none(), "pollInterval should be omitted when None");
+    assert!(
+        json.get("pollInterval").is_none(),
+        "pollInterval should be omitted when None"
+    );
 }
 
 // ─── TaskSupport / ToolExecution Serialization ──────────────────────────────
