@@ -81,7 +81,10 @@ Plans:
   2. Existing non-task workflows registered via `prompt_workflow()` continue to work identically to v1.0 — no behavioral changes when task support is not enabled
   3. Example `62_tasks_workflow.rs` demonstrates the complete lifecycle: workflow prompt creates task, server executes resolvable steps, returns structured handoff, simulated client calls remaining tools with `_task_id`, final `tasks/result` poll shows completion
   4. Integration tests validate the full create-execute-handoff-continue-complete flow through a real `ServerCore` instance with `InMemoryTaskStore`
-**Plans**: TBD
+**Plans:** 2 plans
+Plans:
+- [ ] 07-01-PLAN.md — Bug fix (task_id extraction) + integration tests (builder API, backward compatibility, full lifecycle)
+- [ ] 07-02-PLAN.md — Lifecycle example (62_task_workflow_lifecycle.rs) replacing opt-in example
 
 ## Progress
 
@@ -93,4 +96,4 @@ Plans:
 | 4. Foundation Types and Contracts | v1.1 | 2/2 | Complete | 2026-02-22 |
 | 5. Partial Execution Engine | v1.1 | 2/2 | Complete | 2026-02-23 |
 | 6. Structured Handoff and Client Continuation | v1.1 | Complete    | 2026-02-23 | - |
-| 7. Integration and End-to-End Validation | v1.1 | 0/? | Not started | - |
+| 7. Integration and End-to-End Validation | v1.1 | 0/2 | Not started | - |
