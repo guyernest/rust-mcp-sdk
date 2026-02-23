@@ -20,3 +20,24 @@
 
 ---
 
+
+## v1.1 Task-Prompt Bridge (Shipped: 2026-02-23)
+
+**Phases completed:** 5 phases, 10 plans
+**Code changes:** +10,697 / -553 across 77 files
+**Timeline:** 2026-02-22 → 2026-02-23
+
+**Delivered:** Task-prompt bridge for the PMCP SDK — workflow prompts create tasks, execute server-resolvable steps, return structured handoff with remaining step guidance, and support client continuation via `_task_id` binding.
+
+**Key accomplishments:**
+1. Task-aware workflow composition via `TaskWorkflowPromptHandler` that wraps `WorkflowPromptHandler` with zero modification to existing behavior
+2. Active execution engine that creates tasks, runs server-resolvable steps sequentially, and pauses at client-deferred steps with typed `PauseReason` diagnostics
+3. Hybrid handoff format with `_meta` JSON for machine parsing plus natural language narrative, including resolved arguments and remaining step guidance
+4. Client continuation via `_task_id` in `_meta` with fire-and-forget step recording and cancel-with-result completion
+5. End-to-end integration validation through `ServerCore::handle_request` plus lifecycle example (`62_task_workflow_lifecycle.rs`)
+6. Quality polish closing all audit findings: accurate `SchemaMismatch` diagnostics, complete `PauseReason` coverage, zero clippy warnings, safe TTL overflow handling
+
+**Requirements:** 19/19 satisfied (FNDX-01..05, EXEC-01..04, HAND-01..03, CONT-01..03, INTG-01..04)
+
+---
+
