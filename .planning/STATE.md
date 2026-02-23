@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-22)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state that persists across tool calls.
-**Current focus:** v1.1 Task-Prompt Bridge — Phase 5 complete
+**Current focus:** v1.1 Task-Prompt Bridge — Phase 6 ready to plan
 
 ## Current Position
 
 Milestone: v1.1 Task-Prompt Bridge
-Phase: 5 of 7 (Partial Execution Engine) -- COMPLETE
-Plan: 2 of 2 in current phase
-Status: Phase complete
-Last activity: 2026-02-22 — Completed 05-02 (Active Execution Engine)
+Phase: 6 of 7 (Structured Handoff and Client Continuation)
+Plan: 0 of ? in current phase
+Status: Ready to plan
+Last activity: 2026-02-23 — Phase 5 verified and complete
 
-Progress: [████░░░░░░] 42% (v1.1)
+Progress: [█████░░░░░] 50% (v1.1)
 
 ## Performance Metrics
 

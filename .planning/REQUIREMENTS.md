@@ -20,7 +20,7 @@ Requirements for the Task-Prompt Bridge milestone. Each maps to roadmap phases.
 - [x] **EXEC-01**: Server executes server-mode steps sequentially, storing each result in task variables (durable-first write order)
 - [x] **EXEC-02**: Execution pauses at client-deferred steps without failing the task (task remains Working)
 - [x] **EXEC-03**: Step failure during partial execution keeps task in Working state and records error details in task variables
-- [x] **EXEC-04**: Extended validation checks that client-deferred steps don't depend on outputs of other client-deferred steps
+- [x] **EXEC-04**: At runtime, when a step depends on an output from a failed/skipped step, the engine emits a distinct `UnresolvedDependency` pause reason (reinterpreted from build-time to runtime check)
 
 ### Handoff
 
