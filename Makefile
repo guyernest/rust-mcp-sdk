@@ -273,6 +273,42 @@ test-integration:
 	RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test --test '*' --features "full"
 	@echo "$(GREEN)✓ Integration tests passed$(NC)"
 
+# Feature flag verification for pmcp-tasks crate
+.PHONY: test-feature-flags
+test-feature-flags:
+	@echo "$(BLUE)Verifying feature flag combinations for pmcp-tasks...$(NC)"
+	@echo "$(YELLOW)1/4: No features (InMemory only)...$(NC)"
+	$(CARGO) check -p pmcp-tasks --no-default-features
+	$(CARGO) clippy -p pmcp-tasks --no-default-features -- -D warnings
+	$(CARGO) test -p pmcp-tasks --no-default-features --no-run
+	$(CARGO) test -p pmcp-tasks --no-default-features --doc
+	RUSTDOCFLAGS="-D warnings" $(CARGO) doc -p pmcp-tasks --no-default-features --no-deps
+	@echo "$(GREEN)✓ 1/4 passed: no features$(NC)"
+	@echo "$(YELLOW)2/4: dynamodb only...$(NC)"
+	$(CARGO) check -p pmcp-tasks --features dynamodb
+	$(CARGO) clippy -p pmcp-tasks --features dynamodb -- -D warnings
+	$(CARGO) test -p pmcp-tasks --features dynamodb --no-run
+	$(CARGO) test -p pmcp-tasks --features dynamodb --doc
+	RUSTDOCFLAGS="-D warnings" $(CARGO) doc -p pmcp-tasks --features dynamodb --no-deps
+	@echo "$(GREEN)✓ 2/4 passed: dynamodb$(NC)"
+	@echo "$(YELLOW)3/4: redis only...$(NC)"
+	$(CARGO) check -p pmcp-tasks --features redis
+	$(CARGO) clippy -p pmcp-tasks --features redis -- -D warnings
+	$(CARGO) test -p pmcp-tasks --features redis --no-run
+	$(CARGO) test -p pmcp-tasks --features redis --doc
+	RUSTDOCFLAGS="-D warnings" $(CARGO) doc -p pmcp-tasks --features redis --no-deps
+	@echo "$(GREEN)✓ 3/4 passed: redis$(NC)"
+	@echo "$(YELLOW)4/4: dynamodb + redis...$(NC)"
+	$(CARGO) check -p pmcp-tasks --features "dynamodb,redis"
+	$(CARGO) clippy -p pmcp-tasks --features "dynamodb,redis" -- -D warnings
+	$(CARGO) test -p pmcp-tasks --features "dynamodb,redis" --no-run
+	$(CARGO) test -p pmcp-tasks --features "dynamodb,redis" --doc
+	RUSTDOCFLAGS="-D warnings" $(CARGO) doc -p pmcp-tasks --features "dynamodb,redis" --no-deps
+	@echo "$(GREEN)✓ 4/4 passed: dynamodb + redis$(NC)"
+	@echo "$(GREEN)═══════════════════════════════════════════════════════$(NC)"
+	@echo "$(GREEN)  All 4 feature flag combinations verified for pmcp-tasks$(NC)"
+	@echo "$(GREEN)═══════════════════════════════════════════════════════$(NC)"
+
 # Playwright UI Widget Tests
 .PHONY: test-playwright-setup
 test-playwright-setup:
@@ -708,6 +744,7 @@ help:
 	@echo "  test-doc        - Run doctests"
 	@echo "  test-property   - Run property tests"
 	@echo "  test-all        - Run all tests"
+	@echo "  test-feature-flags - Verify pmcp-tasks feature flag combinations"
 	@echo "  coverage        - Generate coverage report"
 	@echo "  mutants         - Run mutation testing"
 	@echo ""
