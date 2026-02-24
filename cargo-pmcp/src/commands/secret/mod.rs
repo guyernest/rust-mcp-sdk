@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
 
 use crate::secrets::{
@@ -210,7 +210,7 @@ impl SecretCommand {
                 no_newline,
             } => {
                 // Security warning for terminal output
-                if output.is_none() && atty::is(atty::Stream::Stdout) && !self.quiet {
+                if output.is_none() && io::stdout().is_terminal() && !self.quiet {
                     eprintln!("⚠️  Warning: Outputting secret to terminal.");
                     eprintln!("   Consider using --output <file> or piping.");
                     eprintln!();
@@ -290,7 +290,7 @@ impl SecretCommand {
                         eprintln!();
                     }
                     SecretValue::new(direct_value.clone())
-                } else if *prompt || atty::is(atty::Stream::Stdin) {
+                } else if *prompt || io::stdin().is_terminal() {
                     // Default to prompt for interactive use
                     let val = rpassword::prompt_password("Enter secret value: ")?;
                     SecretValue::new(val)

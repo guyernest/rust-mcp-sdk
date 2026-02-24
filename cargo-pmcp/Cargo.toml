@@ -46,7 +46,6 @@ thiserror = "2"                         # Error types for generated code
 secrecy = { version = "0.10", features = ["serde"] }  # Secure secret handling with zeroization
 zeroize = "1"                           # Secure memory clearing
 rand = "0.8"                            # Random secret generation
-atty = "0.2"                            # Terminal detection for security warnings
 regex = "1"                             # Secret reference parsing
 
 # AWS Secrets Manager (optional, for AWS provider)
