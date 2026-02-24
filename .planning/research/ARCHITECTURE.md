@@ -1,612 +1,787 @@
-# Architecture Research: Task-Prompt Bridge Integration
+# Architecture Research: MCP Apps Developer Experience (v1.3)
 
-**Domain:** Task-aware workflow prompts with partial execution for PMCP SDK
-**Researched:** 2026-02-21
-**Confidence:** HIGH (based entirely on existing codebase analysis -- all components already exist, this research maps how they connect)
+**Domain:** MCP Apps developer tooling — preview rendering, WASM widget bridge, publishing, authoring DX
+**Researched:** 2026-02-24
+**Confidence:** HIGH (based on direct codebase analysis of all existing components)
 
-## System Overview: Current vs. Proposed
+## System Overview
 
-### Current Architecture (v1.0) -- Two Disconnected Paths
-
-```
-PATH 1: prompts/get                    PATH 2: tools/call with task
-
-  prompts/get request                    tools/call {task: {ttl: 60000}}
-          |                                      |
-          v                                      v
-  +---------------------------+          +---------------------------+
-  | WorkflowPromptHandler     |          | ServerCore                |
-  | implements PromptHandler  |          | detects task field        |
-  +---------------------------+          +---------------------------+
-          |                                      |
-          | for each step:                       v
-          |   resolve -> execute -> bind  +---------------------------+
-          v                              | Arc<dyn TaskRouter>       |
-  +---------------------------+          | (trait in pmcp core)      |
-  | ExecutionContext           |          +---------------------------+
-  | bindings: HashMap<        |                  |
-  |   BindingName, Value>     |                  v
-  +---------------------------+          +---------------------------+
-          |                              | TaskRouterImpl            |
-          v                              | (in pmcp-tasks crate)     |
-  GetPromptResult {                      +---------------------------+
-    messages: [PromptMessage]                    |
-    // full conversation trace                   v
-  }                                      +---------------------------+
-                                         | TaskStore                 |
-                                         | InMemoryTaskStore         |
-                                         +---------------------------+
-                                                 |
-                                                 v
-                                         CreateTaskResult { task }
-```
-
-These paths are completely disconnected. Workflows execute all steps during `prompts/get` and return a full trace. Tasks manage long-running `tools/call` operations. The v1.1 bridge connects them.
-
-### Proposed Architecture (v1.1 Task-Prompt Bridge)
+### Current Architecture (v1.2 baseline)
 
 ```
-  prompts/get request
-          |
-          v
-  +------------------------------------+
-  | WorkflowPromptHandler              |
-  | (MODIFIED: optional task_router)   |
-  +------------------------------------+
-          |
-          | 1. Create task via TaskRouter.create_workflow_task()
-          | 2. For each step:
-          |    a. resolve params from ExecutionContext
-          |    b. CAN execute? yes: execute, bind, sync to task vars
-          |    c. CAN execute? no:  record remaining steps, BREAK
-          | 3. Build structured reply with task_id + step guidance
-          |
-          v
-  +--------------------+     +---------------------------+
-  | ExecutionContext    |     | Arc<dyn TaskRouter>       |
-  | (local bindings,   | --> |  .set_task_variables()    |
-  |  unchanged type)   |     |  syncs bindings to task   |
-  +--------------------+     +---------------------------+
-          |                              |
-          v                              v
-  GetPromptResult {              +---------------------------+
-    messages: [                  | TaskStore                 |
-      ...executed steps...,     |  variables: {             |
-      ...structured guidance    |    "wf.goal": "...",      |
-         with task_id,          |    "wf.steps.0.status":   |
-         completed steps,       |      "completed",         |
-         remaining steps...     |    "wf.steps.1.status":   |
-    ]                           |      "pending",           |
-  }                             |    "wf.steps.1.tool":     |
-                                |      "provision_infra"    |
-                                |  }                        |
-                                +---------------------------+
-                                         |
-                                         v
-                                Client reads task vars via tasks/get,
-                                follows step guidance,
-                                calls tools directly,
-                                polls tasks/get for progress
++--- pmcp core crate --------------------------------------------------+
+|                                                                        |
+|  src/types/mcp_apps.rs (behind mcp-apps feature flag)                |
+|    WidgetCSP, WidgetMeta, ChatGptToolMeta, WidgetResponseMeta        |
+|    ExtendedUIMimeType, UIAction, UIContent, HostType                  |
+|    UIMetadata, UIDimensions, ToolVisibility, RemoteDomFramework       |
+|                                                                        |
+|  src/server/mcp_apps.rs                                               |
+|    ChatGptAdapter: transforms HTML, injects skybridge bridge          |
+|    UIAdapter trait                                                     |
+|                                                                        |
++--- crates/mcp-preview (Axum HTTP server, ~50% complete) ------------+
+|                                                                        |
+|  PreviewServer + PreviewConfig                                        |
+|    port 8765, proxies to mcp_url                                      |
+|                                                                        |
+|  Handlers:                                                             |
+|    GET  /            -> page::index (serves assets/index.html)        |
+|    GET  /api/config  -> api::get_config                               |
+|    GET  /api/tools   -> api::list_tools (via McpProxy)               |
+|    POST /api/tools/call -> api::call_tool (via McpProxy)             |
+|    GET  /assets/*    -> assets::serve (rust-embed)                    |
+|    GET  /ws          -> websocket::handler (tool calls over WS)       |
+|                                                                        |
+|  McpProxy:                                                             |
+|    HTTP -> MCP JSON-RPC 2.0 (POST /mcp)                              |
+|    Methods: initialize, tools/list, tools/call                        |
+|    No session persistence (re-initializes each request)               |
+|                                                                        |
++--- examples/wasm-client (wasm-bindgen WASM module) -----------------+
+|                                                                        |
+|  WasmClient: connect(url) -> WebSocket or HTTP transport             |
+|    list_tools() -> JsValue                                            |
+|    call_tool(name, args) -> JsValue                                   |
+|    Uses pmcp transports: WasmWebSocketTransport, WasmHttpClient       |
+|                                                                        |
++--- cargo-pmcp (CLI binary) -----------------------------------------+
+|                                                                        |
+|  preview.rs: cargo pmcp preview --url <mcp-url> --port <port>        |
+|    Delegates to mcp_preview::PreviewServer::start()                   |
+|                                                                        |
+|  new.rs: cargo pmcp new [--tier foundation|domain]                   |
+|    No --mcp-apps flag yet                                             |
+|                                                                        |
++--- examples/ (standalone MCP App examples) -------------------------+
+|                                                                        |
+|  mcp-apps-chess/                                                      |
+|    src/main.rs:                                                        |
+|      ServerBuilder + StreamableHttpServer                             |
+|      ChessResources (ResourceHandler): serves board.html via         |
+|        ChatGptAdapter.transform() -> text/html+skybridge              |
+|      widget/board.html: HTML with window.mcpBridge.callTool()        |
+|    preview.html: standalone mock bridge (no real MCP calls)           |
+|                                                                        |
+|  mcp-apps-map/ (similar structure to chess)                          |
+|    preview.html: standalone mock bridge                               |
+|                                                                        |
++--- tests/playwright/ (scaffolding placeholder, not yet wired) ------+
+```
+
+### Target Architecture (v1.3) — New + Modified Components
+
+```
++--- pmcp core (mcp-apps feature) — MINIMAL CHANGES ------------------+
+|                                                                        |
+|  src/types/mcp_apps.rs — UNCHANGED                                   |
+|  src/server/mcp_apps.rs — MODIFIED                                   |
+|    Add: file-based widget loading (include_str! macro helper)         |
+|    Add: ChatGPT manifest generation types                             |
+|                                                                        |
++--- crates/mcp-preview — MAJOR UPGRADE ------------------------------+
+|                                                                        |
+|  server.rs — MODIFIED                                                 |
+|    Add: widget iframe proxy route GET /widget-proxy?uri=<resource-uri>|
+|    Add: resources listing route GET /api/resources                   |
+|    Add: resource read route GET /api/resources/read?uri=<uri>        |
+|    Add: demo mode (no live MCP, serves standalone preview.html)      |
+|                                                                        |
+|  proxy.rs — MODIFIED                                                  |
+|    Add: resources/list MCP call                                       |
+|    Add: resources/read MCP call (returns resource content)           |
+|    Add: session persistence (don't re-initialize every request)       |
+|    Fix: atomic request ID tracking                                    |
+|                                                                        |
+|  handlers/ — NEW FILES                                                |
+|    widget.rs: GET /widget-proxy                                       |
+|      Calls resources/read on MCP server, returns HTML content         |
+|      Injects preview-mode mcpBridge JavaScript into HTML             |
+|      Bridge routes callTool() through preview /api/tools/call         |
+|                                                                        |
+|  bridge/ — NEW MODULE                                                 |
+|    mod.rs: BridgeInjector                                             |
+|      inject_preview_bridge(html: &str, tool_call_url: &str) -> String |
+|      Replaces/augments window.mcpBridge with real HTTP proxy bridge   |
+|      Supports text/html+mcp and text/html+skybridge MIME types        |
+|                                                                        |
+|  demo.rs — NEW                                                        |
+|    DemoServer: serves preview.html as landing page                    |
+|    Reads static preview.html from example directory                   |
+|    No live MCP connection required                                    |
+|                                                                        |
++--- crates/mcp-bridge-js — NEW CRATE --------------------------------+
+|                                                                        |
+|  Shared JavaScript bridge library for widgets                         |
+|  Built with wasm-pack or as a plain JS file                          |
+|  Exposes: window.mcpBridge API                                        |
+|    callTool(name, args): Promise<result>                              |
+|    getState(): object                                                 |
+|    setState(state): void                                              |
+|    onBridgeReady(callback): void                                      |
+|  Detects environment: ChatGPT (window.openai), preview               |
+|  (window.mcpBridge injected), standalone (mock)                      |
+|  Distributed as: CDN-hostable .js file embedded in mcp-preview       |
+|                                                                        |
++--- examples/wasm-client — MODIFIED ---------------------------------+
+|                                                                        |
+|  lib.rs — MODIFIED                                                    |
+|    Add: list_resources() -> JsValue                                   |
+|    Add: read_resource(uri) -> JsValue (returns HTML content)         |
+|    Add: render_widget(uri, container_id): integrates iframe +bridge   |
+|    Fix: request ID counter (currently hardcoded 1/2/3)               |
+|                                                                        |
+|  widget-renderer/ — NEW module in wasm-client                        |
+|    WidgetRenderer: creates iframe, injects mcpBridge                 |
+|    Handles postMessage communication between iframe and bridge        |
+|    Implements text/html+mcp protocol                                  |
+|                                                                        |
++--- cargo-pmcp — MODIFIED -------------------------------------------+
+|                                                                        |
+|  commands/new.rs — MODIFIED                                           |
+|    Add: --mcp-apps flag                                               |
+|    Generates: widgets/ directory, widget HTML template, Rust          |
+|      resource handler skeleton with ChatGptAdapter wiring             |
+|                                                                        |
+|  commands/deploy/ — MODIFIED                                          |
+|    Add: widget serving configuration in deployment descriptors        |
+|    Add: ChatGPT manifest upload step                                  |
+|                                                                        |
+|  commands/landing/ — NEW COMMAND                                      |
+|    cargo pmcp landing --server <id>                                   |
+|    Generates standalone demo HTML page from preview.html              |
+|    Bundles mock bridge + widget HTML for stakeholder sharing          |
+|                                                                        |
+|  commands/manifest/ — NEW COMMAND                                     |
+|    cargo pmcp manifest --server <id>                                  |
+|    Generates ChatGPT-compatible manifest.json                         |
+|    Reads pmcp.toml [mcp-apps] section for metadata                   |
+|                                                                        |
++--- tests/playwright/ — NEW TEST INFRASTRUCTURE ---------------------+
+|                                                                        |
+|  playwright.config.ts: Configure base URL, browser targets            |
+|  tests/widget.spec.ts: Widget E2E tests                               |
+|  tests/bridge.spec.ts: Bridge injection tests                         |
+|  fixtures/: Mock MCP server fixture for testing                       |
+|                                                                        |
+```
+
+## Component Boundaries
+
+| Component | Responsibility | Communicates With |
+|-----------|----------------|-------------------|
+| `mcp-preview::McpProxy` | HTTP->MCP JSON-RPC translation | MCP server HTTP endpoint |
+| `mcp-preview::BridgeInjector` | Injects JS bridge into widget HTML | None (pure transform) |
+| `mcp-preview::handlers::widget` | Fetches resource HTML, injects bridge, serves | McpProxy, BridgeInjector |
+| `mcp-bridge-js` | Shared JS bridge library for all widgets | Embedded in mcp-preview assets |
+| `WasmClient` | In-browser MCP protocol client | MCP server WS/HTTP |
+| `WasmClient::WidgetRenderer` | Creates iframe, manages bridge lifecycle | WasmClient, DOM |
+| `cargo-pmcp::ManifestCommand` | Generates ChatGPT manifest.json | pmcp.toml config |
+| `cargo-pmcp::new --mcp-apps` | Scaffolds widget project structure | Templates |
+| `pmcp::server::mcp_apps` | HTML transform + ChatGPT metadata | Used by app servers |
+| `ChessResources` / app resources | Serves widget HTML via MCP resources | pmcp ServerBuilder |
+
+## Recommended Project Structure
+
+```
+crates/mcp-preview/
+  src/
+    server.rs           # PreviewServer, AppState, PreviewConfig (MODIFIED)
+    proxy.rs            # McpProxy with session persistence (MODIFIED)
+    bridge/             # NEW: Bridge injection logic
+      mod.rs            #   BridgeInjector, inject_preview_bridge()
+      js/               #   Bundled JS source for the preview bridge
+        bridge.js       #   Preview-mode mcpBridge implementation
+    handlers/
+      page.rs           # Unchanged (serves index.html)
+      api.rs            # Add resources endpoints (MODIFIED)
+      assets.rs         # Unchanged
+      websocket.rs      # Unchanged
+      widget.rs         # NEW: /widget-proxy handler
+      demo.rs           # NEW: demo landing page handler
+    assets/
+      index.html        # Preview UI (enhanced with iframe support)
+      ...               # Other static assets
+
+crates/mcp-bridge-js/   # NEW CRATE
+  src/
+    lib.rs              # Rust entry point (minimal, just serves the JS)
+  js/
+    bridge.ts           # TypeScript source for shared bridge library
+    bridge.d.ts         # Type definitions
+  dist/
+    bridge.js           # Bundled output (committed, not gitignored)
+
+examples/wasm-client/
+  src/
+    lib.rs              # WasmClient (MODIFIED: add resources, fix IDs)
+    widget_renderer.rs  # NEW: WidgetRenderer for iframe lifecycle
+    utils.js            # Unchanged
+
+examples/mcp-apps-chess/
+  src/
+    main.rs             # Server (MODIFIED: use file-based widget)
+  widgets/              # NEW: separate widget files
+    board.html          # Extracted from inline strings (was widget/board.html)
+  preview.html          # Enhanced with real MCP proxy option
+
+examples/mcp-apps-map/
+  (same structure as chess)
+
+cargo-pmcp/src/commands/
+  new.rs                # MODIFIED: add --mcp-apps flag
+  preview.rs            # MODIFIED: add --demo flag
+  landing/              # NEW command module
+    mod.rs
+  manifest/             # NEW command module
+    mod.rs
+
+tests/playwright/
+  playwright.config.ts
+  tests/
+    widget.spec.ts
+    bridge.spec.ts
+  fixtures/
+    mock-mcp-server.ts
+
+src/types/mcp_apps.rs   # Minimal additions for manifest types
+src/server/mcp_apps.rs  # Add file-based widget macro helpers
+```
+
+### Structure Rationale
+
+- **`crates/mcp-bridge-js/` as a separate crate:** The bridge JS is consumed both by `mcp-preview` (embedded as static asset) and potentially by developers for their own widget CDN distribution. Separate crate means the JS can be versioned independently and published to npm or CDN.
+- **`bridge/` module inside `mcp-preview`:** Bridge injection logic is preview-server-specific (it points callTool() at the preview server's HTTP endpoint). Not shared externally.
+- **`widgets/` directory in examples:** Separating HTML files from Rust source is the key authoring DX improvement. Avoids `include_str!` deep in method bodies.
+- **`commands/landing/` and `commands/manifest/` as separate modules:** Follows the existing `commands/secret/mod.rs` pattern — each command is its own module directory with its own `mod.rs`.
+
+## Architectural Patterns
+
+### Pattern 1: Preview Bridge Injection
+
+The core integration challenge: how does a widget's `window.mcpBridge.callTool()` reach the real MCP server during development?
+
+**What:** `BridgeInjector` transforms widget HTML before serving it from `mcp-preview`. It injects a JavaScript shim that replaces `window.mcpBridge` with an implementation that POSTs to `/api/tools/call` on the preview server. The preview server then proxies to the real MCP server.
+
+**When to use:** Every time mcp-preview serves a widget resource via `/widget-proxy`.
+
+**Trade-offs:**
+- Pro: Widget HTML works unchanged in both preview and production
+- Pro: No CORS issues (same-origin, preview server proxies)
+- Pro: Tool call logs appear in the preview dev panel
+- Con: HTML injection is fragile if widget has strict CSP; preview must set permissive CSP headers on `/widget-proxy` responses
+
+**Data flow:**
+```
+Browser iframe (widget HTML)
+    |
+    | window.mcpBridge.callTool("chess_move", {...})
+    |   [injected JS resolves this to HTTP]
+    v
+Preview Server POST /api/tools/call
+    |
+    | McpProxy.call_tool()
+    v
+MCP Server POST /mcp
+    |
+    | JSON-RPC tools/call response
+    v
+Preview Server -> iframe -> widget updates
+```
+
+**Implementation sketch:**
+```rust
+// crates/mcp-preview/src/bridge/mod.rs
+pub struct BridgeInjector {
+    tool_call_url: String, // e.g., "http://localhost:8765/api/tools/call"
+}
+
+impl BridgeInjector {
+    pub fn inject(&self, html: &str, mime_type: &str) -> String {
+        let bridge_script = format!(
+            r#"<script>
+            window.mcpBridge = {{
+                callTool: async (name, args) => {{
+                    const res = await fetch("{}", {{
+                        method: "POST",
+                        headers: {{"Content-Type": "application/json"}},
+                        body: JSON.stringify({{name, arguments: args}})
+                    }});
+                    const data = await res.json();
+                    if (!data.success) throw new Error(data.error);
+                    return data.content?.[0]?.text
+                        ? JSON.parse(data.content[0].text)
+                        : data;
+                }},
+                getState: () => JSON.parse(localStorage.getItem("mcpState") || "{{}}"),
+                setState: (s) => localStorage.setItem("mcpState", JSON.stringify(s))
+            }};
+            window.dispatchEvent(new Event("mcpBridgeReady"));
+            </script>"#,
+            self.tool_call_url
+        );
+        // Insert bridge_script before </head> or at start of <body>
+        inject_before_body(html, &bridge_script)
+    }
+}
+```
+
+### Pattern 2: Widget Resource Proxy
+
+**What:** A new `GET /widget-proxy?uri=<resource-uri>` endpoint in mcp-preview fetches resource content from the MCP server, injects the bridge, and serves it with appropriate headers for iframe embedding.
+
+**When to use:** When the preview UI wants to render a widget in an iframe.
+
+**Trade-offs:**
+- Pro: The iframe src points to the preview server (same-origin context)
+- Pro: Enables live resource fetching (not static file serving)
+- Pro: Supports MIME type negotiation (returns text/html regardless of original MIME)
+- Con: Resources must be text/html or text/html+* — binary resources are not renderable
+
+**Integration with existing code:** The new handler calls `McpProxy::read_resource(uri)` (a new method to add), processes content through `BridgeInjector::inject()`, and returns `text/html` with `X-Frame-Options: SAMEORIGIN`.
+
+### Pattern 3: File-Based Widget Authoring
+
+**What:** Instead of `include_str!("../../widget/board.html")` scattered in handler methods, provide a convention and macro helper for loading widget files.
+
+**When to use:** In every MCP Apps server that has HTML widgets.
+
+**Trade-offs:**
+- Pro: Widgets are editable without touching Rust code
+- Pro: IDE support for HTML files
+- Pro: `cargo pmcp new --mcp-apps` can scaffold the right directory structure
+- Con: File path in `include_str!` must be relative to the Rust source file
+
+**Pattern:**
+```rust
+// Widget file at: widgets/board.html (sibling to src/)
+// In src/main.rs:
+const BOARD_WIDGET: &str = include_str!("../widgets/board.html");
+// OR with a helper macro (new addition to pmcp::server::mcp_apps):
+pmcp::widget!("board.html")  // Expands to include_str!("../widgets/board.html")
+```
+
+The `pmcp::widget!()` macro is a thin wrapper that:
+1. Finds `widgets/` relative to `CARGO_MANIFEST_DIR`
+2. Expands to `include_str!` with the correct path
+3. Errors at compile time if the file is missing
+
+### Pattern 4: Shared Bridge Library for Widget Authoring
+
+**What:** `mcp-bridge-js` provides a canonical JavaScript file that handles environment detection and bridge lifecycle. Widgets include it as a CDN script tag rather than implementing `window.mcpBridge` consumption themselves.
+
+**When to use:** In all widget HTML files.
+
+**Trade-offs:**
+- Pro: Eliminates copy-pasted bridge initialization code from every widget
+- Pro: Single place to fix bridge compatibility across ChatGPT/preview/standalone
+- Pro: Version-pinned via CDN URL
+
+**Widget usage:**
+```html
+<!-- Include once, then use window.mcpBridge anywhere -->
+<script src="https://cdn.pmcp.run/bridge/0.1.0/bridge.min.js"></script>
+<script>
+  window.addEventListener('mcpBridgeReady', () => {
+    // bridge is ready
+    const state = await window.mcpBridge.callTool('chess_new_game', {});
+  });
+</script>
+```
+
+The library internally detects:
+1. `window.openai` is present: use ChatGPT Apps API
+2. `window.mcpBridge` is already injected by host: use it directly
+3. Neither: fall back to postMessage protocol (standard MCP Apps)
+
+### Pattern 5: ChatGPT Manifest Generation
+
+**What:** `cargo pmcp manifest` reads `pmcp.toml [mcp-apps]` section and generates a `manifest.json` (or `.well-known/ai-plugin.json`) compatible with ChatGPT App registration.
+
+**When to use:** During deployment, as part of `cargo pmcp deploy`.
+
+**Trade-offs:**
+- Pro: Single source of truth (pmcp.toml) drives both deployment and manifest
+- Pro: Avoids hand-editing JSON with correct structure
+- Con: Must stay current with OpenAI's manifest schema (which evolves)
+
+**pmcp.toml additions:**
+```toml
+[mcp-apps]
+name = "Chess Game"
+description = "Play chess with an interactive board widget"
+server_url = "https://chess.pmcp.run"
+logo_url = "https://chess.pmcp.run/assets/logo.png"
+
+[[mcp-apps.tools]]
+name = "chess_new_game"
+widget_uri = "ui://chess/board.html"
+invoking = "Setting up the board..."
+invoked = "Board ready!"
+```
+
+## Data Flows
+
+### Flow 1: Widget Rendering in mcp-preview
+
+```
+Developer: opens http://localhost:8765
+    |
+    v
+PreviewServer GET /
+  serves index.html (React/vanilla JS preview UI)
+    |
+    | UI fetches tool list
+    v
+PreviewServer GET /api/tools -> McpProxy.list_tools() -> MCP Server
+    |
+    | Developer selects a tool with widget_uri in its metadata
+    v
+PreviewServer GET /api/resources/read?uri=ui://chess/board.html
+    -> McpProxy.read_resource(uri) -> MCP Server resources/read
+    -> BridgeInjector.inject(html, "text/html+skybridge")
+    -> Returns HTML with injected mcpBridge shim
+    |
+    | Preview UI loads iframe with widget HTML
+    v
+iframe: widget/board.html renders
+    |
+    | User clicks "New Game"
+    v
+iframe: window.mcpBridge.callTool("chess_new_game", {})
+    -> fetch POST http://localhost:8765/api/tools/call
+    |
+    v
+PreviewServer POST /api/tools/call
+    -> McpProxy.call_tool("chess_new_game", {})
+    -> MCP Server tools/call
+    -> Returns game state
+    |
+    v
+iframe: widget updates board display
+Preview dev panel: logs tool call + result
+```
+
+### Flow 2: WASM Test Client Widget Rendering
+
+```
+Browser page (wasm-client context, e.g. mcp-preview index.html)
+    |
+    | WasmClient.connect("http://localhost:3000")
+    v
+pmcp HTTP transport: initialize session
+    |
+    | WasmClient.list_resources()
+    v
+pmcp JSON-RPC: resources/list -> returns [{ uri: "ui://chess/board.html", ... }]
+    |
+    | WasmClient::WidgetRenderer.render(uri, container_element)
+    v
+WidgetRenderer:
+  1. WasmClient.read_resource(uri) -> HTML content
+  2. Creates <iframe> in container
+  3. srcdoc = BridgeInjector.inject(html) [injects postMessage bridge]
+  4. Listens for postMessage from iframe
+    |
+    | Widget iframe posts: { type: "callTool", name: "...", args: {...} }
+    v
+WidgetRenderer:
+  5. WasmClient.call_tool(name, args) -> result
+  6. Posts result back to iframe: { type: "toolResult", result: {...} }
+    |
+    v
+Widget iframe: handles result, updates UI
+```
+
+### Flow 3: Cargo pmcp new --mcp-apps Scaffolding
+
+```
+cargo pmcp new my-widget-server --mcp-apps
+    |
+    v
+new.rs::execute(name="my-widget-server", mcp_apps=true)
+    |
+    v
+templates::mcp_apps::generate(workspace_dir, name)
+    Creates:
+      my-widget-server/
+        Cargo.toml        # pmcp with mcp-apps feature
+        pmcp.toml         # [mcp-apps] section stub
+        src/
+          main.rs         # ServerBuilder + StreamableHttpServer + ResourceHandler
+        widgets/
+          main.html       # Widget HTML template using mcp-bridge-js CDN
+    |
+    v
+Prints next steps:
+  1. cd my-widget-server
+  2. Edit widgets/main.html with your UI
+  3. cargo run  (starts MCP server on :3000)
+  4. cargo pmcp preview  (opens widget preview on :8765)
+```
+
+### Flow 4: Demo Landing Page Generation
+
+```
+cargo pmcp landing --server chess --output ./dist
+    |
+    v
+LandingCommand::execute()
+    |
+    | Reads: examples/mcp-apps-chess/preview.html (or equivalent)
+    | Reads: pmcp.toml for title/description
+    v
+Inlines all assets:
+  - Widget HTML (base64 or inline)
+  - Mock bridge JavaScript
+  - CSS
+    |
+    v
+Writes: ./dist/index.html
+  Self-contained, no server required
+  Suitable for GitHub Pages / S3 static hosting
+    |
+    v
+Prints: "Landing page generated at ./dist/index.html"
+```
+
+### Flow 5: ChatGPT Manifest Generation
+
+```
+cargo pmcp manifest --server chess --output ./dist
+    |
+    v
+ManifestCommand::execute()
+    |
+    | Reads: pmcp.toml [mcp-apps] section
+    | Reads: MCP server tools/list (optional, for tool metadata)
+    v
+Generates:
+  ./dist/.well-known/ai-plugin.json:
+    { name, description, api.url, logo_url, ... }
+    tools: [{ name, description, output_template, ... }]
+    |
+    v
+Optionally uploads to MCP server's deployment target
 ```
 
 ## Integration Points: New vs. Modified vs. Unchanged
 
 ### New Components
 
-| Component | Location | Purpose |
-|-----------|----------|---------|
-| 3 new methods on `TaskRouter` trait | `src/server/tasks.rs` | `create_workflow_task`, `set_task_variables`, `complete_workflow_task` -- bridge pmcp core to pmcp-tasks without circular dependency |
-| Structured reply builder | `src/server/workflow/prompt_handler.rs` (internal to handler) | Constructs the final assistant message with task_id, completed/remaining steps |
-| Workflow variable schema | Convention only (no new type) | `wf.goal`, `wf.steps.{idx}.status`, etc. -- flat keys with `wf.` prefix |
+| Component | Location | Integrates With | Purpose |
+|-----------|----------|----------------|---------|
+| `BridgeInjector` | `crates/mcp-preview/src/bridge/mod.rs` | `handlers/widget.rs` | HTML injection of preview bridge |
+| `handlers::widget` | `crates/mcp-preview/src/handlers/widget.rs` | `McpProxy`, `BridgeInjector` | `/widget-proxy` endpoint |
+| `handlers::demo` | `crates/mcp-preview/src/handlers/demo.rs` | Static assets | Demo landing page serving |
+| `mcp-bridge-js` crate | `crates/mcp-bridge-js/` | `mcp-preview` assets, widget HTML | Shared JS bridge library |
+| `WasmClient::WidgetRenderer` | `examples/wasm-client/src/widget_renderer.rs` | `WasmClient`, DOM | In-browser widget lifecycle |
+| `pmcp::widget!` macro | `src/server/mcp_apps.rs` | App server `main.rs` files | File-based widget loading |
+| `cargo pmcp landing` | `cargo-pmcp/src/commands/landing/mod.rs` | `pmcp.toml`, example HTML | Standalone demo generation |
+| `cargo pmcp manifest` | `cargo-pmcp/src/commands/manifest/mod.rs` | `pmcp.toml`, MCP server | ChatGPT manifest generation |
+| Playwright tests | `tests/playwright/` | Preview server, example apps | E2E widget testing |
 
 ### Modified Components
 
-| Component | File | Change |
-|-----------|------|--------|
-| `TaskRouter` trait | `src/server/tasks.rs` | +3 methods with default impls returning errors (non-breaking) |
-| `TaskRouterImpl` | `crates/pmcp-tasks/src/router.rs` | Implement 3 new methods delegating to `TaskStore` |
-| `WorkflowPromptHandler` | `src/server/workflow/prompt_handler.rs` | +`task_router: Option<Arc<dyn TaskRouter>>` field; task creation on entry; binding-to-variable sync; structured reply |
-| `SequentialWorkflow` | `src/server/workflow/sequential.rs` | +`task_support: bool` field with builder method (opt-in) |
-| `ServerCoreBuilder` | `src/server/builder.rs` | `prompt_workflow()` passes `task_router.clone()` to handler when configured |
+| Component | File | Change | Impact |
+|-----------|------|--------|--------|
+| `McpProxy` | `crates/mcp-preview/src/proxy.rs` | Add `list_resources()`, `read_resource()`, session persistence, proper ID counter | Requires adding `resources` module methods |
+| `PreviewServer` | `crates/mcp-preview/src/server.rs` | Add `/widget-proxy`, `/api/resources`, `/api/resources/read` routes; demo mode | New Axum routes, no breaking changes |
+| `api.rs` | `crates/mcp-preview/src/handlers/api.rs` | Add resource list/read endpoints | Additional handler functions |
+| `WasmClient` | `examples/wasm-client/src/lib.rs` | Add `list_resources()`, `read_resource()`, fix request ID atomics | Additive only |
+| `cargo pmcp new` | `cargo-pmcp/src/commands/new.rs` | Add `--mcp-apps` flag + template | New flag, existing behavior unchanged |
+| `cargo pmcp preview` | `cargo-pmcp/src/commands/preview.rs` | Add `--demo` flag | New flag, existing behavior unchanged |
+| `src/server/mcp_apps.rs` | Core | Add `widget!` macro, manifest types | Additive under `mcp-apps` feature |
 
-### Unchanged Components (and Why)
+### Unchanged Components
 
 | Component | Why Unchanged |
 |-----------|---------------|
-| `TaskRouter` existing 7 methods | Task CRUD routing is complete; bridge creates tasks through new methods |
-| `TaskStore` trait | Already has `create`, `set_variables`, `complete_with_result` -- all ops the bridge needs |
-| `TaskContext` (pmcp-tasks) | Bridge uses `TaskRouter` trait boundary, not `TaskContext` directly (avoids circular dep) |
-| `DataSource` enum | `PromptArg`, `StepOutput`, `Constant` resolve from `ExecutionContext` which is unchanged |
-| `ExecutionContext` struct | Still stores bindings during execution; sync to task vars is a post-binding side effect |
-| `MiddlewareExecutor` trait | Tool execution path is unchanged; steps still execute through middleware |
-| `ServerCore` request routing | `prompts/get` already routes to `PromptHandler`; `tasks/*` already routes to `TaskRouter` |
-| `InMemoryTaskStore` | No new store operations needed; existing methods cover all bridge requirements |
-| `WorkflowStep` | Step definition is unchanged; the handler decides whether to execute or defer |
-
-## Detailed Design: Where Things Happen
-
-### 1. Task Creation in WorkflowPromptHandler
-
-**Location:** `WorkflowPromptHandler::handle()`, before the step loop.
-
-**Current flow (prompt_handler.rs lines 757-774):**
-```rust
-async fn handle(&self, args: HashMap<String, String>, extra: RequestHandlerExtra)
-    -> Result<GetPromptResult>
-{
-    let mut messages = Vec::new();
-    let mut execution_context = ExecutionContext::new();
-    messages.push(self.create_user_intent(&args));
-    messages.push(self.create_assistant_plan()?);
-    // ... step loop (lines 785-961) ...
-    Ok(GetPromptResult { description, messages })
-}
-```
-
-**Proposed flow:**
-```rust
-async fn handle(&self, args: HashMap<String, String>, extra: RequestHandlerExtra)
-    -> Result<GetPromptResult>
-{
-    let mut messages = Vec::new();
-    let mut execution_context = ExecutionContext::new();
-
-    // NEW: Create task if task_router configured AND workflow has task_support
-    let task_state = if self.workflow.task_support() {
-        if let Some(ref router) = self.task_router {
-            let owner_id = self.resolve_owner(&extra);
-            let task_json = router.create_workflow_task(
-                &owner_id,
-                self.workflow.name(),
-                self.workflow.steps().len(),
-                serde_json::to_value(&args).unwrap_or(Value::Null),
-            ).await?;
-            let task_id = task_json["taskId"].as_str()
-                .ok_or_else(|| crate::Error::internal("missing taskId"))?
-                .to_string();
-            Some(WorkflowTaskState { router: router.clone(), task_id, owner_id })
-        } else { None }
-    } else { None };
-
-    messages.push(self.create_user_intent(&args));
-    messages.push(self.create_assistant_plan()?);
-    // ... step loop with task_state passed through ...
-    // ... structured reply construction ...
-    Ok(GetPromptResult { description, messages })
-}
-```
-
-**Why `TaskRouter`, not `TaskStore` directly:** The `WorkflowPromptHandler` lives in `pmcp` core. `TaskStore` is defined in `pmcp-tasks`. Using `TaskStore` directly would create a circular dependency (`pmcp-tasks` depends on `pmcp`). The `TaskRouter` trait in `pmcp` core uses `serde_json::Value` to avoid this, same as the existing v1.0 design for `handle_task_call`.
-
-### 2. TaskRouter Trait Extension (Minimal)
-
-**Current trait (src/server/tasks.rs):** 7 methods for tools/call task lifecycle + owner resolution + capabilities.
-
-**3 new methods:**
-
-```rust
-#[async_trait]
-pub trait TaskRouter: Send + Sync {
-    // ... existing 7 methods unchanged ...
-
-    /// Create a task for a workflow prompt execution.
-    ///
-    /// Returns a JSON object with at minimum { "taskId": "..." }.
-    /// Called by WorkflowPromptHandler on prompts/get entry.
-    async fn create_workflow_task(
-        &self,
-        owner_id: &str,
-        workflow_name: &str,
-        step_count: usize,
-        prompt_args: Value,
-    ) -> Result<Value> {
-        // Default impl: tasks not supported
-        Err(crate::Error::internal("task router does not support workflow tasks"))
-    }
-
-    /// Set variables on a task (used by workflow handler to sync step results).
-    ///
-    /// Variables is a JSON object of flat key-value pairs.
-    async fn set_task_variables(
-        &self,
-        task_id: &str,
-        owner_id: &str,
-        variables: Value,
-    ) -> Result<()> {
-        let _ = (task_id, owner_id, variables);
-        Err(crate::Error::internal("task router does not support variable sync"))
-    }
-
-    /// Complete a workflow task with the structured result.
-    async fn complete_workflow_task(
-        &self,
-        task_id: &str,
-        owner_id: &str,
-        result: Value,
-    ) -> Result<()> {
-        let _ = (task_id, owner_id, result);
-        Err(crate::Error::internal("task router does not support workflow completion"))
-    }
-}
-```
-
-**Non-breaking:** Default implementations return errors. Existing `TaskRouterImpl` continues to compile without changes until Phase 2 implements the new methods.
-
-**Value-based interface:** Same rationale as existing methods -- avoids importing `pmcp-tasks` types into `pmcp` core.
-
-### 3. Partial Execution: How the Handler Flow Changes
-
-**Current behavior (prompt_handler.rs lines 785-961):** Execute ALL steps in sequence. On parameter resolution failure, `break`. On tool execution error, `break`. On schema mismatch, `break`.
-
-**Key insight:** The current code already implements partial execution. When it `break`s out of the step loop, it returns whatever messages have been built so far. The task-prompt bridge makes this _explicit_ by recording progress in task variables.
-
-**Modified step loop (pseudocode showing only changes):**
-
-```rust
-let mut completed_steps: Vec<StepSummary> = Vec::new();
-let mut remaining_steps: Vec<StepSummary> = Vec::new();
-
-for (step_index, step) in self.workflow.steps().iter().enumerate() {
-    // ... existing: cancellation check, progress report, guidance ...
-
-    // Tool execution attempt (logic unchanged from current code)
-    match self.create_tool_call_announcement(step, &args, &execution_context) {
-        Ok(announcement) => {
-            // ... existing: schema check, execute tool ...
-            match self.execute_tool_step(step, &args, &execution_context, &extra).await {
-                Ok(result) => {
-                    // ... existing: add result message, store binding ...
-
-                    // NEW: sync to task variables
-                    if let Some(ref ts) = task_state {
-                        let mut vars = serde_json::Map::new();
-                        vars.insert(
-                            format!("wf.steps.{}.status", step_index),
-                            json!("completed"),
-                        );
-                        vars.insert(
-                            format!("wf.steps.{}.binding", step_index),
-                            json!(step.binding().map(|b| b.as_str())),
-                        );
-                        // Store key result fields (not full result to avoid size limits)
-                        if let Some(binding) = step.binding() {
-                            vars.insert(
-                                format!("wf.steps.{}.result_summary", step_index),
-                                summarize_result(&result),
-                            );
-                        }
-                        let _ = ts.router.set_task_variables(
-                            &ts.task_id, &ts.owner_id, Value::Object(vars),
-                        ).await; // Non-critical; log warning on failure
-                    }
-                    completed_steps.push(StepSummary::completed(step, step_index));
-                },
-                Err(e) => {
-                    // ... existing: error message, break ...
-                    // NEW: record this step as failed
-                    remaining_steps.push(StepSummary::failed(step, step_index, &e));
-                    // Record all subsequent steps as pending
-                    for (j, s) in self.workflow.steps().iter().enumerate().skip(step_index + 1) {
-                        remaining_steps.push(StepSummary::pending(s, j));
-                    }
-                    break;
-                },
-            }
-        },
-        Err(_) => {
-            // Cannot resolve parameters -- same break as today
-            // NEW: record this and remaining steps
-            for (j, s) in self.workflow.steps().iter().enumerate().skip(step_index) {
-                remaining_steps.push(StepSummary::pending(s, j));
-            }
-            break;
-        },
-    }
-}
-```
-
-### 4. Step State Storage in Task Variables
-
-**Schema (flat keys with `wf.` prefix):**
-
-```json
-{
-    "wf.goal": "Deploy a service",
-    "wf.total_steps": 3,
-    "wf.completed_count": 1,
-    "wf.prompt_args": {"region": "us-east-1", "service": "my-api"},
-
-    "wf.steps.0.name": "validate_config",
-    "wf.steps.0.status": "completed",
-    "wf.steps.0.tool": "validate_config",
-    "wf.steps.0.binding": "config",
-    "wf.steps.0.result_summary": {"valid": true},
-
-    "wf.steps.1.name": "provision_infra",
-    "wf.steps.1.status": "pending",
-    "wf.steps.1.tool": "provision_infra",
-    "wf.steps.1.guidance": "Provision with the validated config",
-
-    "wf.steps.2.name": "deploy",
-    "wf.steps.2.status": "pending",
-    "wf.steps.2.tool": "deploy_service",
-    "wf.steps.2.guidance": "Deploy using the provisioned infrastructure"
-}
-```
-
-**Why flat keys:** Matches the validated v1.0 decision (PROJECT.md: "flat keys with convention recommendation in docs"). DynamoDB attribute-level operations work better with flat keys. Individual step updates are independent operations.
-
-**Why `result_summary` not full result:** Task variables have a 1MB limit (StoreConfig.max_variable_size_bytes). Full tool results can be large. The summary stores only key output fields needed by subsequent steps. The full result is already in the conversation trace (messages array) and in the ExecutionContext bindings.
-
-### 5. Structured Prompt Reply
-
-**Constraint:** `GetPromptResult { description: Option<String>, messages: Vec<PromptMessage> }` is an MCP protocol type. We cannot add fields without a breaking change.
-
-**Solution:** Embed structured guidance as the final assistant message in the messages array. This is both human-readable (for the LLM) and machine-parseable (JSON block for task-aware clients).
-
-```rust
-// After the step loop, if task is active:
-if let Some(ref ts) = task_state {
-    let structured = json!({
-        "task_id": ts.task_id,
-        "status": if remaining_steps.is_empty() { "all_completed" } else { "partial" },
-        "completed": completed_steps.iter().map(|s| json!({
-            "name": s.name,
-            "tool": s.tool_name,
-            "binding": s.binding_name,
-        })).collect::<Vec<_>>(),
-        "remaining": remaining_steps.iter().map(|s| json!({
-            "index": s.index,
-            "name": s.name,
-            "tool": s.tool_name,
-            "guidance": s.guidance,
-        })).collect::<Vec<_>>(),
-        "continuation": format!(
-            "Call each remaining tool in order. \
-             Poll tasks/get with taskId '{}' to check variable accumulation.",
-            ts.task_id,
-        ),
-    });
-
-    messages.push(PromptMessage {
-        role: Role::Assistant,
-        content: MessageContent::Text {
-            text: format!(
-                "## Workflow Progress\n\n\
-                 Task ID: `{}`\n\
-                 Completed: {}/{} steps\n\n\
-                 {}\n\n\
-                 ```json\n{}\n```",
-                ts.task_id,
-                completed_steps.len(),
-                completed_steps.len() + remaining_steps.len(),
-                remaining_steps_text,
-                serde_json::to_string_pretty(&structured).unwrap(),
-            ),
-        },
-    });
-
-    // If ALL steps completed, mark task as completed
-    if remaining_steps.is_empty() {
-        let _ = ts.router.complete_workflow_task(
-            &ts.task_id,
-            &ts.owner_id,
-            serde_json::to_value(&completed_steps).unwrap_or(Value::Null),
-        ).await;
-    }
-    // Otherwise task stays in "working" -- client continues
-}
-```
-
-**Why this differs from current full-trace reply:** Today, the reply is an opaque conversation trace. The LLM reads it and decides what to do. With the bridge, the reply includes explicit machine-readable guidance: here is the task ID, here are the steps you still need to do, here are the tools to call. This transforms the prompt from "here's what happened" to "here's what happened AND here's what to do next."
-
-### 6. Does TaskRouter Need Changes? -- YES, Minimal
-
-**Added methods (3):**
-
-| Method | Params (Value-based) | Implementation in TaskRouterImpl |
-|--------|---------------------|----------------------------------|
-| `create_workflow_task` | owner_id, workflow_name, step_count, prompt_args | `store.create(owner_id, "prompts/get", None)` + `store.set_variables(task_id, owner_id, {wf.goal, wf.total_steps, wf.prompt_args})` |
-| `set_task_variables` | task_id, owner_id, variables (JSON object) | `store.set_variables(task_id, owner_id, convert_json_to_hashmap(variables))` |
-| `complete_workflow_task` | task_id, owner_id, result | `store.complete_with_result(task_id, owner_id, Completed, None, result)` |
-
-**Existing methods unchanged:** `handle_task_call`, `handle_tasks_get`, `handle_tasks_result`, `handle_tasks_list`, `handle_tasks_cancel`, `resolve_owner`, `tool_requires_task`, `task_capabilities` -- all remain exactly as they are.
-
-**Why not modify `handle_task_call`:** That method is for `tools/call` with task augmentation. Workflow task creation has different semantics: it stores workflow metadata (goal, steps, args), not tool context (tool_name, arguments, progress_token).
-
-## Data Flow: Complete Lifecycle
-
-```
-CLIENT                    SERVER (prompts/get handler)         TaskRouter/Store
-  |                              |                                  |
-  |--- prompts/get "deploy" --->|                                  |
-  |                              |                                  |
-  |                              |--- create_workflow_task() ------>|
-  |                              |<-- {taskId: "t-123"} -----------|
-  |                              |                                  |
-  |                              |--- set_task_variables ---------->|
-  |                              |    {wf.goal, wf.total_steps}    |
-  |                              |                                  |
-  |                              |  STEP LOOP:                      |
-  |                              |  step 0: validate_config         |
-  |                              |    resolve params -> OK          |
-  |                              |    execute tool -> OK            |
-  |                              |    store binding "config"        |
-  |                              |--- set_task_variables ---------->|
-  |                              |    {wf.steps.0.status:completed} |
-  |                              |                                  |
-  |                              |  step 1: provision_infra         |
-  |                              |    resolve params -> FAIL        |
-  |                              |    (needs LLM reasoning)         |
-  |                              |--- set_task_variables ---------->|
-  |                              |    {wf.steps.1.status:pending,   |
-  |                              |     wf.steps.2.status:pending}   |
-  |                              |  BREAK                           |
-  |                              |                                  |
-  |<-- GetPromptResult ---------|                                  |
-  |    messages: [               |                                  |
-  |      user intent,            |                                  |
-  |      assistant plan,         |                                  |
-  |      assistant: calling      |                                  |
-  |        validate_config,      |                                  |
-  |      user: tool result,      |                                  |
-  |      assistant: structured   |                                  |
-  |        guidance {            |                                  |
-  |          task_id: "t-123",   |                                  |
-  |          completed: [0],     |                                  |
-  |          remaining: [1, 2]   |                                  |
-  |        }                     |                                  |
-  |    ]                         |                                  |
-  |                              |                                  |
-  |                              |                                  |
-  |--- tools/call provision_infra (direct, no task field) -------->|
-  |<-- result -----------------------------------------------------|
-  |                              |                                  |
-  |--- tasks/get {taskId: "t-123"} ---->|                          |
-  |                              |--- store.get("t-123") --------->|
-  |<-- task with variables ------|<-- TaskRecord with wf.steps.* --|
-  |                              |                                  |
-  |--- tools/call deploy_service (direct) ----------------------->|
-  |<-- result -----------------------------------------------------|
-```
+| `pmcp::types::mcp_apps` | All types ship and work; no protocol changes needed |
+| `ChatGptAdapter` | Bridge injection for ChatGPT already correct; preview uses its own injector |
+| `ServerBuilder` / `StreamableHttpServer` | No new hooks needed at server level |
+| `TaskRouter`, `pmcp-tasks` | MCP Apps is orthogonal to task management |
+| `cargo pmcp deploy` | Add manifest step without touching existing deploy paths |
+| `handlers::page`, `handlers::assets`, `handlers::websocket` | Still valid as-is |
+| `mcp-apps-chess`, `mcp-apps-map` source | Widget pattern works; only file organization changes |
 
 ## Build Order (Dependency-Aware)
 
-### Phase 1: TaskRouter trait extension (pmcp core, ~30 LOC)
+### Step 1: Preview Bridge Infrastructure (~3 days)
 
-**File:** `src/server/tasks.rs`
+**Deliver:** `McpProxy.read_resource()` + `handlers::widget` + `BridgeInjector`
 
-Add 3 new methods with default implementations returning errors. Non-breaking -- existing `TaskRouterImpl` compiles unchanged.
+**Why first:** Everything else in the preview story depends on being able to render a widget in an iframe with a working bridge. This is the core integration gap.
 
-**Why first:** Everything downstream depends on this interface. It is the smallest change and the one that all other phases import.
+**Implementation sequence within step:**
+1. Add `resources/list` + `resources/read` to `McpProxy` (~50 LOC)
+2. Add `/api/resources` and `/api/resources/read` routes to `PreviewServer`
+3. Write `BridgeInjector::inject()` — HTML string manipulation, pure function, easily testable
+4. Write `handlers::widget` — fetch resource, inject, serve
 
-### Phase 2: TaskRouterImpl new methods (pmcp-tasks, ~80 LOC)
+**Validation:** Start chess server, run `cargo pmcp preview`, navigate to widget — it should render and tool calls should work.
 
-**File:** `crates/pmcp-tasks/src/router.rs`
+### Step 2: WASM Widget Renderer (~2 days)
 
-Implement the 3 new methods:
-- `create_workflow_task` -> `store.create()` + `store.set_variables()` for initial workflow metadata
-- `set_task_variables` -> convert `Value` to `HashMap<String, Value>` + `store.set_variables()`
-- `complete_workflow_task` -> `store.complete_with_result()`
+**Deliver:** `WasmClient::WidgetRenderer` with postMessage bridge
 
-**Why second:** Provides the concrete implementation the handler tests against.
+**Depends on:** Step 1 (validates the bridge protocol being implemented)
 
-### Phase 3: WorkflowPromptHandler modifications (pmcp core, ~150 LOC)
+**Why second:** The WASM client is the in-browser alternative to the preview server proxy. It needs to implement the same bridge protocol that Step 1 establishes.
 
-**File:** `src/server/workflow/prompt_handler.rs`
+**Implementation:** `widget_renderer.rs` — iframe creation, `srcdoc` injection, postMessage listener, call routing through `WasmClient`.
 
-1. Add `task_router: Option<Arc<dyn TaskRouter>>` field
-2. Add `with_task_router()` constructor (parallel to existing `with_middleware_executor()`)
-3. Add helper struct `WorkflowTaskState { router, task_id, owner_id }`
-4. Add helper struct `StepSummary { name, tool_name, binding_name, index, status, guidance }`
-5. Modify `handle()`: task creation, step sync, structured reply
+**Validation:** Load wasm-client test page, render chess widget, play a move.
 
-**Why third:** Depends on Phase 1 (trait) and tested against Phase 2 (impl).
+### Step 3: Shared Bridge Library (`mcp-bridge-js`) (~2 days)
 
-### Phase 4: SequentialWorkflow opt-in flag (pmcp core, ~15 LOC)
+**Deliver:** A versioned `bridge.js` CDN artifact embedded in `mcp-preview`
 
-**File:** `src/server/workflow/sequential.rs`
+**Depends on:** Steps 1 and 2 (defines the API contract both injectors must implement)
 
-Add `task_support: bool` field (default false) with builder method `with_task_support(bool) -> Self`. When false, handler skips task creation even if router is configured.
+**Why third:** Once the bridge API is validated in Steps 1 and 2, extract into a shared library. Update existing chess/map widgets to use it.
 
-**Why fourth:** Simple field addition. Depends on nothing, but Phase 3 reads this flag.
+**Implementation:** Pure JavaScript/TypeScript. No Rust changes. Build with esbuild or tsc. Embed in `mcp-preview::Assets`.
 
-### Phase 5: ServerCoreBuilder wiring (pmcp core, ~10 LOC)
+### Step 4: File-Based Widget Authoring + `cargo pmcp new --mcp-apps` (~2 days)
 
-**File:** `src/server/builder.rs`
+**Deliver:** `pmcp::widget!()` macro + scaffolding template + updated chess/map examples
 
-Modify the `prompt_workflow()` method to pass `self.task_router.clone()` to `WorkflowPromptHandler::with_task_router()` when the task router is configured.
+**Depends on:** Step 3 (template must reference the bridge library from step 3)
 
-**Why fifth:** Simple wiring. Depends on Phase 3 (handler accepts router) and Phase 4 (workflow has flag).
+**Why fourth:** DX improvement that makes widget authoring pleasant. Refactoring chess/map to use `widgets/` directory structure validates the pattern.
 
-### Phase 6: Example and tests
+**Implementation:**
+1. Add `pmcp::widget!()` macro in `src/server/mcp_apps.rs`
+2. Move chess/map HTML files to `widgets/` directory
+3. Update `new.rs` with `--mcp-apps` flag and template
+4. Write template files for `widgets/main.html` and `src/main.rs` skeleton
 
-**Files:** `examples/62_tasks_workflow.rs`, tests in `prompt_handler.rs` and `crates/pmcp-tasks/src/router.rs`
+### Step 5: Demo Landing Page + ChatGPT Manifest (~2 days)
 
-End-to-end: define workflow with `with_task_support(true)`, configure task store + router, invoke prompt, verify task created, verify variables populated, verify structured reply content.
+**Deliver:** `cargo pmcp landing` + `cargo pmcp manifest`
 
-## Anti-Patterns to Avoid
+**Depends on:** Step 4 (demo page must work with the file-based widget structure)
 
-### Anti-Pattern 1: Importing TaskStore in pmcp Core
+**Why fifth:** Publishing tooling. Uses the validated widget artifacts from Steps 1-4.
 
-**What people do:** Import `TaskStore` or `TaskContext` from `pmcp-tasks` directly in workflow handler code.
-**Why wrong:** `pmcp-tasks` depends on `pmcp`. If `pmcp` imports from `pmcp-tasks`, circular dependency.
-**Do instead:** All task operations from `pmcp` core go through `Arc<dyn TaskRouter>` with `serde_json::Value`. This is the established pattern from v1.0.
+**Implementation:**
+1. `commands/landing/mod.rs`: HTML inlining + mock bridge bundling
+2. `commands/manifest/mod.rs`: pmcp.toml parsing + JSON generation
 
-### Anti-Pattern 2: Storing Full Tool Results in Task Variables
+### Step 6: Ship Examples + Playwright Tests (~2 days)
 
-**What people do:** Store the complete tool output JSON as a task variable for each step.
-**Why wrong:** Task variables have a 1MB limit. Accumulating full results across steps can exceed this.
-**Do instead:** Store summaries or key fields in task variables. Full results are in the conversation trace (messages array) and the execution context bindings.
+**Deliver:** Chess and map examples in final form + Playwright E2E test suite
 
-### Anti-Pattern 3: Making Task Creation Mandatory
+**Depends on:** All previous steps
 
-**What people do:** Every `prompts/get` creates a task, even for simple 1-step workflows.
-**Why wrong:** Simple workflows that always execute fully server-side gain nothing. Extra latency, extra storage.
-**Do instead:** Task creation is opt-in via `SequentialWorkflow.with_task_support(true)`. Default is false.
+**Why last:** Integration validation. Examples exercise every piece of the toolchain.
 
-### Anti-Pattern 4: Adding Fields to GetPromptResult
+**Implementation:**
+1. Final chess/map example polish (README, clear comments)
+2. Playwright configuration and widget tests
+3. CI integration for Playwright tests
 
-**What people do:** Add `task_id`, `completed_steps`, `remaining_steps` fields to `GetPromptResult`.
-**Why wrong:** `GetPromptResult` is an MCP protocol type. Adding fields is a spec violation.
-**Do instead:** Embed structured guidance as the final assistant message text. Both human-readable and machine-parseable via JSON block.
+## Anti-Patterns
 
-### Anti-Pattern 5: Blocking prompts/get on Task Completion
+### Anti-Pattern 1: Re-Initializing MCP Session Per Request
 
-**What people do:** Create a task and wait for it to complete before returning the prompt result.
-**Why wrong:** The point is partial execution. Return immediately with what the server could do.
-**Do instead:** Execute steps synchronously (as today), record progress, return immediately. Task stays in `working` state for client continuation.
+**What people do:** Call `McpProxy::initialize()` before every `list_tools()` or `call_tool()` (current behavior in proxy.rs lines 148-151).
 
-## Component Boundary Summary
+**Why it's wrong:** MCP session initialization is a handshake that establishes capabilities. Re-doing it per request is wasteful and breaks session-based MCP servers (ones that use session ID from initialize response for auth).
 
+**Do this instead:** Cache the initialized session state in `McpProxy`. Only call `initialize()` once on construction or first use. Track `session_id` from the response and send it in subsequent requests.
+
+```rust
+pub struct McpProxy {
+    base_url: String,
+    client: reqwest::Client,
+    request_id: AtomicU64,
+    session_id: tokio::sync::RwLock<Option<String>>, // NEW
+}
 ```
-+--- pmcp (core crate) --------------------------------------------------+
-|                                                                         |
-|  TaskRouter trait              WorkflowPromptHandler                    |
-|  (src/server/tasks.rs)         (src/server/workflow/prompt_handler.rs)  |
-|  +3 new methods:               +task_router: Option<Arc<dyn TaskRouter>>|
-|  - create_workflow_task()      +with_task_router() constructor          |
-|  - set_task_variables()        Modified handle(): task create, sync,    |
-|  - complete_workflow_task()      structured reply                       |
-|                                                                         |
-|  SequentialWorkflow            ServerCoreBuilder                        |
-|  +task_support: bool           passes task_router to handler            |
-|  +with_task_support()                                                   |
-|                                                                         |
-+--- pmcp-tasks (separate crate, one-way dep on pmcp) -------------------+
-|                                                                         |
-|  TaskRouterImpl                TaskStore trait (UNCHANGED)               |
-|  (src/router.rs)               (src/store/mod.rs)                       |
-|  +3 new method impls           InMemoryTaskStore (UNCHANGED)            |
-|   delegates to store                                                    |
-|                                                                         |
-|  TaskContext (UNCHANGED)                                                |
-|  (src/context.rs)                                                       |
-|  Used internally by router                                              |
-|                                                                         |
-+-------------------------------------------------------------------------+
-```
+
+### Anti-Pattern 2: Hardcoded Request IDs in WasmClient
+
+**What people do:** Use literal integers (1, 2, 3) as JSON-RPC request IDs in `wasm-client/src/lib.rs` (current code at lines 115, 189, 245).
+
+**Why it's wrong:** Concurrent calls will collide IDs. The MCP server may reject or misroute responses. When `WidgetRenderer` is added, many simultaneous bridge calls will break.
+
+**Do this instead:** Use an `AtomicU64` counter in `WasmClient`, same as `McpProxy` already does. This is already done correctly in the Rust server side; port the pattern to the WASM client.
+
+### Anti-Pattern 3: Inline HTML as Rust String Literals
+
+**What people do:** Embed hundreds of lines of HTML inside `const WIDGET_HTML: &str = r#"..."#` or `include_str!` buried inside handler methods.
+
+**Why it's wrong:** No HTML syntax highlighting, no IDE support, no ability to open as a webpage for standalone development. Refactoring means changing Rust files.
+
+**Do this instead:** Use the `widgets/` directory convention with `pmcp::widget!("board.html")` or `include_str!("../widgets/board.html")` at module level. Widget files are standalone HTML files that work both with the preview bridge and in isolation.
+
+### Anti-Pattern 4: iframe srcdoc for Large Widgets
+
+**What people do:** Inject widget HTML via `<iframe srcdoc="...">` for all widget sizes.
+
+**Why it's wrong:** `srcdoc` attribute has browser-specific size limits (varies, but often ~64KB). Large widget HTML with embedded game assets will fail silently.
+
+**Do this instead:** For preview rendering, use the `/widget-proxy?uri=...` URL as `iframe src`. Only use `srcdoc` in the WASM renderer where there is no server to proxy through, and document the size constraint.
+
+### Anti-Pattern 5: Separate Bridge Implementations Without Shared Contract
+
+**What people do:** Write three different `mcpBridge` JavaScript implementations: one injected by `BridgeInjector`, one in `preview.html` mock, one in `WidgetRenderer`. Each drifts independently.
+
+**Why it's wrong:** Widgets that work in one context fail in another. Adding a new bridge method (e.g., `mcpBridge.listTools()`) requires updating all three implementations.
+
+**Do this instead:** `mcp-bridge-js` is the single canonical implementation. Preview uses it (injecting the real HTTP transport). Mock `preview.html` is a thin overriding layer. WidgetRenderer uses the same JS but wires it to postMessage transport.
+
+### Anti-Pattern 6: Serving Widget HTML with Strict CSP from mcp-preview
+
+**What people do:** Let the default Axum response headers flow through to iframe-rendered widget HTML, including any CSP that blocks the injected `<script>` tag.
+
+**Why it's wrong:** The injected bridge script is inline JavaScript. If the MCP server's original resource response included `Content-Security-Policy: script-src 'self'`, the injected bridge will be blocked.
+
+**Do this instead:** The `/widget-proxy` handler overrides CSP to `Content-Security-Policy: script-src 'unsafe-inline' 'self'` for preview mode only. Document that this is intentional for development. Production widgets should not rely on `unsafe-inline`.
+
+## Scaling Considerations
+
+| Scale | Architecture Adjustments |
+|-------|--------------------------|
+| Single developer, local | `cargo pmcp preview` running locally against local MCP server — all current defaults work |
+| Team demo / stakeholder review | `cargo pmcp landing` generates static page, host on GitHub Pages — no server needed |
+| Published ChatGPT App | Deploy MCP server, run `cargo pmcp manifest`, register at platform.openai.com |
+| Multiple widgets / large apps | `widgets/` directory structure scales naturally; one HTML file per widget |
+
+### First Bottleneck: McpProxy Session Affinity
+
+Preview server runs as a single instance pointing at one MCP server. When that MCP server uses session-based state (via `mcp-session-id` header), the preview proxy must forward the session ID on all requests after initialization. Current `McpProxy` loses this. Fix is session caching in `McpProxy` (Step 1 of build order).
+
+### Second Bottleneck: WASM Bundle Size
+
+`wasm-client` currently pulls in the full `pmcp` crate for WASM. As widgets grow, the WASM bundle will grow. Mitigation: ensure `pmcp` has minimal WASM-only features; profile with `twiggy` or `wasm-opt`. Not an immediate concern for v1.3 scope.
 
 ## Sources
 
-All findings derived from direct codebase analysis:
+### Codebase Analysis (PRIMARY — HIGH confidence)
 
-- `src/server/workflow/prompt_handler.rs` -- WorkflowPromptHandler, ExecutionContext, step loop, break behavior
-- `src/server/tasks.rs` -- TaskRouter trait definition (7 existing methods)
-- `src/server/builder.rs` -- ServerCoreBuilder.with_task_store(), prompt_workflow()
-- `src/server/core.rs` -- ServerCore request routing, task_router field usage
-- `src/server/middleware_executor.rs` -- MiddlewareExecutor trait
-- `src/server/workflow/sequential.rs` -- SequentialWorkflow struct, validate()
-- `src/server/workflow/workflow_step.rs` -- WorkflowStep, DataSource resolution
-- `src/server/workflow/data_source.rs` -- DataSource enum (PromptArg, StepOutput, Constant)
-- `crates/pmcp-tasks/src/router.rs` -- TaskRouterImpl, handle_task_call, store delegation
-- `crates/pmcp-tasks/src/context.rs` -- TaskContext, variable accessors, status transitions
-- `crates/pmcp-tasks/src/store/mod.rs` -- TaskStore trait, StoreConfig, TaskPage
-- `crates/pmcp-tasks/src/domain/record.rs` -- TaskRecord, to_wire_task_with_variables
-- `crates/pmcp-tasks/src/lib.rs` -- pmcp-tasks module organization
-- `docs/design/tasks-feature-design.md` -- Design document for tasks feature
-- `.planning/PROJECT.md` -- v1.1 milestone definition, requirements, constraints
+- `crates/mcp-preview/src/server.rs` — PreviewServer, AppState, route definitions
+- `crates/mcp-preview/src/proxy.rs` — McpProxy: HTTP->JSON-RPC translation, current gaps (session, IDs)
+- `crates/mcp-preview/src/handlers/page.rs` — Minimal handler, serves static HTML
+- `crates/mcp-preview/src/handlers/api.rs` — tool list/call handlers over HTTP
+- `crates/mcp-preview/src/handlers/websocket.rs` — WsMessage, tool call over WebSocket
+- `crates/mcp-preview/src/handlers/assets.rs` — rust-embed static asset serving
+- `examples/wasm-client/src/lib.rs` — WasmClient: WebSocket + HTTP transports, hardcoded IDs
+- `examples/mcp-apps-chess/src/main.rs` — Full app example: ResourceHandler, ChatGptAdapter, StreamableHttpServer
+- `examples/mcp-apps-chess/preview.html` — Mock bridge pattern, dev toolbar, iframe rendering
+- `src/types/mcp_apps.rs` — All MCP Apps types: WidgetCSP, ChatGptToolMeta, UIAction, ExtendedUIMimeType, HostType
+- `cargo-pmcp/src/commands/preview.rs` — CLI entry point for preview
+- `cargo-pmcp/src/commands/new.rs` — Scaffolding pattern (tier-based)
+- `cargo-pmcp/src/commands/secret/mod.rs` — CLI command module pattern to follow
+- `.planning/PROJECT.md` — v1.3 milestone definition, out-of-scope items
+
+### MCP Protocol (MEDIUM confidence — verified against existing codebase implementation)
+
+- MCP `resources/read` method: used by ChessResources handler, same pattern as `tools/call` in McpProxy
+- MCP `resources/list` method: listed in ResourceHandler trait but not in McpProxy yet
 
 ---
-*Architecture research for: Task-Prompt Bridge Integration in PMCP SDK*
-*Researched: 2026-02-21*
+*Architecture research for: MCP Apps Developer Experience (v1.3) in PMCP SDK*
+*Researched: 2026-02-24*

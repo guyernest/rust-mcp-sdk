@@ -1,465 +1,463 @@
 # Pitfalls Research
 
-**Domain:** Task-prompt bridge -- partial execution, structured prompt replies, variable schema, and backward compatibility when adding task-aware workflows to existing PMCP SDK
-**Researched:** 2026-02-21
-**Confidence:** HIGH (codebase analysis of existing WorkflowPromptHandler, TaskContext, TaskStore, and SequentialWorkflow; domain research on state machine serialization, LLM prompt structuring, and Rust trait evolution)
+**Domain:** MCP Apps developer tooling — widget preview (Axum + iframe), WASM bridge client, publishing flow (cargo-pmcp deploy + ChatGPT manifest), and authoring DX (file-based HTML, shared bridge library, scaffolding) added to an existing PMCP SDK
+**Researched:** 2026-02-24
+**Confidence:** HIGH (codebase analysis of proxy.rs, wasm-client/src/lib.rs, mcp_apps.rs, adapter.rs, server.rs, and the chess/map example apps; domain research on ChatGPT Apps SDK, iframe/postMessage security, wasm-bindgen async pitfalls, and CORS with Axum)
 
 ## Critical Pitfalls
 
-### Pitfall 1: Modifying WorkflowPromptHandler Breaks All Existing Non-Task Workflows
+### Pitfall 1: McpProxy Re-Initializes on Every Tool List — No Session Stickiness
 
 **What goes wrong:**
-The existing `WorkflowPromptHandler` implements `PromptHandler` with a signature `fn handle(&self, args: HashMap<String, String>, extra: RequestHandlerExtra) -> Result<GetPromptResult>`. It executes ALL steps server-side and returns a complete conversation trace. Adding task awareness directly into this handler (e.g., checking for a `TaskStore`, creating tasks, pausing mid-execution) means every existing workflow -- including ones that have no task association -- now runs through task-aware code paths. If the task-aware code path has even a subtle behavior change (different message ordering, different error propagation, different binding resolution), existing workflows silently break. Since workflows produce conversation traces consumed by LLMs, even a whitespace change in message formatting can alter LLM behavior.
+`McpProxy::list_tools()` calls `self.initialize().await` before every `tools/list` request. The MCP protocol requires initialization to happen exactly once per session. On stateful MCP servers that track sessions, re-sending `initialize` mid-session can cause servers to reset session state, re-negotiate capabilities, or return an error because a second `initialize` is not valid after the session is established. More concretely, on the existing PMCP `StreamableHttpServer`, the session ID issued in the `initialize` response is stored in an `Mcp-Session-Id` header — but `McpProxy` never stores or forwards this header, so every subsequent request is treated as a sessionless request. The preview server appears to work only because `enable_json_response: true` is set in the chess example, which degrades to stateless mode.
 
 **Why it happens:**
-The temptation is to add an `Option<Arc<dyn TaskStore>>` field to `WorkflowPromptHandler` and branch on `Some`/`None` in `handle()`. This is the "one handler to rule them all" anti-pattern. It couples two distinct execution modes (full-execution and partial-execution) into a single code path, making it impossible to test or reason about them independently. The existing `ExecutionContext` (in-memory `HashMap<BindingName, Value>`) is fundamentally different from `TaskContext` (durable store-backed), but the merge makes them share code that makes assumptions about one or the other.
+The proxy was written for stateless HTTP testing where every round-trip is self-contained. The comment `// First, ensure we're initialized` looks defensive but is actually incorrect for stateful servers. There is no session tracking state in `McpProxy`, and the `AtomicU64` request ID counter starts at 1 on each `McpProxy::new()`, meaning concurrent requests within a session will have colliding or mismatched IDs if the proxy is ever reused across requests.
 
 **How to avoid:**
-Create a **separate** `TaskWorkflowPromptHandler` that composes with (not inherits from) `WorkflowPromptHandler`. The original handler remains unchanged and untouched. The task-aware handler delegates full-execution steps to the original handler's step execution logic, but owns the task lifecycle and partial execution decisions. The key insight: `SequentialWorkflow` is data (step definitions), not behavior. Both handlers consume the same `SequentialWorkflow`, but execute it differently.
-
-```
-SequentialWorkflow (data)
-    |
-    +--- WorkflowPromptHandler (full execution, returns conversation trace)
-    |     - Existing behavior, ZERO changes
-    |     - All steps executed server-side
-    |     - Returns complete trace
-    |
-    +--- TaskWorkflowPromptHandler (partial execution, returns structured guidance)
-          - Creates task, binds variables
-          - Executes resolvable steps
-          - Pauses on unresolvable steps
-          - Returns completed steps + remaining steps + task ID
-```
-
-**Warning signs:**
-- `WorkflowPromptHandler` gaining new constructor parameters or fields
-- `#[cfg(feature = "tasks")]` guards inside `WorkflowPromptHandler::handle()`
-- Existing workflow tests needing modification to pass
-- `ExecutionContext` gaining an `Option<TaskContext>` field
-
-**Phase to address:**
-Phase 1 (Architecture). Must decide handler composition pattern before writing any code. This is the most important architectural decision in the milestone.
-
----
-
-### Pitfall 2: ExecutionContext and TaskContext Dual-Write Inconsistency
-
-**What goes wrong:**
-During partial execution, the task-aware handler must track step results in TWO places simultaneously: (1) the in-memory `ExecutionContext` (needed for resolving `DataSource::StepOutput` references in subsequent steps), and (2) the durable `TaskContext` / task variables (needed for persistence across client continuation calls). If a step result is stored in `ExecutionContext` but the `TaskContext::set_variable()` call fails (store error, variable size exceeded, task expired), the in-memory state diverges from the durable state. Subsequent steps execute successfully using the in-memory binding, but when the client resumes with a tool call, the task variables are missing the data from the failed write. The workflow proceeds with a "phantom step" whose result exists only in the ephemeral execution and is lost.
-
-**Why it happens:**
-`ExecutionContext` is a simple `HashMap<BindingName, Value>` with no error handling on `store_binding`. It always succeeds. `TaskContext::set_variable()` is async and fallible. Developers write the natural sequence: (1) execute step, (2) store in `ExecutionContext` for next step, (3) store in `TaskContext` for durability -- and don't handle the case where (3) fails but (1) and (2) succeeded. The existing `WorkflowPromptHandler` never faced this because there was only one storage path.
-
-**How to avoid:**
-Write to durable storage FIRST, then populate the in-memory context. If the durable write fails, the step is considered failed -- do not proceed to the next step with ephemeral-only data. The execution loop should be:
+Add explicit session lifecycle management to `McpProxy`:
 
 ```rust
-// Correct order: durable first, then ephemeral
-let result = execute_step(&step, &args, &extra).await?;
+pub struct McpProxy {
+    base_url: String,
+    client: reqwest::Client,
+    request_id: AtomicU64,
+    session_id: tokio::sync::OnceCell<Option<String>>,  // set once after initialize
+}
 
-// 1. Store durably (task variables)
-task_ctx.set_variable(&binding_name, result.clone()).await
-    .map_err(|e| /* mark step as failed, stop execution */)?;
-
-// 2. Only then store ephemerally (for next-step resolution)
-execution_ctx.store_binding(binding_name, result);
-```
-
-Additionally, implement a `SyncedExecutionContext` wrapper that writes to both stores atomically (durable first, ephemeral second) and provides rollback semantics (remove from ephemeral if durable fails).
-
-**Warning signs:**
-- Step results stored in `ExecutionContext` before `TaskContext`
-- No error handling on `task_ctx.set_variable()` calls in the execution loop
-- Tests that mock `TaskStore` to never fail -- no failure injection for variable writes
-- Client continuation seeing "step X not found" when the server reported it as completed
-
-**Phase to address:**
-Phase 2 (Partial Execution Engine). The execution loop must be designed with dual-write semantics from the start.
-
----
-
-### Pitfall 3: Structured Prompt Reply Too Rigid for Different LLM Clients
-
-**What goes wrong:**
-The prompt reply must convey: (a) what steps completed with their results, (b) what steps remain with enough context for the LLM to continue, (c) the task ID for polling. If the reply uses a highly structured JSON format embedded in a conversation message, different LLM clients (Claude, GPT-4, Gemini, open-source models) parse and follow it differently. Claude may follow a numbered step list precisely. GPT-4 may reinterpret the remaining steps and attempt them in a different order. Smaller models may ignore the structure entirely and hallucinate tool calls. The prompt reply becomes a de facto "instruction format" that only works with specific LLM families.
-
-**Why it happens:**
-Server developers design the prompt reply for the LLM they test with (usually Claude, given this is an MCP SDK). They assume the LLM will parse structured JSON from a conversation message, follow step ordering, and use the exact tool names and argument structures specified. But MCP is client-agnostic -- the spec makes no assumptions about the LLM powering the client. A reply that says `{"remaining_steps": [{"tool": "deploy", "args": {"config": "$config"}}]}` works if the client parses JSON from messages, but breaks if the client expects natural language instructions.
-
-**How to avoid:**
-Use a hybrid approach for the prompt reply: (1) structured data in `_meta` (machine-readable, for smart clients that know how to parse it) AND (2) natural language in the conversation messages (human-readable, for any LLM client). The `_meta` carries the structured step list. The messages carry the same information as conversational text that any LLM can follow.
-
-```
-GetPromptResult {
-    description: "Deploy service (2 of 4 steps completed)",
-    messages: [
-        // Completed steps as conversation trace (same as existing WorkflowPromptHandler)
-        user("I want to deploy service 'my-api' to us-east-1"),
-        assistant("Step 1: Validated config - region: us-east-1 [DONE]"),
-        user("Validation result: { valid: true, config: {...} }"),
-        assistant("Step 2: Provisioned infrastructure [DONE]"),
-        user("Provisioned: { vpc_id: 'vpc-123', subnet: 'sub-456' }"),
-        // Remaining steps as natural language guidance
-        assistant("Next steps to complete this workflow:
-            3. Call 'approve_deployment' to get deployment approval
-            4. Call 'deploy_service' with the config and infrastructure details above
-
-            The task ID is 'task-abc-123'. After completing all steps,
-            the task will be marked complete."),
-    ],
-    _meta: {
-        "pmcp:task_id": "task-abc-123",
-        "pmcp:workflow_progress": {
-            "completed": ["validate_config", "provision_infra"],
-            "remaining": [
-                {"step": "approve_deployment", "tool": "approve_deployment", "args": {}},
-                {"step": "deploy_service", "tool": "deploy_service", "args": {"config": "..."}}
-            ]
-        }
+impl McpProxy {
+    pub async fn ensure_initialized(&self) -> Result<()> {
+        self.session_id.get_or_try_init(|| async {
+            let result = self.send_request("initialize", Some(params)).await?;
+            // Extract Mcp-Session-Id from response headers
+            // Store it for subsequent requests
+            Ok(session_id_from_result)
+        }).await?;
+        Ok(())
     }
 }
 ```
 
-This way, smart clients can parse `_meta` for machine-readable guidance, while any LLM can follow the natural language instructions in the messages.
+Forward the stored session ID via `Mcp-Session-Id` header on every subsequent request. For the preview server's use case (stateless development servers), document that the preview currently requires `enable_json_response: true` (stateless mode) on the target server.
 
 **Warning signs:**
-- Prompt reply contains ONLY structured JSON, no natural language
-- Reply tested with only one LLM client (e.g., only Claude Code)
-- Remaining steps lack human-readable descriptions of what to do
-- No `_meta` section -- all guidance is in message text (no machine path)
+- Preview server works with chess example (stateless) but fails with servers that use `Mcp-Session-Id`
+- Each tool list call logs two JSON-RPC requests instead of one
+- Server logs show multiple `initialize` method calls from the same client within seconds
+- `list_tools()` always returns the full tool list even if the server's state has changed (because it re-initializes each time)
 
 **Phase to address:**
-Phase 3 (Structured Prompt Reply). Design the reply format before implementing, and test with at least two different clients (Claude Code + a simple test client that only reads text).
+Phase 1 (mcp-preview completion). Fix `McpProxy` session management before adding WASM bridge support that relies on the same proxy pattern.
 
 ---
 
-### Pitfall 4: Variable Schema Becomes an Implicit API That Can't Evolve
+### Pitfall 2: postMessage Bridge Uses Wildcard Target Origin — Security and ChatGPT Incompatibility
 
 **What goes wrong:**
-Task variables store step progress with a schema like `{ "step.validate.result": {...}, "step.deploy.status": "pending", "workflow.current_step": 2 }`. Both server-side step execution and client-side continuation tool calls read and write these variables. The variable key names become an implicit API contract between: (a) the partial execution engine, (b) each tool handler, and (c) the LLM client following the prompt reply. If the schema changes (rename `step.validate.result` to `steps.validate.output`), every component breaks simultaneously with no compile-time safety net. Variables are `HashMap<String, Value>` -- there is zero type safety, no schema validation, and no versioning.
+The `McpAppsAdapter::inject_bridge()` sends all postMessage calls with wildcard target origin `'*'`:
+
+```javascript
+window.parent.postMessage({
+    jsonrpc: '2.0',
+    id,
+    method,
+    params
+}, '*');   // <-- wildcard: sends to ANY window
+```
+
+This has two consequences. First, it is a security vulnerability: if the widget is embedded inside a malicious page that sits between ChatGPT and the widget (e.g., via a compromised CDN or ad injection), that malicious page receives all tool call payloads including any sensitive arguments. The Microsoft CVE-2024-49038 (CVSS 9.3) exploited exactly this pattern. Second, ChatGPT's Skybridge runtime validates the postMessage target origin — widgets using `'*'` may have their messages silently dropped or flagged in stricter ChatGPT App review contexts.
+
+The `message` event listener in the same bridge also lacks origin validation:
+
+```javascript
+window.addEventListener('message', (event) => {
+    const msg = event.data;
+    if (msg.jsonrpc !== '2.0') return;
+    // No event.origin check — accepts messages from any window
+```
+
+Any page on the internet that can embed the widget iframe can inject arbitrary JSON-RPC responses, causing the widget to execute fake tool results.
 
 **Why it happens:**
-`serde_json::Value` is the type of choice for flexibility ("any JSON value"), but flexibility is the enemy of contracts. Each developer writes tool handlers that assume specific variable key patterns without realizing they are creating a cross-component API. The prompt reply generator reads variables to build the structured guidance. The client's tool calls write variables that the server's continuation logic reads. None of these contracts are enforced anywhere -- they are scattered across code as string literals.
+Using `'*'` is the path of least resistance during development — it avoids having to know the parent's origin at widget load time. The widget cannot know its parent's origin without the parent passing it in. This creates a chicken-and-egg problem that most developers resolve by using `'*'` and never revisiting it.
 
 **How to avoid:**
-Define a `WorkflowVariableSchema` struct that formally specifies the variable keys, their types, and their semantics. Use this struct for both serialization and deserialization. Variables written by the partial execution engine go through this schema. Variables expected by the prompt reply generator go through this schema. Tool handlers interact with a typed API, not raw string keys.
+Pass the trusted parent origin to the widget during initialization. The standard pattern is for the parent (preview server or ChatGPT) to send the first message containing the allowed origin:
+
+```javascript
+// Parent sends origin declaration first
+iframe.contentWindow.postMessage({
+    type: 'init',
+    allowedOrigin: window.location.origin
+}, iframeOrigin);
+
+// Widget stores and validates
+let trustedOrigin = null;
+window.addEventListener('message', (event) => {
+    if (!trustedOrigin && event.data?.type === 'init') {
+        trustedOrigin = event.data.allowedOrigin;
+        return;
+    }
+    if (event.origin !== trustedOrigin) return; // reject unknown origins
+    // ... process message
+});
+
+// Widget sends to known origin only
+window.parent.postMessage(msg, trustedOrigin);
+```
+
+For the preview server, the preview page knows it is the parent and its origin is `http://localhost:{port}` — pass this to the iframe via `srcdoc` or a query parameter. For ChatGPT, the Skybridge runtime manages origin policy; use `window.openai.callTool()` instead of postMessage directly.
+
+**Warning signs:**
+- Bridge scripts contain `postMessage({...}, '*')` in production code (not just dev stubs)
+- No `event.origin` check in the `window.addEventListener('message', ...)` handler
+- Widget tool calls include user credentials or session tokens passed as arguments
+- The WASM bridge in the preview server relays arbitrary postMessage content to the MCP server without validating source origin
+
+**Phase to address:**
+Phase 1 (mcp-preview completion) for the preview bridge. Phase 2 (WASM bridge) for the WASM-side postMessage handler. Must be addressed before shipping examples that demonstrate `widget_accessible: true` tools.
+
+---
+
+### Pitfall 3: WASM Client Has Hardcoded Request IDs — Concurrent Calls Corrupt Responses
+
+**What goes wrong:**
+The HTTP path of `WasmClient::call_tool()` uses a hardcoded request ID of `3i64`:
 
 ```rust
-/// Standard variable schema for task-backed workflows.
-///
-/// This schema is the contract between the partial execution engine,
-/// tool handlers, and the prompt reply generator.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkflowProgress {
-    /// The workflow name that created this task
-    pub workflow_name: String,
-    /// Goal description for the LLM
-    pub goal: String,
-    /// Steps that have completed, with their results
-    pub completed_steps: Vec<CompletedStep>,
-    /// Steps remaining, with their expected tool calls
-    pub remaining_steps: Vec<RemainingStep>,
-    /// Index of the current step (0-based)
-    pub current_step_index: usize,
+let request = pmcp::shared::TransportMessage::Request {
+    id: 3i64.into(), // TODO: Implement proper request ID tracking
+    ...
+};
+```
+
+`list_tools()` uses `2i64` and `connect()` uses `1i64`. If a widget calls `callTool` twice concurrently (e.g., getting valid moves while another move is resolving), both requests have ID `3`. The MCP server and the `WasmHttpClient` response demultiplexer match responses to requests by ID. Two concurrent requests with the same ID will cause one response to be matched to the wrong request or lost entirely, producing incorrect game state or silent failures.
+
+The `WasmClient` struct uses `&mut self` on `list_tools` and `call_tool`, which prevents concurrent JavaScript calls from the same `WasmClient` instance — but this is enforced at compile time only. From JavaScript, the user calls async functions sequentially but the JavaScript event loop can interleave them, triggering the wasm-bindgen "recursive use of an object detected which would lead to unsafe aliasing in rust" runtime panic.
+
+**Why it happens:**
+The HTTP client path was added to mirror the WebSocket path but without the request ID tracking that the existing WebSocket implementation handles through the protocol. The `// TODO` comment acknowledges the gap but it is easy to miss during widget development where single-tool calls rarely expose concurrency issues.
+
+**How to avoid:**
+Add an atomic counter to the request ID generator, mirroring what `McpProxy` already does correctly with `AtomicU64`:
+
+```rust
+pub struct WasmClient {
+    connection_type: Option<ConnectionType>,
+    ws_client: Option<Client<WasmWebSocketTransport>>,
+    http_client: Option<WasmHttpClient>,
+    next_id: std::sync::atomic::AtomicI64,  // add this
+}
+
+impl WasmClient {
+    fn next_request_id(&self) -> i64 {
+        self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
 }
 ```
 
-Include a `schema_version: u32` field so the variable format can evolve without breaking existing tasks. The schema struct is defined once in `pmcp-tasks` and used by all components.
+For the `&mut self` / concurrent-call problem: redesign the bridge API to use `RefCell<WasmClient>` internally or restructure so that the WASM-exposed async methods take ownership of what they need before the first await point. Document in the bridge API that concurrent JS calls to the same `WasmClient` are not supported without explicit queuing.
 
 **Warning signs:**
-- Variable keys as string literals in more than one module
-- Different components using different key naming conventions (`step.X.result` vs `steps[0].result` vs `x_result`)
-- No documentation of what variables a workflow produces
-- Client-side code guessing at variable structure from prompt reply text
+- Widget makes two rapid tool calls (e.g., `chess_valid_moves` immediately after `chess_new_game`) and receives wrong results
+- Browser console shows `"recursive use of an object detected which would lead to unsafe aliasing in rust"` panic
+- The `// TODO: Implement proper request ID tracking` comment is still present
+- HTTP-path tool calls are never tested concurrently in integration tests
 
 **Phase to address:**
-Phase 1 (Variable Schema Design). Define the schema struct before implementing partial execution, because the schema shapes everything downstream.
+Phase 2 (WASM bridge). Fix before exposing the WASM client to widget authors as a supported API.
 
 ---
 
-### Pitfall 5: Partial Execution "Pause Point" Logic Becomes a Second Workflow Engine
+### Pitfall 4: Bridge Injection Breaks on HTML with Multiple `</head>` Occurrences or Template Strings
 
 **What goes wrong:**
-The partial execution engine must decide, for each step, whether it can execute server-side or must be deferred to the client. The simplest rule is "execute if the step has no `DataSource::StepOutput` dependencies on non-yet-executed steps." But this is a simplification. Real pause criteria include: (a) the step needs LLM reasoning (guidance text present), (b) the step needs user input (elicitation), (c) the step's tool is not registered on the server (external tool), (d) the step references a resource that requires client-side fetching, (e) a previous step failed and recovery requires client judgment. As more pause criteria accumulate, the "should I execute this step?" decision tree grows into a second workflow engine embedded inside the first one, with its own state, its own error handling, and its own bugs.
-
-**Why it happens:**
-Developers start with a clean "execute all, pause on first unresolvable" loop. Then product requirements add nuance: "skip steps that need user input," "execute steps even if a previous step failed (for non-critical steps)," "allow the workflow author to mark steps as client-only." Each requirement adds a branch to the pause logic, and the branches interact in unexpected ways. The result is a workflow-within-a-workflow that is harder to understand than either system alone.
-
-**How to avoid:**
-Make the pause decision a SIMPLE, EXPLICIT property of each `WorkflowStep`, not an inferred decision. Add an execution mode enum to `WorkflowStep`:
+The `inject_bridge` implementations in both `ChatGptAdapter` and `McpAppsAdapter` use `html.replace("</head>", ...)`:
 
 ```rust
-#[derive(Clone, Debug, Default)]
-pub enum StepExecution {
-    /// Execute server-side during partial execution (default)
-    #[default]
-    ServerSide,
-    /// Always defer to client (step needs LLM reasoning or user input)
-    ClientSide,
-    /// Execute server-side, but defer to client if server execution fails
-    BestEffort,
-}
+if html.contains("</head>") {
+    html.replace("</head>", &format!("{bridge_script}</head>"))
 ```
 
-The partial execution engine has exactly ONE decision: check `step.execution()`. If `ServerSide`, execute it. If `ClientSide`, stop and add to remaining. If `BestEffort`, try and fall back. No inference, no heuristics, no "does this step have guidance? then it probably needs the client" guessing. The workflow author explicitly declares intent.
+Rust's `str::replace` replaces **all occurrences**, not just the first. An HTML template that contains `</head>` inside a JavaScript string literal, HTML comment, or `<template>` tag will have the bridge script injected multiple times. Example:
 
-The existing `with_guidance()` method on `WorkflowStep` already signals "this step may need client reasoning." But it is currently used for rendering, not for execution decisions. Do not overload its semantics. Keep `guidance` for rendering and `execution` for control flow.
+```html
+<head><title>Chess</title></head>
+<body>
+  <template id="error-tmpl">
+    <!-- loaded from </head> snippet -->
+  </template>
+</body>
+```
 
-**Warning signs:**
-- The pause loop checking for `step.guidance().is_some()` to decide server vs client
-- More than 3 conditions in the "should I execute?" decision
-- Steps executing server-side that should have been deferred (wrong pause logic)
-- The pause decision referencing anything outside the step's own properties (e.g., inspecting task variables to decide whether to pause)
+Additionally, `html.replace` is O(n) per call and creates a new allocation. For large widget HTML files (say, 500KB with embedded SVGs), this is a measurable allocation hit on every resource read request.
 
-**Phase to address:**
-Phase 1 (WorkflowStep extension). Add `StepExecution` before implementing the partial execution loop. Validate with the workflow author, not inferred at runtime.
-
----
-
-### Pitfall 6: Error During Partial Execution Leaves Task in Inconsistent Half-Completed State
-
-**What goes wrong:**
-The partial execution engine runs steps 1, 2, 3 in sequence. Step 2 succeeds. Step 3 fails (tool error, timeout, variable size exceeded). The task now has variables from steps 1 and 2, but step 3's failure is ambiguous: did the tool execute and fail (effect already applied, e.g., database row inserted)? Or did the tool execution error out before any side effects (safe to retry)? The task variables say steps 1-2 completed, but the prompt reply must communicate step 3's failure in a way the client can act on. If step 3's failure is reported as a generic "step failed," the client has no basis for deciding whether to retry step 3 or skip it. If the task status remains `Working`, the client may not even know something went wrong.
+For the HTML injection path without `</head>`, the code falls back to wrapping the entire document in `<head>...</head>` tags, which produces invalid HTML if there is already a `<head>` element with a different case (`<HEAD>`) or in XML-ish content.
 
 **Why it happens:**
-The existing `WorkflowPromptHandler` treats any step failure as a terminal error -- it returns an error from `handle()` and the entire prompt fails. But in partial execution, step failure is not necessarily terminal. The workflow should be able to communicate "steps 1-2 done, step 3 failed with error X, remaining steps 4-5 still needed" and let the client decide. This requires a richer error model than "success or failure" -- it needs "partial success with failure details."
+Simple string substitution is fast to implement and handles the common case (a normal HTML file with one `</head>`). Widget authors write clean HTML so the edge cases rarely surface during development, but they can appear when including third-party HTML fragments, SVG embeds with XML processing instructions, or when scaffolded templates include comment blocks.
 
 **How to avoid:**
-Each step in the progress schema should have a status field, not just "completed" or "remaining":
+Use `html.replacen("</head>", ..., 1)` (replace only the first occurrence) as the immediate fix. For a robust solution, use a lightweight HTML injection approach that searches for the last `<head>` tag position and inserts before `</head>`:
 
 ```rust
-pub enum StepStatus {
-    Completed { result: Value },
-    Failed { error: String, retryable: bool },
-    Skipped { reason: String },
-    Remaining { tool: String, args: Value },
-}
-```
-
-When a step fails during partial execution:
-1. Store the failure in task variables (`step.X.status = "failed"`, `step.X.error = "..."`)
-2. Set `retryable` based on whether the tool handler indicates idempotency
-3. Continue to the NEXT step only if the failed step was non-critical (opt-in via `WorkflowStep`)
-4. By default, stop execution on first failure and report all remaining steps
-5. Set task status to `Working` (not `Failed`) -- the task is still in progress, just needs client intervention
-6. The prompt reply includes the failure details in both `_meta` and natural language
-
-Never set the task to `Failed` during partial execution unless ALL steps have failed or the workflow is unrecoverable. The task state machine has `Working` and `InputRequired` for exactly this situation -- the task needs client action but is not terminal.
-
-**Warning signs:**
-- Step failure causing the entire task to transition to `Failed`
-- No `retryable` flag on step failures
-- Client receiving a `Failed` task with no information about which steps succeeded
-- Steps after a failed step being silently skipped with no record in task variables
-
-**Phase to address:**
-Phase 2 (Partial Execution Engine) and Phase 3 (Prompt Reply). Error handling must be designed alongside the execution loop, not bolted on after.
-
----
-
-### Pitfall 7: Resumption Semantics -- Client Continuation Tools Don't Know About Workflow Context
-
-**What goes wrong:**
-After partial execution, the prompt reply tells the client "call `approve_deployment` next." The client (LLM) calls `tools/call approve_deployment` as a regular tool call. But the tool handler for `approve_deployment` doesn't know it is being called as part of a workflow, doesn't know the task ID, and doesn't know to update the workflow progress variables. The tool executes correctly but the workflow state in task variables is stale -- it still shows `approve_deployment` as "remaining." The server has no way to advance the workflow because tool calls and workflow state are disconnected.
-
-**Why it happens:**
-MCP tool calls are stateless by design. `tools/call` receives a tool name and arguments -- there is no built-in concept of "this call is part of workflow X, task Y, step Z." The v1.0 task system solved this for task-augmented tools (via `params.task`), but the prompt-driven workflow continuation is different: the client is calling tools directly based on the prompt reply, not via task-augmented requests. There is no mechanism to bind a regular `tools/call` back to a workflow task.
-
-**How to avoid:**
-Two options, choose one:
-
-**Option A (recommended): Embed task ID in the prompt reply tool arguments.** The remaining steps in the prompt reply include a `_task_id` argument that the LLM passes through when calling the tool. The server's tool middleware detects `_task_id`, loads the task, and provides the `TaskContext` to the handler. This is the least invasive approach -- it works with any MCP client because the task ID is just another argument.
-
-```json
-// In prompt reply:
-"remaining": [
-    {"tool": "approve_deployment", "args": {"_task_id": "task-abc-123", "config": "..."}}
-]
-```
-
-**Option B: Use task-augmented tool calls.** The prompt reply instructs the client to use `params.task` with the task ID when calling tools. This requires the client to support MCP Tasks, which most clients don't yet. Not recommended as the primary mechanism.
-
-In either case, the server needs a `WorkflowStepMiddleware` that intercepts tool calls with a `_task_id` argument, loads the task, provides the `TaskContext`, and after the tool completes, updates the workflow progress variables (marking the step as completed, advancing `current_step_index`).
-
-**Warning signs:**
-- Prompt reply listing remaining tools without any task ID reference
-- Tool handlers that don't update workflow progress variables
-- Client calling tools that complete successfully but the task variables are stale
-- No middleware that connects a regular `tools/call` back to its workflow task
-
-**Phase to address:**
-Phase 3 (Client Continuation Pattern). This is the core of the "bridge" -- connecting prompt-driven guidance back to task state. Design the continuation mechanism before implementing the prompt reply, because the reply's format depends on how continuation works.
-
----
-
-### Pitfall 8: SequentialWorkflow Validation Does Not Account for Partial Execution Dependencies
-
-**What goes wrong:**
-The existing `SequentialWorkflow::validate()` checks that all `DataSource::StepOutput` references point to earlier steps with explicit bindings. This is correct for full execution (all steps run). But in partial execution, some steps are deferred to the client. If step 3 (client-side) depends on step 2's output via `DataSource::StepOutput { step: "step2_result" }`, and step 2 was executed server-side, the dependency is satisfied by task variables. But if step 2 is ALSO client-side, the dependency is between two client-executed steps -- the prompt reply must communicate this dependency so the client executes them in order. The current validation does not distinguish between server-resolved and client-resolved dependencies, and does not flag the case where a client-side step depends on another client-side step's output.
-
-**Why it happens:**
-The existing `validate()` method treats all steps equally -- it does not know about `StepExecution::ServerSide` vs `StepExecution::ClientSide`. When partial execution is added, the validation becomes split-brain: some bindings are resolved by the server (available in task variables) and some must be resolved by the client (available only in the LLM's context window). The validation needs to verify that client-side step dependencies can actually be communicated through the prompt reply.
-
-**How to avoid:**
-Extend validation to be aware of step execution modes. Add a `validate_for_partial_execution()` method that:
-1. Separates steps into server-side and client-side groups
-2. Verifies all server-side step dependencies are on other server-side steps (or prompt args)
-3. For client-side step dependencies on server-side steps, verifies the server step has a binding (so the result is stored in task variables and available in the prompt reply)
-4. For client-side step dependencies on other client-side steps, verifies the dependent step comes AFTER the dependency in the step list and includes the dependency information in the prompt reply
-
-```rust
-impl SequentialWorkflow {
-    pub fn validate_for_partial_execution(&self) -> Result<PartialExecutionPlan, WorkflowError> {
-        // Returns a plan that explicitly states:
-        // - Which steps run server-side
-        // - Which steps are deferred
-        // - Which deferred steps depend on server results (via task variables)
-        // - Which deferred steps depend on other deferred steps (via prompt ordering)
+fn inject_before_head_close(html: &str, script: &str) -> String {
+    // Case-insensitive search for the closing head tag
+    let lower = html.to_lowercase();
+    if let Some(pos) = lower.find("</head>") {
+        let mut result = String::with_capacity(html.len() + script.len());
+        result.push_str(&html[..pos]);
+        result.push_str(script);
+        result.push_str(&html[pos..]);
+        result
+    } else {
+        // No <head>: prepend script
+        format!("{script}{html}")
     }
 }
 ```
 
 **Warning signs:**
-- Existing `validate()` passing for workflows that would fail during partial execution
-- Client-side steps referencing bindings that are never stored in task variables
-- Prompt reply listing steps in an order that violates data dependencies
-- `DataSource::StepOutput` references to steps that were deferred but whose results aren't in the prompt context
+- Widget HTML contains commented-out code blocks with HTML tags
+- Bridge script appears twice in the rendered widget's source
+- Widget with embedded `<template>` tags or SVG `<defs>` fails to initialize
+- Tests only use minimal `<html><head></head><body></body></html>` fixtures, never real widget HTML
 
 **Phase to address:**
-Phase 2 (Partial Execution Engine). Validation must be extended before the execution loop is implemented, because the execution plan comes from validation.
+Phase 1 (mcp-preview). Fix `inject_bridge` before the file-based widget authoring feature (Phase 3 authoring DX) makes this code path critical for real widget files.
+
+---
+
+### Pitfall 5: ChatGPT Manifest Generation Without HTTPS Causes Silent Rejection
+
+**What goes wrong:**
+The ChatGPT Apps runtime requires an HTTPS endpoint for MCP server registration. ChatGPT will not connect to an HTTP server even for development mode. The OAuth protected resource endpoint must be at `https://your-mcp.example.com/.well-known/oauth-protected-resource`. If `cargo pmcp deploy` generates a manifest with an HTTP URL (e.g., because the deploy target outputs an HTTP load balancer URL before HTTPS redirect is configured), ChatGPT will silently fail to register the MCP App with no useful error message — it simply will not appear in the ChatGPT Apps panel.
+
+The existing deploy flow uses `npx cdk deploy` which outputs a CloudFormation stack URL. Lambda Function URLs can be HTTP or HTTPS depending on configuration. If the generated manifest uses the HTTP variant of the Function URL, the ChatGPT registration fails.
+
+**Why it happens:**
+Developers test the manifest locally with an HTTP preview server (mcp-preview runs on `http://localhost:8765`), which works for the preview tool itself. When they deploy and generate the manifest for ChatGPT submission, they copy the pattern from the preview configuration and use the deployed HTTP URL. ChatGPT's error reporting for manifest problems is minimal — it shows a generic "could not connect" message.
+
+**How to avoid:**
+In the manifest generation step of `cargo pmcp deploy`:
+1. Validate that the MCP server URL starts with `https://` before generating the manifest. Fail with a clear error: `"ChatGPT requires HTTPS. The deployed URL must use https:// — configure HTTPS on your deployment target first."`
+2. Auto-generate the `.well-known/oauth-protected-resource` endpoint as part of the manifest.
+3. For AWS Lambda: ensure the CloudFormation template configures `AuthType: NONE` (or OAuth) on the Function URL with HTTPS only. Document this in the deploy guide.
+4. Add a `cargo pmcp validate-manifest` subcommand that checks the manifest URL is HTTPS, the endpoint is reachable, and the tools/list response is valid.
+
+```rust
+// In manifest generation
+if !mcp_url.starts_with("https://") {
+    anyhow::bail!(
+        "ChatGPT Apps require HTTPS. Got: {}. \
+         Configure HTTPS on your deployment target before generating the manifest.",
+        mcp_url
+    );
+}
+```
+
+**Warning signs:**
+- Manifest generation accepts `http://` URLs without warning
+- No `cargo pmcp validate-manifest` or equivalent verification step
+- CloudFormation template does not enforce HTTPS-only on Function URL
+- The deploy guide says "deploy, then register" without explicitly noting the HTTPS requirement
+
+**Phase to address:**
+Phase 3 (publishing flow). Must be part of the initial manifest generation implementation, not a post-ship fix.
+
+---
+
+### Pitfall 6: iframe Preview Bridge and WASM Bridge Have Divergent APIs — Widget Authors Must Target Two Contracts
+
+**What goes wrong:**
+The mcp-preview tool injects a `window.mcpBridge` via the preview server's parent page JavaScript (chess `preview.html`), which is a completely different code path from the `inject_bridge` call in `ChatGptAdapter`. When a widget is developed using `mcp-preview`, it runs against the preview bridge (which is a mock implemented in `preview.html`'s JavaScript). When the widget is deployed to ChatGPT, it runs against the `ChatGptAdapter`-injected bridge which wraps `window.openai`. If these two bridges have different function signatures or different return value shapes, the widget works in preview but fails in production.
+
+Concrete divergence already exists: the preview bridge in chess `preview.html` returns raw game state objects from `callTool()`, while the ChatGPT `window.openai.callTool()` wraps tool results in `{ content: [...], _meta: ... }` envelopes (matching the MCP `CallToolResult` type). A widget that does `const state = await mcpBridge.callTool('chess_new_game', {})` and treats `state` as the game state directly will work in preview (mock returns state directly) but fail in ChatGPT (result is `{ content: [{ type: 'text', text: '...' }] }`).
+
+**Why it happens:**
+The preview bridge and the production bridge are written independently and there is no shared contract definition. The preview bridge was written to make the chess example easy to develop, not to accurately simulate the ChatGPT runtime. Since the chess example works in preview, nobody notices the divergence until running in actual ChatGPT.
+
+**How to avoid:**
+Define a single `McpBridgeContract` interface (as a TypeScript type definition or a well-documented JavaScript module) that both the preview bridge and the production bridge must conform to:
+
+```typescript
+// bridge-contract.d.ts
+interface McpBridgeCallResult {
+    content: Array<{ type: string; text?: string; mimeType?: string }>;
+    isError?: boolean;
+    _meta?: Record<string, unknown>;
+}
+
+interface McpBridge {
+    callTool(name: string, args: Record<string, unknown>): Promise<McpBridgeCallResult>;
+    getState(): Record<string, unknown>;
+    setState(state: Record<string, unknown>): void;
+    // ... all methods
+}
+```
+
+The preview server's mock bridge must return results in `McpBridgeCallResult` format, not raw values. The shared bridge library (authoring DX feature) enforces this contract by providing a `parseBridgeResult<T>(result: McpBridgeCallResult): T` helper that widget authors use instead of direct property access.
+
+The Playwright E2E tests should run against both the mock bridge (via `mcp-preview`) and a real ChatGPT-like bridge to catch divergence.
+
+**Warning signs:**
+- `preview.html` bridge returns a different structure than the ChatGPT SDK bridge would return for the same tool call
+- Widget code does `const result = await mcpBridge.callTool(...)` and then `result.someField` directly without checking `result.content[0].text`
+- No TypeScript types or interface definition for the bridge contract
+- E2E tests only run against `mcp-preview`, never against a production-equivalent bridge
+
+**Phase to address:**
+Phase 1 (mcp-preview completion) to define the contract. Phase 2 (WASM bridge) to implement it. Phase 3 (authoring DX) to provide the shared bridge helper library that enforces it.
+
+---
+
+### Pitfall 7: WASM Module Size Balloons When Including Full pmcp Crate Without Feature Pruning
+
+**What goes wrong:**
+The WASM client uses `pmcp = { path = "../..", default-features = false, features = ["wasm"] }`. The `pmcp` crate is large (~32K Rust LOC at v1.2 with tasks, workflow, auth, storage backends, and MCP Apps adapters). Even with `default-features = false`, feature flags that are implicitly enabled by transitive dependencies (e.g., `serde`, `tokio` features pulled in by async-trait) can bloat the WASM binary significantly. The `console_error_panic_hook` and `tracing-wasm` dependencies are also included unconditionally, adding debug overhead even in release builds.
+
+The existing `wasm-pack` configuration in `Cargo.toml` sets `wasm-opt = false`, which explicitly disables the wasm-opt optimizer that typically reduces WASM binary size by 15-20%. For a browser test client that needs to download quickly, a 5MB unoptimized WASM binary is a bad developer experience (each reload of the preview page downloads 5MB).
+
+**Why it happens:**
+`wasm-opt = false` was set to work around build system issues (wasm-opt requires a separate binary installation on some CI systems). It is a build convenience that becomes a permanent liability. Feature flag analysis for WASM is tedious — `cargo bloat --target wasm32-unknown-unknown` is not in the standard toolkit.
+
+**How to avoid:**
+1. Enable `wasm-opt` in release builds. Add it as a CI dependency or use the `wasm-opt` crate feature in `wasm-pack` which bundles a pre-compiled wasm-opt binary:
+   ```toml
+   [package.metadata.wasm-pack]
+   wasm-opt = ["-Oz", "--enable-mutable-globals"]
+   ```
+2. Add a Cargo profile for WASM builds that enables size optimization:
+   ```toml
+   [profile.release]
+   opt-level = "z"
+   lto = true
+   codegen-units = 1
+   ```
+3. Gate `tracing-wasm` and `console_error_panic_hook` behind a `debug` feature flag so release WASM builds exclude them.
+4. Add a `just wasm-size` recipe that runs `wasm-pack build --release` and reports binary size. Set a budget (e.g., 2MB uncompressed) and fail CI if exceeded.
+
+**Warning signs:**
+- `wasm-opt = false` remains in `Cargo.toml` with no comment explaining why
+- WASM binary in `pkg/` is larger than 3MB
+- `cargo bloat` has never been run against the WASM target
+- `tracing-wasm` is initialized unconditionally in `WasmClient::new()` even in release builds
+
+**Phase to address:**
+Phase 2 (WASM bridge). Address before the WASM bridge adds more dependencies for bridge injection and postMessage handling.
 
 ---
 
 ## Technical Debt Patterns
 
-Shortcuts that seem reasonable but create long-term problems.
-
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Reusing `ExecutionContext` for both full and partial execution | Less code, one execution path | Two fundamentally different state management models (ephemeral vs durable) share code that makes assumptions about one or the other. Adding durable semantics to an ephemeral struct is a category error. | Never -- create a separate `TaskExecutionContext` that wraps `TaskContext` |
-| Hardcoding variable key patterns as string literals | Fast to implement, easy to read | Keys drift across modules, no refactoring safety, key typos cause silent bugs. `"step.validate.result"` in the execution engine vs `"steps.validate.result"` in the prompt generator = silent data loss. | Only in tests -- production code must use constants or the typed schema struct |
-| Skipping `_meta` in prompt reply (only natural language) | Simpler implementation, works with current LLMs | Smart clients that could parse structured guidance are forced to parse natural language, which is unreliable. Adding `_meta` later requires changing the reply format, breaking existing client integrations. | Never -- include `_meta` from day one, even if minimal |
-| Making all steps `ServerSide` by default with no client-side option | Simpler execution loop, backward compatible | Steps that genuinely need LLM reasoning (fuzzy matching, user-facing decisions) are forced server-side and fail because the server has no LLM. Forces awkward workarounds like "skip steps that have guidance." | Acceptable for MVP only if a `ClientSide` option is planned for the next iteration |
-| Using `PromptHandler` trait directly for task-aware prompts (no new trait) | Fits existing server registration, no API changes | `PromptHandler::handle()` returns `GetPromptResult` synchronously -- it has no way to signal "I created a task, here's the ID" as a side channel. Task creation becomes invisible to the server framework. | Never -- at minimum, extend `GetPromptResult` with optional `_meta` for task association |
+| Preview bridge mocks tool calls in JavaScript | Fast widget iteration without server | Bridge contract drifts from production; widget works in preview, fails in ChatGPT | Only acceptable until shared bridge library defines the contract (Phase 3) |
+| `window.parent.postMessage({...}, '*')` wildcard target origin | No need to know parent origin at bridge init time | Security vulnerability; CVE-class bug if widget handles sensitive data; may be silently dropped by ChatGPT runtime | Never acceptable in production code; use origin handshake pattern |
+| Hardcoded request IDs in WASM HTTP client | Simplest possible implementation | Concurrent calls corrupt responses; runtime panics on rapid sequential calls | Acceptable only during initial prototype before any concurrent usage |
+| `cargo pmcp deploy` skips HTTPS validation | Faster dev iteration with HTTP | Manifest is silently rejected by ChatGPT; developer has no actionable error | Never acceptable in the deploy command output |
+| Inline HTML strings in `include_str!()` | Works today; files already exist | Blocks file-based widget authoring DX; hot-reload requires server restart | Only until file-based authoring is implemented (Phase 3) |
+| `html.replace("</head>", ...)` (replaces all occurrences) | Simple one-liner | Injects bridge multiple times into HTML with template tags or comments | Acceptable only for trivial test HTML; use `replacen(..., 1)` immediately |
 
 ## Integration Gotchas
 
-Common mistakes when connecting the task-prompt bridge to existing systems.
-
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| `WorkflowPromptHandler` + `TaskContext` | Passing `TaskContext` via `RequestHandlerExtra::metadata` (a `HashMap<String, String>`) which requires serialization and loses type safety | Add `task_context: Option<TaskContext>` as a proper typed field on a workflow-specific execution context, not smuggled through generic metadata |
-| `SequentialWorkflow` step execution in partial mode | Calling the existing `WorkflowPromptHandler::execute_step()` method which assumes all bindings are in-memory and available | Extract step execution into a standalone function that accepts either `ExecutionContext` or `TaskContext` for binding resolution, keeping the resolution mechanism pluggable |
-| `PromptHandler` return type for task association | Returning a `GetPromptResult` with no indication that a task was created -- the server framework has no way to auto-include the task ID in the response | Ensure `GetPromptResult._meta` includes `pmcp:task_id` so the client can discover the task association. The existing `_meta: Option<Map<String, Value>>` on `GetPromptResult` is sufficient -- do NOT modify the trait |
-| Existing middleware chain during partial execution | Executing tools during `prompts/get` without going through the middleware chain (auth, logging, rate limiting). The existing handler uses `MiddlewareExecutor` but the task-aware handler might bypass it for "simplicity." | Always use the `MiddlewareExecutor` for tool execution, even during partial workflow execution. Tools inside workflows are not special -- they must go through the same auth and logging as direct tool calls. |
-| Task store cleanup for workflow tasks | Treating workflow tasks the same as tool-augmented tasks for TTL and cleanup. Workflow tasks may span hours (user thinking time between steps), while tool tasks complete in seconds. | Use workflow-specific TTL defaults (e.g., 4 hours vs 1 hour for tool tasks). Consider making TTL configurable per workflow via `SequentialWorkflow::with_ttl()`. |
-| `DataSource::StepOutput` resolution from task variables | Assuming step outputs in task variables have the same shape as in-memory bindings. In-memory bindings store the raw `Value` from the tool result. Task variables may be serialized differently (e.g., string-encoded JSON if the variable schema uses string values). | Define a clear contract: step results stored in task variables use the same `serde_json::Value` representation as in-memory bindings. Test round-trip: in-memory result -> task variable -> resolution produces identical values. |
+| ChatGPT Skybridge | Testing widget with `mcp-preview` mock and shipping to ChatGPT assuming bridge APIs match | Define bridge contract TypeScript types; test against real `window.openai` API signatures in unit tests before shipping |
+| ChatGPT Skybridge | Using `window.mcpBridge.callTool()` results directly as typed objects | Tool results are wrapped in `{ content: [...] }` — use `parseBridgeResult<T>()` helper or check `result.content[0].text` |
+| ChatGPT Skybridge | Sending postMessage to `window.parent` with `'*'` | ChatGPT injects `window.openai.callTool()` — use the OpenAI API directly; no postMessage needed for Skybridge widgets |
+| mcp-preview WebSocket | Widget calls bridge, expects synchronous response | WebSocket bridge is async; always `await` bridge calls; never use bridge in synchronous render code |
+| CORS in mcp-preview | Preview server uses `CorsLayer::new().allow_origin(Any)` — this is the current code | For preview, `Any` origin is correct. For production MCP server, restrict to your domain. Never use `allow_credentials(true)` with `Any` origin |
+| Axum static assets | Embedded assets via `rust-embed` require recompile to update | For development, serve assets from the filesystem using `tower-http ServeDir`; use `rust-embed` only for release builds |
+| ChatGPT manifest | Manifest uses HTTP URL from deploy output | Validate URL is HTTPS before generating manifest; fail fast with clear error |
+| wasm-bindgen `JsValue` | Passing Rust structs across the WASM boundary by value consumes them | Prefer `JsValue` returns from `serde_wasm_bindgen::to_value()`; mark consumed values clearly in API docs |
 
 ## Performance Traps
 
-Patterns that work at small scale but fail as usage grows.
-
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| Re-reading all task variables on every step during partial execution | Each step calls `task_ctx.variables()` which fetches the full task record from the store. For a 10-step workflow, that is 10 full reads of an increasingly large variable payload. | Read task variables ONCE at the start of partial execution. Cache in the `TaskExecutionContext`. Only write-through on `set_variable`. | ~5 steps with non-trivial variable payloads on DynamoDB |
-| Storing full tool results in task variables | A tool returning a 100KB JSON response stored as a variable. After 5 steps, the task has 500KB of variables, approaching the 1MB limit and slowing every read/write. | Store only the fields needed by subsequent steps, not the entire tool result. Use `DataSource::StepOutput { field: Some("id") }` to extract specific fields and store those. Document a "lean variables" pattern. | ~3-4 steps with large tool responses |
-| Prompt reply re-rendering for every `tasks/get` poll | If the client polls `tasks/get` and the server re-generates the prompt reply each time (re-executing the prompt handler to build the message trace), each poll becomes as expensive as the original `prompts/get` call. | The prompt reply is generated ONCE during `prompts/get` and the result is stored in the task variables or task result. Subsequent `tasks/get` returns the stored state without re-rendering. | Any polling frequency under 10 seconds |
-| Linear scan of completed steps to build prompt reply | Building the "completed steps" section of the prompt reply by iterating over all task variables and matching key patterns. As variables accumulate, this becomes O(n) string matching. | Use the typed `WorkflowProgress` schema with a `completed_steps: Vec<CompletedStep>` that is directly serialized/deserialized, not reconstructed from flat key scans. | ~20+ variables in a task |
+| McpProxy re-initializes on every tool list | Each tool list request takes 2 RTTs instead of 1; servers with session state reset on each call | Initialize once and cache session ID in `OnceCell` | From the first deployment where the target server uses `Mcp-Session-Id` |
+| WASM binary downloaded on every preview page reload | Preview page feels slow even on localhost; large binary clogs dev server | Enable wasm-opt; add content-hash to WASM file URL for caching | Immediately during widget development iteration |
+| Chess game state included in every tool call argument | Network payload per tool call grows with move history (8x8 board × 64 squares × move history) | This is intentional for stateless design — document that widgets should trim state; provide a `trimGameState()` helper | At ~200 moves (game history becomes larger than the board state) |
+| Playwright E2E tests spawn full browser for each test | CI widget test suite takes 5+ minutes | Share browser context across tests; only reload the page for each test | When widget test count exceeds 10 tests |
+| WASM module instantiation in every preview iframe reload | Repeated 500ms+ instantiation delay on each widget test cycle | Cache initialized WASM module in a web worker or use `WebAssembly.compileStreaming` with HTTP cache | After first day of widget development when the reload friction becomes noticeable |
 
 ## Security Mistakes
 
-Domain-specific security issues for the task-prompt bridge.
-
 | Mistake | Risk | Prevention |
 |---------|------|------------|
-| Prompt reply leaking internal tool arguments in natural language | The prompt reply says "Call deploy_service with database_password='hunter2'". The LLM client includes this in its conversation context, potentially leaking it to the user or to other tools. | Never include sensitive argument values in the natural language portion of the prompt reply. Use argument references (`"use the config from step 2"`) not literal values. Store sensitive values in task variables accessed by reference, not inlined in messages. |
-| Task ID in prompt reply enables unauthorized task access | The prompt reply includes the task ID in plain text. A malicious user seeing the prompt output could use the task ID to access the task via `tasks/get` without proper authentication. | Task access is always gated by `owner_id` enforcement (already implemented in v1.0). The task ID alone is not sufficient for access. However, ensure the prompt reply makes this clear and does not encourage the client to share task IDs. |
-| Client-side tool calls bypassing workflow step ordering | The prompt reply lists steps 3, 4, 5 as remaining. The client calls step 5 first, skipping 3 and 4. If step 5 has side effects (e.g., deploying without approval), the workflow's intended sequencing is bypassed. | The `WorkflowStepMiddleware` should validate that the step being called is the NEXT expected step in the workflow, not an arbitrary step. Reject out-of-order tool calls with a clear error: "Step 'deploy' requires 'approve' to complete first." |
-| Workflow progress variables writable by the client | Task variables are a shared scratchpad. A malicious client could write `workflow.current_step_index = 99` to skip all remaining steps, or overwrite `step.validate.result` to inject false data. | Prefix server-managed workflow variables with a reserved namespace (e.g., `_workflow.`) and reject client-side writes to that namespace. Or make workflow progress variables read-only for clients (write-only for the server execution engine). |
+| postMessage with wildcard `'*'` target origin in production bridge | Any page embedding the widget can intercept tool call arguments including user data; CVE-class vulnerability (similar to CVE-2024-49038, CVSS 9.3) | Use origin handshake: parent passes allowed origin on first message; widget validates `event.origin` on every message |
+| No `event.origin` check in message listener | Malicious page can inject fake tool call responses, causing widget to execute attacker-controlled logic | Always check `event.origin === trustedOrigin` before processing postMessage events |
+| Exposing `widget_accessible: true` tools without session scoping | A widget in one ChatGPT conversation can call tools that affect state in another conversation | Scope tool-accessible state by `widgetSessionId` from `WidgetResponseMeta`; validate it on every tool call |
+| Rendering user-provided HTML in widget iframe without Content Security Policy | Stored XSS if widget content includes user-generated HTML | Set `Content-Security-Policy` header on the preview server; never inject user content directly into HTML without sanitization |
+| Trusting `toolInput` from `window.openai.toolInput` without server-side validation | Widget state can be tampered (the client controls what is displayed but the server must validate) | Always re-validate game state or tool inputs server-side on `tools/call`; never trust widget-provided state as authoritative |
 
 ## UX Pitfalls
 
-Common user experience mistakes for workflow authors and LLM clients.
-
 | Pitfall | User Impact | Better Approach |
 |---------|-------------|-----------------|
-| Prompt reply says "call tool X" without explaining WHY or WHAT it accomplishes | LLM makes the tool call but does not understand its purpose, leading to poor argument choices or unnecessary calls | Include a description with each remaining step: "Call 'approve_deployment' to get human approval for deploying to production. This step requires user confirmation." |
-| No clear signal when all steps are done | Client keeps calling tools after the workflow is complete because the prompt didn't say "when done, the task will be marked complete" | Include explicit completion criteria in the prompt reply: "After completing all steps above, call `tasks/result` with task ID X to verify the workflow completed successfully." |
-| Workflow error shows task-internal error codes | Client receives `TaskError::InvalidTransition` which is meaningless to the LLM and user | Map task-internal errors to workflow-level messages: "Cannot call deploy_service because the approval step has not been completed yet." |
+| Widget shows blank screen when bridge is not ready at load time | Developer stares at blank preview with no indication of what went wrong | Check for bridge readiness with a timeout and show a clear error: "Bridge not available — is the preview server running?" |
+| Tool call errors are swallowed in the bridge `catch` block | Widget appears to hang; developer cannot diagnose failures | Surface errors visibly in the widget and log to both browser console and the mcp-preview dev panel simultaneously |
+| `cargo pmcp new --mcp-apps` scaffold generates widget that uses bridge before DOM is ready | Widget fails with "cannot read property of null" errors that are hard to trace | Scaffold wraps all bridge usage in `DOMContentLoaded` or `mcpBridgeReady` event listener; document this in scaffold comments |
+| Preview server requires manual restart to pick up HTML file changes | Developer edits widget HTML, sees no change, edits again, still no change — until restart | mcp-preview should watch `widget/` directory and broadcast reload notification via WebSocket; already has a `/ws` handler |
+| `cargo pmcp preview` opens browser before server is ready | Browser shows connection refused; developer refreshes manually | The current 800ms sleep before `open::that()` is fragile — replace with health-check polling on `/api/config` endpoint |
 
 ## "Looks Done But Isn't" Checklist
 
-Things that appear complete but are missing critical pieces.
-
-- [ ] **Task-aware prompt handler:** Often missing fallback to full execution when no task store is configured -- verify that `TaskWorkflowPromptHandler` degrades gracefully to `WorkflowPromptHandler` behavior when tasks are not available
-- [ ] **Variable schema:** Often missing `schema_version` field -- verify that the variable format can be upgraded without breaking existing in-progress tasks
-- [ ] **Prompt reply:** Often missing `_meta` section -- verify that structured guidance is available for machine consumption, not just natural language
-- [ ] **Partial execution:** Often missing step failure handling -- verify that a mid-execution step failure produces a valid prompt reply with failure details, not an error
-- [ ] **Client continuation:** Often missing task ID propagation -- verify that remaining steps in the prompt reply include the task ID so the client can bind subsequent tool calls to the task
-- [ ] **Resumption:** Often missing "where did I leave off" logic -- verify that a client calling a remaining-step tool updates the workflow progress variables and the server can determine the next step
-- [ ] **Backward compatibility:** Often missing existing workflow tests run against new code -- verify that the entire existing workflow test suite passes WITHOUT modification
-- [ ] **Step ordering:** Often missing client-side step dependency validation -- verify that out-of-order tool calls are rejected with a clear error
-- [ ] **TTL:** Often missing workflow-specific TTL -- verify that workflow tasks don't expire during normal user think time (minutes to hours between steps)
-- [ ] **Cleanup:** Often missing orphaned workflow task reaping -- verify that workflow tasks stuck in `Working` for longer than TTL are eventually cleaned up
+- [ ] **McpProxy session management:** Often the proxy re-initializes on each tool list call — verify that `initialize` is called exactly once per `McpProxy` instance and that `Mcp-Session-Id` is forwarded on subsequent requests
+- [ ] **postMessage target origin:** Often ships with `'*'` wildcard — verify that production bridge code specifies an explicit target origin, not `'*'`
+- [ ] **postMessage message listener:** Often lacks `event.origin` validation — verify the `message` event handler checks `event.origin` matches the trusted parent origin
+- [ ] **WASM request IDs:** Often hardcoded — verify that `call_tool`, `list_tools`, and `connect` each use an atomically incrementing request ID, not `1i64`, `2i64`, `3i64`
+- [ ] **Bridge contract parity:** Often diverges between preview mock and production bridge — verify that `callTool()` returns `{ content: [...] }` envelope in both preview and production implementations
+- [ ] **HTTPS validation in manifest generation:** Often accepts any URL — verify that `cargo pmcp deploy` with MCP Apps rejects HTTP URLs and emits a clear error before generating the manifest
+- [ ] **`html.replace` injects bridge once:** Often replaces all occurrences — verify `replacen("</head>", ..., 1)` is used, and test with HTML that contains `</head>` inside a `<script>` string
+- [ ] **wasm-opt enabled in release:** Often still `wasm-opt = false` — verify that `pkg/*.wasm` for release builds is less than 2MB uncompressed
+- [ ] **CORS credentials + Any origin:** Often misconfigured together — verify that `allow_credentials(true)` is never combined with `allow_origin(Any)` in Axum routes
+- [ ] **Bridge readiness event:** Often missing — verify widgets listen for `mcpBridgeReady` event before calling any bridge methods, and test what happens when the event never fires
 
 ## Recovery Strategies
 
-When pitfalls occur despite prevention, how to recover.
-
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| Existing workflows broken by handler modification | HIGH | Revert to original `WorkflowPromptHandler` (it must be untouched). If already merged and deployed, hotfix by restoring the original handler and creating the task-aware handler as a separate class. This is why the "separate handler" architecture is critical -- the original is always available as a fallback. |
-| Dual-write inconsistency (ephemeral has data, durable doesn't) | MEDIUM | For in-progress tasks, read task variables to determine which steps actually persisted. Re-execute from the last durably-persisted step. For completed tasks with missing variable data, mark affected steps as "unknown" and let the client re-do them. |
-| Prompt reply format doesn't work with a specific LLM client | LOW | Since both `_meta` (machine) and natural language (human) are present, clients that can't parse `_meta` still work via natural language. Only the `_meta` format needs updating for new clients, which is backward compatible. |
-| Variable schema migration needed | MEDIUM | Add a migration function that reads `schema_version` from task variables and upgrades the schema in-place. Run the migration lazily on first access (check version, upgrade if needed, write back). Never delete old schema support -- always support reading old versions. |
-| Client calling tools out of order | LOW | The `WorkflowStepMiddleware` rejects the call. The client receives a clear error and can retry with the correct step. No data corruption occurs because the middleware validates before executing. |
-| Task expired during user think time | LOW | Client receives a `TaskError::Expired` on the next tool call. Create a new task and re-execute the workflow from scratch. Consider extending default TTL for workflow tasks to minimize this. |
+| McpProxy re-initializes (session drift) | LOW | Add `OnceCell<String>` for session ID; forward `Mcp-Session-Id` header; one afternoon of work |
+| postMessage wildcard origin ships to production | HIGH | Requires coordinated update of preview bridge contract, adapter bridge scripts, and widget documentation; existing deployed widgets must be re-published |
+| WASM hardcoded request IDs cause concurrent corruption | MEDIUM | Add `AtomicI64` counter to `WasmClient`; fix is mechanical but requires thorough regression testing of all tool call paths |
+| Bridge contract divergence discovered post-ship | HIGH | Must deprecate old bridge API, publish new contract as TypeScript types, update all widget examples, write migration guide |
+| HTTPS validation missing from manifest generation | LOW | Add URL validation to `cargo pmcp deploy` manifest step; one-line fix, immediate re-release of cargo-pmcp |
+| WASM binary too large for production use | MEDIUM | Enable wasm-opt, add size optimization Cargo profile, re-run wasm-pack build; may require feature flag audit to remove unused dependencies |
+| `html.replace` double-injects bridge | LOW | Change to `html.replacen("</head>", ..., 1)`; fix is one line; verify with test cases covering template tags and comments |
 
 ## Pitfall-to-Phase Mapping
 
-How roadmap phases should address these pitfalls.
-
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| Handler modification breaking existing workflows | Phase 1: Architecture | `WorkflowPromptHandler` source file has zero diff; all existing workflow tests pass unchanged |
-| Dual-write inconsistency | Phase 2: Partial Execution Engine | Integration test: inject `TaskStore::set_variables` failure mid-execution; verify prompt reply shows partial progress correctly |
-| Prompt reply too rigid for LLMs | Phase 3: Structured Prompt Reply | Test with two different clients (Claude Code + simple test client); both correctly follow remaining steps |
-| Variable schema as implicit API | Phase 1: Variable Schema Design | All variable keys defined in `WorkflowProgress` struct; no string literal keys in production code outside the schema module |
-| Pause logic becoming second engine | Phase 1: WorkflowStep extension | `StepExecution` enum on `WorkflowStep`; pause loop is a simple match on `step.execution()` |
-| Error during partial execution | Phase 2: Partial Execution Engine | Step failure produces valid prompt reply; task stays in `Working` not `Failed`; failure details in both `_meta` and messages |
-| Client continuation disconnected from task | Phase 3: Client Continuation | Tool calls with `_task_id` argument update workflow progress variables; verified by integration test |
-| Validation not accounting for partial execution | Phase 2: Validation Extension | `validate_for_partial_execution()` catches dependencies between two client-side steps; test case for this specific scenario |
-| Workflow progress variables writable by client | Phase 3: Security | `_workflow.` prefix variables rejected on client write; integration test attempts write and verifies rejection |
-| Existing prompt handler return type | Phase 1: Architecture | `GetPromptResult._meta` used for task association; no trait modification needed |
+| McpProxy session re-initialization | Phase 1: mcp-preview completion | Integration test: connect to stateful PMCP server, call `list_tools` twice, verify exactly one `initialize` was sent |
+| postMessage wildcard target origin | Phase 1: mcp-preview completion (preview bridge), Phase 2: WASM bridge | Security audit: grep for `postMessage({`, verify no `'*'` target origin in production bridge scripts |
+| WASM hardcoded request IDs | Phase 2: WASM bridge | Concurrent test: call `list_tools` and `call_tool` in parallel from JavaScript, verify both responses are correctly matched |
+| Bridge inject double-fires on template HTML | Phase 1: mcp-preview completion | Unit test: inject bridge into HTML with `</head>` inside `<script>` string; verify bridge script appears exactly once |
+| Bridge contract divergence | Phase 1 (define contract), Phase 2 (enforce in WASM bridge), Phase 3 (shared library) | E2E test: run chess widget against both mock bridge and production-equivalent bridge, assert same state transitions |
+| ChatGPT manifest HTTPS validation | Phase 3: publishing flow | Integration test: call manifest generation with HTTP URL, verify non-zero exit code and descriptive error message |
+| WASM binary size bloat | Phase 2: WASM bridge | CI check: `wasm-pack build --release` produces pkg/*.wasm under 2MB; fails build if exceeded |
+| Browser before server ready (open timing) | Phase 1: mcp-preview completion | Manual test: `cargo pmcp preview` with fast server; verify browser opens to a loaded page, not connection refused |
 
 ## Sources
 
-- [State Machine Executor Part 2 -- Fault Tolerance](https://blog.adamfurmanek.pl/2025/10/13/state-machine-executor-part-2/) -- serialization pitfalls in paused state machines, backward/forward compatibility
-- [Towards Serialization-free State Transfer in Serverless Workflows](https://doi.org/10.1145/3725986) -- performance costs of state serialization in workflow engines
-- [QCon SF: Database-Backed Workflow Orchestration](https://www.infoq.com/news/2025/11/database-backed-workflow/) -- challenges in durable workflow state management
-- [Using a Rust async function as a polled state machine](https://jeffmcbride.net/blog/2025/05/16/rust-async-functions-as-state-machines/) -- Rust async state machine fundamentals
-- [Serde async state machine (Rust Forum)](https://users.rust-lang.org/t/serde-async-state-machine/99648) -- challenges serializing async state
-- [Rust Concurrency: Common Async Pitfalls](https://leapcell.medium.com/rust-concurrency-common-async-pitfalls-explained-8f80d90b9a43) -- blocking in async, runtime considerations
-- [Future proofing - Rust API Guidelines](https://rust-lang.github.io/api-guidelines/future-proofing.html) -- sealed traits, non_exhaustive, backward compatible changes
-- [RFC 1105: API Evolution](https://rust-lang.github.io/rfcs/1105-api-evolution.html) -- what constitutes a breaking change in Rust
-- [Effective Rust: Default implementations](https://effective-rust.com/default-impl.html) -- minimizing required trait methods for evolution
-- [MCP 2025-11-25 Specification](https://modelcontextprotocol.io/specification/2025-11-25) -- Tasks primitive, prompt semantics
-- [MCP's Next Phase: November 2025 Spec](https://medium.com/@dave-patten/mcps-next-phase-inside-the-november-2025-specification-49f298502b03) -- async tasks, prompt-driven workflows
-- [A Year of MCP: 2025 Review](https://www.pento.ai/blog/a-year-of-mcp-2025-review) -- MCP ecosystem evolution, client diversity
-- [MCP 2025-11-25 Spec Update (WorkOS)](https://workos.com/blog/mcp-2025-11-25-spec-update) -- experimental tasks status
-- [MCP Tool Descriptions Are Smelly (arxiv)](https://arxiv.org/html/2602.14878v1) -- tool description quality impacts on LLM behavior
-- [LLM Limitations: When Models Make Mistakes](https://learnprompting.org/docs/basics/pitfalls) -- structured prompt interpretation failure modes
-- [MIT: Shortcoming makes LLMs less reliable](https://news.mit.edu/2025/shortcoming-makes-llms-less-reliable-1126) -- LLM instruction following reliability
-- [Palantir: Best practices for LLM prompt engineering](https://www.palantir.com/docs/foundry/aip/best-practices-prompt-engineering) -- structuring prompts for reliable tool use
-- Codebase analysis: `src/server/workflow/prompt_handler.rs` (WorkflowPromptHandler, ExecutionContext)
-- Codebase analysis: `src/server/workflow/sequential.rs` (SequentialWorkflow, validation)
-- Codebase analysis: `src/server/workflow/workflow_step.rs` (WorkflowStep, DataSource, guidance)
-- Codebase analysis: `crates/pmcp-tasks/src/context.rs` (TaskContext, typed variable accessors)
-- Codebase analysis: `crates/pmcp-tasks/src/router.rs` (TaskRouterImpl, task-augmented tool calls)
-- Codebase analysis: `crates/pmcp-tasks/src/store/mod.rs` (TaskStore trait, atomicity guarantees)
-- Codebase analysis: `crates/pmcp-tasks/src/domain/record.rs` (TaskRecord, variable injection)
+- [OpenAI Apps SDK Reference](https://developers.openai.com/apps-sdk/reference/)
+- [MCP Apps compatibility in ChatGPT](https://developers.openai.com/apps-sdk/mcp-apps-in-chatgpt/)
+- [OpenAI Apps SDK Security & Privacy](https://developers.openai.com/apps-sdk/guides/security-privacy)
+- [How to crash your software with Rust and wasm-bindgen — Ross Gardiner (2025-01-20)](https://www.rossng.eu/posts/2025-01-20-wasm-bindgen-pitfalls/)
+- [Pitfalls of wasm-bindgen part 2: vec parameters — Ross Gardiner (2025-02-22)](https://www.rossng.eu/posts/2025-02-22-wasm-bindgen-vec-parameters/)
+- [wasm-bindgen Issue #2486: Recursive use of an object detected](https://github.com/wasm-bindgen/wasm-bindgen/issues/2486)
+- [PostMessage security — Microsoft MSRC Blog (2025-08)](https://www.microsoft.com/en-us/msrc/blog/2025/08/postmessaged-and-compromised)
+- [PostMessage target origin wildcard vulnerabilities — Payatu](https://payatu.com/blog/postmessage-vulnerabilities/)
+- [Sandboxed iframes: allow-scripts + allow-same-origin security issue — Mozilla Discourse](https://discourse.mozilla.org/t/can-someone-explain-the-issue-behind-the-rule-sandboxed-iframes-with-attributes-allow-scripts-and-allow-same-origin-are-not-allowed-for-security-reasons/110651)
+- [iframe Security Risks — Qrvey (2026)](https://qrvey.com/blog/iframe-security/)
+- [Shrinking .wasm Code Size — Rust and WebAssembly Book](https://rustwasm.github.io/book/reference/code-size.html)
+- [wasm-pack build command reference](https://rustwasm.github.io/docs/wasm-pack/commands/build.html)
+- [Cross-window communication — javascript.info](https://javascript.info/cross-window-communication)
+- [OpenAI ChatGPT Apps Developer Mode announcement (September 2025) — InfoQ](https://www.infoq.com/news/2025/10/chat-gpt-mcp/)
+- Codebase analysis: `crates/mcp-preview/src/proxy.rs`, `examples/wasm-client/src/lib.rs`, `src/types/mcp_apps.rs`, `src/server/mcp_apps/adapter.rs`, `crates/mcp-preview/src/server.rs`, `examples/mcp-apps-chess/preview.html`
 
 ---
-*Pitfalls research for: Task-prompt bridge -- partial execution and client continuation for PMCP SDK v1.1*
-*Researched: 2026-02-21*
+*Pitfalls research for: MCP Apps developer tooling (widget preview, WASM bridge, publishing, authoring DX) added to PMCP SDK*
+*Researched: 2026-02-24*

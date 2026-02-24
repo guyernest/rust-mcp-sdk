@@ -1,244 +1,398 @@
-# Stack Research: Task-Prompt Bridge
+# Stack Research: MCP Apps Developer Experience (v1.3)
 
-**Domain:** Bridging task lifecycle with workflow prompt execution in PMCP SDK
-**Researched:** 2026-02-21
-**Confidence:** HIGH
-**Mode:** Subsequent milestone -- only NEW stack needs, not re-researching v1.0 foundations
+**Domain:** MCP Apps developer tooling — preview server, WASM test client, publishing, scaffolding
+**Researched:** 2026-02-24
+**Confidence:** HIGH (mcp-preview, WASM, Playwright), MEDIUM (MCP Apps spec, ChatGPT manifest format)
+**Mode:** Subsequent milestone — only NEW stack for v1.3, not re-researching v1.0/v1.1/v1.2 foundations
 
 ## Executive Assessment
 
-**No new crate dependencies are needed.** The task-prompt bridge is an architectural integration, not a technology addition. Every capability required -- partial execution control flow, step state serialization, structured prompt reply formatting, and WorkflowPromptHandler modification -- is achievable with the existing dependency graph in `pmcp-tasks` and `pmcp` core.
+**Five distinct areas need stack attention, most of which require zero new Rust crates.** The existing `mcp-preview` crate already has Axum 0.7, WebSocket, reqwest, rust-embed, and serde. The `wasm-client` already has wasm-bindgen 0.2 and web-sys. The `cargo-pmcp` CLI already has minijinja-style templating needs covered by its existing deps.
 
-The work is entirely about wiring existing types together: `WorkflowPromptHandler` (which already executes steps sequentially and already has a graceful "break" pattern for unresolvable steps) needs to optionally create a `TaskContext` at the start of execution and persist step progress into task variables as it runs. The return format changes from a bare `GetPromptResult` to one that includes structured step metadata in `_meta`.
+The real work is:
+1. **mcp-preview widget bridge**: The iframe MCP bridge JavaScript is ~90% complete in `assets/index.html`. What's missing is the `ui://` resource URI resolution pattern per the MCP Apps spec v2026-01-26 — tools now declare `_meta.ui.resourceUri` pointing to `ui://` resources, not inline HTML. The current proxy assumes inline HTML in tool responses; it must also support fetching resources by `ui://` URI.
+2. **WASM widget bridge**: The WASM client (wasm-bindgen 0.2.100+) needs `web-sys` features for `MessageChannel`, `HtmlIframeElement`, and `Window.postMessage` to inject the bridge into an iframe. These are features on the existing `web-sys` dep, not new crates.
+3. **ChatGPT manifest generation**: No `manifest.json` file — OpenAI uses MCP server discovery via `_meta.ui.resourceUri` on tool annotations. The "manifest" is the MCP `tools/list` response with `ui` metadata annotations. Generation is pure `serde_json` templating, zero new deps.
+4. **Demo landing pages**: HTML generation for stakeholder demos. Use `minijinja` `"2"` (already the right choice for cargo-pmcp's scaffolding use case — minimal deps, Jinja2 syntax, no proc macros). This IS a new dep for `mcp-preview` but `cargo-pmcp` needs it for `new --mcp-apps`.
+5. **`cargo pmcp new --mcp-apps` scaffolding**: Template expansion with variable substitution. Use `minijinja` `"2"`. cargo-pmcp already has the CLI infrastructure; this is template files + minijinja dep.
 
-## Stack Status: No Changes Required
+**Axum version mismatch is the one technical risk**: `mcp-preview` uses `axum = "0.7"` but the root `pmcp` crate uses `axum = "0.8.5"`. The route syntax changed (`/:param` → `/{param}`, `/*path` → `/{*path}`). `mcp-preview` must upgrade to `axum = "0.8"` to avoid dependency duplication and the path syntax already in `server.rs` uses the new `{*path}` style — so the code is written for 0.8 already but Cargo.toml says 0.7. Fix: bump `mcp-preview/Cargo.toml` to `axum = "0.8"`.
 
-### Dependencies Already Sufficient
+---
 
-| Capability Needed | Already Available In | How |
-|---|---|---|
-| Task creation during prompt execution | `pmcp-tasks` (`TaskStore::create`, `TaskContext::new`) | WorkflowPromptHandler gets optional `Arc<dyn TaskStore>` |
-| Step state serialization | `serde` + `serde_json` (already deps) | Serialize step progress as `Value` into task variables |
-| Structured prompt reply with `_meta` | `serde_json::Map` (already used in `GetPromptResult`) | Add `_meta` field to `GetPromptResult` or embed in messages |
-| Variable tracking per step | `TaskContext::set_variable` / `set_variables` | One store call per completed step |
-| Partial execution detection | Already exists in `WorkflowPromptHandler::handle()` | The `break` pattern at lines 891-958 already handles "cannot resolve parameters" |
-| Owner ID resolution | `pmcp-tasks::resolve_owner_id` | Extract from `RequestHandlerExtra` auth context |
-| Typed variable accessors | `TaskContext::get_string`, `get_typed` | Read step results back from task variables |
+## Recommended Stack Additions
 
-### Why No New Dependencies
+### mcp-preview Crate — Changes Required
 
-1. **Serialization of step state:** `serde_json::Value` already represents arbitrary step outputs. The `WorkflowPromptHandler::ExecutionContext` already stores `HashMap<BindingName, Value>`. Converting this to task variables is a `HashMap<String, Value>` which `TaskStore::set_variables` accepts directly.
+| Technology | Current | Target | Change | Why |
+|------------|---------|--------|--------|-----|
+| `axum` | `"0.7"` | `"0.8"` | Version bump | Aligns with root `pmcp` crate. Route syntax `/{*path}` already used in server.rs matches 0.8 syntax. Avoids duplicate compilation. |
+| `tower-http` | `"0.6"` | `"0.6"` | No change | 0.6 is the version compatible with axum 0.8. Already correct. |
+| `minijinja` | (absent) | `"2"` | New dep | Needed for demo landing page HTML generation (configurable templates for stakeholder demos with server URL, tool list, branding). |
 
-2. **Structured prompt reply:** The MCP `GetPromptResult` type already has a `description: Option<String>` field. For richer metadata, the prompt messages themselves can carry structured JSON in text content. No schema validation library is needed because the reply format is a convention between server and client (the LLM interprets it), not a wire protocol contract.
+**mcp-preview adds one dep: `minijinja = "2"`.**
 
-3. **Partial execution control flow:** The existing `break` statements in `WorkflowPromptHandler::handle()` already implement this pattern. When parameter resolution fails (line 958: "Cannot resolve parameters deterministically") or schema satisfaction fails (line 891: "Params resolved but incomplete"), the handler breaks out of the step loop and returns partial results. The bridge simply adds "persist progress to task before breaking."
+### cargo-pmcp Crate — Changes Required
 
-4. **Step state schema:** The task variables schema (`goal`, `completed_steps`, `remaining_steps`, `step_results`) is pure `serde_json::Value` construction. No schema definition library (like `schemars` or `jsonschema`) is needed because the schema is a PMCP convention, not a validated contract.
+| Technology | Current | Target | Change | Why |
+|------------|---------|--------|--------|-----|
+| `minijinja` | (absent) | `"2"` | New dep | `cargo pmcp new --mcp-apps` scaffolding: expand template files with `{{project_name}}`, `{{server_url}}`, `{{tool_name}}` variables. minijinja has no proc macros, minimal compile footprint vs `tera`. |
 
-## Integration Points (Where Code Changes)
+**cargo-pmcp adds one dep: `minijinja = "2"`.**
 
-### 1. WorkflowPromptHandler -- Primary Integration
+### wasm-client (examples/wasm-client) — Changes Required
 
-**Current state:** Owns `SequentialWorkflow`, `tools`, `middleware_executor`, `tool_handlers`, `resource_handler`. Executes all steps during `prompts/get`, returns conversation trace as `GetPromptResult`.
+| Technology | Current Version | Change | Why |
+|------------|----------------|--------|-----|
+| `wasm-bindgen` | `"0.2"` | Pin to `"0.2.100"` or keep `"0.2"` | Existing dep. Latest is 0.2.108 (Jan 2026). The `"0.2"` semver range already pulls the latest compatible version. No change needed. |
+| `web-sys` features | `["console", "WebSocket"]` | Add: `"MessageChannel"`, `"MessagePort"`, `"HtmlIframeElement"`, `"Window"`, `"EventTarget"` | Bridge injection into iframe requires postMessage API. These are all `web-sys` feature flags, NOT new crates. |
 
-**What changes:**
+**wasm-client changes: web-sys feature additions only. No new crates.**
 
-| Field/Method | Change | Why |
-|---|---|---|
-| New field: `task_store: Option<Arc<dyn TaskStore>>` | Add | Optional task backing for workflow execution |
-| New constructor: `with_task_store()` | Add builder method | Pass store when registering workflow |
-| `handle()` method | Modify | Create task at start, persist step results as variables, include task ID and step metadata in reply |
-| New method: `persist_step_progress()` | Add private helper | Writes completed step name + result to task variables |
-| New method: `build_structured_reply()` | Add private helper | Constructs the step guidance metadata |
+### Build Tooling — New Requirements
 
-**Dependency path:**
+| Tool | Version | Purpose | Where Used |
+|------|---------|---------|------------|
+| `wasm-pack` | latest (0.13.x) | Build WASM client to `pkg/` output for embedding | CI + developer local build. Already used implicitly but should be pinned in `just` tasks. |
+| `@playwright/test` | `^1.50.0` | E2E widget testing | Already in `tests/playwright/package.json`. Correct version. |
+
+**No new Rust toolchain crates. `wasm-pack` is already the standard WASM build tool for this stack.**
+
+---
+
+## Detailed Recommendations by Feature Area
+
+### 1. mcp-preview Widget Iframe Rendering
+
+**Gap**: The current `handleToolResponse()` in `index.html` looks for inline HTML in `content[].text` with MIME type `text/html`. The MCP Apps spec (2026-01-26) defines tools as declaring `_meta.ui.resourceUri: "ui://..."` — the host fetches the resource separately, then injects the tool result as context into the already-rendered widget.
+
+**Stack implication**: The proxy (`proxy.rs`) needs a `read_resource(uri: &str)` method alongside `call_tool()`. The existing `reqwest::Client` handles this — zero new deps. The resource URI `ui://my-widget` maps to a `resources/read` JSON-RPC call.
+
+**Bridge JavaScript in `index.html`**: The `wrapWidgetHtml()` function is functional but uses `window.parent` direct access which breaks with `sandbox` iframe attributes. The correct pattern is `postMessage`/`addEventListener("message")` for cross-origin iframe communication. This is a JavaScript-only change in the embedded HTML, not a Rust dep change.
+
+**Recommended**: Keep the current approach (srcdoc iframe with injected bridge script) for the preview server since it runs same-origin. The postMessage pattern is needed only in the WASM in-browser test client where the iframe is from a different origin.
+
+### 2. WASM-Based In-Browser Test Client
+
+**Current state**: `examples/wasm-client/src/lib.rs` exports `WasmClient` with `connect()`, `list_tools()`, `call_tool()`. It has no bridge injection capability.
+
+**What's needed**: A `WasmAppsClient` that:
+1. Creates an `<iframe>` element (needs `web-sys::HtmlIframeElement` feature)
+2. Sets `srcdoc` to the widget HTML from `read_resource()`
+3. Injects bridge via `contentWindow.postMessage` (needs `web-sys::Window`, `web-sys::MessageEvent`)
+4. Listens for `mcpBridge.callTool()` calls from the iframe via `addEventListener("message")` (needs `web-sys::EventTarget`)
+5. Forwards to the MCP server via existing `WasmClient` methods
+
+**Required web-sys features** (add to `examples/wasm-client/Cargo.toml`):
+```toml
+web-sys = { version = "0.3", features = [
+  "console",
+  "WebSocket",
+  # New for bridge:
+  "MessageChannel",
+  "MessagePort",
+  "MessageEvent",
+  "HtmlIframeElement",
+  "HtmlElement",
+  "Window",
+  "EventTarget",
+  "Document",
+  "Element",
+] }
 ```
-WorkflowPromptHandler (in pmcp crate)
-  -> needs Arc<dyn TaskStore> (trait defined in pmcp-tasks)
-```
 
-**Problem:** This creates a dependency from `pmcp` -> `pmcp-tasks`, which violates the current one-directional dependency (`pmcp-tasks` -> `pmcp`).
+Note: `Document` and `Window` are already in the root `pmcp` crate's WASM deps (in `Cargo.toml` line 103). The wasm-client is a separate crate excluded from the workspace, so it must declare them explicitly.
 
-**Solution:** Use the same pattern as `TaskRouter`. Define a `WorkflowTaskBridge` trait in `pmcp` (with `serde_json::Value` params), implement it in `pmcp-tasks`. This maintains the one-directional dependency.
+### 3. ChatGPT Manifest Generation
 
-```rust
-// In pmcp::server::tasks (or new module pmcp::server::workflow_bridge)
-#[async_trait]
-pub trait WorkflowTaskBridge: Send + Sync {
-    /// Create a task for a workflow execution
-    async fn create_workflow_task(
-        &self,
-        owner_id: &str,
-        workflow_name: &str,
-        ttl: Option<u64>,
-    ) -> Result<Value>;
+**What "manifest" means in practice**: OpenAI does not use a `manifest.json` file. The ChatGPT Apps SDK (as of Nov 2025) registers MCP Apps by:
+1. Providing an MCP server URL in the OpenAI platform dashboard
+2. The server responding to `tools/list` with tools that include `_meta.ui.resourceUri` annotations
+3. ChatGPT fetching `ui://` resources to prefetch widget templates
 
-    /// Store step progress as task variables
-    async fn persist_step_result(
-        &self,
-        task_id: &str,
-        owner_id: &str,
-        step_name: &str,
-        step_index: usize,
-        result: Value,
-    ) -> Result<()>;
+**Generation strategy**: A `cargo pmcp manifest` command (or auto-generation during `deploy`) outputs a JSON summary document for developer reference — it is NOT submitted to OpenAI. The actual "registration" is the live MCP server.
 
-    /// Get all step progress for a task
-    async fn get_step_progress(
-        &self,
-        task_id: &str,
-        owner_id: &str,
-    ) -> Result<Value>;
+**Stack**: `serde_json` (already in `cargo-pmcp`). No new deps.
 
-    /// Complete the workflow task with final result
-    async fn complete_workflow(
-        &self,
-        task_id: &str,
-        owner_id: &str,
-        result: Value,
-    ) -> Result<()>;
-}
-```
-
-### 2. SequentialWorkflow -- Minor Extension
-
-**Current state:** Pure data structure. Holds name, description, arguments, steps, instructions.
-
-**What changes:**
-
-| Change | Why |
-|---|---|
-| New field: `task_support: Option<TaskSupportMode>` | Declare whether this workflow creates tasks |
-| New method: `with_task_support(mode)` | Builder chain |
-
-`TaskSupportMode` is a simple enum (`Disabled`, `Optional`, `Required`) defined in `pmcp` core. Not the same as `pmcp-tasks::TaskSupport` (which is for tools), but semantically similar.
-
-### 3. GetPromptResult -- Structured Reply Embedding
-
-**Current state:** `{ description: Option<String>, messages: Vec<PromptMessage> }`.
-
-**What changes:** No structural change to `GetPromptResult`. Instead, embed step metadata in the conversation trace messages themselves. This keeps the protocol type unchanged while providing structured guidance.
-
-The last assistant message becomes the "step guidance" message:
+**What to generate**: A human-readable JSON that documents the MCP server's tool-to-widget mapping, suitable for copy-pasting into the OpenAI platform dashboard submission form. Structure:
 
 ```json
 {
-  "role": "assistant",
-  "content": {
-    "type": "text",
-    "text": "## Workflow Progress\n\n**Task ID:** task-abc-123\n**Status:** partial (2/4 steps completed)\n\n### Completed Steps\n1. validate_config: {\"valid\": true, \"region\": \"us-east-1\"}\n2. check_resources: {\"available\": true}\n\n### Remaining Steps\n3. deploy_service (needs: approval, config from step 1)\n4. verify_deployment (needs: deployment_id from step 3)\n\n### Next Action\nCall tool `deploy_service` with arguments:\n- config: (from task variable `validate_config_result`)\n- region: \"us-east-1\"\n\nUse task ID `task-abc-123` to track progress."
-  }
+  "server_url": "https://...",
+  "tools": [
+    {
+      "name": "chess_board",
+      "description": "Interactive chess game",
+      "ui": { "resourceUri": "ui://chess-board" }
+    }
+  ]
 }
 ```
 
-**Why text, not `_meta`:** MCP `PromptMessage` does not have a `_meta` field in the current spec. Adding one would be a protocol extension. Using structured text in the message is MCP-compliant, LLM-readable, and requires no protocol changes.
+### 4. Demo Landing Page Generation
 
-### 4. DataSource -- New Variant (Optional)
+**Purpose**: Auto-generated standalone HTML page that non-technical stakeholders can open in a browser to see a widget demo with a mock bridge (no live MCP server required).
 
-**Current state:** `PromptArg`, `StepOutput`, `Constant`.
+**Stack**: `minijinja = "2"` in `mcp-preview`. The template expands to a self-contained HTML file (inline CSS, inline JS, inline widget HTML).
 
-**Potential addition:** `TaskVariable { key: String }` -- resolve from task variables instead of execution context bindings. This would allow workflows that resume from a task to read previously stored state.
+**Why minijinja over tera**:
+- `tera` pulls in `regex`, `globbing`, `serde_json` deep integration — heavier compile cost
+- `minijinja` version 2 is single-file, zero proc macros, ~2s compile overhead
+- Jinja2 syntax is broadly familiar
+- `minijinja` is used by the same author (mitsuhiko) who wrote Flask/Jinja2; the API is production-quality
+- Latest stable: 2.15.1 (MEDIUM confidence — web search result, no direct crates.io verification)
 
-**Assessment:** Defer this. For v1.1, step outputs stored as task variables can be read back via `TaskContext::get_variable()` inside the handler. A new `DataSource` variant would be valuable for v1.2 when workflows support true resume-from-checkpoint, but it is unnecessary for the initial bridge.
+**Why not handlebars**: handlebars-rs lacks filters and the template complexity for generating a full HTML page with conditional sections warrants Jinja2's `{% if %}` / `{% for %}` support.
 
-## Step State Variable Schema
+### 5. `cargo pmcp new --mcp-apps` Scaffolding
 
-The standard schema for workflow progress in task variables uses flat keys with a `workflow.` prefix convention. No schema validation library needed -- this is a convention enforced by `WorkflowTaskBridge` implementation code.
+**Current state**: `cargo-pmcp` has the CLI infra (clap, walkdir, colored). The `new` subcommand likely exists for basic projects. The `--mcp-apps` flag generates a project with:
+- `src/main.rs` (MCP server with mcp-apps feature, example tool)
+- `widgets/board.html` (starter widget HTML with bridge boilerplate)
+- `Cargo.toml` (with `pmcp` and `mcp-apps` feature)
+- `README.md`
 
-```json
-{
-  "workflow.name": "deploy-service",
-  "workflow.total_steps": 4,
-  "workflow.completed_count": 2,
-  "workflow.status": "partial",
-  "workflow.step.0.name": "validate_config",
-  "workflow.step.0.status": "completed",
-  "workflow.step.0.result": {"valid": true, "region": "us-east-1"},
-  "workflow.step.1.name": "check_resources",
-  "workflow.step.1.status": "completed",
-  "workflow.step.1.result": {"available": true},
-  "workflow.step.2.name": "deploy_service",
-  "workflow.step.2.status": "pending",
-  "workflow.step.3.name": "verify_deployment",
-  "workflow.step.3.status": "pending"
-}
+**Stack**: `minijinja = "2"`. Templates are embedded via `include_str!()` (already a Rust builtin — zero deps). Variables: `{{project_name}}`, `{{tool_name}}`, `{{server_port}}`.
+
+**Why not cargo-generate**: `cargo-generate` is a standalone external tool; users shouldn't need to install it separately. The scaffolding is simple enough (5 files, 3 variables) that `minijinja` + embedded templates are the right approach. cargo-generate's Liquid/Rhai complexity is overkill.
+
+---
+
+## Existing Dependencies — No Changes Needed
+
+These are already in the relevant crates and do NOT need modification:
+
+### mcp-preview (already present)
+| Dep | Version | Used For | Status |
+|-----|---------|---------|--------|
+| `axum` | `"0.7"` → bump to `"0.8"` | HTTP server, WebSocket | Bump required (see above) |
+| `tokio` | `"1"` | Async runtime | Unchanged |
+| `tower-http` | `"0.6"` | CORS, static file serving | Unchanged |
+| `rust-embed` | `"8"` | Embedded static assets (`assets/index.html`) | Unchanged |
+| `mime_guess` | `"2"` | MIME type detection for asset serving | Unchanged |
+| `serde` / `serde_json` | `"1"` | Config, proxy serialization | Unchanged |
+| `reqwest` | `"0.12"` | HTTP proxy to MCP server | Unchanged — also handles `resources/read` for `ui://` URIs |
+| `uuid` | `"1"` | Request ID generation | Unchanged |
+| `tracing` | `"0.1"` | Logging | Unchanged |
+| `anyhow` | `"1"` | Error handling | Unchanged |
+| `futures` | `"0.3"` | WebSocket stream handling | Unchanged |
+
+### wasm-client (already present)
+| Dep | Version | Used For | Status |
+|-----|---------|---------|--------|
+| `pmcp` | `path = "../.."` | MCP protocol types + transports | Unchanged |
+| `wasm-bindgen` | `"0.2"` | JS/Rust interop | Unchanged (pulls 0.2.108) |
+| `wasm-bindgen-futures` | `"0.4"` | Async bridge | Unchanged |
+| `serde` / `serde_json` | `"1"` | Type serialization | Unchanged |
+| `serde-wasm-bindgen` | `"0.6"` | JsValue ↔ Rust conversion | Unchanged |
+| `web-sys` | `"0.3"` | Browser APIs | Feature additions only (see above) |
+| `console_error_panic_hook` | `"0.1"` | Panic messages in browser console | Unchanged |
+| `tracing-wasm` | `"0.2"` | Tracing in browser | Unchanged |
+
+### cargo-pmcp (already present)
+| Dep | Version | Used For | Status |
+|-----|---------|---------|--------|
+| `clap` | `"4"` | CLI parsing | Unchanged — `--mcp-apps` flag added to existing `new` subcommand |
+| `serde_json` | `"1"` | Manifest JSON generation | Unchanged |
+| `reqwest` | `"0.12"` | Publishing API calls | Unchanged |
+| `zip` | `"7.0"` | Landing page deployment archives | Unchanged |
+| `colored` | `"3"` | Scaffolding output formatting | Unchanged |
+| `indicatif` | `"0.18"` | Progress bars during build/deploy | Unchanged |
+
+---
+
+## Updated Cargo.toml Snippets
+
+### `crates/mcp-preview/Cargo.toml` — Changes
+
+```toml
+[dependencies]
+# CHANGE: bump from "0.7" to "0.8" (route syntax in server.rs already uses 0.8 style)
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+
+# Embedded assets
+rust-embed = "8"
+mime_guess = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# HTTP client for MCP proxy
+reqwest = { version = "0.12", features = ["json"] }
+
+# NEW: Template engine for demo landing page generation
+minijinja = "2"
+
+# Utilities
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+anyhow = "1"
+futures = "0.3"
 ```
 
-**Why flat keys with prefix:** Validated in v1.0 -- flat keys are sufficient, namespace via convention in docs. The `workflow.` prefix avoids collision with tool-level variables (`tool_name`, `arguments`, `progress_token` stored by `TaskRouterImpl::handle_task_call`).
+### `examples/wasm-client/Cargo.toml` — Changes
 
-**Why individual step keys (not a single JSON array):** Task variable merge semantics are key-level. Storing all steps in a single array variable means every update overwrites the entire array. Individual keys allow atomic per-step updates without read-modify-write races.
+```toml
+[dependencies]
+pmcp = { path = "../..", default-features = false, features = ["wasm"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde-wasm-bindgen = "0.6"
+# CHANGE: add web-sys features for bridge injection
+web-sys = { version = "0.3", features = [
+  "console",
+  "WebSocket",
+  "MessageChannel",
+  "MessagePort",
+  "MessageEvent",
+  "HtmlIframeElement",
+  "HtmlElement",
+  "Window",
+  "EventTarget",
+  "Document",
+  "Element",
+] }
+console_error_panic_hook = "0.1"
+tracing-wasm = "0.2"
+```
+
+### `cargo-pmcp/Cargo.toml` — Changes
+
+Add to `[dependencies]`:
+```toml
+# NEW: Template engine for --mcp-apps scaffolding
+minijinja = "2"
+```
+
+---
 
 ## Alternatives Considered
 
 | Category | Recommended | Alternative | Why Not |
-|---|---|---|---|
-| Bridge pattern | `WorkflowTaskBridge` trait in pmcp | Direct `pmcp-tasks` dependency from pmcp | Violates one-directional dependency. Would make experimental task code a hard dependency of the stable SDK. |
-| Step metadata in reply | Structured text in last assistant message | New `_meta` field on `PromptMessage` | `PromptMessage` has no `_meta` in the MCP spec. Protocol extension is out of scope. Text is LLM-readable. |
-| Step state storage | Flat task variables with `workflow.` prefix | Nested JSON object in single variable | Flat keys support atomic per-step updates. Nested object requires read-modify-write for each step. |
-| Execution resumption | Client follows step list, calls tools directly | Server-side resume from checkpoint | Server resume requires request-response lifecycle management beyond `prompts/get`. Defer to v1.2. Client-driven continuation is simpler and works with existing MCP flow. |
-| Schema validation | Convention in code (no library) | `schemars` + `jsonschema` | Over-engineering. The variable schema is internal convention, not a validated contract. 20 lines of code vs. 2 new dependencies. |
-| New DataSource variant | Defer `TaskVariable` to v1.2 | Add now | Unnecessary for v1.1. Step outputs are stored in task variables AND in execution context bindings. The handler reads from bindings during execution, stores to variables for persistence. |
+|----------|-------------|-------------|---------|
+| Template engine (scaffolding) | `minijinja "2"` | `tera "1"` | tera pulls regex + globbing; larger compile footprint. minijinja is purpose-built for this exact use case (Jinja2 templates in Rust CLI tools). |
+| Template engine (scaffolding) | `minijinja "2"` | `handlebars "6"` | handlebars has no filter support or block-level conditionals — insufficient for HTML generation with conditional sections. |
+| Template engine (scaffolding) | `minijinja "2"` | `askama` | askama is compile-time, not runtime. Scaffolding templates need to be embedded strings expanded at runtime. |
+| Scaffolding tool | Embedded templates + minijinja | `cargo-generate` | External tool; users must install separately. Our templates are simple (5 files, 3 variables). |
+| Bridge communication | srcdoc + same-origin access | postMessage cross-origin | srcdoc iframes are same-origin with their parent; direct `window.parent` access works. postMessage is the right choice only for the WASM test client where iframes are cross-origin. |
+| WASM packaging | `wasm-pack` | `trunk` | trunk is a full bundler (webpack-like) designed for full WASM SPAs. wasm-pack produces a `pkg/` directory we embed in the preview server or serve standalone. trunk adds unnecessary complexity. |
+| Manifest format | serde_json generation from tool metadata | Separate manifest.json | OpenAI does not use a manifest.json; registration is through the platform dashboard pointing at the live MCP server URL. A generated JSON is documentation only. |
+| Axum version | `"0.8"` | Keep `"0.7"` | The root `pmcp` crate already depends on `axum = "0.8.5"`. Two incompatible axum versions in one workspace would compile both, bloating the binary. |
+
+---
 
 ## What NOT to Add
 
-| Technology | Why Not |
-|---|---|
-| `jsonschema` crate | No runtime schema validation needed for task variable conventions |
-| `schemars` crate | JSON Schema generation not needed -- variable keys are code convention |
-| `state_machine` / `rust-fsm` | The "partial execution" flow is a simple break-from-loop, not a state machine |
-| New serialization format | `serde_json::Value` handles all step result serialization already |
-| `pmcp-tasks` as dependency of `pmcp` | Violates crate isolation. Use trait bridge pattern. |
-| Channels / `tokio::mpsc` for step progress | Step execution is synchronous-sequential within `handle()`. No async coordination needed. |
-| `dashmap` in prompt handler | The execution context is single-threaded (one `handle()` call). `HashMap` is correct. |
+| Technology | Why Not | What to Use Instead |
+|------------|---------|---------------------|
+| `trunk` | Full SPA bundler — overkill for embedding a WASM client in a preview server. Requires webpack config, `index.html` entrypoint conventions, npm-style setup. | `wasm-pack build --target web` produces standalone ES module. |
+| `leptos` or `yew` | Frontend frameworks. The preview UI is intentionally vanilla JS (single HTML file, no build step). Adding a framework would require a JS build pipeline. | Plain JavaScript in `assets/index.html`. Already implemented. |
+| `axum-extra` | Optional axum extensions — none needed for this feature set. | Core `axum = "0.8"` with `ws` feature. |
+| `tower-serve-static` | Wrapper around tower-http for embedded files. `rust-embed` + a custom handler (already implemented in `handlers/assets.rs`) does the same thing without an extra dep. | Existing `rust-embed` + `handlers::assets`. |
+| `include_dir` | Alternative to `rust-embed`. No advantage here — `rust-embed` is already present and provides the same compile-time embedding. | `rust-embed = "8"` (already in mcp-preview). |
+| `cargo-generate` (as a lib) | Using cargo-generate as a library dep brings its full dependency tree (liquid template, git2, etc.) for a 5-file template. | `minijinja` for template expansion, `include_str!()` for embedding. |
+| `serde_dynamo` / DynamoDB / Redis | Out of scope for this milestone. Storage backends are v1.2 work. | Not applicable to MCP Apps DX. |
+| `oauth2` (new in mcp-preview) | Auth for the preview server is unnecessary — it runs localhost only. cargo-pmcp already has oauth2 for publishing flows. | No auth in preview server. |
 
-## Integration Dependency Graph
-
-```
-pmcp (core SDK)
-  |-- server::tasks::TaskRouter         (trait, existing)
-  |-- server::tasks::WorkflowTaskBridge (trait, NEW)
-  |-- server::workflow::WorkflowPromptHandler
-  |     |-- uses WorkflowTaskBridge (via Option<Arc<dyn WorkflowTaskBridge>>)
-  |     |-- creates task at prompts/get start
-  |     |-- persists step results as task variables
-  |     |-- returns structured step guidance in messages
-  |
-pmcp-tasks (tasks crate, depends on pmcp)
-  |-- router::TaskRouterImpl            (impl TaskRouter, existing)
-  |-- bridge::WorkflowTaskBridgeImpl    (impl WorkflowTaskBridge, NEW)
-  |     |-- wraps TaskStore
-  |     |-- manages workflow.* variable keys
-  |     |-- provides step progress accessors
-```
-
-**Direction of dependency:** `pmcp-tasks` -> `pmcp` (unchanged). The `WorkflowTaskBridge` trait lives in `pmcp` so that `WorkflowPromptHandler` can use it without depending on `pmcp-tasks`.
+---
 
 ## Version Compatibility
 
-No version changes from v1.0 research. All dependencies remain the same:
+| Package A | Version | Compatible With | Notes |
+|-----------|---------|-----------------|-------|
+| `axum` | `"0.8"` | `tower-http = "0.6"` | tower-http 0.6 is the correct companion to axum 0.8. Already in mcp-preview. |
+| `axum` | `"0.8"` | `tokio-tungstenite = "0.26+"` | axum 0.8 upgraded tokio-tungstenite to 0.26. The `ws` feature in axum 0.8 handles this. |
+| `wasm-bindgen` | `"0.2"` | `web-sys = "0.3"` | These are co-released; the `"0.2"` and `"0.3"` semver ranges always track together. No pinning needed. |
+| `minijinja` | `"2"` | `serde = "1"` | minijinja 2.x uses serde for value serialization. Compatible with existing serde 1.x. |
+| `minijinja` | `"2"` | `minijinja = "1"` (if present elsewhere) | They are separate major versions. If any dep transitively pulls minijinja 1, Cargo resolves both. Both are small; duplication is acceptable but avoid if possible. |
+| `pmcp` root | `axum = "0.8.5"` | `mcp-preview axum = "0.8"` | After the bump, both use the same semver range. Cargo deduplicates to a single axum 0.8.x compile. |
 
-| Package | Version | Status |
-|---|---|---|
-| `serde` | 1.0 | Unchanged |
-| `serde_json` | 1.0 | Unchanged |
-| `async-trait` | 0.1 | Unchanged, needed for `WorkflowTaskBridge` trait |
-| `thiserror` | 2.0 | Unchanged |
-| `tokio` | 1 | Unchanged |
-| `tracing` | 0.1 | Unchanged |
-| All pmcp-tasks deps | Same as v1.0 | No additions |
+---
+
+## MCP Apps Spec Impact on Architecture (Not Stack)
+
+The ext-apps specification (2026-01-26, now production-stable) defines:
+- Tools declare `_meta.ui.resourceUri: "ui://widget-name"`
+- Hosts call `resources/read` with that URI to get the HTML bundle
+- Communication is postMessage JSON-RPC between iframe and host
+
+**Stack consequence**: The `McpProxy` in `mcp-preview/src/proxy.rs` needs a `read_resource(uri: &str) -> Result<String>` method. This uses the existing `reqwest::Client` to call `resources/read` on the MCP server. **Zero new deps.** The existing `send_request()` private method handles this already.
+
+The preview server's WebSocket handler already supports `CallTool` messages. It needs a companion `ReadResource` message type. **Zero new deps** — just additional match arms in `handlers/websocket.rs`.
+
+---
+
+## Playwright E2E Stack
+
+The Playwright setup is already correct:
+
+```json
+{
+  "@playwright/test": "^1.50.0",
+  "@types/node": "^22.0.0",
+  "typescript": "^5.7.0"
+}
+```
+
+The `serve.js` static file server, `playwright.config.ts`, `fixtures/mock-mcp-bridge.ts`, and `tests/chess-widget.spec.ts` are already written. What's missing is the widget HTML files being served at the expected paths (`/chess/board.html`, `/map/explorer.html`). The `serve.js` serves from `examples/` — the chess example's `preview.html` must be placed at the path the tests expect, or the test paths updated to match the examples' structure.
+
+**No new npm packages needed.** `@playwright/test 1.50.0` is current as of early 2026.
+
+---
+
+## Build Pipeline for wasm-pack
+
+The WASM test client needs a build step before embedding:
+
+```bash
+# In examples/wasm-client/
+wasm-pack build --target web --out-dir pkg
+
+# The mcp-preview server then serves pkg/ assets
+# OR: pkg/ is embedded via rust-embed at compile time
+```
+
+**Recommended**: Add to `justfile` at workspace root:
+
+```just
+build-wasm:
+    cd examples/wasm-client && wasm-pack build --target web --out-dir pkg
+```
+
+The `mcp-preview` crate can then `include!` the built WASM via `rust-embed` pointing at the build output path (requires `BUILD_WASM=1` to run `build-wasm` before cargo build). This is standard practice; see examples in the wasm-pack documentation.
+
+**wasm-pack version**: Use whatever `cargo install wasm-pack` installs (0.13.x as of early 2026). No Cargo.toml dep — it's a standalone tool.
+
+---
 
 ## Sources
 
-- Codebase analysis: `src/server/workflow/prompt_handler.rs` -- existing execution flow with break-on-failure pattern (lines 838-961)
-- Codebase analysis: `src/server/tasks.rs` -- existing `TaskRouter` trait pattern for cross-crate integration
-- Codebase analysis: `crates/pmcp-tasks/src/router.rs` -- existing `TaskRouterImpl` as reference for bridge implementation
-- Codebase analysis: `crates/pmcp-tasks/src/context.rs` -- `TaskContext` API for variable read/write
-- Codebase analysis: `crates/pmcp-tasks/src/domain/record.rs` -- `TaskRecord::to_wire_task_with_variables()` for variable injection into `_meta`
-- Codebase analysis: `crates/pmcp-tasks/Cargo.toml` -- current dependency set
-- Project doc: `.planning/PROJECT.md` -- v1.1 milestone scope and validated decisions
-- Design doc: `docs/design/tasks-feature-design.md` -- workflow integration vision (section 8.5)
+- [MCP Apps ext-apps spec 2026-01-26](https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx) — `ui://` resource URI scheme, `_meta.ui.resourceUri` tool annotations, postMessage protocol (MEDIUM confidence — web search, structure described but not directly fetched)
+- [OpenAI Apps SDK docs](https://developers.openai.com/apps-sdk/) — No manifest.json; registration via platform dashboard + live MCP server (MEDIUM confidence)
+- [minijinja on crates.io](https://crates.io/crates/minijinja) — version 2.15.1 as of web search (MEDIUM confidence — web search result)
+- [wasm-bindgen on crates.io](https://crates.io/crates/wasm-bindgen) — latest 0.2.108 as of Jan 2026 (MEDIUM confidence — web search result)
+- [Announcing axum 0.8.0](https://tokio.rs/blog/2025-01-01-announcing-axum-0-8-0) — Breaking changes: path syntax `/{param}`, WebSocket Message uses Bytes (HIGH confidence — official tokio blog)
+- [web-sys docs](https://docs.rs/web-sys/latest/web_sys/) — MessageChannel, MessagePort, HtmlIframeElement, Window features available (HIGH confidence — official docs)
+- [Playwright npm package](https://www.npmjs.com/package/playwright) — version 1.50.0 is current in early 2026 (MEDIUM confidence — web search)
+- Codebase analysis: `crates/mcp-preview/Cargo.toml` — existing axum 0.7, current deps
+- Codebase analysis: `crates/mcp-preview/src/server.rs` — route uses `/{*path}` (axum 0.8 syntax, confirming the version mismatch)
+- Codebase analysis: `crates/mcp-preview/assets/index.html` — bridge JavaScript implementation status (~90% complete)
+- Codebase analysis: `examples/wasm-client/Cargo.toml` — existing web-sys features
+- Codebase analysis: `cargo-pmcp/Cargo.toml` — existing deps, no templating engine present
+- Codebase analysis: `tests/playwright/package.json`, `playwright.config.ts` — Playwright already set up
+- Project doc: `.planning/PROJECT.md` — v1.3 milestone scope
 
 ---
-*Stack research for: Task-Prompt Bridge (v1.1 milestone)*
-*Researched: 2026-02-21*
-*Key finding: Zero new dependencies. This is an architecture problem, not a technology problem.*
+*Stack research for: MCP Apps Developer Experience (v1.3 milestone)*
+*Researched: 2026-02-24*
+*Key findings:*
+*1. THREE new deps total: `minijinja "2"` in mcp-preview, `minijinja "2"` in cargo-pmcp, web-sys feature additions in wasm-client.*
+*2. ONE critical fix: bump mcp-preview axum from "0.7" to "0.8" (server.rs already uses 0.8 route syntax).*
+*3. ChatGPT "manifest" is not a file — it's the tools/list response with _meta.ui annotations.*
+*4. Playwright E2E stack is already complete; missing piece is widget HTML files at expected paths.*
+*5. MCP Apps spec went production-stable 2026-01-26; PMCP's existing type support is aligned.*

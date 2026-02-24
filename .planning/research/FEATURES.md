@@ -1,193 +1,406 @@
-# Feature Research: Task-Prompt Bridge for PMCP SDK v1.1
+# Feature Research: MCP Apps Developer Experience (v1.3)
 
-**Domain:** Protocol SDK -- task-aware workflow prompts with partial execution and client continuation
-**Researched:** 2026-02-21
-**Confidence:** MEDIUM (MCP spec defines tasks and prompts independently; bridge semantics are PMCP innovation, not spec-mandated. A2A's input_required pattern and durable execution research provide validated analogues.)
+**Domain:** Developer tooling for interactive UI widgets embedded in MCP servers (ChatGPT Apps, MCP Apps SEP-1865, MCP-UI)
+**Researched:** 2026-02-24
+**Confidence:** HIGH for preview completion and Playwright E2E (existing infrastructure is ~80% there); MEDIUM for ChatGPT manifest publishing (spec is stable but OpenAI review process is opaque); MEDIUM for WASM bridge injection (novel pattern, limited prior art)
 
 ## Context
 
-v1.0 shipped the complete MCP Tasks lifecycle (create, poll, complete, cancel, list), task variables as shared state, owner isolation, and the SequentialWorkflow system with server-side execution. This research covers **only the v1.1 features**: bridging workflows (prompts) with tasks so workflows can pause mid-execution, track progress in task variables, and return structured guidance for client continuation.
+This research targets v1.3 only. The following already exist and are NOT in scope:
 
-## Feature Landscape
+- Core `mcp_apps.rs` types (`WidgetCSP`, `ChatGptToolMeta`, `ExtendedUIMimeType`, etc.)
+- `ChatGptAdapter` and `UIAdapter` in `server::mcp_apps`
+- Chess and Map example apps with `widget/` HTML files and `preview.html` mock bridges
+- `mcp-preview` crate: Axum server, proxy, asset handler, full `index.html` with bridge injection, tool list/call API, WebSocket handler skeleton
+- WASM client with dual transport (WebSocket + HTTP) in `examples/wasm-client/`
+- `cargo pmcp preview` command wiring
+- Playwright scaffolding: `chess-widget.spec.ts`, `mock-mcp-bridge.ts` fixture, `playwright.config.ts`
+- `cargo pmcp` deploy targets (Lambda, Cloud Run, Workers) and `landing` command skeleton
 
-### Table Stakes (Users Expect These)
+The mcp-preview widget iframe rendering is **NOT working** yet: the bridge JavaScript in `wrapWidgetHtml()` uses `window.parent.previewRuntime` cross-origin access which fails when the widget HTML is loaded as `srcdoc` with different origin assumptions, and the `handleToolResponse` handler looks for `content_type === 'resource'` but MCP widgets are typically served as MCP resources that must be fetched separately by URI, not returned inline in tool responses.
 
-Features that any task-prompt bridge must have. Without these, the bridge concept fails to deliver on its promise. A user who reads "task-aware workflow prompts" and gets anything less will consider the feature broken.
+The Playwright tests reference `page.goto('/chess/board.html')` but the `playwright.config.ts` `baseURL` and the file server (`serve.js`) are not yet wired to the chess widget directory.
 
-| Feature | Why Expected | Complexity | Notes |
-|---------|--------------|------------|-------|
-| **Task-aware prompt handler** (WorkflowPromptHandler creates a task on invocation) | The foundational bridge. A workflow prompt that claims task support must actually create a task when invoked. Without this, there is no bridge -- just a workflow and a separate task. Users expect `prompts/get` on a task-aware workflow to return a task ID they can poll. | MEDIUM | Extends existing `WorkflowPromptHandler`. On `handle()`, create task via store, bind step execution to task, return task ID in `_meta` of GetPromptResult. Must integrate with existing `SequentialWorkflow` without breaking non-task workflows. Requires `Arc<dyn TaskStore>` access from prompt handler. |
-| **Partial server-side execution** (run steps until unresolvable, then stop) | The existing WorkflowPromptHandler already does this -- it breaks on parameter resolution failure or schema unsatisfied. The task-aware version must do the same BUT persist progress in the task. Users expect: steps the server can do are done, steps it cannot are left for the client. | MEDIUM | Current `prompt_handler.rs` (lines 874-961) already breaks on unresolvable steps. New behavior: before breaking, write completed step bindings to task variables and update task status. The ExecutionContext's in-memory bindings become durable via task variables. Key change: `ExecutionContext` wraps `TaskContext` when task-backed. |
-| **Step state tracking in task variables** (standard schema for workflow progress) | Users polling `tasks/get` need to see what happened. Task variables must contain a predictable schema showing which steps completed, what they produced, and what remains. Without this, the task is an opaque blob -- the client cannot reason about progress. Both A2A (artifacts accumulate per-turn) and Temporal (workflow state is queryable) provide this. | MEDIUM | Define a standard variable schema: `_workflow.goal`, `_workflow.steps` (array of step definitions), `_workflow.completed` (array of completed step names with results), `_workflow.remaining` (array of remaining step names), `_workflow.current_step_index`. Prefix with `_workflow.` to avoid collision with user-defined variables. Schema must be JSON-serializable and readable by any MCP client. |
-| **Structured prompt reply with step guidance** (GetPromptResult includes completed results + remaining steps + task ID) | The prompt reply is the client's instruction manual. It must tell the LLM: (1) what was already done (completed step results), (2) what needs to happen next (remaining steps with tool names and expected arguments), and (3) how to track progress (task ID). Without structure, the LLM gets raw text and must guess what to do. | MEDIUM | The existing prompt handler builds a conversation trace (user intent, plan, tool calls, results). For partial execution, extend with: a summary assistant message listing completed vs remaining steps, tool call guidance for the first remaining step (tool name, argument sources, expected binding), and the task ID in `_meta`. This is the "handoff document" from server to client. |
-| **Client continuation via tool calls + task polling** | After receiving the structured prompt reply, the client must be able to: (1) call the next tool directly using guidance from the prompt reply, (2) pass the task ID in `_meta` so tool results bind to the task, (3) poll `tasks/get` to see updated progress. Without this, the partial execution is a dead end. | LOW | Mostly a protocol-level concern, not new code. Existing task-augmented `tools/call` already works. The new requirement is documentation of the continuation protocol and ensuring tool handlers can read/write the same task variables the workflow uses. Task ID propagation via `_meta.io.modelcontextprotocol/related-task` is already implemented. |
-| **Task status lifecycle integration** (workflow states map to task states) | A task-backed workflow must set appropriate task statuses: `working` during execution, `completed` when all steps finish server-side, and the task must NOT be marked terminal when partial execution hands off to client (client still needs to continue). Users expect task status to reflect workflow progress faithfully. | LOW | During partial execution: task stays `working` (client is expected to continue). After all steps complete server-side: task transitions to `completed` with the final result. On error: task transitions to `failed`. On cancellation (via `extra.is_cancelled()`): task transitions to `cancelled`. Clear mapping, small code change. |
+---
 
-### Differentiators (Competitive Advantage)
+## Feature Area 1: mcp-preview Widget Iframe Rendering
 
-Features that make PMCP's task-prompt bridge uniquely valuable. No other MCP SDK has a workflow-as-prompt system, let alone one backed by durable tasks. These features compound the existing differentiators.
+### What Expected Behavior Looks Like
+
+A developer runs `cargo pmcp preview --url http://localhost:3000 --open`. A browser opens at `http://localhost:8765`. The left panel lists the server's tools (fetched via `/api/tools`). The developer selects a tool that has a widget resource (e.g., `chess_new_game`) and clicks Execute. The center panel renders the widget in an iframe. The widget works: clicking pieces calls `chess_move` and the board updates. The right DevTools panel shows State, Console, Network, and Events tabs updating in real time.
+
+The bridge is the critical link. The widget's `window.mcpBridge.callTool(name, args)` must reach the PMCP server through the preview server proxy. The current `index.html` already injects the bridge via `srcdoc` — but the injected bridge uses `window.parent.previewRuntime` which breaks in sandboxed iframes. The correct pattern uses `postMessage` for cross-origin iframe communication.
+
+### Table Stakes
+
+| Feature | Why Expected | Complexity | Dependencies on Existing Code |
+|---------|--------------|------------|-------------------------------|
+| **Widget iframe renders from resource URI** | The whole purpose of mcp-preview. Without rendering, the tool is useless. | MEDIUM | `mcp-preview` proxy already calls `tools/call`; must add `resources/read` proxy call to fetch widget HTML by URI |
+| **`window.mcpBridge.callTool()` routes to real MCP server** | Chess and Map widgets call `callTool()` on every user interaction. Bridge must reach the live server. | MEDIUM | Fix postMessage architecture in `wrapWidgetHtml()`. Bridge in iframe sends postMessage to parent; parent calls `/api/tools/call`; result posted back. CSP headers must allow parent-child messaging. |
+| **MCP session initialization (handshake)** | MCP requires `initialize` before any method. Current `McpProxy::list_tools()` calls initialize each time (inefficient). Must call once and reuse session. | LOW | `McpProxy` already has `initialize()`. Add session state: track whether initialized. `initialize` once on preview server start. |
+| **Resource fetching for widget HTML** | Widgets are served as MCP resources (`ui://chess/board.html`). The preview must call `resources/read` to get the HTML. Current code looks for inline HTML in tool response content, which is not how MCP Apps works. | MEDIUM | Add `/api/resources/read?uri=...` endpoint to preview. `McpProxy::read_resource(uri)` method. In `handleToolResponse`, scan tool result for `_meta.ui.widget` URI, then fetch that resource. |
+| **`window.mcpBridge.getState()` and `setState()` work** | Widget state persistence across tool calls (chess board position, map center). DevTools State tab shows current state. | LOW | Already sketched in `wrapWidgetHtml()`. Wire postMessage state sync. |
+| **DevTools panels update in real time** | Developers need to see what the widget is doing. Console, Network, Events should update on bridge calls. | LOW | Already in `index.html`. Must ensure postMessage from iframe triggers devtools log updates in parent. |
+| **Connection status shows connected/disconnected** | Immediate feedback if the MCP server is not running. | LOW | Already in UI. `status-dot` element and `setStatus()` function exist. Ensure proxy errors surface here. |
+
+### Differentiators
 
 | Feature | Value Proposition | Complexity | Notes |
 |---------|-------------------|------------|-------|
-| **Automatic step result persistence to task variables** | Every completed step's binding is automatically written to task variables. If step "validate" produces `{"config": {...}}`, it appears in `task.variables["validate"]` immediately. The client can poll `tasks/get` mid-workflow and see accumulated results. No manual `set_variable()` calls needed for basic data flow. This is the "server memory" promise made real. | MEDIUM | When a step with `.bind("name")` completes, the prompt handler writes the result to `task_context.set_variable("name", result)`. This mirrors the existing `execution_context.store_binding()` but makes it durable. Dual-write: in-memory (for same-request step chaining) + task store (for persistence). |
-| **Structured handoff message format** | The prompt reply's final assistant message is a machine-readable handoff: a JSON-structured block (embedded in text for LLM consumption, parseable for programmatic clients) listing task ID, completed steps with summaries, and next-step guidance with tool name, expected arguments, and data sources. This goes beyond "here's what I did" to "here's exactly how to continue." | HIGH | Design a handoff format that works for both LLMs (natural language with structure) and programmatic clients (parseable JSON within the message). The format must include: `taskId`, `completedSteps[]` (name, tool, status, binding), `nextStep` (name, tool, arguments with sources), `remainingSteps[]` (names). Balance between human-readable and machine-parseable. |
-| **DataSource resolution from task variables** | New `DataSource::TaskVariable { key, field }` variant that resolves step arguments from task variables instead of in-memory bindings. This enables a client-completed step to feed data to subsequent server steps in a resumed workflow. Cross-session data flow becomes possible: session 1 creates task + does steps 1-2, session 2 resumes and steps 3-4 read from task variables. | HIGH | Extends the existing `DataSource` enum with a new variant. Resolution in `resolve_tool_parameters()` pulls from `TaskContext` instead of `ExecutionContext`. Must handle the case where a task variable was set by a previous session (not in current execution context). Backward-compatible: existing `StepOutput` still works for same-session chains. |
-| **Guidance-aware step classification** | Steps with `.with_guidance()` are classified as "client steps" (need LLM reasoning), steps without guidance and with fully resolvable parameters are "server steps" (can execute deterministically). The prompt handler pre-classifies steps and reports this in the handoff, so the client knows upfront which steps it must handle. | LOW | Classification is already implicit in the current code (steps that fail parameter resolution are handed off). Making it explicit via a `StepExecutability` enum (ServerExecutable, ClientRequired, Conditional) and including it in the handoff message. Enables smarter client strategies (skip polling if all remaining steps are client-required). |
-| **Workflow resume from task state** | A new API `WorkflowPromptHandler::resume(task_id, extra)` that reconstructs execution state from task variables and continues from where the workflow paused. Enables a second `prompts/get` call to pick up a partially-executed workflow. Neither A2A nor any MCP SDK supports this -- they require the client to manually call individual tools. | HIGH | Read `_workflow.completed` and `_workflow.current_step_index` from task variables. Reconstruct `ExecutionContext` bindings from stored step results in task variables. Resume step loop from `current_step_index`. Must handle: steps completed by client (results in task variables but not from server execution), steps that were skipped, and steps whose prerequisites changed. This is the most complex feature in the milestone. |
-| **Example demonstrating full task-prompt bridge** (`61_tasks_workflow.rs`) | A working example that shows: prompt creates task, server runs 2 of 4 steps, returns structured handoff, simulated client continues steps 3-4 using guidance, polls task for final result. Proves the bridge works end-to-end. No other MCP SDK has an equivalent. | MEDIUM | Must demonstrate: workflow definition with 4 steps (2 server-executable, 2 client-required), task creation on prompt invocation, partial execution with task variable persistence, structured handoff message, client-side tool calls with task ID propagation, final task completion. Complex example but high-value -- this IS the feature demonstration. |
+| **Auto-reload on server restart** | When the MCP server restarts (hot-reload during development), the preview reconnects and refreshes the tool list. | MEDIUM | WebSocket handler skeleton exists (`/ws` route). Use WebSocket to signal reconnect. Poll `/api/tools` on disconnect. |
+| **Environment variable simulation** | Theme (light/dark), locale, display mode, maxHeight, safeArea. Widget receives `openai/setGlobals` postMessage when env changes. | LOW | Already in `index.html` env-controls. `emitGlobalsUpdate()` already implemented. Just needs the postMessage fix to actually reach the iframe. |
+| **Multiple widget resources panel** | Server may expose multiple UI resources. Show a resource picker in addition to tool list. | MEDIUM | Add `/api/resources` endpoint. Add resource panel to UI. |
+| **Fullscreen mode** | Widget expands to fill viewport, simulating the Picture-in-Picture or expanded view mode in ChatGPT. | LOW | `.widget-frame-container.fullscreen` class already defined. Toggle logic in `updateDisplayMode()` already exists. |
 
-### Anti-Features (Commonly Requested, Often Problematic)
+### Anti-Features
 
-Features that seem natural for a task-prompt bridge but create problems in the MCP context.
+| Anti-Feature | Why Avoid | What to Do Instead |
+|--------------|-----------|-------------------|
+| **Re-implement MCP session management in preview** | The preview is a dev tool, not a production client. Session complexity is a maintenance burden. | Use stateless HTTP POST to `/mcp` for each tool/resource call. MCP server handles its own statefulness. |
+| **Hot module replacement (HMR) for widget HTML** | Watching widget file changes and pushing updates requires a file watcher, which adds OS-specific complexity. | Developers refresh the browser. Good enough for a dev tool. Add auto-reload later if demand exists. |
+| **Preview server authentication** | The preview runs locally on 127.0.0.1. Adding auth adds friction with zero security benefit. | Document that preview is local-only. CORS is already set to `Any`. |
 
-| Feature | Why Requested | Why Problematic | Alternative |
-|---------|---------------|-----------------|-------------|
-| **Automatic client-side step execution** | "The SDK should handle remaining steps automatically on the client side" | MCP clients are LLM applications. The SDK provides prompts (guidance), not execution. Automatic execution would require the SDK to embed an LLM orchestrator, which is the host application's job. The protocol separation is intentional: server provides context, client decides actions. | Provide structured handoff with explicit tool call guidance. Let the host LLM decide how to execute remaining steps. Document the continuation protocol. |
-| **Step-level task status transitions** (working per step) | "Each step should have its own task status, like `working` for step 1, `input_required` for step 2" | MCP tasks have ONE status. The spec does not support per-step status within a task. Adding sub-statuses creates a state machine explosion (5 states x N steps). Task variables are the right place for per-step state. | Track per-step state in task variables: `_workflow.completed`, `_workflow.remaining`. Task-level status stays simple: `working` (in progress), `completed` (all done), `failed` (error). |
-| **Bidirectional step negotiation** (server asks client mid-execution) | "During workflow execution, the server should be able to ask the client questions before continuing to the next step" | This requires sampling or elicitation during `prompts/get`, which is a completely different protocol flow. Prompts are single-request-response. Mixing prompts with server-initiated requests creates circular dependencies and violates the MCP protocol flow. A2A handles this with multi-turn messages; MCP does not. | The partial execution pattern IS the solution: server runs what it can, returns a structured handoff, client acts on it. If the server needs client input, it stops at that step and includes guidance. The next round (tool call or re-invocation) provides the input. |
-| **Task-backed prompt caching** (resume prompt from cache) | "If I call `prompts/get` again with the same arguments, return the cached task result instead of re-executing" | Prompts are expected to be side-effect-free in most MCP clients. Caching a task reference would make repeated `prompts/get` calls return stale or unexpected results. The task ID is in the original response -- the client should use it for continuation, not re-invoke the prompt. | Return task ID in the prompt response. Document that clients should use `tasks/get` and direct tool calls for continuation, not repeat `prompts/get`. Provide `resume()` API for explicit re-entry with a task ID. |
-| **Workflow branching based on step results** | "If step 1 returns X, run step 2a; if step 1 returns Y, run step 2b" | SequentialWorkflow is sequential by design. Adding branching makes it a DAG engine, which massively increases complexity in validation, execution, and especially in the handoff message format (which branch to communicate?). This is a workflow engine concern, not an SDK concern. | Use step guidance to describe conditional logic: "Based on the validation result above, choose the appropriate next action." The LLM client handles branching naturally. For programmatic branching, use separate workflows or custom PromptHandler implementations. |
-| **Persistent workflow definitions in task store** | "Store the workflow definition alongside the task so any server instance can resume it" | Workflow definitions are code (Rust structs). Serializing them requires a DSL or schema language, adding massive complexity. Workflows are registered at server startup -- they are always available on any server instance running the same code. | Store only state (task variables) in the task store, not definitions. The workflow definition lives in the server code. Any server instance running the same version can resume from task variables because the step definitions are identical. Document that workflow schema changes require migration. |
-
-## Feature Dependencies
+### Feature Dependencies
 
 ```
-[EXISTING: SequentialWorkflow + WorkflowPromptHandler]
-    |
-    +--extended-by--> [Task-Aware Prompt Handler]
-    |                       |
-    |                       +--requires--> [EXISTING: TaskStore + TaskContext]
-    |                       |
-    |                       +--requires--> [EXISTING: InMemoryTaskStore]
-    |                       |
-    |                       +--enables--> [Partial Server-Side Execution with Persistence]
-    |                       |                   |
-    |                       |                   +--requires--> [Step State Tracking in Task Variables]
-    |                       |                   |                   |
-    |                       |                   |                   +--defines--> [Standard Variable Schema (_workflow.*)]
-    |                       |                   |
-    |                       |                   +--enables--> [Structured Handoff Message]
-    |                       |                   |                   |
-    |                       |                   |                   +--enables--> [Client Continuation Protocol]
-    |                       |                   |
-    |                       |                   +--enables--> [Task Status Lifecycle Integration]
-    |                       |
-    |                       +--enables--> [Automatic Step Result Persistence]
-    |                                           |
-    |                                           +--enables--> [DataSource::TaskVariable]
-    |                                                               |
-    |                                                               +--enables--> [Workflow Resume from Task State]
+McpProxy::read_resource(uri) [NEW]
+    required by: widget iframe rendering from resource URI
 
-[Step State Tracking] + [Structured Handoff Message]
-    |
-    +--enables--> [Guidance-Aware Step Classification]
+postMessage bridge architecture [REPLACE wrapWidgetHtml cross-origin access]
+    required by: callTool(), getState(), setState(), DevTools updates
+    required by: environment variable simulation (openai/setGlobals)
 
-[All of the above]
-    |
-    +--enables--> [Example: 61_tasks_workflow.rs]
+/api/resources/read endpoint [NEW]
+    required by: widget iframe rendering
+    requires: McpProxy::read_resource
+
+/api/resources endpoint [NEW, optional]
+    required by: multiple widget resources panel
+
+MCP session initialization once [IMPROVE McpProxy]
+    required by: all proxy calls (performance, correctness)
 ```
 
-### Dependency Notes
+---
 
-- **Task-Aware Prompt Handler extends WorkflowPromptHandler, not replaces.** Non-task workflows must continue working unchanged. The bridge is opt-in via `.with_task_support()` on SequentialWorkflow or a new `TaskWorkflowPromptHandler` that wraps `WorkflowPromptHandler`.
-- **Step State Tracking in Task Variables is the critical foundation.** Without a standard schema, the handoff message has nothing to communicate and the resume API has nothing to reconstruct from. Design the schema first.
-- **Structured Handoff Message depends on Step State Tracking.** The handoff reads from `_workflow.completed` and `_workflow.remaining` to build the guidance.
-- **DataSource::TaskVariable depends on Automatic Step Result Persistence.** The new data source variant is only useful if step results are actually in task variables. Build persistence first, then the data source.
-- **Workflow Resume is the last and hardest feature.** It depends on everything else: task-aware handler (creates the task), step state tracking (knows what was done), automatic persistence (has the data), and DataSource::TaskVariable (can read it back). Build last, validate thoroughly.
-- **Client Continuation Protocol is mostly documentation, not code.** The tools/call + task polling already work. The new contribution is documenting the handoff contract and ensuring _meta propagation.
+## Feature Area 2: WASM Widget Test Client (In-Browser MCP)
 
-## MVP Definition
+### What Expected Behavior Looks Like
 
-### Launch With (v1.1.0 -- Task-Prompt Bridge)
+A developer opens `http://localhost:8765` (preview server). In the widget iframe, the bridge connects not via server-side HTTP proxy but via the WASM MCP client running in the browser. The WASM client connects directly to the MCP server using HTTP transport. Tool calls from the widget go Browser → WASM client → MCP server (no server-side proxy hop). This enables testing widgets in conditions closer to how ChatGPT runs them: the client is in the browser, not on a server.
 
-Minimum feature set to validate that task-backed workflows with partial execution work end-to-end.
+Alternatively: the WASM client is injected by the preview server into the widget iframe as the `window.mcpBridge` implementation, allowing the widget to be loaded from any origin.
 
-- [ ] **Task-aware prompt handler** -- WorkflowPromptHandler creates a task when invoked with task support enabled. Returns task ID in GetPromptResult `_meta`.
-- [ ] **Partial execution with task variable persistence** -- Steps that execute server-side write bindings to task variables. Step loop behavior unchanged (break on unresolvable params), but now progress is durable.
-- [ ] **Step state tracking in task variables** -- Standard `_workflow.*` schema: goal, steps, completed, remaining, current_step_index. Written on each step completion and at handoff point.
-- [ ] **Structured prompt reply (handoff message)** -- Final assistant message in GetPromptResult includes: task ID, completed step summaries, next step guidance with tool name and argument sources, remaining step list.
-- [ ] **Task status lifecycle integration** -- Task stays `working` during execution and at handoff. Transitions to `completed` only when all steps finish server-side. Transitions to `failed` on error.
-- [ ] **Automatic step result persistence** -- Step bindings automatically written to task variables alongside in-memory context. Dual-write ensures both same-request chaining and durability.
-- [ ] **Example: 61_tasks_workflow.rs** -- End-to-end demonstration of 4-step workflow with 2 server-executed steps, handoff, and simulated client continuation.
+The WASM client already exists (`examples/wasm-client/`). It has dual transport (WebSocket + HTTP) and exposes `connect()`, `list_tools()`, `call_tool()` via `wasm-bindgen`. The gap is:
+1. The WASM client is not wired into the preview server's bridge injection.
+2. The WASM client's `call_tool()` returns a `CallToolResult` structure, not the flat JSON that `window.mcpBridge.callTool()` widgets expect (they expect just the tool output value, not the `{content: [{type, text}]}` wrapper).
 
-### Add After Validation (v1.1.x)
+### Table Stakes
 
-Features to add once the basic bridge is working and tested.
+| Feature | Why Expected | Complexity | Dependencies on Existing Code |
+|---------|--------------|------------|-------------------------------|
+| **WASM client loads in preview iframe context** | If the WASM client is the bridge implementation, it must load inside the iframe. The iframe is served via `srcdoc` so WASM loading needs special handling (blob URL or `importmap`). | HIGH | `examples/wasm-client/pkg/` has compiled WASM + JS. Preview server must serve WASM as a static asset, then inject `<script type="module">` loading it. |
+| **Bridge adapter: WASM client → `window.mcpBridge` shape** | The WASM `call_tool()` returns `{content: [{type: "text", text: "..."}]}`. Widget code calls `callTool()` and expects the unwrapped tool output (e.g., a `GameState` object). The adapter must unwrap MCP content format into the tool's return value. | MEDIUM | New JavaScript shim layer. Parse `CallToolResult.content[0].text` as JSON if content type is `text`. If content type is `resource` with widget MIME type, load the widget. |
+| **WASM client handles CORS (HTTP transport to local server)** | The widget iframe is at `http://localhost:8765` and the MCP server is at `http://localhost:3000`. Cross-origin fetch is blocked without CORS headers. | LOW | PMCP's `StreamableHttpServer` already emits CORS headers. Confirm `Access-Control-Allow-Origin: *` is present. The preview server already sets `CorsLayer::new().allow_origin(Any)`. |
+| **Connection URL configuration passed to WASM client** | The WASM client must know the MCP server URL. The preview server knows this (`config.mcp_url`). Must inject the URL into the iframe context. | LOW | Pass `mcp_url` from `/api/config` response. Inject into bridge setup script. |
 
-- [ ] **DataSource::TaskVariable** -- Trigger: users need cross-session data flow where a client-completed step feeds subsequent server steps.
-- [ ] **Guidance-aware step classification** -- Trigger: clients want upfront knowledge of which steps require LLM reasoning vs which are server-executable.
-- [ ] **Workflow resume from task state** -- Trigger: users need to re-invoke a workflow prompt to continue from where it left off across sessions.
-- [ ] **Structured handoff as parseable JSON** -- Trigger: programmatic clients (not LLMs) need to parse the handoff message programmatically rather than from natural language.
+### Differentiators
 
-### Future Consideration (v1.2+)
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| **Side-by-side comparison: proxy mode vs WASM mode** | Preview server has two bridge modes: (a) server-side proxy (simple), (b) WASM client in browser (closer to production ChatGPT). Toggle in UI. | HIGH | Mode A (proxy) uses `/api/tools/call`. Mode B (WASM) loads WASM client. Same widget, two modes, one preview UI. |
+| **WASM client as standalone `mcpBridge` polyfill** | Developers can include the WASM client in their widget's `preview.html` and get a real MCP bridge without running the preview server. | MEDIUM | Package the WASM + bridge adapter as `widget-runtime.js`. Widgets `<script src="widget-runtime.js">` and it provides `window.mcpBridge`. This is the `packages/widget-runtime/` referenced in chess README but not yet built. |
+| **Request ID tracking fix** | Current WASM HTTP client uses hardcoded IDs (`id: 3i64.into()`). In concurrent widget scenarios, ID collisions produce incorrect responses. | LOW | Add atomic ID counter. Already noted as `// TODO` in source. |
 
-Features to defer until the task-prompt bridge is validated in production.
+### Anti-Features
 
-- [ ] **Nested workflows** (task-backed workflows that invoke sub-workflows) -- Wait for demand.
-- [ ] **Conditional step execution within workflows** -- Wait for branching demand; currently handled by LLM reasoning.
-- [ ] **Progress notifications per step** -- Wait for SSE transport adoption; polling is sufficient initially.
-- [ ] **Client-side SDK helpers for continuation** -- Wait for client SDK ecosystem maturity.
+| Anti-Feature | Why Avoid | What to Do Instead |
+|--------------|-----------|-------------------|
+| **WASM client in production widget bundle** | Embedding the full WASM MCP client in every widget HTML adds ~200KB+ per widget. ChatGPT injects its own bridge — widgets should use `window.mcpBridge`, not bundle their own client. | WASM client is for the preview server environment only. Production widgets assume `window.mcpBridge` exists (injected by host). |
+| **WebSocket transport for WASM-to-server connection** | WebSocket requires a persistent connection. Lambda/serverless deployments (main PMCP target) do not support persistent WebSocket connections. HTTP transport is the only viable option. | Use WASM HTTP transport exclusively for MCP Apps widgets. WebSocket WASM transport is for other use cases. |
 
-## Feature Prioritization Matrix
+### Feature Dependencies
 
-| Feature | User Value | Implementation Cost | Priority | Depends On |
-|---------|------------|---------------------|----------|------------|
-| Task-aware prompt handler | HIGH | MEDIUM | P1 | Existing TaskStore, WorkflowPromptHandler |
-| Partial execution with persistence | HIGH | MEDIUM | P1 | Task-aware prompt handler |
-| Step state tracking (_workflow.* schema) | HIGH | MEDIUM | P1 | Task-aware prompt handler |
-| Structured handoff message | HIGH | MEDIUM | P1 | Step state tracking |
-| Task status lifecycle integration | HIGH | LOW | P1 | Task-aware prompt handler |
-| Automatic step result persistence | HIGH | LOW | P1 | Task-aware prompt handler |
-| Example 61_tasks_workflow.rs | HIGH | MEDIUM | P1 | All P1 features |
-| DataSource::TaskVariable | MEDIUM | HIGH | P2 | Automatic step result persistence |
-| Guidance-aware step classification | MEDIUM | LOW | P2 | Step state tracking |
-| Workflow resume from task state | HIGH | HIGH | P2 | DataSource::TaskVariable, step state tracking |
-| Structured handoff as parseable JSON | MEDIUM | LOW | P2 | Structured handoff message |
+```
+Preview server serves WASM assets at /wasm/* [NEW]
+    requires: wasm-client/pkg/ copied to mcp-preview assets
 
-**Priority key:**
-- P1: Must have for v1.1.0 launch (validates the task-prompt bridge concept)
-- P2: Should have, add when core bridge is working (enables advanced patterns)
+Bridge adapter JavaScript (wasm-client → mcpBridge shape) [NEW]
+    requires: WASM client loaded in iframe
 
-## Competitor Feature Analysis
+MCP server URL injected into iframe [NEW]
+    requires: /api/config endpoint (already exists)
 
-| Feature | MCP Spec (base) | A2A Protocol | Temporal Workflows | PMCP v1.1 Approach |
-|---------|-----------------|--------------|--------------------|--------------------|
-| **Prompt + task binding** | Prompts and tasks are independent primitives. No spec-defined bridge. | Tasks are the unit of agent interaction; no separate "prompt" concept. Messages within a task serve as guidance. | Workflows ARE the task. No separate prompt layer. | Prompt creates and binds to a task. Prompt reply includes task ID. Unique in MCP ecosystem. |
-| **Partial execution** | Not addressed. Prompts return full result synchronously. | Tasks accumulate messages/artifacts over multiple turns. Server can return `input-required` to pause. | Workflows checkpoint after each activity. Resume from checkpoint on failure. | Server executes resolvable steps, persists progress to task variables, returns structured handoff. Closest to A2A's multi-turn pattern but using MCP primitives. |
-| **Step progress tracking** | Not addressed for prompts. Tasks have `statusMessage` but no structured progress. | Task has `history` (message log) and `artifacts` (accumulated outputs). Client polls or subscribes for updates. | Full event history with each activity's input/output/status. Queryable via workflow queries. | Task variables with `_workflow.*` schema. Simpler than Temporal's event history, more structured than A2A's message log. Designed for LLM consumption. |
-| **Client continuation guidance** | Not addressed. Client must infer what to do from prompt messages. | Agent returns messages with next-action hints. No standardized format. | N/A (Temporal handles continuation internally). | Structured handoff message with explicit tool name, argument sources, and remaining step list. Most prescriptive guidance of any system. |
-| **Cross-session resume** | Not possible. Prompts are stateless. | Tasks persist across sessions. Client can send follow-up messages. | Core feature. Workflows resume from any checkpoint on any worker. | Workflow resume via task variables. Less robust than Temporal (no event replay), but works within MCP's simpler model. |
-| **Variable schema for progress** | No standard. `_meta` is freeform. | No standard variable schema. Artifacts are typed but custom per agent. | Workflow state is custom per workflow. No universal schema. | `_workflow.*` prefix convention: `goal`, `steps`, `completed`, `remaining`, `current_step_index`. PMCP-defined standard. |
+Request ID atomic counter in WASM HTTP client [FIX]
+    required by: concurrent tool calls in WASM mode
+```
 
-### Key Takeaways
+---
 
-1. **PMCP is creating a new pattern.** No existing protocol or framework combines prompts (templates for LLM guidance) with durable tasks (stateful progress) and structured handoff (continuation instructions). This is genuinely novel.
+## Feature Area 3: Publishing — ChatGPT Manifest + Deploy Targets
 
-2. **A2A's multi-turn task model is the closest analogue.** A2A tasks accumulate messages and artifacts over multiple `message/send` calls. PMCP's approach is similar but uses prompts for the initial structured guidance and task variables for state, which is simpler and more LLM-friendly.
+### What Expected Behavior Looks Like
 
-3. **Keep it simpler than Temporal.** Temporal's event replay and checkpoint system is orders of magnitude more complex. PMCP's "read state from task variables, resume from step index" approach trades some robustness for massive simplicity. This is the right tradeoff for an SDK.
+**ChatGPT manifest generation:** A developer runs `cargo pmcp deploy --target chatgpt-apps` (or a subcommand like `cargo pmcp manifest --chatgpt`). The CLI reads the server's tool definitions (via `cargo pmcp schema export` or by connecting to the running server) and generates a `chatgpt-manifest.json` describing the app for submission to the ChatGPT App Directory. The file includes server URL, app name, tool definitions, and HTTPS verification metadata.
 
-4. **The structured handoff is the unique value.** Every other system leaves continuation to the client's intelligence. PMCP explicitly tells the client "call tool X with arguments Y and Z" -- this is what makes the bridge practical for LLM clients that benefit from explicit guidance.
+**Demo landing page:** `cargo pmcp preview --demo` generates a standalone `demo/index.html` with a mock bridge. The developer opens it in a browser, clicks through the widget, takes screenshots for the App Directory submission. No server needed.
+
+**Deploy extension for MCP Apps:** `cargo pmcp deploy --target aws-lambda` already works for basic MCP servers. The extension adds: (a) widget asset serving — the lambda must serve widget HTML at the `ui://` resource URIs; (b) HTTPS URL in generated outputs so it can be submitted to ChatGPT.
+
+### Table Stakes
+
+| Feature | Why Expected | Complexity | Dependencies on Existing Code |
+|---------|--------------|------------|-------------------------------|
+| **ChatGPT-compatible manifest generation** | ChatGPT App Directory requires a specific manifest format for submission. Without this, the app cannot be submitted. | MEDIUM | Read tool definitions from server (`McpProxy::list_tools()`). Generate JSON matching ChatGPT Apps schema (name, description, server URL, HTTPS endpoint, auth type). `cargo-pmcp` already has `schema` command for exporting MCP schema. |
+| **`text/html+skybridge` MIME type verified on deploy** | ChatGPT requires resources to use `text/html+skybridge` MIME type. If the MIME type is wrong, the widget won't render. | LOW | `ExtendedUIMimeType::HtmlSkybridge` already defined in `mcp_apps.rs`. Verification is a lint/check step in deploy. |
+| **HTTPS URL in deployment outputs** | ChatGPT will not register an HTTP server. The deployment output must include the HTTPS endpoint. | LOW | `cargo-pmcp` outputs already track deployed URL. Add HTTPS validation: warn if URL is not `https://`. Lambda + API Gateway always produces HTTPS. Cloud Run always HTTPS. |
+| **Widget HTML served from MCP resources endpoint** | The deployed server must serve widget HTML at the `ui://` resource URIs when `resources/read` is called. | LOW | Chess example already does this via `ChessResources` handler. The deploy check must verify at least one resource with `text/html+skybridge` MIME exists. |
+
+### Differentiators
+
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| **Auto-generated demo landing page with mock bridge** | Stakeholders and reviewers can interact with the widget before the server is deployed. The landing page embeds the chess/map widget HTML with a fully functioning mock bridge and tool call log. | MEDIUM | Generate a single-file HTML combining: widget HTML, mock bridge script (like `preview.html` today), tool responses hardcoded or editable in the page. `cargo pmcp preview --demo --output demo.html`. |
+| **`cargo pmcp deploy --mcp-apps` flag** | Extends the existing deploy targets to verify MCP Apps requirements and output the manifest. | LOW | Reuse existing deploy targets. Add a `--mcp-apps` flag that triggers manifest generation and HTTPS verification after deploy. |
+| **ChatGPT App Directory submission checklist** | After generating the manifest, print a checklist: HTTPS endpoint present, MIME types correct, CSP configured, widget renders in preview. Reduces submission rejections. | LOW | CLI output only. No new API calls. Gather from existing deploy outputs. |
+| **Manifest validation against ChatGPT schema** | Validate the generated manifest against the ChatGPT Apps schema before submission. Catches missing fields, invalid URLs, wrong MIME types. | MEDIUM | Embed the ChatGPT manifest JSON schema in `cargo-pmcp`. Validate at manifest generation time. Fail fast with actionable errors. |
+
+### Anti-Features
+
+| Anti-Feature | Why Avoid | What to Do Instead |
+|--------------|-----------|-------------------|
+| **Automated ChatGPT App Directory submission** | The submission process requires OAuth, human review, and manual approval. Automating submission is not possible and would break with ChatGPT API changes. | Generate the manifest and print instructions for manual submission. |
+| **Publishing to non-ChatGPT stores (Claude App Directory, etc.)** | These stores do not exist yet (as of 2026-02). Building for hypothetical stores wastes effort. | Build the ChatGPT manifest. Make the manifest structure extensible. When other stores emerge, add adapters. |
+| **Complex deploy orchestration for widget CDN** | Hosting widget assets on a CDN (CloudFront, etc.) separate from the MCP server adds infrastructure complexity. | Widgets are served by the MCP server itself via `resources/read`. The server IS the CDN. No separate asset hosting needed. |
+
+### Feature Dependencies
+
+```
+ChatGPT manifest JSON generation [NEW]
+    requires: McpProxy::list_tools() (already exists in mcp-preview)
+    requires: deployment output URL (already in cargo-pmcp deploy outputs)
+    requires: mcp_apps::WidgetCSP serialization to ChatGPT format
+
+Demo landing page generation [NEW]
+    requires: widget HTML from server (resources/read)
+    requires: mock bridge JavaScript (pattern exists in preview.html)
+    requires: cargo-pmcp CLI subcommand
+
+Deploy --mcp-apps flag [NEW]
+    requires: existing deploy targets (all three already work)
+    requires: ChatGPT manifest generation
+```
+
+---
+
+## Feature Area 4: Widget Authoring DX
+
+### What Expected Behavior Looks Like
+
+**File-based widgets:** Currently the chess server does `include_str!("../widget/board.html")` — the widget HTML is already a separate file. The pattern works. The issue is that the `cargo pmcp new` scaffolding generates no widget file: it only creates a calculator server with no widget. The `--mcp-apps` template creates a server with a placeholder widget file, a `preview.html` mock bridge, and a `Cargo.toml` with `mcp-apps` feature enabled.
+
+**Shared bridge library:** Both chess and map copy the same mock bridge pattern into their `preview.html`. This is duplication. A shared JavaScript file (`widget-runtime.js`) provides `window.mcpBridge` with the mock implementation, usable in any `preview.html` by including one `<script>` tag. This file ships as a PMCP static asset, served by `cargo pmcp preview` at `/widget-runtime.js`.
+
+**Scaffolding:** `cargo pmcp new --mcp-apps my-widget` creates a complete MCP Apps workspace: Rust server with 1-2 example tools, `widget/index.html` with the bridge integration pattern, `preview.html` using the shared bridge library, and Playwright test skeleton.
+
+### Table Stakes
+
+| Feature | Why Expected | Complexity | Dependencies on Existing Code |
+|---------|--------------|------------|-------------------------------|
+| **File-based widget authoring (separate HTML file, not Rust inline strings)** | Already implemented in chess and map examples via `include_str!`. The pattern works. The scaffolding template must generate a widget file, not inline HTML. | LOW | Template generation in `cargo-pmcp/src/templates/`. Add `mcp_apps` template variant. |
+| **`cargo pmcp new --mcp-apps` scaffolding template** | Developers starting a new MCP App need a working starting point. Without scaffolding, they manually copy the chess example. | MEDIUM | Add new template to `cargo-pmcp/src/templates/mod.rs`. Generate: `src/main.rs` with `ChatGptAdapter`, `widget/index.html` with bridge boilerplate, `preview.html` with shared bridge, `Cargo.toml` with `mcp-apps` feature. Wire into `cargo pmcp new` and `cargo pmcp add server` commands. |
+| **Shared bridge library (`widget-runtime.js`) served by preview server** | Chess and map both copy the same 200-line mock bridge script. Single source of truth eliminates drift when the bridge API changes. | LOW | Extract `wrapWidgetHtml()` bridge JavaScript from `index.html` into `assets/widget-runtime.js`. Serve at `/widget-runtime.js`. Update `preview.html` templates to `<script src="http://localhost:8765/widget-runtime.js">`. |
+| **Widget HTML hot-reload on save (development mode)** | MCP App developer edits `widget/index.html`, refreshes the preview browser, sees changes. | LOW | No server change needed. The widget HTML is re-fetched on each tool execute. `srcdoc` is reset. Developer just clicks Execute again. Or: add a Refresh button in the preview UI that re-runs the last tool call. |
+
+### Differentiators
+
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| **Widget authoring guide in scaffolded README** | Generated `README.md` explains the bridge API (`callTool`, `getState`, `setState`), the stateless widget pattern, CSP configuration, and how to run the preview. Removes the need to read the full MCP Apps spec. | LOW | Template content. No code changes. |
+| **Bridge API type definitions (`widget-runtime.d.ts`)** | TypeScript type definitions for `window.mcpBridge` and `window.openai`. Widget HTML with `<script type="module">` can import types for IDE autocompletion. | LOW | Hand-write `.d.ts` file. Ship alongside `widget-runtime.js`. |
+| **Stateless widget pattern enforcement in template** | The scaffolded widget uses the stateless pattern from the chess example (full state sent with each tool call). Comment in the generated code explains why: no server-side sessions, works across MCP hosts, easy horizontal scaling. | LOW | Template content. One comment block. |
+| **Widget CSP configuration helper** | The scaffolded `main.rs` includes `WidgetCSP::new().connect("https://...")` with commented examples for common cases (external API, CDN, tile server). | LOW | Template content. |
+
+### Anti-Features
+
+| Anti-Feature | Why Avoid | What to Do Instead |
+|--------------|-----------|-------------------|
+| **React/Vue/Svelte widget template** | Frontend framework templates balloon the scaffolding surface: different build steps, different CSP requirements, different bundle configurations. The chess and map examples prove vanilla HTML/JS is sufficient for rich widgets. | Generate vanilla HTML/JS templates. Document that any framework works if you produce a single HTML file (per the MCP Apps spec). |
+| **Widget build pipeline integration (Vite, webpack, etc.)** | A build step for widgets adds Node.js as a requirement, which is jarring in a Rust-first ecosystem. The MCP Apps spec supports raw HTML. | Serve raw HTML. If developers want a build step, they call `vite build` themselves and point the server at the output. |
+| **Widget versioning and CDN hosting** | Versioning widget HTML files on S3/CloudFront adds infrastructure complexity. Widgets change with the server code — they should be versioned together. | Widgets are embedded in the Rust binary via `include_str!`. They version with the server. No separate CDN needed. |
+
+### Feature Dependencies
+
+```
+Shared bridge library (widget-runtime.js) [NEW]
+    required by: cargo pmcp new --mcp-apps template (preview.html uses it)
+    required by: WASM widget test client (WASM mode uses it)
+    served by: mcp-preview static assets handler (already exists)
+
+cargo pmcp new --mcp-apps template [NEW]
+    requires: shared bridge library
+    requires: templates/mod.rs update
+    requires: ChatGptAdapter usage pattern (already in chess example)
+
+cargo pmcp add server --mcp-apps flag [NEW, additive]
+    requires: mcp_apps template variant
+    same as: cargo pmcp new but adds server to existing workspace
+```
+
+---
+
+## Feature Area 5: Ship Examples + Playwright E2E
+
+### What Expected Behavior Looks Like
+
+**Chess and Map examples ship:** `cargo run --example mcp-apps-chess` builds and starts the server. `cargo run --example mcp-apps-map` builds and starts the map server. Both are in the workspace examples. Both have complete READMEs. Both compile with `--features mcp-apps`. Both have `preview.html` files that work in the browser.
+
+**Playwright E2E tests pass:** `cd tests/playwright && npm install && npx playwright test` passes all tests in `chess-widget.spec.ts`. The test server (`serve.js`) serves the widget HTML at the paths the tests expect (`/chess/board.html`, `/map/map.html`). The mock bridge fixture works.
+
+### Table Stakes
+
+| Feature | Why Expected | Complexity | Dependencies on Existing Code |
+|---------|--------------|------------|-------------------------------|
+| **Chess example compiles and runs** | `cargo build --example mcp-apps-chess --features mcp-apps` produces a working binary. Currently the example depends on `pmcp::server::mcp_apps` types that may not be wired correctly. | LOW | Chess example code already complete. Verify feature flag wiring. Add to workspace Cargo.toml examples section if not present. |
+| **Map example compiles and runs** | Same as chess. The map example uses Leaflet.js (loaded from CDN) — must verify CSP allows `cdn.leafletjs.com` in the widget HTML. | LOW | Map example code exists. Same as chess: feature flag verification. |
+| **Playwright test server serves widget files** | The `serve.js` in `tests/playwright/` must serve `examples/mcp-apps-chess/widget/board.html` at `/chess/board.html`. | LOW | `serve.js` exists but may not be configured to serve from example directories. Update `playwright.config.ts` `webServer` command. |
+| **All chess widget Playwright tests pass** | 10 tests in `chess-widget.spec.ts`. Mock bridge handles `chess_new_game`, `chess_move`, `chess_valid_moves`. Widget must: show 64 squares, select pieces, highlight valid moves, make moves, update status. | MEDIUM | Tests already written. Widget may need `data-file` and `data-rank` attributes on squares, `#board`, `#status`, `#newGameBtn` IDs. May require updates to `widget/board.html`. |
+| **Map widget Playwright tests** | Equivalent to chess tests but for the map. Search, category filter, marker click, city list, detail panel. | MEDIUM | Tests not yet written. Add `tests/playwright/tests/map-widget.spec.ts`. |
+
+### Differentiators
+
+| Feature | Value Proposition | Complexity | Notes |
+|---------|-------------------|------------|-------|
+| **Playwright test report with widget screenshots** | `npx playwright test --reporter=html` produces an HTML report with screenshots of the widget at each test step. Useful for sharing with stakeholders. | LOW | Playwright built-in. Add `screenshot: 'on'` to `playwright.config.ts`. |
+| **Integration test: preview server + chess server** | A Playwright test that: starts chess MCP server, starts preview server pointing at chess, opens preview, selects `chess_new_game` tool, clicks Execute, verifies widget renders. End-to-end with real servers. | HIGH | Requires starting two servers from within Playwright setup. `playwright.config.ts` `webServer` supports multiple servers. Complex but high value. |
+| **Widget accessibility tests** | Playwright axe-core integration verifies the chess board has proper ARIA labels. Screen reader accessibility. | MEDIUM | `@axe-core/playwright` npm package. Not in scope for v1.3 MVP. |
+
+### Anti-Features
+
+| Anti-Feature | Why Avoid | What to Do Instead |
+|--------------|-----------|-------------------|
+| **Cross-browser testing matrix (Chrome, Firefox, Safari, WebKit)** | MCP Apps widgets are rendered by the host (ChatGPT, Claude) in their own WebView. The developer's preview is Chromium. Testing other browsers for the preview tool is low value. | Default Playwright to Chromium only. Document that production hosts use their own rendering. |
+| **Visual regression testing (screenshot diffing)** | Widget UIs change frequently during development. Snapshot drift causes false failures. | Save screenshots for manual review, not as test assertions. |
+| **Testing with real ChatGPT** | ChatGPT's review process involves human reviewers, not automated tests. | Test with the mock bridge. The bridge is a faithful simulation of the ChatGPT bridge API. |
+
+### Feature Dependencies
+
+```
+Playwright test server wired to widget directories [FIX]
+    required by: all Playwright tests
+
+Widget HTML data attributes and IDs match Playwright selectors [FIX/VERIFY]
+    required by: chess-widget.spec.ts assertions
+    may require: updates to examples/mcp-apps-chess/widget/board.html
+
+Map widget Playwright tests [NEW]
+    requires: Playwright test server serves map widget
+    requires: map widget has testable IDs
+
+Integration test: preview + chess [NEW, optional]
+    requires: both servers startable from playwright setup
+    requires: preview server bridge working (Feature Area 1)
+```
+
+---
+
+## Feature Dependencies (Cross-Area)
+
+```
+[Feature Area 1: mcp-preview Bridge Fix]
+    |
+    +--enables--> [Feature Area 2: WASM mode in preview]
+    |               (WASM bridge replaces proxy bridge in preview)
+    |
+    +--enables--> [Feature Area 5: Integration Playwright test]
+    |               (preview working = end-to-end test possible)
+    |
+    +--enables--> [Feature Area 3: Demo landing page]
+                    (demo page uses same bridge injection pattern)
+
+[Feature Area 4: Shared bridge library]
+    |
+    +--used-by--> [Feature Area 1: preview bridge]
+    +--used-by--> [Feature Area 4: scaffolded preview.html]
+    +--used-by--> [Feature Area 3: demo landing page]
+
+[Feature Area 5: Chess + Map examples ship]
+    |
+    +--validates--> [Feature Area 4: widget authoring DX]
+                      (examples ARE the reference implementation)
+```
+
+---
+
+## MVP Recommendation
+
+### Launch With (v1.3.0)
+
+Priority order based on dependencies and user value:
+
+**P1 — Blocking (must work or the milestone fails):**
+1. **mcp-preview bridge fix** (Feature Area 1): Replace `window.parent.previewRuntime` with postMessage. Add `resources/read` proxy. Without this, the preview tool shows the UI but widgets don't work.
+2. **Chess and map examples ship** (Feature Area 5): `cargo build` must succeed. `preview.html` must work. These are the only concrete deliverables users can try.
+3. **Playwright tests pass** (Feature Area 5): Tests exist but may need widget HTML attribute fixes. Green CI is table stakes for "shipped."
+
+**P2 — High value, not blocking:**
+4. **`cargo pmcp new --mcp-apps` scaffolding** (Feature Area 4): Enables community adoption. Without this, users copy the chess example manually.
+5. **Shared bridge library (`widget-runtime.js`)** (Feature Area 4): Reduces duplication. Trivial once preview bridge is fixed.
+6. **ChatGPT manifest generation** (Feature Area 3): Required for App Directory submission. Medium complexity, high practical value.
+
+**P3 — Ship if time allows:**
+7. **WASM widget test client** (Feature Area 2): Differentiator, but proxy mode (P1) already works. WASM mode is a "closer to production" option.
+8. **Demo landing page generation** (Feature Area 3): Nice for demos, not required for publishing.
+9. **Map Playwright tests** (Feature Area 5): Chess tests validate the pattern. Map tests are duplicative work.
+
+### Defer to v1.4+
+
+- WASM bridge polyfill (`widget-runtime.js` with WASM client inside)
+- Integration Playwright test (preview + real server)
+- Manifest validation against ChatGPT schema
+- Multiple widget resources panel
+- Auto-reload on server restart via WebSocket
+
+---
+
+## Competitor / Ecosystem Analysis
+
+| Capability | Official MCP Apps SDK (`@modelcontextprotocol/ext-apps`) | OpenAI Apps SDK | PMCP SDK v1.3 (target) |
+|------------|----------------------------------------------------------|-----------------|------------------------|
+| **Preview tool** | No built-in preview. Developers use the MCP Inspector (tool-call focus, no widget rendering). | No preview tool. Use developer mode in ChatGPT directly. | `cargo pmcp preview`: full widget rendering with DevTools. **Best-in-class for Rust.** |
+| **Bridge simulation** | Manual: create `preview.html` with `window.mcpBridge`. | Manual: same pattern. | Shared `widget-runtime.js`. Mock bridge + proxy bridge. Lower friction. |
+| **Scaffolding** | `npx @modelcontextprotocol/create-app` (TypeScript only). | OpenAI Apps Builder. No CLI for MCP. | `cargo pmcp new --mcp-apps` (Rust). **First Rust scaffolding for MCP Apps.** |
+| **Publishing** | Manual manifest creation. | Apps SDK has manifest helpers (TypeScript). | `cargo pmcp manifest --chatgpt`. **First Rust manifest generator.** |
+| **Widget testing** | No standardized test harness. Use Playwright manually. | No test harness. | Playwright fixture (`mock-mcp-bridge.ts`) ships with SDK. **Differentiator.** |
+| **WASM widget client** | Not applicable (TypeScript SDK runs in Node.js). | Not applicable. | Unique to PMCP. Browser-native MCP client. **Only Rust SDK with this.** |
+
+---
 
 ## Sources
 
 ### Authoritative (HIGH confidence)
-- [MCP Tasks Specification (2025-11-25)](https://modelcontextprotocol.io/specification/2025-11-25) -- Task states, polling, result retrieval
-- [SEP-1686: Tasks Proposal](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1686) -- Task lifecycle, input_required semantics
+- Codebase analysis: `crates/mcp-preview/assets/index.html` — bridge injection implementation, identified cross-origin bug
+- Codebase analysis: `crates/mcp-preview/src/proxy.rs` — proxy architecture, missing `resources/read`
+- Codebase analysis: `examples/wasm-client/src/lib.rs` — WASM client capabilities, hardcoded ID bug
+- Codebase analysis: `cargo-pmcp/src/templates/server.rs` — no `--mcp-apps` template variant exists
+- Codebase analysis: `tests/playwright/tests/chess-widget.spec.ts` — 10 tests targeting specific HTML selectors
+- Codebase analysis: `.planning/PROJECT.md` — v1.3 milestone scope, existing infrastructure inventory
 
 ### Verified (MEDIUM confidence)
-- [WorkOS: MCP Async Tasks Guide](https://workos.com/blog/mcp-async-tasks-ai-agent-workflows) -- Client continuation patterns, polling best practices, input_required semantics
-- [MCP Prompts: Building Workflow Automation](http://blog.modelcontextprotocol.io/posts/2025-07-29-prompts-for-automation/) -- Prompt-driven automation patterns
-- [A2A Protocol: Life of a Task](https://a2a-protocol.org/latest/topics/life-of-a-task/) -- Multi-turn task lifecycle, artifact accumulation, input-required patterns
-- [A2A Protocol Specification](https://a2a-protocol.org/latest/specification/) -- Task state machine comparison
-- [Restate: Building a Durable Execution Engine](https://www.restate.dev/blog/building-a-modern-durable-execution-engine-from-first-principles) -- Step checkpoint patterns
+- [MCP Apps Official Docs](https://modelcontextprotocol.io/docs/extensions/apps) — `text/html+mcp` MIME type, resource registration pattern
+- [ext-apps GitHub](https://github.com/modelcontextprotocol/ext-apps) — official SDK, `app-bridge` postMessage protocol
+- [@modelcontextprotocol/ext-apps v1.1.0 API](https://modelcontextprotocol.github.io/ext-apps/api/) — `App.callServerTool()` API shape
+- [MCP Apps Blog 2026-01-26](http://blog.modelcontextprotocol.io/posts/2026-01-26-mcp-apps/) — official launch, current host support (Claude, VS Code, Goose, Postman, MCPJam)
+- [OpenAI Apps SDK build MCP server](https://developers.openai.com/apps-sdk/build/mcp-server/) — ChatGPT deployment requirements (HTTPS mandatory)
+- [ChatGPT Apps MCP Developer Mode](https://help.openai.com/en/articles/12584461-developer-mode-apps-and-full-mcp-connectors-in-chatgpt-beta) — App Directory submission process, December 2025 launch
+- [Connect from ChatGPT guide](https://developers.openai.com/apps-sdk/deploy/connect-chatgpt/) — HTTPS requirement, manifest fields
 
-### Additional Context (LOW confidence -- architectural patterns)
-- [Agents At Work: 2026 Playbook](https://promptengineering.org/agents-at-work-the-2026-playbook-for-building-reliable-agentic-workflows/) -- Pause/resume architecture, structured outputs
-- [2026 Guide to Agentic Workflows](https://www.vellum.ai/blog/agentic-workflows-emerging-architectures-and-design-patterns) -- Workflow control flow patterns
-- [Mastra Workflows](https://mastra.ai/docs/workflows/overview) -- Step state tracking, variable passing patterns
-- [AWS Step Functions Variable Passing](https://docs.aws.amazon.com/step-functions/latest/dg/workflow-variables.html) -- Variable schema patterns for step data flow
+### Additional Context (LOW confidence)
+- [MCP Apps playground](https://github.com/digitarald/mcp-apps-playground) — widget authoring patterns in the wild
+- [SEP-1865 PR](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/1865) — original proposal, spec background
 
 ---
-*Feature research for: Task-Prompt Bridge (PMCP SDK v1.1)*
-*Researched: 2026-02-21*
+
+*Feature research for: MCP Apps Developer Experience (v1.3 milestone)*
+*Researched: 2026-02-24*
+*Key findings: (1) mcp-preview bridge is 80% done but has a critical cross-origin postMessage bug; (2) the widget must be fetched via `resources/read`, not returned inline in tool responses; (3) the WASM client is complete but not wired into the preview; (4) Playwright tests are written but not yet passing; (5) no `--mcp-apps` scaffolding template exists yet; (6) ChatGPT manifest format is stable and well-documented; (7) shared bridge library reduces the main DX friction point.*
