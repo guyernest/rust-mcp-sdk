@@ -22,11 +22,11 @@ Requirements for pluggable storage backend milestone. Each maps to roadmap phase
 
 ### DynamoDB Backend
 
-- [ ] **DYNA-01**: DynamoDbBackend implements StorageBackend behind `dynamodb` feature flag
-- [ ] **DYNA-02**: Single-table design with composite keys for task storage and owner isolation
-- [ ] **DYNA-03**: ConditionExpression for atomic state transitions (concurrent mutation safety)
-- [ ] **DYNA-04**: Native DynamoDB TTL for automatic expired task cleanup
-- [ ] **DYNA-05**: Automatic variable size cap at ~350KB to stay within DynamoDB's 400KB item limit
+- [x] **DYNA-01**: DynamoDbBackend implements StorageBackend behind `dynamodb` feature flag
+- [x] **DYNA-02**: Single-table design with composite keys for task storage and owner isolation
+- [x] **DYNA-03**: ConditionExpression for atomic state transitions (concurrent mutation safety)
+- [x] **DYNA-04**: Native DynamoDB TTL for automatic expired task cleanup
+- [x] **DYNA-05**: Automatic variable size cap at ~350KB to stay within DynamoDB's 400KB item limit
 - [ ] **DYNA-06**: Cloud-only integration tests against real DynamoDB table
 
 ### Redis Backend
@@ -86,11 +86,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | IMEM-01 | Phase 10 | Complete |
 | IMEM-02 | Phase 10 | Complete |
 | IMEM-03 | Phase 10 | Complete |
-| DYNA-01 | Phase 11 | Pending |
-| DYNA-02 | Phase 11 | Pending |
-| DYNA-03 | Phase 11 | Pending |
-| DYNA-04 | Phase 11 | Pending |
-| DYNA-05 | Phase 11 | Pending |
+| DYNA-01 | Phase 11 | Complete |
+| DYNA-02 | Phase 11 | Complete |
+| DYNA-03 | Phase 11 | Complete |
+| DYNA-04 | Phase 11 | Complete |
+| DYNA-05 | Phase 11 | Complete |
 | DYNA-06 | Phase 11 | Pending |
 | RDIS-01 | Phase 12 | Pending |
 | RDIS-02 | Phase 12 | Pending |

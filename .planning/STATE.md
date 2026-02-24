@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-23)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state that persists across tool calls.
-**Current focus:** Phase 10 - InMemory Backend Refactor
+**Current focus:** Phase 11 - DynamoDB Backend
 
 ## Current Position
 
 Milestone: v1.2 Pluggable Storage Backends
-Phase: 10 of 13 (InMemory Backend Refactor)
-Plan: 2 of 2 (phase complete)
-Status: Phase 10 complete, ready for Phase 11
-Last activity: 2026-02-24 — Plan 10-02 complete
+Phase: 11 of 13 (DynamoDB Backend)
+Plan: 1 of 2
+Status: Plan 11-01 complete, ready for Plan 11-02
+Last activity: 2026-02-24 -- Plan 11-01 complete
 
-Progress: [████░░░░░░] 18% (4/~11 estimated plans)
+Progress: [█████░░░░░] 23% (5/~11 estimated plans)
 
 ## Performance Metrics
 
@@ -45,6 +45,7 @@ Progress: [████░░░░░░] 18% (4/~11 estimated plans)
 | Phase 09 P02 | 6 | 2 tasks | 3 files |
 | Phase 10 P01 | 7 | 1 task | 4 files |
 | Phase 10 P02 | 4 | 2 tasks | 2 files |
+| Phase 11 P01 | 5 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -69,6 +70,10 @@ Recent decisions affecting current work:
 - [Phase 10]: Per-backend contract tests in separate mod backend_tests alongside mod tests
 - [Phase 10]: TestBackend eliminated; InMemoryBackend is single source of truth for in-memory storage
 - [Phase 10]: CasConflictBackend retained (tests GenericTaskStore CAS error handling, not backend)
+- [Phase 11]: No extra GetItem on CAS failure; report actual=expected in VersionConflict
+- [Phase 11]: Data stored as AttributeValue::S (String) for DynamoDB console readability
+- [Phase 11]: extract_ttl_epoch parses expiresAt from JSON data blob for DynamoDB native TTL
+- [Phase 11]: Unconditional put uses GetItem + PutItem to maintain monotonic version chain
 
 ### Pending Todos
 
@@ -81,5 +86,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Completed 10-02-PLAN.md (Phase 10 complete)
-Resume file: .planning/phases/10-inmemory-backend-refactor/10-02-SUMMARY.md
+Stopped at: Completed 11-01-PLAN.md
+Resume file: .planning/phases/11-dynamodb-backend/11-01-SUMMARY.md
