@@ -41,3 +41,23 @@
 
 ---
 
+
+## v1.2 Pluggable Storage Backends (Shipped: 2026-02-24)
+
+**Phases completed:** 5 phases, 9 plans, 15 tasks
+**Code changes:** +9,802 / -544 across 47 files
+**Timeline:** 2026-02-23 → 2026-02-24
+
+**Delivered:** Pluggable KV storage backend layer for MCP Tasks — StorageBackend trait with GenericTaskStore centralizing all domain logic, InMemoryBackend refactored from existing store, plus production-ready DynamoDB and Redis backends behind feature flags with automated feature-flag verification in CI.
+
+**Key accomplishments:**
+1. StorageBackend async trait with 6 KV methods and GenericTaskStore<B> implementing all 11 domain operations once, backend-agnostically
+2. InMemoryBackend refactor replacing InMemoryTaskStore internals with GenericTaskStore<InMemoryBackend> — zero behavioral changes, all 500+ tests pass unchanged
+3. DynamoDbBackend with single-table design (composite keys), CAS via ConditionExpression, native TTL, behind `dynamodb` feature flag with 18 cloud integration tests
+4. RedisBackend with Lua atomic scripts, per-owner sorted set indexing, EXPIRE TTL with application-level enforcement, behind `redis` feature flag with 19 integration tests
+5. Automated feature-flag verification: `make test-feature-flags` target and CI job testing all 4 feature combinations (none, dynamodb, redis, both) with zero doc-link warnings
+
+**Requirements:** 22/22 satisfied (ABST-01..04, IMEM-01..03, DYNA-01..06, RDIS-01..05, TEST-01..04)
+
+---
+

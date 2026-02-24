@@ -32,28 +32,16 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 - ✓ Step state tracking in task variables (standard schema: goal, steps, completed, remaining) — v1.1
 - ✓ Client continuation pattern via direct tool calls guided by prompt reply — v1.1
 - ✓ Working example demonstrating task-prompt bridge with multi-step workflow — v1.1
+- ✓ Lower-level KV storage backend trait for pluggable persistence — v1.2
+- ✓ GenericTaskStore that delegates to any StorageBackend implementation — v1.2
+- ✓ InMemoryBackend refactored from existing InMemoryTaskStore — v1.2
+- ✓ DynamoDB backend behind `dynamodb` feature flag (cloud-only tests) — v1.2
+- ✓ Redis backend behind `redis` feature flag (proving the trait) — v1.2
+- ✓ Automated feature-flag verification across all backend combinations — v1.2
 
 ### Active
 
-<!-- Current milestone: v1.2 Pluggable Storage Backends -->
-
-- [ ] Lower-level KV storage backend trait for pluggable persistence
-- [ ] GenericTaskStore that delegates to any StorageBackend implementation
-- [ ] InMemoryBackend refactored from existing InMemoryTaskStore
-- [ ] DynamoDB backend behind `dynamodb` feature flag (cloud-only tests)
-- [ ] Redis backend behind `redis` feature flag (proving the trait)
-- [ ] TaskStore trait simplified to leverage KV backend pattern
-
-## Current Milestone: v1.2 Pluggable Storage Backends
-
-**Goal:** Introduce a pluggable KV storage backend layer, refactor TaskStore to delegate to it, and validate with DynamoDB + Redis implementations.
-
-**Target features:**
-- StorageBackend trait — lower-level KV operations
-- GenericTaskStore<B: StorageBackend> — implements TaskStore via backend delegation
-- InMemoryBackend — refactored from existing InMemoryTaskStore
-- DynamoDbBackend — full implementation (feature-flagged, cloud-only CI tests)
-- RedisBackend — implementation proving the trait handles Redis's storage model
+<!-- No active milestone — v1.2 shipped 2026-02-24 -->
 
 ### Future
 
@@ -69,7 +57,7 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 - Task status notifications — skip for now, rely on polling only (validated by v1.0: polling works well)
 - Bounded blocking on tasks/result — polling-only behavior
-- Redis or other non-DynamoDB backends — future phase
+- Redis Cluster support — single-node sufficient (validated by v1.2: single-node Redis backend shipped)
 - Task progress streaming via SSE — future phase
 - Moving types into core pmcp crate — wait for spec stabilization
 - Namespaced variable keys — flat keys with convention recommendation in docs (validated by v1.0: flat keys sufficient)
@@ -81,12 +69,13 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ## Context
 
-Shipped v1.1 with ~22,000 Rust LOC across `pmcp-tasks` crate and `pmcp` core modifications (v1.0: ~11,500 + v1.1: +10,697).
-Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, parking_lot) + `pmcp` core (protocol types, ServerCore routing, workflow system).
+Shipped v1.2 with ~32,000 Rust LOC across `pmcp-tasks` crate and `pmcp` core modifications (v1.0: ~11,500 + v1.1: +10,697 + v1.2: +9,802).
+Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, parking_lot; optional: aws-sdk-dynamodb, redis) + `pmcp` core (protocol types, ServerCore routing, workflow system).
 
 - The MCP Tasks spec is experimental (2025-11-25). Most MCP clients don't support it yet, so the feature is optional and isolated in `pmcp-tasks`.
 - PMCP extends the minimal spec with task variables — a shared scratchpad visible to both client and server via `_meta`. This is the key innovation for servers without LLM capabilities.
 - v1.1 bridges the `SequentialWorkflow` system with tasks: workflows pause mid-execution and the client continues via structured handoff guidance.
+- v1.2 introduced pluggable storage backends: `StorageBackend` KV trait with `GenericTaskStore<B>` centralizing all domain logic. Three backends ship: `InMemoryBackend` (default), `DynamoDbBackend` (feature-flagged), `RedisBackend` (feature-flagged).
 - The workflow-as-prompt model: domain experts design MCP prompts that chain tools and resources. The prompt defines steps, the server executes what it can, the task tracks what's done, and the LLM client picks up the rest.
 - `cargo-pmcp` has pluggable deployment targets (Lambda+CFN, Google Run+Docker, Cloudflare Workers+wrangler). Task storage backends should follow the same plugin pattern, starting with DynamoDB+CFN.
 - Detailed design document: `docs/design/tasks-feature-design.md`
@@ -120,6 +109,12 @@ Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, park
 | Cancel-as-completion (v1.1) | `tasks/cancel` with result transitions to Completed, not Cancelled | ✓ Good — enables clean workflow completion after all steps done client-side |
 | Local mirror types (v1.1) | PauseReason/StepStatus mirrored in pmcp to avoid circular dependency | ✓ Good — same approach as TaskRouter; clean trait boundary preserved |
 | Runtime best-effort execution (v1.1) | Dropped StepExecution enum; steps execute what they can at runtime | ✓ Good — simpler than static classification; PauseReason captures why stops |
+| KV StorageBackend with GenericTaskStore (v1.2) | Domain logic once, backends are dumb KV stores | ✓ Good — 3 backends share identical domain logic; zero divergence |
+| CAS in trait from day one (v1.2) | Retrofitting after backends exist would require rewriting every backend | ✓ Good — all 3 backends implement put_if_version atomically |
+| Canonical JSON serialization (v1.2) | Prevents format divergence across backends | ✓ Good — identical round-trip behavior regardless of backend |
+| Composite string keys (v1.2) | `{owner_id}:{task_id}` for universal backend support | ✓ Good — maps naturally to DynamoDB partition keys and Redis key prefixes |
+| Feature-flagged backends (v1.2) | DynamoDB/Redis behind feature flags, InMemory always available | ✓ Good — zero-cost default, opt-in for production backends |
+| Lua scripts for Redis CAS (v1.2) | Atomic check-and-set without WATCH/MULTI race conditions | ✓ Good — 19 integration tests verify atomicity |
 
 ---
-*Last updated: 2026-02-23 after v1.2 milestone start*
+*Last updated: 2026-02-24 after v1.2 milestone completion*
