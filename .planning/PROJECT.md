@@ -1,8 +1,8 @@
-# MCP Tasks Support for PMCP SDK
+# PMCP SDK Extensions
 
 ## What This Is
 
-A separate crate (`pmcp-tasks`) that implements the MCP Tasks specification (2025-11-25, experimental) for the PMCP SDK, with a task-prompt bridge that enables workflow prompts to create tasks, execute server-resolvable steps, and return structured handoff guidance for LLM client continuation.
+Extensions for the PMCP SDK: a `pmcp-tasks` crate implementing MCP Tasks (experimental spec 2025-11-25) with pluggable storage backends, and MCP Apps developer tooling (`mcp-preview`, WASM test client, scaffolding, publishing) enabling rich UI widgets served from MCP servers across ChatGPT, Claude, and other MCP clients.
 
 ## Core Value
 
@@ -41,7 +41,18 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ### Active
 
-<!-- No active milestone — v1.2 shipped 2026-02-24 -->
+<!-- Current milestone: v1.3 MCP Apps Developer Experience -->
+
+- [ ] mcp-preview widget iframe rendering with working MCP bridge proxy
+- [ ] WASM-based in-browser MCP Apps test client (connect to server, render widget, inject bridge)
+- [ ] cargo pmcp deploy extended for MCP Apps widget serving
+- [ ] Auto-generated demo landing page with mock bridge for stakeholder demos
+- [ ] ChatGPT-compatible manifest generation for registering MCP Apps
+- [ ] File-based widget authoring (separate HTML from Rust inline strings)
+- [ ] Shared bridge library reducing JavaScript boilerplate in widgets
+- [ ] cargo pmcp new --mcp-apps scaffolding template
+- [ ] Ship existing chess and map MCP Apps examples
+- [ ] Playwright E2E test integration for widgets
 
 ### Future
 
@@ -52,6 +63,17 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 - [ ] Workflow resume from task state (re-invoke prompt with task ID to continue from last step)
 - [ ] StepExecution user API for runtime step mode customization
 - [ ] Examples: code mode, DynamoDB backend
+
+## Current Milestone: v1.3 MCP Apps Developer Experience
+
+**Goal:** Polish MCP Apps into a production-ready developer experience — from authoring through preview to publishing — making it easy for developers to build, test, demo, and publish MCP Apps with rich UI widgets.
+
+**Target features:**
+- mcp-preview: widget iframe rendering with working MCP bridge proxy
+- WASM test client: in-browser MCP Apps testing (connect, render, bridge injection)
+- Publishing: deploy targets for Apps, auto demo landing page, ChatGPT manifest generation
+- Authoring DX: file-based widgets, shared bridge library, `cargo pmcp new --mcp-apps` scaffolding
+- Polish: ship chess/map examples, Playwright E2E tests
 
 ### Out of Scope
 
@@ -78,6 +100,8 @@ Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, park
 - v1.2 introduced pluggable storage backends: `StorageBackend` KV trait with `GenericTaskStore<B>` centralizing all domain logic. Three backends ship: `InMemoryBackend` (default), `DynamoDbBackend` (feature-flagged), `RedisBackend` (feature-flagged).
 - The workflow-as-prompt model: domain experts design MCP prompts that chain tools and resources. The prompt defines steps, the server executes what it can, the task tracks what's done, and the LLM client picks up the rest.
 - `cargo-pmcp` has pluggable deployment targets (Lambda+CFN, Google Run+Docker, Cloudflare Workers+wrangler). Task storage backends should follow the same plugin pattern, starting with DynamoDB+CFN.
+- MCP Apps is an OpenAI extension (ChatGPT Apps / SEP-1865) adding rich HTML UI widgets to MCP servers. PMCP SDK supports multiple MIME types: `text/html+skybridge` (ChatGPT), `text/html+mcp` (standard MCP Apps), `text/html` (MCP-UI). Core types and adapters are in `src/types/mcp_apps.rs` behind `mcp-apps` feature flag.
+- Existing MCP Apps infrastructure: `crates/mcp-preview/` (browser preview server, ~50% complete), WASM client (`examples/wasm-client/`), two example apps (chess, map) with preview.html files, and Playwright test scaffolding.
 - Detailed design document: `docs/design/tasks-feature-design.md`
 
 ## Constraints
@@ -117,4 +141,4 @@ Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, park
 | Lua scripts for Redis CAS (v1.2) | Atomic check-and-set without WATCH/MULTI race conditions | ✓ Good — 19 integration tests verify atomicity |
 
 ---
-*Last updated: 2026-02-24 after v1.2 milestone completion*
+*Last updated: 2026-02-24 after v1.3 milestone start*
