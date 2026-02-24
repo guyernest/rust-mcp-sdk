@@ -5,15 +5,15 @@
 See: .planning/PROJECT.md (updated 2026-02-23)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state that persists across tool calls.
-**Current focus:** Phase 9 - Storage Abstraction Layer
+**Current focus:** Phase 10 - InMemory Backend Refactor
 
 ## Current Position
 
 Milestone: v1.2 Pluggable Storage Backends
-Phase: 9 of 13 (Storage Abstraction Layer)
-Plan: 2 of 2 in phase
-Status: Phase 09 complete
-Last activity: 2026-02-24 — Completed 09-02 GenericTaskStore and TaskStore blanket impl
+Phase: 10 of 13 (InMemory Backend Refactor)
+Plan: — (not yet planned)
+Status: Ready to plan
+Last activity: 2026-02-24 — Phase 9 complete, advancing to Phase 10
 
 Progress: [██░░░░░░░░] 10% (2/~11 estimated plans)
 
