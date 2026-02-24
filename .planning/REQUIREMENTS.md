@@ -1,7 +1,7 @@
 # Requirements: MCP Apps Developer Experience
 
 **Defined:** 2026-02-24
-**Core Value:** Developers can author, preview, test, and publish MCP Apps with rich UI widgets from the Rust toolchain — from `cargo pmcp new --mcp-apps` through `cargo pmcp preview` to `cargo pmcp manifest`.
+**Core Value:** Developers can author, preview, test, and publish MCP Apps with rich UI widgets from the Rust toolchain -- from `cargo pmcp new --mcp-apps` through `cargo pmcp preview` to `cargo pmcp manifest`.
 
 ## v1.3 Requirements
 
@@ -96,38 +96,38 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PREV-01 | — | Pending |
-| PREV-02 | — | Pending |
-| PREV-03 | — | Pending |
-| PREV-04 | — | Pending |
-| PREV-05 | — | Pending |
-| PREV-06 | — | Pending |
-| PREV-07 | — | Pending |
-| WASM-01 | — | Pending |
-| WASM-02 | — | Pending |
-| WASM-03 | — | Pending |
-| WASM-04 | — | Pending |
-| WASM-05 | — | Pending |
-| PUBL-01 | — | Pending |
-| PUBL-02 | — | Pending |
-| DEVX-01 | — | Pending |
-| DEVX-02 | — | Pending |
-| DEVX-03 | — | Pending |
-| DEVX-04 | — | Pending |
-| DEVX-05 | — | Pending |
-| DEVX-06 | — | Pending |
-| DEVX-07 | — | Pending |
-| SHIP-01 | — | Pending |
-| SHIP-02 | — | Pending |
-| SHIP-03 | — | Pending |
-| SHIP-04 | — | Pending |
-| SHIP-05 | — | Pending |
+| PREV-01 | Phase 14 | Pending |
+| PREV-02 | Phase 14 | Pending |
+| PREV-03 | Phase 14 | Pending |
+| PREV-04 | Phase 14 | Pending |
+| PREV-05 | Phase 14 | Pending |
+| PREV-06 | Phase 14 | Pending |
+| PREV-07 | Phase 14 | Pending |
+| WASM-01 | Phase 15 | Pending |
+| WASM-02 | Phase 15 | Pending |
+| WASM-03 | Phase 15 | Pending |
+| WASM-04 | Phase 15 | Pending |
+| WASM-05 | Phase 15 | Pending |
+| DEVX-03 | Phase 16 | Pending |
+| DEVX-05 | Phase 16 | Pending |
+| DEVX-01 | Phase 17 | Pending |
+| DEVX-02 | Phase 17 | Pending |
+| DEVX-04 | Phase 17 | Pending |
+| DEVX-06 | Phase 17 | Pending |
+| DEVX-07 | Phase 17 | Pending |
+| PUBL-01 | Phase 18 | Pending |
+| PUBL-02 | Phase 18 | Pending |
+| SHIP-01 | Phase 19 | Pending |
+| SHIP-02 | Phase 19 | Pending |
+| SHIP-03 | Phase 19 | Pending |
+| SHIP-04 | Phase 19 | Pending |
+| SHIP-05 | Phase 19 | Pending |
 
 **Coverage:**
 - v1.3 requirements: 26 total
-- Mapped to phases: 0
-- Unmapped: 26
+- Mapped to phases: 26
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-24*
-*Last updated: 2026-02-24 after initial definition*
+*Last updated: 2026-02-24 after roadmap creation*
