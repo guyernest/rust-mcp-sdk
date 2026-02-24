@@ -579,6 +579,132 @@
     .widget-error-retry:hover {
       opacity: 0.9;
     }
+
+    /* Network Badge */
+    .devtools-tab {
+      position: relative;
+    }
+
+    .badge {
+      position: absolute;
+      top: 2px;
+      right: 4px;
+      background: var(--error-color);
+      color: white;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 1px 5px;
+      border-radius: 10px;
+      min-width: 16px;
+      text-align: center;
+      line-height: 14px;
+    }
+
+    /* Bridge Call Expandable Entries */
+    .network-entry details summary {
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      list-style: none;
+      user-select: none;
+    }
+
+    .network-entry details summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .network-entry details summary::before {
+      content: '\25B6';
+      font-size: 8px;
+      margin-right: 6px;
+      transition: transform 0.15s ease;
+      display: inline-block;
+    }
+
+    .network-entry details[open] summary::before {
+      transform: rotate(90deg);
+    }
+
+    .network-entry-tool {
+      font-weight: 600;
+      flex: 1;
+    }
+
+    .network-entry-status {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-left: 6px;
+    }
+
+    .network-entry-status.success {
+      background: var(--success-color);
+    }
+
+    .network-entry-status.error {
+      background: var(--error-color);
+    }
+
+    .network-entry-duration {
+      color: var(--text-secondary);
+      font-size: 10px;
+      margin-left: 8px;
+    }
+
+    .network-entry-body {
+      margin-top: 8px;
+    }
+
+    .network-entry-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      margin-top: 6px;
+      margin-bottom: 2px;
+    }
+
+    .network-entry-label:first-child {
+      margin-top: 0;
+    }
+
+    .network-entry-pre {
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 10px;
+      white-space: pre-wrap;
+      word-break: break-all;
+      background: var(--bg-secondary);
+      padding: 6px;
+      border-radius: 3px;
+      max-height: 120px;
+      overflow-y: auto;
+    }
+
+    /* Clear Buttons */
+    .devtools-section {
+      position: relative;
+    }
+
+    .clear-btn {
+      position: absolute;
+      top: 0;
+      right: 0;
+      padding: 2px 8px;
+      border: 1px solid var(--border-color);
+      border-radius: 3px;
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 11px;
+      z-index: 1;
+    }
+
+    .clear-btn:hover {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+    }
   </style>
 </head>
 <body data-theme="light">
@@ -682,16 +808,19 @@
           </div>
         </div>
         <div class="devtools-section" id="tab-console">
+          <button class="clear-btn" data-clear="console">Clear</button>
           <div class="console-log" id="console-log">
             <div class="empty-state">Console output will appear here</div>
           </div>
         </div>
         <div class="devtools-section" id="tab-network">
+          <button class="clear-btn" data-clear="network">Clear</button>
           <div id="network-log">
             <div class="empty-state">Network requests will appear here</div>
           </div>
         </div>
         <div class="devtools-section" id="tab-events">
+          <button class="clear-btn" data-clear="events">Clear</button>
           <div id="events-log">
             <div class="empty-state">Events will appear here</div>
           </div>
@@ -1036,6 +1165,31 @@
             document.querySelectorAll('.devtools-section').forEach(s => s.classList.remove('active'));
             tab.classList.add('active');
             document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
+
+            // Clear network badge when Network tab is selected
+            if (tab.dataset.tab === 'network') {
+              this.networkUnreadCount = 0;
+              this.updateNetworkBadge();
+            }
+          });
+        });
+
+        // Setup clear buttons
+        document.querySelectorAll('.clear-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const target = btn.dataset.clear;
+            if (target === 'console') {
+              document.getElementById('console-log').innerHTML =
+                '<div class="empty-state">Console output will appear here</div>';
+            } else if (target === 'network') {
+              document.getElementById('network-log').innerHTML =
+                '<div class="empty-state">Network requests will appear here</div>';
+              this.networkUnreadCount = 0;
+              this.updateNetworkBadge();
+            } else if (target === 'events') {
+              document.getElementById('events-log').innerHTML =
+                '<div class="empty-state">Events will appear here</div>';
+            }
           });
         });
       }
@@ -1184,24 +1338,37 @@
         preview.logConsole('log', 'callTool: ' + name);
         preview.logEvent('bridgeCall', { method: 'callTool', name, args });
 
-        const response = await fetch('/api/tools/call', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, arguments: args || {} })
-        });
-        const result = await response.json();
+        const startTime = Date.now();
+        let result;
+        let success = true;
 
-        if (result.success && result.content) {
-          // Handle widget response if HTML is returned
-          const widgetContent = result.content.find(c =>
-            c.content_type === 'resource' &&
-            c.mime_type &&
-            c.mime_type.includes('html')
-          );
-          if (widgetContent && widgetContent.text) {
-            preview.loadWidget(widgetContent.text);
+        try {
+          const response = await fetch('/api/tools/call', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, arguments: args || {} })
+          });
+          result = await response.json();
+          success = !!result.success;
+
+          if (result.success && result.content) {
+            // Handle widget response if HTML is returned
+            const widgetContent = result.content.find(c =>
+              c.content_type === 'resource' &&
+              c.mime_type &&
+              c.mime_type.includes('html')
+            );
+            if (widgetContent && widgetContent.text) {
+              preview.loadWidget(widgetContent.text);
+            }
           }
+        } catch (e) {
+          result = { error: e.message };
+          success = false;
         }
+
+        const duration = Date.now() - startTime;
+        preview.logBridgeCall(name, args || {}, result, duration, success);
 
         return result;
       },
@@ -1378,6 +1545,60 @@ ${html}
         `;
         container.appendChild(entry);
         container.scrollTop = container.scrollHeight;
+      }
+
+      logBridgeCall(toolName, args, result, duration, success) {
+        const container = document.getElementById('network-log');
+        if (container.querySelector('.empty-state')) {
+          container.innerHTML = '';
+        }
+
+        const entry = document.createElement('div');
+        entry.className = `network-entry ${success ? 'success' : 'error'}`;
+        entry.innerHTML = `
+          <details>
+            <summary>
+              <span class="network-entry-tool">${toolName}</span>
+              <span class="network-entry-duration">${duration}ms</span>
+              <span class="network-entry-status ${success ? 'success' : 'error'}"></span>
+            </summary>
+            <div class="network-entry-body">
+              <div class="network-entry-label">Arguments</div>
+              <pre class="network-entry-pre">${JSON.stringify(args, null, 2)}</pre>
+              <div class="network-entry-label">Response</div>
+              <pre class="network-entry-pre">${JSON.stringify(result, null, 2)}</pre>
+            </div>
+          </details>
+        `;
+        container.appendChild(entry);
+        container.scrollTop = container.scrollHeight;
+
+        // Update badge count
+        this.networkUnreadCount++;
+        this.updateNetworkBadge();
+      }
+
+      updateNetworkBadge() {
+        const networkTab = document.querySelector('.devtools-tab[data-tab="network"]');
+        let badge = networkTab.querySelector('.badge');
+
+        if (this.networkUnreadCount > 0) {
+          // Check if the Network tab is currently active
+          if (networkTab.classList.contains('active')) {
+            this.networkUnreadCount = 0;
+          }
+        }
+
+        if (this.networkUnreadCount > 0) {
+          if (!badge) {
+            badge = document.createElement('span');
+            badge.className = 'badge';
+            networkTab.appendChild(badge);
+          }
+          badge.textContent = this.networkUnreadCount;
+        } else {
+          if (badge) badge.remove();
+        }
       }
     }
 
