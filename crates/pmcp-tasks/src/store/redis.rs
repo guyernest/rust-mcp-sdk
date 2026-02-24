@@ -830,6 +830,30 @@ mod integration_tests {
     // ---- TTL verification tests ----
 
     #[tokio::test]
+    async fn redis_get_filters_expired_task() {
+        let (backend, _prefix) = test_backend().await;
+        let key = "owner:task-expired";
+
+        // Create a TaskRecord with a TTL, then override expiresAt to the past
+        let mut record =
+            TaskRecord::new("owner".to_string(), "tools/call".to_string(), Some(60_000));
+        // Set expiresAt to 1 hour in the past so application-level filtering
+        // in `get` considers it expired.
+        record.expires_at = Some(chrono::Utc::now() - chrono::Duration::try_hours(1).unwrap());
+
+        let data = serde_json::to_vec(&record).unwrap();
+        backend.put(key, &data).await.unwrap();
+
+        // get should return NotFound because the application-level is_expired
+        // check fires before returning the record.
+        let result = backend.get(key).await;
+        assert!(
+            matches!(&result, Err(StorageError::NotFound { key: k }) if k == key),
+            "expected NotFound for expired task, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn redis_put_sets_ttl_when_expires_at_present() {
         let (backend, _prefix) = test_backend().await;
         let key = "owner:task-ttl";
