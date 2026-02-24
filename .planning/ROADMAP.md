@@ -53,11 +53,11 @@ See: `.planning/milestones/v1.1-ROADMAP.md` for full phase details
   2. A `GenericTaskStore<B: StorageBackend>` implements all TaskStore domain logic (state machine transitions, owner isolation, variable merge, TTL enforcement) by delegating storage to the backend
   3. Canonical JSON serialization in GenericTaskStore ensures identical round-trip behavior regardless of which backend is plugged in
   4. The existing TaskStore trait is simplified or redesigned to leverage the new KV backend pattern
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 09-01: TBD
-- [ ] 09-02: TBD
+- [ ] 09-01-PLAN.md — StorageBackend trait, StorageError, VersionedRecord, TaskRecord serialization, error variants, variable validation
+- [ ] 09-02-PLAN.md — GenericTaskStore with all domain logic, TaskStore trait redesign with blanket impl
 
 ### Phase 10: InMemory Backend Refactor
 **Goal**: The existing InMemoryTaskStore is replaced by GenericTaskStore\<InMemoryBackend\> with zero behavioral changes -- all 200+ existing tests pass unchanged
