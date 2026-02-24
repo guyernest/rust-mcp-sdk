@@ -579,10 +579,7 @@ mod integration_tests {
         let (backend, prefix) = test_backend().await;
         let key = format!("{prefix}:task-1");
         let v1 = backend.put(&key, b"data-v1").await.unwrap();
-        let v2 = backend
-            .put_if_version(&key, b"data-v2", v1)
-            .await
-            .unwrap();
+        let v2 = backend.put_if_version(&key, b"data-v2", v1).await.unwrap();
         assert_eq!(v2, v1 + 1);
     }
 
@@ -595,9 +592,7 @@ mod integration_tests {
         let result = backend.put_if_version(&key, b"new-data", 999).await;
         match result {
             Err(StorageError::VersionConflict {
-                key: k,
-                expected,
-                ..
+                key: k, expected, ..
             }) => {
                 assert_eq!(k, key);
                 assert_eq!(expected, 999);
@@ -614,10 +609,7 @@ mod integration_tests {
         // DynamoDB returns ConditionalCheckFailedException for missing items
         // with a condition expression, which maps to VersionConflict.
         assert!(
-            matches!(
-                &result,
-                Err(StorageError::VersionConflict { .. })
-            ),
+            matches!(&result, Err(StorageError::VersionConflict { .. })),
             "expected VersionConflict for missing key with condition, got: {result:?}"
         );
     }
@@ -701,10 +693,7 @@ mod integration_tests {
     async fn ddb_list_by_prefix_empty_on_no_match() {
         let (backend, prefix) = test_backend().await;
         let owner = format!("{prefix}-nomatch");
-        let results = backend
-            .list_by_prefix(&format!("{owner}:"))
-            .await
-            .unwrap();
+        let results = backend.list_by_prefix(&format!("{owner}:")).await.unwrap();
         assert!(results.is_empty());
     }
 
@@ -727,10 +716,7 @@ mod integration_tests {
             .await
             .unwrap();
 
-        let results = backend
-            .list_by_prefix(&format!("{owner}:"))
-            .await
-            .unwrap();
+        let results = backend.list_by_prefix(&format!("{owner}:")).await.unwrap();
         assert_eq!(results.len(), 2);
 
         for (key, record) in &results {
