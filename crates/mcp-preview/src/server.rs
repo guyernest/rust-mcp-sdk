@@ -70,10 +70,16 @@ impl PreviewServer {
         let app = Router::new()
             // Main preview page
             .route("/", get(handlers::page::index))
-            // API endpoints
+            // API endpoints - tools
             .route("/api/config", get(handlers::api::get_config))
             .route("/api/tools", get(handlers::api::list_tools))
             .route("/api/tools/call", post(handlers::api::call_tool))
+            // API endpoints - resources
+            .route("/api/resources", get(handlers::api::list_resources))
+            .route("/api/resources/read", get(handlers::api::read_resource))
+            // API endpoints - session management
+            .route("/api/reconnect", post(handlers::api::reconnect))
+            .route("/api/status", get(handlers::api::status))
             // Static assets
             .route("/assets/{*path}", get(handlers::assets::serve))
             // WebSocket for live updates
