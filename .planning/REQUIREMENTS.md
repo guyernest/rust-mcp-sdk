@@ -9,9 +9,9 @@ Requirements for pluggable storage backend milestone. Each maps to roadmap phase
 
 ### Storage Abstraction
 
-- [ ] **ABST-01**: StorageBackend trait defines KV operations (get, put, delete, list-by-prefix, cleanup-expired)
+- [x] **ABST-01**: StorageBackend trait defines KV operations (get, put, delete, list-by-prefix, cleanup-expired)
 - [ ] **ABST-02**: GenericTaskStore implements all TaskStore domain logic (state machine, owner isolation, variable merge, TTL) by delegating to any StorageBackend
-- [ ] **ABST-03**: Canonical serialization layer in GenericTaskStore ensures consistent JSON round-trips regardless of backend
+- [x] **ABST-03**: Canonical serialization layer in GenericTaskStore ensures consistent JSON round-trips regardless of backend
 - [ ] **ABST-04**: TaskStore trait can be simplified/redesigned to leverage the KV backend pattern
 
 ### InMemory Refactor
@@ -79,9 +79,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ABST-01 | Phase 9 | Pending |
+| ABST-01 | Phase 9 | Complete |
 | ABST-02 | Phase 9 | Pending |
-| ABST-03 | Phase 9 | Pending |
+| ABST-03 | Phase 9 | Complete |
 | ABST-04 | Phase 9 | Pending |
 | IMEM-01 | Phase 10 | Pending |
 | IMEM-02 | Phase 10 | Pending |

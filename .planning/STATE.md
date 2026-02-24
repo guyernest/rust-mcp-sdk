@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-23)
 
 Milestone: v1.2 Pluggable Storage Backends
 Phase: 9 of 13 (Storage Abstraction Layer)
-Plan: — (not yet planned)
-Status: Ready to plan
-Last activity: 2026-02-23 — Phase 9 context gathered
+Plan: 1 of 2 in phase
+Status: Plan 01 complete
+Last activity: 2026-02-24 — Completed 09-01 StorageBackend trait and foundation types
 
-Progress: [░░░░░░░░░░] 0% (0/~11 estimated plans)
+Progress: [█░░░░░░░░░] 5% (1/~11 estimated plans)
 
 ## Performance Metrics
 
@@ -41,6 +41,7 @@ Progress: [░░░░░░░░░░] 0% (0/~11 estimated plans)
 | 06 | 2 | 10 min | 5 min |
 | 07 | 2 | 9 min | 4 min |
 | 08 | 2 | 17 min | 8 min |
+| Phase 09 P01 | 8 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -52,6 +53,9 @@ Recent decisions affecting current work:
 - [v1.2]: CAS (put_if_version) must be part of StorageBackend trait from day one -- retrofitting after backends exist would require rewriting every backend
 - [v1.2]: Canonical JSON serialization in GenericTaskStore prevents format divergence across backends
 - [v1.2]: DynamoDB primary production target; Redis proves trait generality
+- [Phase 09]: Monotonic u64 versions for CAS (maps to DynamoDB/Redis)
+- [Phase 09]: Composite string keys {owner_id}:{task_id} for universal backend support
+- [Phase 09]: TaskRecord version field uses serde(skip) -- managed by storage layer
 
 ### Pending Todos
 
@@ -63,6 +67,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-23
-Stopped at: Phase 9 context gathered
-Resume file: .planning/phases/09-storage-abstraction-layer/09-CONTEXT.md
+Last session: 2026-02-24
+Stopped at: Completed 09-01-PLAN.md
+Resume file: .planning/phases/09-storage-abstraction-layer/09-01-SUMMARY.md
