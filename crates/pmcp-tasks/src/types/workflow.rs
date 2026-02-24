@@ -1,6 +1,6 @@
 //! Workflow progress types for task-backed workflow execution.
 //!
-//! These types track the execution state of a [`SequentialWorkflow`] that is
+//! These types track the execution state of a `SequentialWorkflow` that is
 //! backed by a task. The [`WorkflowProgress`] struct is serialized to the
 //! task's variable store under the [`WORKFLOW_PROGRESS_KEY`] key, allowing
 //! clients and servers to inspect which steps have completed, failed, or
@@ -157,7 +157,7 @@ pub struct WorkflowProgress {
 
 /// Tracks the execution state of a single workflow step.
 ///
-/// Each step corresponds to a [`WorkflowStep`] in the workflow definition.
+/// Each step corresponds to a `WorkflowStep` in the workflow definition.
 /// The `tool` field is `None` for resource-only steps that don't invoke a tool.
 ///
 /// # Serialization

@@ -314,8 +314,8 @@ impl TaskRouter for TaskRouterImpl {
     /// Create a workflow-backed task with initial progress in variables.
     ///
     /// The `workflow_name` becomes the task's origin method identifier.
-    /// The `progress` value (a serialized [`WorkflowProgress`]) is stored
-    /// under the [`WORKFLOW_PROGRESS_KEY`] task variable.
+    /// The `progress` value (a serialized [`WorkflowProgress`](crate::types::workflow::WorkflowProgress)) is stored
+    /// under the [`WORKFLOW_PROGRESS_KEY`](crate::types::workflow::WORKFLOW_PROGRESS_KEY) task variable.
     async fn create_workflow_task(
         &self,
         workflow_name: &str,

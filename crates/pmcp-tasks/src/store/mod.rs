@@ -8,7 +8,7 @@
 //!    `Arc<dyn TaskStore>` in [`TaskContext`](crate::context::TaskContext)
 //!    and [`TaskRouterImpl`](crate::router::TaskRouterImpl).
 //!
-//! 2. **[`GenericTaskStore<B>`](generic::GenericTaskStore)** -- All domain
+//! 2. **[`GenericTaskStore<B>`](crate::store::generic::GenericTaskStore)** -- All domain
 //!    logic (state machine, owner isolation, variable merge, TTL, CAS-based
 //!    mutations, canonical serialization). Has a blanket `TaskStore` impl.
 //!
@@ -23,11 +23,10 @@
 //! - [`InMemoryBackend`](crate::store::memory::InMemoryBackend) -- Thread-safe
 //!   in-memory backend using `DashMap`. Used by
 //!   [`InMemoryTaskStore`](crate::store::memory::InMemoryTaskStore).
-//! - [`DynamoDbBackend`](crate::store::dynamodb::DynamoDbBackend) -- DynamoDB
-//!   backend for production AWS/Lambda deployments. Available behind the
-//!   `dynamodb` feature flag.
-//! - [`RedisBackend`](crate::store::redis::RedisBackend) -- Redis backend for
-//!   long-running server deployments. Available behind the `redis` feature flag.
+//! - `DynamoDbBackend` -- DynamoDB backend for production AWS/Lambda
+//!   deployments. Available behind the `dynamodb` feature flag.
+//! - `RedisBackend` -- Redis backend for long-running server deployments.
+//!   Available behind the `redis` feature flag.
 //!
 //! # Supporting Types
 //!
@@ -195,7 +194,7 @@ pub struct TaskPage {
 /// Type-erasure interface for task storage.
 ///
 /// This trait serves as the dynamic dispatch interface for
-/// [`GenericTaskStore<B>`](generic::GenericTaskStore). Domain logic lives
+/// [`GenericTaskStore<B>`](crate::store::generic::GenericTaskStore). Domain logic lives
 /// in `GenericTaskStore`, not in trait implementations. Use
 /// `GenericTaskStore::new(backend)` to create a store, then wrap in
 /// `Arc<dyn TaskStore>` for use with
