@@ -456,6 +456,129 @@
       text-align: center;
       padding: 20px;
     }
+
+    /* Resource Picker */
+    .resource-picker {
+      border-bottom: 1px solid var(--border-color);
+      padding: 8px;
+    }
+
+    .resource-picker-header {
+      padding: 4px 8px 8px;
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-secondary);
+    }
+
+    .resource-label {
+      padding: 8px 12px;
+      font-size: 13px;
+      color: var(--text-primary);
+      font-weight: 500;
+    }
+
+    .resource-entry {
+      padding: 8px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      margin-bottom: 2px;
+    }
+
+    .resource-entry:hover {
+      background: var(--bg-tertiary);
+    }
+
+    .resource-entry.active {
+      background: var(--accent-color);
+      color: white;
+    }
+
+    .resource-name {
+      font-weight: 600;
+      font-size: 13px;
+    }
+
+    .resource-desc {
+      font-size: 11px;
+      color: var(--text-secondary);
+      margin-top: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .resource-entry.active .resource-desc {
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    /* Reconnect Button */
+    #reconnect-btn {
+      padding: 4px 10px;
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      margin-left: 8px;
+    }
+
+    #reconnect-btn:hover {
+      background: var(--bg-primary);
+    }
+
+    /* Status dot colors */
+    .status-dot {
+      transition: background-color 0.3s ease;
+    }
+
+    .status-dot.connected {
+      background: var(--success-color);
+    }
+
+    .status-dot.disconnected {
+      background: var(--error-color);
+    }
+
+    .status-dot.reconnecting {
+      background: var(--warning-color);
+    }
+
+    /* Widget Error */
+    .widget-error {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      gap: 16px;
+      padding: 40px;
+      text-align: center;
+    }
+
+    .widget-error-message {
+      color: var(--error-color);
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .widget-error-retry {
+      padding: 8px 20px;
+      border: none;
+      border-radius: 6px;
+      background: var(--accent-color);
+      color: white;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .widget-error-retry:hover {
+      opacity: 0.9;
+    }
   </style>
 </head>
 <body data-theme="light">
@@ -464,6 +587,7 @@
     <div class="status-indicator">
       <span class="status-dot" id="status-dot"></span>
       <span id="status-text">Connecting...</span>
+      <button id="reconnect-btn">Reconnect</button>
     </div>
     <div class="theme-toggle">
       <button class="active" data-theme="light">Light</button>
@@ -474,6 +598,11 @@
   <main class="main">
     <!-- Tool Panel -->
     <aside class="tool-panel">
+      <div class="resource-picker" id="resource-picker" style="display: none;">
+        <div class="resource-picker-header">Resources</div>
+        <div id="resource-label" class="resource-label" style="display: none;"></div>
+        <div id="resource-list"></div>
+      </div>
       <div class="panel-header">Tools</div>
       <div class="tool-list" id="tool-list">
         <div class="empty-state">Loading tools...</div>
@@ -582,6 +711,13 @@
         this.toolOutput = null;
         this.toolResponseMetadata = {};
 
+        // Resources
+        this.uiResources = [];
+        this.activeResourceUri = null;
+
+        // Network badge
+        this.networkUnreadCount = 0;
+
         // Environment
         this.theme = 'light';
         this.locale = 'en-US';
@@ -598,8 +734,9 @@
         this.setupDevToolsTabs();
         this.setupEnvironmentControls();
         this.setupExecuteButton();
+        this.setupReconnectButton();
         await this.loadConfig();
-        await this.loadTools();
+        await this.initSession();
       }
 
       async loadConfig() {
@@ -624,39 +761,204 @@
         }
       }
 
-      async loadTools() {
+      async initSession() {
         try {
-          const response = await fetch('/api/tools');
-          const data = await response.json();
+          const [toolsResponse, resourcesResponse] = await Promise.all([
+            fetch('/api/tools'),
+            fetch('/api/resources')
+          ]);
 
-          if (data.error) {
-            this.setStatus(false, `Error: ${data.error}`);
+          const toolsData = await toolsResponse.json();
+          const resourcesData = await resourcesResponse.json();
+
+          // Handle tools
+          if (toolsData.error) {
+            this.setStatus(false, `Error: ${toolsData.error}`);
             document.getElementById('tool-list').innerHTML =
-              `<div class="empty-state">Error: ${data.error}</div>`;
-            return;
+              `<div class="empty-state">Error: ${toolsData.error}</div>`;
+          } else {
+            this.tools = toolsData.tools;
+            this.renderToolList();
+
+            // Auto-select initial tool if specified
+            if (this.initialTool) {
+              const tool = this.tools.find(t => t.name === this.initialTool);
+              if (tool) this.selectTool(tool);
+            }
           }
 
-          this.tools = data.tools;
-          this.setStatus(true, `Connected (${this.tools.length} tools)`);
-          this.renderToolList();
-
-          // Auto-select initial tool if specified
-          if (this.initialTool) {
-            const tool = this.tools.find(t => t.name === this.initialTool);
-            if (tool) this.selectTool(tool);
+          // Handle resources
+          if (resourcesData.resources) {
+            this.uiResources = resourcesData.resources;
+          } else {
+            this.uiResources = [];
           }
+          this.renderResourcePicker();
+
+          // Auto-load first resource widget
+          if (this.uiResources.length > 0) {
+            await this.loadResourceWidget(this.uiResources[0].uri);
+          } else {
+            this.showWidgetPlaceholder('No UI resources found. Your MCP server needs to expose HTML resources via resources/list.');
+          }
+
+          this.setStatus(true, `Connected (${this.tools.length} tools, ${this.uiResources.length} resources)`);
         } catch (e) {
           this.setStatus(false, 'Connection failed');
+          this.showWidgetError('Failed to connect to MCP server. Check that the server is running.');
           document.getElementById('tool-list').innerHTML =
             `<div class="empty-state">Failed to connect to MCP server</div>`;
         }
       }
 
-      setStatus(connected, text) {
+      renderResourcePicker() {
+        const picker = document.getElementById('resource-picker');
+        const label = document.getElementById('resource-label');
+        const list = document.getElementById('resource-list');
+
+        if (this.uiResources.length === 0) {
+          picker.style.display = 'none';
+          return;
+        }
+
+        picker.style.display = 'block';
+
+        if (this.uiResources.length === 1) {
+          // Single resource: show label only
+          label.style.display = 'block';
+          label.textContent = this.uiResources[0].name || this.uiResources[0].uri;
+          list.style.display = 'none';
+          return;
+        }
+
+        // Multiple resources: show clickable list
+        label.style.display = 'none';
+        list.style.display = 'block';
+        list.innerHTML = this.uiResources.map(res => `
+          <div class="resource-entry${this.activeResourceUri === res.uri ? ' active' : ''}" data-uri="${res.uri}">
+            <div class="resource-name">${res.name || res.uri}</div>
+            ${res.description ? `<div class="resource-desc">${res.description}</div>` : ''}
+          </div>
+        `).join('');
+
+        // Add click handlers
+        list.querySelectorAll('.resource-entry').forEach(entry => {
+          entry.addEventListener('click', () => {
+            this.loadResourceWidget(entry.dataset.uri);
+          });
+        });
+      }
+
+      async loadResourceWidget(uri) {
+        this.activeResourceUri = uri;
+        this.renderResourcePicker();
+
+        try {
+          const response = await fetch(`/api/resources/read?uri=${encodeURIComponent(uri)}`);
+          const data = await response.json();
+
+          if (data.error) {
+            this.showWidgetError(data.error);
+            return;
+          }
+
+          // Find HTML content in the response
+          const contents = data.contents || [];
+          const htmlContent = contents.find(item =>
+            item.mimeType && item.mimeType.includes('html')
+          );
+
+          if (htmlContent && htmlContent.text) {
+            this.loadWidget(htmlContent.text);
+          } else {
+            this.showWidgetError('Resource does not contain HTML content');
+          }
+        } catch (e) {
+          this.showWidgetError(`Failed to load resource: ${e.message}`);
+        }
+      }
+
+      showWidgetError(message) {
+        const placeholder = document.getElementById('widget-placeholder');
+        const frame = document.getElementById('widget-frame');
+
+        frame.style.display = 'none';
+        placeholder.style.display = 'none';
+
+        // Remove any existing error
+        const existing = document.getElementById('widget-error');
+        if (existing) existing.remove();
+
+        const errorDiv = document.createElement('div');
+        errorDiv.id = 'widget-error';
+        errorDiv.className = 'widget-error';
+        errorDiv.innerHTML = `
+          <div class="widget-error-message">${message}</div>
+          <button class="widget-error-retry" id="retry-btn">Retry</button>
+        `;
+
+        const container = document.getElementById('widget-container');
+        container.appendChild(errorDiv);
+
+        document.getElementById('retry-btn').addEventListener('click', () => {
+          errorDiv.remove();
+          if (this.activeResourceUri) {
+            this.loadResourceWidget(this.activeResourceUri);
+          } else {
+            this.initSession();
+          }
+        });
+      }
+
+      showWidgetPlaceholder(message) {
+        const placeholder = document.getElementById('widget-placeholder');
+        const frame = document.getElementById('widget-frame');
+
+        frame.style.display = 'none';
+        placeholder.style.display = 'flex';
+        placeholder.textContent = message;
+
+        // Remove any existing error
+        const existing = document.getElementById('widget-error');
+        if (existing) existing.remove();
+      }
+
+      setupReconnectButton() {
+        document.getElementById('reconnect-btn').addEventListener('click', () => {
+          this.handleReconnect();
+        });
+      }
+
+      async handleReconnect() {
+        this.setStatus('reconnecting', 'Reconnecting...');
+
+        try {
+          await fetch('/api/reconnect', { method: 'POST' });
+          await this.initSession();
+        } catch (e) {
+          this.setStatus(false, 'Reconnect failed');
+          this.showWidgetError(`Reconnect failed: ${e.message}`);
+        }
+      }
+
+      setStatus(state, text) {
         const dot = document.getElementById('status-dot');
         const textEl = document.getElementById('status-text');
-        dot.classList.toggle('connected', connected);
-        textEl.textContent = text;
+
+        // Remove all state classes
+        dot.classList.remove('connected', 'disconnected', 'reconnecting');
+
+        if (state === true || state === 'connected') {
+          dot.classList.add('connected');
+        } else if (state === 'reconnecting') {
+          dot.classList.add('reconnecting');
+        } else {
+          dot.classList.add('disconnected');
+        }
+
+        if (text) {
+          textEl.textContent = text;
+        }
       }
 
       renderToolList() {
@@ -846,6 +1148,10 @@
       loadWidget(html) {
         const placeholder = document.getElementById('widget-placeholder');
         const frame = document.getElementById('widget-frame');
+
+        // Clear any error state
+        const existing = document.getElementById('widget-error');
+        if (existing) existing.remove();
 
         placeholder.style.display = 'none';
         frame.style.display = 'block';
