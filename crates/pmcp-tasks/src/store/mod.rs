@@ -1,9 +1,22 @@
-//! Task store trait and supporting types.
+//! Task store trait, generic implementation, and supporting types.
 //!
-//! The [`TaskStore`] async trait is the contract that all task storage
-//! backends must implement. It defines methods for creating, reading,
-//! updating, and deleting tasks, as well as variable management,
-//! result storage, and TTL-based cleanup.
+//! # Architecture
+//!
+//! The task storage system has three layers:
+//!
+//! 1. **[`TaskStore`]** -- A type-erasure interface for use with
+//!    `Arc<dyn TaskStore>` in [`TaskContext`](crate::context::TaskContext)
+//!    and [`TaskRouterImpl`](crate::router::TaskRouterImpl).
+//!
+//! 2. **[`GenericTaskStore<B>`](generic::GenericTaskStore)** -- All domain
+//!    logic (state machine, owner isolation, variable merge, TTL, CAS-based
+//!    mutations, canonical serialization). Has a blanket `TaskStore` impl.
+//!
+//! 3. **[`StorageBackend`]** -- Dumb KV trait that backends implement
+//!    (in-memory, DynamoDB, Redis). No domain logic.
+//!
+//! To create a store: `GenericTaskStore::new(backend)` and wrap in
+//! `Arc<dyn TaskStore>` for use with `TaskContext` and `TaskRouterImpl`.
 //!
 //! # Supporting Types
 //!
@@ -11,12 +24,11 @@
 //! - [`ListTasksOptions`] - Parameters for cursor-based task listing.
 //! - [`TaskPage`] - A page of task results with optional next cursor.
 //!
-//! # Backend Implementations
+//! # Legacy
 //!
-//! This module defines the trait only. Implementations are provided
-//! by submodules:
-//! - `InMemoryTaskStore` (in `memory` submodule) - Thread-safe in-memory backend using DashMap.
-//! - DynamoDB backend (Phase 4)
+//! [`InMemoryTaskStore`](memory::InMemoryTaskStore) implements `TaskStore`
+//! directly (not via `GenericTaskStore`). It will be refactored to use
+//! `GenericTaskStore<InMemoryBackend>` in a future phase.
 
 pub mod backend;
 pub mod generic;
@@ -171,11 +183,19 @@ pub struct TaskPage {
     pub next_cursor: Option<String>,
 }
 
-/// Async trait defining the task storage contract.
+/// Type-erasure interface for task storage.
 ///
-/// All task storage backends (in-memory, `DynamoDB`, etc.) implement this
-/// trait. Methods return [`Result<_, TaskError>`] with specific error
-/// variants documented on each method.
+/// This trait serves as the dynamic dispatch interface for
+/// [`GenericTaskStore<B>`](generic::GenericTaskStore). Domain logic lives
+/// in `GenericTaskStore`, not in trait implementations. Use
+/// `GenericTaskStore::new(backend)` to create a store, then wrap in
+/// `Arc<dyn TaskStore>` for use with
+/// [`TaskContext`](crate::context::TaskContext) and
+/// [`TaskRouterImpl`](crate::router::TaskRouterImpl).
+///
+/// A blanket implementation is provided for `GenericTaskStore<B>` where
+/// `B: StorageBackend + 'static`, so any `GenericTaskStore` automatically
+/// satisfies this trait.
 ///
 /// # Thread Safety
 ///
@@ -381,6 +401,85 @@ pub trait TaskStore: Send + Sync {
     /// This method is synchronous (not async) since it returns a reference
     /// to a configuration value that does not require I/O.
     fn config(&self) -> &StoreConfig;
+}
+
+// ---- Blanket impl for GenericTaskStore<B> ----
+
+#[async_trait]
+impl<B: StorageBackend + 'static> TaskStore for generic::GenericTaskStore<B> {
+    async fn create(
+        &self,
+        owner_id: &str,
+        request_method: &str,
+        ttl: Option<u64>,
+    ) -> Result<TaskRecord, TaskError> {
+        self.create(owner_id, request_method, ttl).await
+    }
+
+    async fn get(&self, task_id: &str, owner_id: &str) -> Result<TaskRecord, TaskError> {
+        self.get(task_id, owner_id).await
+    }
+
+    async fn update_status(
+        &self,
+        task_id: &str,
+        owner_id: &str,
+        new_status: TaskStatus,
+        status_message: Option<String>,
+    ) -> Result<TaskRecord, TaskError> {
+        self.update_status(task_id, owner_id, new_status, status_message)
+            .await
+    }
+
+    async fn set_variables(
+        &self,
+        task_id: &str,
+        owner_id: &str,
+        variables: HashMap<String, Value>,
+    ) -> Result<TaskRecord, TaskError> {
+        self.set_variables(task_id, owner_id, variables).await
+    }
+
+    async fn set_result(
+        &self,
+        task_id: &str,
+        owner_id: &str,
+        result: Value,
+    ) -> Result<(), TaskError> {
+        self.set_result(task_id, owner_id, result).await
+    }
+
+    async fn get_result(&self, task_id: &str, owner_id: &str) -> Result<Value, TaskError> {
+        self.get_result(task_id, owner_id).await
+    }
+
+    async fn complete_with_result(
+        &self,
+        task_id: &str,
+        owner_id: &str,
+        status: TaskStatus,
+        status_message: Option<String>,
+        result: Value,
+    ) -> Result<TaskRecord, TaskError> {
+        self.complete_with_result(task_id, owner_id, status, status_message, result)
+            .await
+    }
+
+    async fn list(&self, options: ListTasksOptions) -> Result<TaskPage, TaskError> {
+        self.list(options).await
+    }
+
+    async fn cancel(&self, task_id: &str, owner_id: &str) -> Result<TaskRecord, TaskError> {
+        self.cancel(task_id, owner_id).await
+    }
+
+    async fn cleanup_expired(&self) -> Result<usize, TaskError> {
+        self.cleanup_expired().await
+    }
+
+    fn config(&self) -> &StoreConfig {
+        self.config()
+    }
 }
 
 #[cfg(test)]

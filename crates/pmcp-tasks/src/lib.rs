@@ -51,6 +51,7 @@ pub use domain::{TaskRecord, TaskWithVariables};
 pub use error::TaskError;
 pub use router::TaskRouterImpl;
 pub use security::{resolve_owner_id, TaskSecurityConfig, DEFAULT_LOCAL_OWNER};
+pub use store::generic::GenericTaskStore;
 pub use store::memory::InMemoryTaskStore;
 pub use store::{
     ListTasksOptions, StorageBackend, StorageError, StoreConfig, TaskPage, TaskStore,
