@@ -67,7 +67,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     message: format!("Invalid message: {e}"),
                 };
                 let _ = sender
-                    .send(Message::Text(serde_json::to_string(&error).unwrap().into()))
+                    .send(Message::Text(serde_json::to_string(&error).unwrap()))
                     .await;
                 continue;
             },
@@ -96,7 +96,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
         // Send response
         if let Ok(text) = serde_json::to_string(&response) {
-            if sender.send(Message::Text(text.into())).await.is_err() {
+            if sender.send(Message::Text(text)).await.is_err() {
                 break;
             }
         }
