@@ -19,6 +19,7 @@
 //! - DynamoDB backend (Phase 4)
 
 pub mod backend;
+pub mod generic;
 pub mod memory;
 
 use std::collections::HashMap;
