@@ -100,12 +100,11 @@ Plans:
   3. Concurrent mutations are protected by Lua scripts that atomically check version and set new values
   4. Task expiry uses EXPIRE-based TTL with application-level enforcement for consistent semantics across get/list operations
   5. Owner-scoped task listing is supported via sorted set indexing
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 12-01: TBD
-- [ ] 12-02: TBD
-- [ ] 12-03: TBD
+- [ ] 12-01-PLAN.md — Feature flag setup, RedisBackend struct with all 6 StorageBackend methods, Lua scripts, sorted set indexing
+- [ ] 12-02-PLAN.md — Integration tests against real Redis, gated behind redis-tests feature flag
 
 ### Phase 13: Feature Flag Verification
 **Goal**: All backends compile independently and in combination under their respective feature flags, with no cross-contamination between feature-gated code
@@ -140,5 +139,5 @@ Note: Phase 11 (DynamoDB) and Phase 12 (Redis) both depend on Phase 10 but not o
 | 9. Storage Abstraction Layer | v1.2 | Complete    | 2026-02-24 | - |
 | 10. InMemory Backend Refactor | 2/2 | Complete    | 2026-02-24 | - |
 | 11. DynamoDB Backend | 2/2 | Complete    | 2026-02-24 | - |
-| 12. Redis Backend | v1.2 | 0/? | Not started | - |
+| 12. Redis Backend | v1.2 | 0/2 | Not started | - |
 | 13. Feature Flag Verification | v1.2 | 0/? | Not started | - |
