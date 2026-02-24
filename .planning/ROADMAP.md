@@ -36,7 +36,7 @@ See: `.planning/milestones/v1.1-ROADMAP.md` for full phase details
 
 **Milestone Goal:** Introduce a pluggable KV storage backend layer, refactor TaskStore to delegate to it, and validate with DynamoDB + Redis implementations.
 
-- [ ] **Phase 9: Storage Abstraction Layer** - StorageBackend trait and GenericTaskStore with all domain logic
+- [x] **Phase 9: Storage Abstraction Layer** - StorageBackend trait and GenericTaskStore with all domain logic (completed 2026-02-24)
 - [ ] **Phase 10: InMemory Backend Refactor** - Reimplement InMemoryTaskStore as GenericTaskStore\<InMemoryBackend\>
 - [ ] **Phase 11: DynamoDB Backend** - Full DynamoDbBackend behind `dynamodb` feature flag
 - [ ] **Phase 12: Redis Backend** - Full RedisBackend behind `redis` feature flag
@@ -138,7 +138,7 @@ Note: Phase 11 (DynamoDB) and Phase 12 (Redis) both depend on Phase 10 but not o
 | 6. Structured Handoff and Client Continuation | v1.1 | 2/2 | Complete | 2026-02-23 |
 | 7. Integration and End-to-End Validation | v1.1 | 2/2 | Complete | 2026-02-23 |
 | 8. Quality Polish and Test Coverage | v1.1 | 2/2 | Complete | 2026-02-23 |
-| 9. Storage Abstraction Layer | v1.2 | 0/? | Not started | - |
+| 9. Storage Abstraction Layer | v1.2 | Complete    | 2026-02-24 | - |
 | 10. InMemory Backend Refactor | v1.2 | 0/? | Not started | - |
 | 11. DynamoDB Backend | v1.2 | 0/? | Not started | - |
 | 12. Redis Backend | v1.2 | 0/? | Not started | - |
