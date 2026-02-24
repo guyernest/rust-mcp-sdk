@@ -31,11 +31,11 @@ Requirements for pluggable storage backend milestone. Each maps to roadmap phase
 
 ### Redis Backend
 
-- [ ] **RDIS-01**: RedisBackend implements StorageBackend behind `redis` feature flag
-- [ ] **RDIS-02**: Hash-based storage mapping task record fields to Redis hash fields
-- [ ] **RDIS-03**: Lua scripts for atomic check-and-set operations (concurrent mutation safety)
-- [ ] **RDIS-04**: EXPIRE-based TTL with application-level enforcement for consistent expiry semantics
-- [ ] **RDIS-05**: Sorted set indexing for owner-scoped task listing
+- [x] **RDIS-01**: RedisBackend implements StorageBackend behind `redis` feature flag
+- [x] **RDIS-02**: Hash-based storage mapping task record fields to Redis hash fields
+- [x] **RDIS-03**: Lua scripts for atomic check-and-set operations (concurrent mutation safety)
+- [x] **RDIS-04**: EXPIRE-based TTL with application-level enforcement for consistent expiry semantics
+- [x] **RDIS-05**: Sorted set indexing for owner-scoped task listing
 
 ### Testing
 
@@ -92,11 +92,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DYNA-04 | Phase 11 | Complete |
 | DYNA-05 | Phase 11 | Complete |
 | DYNA-06 | Phase 11 | Complete |
-| RDIS-01 | Phase 12 | Pending |
-| RDIS-02 | Phase 12 | Pending |
-| RDIS-03 | Phase 12 | Pending |
-| RDIS-04 | Phase 12 | Pending |
-| RDIS-05 | Phase 12 | Pending |
+| RDIS-01 | Phase 12 | Complete |
+| RDIS-02 | Phase 12 | Complete |
+| RDIS-03 | Phase 12 | Complete |
+| RDIS-04 | Phase 12 | Complete |
+| RDIS-05 | Phase 12 | Complete |
 | TEST-01 | Phase 10 | Complete |
 | TEST-02 | Phase 11 | Complete |
 | TEST-03 | Phase 12 | Pending |

@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-23)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state that persists across tool calls.
-**Current focus:** Phase 11 - DynamoDB Backend
+**Current focus:** Phase 12 - Redis Backend
 
 ## Current Position
 
 Milestone: v1.2 Pluggable Storage Backends
-Phase: 11 of 13 (DynamoDB Backend)
-Plan: 2 of 2 (Phase 11 complete)
-Status: Phase 11 complete, ready for Phase 12
-Last activity: 2026-02-24 -- Plan 11-02 complete
+Phase: 12 of 13 (Redis Backend)
+Plan: 1 of 2
+Status: Plan 12-01 complete, ready for 12-02
+Last activity: 2026-02-24 -- Plan 12-01 complete
 
-Progress: [██████░░░░] 27% (6/~11 estimated plans)
+Progress: [███████░░░] 30% (7/~11 estimated plans)
 
 ## Performance Metrics
 
@@ -47,6 +47,7 @@ Progress: [██████░░░░] 27% (6/~11 estimated plans)
 | Phase 10 P02 | 4 | 2 tasks | 2 files |
 | Phase 11 P01 | 5 | 2 tasks | 4 files |
 | Phase 11 P02 | 5 | 2 tasks | 1 file |
+| Phase 12 P01 | 4 | 1 task | 4 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,12 @@ Recent decisions affecting current work:
 - [Phase 11]: put_if_version on missing key returns VersionConflict (DynamoDB ConditionExpression)
 - [Phase 11]: TTL tests verify expires_at attribute via raw GetItem, not actual TTL deletion
 - [Phase 11]: UUID-based test isolation (test-{uuid} prefix) -- no cleanup needed
+- [Phase 12]: Per-owner sorted sets for O(log N) scoped listing (not global sorted set)
+- [Phase 12]: EXPIREAT (absolute epoch) maps directly from TaskRecord expiresAt field
+- [Phase 12]: Lua scripts embedded as const string constants in module
+- [Phase 12]: Lazy orphan cleanup during list_by_prefix (best-effort ZREM)
+- [Phase 12]: ::redis:: absolute path imports to avoid module name collision
+- [Phase 12]: put_if_version on missing key returns VersionConflict (consistent with DynamoDB)
 
 ### Pending Todos
 
@@ -90,5 +97,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Completed 11-02-PLAN.md (Phase 11 complete)
-Resume file: .planning/phases/11-dynamodb-backend/11-02-SUMMARY.md
+Stopped at: Completed 12-01-PLAN.md
+Resume file: .planning/phases/12-redis-backend/12-01-SUMMARY.md
