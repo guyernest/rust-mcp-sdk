@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-23)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state that persists across tool calls.
-**Current focus:** Phase 12 - Redis Backend
+**Current focus:** Phase 13 - Feature Flag Verification (COMPLETE)
 
 ## Current Position
 
 Milestone: v1.2 Pluggable Storage Backends
-Phase: 12 of 13 (Redis Backend)
-Plan: 2 of 2 (PHASE COMPLETE)
-Status: Phase 12 complete (both plans done)
-Last activity: 2026-02-24 -- Plan 12-02 complete
+Phase: 13 of 13 (Feature Flag Verification)
+Plan: 1 of 1 (PHASE COMPLETE)
+Status: Phase 13 complete -- milestone v1.2 fully done
+Last activity: 2026-02-24 -- Plan 13-01 complete
 
-Progress: [████████░░] 36% (8/~11 estimated plans)
+Progress: [██████████] 100% (9/9 remaining plans complete)
 
 ## Performance Metrics
 
@@ -49,6 +49,7 @@ Progress: [████████░░] 36% (8/~11 estimated plans)
 | Phase 11 P02 | 5 | 2 tasks | 1 file |
 | Phase 12 P01 | 4 | 1 task | 4 files |
 | Phase 12 P02 | 2 | 1 task | 1 file |
+| Phase 13 P01 | 4 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -88,6 +89,9 @@ Recent decisions affecting current work:
 - [Phase 12]: put_if_version on missing key returns VersionConflict (consistent with DynamoDB)
 - [Phase 12]: 19 integration tests verified for RedisBackend (18 from 12-01, 1 added in 12-02)
 - [Phase 12]: Past-expiresAt injection pattern for testing application-level expiry filtering
+- [Phase 13]: Plain backtick references for feature-gated types instead of cfg_attr conditional doc links
+- [Phase 13]: Full crate paths for cross-module doc-links (crate::store::generic::GenericTaskStore)
+- [Phase 13]: 5 checks per feature combination: check, clippy, test --no-run, test --doc, cargo doc -D warnings
 
 ### Pending Todos
 
@@ -100,5 +104,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Completed 12-02-PLAN.md (Phase 12 complete)
-Resume file: .planning/phases/12-redis-backend/12-02-SUMMARY.md
+Stopped at: Completed 13-01-PLAN.md (Phase 13 complete -- milestone v1.2 done)
+Resume file: .planning/phases/13-feature-flag-verification/13-01-SUMMARY.md
