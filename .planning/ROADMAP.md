@@ -68,11 +68,11 @@ Plans:
   2. `InMemoryTaskStore` is now a type alias or thin wrapper around `GenericTaskStore<InMemoryBackend>` with backward-compatible constructors (`new`, `with_config`)
   3. All 200+ existing unit, property, integration, and security tests pass without modification
   4. Per-backend unit tests validate InMemoryBackend's StorageBackend contract independently
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 10-01: TBD
-- [ ] 10-02: TBD
+- [ ] 10-01-PLAN.md — InMemoryBackend + InMemoryTaskStore thin wrapper + test adaptation
+- [ ] 10-02-PLAN.md — Per-backend StorageBackend contract tests + TestBackend replacement in generic.rs
 
 ### Phase 11: DynamoDB Backend
 **Goal**: Developers can persist tasks in DynamoDB for production AWS/Lambda deployments by enabling the `dynamodb` feature flag
