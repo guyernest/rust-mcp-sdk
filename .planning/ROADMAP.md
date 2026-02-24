@@ -69,11 +69,11 @@ See: `.planning/milestones/v1.2-ROADMAP.md` for full phase details
   3. Refreshing the preview page or making multiple tool calls reuses the same MCP session (no re-initialization per request)
   4. DevTools panel in the preview UI shows a live log entry each time a bridge call is made, including tool name and response
   5. When the MCP server exposes multiple UI resources, a picker in the preview sidebar lets the developer switch between them
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 14-01: TBD
-- [ ] 14-02: TBD
+- [ ] 14-01-PLAN.md — Backend: session-persistent MCP proxy with resource list/read methods and API routes
+- [ ] 14-02-PLAN.md — Frontend: resource picker, auto-load widget, enhanced DevTools, connection status, reconnect
 
 ### Phase 15: WASM Widget Bridge
 **Goal**: Developer can toggle to a WASM bridge mode in preview where an in-browser MCP client connects directly to the server, eliminating the proxy middleman
