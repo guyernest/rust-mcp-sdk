@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-23)
 
 Milestone: v1.2 Pluggable Storage Backends
 Phase: 10 of 13 (InMemory Backend Refactor)
-Plan: — (not yet planned)
-Status: Ready to plan
-Last activity: 2026-02-24 — Phase 9 complete, advancing to Phase 10
+Plan: 1 of 2
+Status: Plan 01 complete, ready for Plan 02
+Last activity: 2026-02-24 — Plan 10-01 complete
 
-Progress: [██░░░░░░░░] 10% (2/~11 estimated plans)
+Progress: [███░░░░░░░] 15% (3/~11 estimated plans)
 
 ## Performance Metrics
 
@@ -43,6 +43,7 @@ Progress: [██░░░░░░░░] 10% (2/~11 estimated plans)
 | 08 | 2 | 17 min | 8 min |
 | Phase 09 P01 | 8 | 2 tasks | 5 files |
 | Phase 09 P02 | 6 | 2 tasks | 3 files |
+| Phase 10 P01 | 7 | 1 task | 4 files |
 
 ## Accumulated Context
 
@@ -60,6 +61,10 @@ Recent decisions affecting current work:
 - [Phase 09]: GenericTaskStore centralizes all domain logic; backends remain dumb KV stores
 - [Phase 09]: Blanket impl requires B: StorageBackend + 'static for Arc<dyn TaskStore>
 - [Phase 09]: Variable schema validation applied to incoming variables before merge
+- [Phase 10]: Thin wrapper (not type alias) for InMemoryTaskStore to preserve zero-arg new()
+- [Phase 10]: Keep 5000ms poll interval default in InMemoryTaskStore (avoids test churn)
+- [Phase 10]: InMemoryBackend is public for downstream GenericTaskStore usage
+- [Phase 10]: GenericTaskStore::backend() accessor enables test introspection
 
 ### Pending Todos
 
@@ -72,5 +77,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Completed 09-02-PLAN.md (Phase 09 complete)
-Resume file: .planning/phases/09-storage-abstraction-layer/09-02-SUMMARY.md
+Stopped at: Completed 10-01-PLAN.md
+Resume file: .planning/phases/10-inmemory-backend-refactor/10-01-SUMMARY.md

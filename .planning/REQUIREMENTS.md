@@ -16,9 +16,9 @@ Requirements for pluggable storage backend milestone. Each maps to roadmap phase
 
 ### InMemory Refactor
 
-- [ ] **IMEM-01**: InMemoryBackend implements StorageBackend using DashMap for concurrent KV storage
-- [ ] **IMEM-02**: InMemoryTaskStore becomes GenericTaskStore\<InMemoryBackend\> with backward-compatible constructors
-- [ ] **IMEM-03**: All existing 200+ tests pass unchanged after the refactor
+- [x] **IMEM-01**: InMemoryBackend implements StorageBackend using DashMap for concurrent KV storage
+- [x] **IMEM-02**: InMemoryTaskStore becomes GenericTaskStore\<InMemoryBackend\> with backward-compatible constructors
+- [x] **IMEM-03**: All existing 200+ tests pass unchanged after the refactor
 
 ### DynamoDB Backend
 
@@ -83,9 +83,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ABST-02 | Phase 9 | Complete |
 | ABST-03 | Phase 9 | Complete |
 | ABST-04 | Phase 9 | Complete |
-| IMEM-01 | Phase 10 | Pending |
-| IMEM-02 | Phase 10 | Pending |
-| IMEM-03 | Phase 10 | Pending |
+| IMEM-01 | Phase 10 | Complete |
+| IMEM-02 | Phase 10 | Complete |
+| IMEM-03 | Phase 10 | Complete |
 | DYNA-01 | Phase 11 | Pending |
 | DYNA-02 | Phase 11 | Pending |
 | DYNA-03 | Phase 11 | Pending |

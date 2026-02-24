@@ -20,8 +20,9 @@
 //!
 //! # Backends
 //!
-//! - [`InMemoryBackend`](memory::InMemoryBackend) -- Thread-safe in-memory
-//!   backend using `DashMap`. Used by [`InMemoryTaskStore`](memory::InMemoryTaskStore).
+//! - [`InMemoryBackend`](crate::store::memory::InMemoryBackend) -- Thread-safe
+//!   in-memory backend using `DashMap`. Used by
+//!   [`InMemoryTaskStore`](crate::store::memory::InMemoryTaskStore).
 //!
 //! # Supporting Types
 //!
