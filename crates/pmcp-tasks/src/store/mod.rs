@@ -26,6 +26,8 @@
 //! - [`DynamoDbBackend`](crate::store::dynamodb::DynamoDbBackend) -- DynamoDB
 //!   backend for production AWS/Lambda deployments. Available behind the
 //!   `dynamodb` feature flag.
+//! - [`RedisBackend`](crate::store::redis::RedisBackend) -- Redis backend for
+//!   long-running server deployments. Available behind the `redis` feature flag.
 //!
 //! # Supporting Types
 //!
@@ -38,6 +40,8 @@ pub mod backend;
 pub mod dynamodb;
 pub mod generic;
 pub mod memory;
+#[cfg(feature = "redis")]
+pub mod redis;
 
 use std::collections::HashMap;
 

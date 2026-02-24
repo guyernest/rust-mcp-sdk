@@ -56,6 +56,8 @@ pub use store::dynamodb::DynamoDbBackend;
 pub use store::generic::GenericTaskStore;
 pub use store::memory::InMemoryBackend;
 pub use store::memory::InMemoryTaskStore;
+#[cfg(feature = "redis")]
+pub use store::redis::RedisBackend;
 pub use store::{
     ListTasksOptions, StorageBackend, StorageError, StoreConfig, TaskPage, TaskStore,
     VersionedRecord,
