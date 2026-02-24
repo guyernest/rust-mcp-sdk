@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-23)
 
 Milestone: v1.2 Pluggable Storage Backends
 Phase: 12 of 13 (Redis Backend)
-Plan: 1 of 2
-Status: Plan 12-01 complete, ready for 12-02
-Last activity: 2026-02-24 -- Plan 12-01 complete
+Plan: 2 of 2 (PHASE COMPLETE)
+Status: Phase 12 complete (both plans done)
+Last activity: 2026-02-24 -- Plan 12-02 complete
 
-Progress: [███████░░░] 30% (7/~11 estimated plans)
+Progress: [████████░░] 36% (8/~11 estimated plans)
 
 ## Performance Metrics
 
@@ -48,6 +48,7 @@ Progress: [███████░░░] 30% (7/~11 estimated plans)
 | Phase 11 P01 | 5 | 2 tasks | 4 files |
 | Phase 11 P02 | 5 | 2 tasks | 1 file |
 | Phase 12 P01 | 4 | 1 task | 4 files |
+| Phase 12 P02 | 2 | 1 task | 1 file |
 
 ## Accumulated Context
 
@@ -85,6 +86,8 @@ Recent decisions affecting current work:
 - [Phase 12]: Lazy orphan cleanup during list_by_prefix (best-effort ZREM)
 - [Phase 12]: ::redis:: absolute path imports to avoid module name collision
 - [Phase 12]: put_if_version on missing key returns VersionConflict (consistent with DynamoDB)
+- [Phase 12]: 19 integration tests verified for RedisBackend (18 from 12-01, 1 added in 12-02)
+- [Phase 12]: Past-expiresAt injection pattern for testing application-level expiry filtering
 
 ### Pending Todos
 
@@ -97,5 +100,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Completed 12-01-PLAN.md
-Resume file: .planning/phases/12-redis-backend/12-01-SUMMARY.md
+Stopped at: Completed 12-02-PLAN.md (Phase 12 complete)
+Resume file: .planning/phases/12-redis-backend/12-02-SUMMARY.md

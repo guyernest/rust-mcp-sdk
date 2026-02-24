@@ -39,7 +39,7 @@ See: `.planning/milestones/v1.1-ROADMAP.md` for full phase details
 - [x] **Phase 9: Storage Abstraction Layer** - StorageBackend trait and GenericTaskStore with all domain logic (completed 2026-02-24)
 - [x] **Phase 10: InMemory Backend Refactor** - Reimplement InMemoryTaskStore as GenericTaskStore\<InMemoryBackend\> (completed 2026-02-24)
 - [x] **Phase 11: DynamoDB Backend** - Full DynamoDbBackend behind `dynamodb` feature flag (completed 2026-02-24)
-- [ ] **Phase 12: Redis Backend** - Full RedisBackend behind `redis` feature flag
+- [x] **Phase 12: Redis Backend** - Full RedisBackend behind `redis` feature flag (completed 2026-02-24)
 - [ ] **Phase 13: Feature Flag Verification** - Cross-backend compilation and feature flag isolation
 
 ## Phase Details
@@ -139,5 +139,5 @@ Note: Phase 11 (DynamoDB) and Phase 12 (Redis) both depend on Phase 10 but not o
 | 9. Storage Abstraction Layer | v1.2 | Complete    | 2026-02-24 | - |
 | 10. InMemory Backend Refactor | 2/2 | Complete    | 2026-02-24 | - |
 | 11. DynamoDB Backend | 2/2 | Complete    | 2026-02-24 | - |
-| 12. Redis Backend | 1/2 | In Progress|  | - |
+| 12. Redis Backend | 2/2 | Complete   | 2026-02-24 | - |
 | 13. Feature Flag Verification | v1.2 | 0/? | Not started | - |
