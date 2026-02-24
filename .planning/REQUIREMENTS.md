@@ -39,7 +39,7 @@ Requirements for pluggable storage backend milestone. Each maps to roadmap phase
 
 ### Testing
 
-- [ ] **TEST-01**: Per-backend unit tests for InMemoryBackend validating StorageBackend contract
+- [x] **TEST-01**: Per-backend unit tests for InMemoryBackend validating StorageBackend contract
 - [ ] **TEST-02**: Per-backend integration tests for DynamoDbBackend against cloud DynamoDB
 - [ ] **TEST-03**: Per-backend integration tests for RedisBackend against Redis instance
 - [ ] **TEST-04**: Feature flag compilation verification (each backend compiles independently)
@@ -97,7 +97,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | RDIS-03 | Phase 12 | Pending |
 | RDIS-04 | Phase 12 | Pending |
 | RDIS-05 | Phase 12 | Pending |
-| TEST-01 | Phase 10 | Pending |
+| TEST-01 | Phase 10 | Complete |
 | TEST-02 | Phase 11 | Pending |
 | TEST-03 | Phase 12 | Pending |
 | TEST-04 | Phase 13 | Pending |

@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-23)
 
 Milestone: v1.2 Pluggable Storage Backends
 Phase: 10 of 13 (InMemory Backend Refactor)
-Plan: 1 of 2
-Status: Plan 01 complete, ready for Plan 02
-Last activity: 2026-02-24 — Plan 10-01 complete
+Plan: 2 of 2 (phase complete)
+Status: Phase 10 complete, ready for Phase 11
+Last activity: 2026-02-24 — Plan 10-02 complete
 
-Progress: [███░░░░░░░] 15% (3/~11 estimated plans)
+Progress: [████░░░░░░] 18% (4/~11 estimated plans)
 
 ## Performance Metrics
 
@@ -44,6 +44,7 @@ Progress: [███░░░░░░░] 15% (3/~11 estimated plans)
 | Phase 09 P01 | 8 | 2 tasks | 5 files |
 | Phase 09 P02 | 6 | 2 tasks | 3 files |
 | Phase 10 P01 | 7 | 1 task | 4 files |
+| Phase 10 P02 | 4 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -65,6 +66,9 @@ Recent decisions affecting current work:
 - [Phase 10]: Keep 5000ms poll interval default in InMemoryTaskStore (avoids test churn)
 - [Phase 10]: InMemoryBackend is public for downstream GenericTaskStore usage
 - [Phase 10]: GenericTaskStore::backend() accessor enables test introspection
+- [Phase 10]: Per-backend contract tests in separate mod backend_tests alongside mod tests
+- [Phase 10]: TestBackend eliminated; InMemoryBackend is single source of truth for in-memory storage
+- [Phase 10]: CasConflictBackend retained (tests GenericTaskStore CAS error handling, not backend)
 
 ### Pending Todos
 
@@ -77,5 +81,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Completed 10-01-PLAN.md
-Resume file: .planning/phases/10-inmemory-backend-refactor/10-01-SUMMARY.md
+Stopped at: Completed 10-02-PLAN.md (Phase 10 complete)
+Resume file: .planning/phases/10-inmemory-backend-refactor/10-02-SUMMARY.md
