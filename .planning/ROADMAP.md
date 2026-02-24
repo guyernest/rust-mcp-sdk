@@ -84,12 +84,11 @@ Plans:
   3. State transitions use `ConditionExpression` for atomic compare-and-set, preventing concurrent mutation corruption
   4. Expired tasks are automatically cleaned up via native DynamoDB TTL (epoch seconds)
   5. Variable payloads are capped at ~350KB to stay within DynamoDB's 400KB item limit, with a clear error when exceeded
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 11-01: TBD
-- [ ] 11-02: TBD
-- [ ] 11-03: TBD
+- [ ] 11-01-PLAN.md — Feature flag setup, DynamoDbBackend struct, and all 6 StorageBackend method implementations
+- [ ] 11-02-PLAN.md — Integration tests against real DynamoDB, gated behind dynamodb-tests feature flag
 
 ### Phase 12: Redis Backend
 **Goal**: Developers can persist tasks in Redis for long-running server deployments by enabling the `redis` feature flag, proving the StorageBackend trait generalizes beyond DynamoDB
@@ -140,6 +139,6 @@ Note: Phase 11 (DynamoDB) and Phase 12 (Redis) both depend on Phase 10 but not o
 | 8. Quality Polish and Test Coverage | v1.1 | 2/2 | Complete | 2026-02-23 |
 | 9. Storage Abstraction Layer | v1.2 | Complete    | 2026-02-24 | - |
 | 10. InMemory Backend Refactor | 2/2 | Complete    | 2026-02-24 | - |
-| 11. DynamoDB Backend | v1.2 | 0/? | Not started | - |
+| 11. DynamoDB Backend | v1.2 | 0/2 | Not started | - |
 | 12. Redis Backend | v1.2 | 0/? | Not started | - |
 | 13. Feature Flag Verification | v1.2 | 0/? | Not started | - |
