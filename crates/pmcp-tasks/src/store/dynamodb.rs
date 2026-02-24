@@ -453,3 +453,381 @@ impl StorageBackend for DynamoDbBackend {
         Ok(0)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Test-only accessors
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+impl DynamoDbBackend {
+    /// Returns a reference to the underlying DynamoDB client.
+    ///
+    /// Test-only: used by integration tests to inspect raw DynamoDB items
+    /// (e.g., verifying `expires_at` TTL attribute presence).
+    pub(crate) fn client(&self) -> &Client {
+        &self.client
+    }
+
+    /// Returns the table name this backend operates on.
+    ///
+    /// Test-only: used by integration tests to issue raw `GetItem` calls
+    /// for TTL attribute verification.
+    pub(crate) fn table_name(&self) -> &str {
+        &self.table_name
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Integration tests -- DynamoDB backend contract tests
+// ---------------------------------------------------------------------------
+
+/// Integration tests for [`DynamoDbBackend`] against real AWS DynamoDB.
+///
+/// These tests require:
+/// - Valid AWS credentials (via environment variables, profile, or IMDS)
+/// - A DynamoDB table named `pmcp_tasks` with schema:
+///   - Partition key: `PK` (String)
+///   - Sort key: `SK` (String)
+///   - TTL attribute: `expires_at` (enabled via Table settings)
+///
+/// Run with:
+/// ```bash
+/// cargo test -p pmcp-tasks --features dynamodb-tests -- ddb_ --test-threads=1
+/// ```
+///
+/// Each test uses a unique UUID-based owner prefix for isolation, so tests
+/// do not interfere with each other and no cleanup is needed.
+#[cfg(all(test, feature = "dynamodb-tests"))]
+mod integration_tests {
+    use super::*;
+    use crate::domain::TaskRecord;
+
+    /// Creates a test backend from environment and a unique owner prefix.
+    ///
+    /// The prefix is a random UUID, ensuring each test run operates on
+    /// isolated keys with zero chance of collision.
+    async fn test_backend() -> (DynamoDbBackend, String) {
+        let backend = DynamoDbBackend::from_env().await;
+        let test_prefix = format!("test-{}", uuid::Uuid::new_v4());
+        (backend, test_prefix)
+    }
+
+    // ---- get tests ----
+
+    #[tokio::test]
+    async fn ddb_get_missing_key_returns_not_found() {
+        let (backend, prefix) = test_backend().await;
+        let key = format!("{prefix}:nonexistent-task");
+        let result = backend.get(&key).await;
+        assert!(
+            matches!(&result, Err(StorageError::NotFound { key: k }) if k == &key),
+            "expected NotFound, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ddb_get_returns_stored_data() {
+        let (backend, prefix) = test_backend().await;
+        let key = format!("{prefix}:task-1");
+        let data = b"hello world";
+        let version = backend.put(&key, data).await.unwrap();
+
+        let record = backend.get(&key).await.unwrap();
+        assert_eq!(record.data, data);
+        assert_eq!(record.version, version);
+    }
+
+    // ---- put tests ----
+
+    #[tokio::test]
+    async fn ddb_put_new_key_returns_version_1() {
+        let (backend, prefix) = test_backend().await;
+        let key = format!("{prefix}:task-1");
+        let version = backend.put(&key, b"data").await.unwrap();
+        assert_eq!(version, 1);
+    }
+
+    #[tokio::test]
+    async fn ddb_put_existing_key_increments_version() {
+        let (backend, prefix) = test_backend().await;
+        let key = format!("{prefix}:task-1");
+        let v1 = backend.put(&key, b"first").await.unwrap();
+        let v2 = backend.put(&key, b"second").await.unwrap();
+        assert_eq!(v1, 1);
+        assert_eq!(v2, 2);
+
+        let record = backend.get(&key).await.unwrap();
+        assert_eq!(record.data, b"second");
+        assert_eq!(record.version, 2);
+    }
+
+    #[tokio::test]
+    async fn ddb_put_overwrites_data() {
+        let (backend, prefix) = test_backend().await;
+        let key = format!("{prefix}:task-1");
+        backend.put(&key, b"original").await.unwrap();
+        backend.put(&key, b"updated").await.unwrap();
+
+        let record = backend.get(&key).await.unwrap();
+        assert_eq!(record.data, b"updated");
+    }
+
+    // ---- put_if_version tests ----
+
+    #[tokio::test]
+    async fn ddb_put_if_version_succeeds_on_match() {
+        let (backend, prefix) = test_backend().await;
+        let key = format!("{prefix}:task-1");
+        let v1 = backend.put(&key, b"data-v1").await.unwrap();
+        let v2 = backend
+            .put_if_version(&key, b"data-v2", v1)
+            .await
+            .unwrap();
+        assert_eq!(v2, v1 + 1);
+    }
+
+    #[tokio::test]
+    async fn ddb_put_if_version_fails_on_mismatch() {
+        let (backend, prefix) = test_backend().await;
+        let key = format!("{prefix}:task-1");
+        backend.put(&key, b"data").await.unwrap();
+
+        let result = backend.put_if_version(&key, b"new-data", 999).await;
+        match result {
+            Err(StorageError::VersionConflict {
+                key: k,
+                expected,
+                ..
+            }) => {
+                assert_eq!(k, key);
+                assert_eq!(expected, 999);
+            },
+            other => panic!("expected VersionConflict, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ddb_put_if_version_fails_on_missing_key() {
+        let (backend, prefix) = test_backend().await;
+        let key = format!("{prefix}:nonexistent");
+        let result = backend.put_if_version(&key, b"data", 1).await;
+        // DynamoDB returns ConditionalCheckFailedException for missing items
+        // with a condition expression, which maps to VersionConflict.
+        assert!(
+            matches!(
+                &result,
+                Err(StorageError::VersionConflict { .. })
+            ),
+            "expected VersionConflict for missing key with condition, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ddb_put_if_version_updates_data() {
+        let (backend, prefix) = test_backend().await;
+        let key = format!("{prefix}:task-1");
+        let v1 = backend.put(&key, b"original").await.unwrap();
+        backend
+            .put_if_version(&key, b"cas-updated", v1)
+            .await
+            .unwrap();
+
+        let record = backend.get(&key).await.unwrap();
+        assert_eq!(record.data, b"cas-updated");
+    }
+
+    // ---- delete tests ----
+
+    #[tokio::test]
+    async fn ddb_delete_existing_returns_true() {
+        let (backend, prefix) = test_backend().await;
+        let key = format!("{prefix}:task-1");
+        backend.put(&key, b"data").await.unwrap();
+        let deleted = backend.delete(&key).await.unwrap();
+        assert!(deleted);
+    }
+
+    #[tokio::test]
+    async fn ddb_delete_missing_returns_false() {
+        let (backend, prefix) = test_backend().await;
+        let key = format!("{prefix}:nonexistent");
+        let deleted = backend.delete(&key).await.unwrap();
+        assert!(!deleted);
+    }
+
+    #[tokio::test]
+    async fn ddb_delete_then_get_returns_not_found() {
+        let (backend, prefix) = test_backend().await;
+        let key = format!("{prefix}:task-1");
+        backend.put(&key, b"data").await.unwrap();
+        backend.delete(&key).await.unwrap();
+
+        let result = backend.get(&key).await;
+        assert!(matches!(result, Err(StorageError::NotFound { .. })));
+    }
+
+    // ---- list_by_prefix tests ----
+
+    #[tokio::test]
+    async fn ddb_list_by_prefix_returns_matching() {
+        let (backend, prefix) = test_backend().await;
+        let owner_a = format!("{prefix}-a");
+        let owner_b = format!("{prefix}-b");
+
+        backend
+            .put(&format!("{owner_a}:task-1"), b"data-a1")
+            .await
+            .unwrap();
+        backend
+            .put(&format!("{owner_a}:task-2"), b"data-a2")
+            .await
+            .unwrap();
+        backend
+            .put(&format!("{owner_b}:task-3"), b"data-b1")
+            .await
+            .unwrap();
+
+        let results = backend
+            .list_by_prefix(&format!("{owner_a}:"))
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        let keys: Vec<&str> = results.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&format!("{owner_a}:task-1").as_str()));
+        assert!(keys.contains(&format!("{owner_a}:task-2").as_str()));
+    }
+
+    #[tokio::test]
+    async fn ddb_list_by_prefix_empty_on_no_match() {
+        let (backend, prefix) = test_backend().await;
+        let owner = format!("{prefix}-nomatch");
+        let results = backend
+            .list_by_prefix(&format!("{owner}:"))
+            .await
+            .unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn ddb_list_by_prefix_returns_correct_data_and_versions() {
+        let (backend, prefix) = test_backend().await;
+        let owner = format!("{prefix}-owner");
+
+        backend
+            .put(&format!("{owner}:task-1"), b"data-1")
+            .await
+            .unwrap();
+        backend
+            .put(&format!("{owner}:task-2"), b"data-2")
+            .await
+            .unwrap();
+        // Update task-2 to get version 2
+        backend
+            .put(&format!("{owner}:task-2"), b"data-2-v2")
+            .await
+            .unwrap();
+
+        let results = backend
+            .list_by_prefix(&format!("{owner}:"))
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
+
+        for (key, record) in &results {
+            if key.ends_with(":task-1") {
+                assert_eq!(record.data, b"data-1");
+                assert_eq!(record.version, 1);
+            } else if key.ends_with(":task-2") {
+                assert_eq!(record.data, b"data-2-v2");
+                assert_eq!(record.version, 2);
+            } else {
+                panic!("unexpected key: {key}");
+            }
+        }
+    }
+
+    // ---- cleanup_expired tests ----
+
+    #[tokio::test]
+    async fn ddb_cleanup_expired_returns_zero() {
+        let (backend, _prefix) = test_backend().await;
+        let removed = backend.cleanup_expired().await.unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    // ---- TTL verification tests ----
+
+    #[tokio::test]
+    async fn ddb_put_sets_expires_at_attribute_when_ttl_present() {
+        let (backend, prefix) = test_backend().await;
+        let key = format!("{prefix}:task-ttl");
+
+        // Create a TaskRecord with a 1-hour TTL
+        let record = TaskRecord::new(prefix.clone(), "tools/call".to_string(), Some(3_600_000));
+        let data = serde_json::to_vec(&record).unwrap();
+        backend.put(&key, &data).await.unwrap();
+
+        // Directly inspect the raw DynamoDB item
+        let (pk, sk) = split_key(&key).unwrap();
+        let raw = backend
+            .client()
+            .get_item()
+            .table_name(backend.table_name())
+            .key("PK", AttributeValue::S(pk))
+            .key("SK", AttributeValue::S(sk))
+            .send()
+            .await
+            .expect("GetItem should succeed");
+
+        let item = raw.item().expect("item should exist");
+
+        // Verify expires_at attribute is present and is a Number
+        let expires_at_attr = item
+            .get("expires_at")
+            .expect("expires_at attribute should exist");
+        let epoch_str = expires_at_attr
+            .as_n()
+            .expect("expires_at should be a Number");
+        let epoch: i64 = epoch_str
+            .parse()
+            .expect("expires_at should be parseable as i64");
+
+        // Verify the epoch is reasonable (within ~2 hours of now)
+        let now_epoch = chrono::Utc::now().timestamp();
+        assert!(
+            epoch > now_epoch && epoch < now_epoch + 7200,
+            "expires_at epoch {epoch} should be within 2 hours of now ({now_epoch})"
+        );
+    }
+
+    #[tokio::test]
+    async fn ddb_put_omits_expires_at_when_no_ttl() {
+        let (backend, prefix) = test_backend().await;
+        let key = format!("{prefix}:task-no-ttl");
+
+        // Create a TaskRecord without TTL
+        let record = TaskRecord::new(prefix.clone(), "tools/call".to_string(), None);
+        let data = serde_json::to_vec(&record).unwrap();
+        backend.put(&key, &data).await.unwrap();
+
+        // Directly inspect the raw DynamoDB item
+        let (pk, sk) = split_key(&key).unwrap();
+        let raw = backend
+            .client()
+            .get_item()
+            .table_name(backend.table_name())
+            .key("PK", AttributeValue::S(pk))
+            .key("SK", AttributeValue::S(sk))
+            .send()
+            .await
+            .expect("GetItem should succeed");
+
+        let item = raw.item().expect("item should exist");
+
+        // Verify expires_at attribute is absent
+        assert!(
+            item.get("expires_at").is_none(),
+            "expires_at attribute should be absent when TTL is None"
+        );
+    }
+}
