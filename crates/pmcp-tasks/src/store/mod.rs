@@ -18,17 +18,16 @@
 //! To create a store: `GenericTaskStore::new(backend)` and wrap in
 //! `Arc<dyn TaskStore>` for use with `TaskContext` and `TaskRouterImpl`.
 //!
+//! # Backends
+//!
+//! - [`InMemoryBackend`](memory::InMemoryBackend) -- Thread-safe in-memory
+//!   backend using `DashMap`. Used by [`InMemoryTaskStore`](memory::InMemoryTaskStore).
+//!
 //! # Supporting Types
 //!
 //! - [`StoreConfig`] - Configurable limits for variable size and TTL.
 //! - [`ListTasksOptions`] - Parameters for cursor-based task listing.
 //! - [`TaskPage`] - A page of task results with optional next cursor.
-//!
-//! # Legacy
-//!
-//! [`InMemoryTaskStore`](memory::InMemoryTaskStore) implements `TaskStore`
-//! directly (not via `GenericTaskStore`). It will be refactored to use
-//! `GenericTaskStore<InMemoryBackend>` in a future phase.
 
 pub mod backend;
 pub mod generic;

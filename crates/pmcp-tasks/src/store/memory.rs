@@ -1,22 +1,28 @@
-//! In-memory task store backed by [`DashMap`].
+//! In-memory storage backend and task store.
 //!
-//! [`InMemoryTaskStore`] provides a thread-safe, concurrent implementation
-//! of the [`TaskStore`] trait using `DashMap<String, TaskRecord>`. It is
-//! designed for development, testing, and single-process production servers
-//! that do not need durable persistence.
+//! [`InMemoryBackend`] provides a thread-safe [`StorageBackend`] implementation
+//! using `DashMap<String, (Vec<u8>, u64)>` for concurrent key-value storage.
+//! It is a dumb KV store with no domain logic.
+//!
+//! [`InMemoryTaskStore`] is a thin wrapper around
+//! [`GenericTaskStore<InMemoryBackend>`](crate::store::generic::GenericTaskStore)
+//! that preserves the existing zero-argument `new()` constructor, builder methods,
+//! and `Default` impl. All domain logic (state machine validation, owner isolation,
+//! variable merge, TTL enforcement, CAS-based mutations) is handled by
+//! `GenericTaskStore`.
 //!
 //! # Security
 //!
-//! Owner isolation is enforced structurally: every operation that takes an
-//! `owner_id` verifies that the record's owner matches. On mismatch, the
-//! store returns [`TaskError::NotFound`] -- never revealing that a task
-//! exists but belongs to someone else.
+//! Owner isolation is enforced structurally by `GenericTaskStore`: every
+//! operation that takes an `owner_id` verifies that the record's owner
+//! matches. On mismatch, the store returns [`TaskError::NotFound`] -- never
+//! revealing that a task exists but belongs to someone else.
 //!
 //! # Concurrency
 //!
-//! `DashMap` provides fine-grained locking at the shard level. Mutation
-//! operations use [`DashMap::get_mut`] which holds the entry lock for the
-//! duration of the update, ensuring atomic state transitions.
+//! `InMemoryBackend` uses `DashMap` for fine-grained shard-level locking.
+//! Mutation operations use CAS (`put_if_version`) through `GenericTaskStore`
+//! for optimistic concurrency control.
 //!
 //! # Examples
 //!
@@ -39,19 +45,192 @@ use serde_json::Value;
 
 use crate::domain::TaskRecord;
 use crate::error::TaskError;
-use crate::security::{TaskSecurityConfig, DEFAULT_LOCAL_OWNER};
+use crate::security::TaskSecurityConfig;
+use crate::store::backend::{StorageBackend, StorageError, VersionedRecord};
+use crate::store::generic::GenericTaskStore;
 use crate::types::task::TaskStatus;
 
 use super::{ListTasksOptions, StoreConfig, TaskPage, TaskStore};
 
-/// Thread-safe in-memory task store using [`DashMap`].
+// ---- InMemoryBackend: dumb KV store using DashMap ----
+
+/// Thread-safe in-memory storage backend using [`DashMap`].
 ///
-/// Implements all 11 [`TaskStore`] methods with:
-/// - Structural owner isolation (mismatch returns `NotFound`)
-/// - Configurable security limits via [`TaskSecurityConfig`]
-/// - Atomic state transitions within `DashMap` entry locks
-/// - Cursor-based pagination for task listing
-/// - TTL enforcement with hard reject (no silent clamping)
+/// Stores serialized task records as `(Vec<u8>, u64)` tuples where the
+/// `u64` is a monotonic version number starting at 1. Keys are composite
+/// strings in the format `{owner_id}:{task_id}`.
+///
+/// This backend contains **no domain logic**. All intelligence (state machine
+/// validation, owner isolation, variable merge, TTL enforcement) lives in
+/// [`GenericTaskStore`].
+///
+/// # Examples
+///
+/// ```
+/// use pmcp_tasks::store::memory::InMemoryBackend;
+/// use pmcp_tasks::store::generic::GenericTaskStore;
+/// use pmcp_tasks::security::TaskSecurityConfig;
+///
+/// let backend = InMemoryBackend::new();
+/// let store = GenericTaskStore::new(backend)
+///     .with_security(TaskSecurityConfig::default().with_allow_anonymous(true));
+/// ```
+#[derive(Debug)]
+pub struct InMemoryBackend {
+    data: DashMap<String, (Vec<u8>, u64)>,
+}
+
+impl InMemoryBackend {
+    /// Creates an empty in-memory backend.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pmcp_tasks::store::memory::InMemoryBackend;
+    ///
+    /// let backend = InMemoryBackend::new();
+    /// assert!(backend.is_empty());
+    /// ```
+    pub fn new() -> Self {
+        Self {
+            data: DashMap::new(),
+        }
+    }
+
+    /// Returns the number of records stored.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pmcp_tasks::store::memory::InMemoryBackend;
+    ///
+    /// let backend = InMemoryBackend::new();
+    /// assert_eq!(backend.len(), 0);
+    /// ```
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Returns `true` if the backend contains no records.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use pmcp_tasks::store::memory::InMemoryBackend;
+    ///
+    /// let backend = InMemoryBackend::new();
+    /// assert!(backend.is_empty());
+    /// ```
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+}
+
+impl Default for InMemoryBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl StorageBackend for InMemoryBackend {
+    async fn get(&self, key: &str) -> Result<VersionedRecord, StorageError> {
+        let entry = self.data.get(key).ok_or_else(|| StorageError::NotFound {
+            key: key.to_string(),
+        })?;
+        let (data, version) = entry.value();
+        Ok(VersionedRecord {
+            data: data.clone(),
+            version: *version,
+        })
+    }
+
+    async fn put(&self, key: &str, data: &[u8]) -> Result<u64, StorageError> {
+        let new_version = self.data.get(key).map_or(1, |entry| entry.value().1 + 1);
+        self.data
+            .insert(key.to_string(), (data.to_vec(), new_version));
+        Ok(new_version)
+    }
+
+    async fn put_if_version(
+        &self,
+        key: &str,
+        data: &[u8],
+        expected_version: u64,
+    ) -> Result<u64, StorageError> {
+        let mut entry = self
+            .data
+            .get_mut(key)
+            .ok_or_else(|| StorageError::NotFound {
+                key: key.to_string(),
+            })?;
+        let (ref _current_data, current_version) = *entry.value();
+        if current_version != expected_version {
+            return Err(StorageError::VersionConflict {
+                key: key.to_string(),
+                expected: expected_version,
+                actual: current_version,
+            });
+        }
+        let new_version = current_version + 1;
+        *entry.value_mut() = (data.to_vec(), new_version);
+        Ok(new_version)
+    }
+
+    async fn delete(&self, key: &str) -> Result<bool, StorageError> {
+        Ok(self.data.remove(key).is_some())
+    }
+
+    async fn list_by_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Vec<(String, VersionedRecord)>, StorageError> {
+        let results: Vec<(String, VersionedRecord)> = self
+            .data
+            .iter()
+            .filter(|entry| entry.key().starts_with(prefix))
+            .map(|entry| {
+                let (data, version) = entry.value();
+                (
+                    entry.key().clone(),
+                    VersionedRecord {
+                        data: data.clone(),
+                        version: *version,
+                    },
+                )
+            })
+            .collect();
+        Ok(results)
+    }
+
+    async fn cleanup_expired(&self) -> Result<usize, StorageError> {
+        let keys_to_remove: Vec<String> = self
+            .data
+            .iter()
+            .filter_map(|entry| {
+                let (data, _) = entry.value();
+                let record: TaskRecord = serde_json::from_slice(data).ok()?;
+                if record.is_expired() {
+                    Some(entry.key().clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for key in &keys_to_remove {
+            self.data.remove(key);
+        }
+        Ok(keys_to_remove.len())
+    }
+}
+
+// ---- InMemoryTaskStore: thin wrapper around GenericTaskStore<InMemoryBackend> ----
+
+/// Thread-safe in-memory task store using [`GenericTaskStore`] with [`InMemoryBackend`].
+///
+/// This is a thin wrapper that preserves the existing builder API while
+/// delegating all domain logic to `GenericTaskStore`. Implements all 11
+/// [`TaskStore`] methods via forwarding calls to the inner store.
 ///
 /// # Construction
 ///
@@ -72,14 +251,7 @@ use super::{ListTasksOptions, StoreConfig, TaskPage, TaskStore};
 /// ```
 #[derive(Debug)]
 pub struct InMemoryTaskStore {
-    /// Task storage keyed by task ID.
-    tasks: DashMap<String, TaskRecord>,
-    /// Storage-level configuration (variable size, TTL limits).
-    config: StoreConfig,
-    /// Owner-specific security configuration.
-    security: TaskSecurityConfig,
-    /// Default poll interval in milliseconds suggested to clients.
-    default_poll_interval: u64,
+    inner: GenericTaskStore<InMemoryBackend>,
 }
 
 impl InMemoryTaskStore {
@@ -99,10 +271,7 @@ impl InMemoryTaskStore {
     /// ```
     pub fn new() -> Self {
         Self {
-            tasks: DashMap::new(),
-            config: StoreConfig::default(),
-            security: TaskSecurityConfig::default(),
-            default_poll_interval: 5000,
+            inner: GenericTaskStore::new(InMemoryBackend::new()).with_poll_interval(5000),
         }
     }
 
@@ -121,7 +290,7 @@ impl InMemoryTaskStore {
     ///     });
     /// ```
     pub fn with_config(mut self, config: StoreConfig) -> Self {
-        self.config = config;
+        self.inner = self.inner.with_config(config);
         self
     }
 
@@ -138,7 +307,7 @@ impl InMemoryTaskStore {
     ///         .with_max_tasks_per_owner(25));
     /// ```
     pub fn with_security(mut self, security: TaskSecurityConfig) -> Self {
-        self.security = security;
+        self.inner = self.inner.with_security(security);
         self
     }
 
@@ -153,35 +322,17 @@ impl InMemoryTaskStore {
     ///     .with_poll_interval(3000);
     /// ```
     pub fn with_poll_interval(mut self, ms: u64) -> Self {
-        self.default_poll_interval = ms;
+        self.inner = self.inner.with_poll_interval(ms);
         self
     }
 
-    /// Checks if the given owner ID represents anonymous/local access.
-    fn is_anonymous_owner(owner_id: &str) -> bool {
-        owner_id.is_empty() || owner_id == DEFAULT_LOCAL_OWNER
-    }
-
-    /// Validates that the owner has permission to create tasks.
+    /// Returns a reference to the underlying backend.
     ///
-    /// Returns an error if anonymous access is disabled and the owner
-    /// is anonymous/local.
-    fn check_anonymous_access(&self, owner_id: &str) -> Result<(), TaskError> {
-        if !self.security.allow_anonymous && Self::is_anonymous_owner(owner_id) {
-            return Err(TaskError::StoreError(
-                "anonymous access is not allowed; configure OAuth or enable allow_anonymous"
-                    .to_string(),
-            ));
-        }
-        Ok(())
-    }
-
-    /// Counts the number of tasks owned by the given owner.
-    fn count_owner_tasks(&self, owner_id: &str) -> usize {
-        self.tasks
-            .iter()
-            .filter(|entry| entry.value().owner_id == owner_id)
-            .count()
+    /// Useful for test code that needs to inspect backend state (e.g., record
+    /// count, force-writing expired records).
+    #[cfg(test)]
+    pub fn backend(&self) -> &InMemoryBackend {
+        self.inner.backend()
     }
 }
 
@@ -191,92 +342,23 @@ impl Default for InMemoryTaskStore {
     }
 }
 
+// ---- TaskStore delegation impl ----
+
 #[async_trait]
 impl TaskStore for InMemoryTaskStore {
-    /// Creates a new task in the `Working` state.
-    ///
-    /// Enforces:
-    /// - Anonymous access check (if `allow_anonymous` is false)
-    /// - Max tasks per owner limit (hard reject, no auto-eviction)
-    /// - TTL maximum (hard reject, no silent clamping)
-    /// - Default TTL application when none provided
     async fn create(
         &self,
         owner_id: &str,
         request_method: &str,
         ttl: Option<u64>,
     ) -> Result<TaskRecord, TaskError> {
-        // Check anonymous access
-        self.check_anonymous_access(owner_id)?;
-
-        // Check max tasks per owner
-        let owner_task_count = self.count_owner_tasks(owner_id);
-        if owner_task_count >= self.security.max_tasks_per_owner {
-            return Err(TaskError::ResourceExhausted {
-                suggested_action: Some("Cancel or wait for existing tasks to expire".to_string()),
-            });
-        }
-
-        // Validate TTL against maximum (hard reject, no clamping)
-        if let (Some(requested_ttl), Some(max_ttl)) = (ttl, self.config.max_ttl_ms) {
-            if requested_ttl > max_ttl {
-                return Err(TaskError::StoreError(format!(
-                    "TTL {requested_ttl}ms exceeds maximum allowed {max_ttl}ms"
-                )));
-            }
-        }
-
-        // Apply default TTL if none provided
-        let effective_ttl = ttl.or(self.config.default_ttl_ms);
-
-        // Create the task record
-        let mut record = TaskRecord::new(
-            owner_id.to_string(),
-            request_method.to_string(),
-            effective_ttl,
-        );
-        record.task.poll_interval = Some(self.default_poll_interval);
-
-        // Insert into store
-        let task_id = record.task.task_id.clone();
-        self.tasks.insert(task_id, record.clone());
-
-        Ok(record)
+        self.inner.create(owner_id, request_method, ttl).await
     }
 
-    /// Retrieves a task by ID, scoped to the given owner.
-    ///
-    /// Returns the task even if expired (callers check `is_expired()`).
-    /// Owner mismatch returns `NotFound` for security.
     async fn get(&self, task_id: &str, owner_id: &str) -> Result<TaskRecord, TaskError> {
-        let entry = self.tasks.get(task_id).ok_or_else(|| TaskError::NotFound {
-            task_id: task_id.to_string(),
-        })?;
-
-        let record = entry.value();
-
-        // Structural owner isolation: mismatch looks like NotFound
-        if record.owner_id != owner_id {
-            tracing::warn!(
-                task_id = task_id,
-                expected_owner = owner_id,
-                actual_owner = record.owner_id,
-                "owner mismatch on task get (returning NotFound)"
-            );
-            return Err(TaskError::NotFound {
-                task_id: task_id.to_string(),
-            });
-        }
-
-        // Return record even if expired per locked decision.
-        // Expired tasks are readable; only mutation operations reject them.
-        Ok(record.clone())
+        self.inner.get(task_id, owner_id).await
     }
 
-    /// Transitions a task to a new status with atomic validation.
-    ///
-    /// Validates owner, expiry, and state machine transition within the
-    /// `DashMap` entry lock for atomicity.
     async fn update_status(
         &self,
         task_id: &str,
@@ -284,206 +366,33 @@ impl TaskStore for InMemoryTaskStore {
         new_status: TaskStatus,
         status_message: Option<String>,
     ) -> Result<TaskRecord, TaskError> {
-        let mut entry = self
-            .tasks
-            .get_mut(task_id)
-            .ok_or_else(|| TaskError::NotFound {
-                task_id: task_id.to_string(),
-            })?;
-
-        let record = entry.value_mut();
-
-        // Owner isolation
-        if record.owner_id != owner_id {
-            tracing::warn!(
-                task_id = task_id,
-                expected_owner = owner_id,
-                actual_owner = record.owner_id,
-                "owner mismatch on task update_status (returning NotFound)"
-            );
-            return Err(TaskError::NotFound {
-                task_id: task_id.to_string(),
-            });
-        }
-
-        // Reject mutations on expired tasks
-        if record.is_expired() {
-            return Err(TaskError::Expired {
-                task_id: task_id.to_string(),
-                expired_at: record.expires_at.map(|e| e.to_rfc3339()),
-            });
-        }
-
-        // Validate state machine transition
-        record
-            .task
-            .status
-            .validate_transition(task_id, &new_status)?;
-
-        // Apply transition atomically (within DashMap entry lock)
-        record.task.status = new_status;
-        record.task.status_message = status_message;
-        record.task.last_updated_at =
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-
-        Ok(record.clone())
+        self.inner
+            .update_status(task_id, owner_id, new_status, status_message)
+            .await
     }
 
-    /// Merges variables with null-deletion semantics and size validation.
-    ///
-    /// Uses a clone-check-commit pattern: merges on a clone first, checks
-    /// the serialized size, and only commits if within limits. This avoids
-    /// needing rollback on size violations.
     async fn set_variables(
         &self,
         task_id: &str,
         owner_id: &str,
         variables: HashMap<String, Value>,
     ) -> Result<TaskRecord, TaskError> {
-        let mut entry = self
-            .tasks
-            .get_mut(task_id)
-            .ok_or_else(|| TaskError::NotFound {
-                task_id: task_id.to_string(),
-            })?;
-
-        let record = entry.value_mut();
-
-        // Owner isolation
-        if record.owner_id != owner_id {
-            tracing::warn!(
-                task_id = task_id,
-                expected_owner = owner_id,
-                actual_owner = record.owner_id,
-                "owner mismatch on task set_variables (returning NotFound)"
-            );
-            return Err(TaskError::NotFound {
-                task_id: task_id.to_string(),
-            });
-        }
-
-        // Reject mutations on expired tasks
-        if record.is_expired() {
-            return Err(TaskError::Expired {
-                task_id: task_id.to_string(),
-                expired_at: record.expires_at.map(|e| e.to_rfc3339()),
-            });
-        }
-
-        // Clone-check-commit: merge on a clone first, validate size, then commit
-        let mut merged = record.variables.clone();
-        for (key, value) in &variables {
-            if value.is_null() {
-                merged.remove(key);
-            } else {
-                merged.insert(key.clone(), value.clone());
-            }
-        }
-
-        // Check merged size against limit
-        let serialized = serde_json::to_vec(&merged)
-            .map_err(|e| TaskError::StoreError(format!("failed to serialize variables: {e}")))?;
-
-        if serialized.len() > self.config.max_variable_size_bytes {
-            return Err(TaskError::VariableSizeExceeded {
-                limit_bytes: self.config.max_variable_size_bytes,
-                actual_bytes: serialized.len(),
-            });
-        }
-
-        // Commit the merged variables
-        record.variables = merged;
-        record.task.last_updated_at =
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-
-        Ok(record.clone())
+        self.inner.set_variables(task_id, owner_id, variables).await
     }
 
-    /// Stores the operation result for a task.
     async fn set_result(
         &self,
         task_id: &str,
         owner_id: &str,
         result: Value,
     ) -> Result<(), TaskError> {
-        let mut entry = self
-            .tasks
-            .get_mut(task_id)
-            .ok_or_else(|| TaskError::NotFound {
-                task_id: task_id.to_string(),
-            })?;
-
-        let record = entry.value_mut();
-
-        // Owner isolation
-        if record.owner_id != owner_id {
-            tracing::warn!(
-                task_id = task_id,
-                expected_owner = owner_id,
-                actual_owner = record.owner_id,
-                "owner mismatch on task set_result (returning NotFound)"
-            );
-            return Err(TaskError::NotFound {
-                task_id: task_id.to_string(),
-            });
-        }
-
-        // Reject mutations on expired tasks
-        if record.is_expired() {
-            return Err(TaskError::Expired {
-                task_id: task_id.to_string(),
-                expired_at: record.expires_at.map(|e| e.to_rfc3339()),
-            });
-        }
-
-        record.result = Some(result);
-        record.task.last_updated_at =
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-
-        Ok(())
+        self.inner.set_result(task_id, owner_id, result).await
     }
 
-    /// Retrieves the stored result for a completed task.
-    ///
-    /// Returns `NotReady` if the task has not reached a terminal state.
     async fn get_result(&self, task_id: &str, owner_id: &str) -> Result<Value, TaskError> {
-        let entry = self.tasks.get(task_id).ok_or_else(|| TaskError::NotFound {
-            task_id: task_id.to_string(),
-        })?;
-
-        let record = entry.value();
-
-        // Owner isolation
-        if record.owner_id != owner_id {
-            tracing::warn!(
-                task_id = task_id,
-                expected_owner = owner_id,
-                actual_owner = record.owner_id,
-                "owner mismatch on task get_result (returning NotFound)"
-            );
-            return Err(TaskError::NotFound {
-                task_id: task_id.to_string(),
-            });
-        }
-
-        // Must be in a terminal state to retrieve result
-        if !record.task.status.is_terminal() {
-            return Err(TaskError::NotReady {
-                task_id: task_id.to_string(),
-                current_status: record.task.status,
-            });
-        }
-
-        record.result.clone().ok_or_else(|| TaskError::NotReady {
-            task_id: task_id.to_string(),
-            current_status: record.task.status,
-        })
+        self.inner.get_result(task_id, owner_id).await
     }
 
-    /// Atomically transitions to a terminal status AND stores the result.
-    ///
-    /// Both the status transition and result storage happen within a single
-    /// `DashMap` entry lock, guaranteeing atomicity.
     async fn complete_with_result(
         &self,
         task_id: &str,
@@ -492,125 +401,32 @@ impl TaskStore for InMemoryTaskStore {
         status_message: Option<String>,
         result: Value,
     ) -> Result<TaskRecord, TaskError> {
-        let mut entry = self
-            .tasks
-            .get_mut(task_id)
-            .ok_or_else(|| TaskError::NotFound {
-                task_id: task_id.to_string(),
-            })?;
-
-        let record = entry.value_mut();
-
-        // Owner isolation
-        if record.owner_id != owner_id {
-            tracing::warn!(
-                task_id = task_id,
-                expected_owner = owner_id,
-                actual_owner = record.owner_id,
-                "owner mismatch on task complete_with_result (returning NotFound)"
-            );
-            return Err(TaskError::NotFound {
-                task_id: task_id.to_string(),
-            });
-        }
-
-        // Reject mutations on expired tasks
-        if record.is_expired() {
-            return Err(TaskError::Expired {
-                task_id: task_id.to_string(),
-                expired_at: record.expires_at.map(|e| e.to_rfc3339()),
-            });
-        }
-
-        // Validate state machine transition
-        record.task.status.validate_transition(task_id, &status)?;
-
-        // Atomically apply status + result (within DashMap entry lock)
-        record.task.status = status;
-        record.task.status_message = status_message;
-        record.result = Some(result);
-        record.task.last_updated_at =
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-
-        Ok(record.clone())
-    }
-
-    /// Lists tasks for an owner with cursor-based pagination.
-    ///
-    /// Results are sorted by creation time (newest first). The cursor is
-    /// the task ID of the last item in the previous page.
-    async fn list(&self, options: ListTasksOptions) -> Result<TaskPage, TaskError> {
-        // Collect and filter by owner
-        let mut tasks: Vec<TaskRecord> = self
-            .tasks
-            .iter()
-            .filter(|entry| entry.value().owner_id == options.owner_id)
-            .map(|entry| entry.value().clone())
-            .collect();
-
-        // Sort by creation time, newest first
-        tasks.sort_by(|a, b| b.task.created_at.cmp(&a.task.created_at));
-
-        // Cursor-based pagination: cursor = task_id of last item in previous page
-        let start_idx = if let Some(ref cursor) = options.cursor {
-            tasks
-                .iter()
-                .position(|t| t.task.task_id == *cursor)
-                .map_or(0, |i| i + 1)
-        } else {
-            0
-        };
-
-        let limit = options.limit.unwrap_or(50);
-        let page_tasks: Vec<TaskRecord> = tasks
-            .get(start_idx..)
-            .unwrap_or(&[])
-            .iter()
-            .take(limit)
-            .cloned()
-            .collect();
-
-        let next_cursor = if start_idx + limit < tasks.len() {
-            page_tasks.last().map(|t| t.task.task_id.clone())
-        } else {
-            None
-        };
-
-        Ok(TaskPage {
-            tasks: page_tasks,
-            next_cursor,
-        })
-    }
-
-    /// Cancels a non-terminal task.
-    ///
-    /// Delegates to [`update_status`](TaskStore::update_status) with
-    /// `TaskStatus::Cancelled`.
-    async fn cancel(&self, task_id: &str, owner_id: &str) -> Result<TaskRecord, TaskError> {
-        self.update_status(task_id, owner_id, TaskStatus::Cancelled, None)
+        self.inner
+            .complete_with_result(task_id, owner_id, status, status_message, result)
             .await
     }
 
-    /// Removes expired tasks from storage.
-    ///
-    /// Uses [`DashMap::retain`] for atomic per-entry removal. Returns the
-    /// count of tasks removed.
-    async fn cleanup_expired(&self) -> Result<usize, TaskError> {
-        let before = self.tasks.len();
-        self.tasks.retain(|_, record| !record.is_expired());
-        let after = self.tasks.len();
-        Ok(before - after)
+    async fn list(&self, options: ListTasksOptions) -> Result<TaskPage, TaskError> {
+        self.inner.list(options).await
     }
 
-    /// Returns a reference to the store's configuration.
+    async fn cancel(&self, task_id: &str, owner_id: &str) -> Result<TaskRecord, TaskError> {
+        self.inner.cancel(task_id, owner_id).await
+    }
+
+    async fn cleanup_expired(&self) -> Result<usize, TaskError> {
+        self.inner.cleanup_expired().await
+    }
+
     fn config(&self) -> &StoreConfig {
-        &self.config
+        self.inner.config()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::backend::make_key;
     use serde_json::json;
 
     /// Helper: creates a store with anonymous access enabled.
@@ -628,20 +444,49 @@ mod tests {
         )
     }
 
+    /// Helper: forces a task to be expired by rewriting the backend record
+    /// with a past `expires_at` timestamp.
+    async fn force_expire(store: &InMemoryTaskStore, owner_id: &str, task_id: &str) {
+        let key = make_key(owner_id, task_id);
+        let versioned = store.backend().get(&key).await.unwrap();
+        let mut record: TaskRecord = serde_json::from_slice(&versioned.data).unwrap();
+        record.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(10));
+        let bytes = serde_json::to_vec(&record).unwrap();
+        store
+            .backend()
+            .put_if_version(&key, &bytes, versioned.version)
+            .await
+            .unwrap();
+    }
+
     // --- Constructor and builder tests ---
 
     #[test]
     fn new_creates_empty_store() {
         let store = InMemoryTaskStore::new();
-        assert_eq!(store.tasks.len(), 0);
-        assert_eq!(store.default_poll_interval, 5000);
+        assert!(store.backend().is_empty());
     }
 
     #[test]
     fn default_delegates_to_new() {
         let store = InMemoryTaskStore::default();
-        assert_eq!(store.tasks.len(), 0);
-        assert_eq!(store.default_poll_interval, 5000);
+        assert!(store.backend().is_empty());
+    }
+
+    #[tokio::test]
+    async fn new_creates_store_with_5000ms_poll_interval() {
+        let store = InMemoryTaskStore::new()
+            .with_security(TaskSecurityConfig::default().with_allow_anonymous(true));
+        let record = store.create("owner-1", "tools/call", None).await.unwrap();
+        assert_eq!(record.task.poll_interval, Some(5000));
+    }
+
+    #[tokio::test]
+    async fn default_creates_store_with_5000ms_poll_interval() {
+        let store = InMemoryTaskStore::default()
+            .with_security(TaskSecurityConfig::default().with_allow_anonymous(true));
+        let record = store.create("owner-1", "tools/call", None).await.unwrap();
+        assert_eq!(record.task.poll_interval, Some(5000));
     }
 
     #[test]
@@ -650,20 +495,37 @@ mod tests {
             max_variable_size_bytes: 512_000,
             ..StoreConfig::default()
         });
-        assert_eq!(store.config.max_variable_size_bytes, 512_000);
+        assert_eq!(store.config().max_variable_size_bytes, 512_000);
     }
 
-    #[test]
-    fn with_security_sets_security() {
-        let store = InMemoryTaskStore::new()
-            .with_security(TaskSecurityConfig::default().with_max_tasks_per_owner(42));
-        assert_eq!(store.security.max_tasks_per_owner, 42);
+    #[tokio::test]
+    async fn with_security_sets_security() {
+        // Verify the security config takes effect by checking behavior:
+        // set max_tasks_per_owner to 2, create 2 tasks, third should fail
+        let store = InMemoryTaskStore::new().with_security(
+            TaskSecurityConfig::default()
+                .with_max_tasks_per_owner(2)
+                .with_allow_anonymous(true),
+        );
+        store.create("owner-1", "tools/call", None).await.unwrap();
+        store.create("owner-1", "tools/call", None).await.unwrap();
+        let result = store.create("owner-1", "tools/call", None).await;
+        assert!(matches!(result, Err(TaskError::ResourceExhausted { .. })));
     }
 
     #[test]
     fn with_poll_interval_sets_interval() {
-        let store = InMemoryTaskStore::new().with_poll_interval(3000);
-        assert_eq!(store.default_poll_interval, 3000);
+        // Verified via create in the async test below
+        let _store = InMemoryTaskStore::new().with_poll_interval(3000);
+    }
+
+    #[tokio::test]
+    async fn with_poll_interval_applied_to_created_tasks() {
+        let store = InMemoryTaskStore::new()
+            .with_poll_interval(3000)
+            .with_security(TaskSecurityConfig::default().with_allow_anonymous(true));
+        let record = store.create("owner-1", "tools/call", None).await.unwrap();
+        assert_eq!(record.task.poll_interval, Some(3000));
     }
 
     // --- Create tests ---
@@ -798,9 +660,7 @@ mod tests {
             .unwrap();
 
         // Force the task to be expired
-        let mut entry = store.tasks.get_mut(&created.task.task_id).unwrap();
-        entry.value_mut().expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(10));
-        drop(entry);
+        force_expire(&store, "owner-1", &created.task.task_id).await;
 
         // Get should still succeed (expired tasks are readable)
         let fetched = store.get(&created.task.task_id, "owner-1").await.unwrap();
@@ -856,9 +716,7 @@ mod tests {
             .unwrap();
 
         // Force expiry
-        let mut entry = store.tasks.get_mut(&created.task.task_id).unwrap();
-        entry.value_mut().expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(10));
-        drop(entry);
+        force_expire(&store, "owner-1", &created.task.task_id).await;
 
         let result = store
             .update_status(
@@ -1007,9 +865,7 @@ mod tests {
             .unwrap();
 
         // Force expiry
-        let mut entry = store.tasks.get_mut(&created.task.task_id).unwrap();
-        entry.value_mut().expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(10));
-        drop(entry);
+        force_expire(&store, "owner-1", &created.task.task_id).await;
 
         let mut vars = HashMap::new();
         vars.insert("key".to_string(), json!("val"));
@@ -1293,13 +1149,11 @@ mod tests {
             .unwrap();
 
         // Force expiry
-        let mut entry = store.tasks.get_mut(&created.task.task_id).unwrap();
-        entry.value_mut().expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(10));
-        drop(entry);
+        force_expire(&store, "owner-1", &created.task.task_id).await;
 
         let removed = store.cleanup_expired().await.unwrap();
         assert_eq!(removed, 1);
-        assert_eq!(store.tasks.len(), 0);
+        assert_eq!(store.backend().len(), 0);
     }
 
     #[tokio::test]
@@ -1311,7 +1165,7 @@ mod tests {
             .unwrap();
         let removed = store.cleanup_expired().await.unwrap();
         assert_eq!(removed, 0);
-        assert_eq!(store.tasks.len(), 1);
+        assert_eq!(store.backend().len(), 1);
     }
 
     // --- Config accessor test ---

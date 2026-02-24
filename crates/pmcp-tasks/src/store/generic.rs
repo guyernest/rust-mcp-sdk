@@ -165,9 +165,7 @@ impl<B: StorageBackend> GenericTaskStore<B> {
             .map_err(|e| Self::map_storage_error(e, ""))?;
         if owner_records.len() >= self.security.max_tasks_per_owner {
             return Err(TaskError::ResourceExhausted {
-                suggested_action: Some(
-                    "Cancel or wait for existing tasks to expire".to_string(),
-                ),
+                suggested_action: Some("Cancel or wait for existing tasks to expire".to_string()),
             });
         }
 
@@ -604,6 +602,11 @@ impl<B: StorageBackend> GenericTaskStore<B> {
     pub fn config(&self) -> &StoreConfig {
         &self.config
     }
+
+    /// Returns a reference to the underlying storage backend.
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
 }
 
 #[cfg(test)]
@@ -649,10 +652,7 @@ mod tests {
         }
 
         async fn put(&self, key: &str, data: &[u8]) -> Result<u64, StorageError> {
-            let new_version = self
-                .data
-                .get(key)
-                .map_or(1, |entry| entry.value().1 + 1);
+            let new_version = self.data.get(key).map_or(1, |entry| entry.value().1 + 1);
             self.data
                 .insert(key.to_string(), (data.to_vec(), new_version));
             Ok(new_version)
@@ -665,9 +665,12 @@ mod tests {
             expected_version: u64,
         ) -> Result<u64, StorageError> {
             // Use entry API for atomic CAS
-            let mut entry = self.data.get_mut(key).ok_or_else(|| StorageError::NotFound {
-                key: key.to_string(),
-            })?;
+            let mut entry = self
+                .data
+                .get_mut(key)
+                .ok_or_else(|| StorageError::NotFound {
+                    key: key.to_string(),
+                })?;
             let (ref current_data, current_version) = *entry.value();
             let _ = current_data;
             if current_version != expected_version {
@@ -876,12 +879,7 @@ mod tests {
             .await
             .unwrap();
         let result = store
-            .update_status(
-                &created.task.task_id,
-                "owner-1",
-                TaskStatus::Working,
-                None,
-            )
+            .update_status(&created.task.task_id, "owner-1", TaskStatus::Working, None)
             .await;
         assert!(matches!(result, Err(TaskError::InvalidTransition { .. })));
     }
@@ -990,9 +988,7 @@ mod tests {
             })
             .with_security(TaskSecurityConfig::default().with_allow_anonymous(true));
 
-        let result = store
-            .create("owner-1", "tools/call", Some(120_000))
-            .await;
+        let result = store.create("owner-1", "tools/call", Some(120_000)).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("TTL"));
     }
@@ -1187,7 +1183,8 @@ mod tests {
         // Force the record to be expired by rewriting with past expiry
         let key = make_key("owner-1", &created.task.task_id);
         let versioned = store.backend.get(&key).await.unwrap();
-        let mut record = GenericTaskStore::<TestBackend>::deserialize_record(&versioned.data).unwrap();
+        let mut record =
+            GenericTaskStore::<TestBackend>::deserialize_record(&versioned.data).unwrap();
         record.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(10));
         let bytes = GenericTaskStore::<TestBackend>::serialize_record(&record).unwrap();
         store
@@ -1205,7 +1202,10 @@ mod tests {
     #[tokio::test]
     async fn serialization_round_trip() {
         let store = test_store();
-        let created = store.create("owner-1", "tools/call", Some(60_000)).await.unwrap();
+        let created = store
+            .create("owner-1", "tools/call", Some(60_000))
+            .await
+            .unwrap();
 
         // Set some variables
         let mut vars = HashMap::new();
@@ -1309,7 +1309,8 @@ mod tests {
         // Force expiry by rewriting
         let key = make_key("owner-1", &created.task.task_id);
         let versioned = store.backend.get(&key).await.unwrap();
-        let mut record = GenericTaskStore::<TestBackend>::deserialize_record(&versioned.data).unwrap();
+        let mut record =
+            GenericTaskStore::<TestBackend>::deserialize_record(&versioned.data).unwrap();
         record.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(10));
         let bytes = GenericTaskStore::<TestBackend>::serialize_record(&record).unwrap();
         store
@@ -1327,5 +1328,57 @@ mod tests {
             )
             .await;
         assert!(matches!(result, Err(TaskError::Expired { .. })));
+    }
+
+    // ---- Type-erasure test: GenericTaskStore as Arc<dyn TaskStore> ----
+
+    #[tokio::test]
+    async fn generic_task_store_as_dyn_task_store() {
+        use crate::store::TaskStore;
+
+        let backend = TestBackend::new();
+        let store = GenericTaskStore::new(backend)
+            .with_security(TaskSecurityConfig::default().with_allow_anonymous(true));
+        let dyn_store: Arc<dyn TaskStore> = Arc::new(store);
+
+        // Use through trait interface
+        let record = dyn_store
+            .create("owner", "tools/call", Some(60_000))
+            .await
+            .unwrap();
+        let fetched = dyn_store.get(&record.task.task_id, "owner").await.unwrap();
+        assert_eq!(fetched.task.task_id, record.task.task_id);
+
+        // Set variables through trait
+        let mut vars = HashMap::new();
+        vars.insert("key".to_string(), json!("value"));
+        let updated = dyn_store
+            .set_variables(&record.task.task_id, "owner", vars)
+            .await
+            .unwrap();
+        assert_eq!(updated.variables.get("key").unwrap(), &json!("value"));
+
+        // Complete through trait
+        let completed = dyn_store
+            .complete_with_result(
+                &record.task.task_id,
+                "owner",
+                TaskStatus::Completed,
+                None,
+                json!({"done": true}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(completed.task.status, TaskStatus::Completed);
+
+        // Get result through trait
+        let result = dyn_store
+            .get_result(&record.task.task_id, "owner")
+            .await
+            .unwrap();
+        assert_eq!(result, json!({"done": true}));
+
+        // Config through trait
+        assert_eq!(dyn_store.config().max_variable_size_bytes, 1_048_576);
     }
 }
