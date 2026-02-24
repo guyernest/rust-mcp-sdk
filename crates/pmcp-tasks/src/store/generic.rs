@@ -613,134 +613,20 @@ impl<B: StorageBackend> GenericTaskStore<B> {
 mod tests {
     use super::*;
     use crate::store::backend::VersionedRecord;
+    use crate::store::memory::InMemoryBackend;
     use async_trait::async_trait;
-    use dashmap::DashMap;
     use serde_json::json;
     use std::sync::Arc;
 
-    // ---- TestBackend: minimal StorageBackend for testing ----
-
-    /// Minimal in-memory backend for testing GenericTaskStore logic.
-    ///
-    /// Uses `DashMap` for thread-safe storage. NOT the full `InMemoryBackend`
-    /// (which will be built in Phase 10) -- just enough to exercise
-    /// `GenericTaskStore` domain operations.
-    #[derive(Debug)]
-    struct TestBackend {
-        data: DashMap<String, (Vec<u8>, u64)>,
-    }
-
-    impl TestBackend {
-        fn new() -> Self {
-            Self {
-                data: DashMap::new(),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl StorageBackend for TestBackend {
-        async fn get(&self, key: &str) -> Result<VersionedRecord, StorageError> {
-            let entry = self.data.get(key).ok_or_else(|| StorageError::NotFound {
-                key: key.to_string(),
-            })?;
-            let (data, version) = entry.value();
-            Ok(VersionedRecord {
-                data: data.clone(),
-                version: *version,
-            })
-        }
-
-        async fn put(&self, key: &str, data: &[u8]) -> Result<u64, StorageError> {
-            let new_version = self.data.get(key).map_or(1, |entry| entry.value().1 + 1);
-            self.data
-                .insert(key.to_string(), (data.to_vec(), new_version));
-            Ok(new_version)
-        }
-
-        async fn put_if_version(
-            &self,
-            key: &str,
-            data: &[u8],
-            expected_version: u64,
-        ) -> Result<u64, StorageError> {
-            // Use entry API for atomic CAS
-            let mut entry = self
-                .data
-                .get_mut(key)
-                .ok_or_else(|| StorageError::NotFound {
-                    key: key.to_string(),
-                })?;
-            let (ref current_data, current_version) = *entry.value();
-            let _ = current_data;
-            if current_version != expected_version {
-                return Err(StorageError::VersionConflict {
-                    key: key.to_string(),
-                    expected: expected_version,
-                    actual: current_version,
-                });
-            }
-            let new_version = current_version + 1;
-            *entry.value_mut() = (data.to_vec(), new_version);
-            Ok(new_version)
-        }
-
-        async fn delete(&self, key: &str) -> Result<bool, StorageError> {
-            Ok(self.data.remove(key).is_some())
-        }
-
-        async fn list_by_prefix(
-            &self,
-            prefix: &str,
-        ) -> Result<Vec<(String, VersionedRecord)>, StorageError> {
-            let results: Vec<(String, VersionedRecord)> = self
-                .data
-                .iter()
-                .filter(|entry| entry.key().starts_with(prefix))
-                .map(|entry| {
-                    let (data, version) = entry.value();
-                    (
-                        entry.key().clone(),
-                        VersionedRecord {
-                            data: data.clone(),
-                            version: *version,
-                        },
-                    )
-                })
-                .collect();
-            Ok(results)
-        }
-
-        async fn cleanup_expired(&self) -> Result<usize, StorageError> {
-            let keys_to_remove: Vec<String> = self
-                .data
-                .iter()
-                .filter_map(|entry| {
-                    let (data, _) = entry.value();
-                    let record: TaskRecord = serde_json::from_slice(data).ok()?;
-                    if record.is_expired() {
-                        Some(entry.key().clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            for key in &keys_to_remove {
-                self.data.remove(key);
-            }
-            Ok(keys_to_remove.len())
-        }
-    }
-
     /// Helper: creates a store with anonymous access enabled.
-    fn test_store() -> GenericTaskStore<TestBackend> {
-        GenericTaskStore::new(TestBackend::new())
+    fn test_store() -> GenericTaskStore<InMemoryBackend> {
+        GenericTaskStore::new(InMemoryBackend::new())
             .with_security(TaskSecurityConfig::default().with_allow_anonymous(true))
     }
 
     /// Helper: creates a store with a specific max tasks limit.
-    fn store_with_max_tasks(max: usize) -> GenericTaskStore<TestBackend> {
-        GenericTaskStore::new(TestBackend::new()).with_security(
+    fn store_with_max_tasks(max: usize) -> GenericTaskStore<InMemoryBackend> {
+        GenericTaskStore::new(InMemoryBackend::new()).with_security(
             TaskSecurityConfig::default()
                 .with_max_tasks_per_owner(max)
                 .with_allow_anonymous(true),
@@ -794,7 +680,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_rejects_anonymous_when_disabled() {
-        let store = GenericTaskStore::new(TestBackend::new()); // allow_anonymous = false
+        let store = GenericTaskStore::new(InMemoryBackend::new()); // allow_anonymous = false
         let result = store.create("local", "tools/call", None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("anonymous access"));
@@ -917,7 +803,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_variables_size_exceeded() {
-        let store = GenericTaskStore::new(TestBackend::new())
+        let store = GenericTaskStore::new(InMemoryBackend::new())
             .with_config(StoreConfig {
                 max_variable_size_bytes: 100,
                 ..StoreConfig::default()
@@ -957,7 +843,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_variables_long_string_rejected() {
-        let store = GenericTaskStore::new(TestBackend::new())
+        let store = GenericTaskStore::new(InMemoryBackend::new())
             .with_config(StoreConfig {
                 max_string_length: 100,
                 ..StoreConfig::default()
@@ -981,7 +867,7 @@ mod tests {
 
     #[tokio::test]
     async fn ttl_rejection_not_clamping() {
-        let store = GenericTaskStore::new(TestBackend::new())
+        let store = GenericTaskStore::new(InMemoryBackend::new())
             .with_config(StoreConfig {
                 max_ttl_ms: Some(60_000),
                 ..StoreConfig::default()
@@ -997,7 +883,7 @@ mod tests {
 
     #[tokio::test]
     async fn cas_conflict_returns_concurrent_modification() {
-        let backend = Arc::new(TestBackend::new());
+        let backend = Arc::new(InMemoryBackend::new());
         let store = GenericTaskStore {
             backend: CasConflictBackend {
                 inner: backend.clone(),
@@ -1027,7 +913,7 @@ mod tests {
     /// Backend wrapper that makes put_if_version always fail with VersionConflict.
     #[derive(Debug)]
     struct CasConflictBackend {
-        inner: Arc<TestBackend>,
+        inner: Arc<InMemoryBackend>,
     }
 
     #[async_trait]
@@ -1184,9 +1070,9 @@ mod tests {
         let key = make_key("owner-1", &created.task.task_id);
         let versioned = store.backend.get(&key).await.unwrap();
         let mut record =
-            GenericTaskStore::<TestBackend>::deserialize_record(&versioned.data).unwrap();
+            GenericTaskStore::<InMemoryBackend>::deserialize_record(&versioned.data).unwrap();
         record.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(10));
-        let bytes = GenericTaskStore::<TestBackend>::serialize_record(&record).unwrap();
+        let bytes = GenericTaskStore::<InMemoryBackend>::serialize_record(&record).unwrap();
         store
             .backend
             .put_if_version(&key, &bytes, versioned.version)
@@ -1274,7 +1160,7 @@ mod tests {
 
     #[test]
     fn config_returns_store_config() {
-        let store = GenericTaskStore::new(TestBackend::new()).with_config(StoreConfig {
+        let store = GenericTaskStore::new(InMemoryBackend::new()).with_config(StoreConfig {
             max_variable_size_bytes: 999,
             ..StoreConfig::default()
         });
@@ -1310,9 +1196,9 @@ mod tests {
         let key = make_key("owner-1", &created.task.task_id);
         let versioned = store.backend.get(&key).await.unwrap();
         let mut record =
-            GenericTaskStore::<TestBackend>::deserialize_record(&versioned.data).unwrap();
+            GenericTaskStore::<InMemoryBackend>::deserialize_record(&versioned.data).unwrap();
         record.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(10));
-        let bytes = GenericTaskStore::<TestBackend>::serialize_record(&record).unwrap();
+        let bytes = GenericTaskStore::<InMemoryBackend>::serialize_record(&record).unwrap();
         store
             .backend
             .put_if_version(&key, &bytes, versioned.version)
@@ -1336,7 +1222,7 @@ mod tests {
     async fn generic_task_store_as_dyn_task_store() {
         use crate::store::TaskStore;
 
-        let backend = TestBackend::new();
+        let backend = InMemoryBackend::new();
         let store = GenericTaskStore::new(backend)
             .with_security(TaskSecurityConfig::default().with_allow_anonymous(true));
         let dyn_store: Arc<dyn TaskStore> = Arc::new(store);
