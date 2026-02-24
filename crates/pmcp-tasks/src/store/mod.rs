@@ -18,12 +18,15 @@
 //! - `InMemoryTaskStore` (in `memory` submodule) - Thread-safe in-memory backend using DashMap.
 //! - DynamoDB backend (Phase 4)
 
+pub mod backend;
 pub mod memory;
 
 use std::collections::HashMap;
 
 use async_trait::async_trait;
 use serde_json::Value;
+
+pub use backend::{StorageBackend, StorageError, VersionedRecord};
 
 use crate::domain::TaskRecord;
 use crate::error::TaskError;
