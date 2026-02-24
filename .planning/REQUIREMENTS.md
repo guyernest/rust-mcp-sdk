@@ -9,13 +9,13 @@ Requirements for the MCP Apps Developer Experience milestone. Each maps to roadm
 
 ### Preview
 
-- [ ] **PREV-01**: Developer can preview widget in iframe rendered from MCP resource URI via `cargo pmcp preview`
+- [x] **PREV-01**: Developer can preview widget in iframe rendered from MCP resource URI via `cargo pmcp preview`
 - [x] **PREV-02**: Widget `window.mcpBridge.callTool()` calls route to real MCP server through preview proxy
 - [x] **PREV-03**: MCP proxy initializes session once and reuses across all subsequent requests
 - [x] **PREV-04**: Preview fetches widget HTML via `resources/read` proxy call to MCP server
-- [ ] **PREV-05**: DevTools panel updates in real time when bridge calls are made
-- [ ] **PREV-06**: Connection status indicator shows connected/disconnected state
-- [ ] **PREV-07**: Resource picker shows multiple UI resources when server exposes more than one
+- [x] **PREV-05**: DevTools panel updates in real time when bridge calls are made
+- [x] **PREV-06**: Connection status indicator shows connected/disconnected state
+- [x] **PREV-07**: Resource picker shows multiple UI resources when server exposes more than one
 
 ### WASM Bridge
 
@@ -96,13 +96,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PREV-01 | Phase 14 | Pending |
+| PREV-01 | Phase 14 | Complete |
 | PREV-02 | Phase 14 | Complete |
 | PREV-03 | Phase 14 | Complete |
 | PREV-04 | Phase 14 | Complete |
-| PREV-05 | Phase 14 | Pending |
-| PREV-06 | Phase 14 | Pending |
-| PREV-07 | Phase 14 | Pending |
+| PREV-05 | Phase 14 | Complete |
+| PREV-06 | Phase 14 | Complete |
+| PREV-07 | Phase 14 | Complete |
 | WASM-01 | Phase 15 | Pending |
 | WASM-02 | Phase 15 | Pending |
 | WASM-03 | Phase 15 | Pending |

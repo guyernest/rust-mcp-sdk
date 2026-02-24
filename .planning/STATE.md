@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Developers can author, preview, test, and publish MCP Apps with rich UI widgets entirely from the Rust toolchain.
-**Current focus:** Milestone v1.3 -- MCP Apps Developer Experience (Phase 14 in progress)
+**Current focus:** Milestone v1.3 -- MCP Apps Developer Experience (Phase 14 complete, ready for Phase 15)
 
 ## Current Position
 
 Milestone: v1.3 MCP Apps Developer Experience
-Phase: 14 of 19 (Preview Bridge Infrastructure)
-Plan: 1 of 2 complete
-Status: Executing
-Last activity: 2026-02-24 -- Completed 14-01 (preview bridge backend: session persistence, resource proxy, API routes)
+Phase: 14 of 19 (Preview Bridge Infrastructure) -- COMPLETE
+Plan: 2 of 2 complete
+Status: Phase Complete
+Last activity: 2026-02-24 -- Completed 14-02 (preview UI: resource picker, auto-load, DevTools enhancements, connection status)
 
-Progress: [=========================..........] 72% (13/19 phases across all milestones; 0/6 in v1.3)
+Progress: [==========================.........] 74% (14/19 phases across all milestones; 1/6 in v1.3)
 
 ## Shipped Milestones
 
@@ -28,8 +28,8 @@ Progress: [=========================..........] 72% (13/19 phases across all mil
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 29 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 1)
-- v1.3 plans completed: 1
+- Total plans completed: 31 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 3)
+- v1.3 plans completed: 3
 
 ## Accumulated Context
 
@@ -42,6 +42,9 @@ Recent decisions affecting current work:
 - Extract shared library after proving: Build two independent bridge implementations (proxy + WASM) before extracting widget-runtime.js to ensure the abstraction is correct
 - Used RwLock<Option<SessionInfo>> instead of OnceCell for resettable session support (reconnect button requires reset capability)
 - UI resource filtering done in handler layer, not proxy layer (proxy returns all resources; handler filters for HTML MIME types)
+- Used native HTML details/summary for expandable bridge call entries (no JS toggle library needed)
+- Resource picker shows label for single resource, clickable list for multiple (avoids unnecessary dropdown)
+- Badge count auto-clears when Network tab is selected
 
 ### Pending Todos
 
@@ -57,5 +60,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Completed 14-01-PLAN.md (preview bridge backend)
-Resume: Execute 14-02-PLAN.md (frontend: resource picker, auto-load, DevTools enhancements)
+Stopped at: Completed 14-02-PLAN.md (preview UI: resource picker, auto-load, DevTools enhancements)
+Resume: Phase 14 complete. Start Phase 15 (WASM Bridge) planning or execution.
