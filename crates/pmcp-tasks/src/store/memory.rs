@@ -424,6 +424,248 @@ impl TaskStore for InMemoryTaskStore {
 }
 
 #[cfg(test)]
+mod backend_tests {
+    use super::*;
+    use crate::store::backend::{StorageBackend, StorageError};
+
+    // ---- get tests ----
+
+    #[tokio::test]
+    async fn get_missing_key_returns_not_found() {
+        let backend = InMemoryBackend::new();
+        let result = backend.get("nonexistent").await;
+        assert!(
+            matches!(&result, Err(StorageError::NotFound { key }) if key == "nonexistent"),
+            "expected NotFound, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_returns_stored_data() {
+        let backend = InMemoryBackend::new();
+        let data = b"hello world";
+        let version = backend.put("key-1", data).await.unwrap();
+
+        let record = backend.get("key-1").await.unwrap();
+        assert_eq!(record.data, data);
+        assert_eq!(record.version, version);
+    }
+
+    // ---- put tests ----
+
+    #[tokio::test]
+    async fn put_new_key_returns_version_1() {
+        let backend = InMemoryBackend::new();
+        let version = backend.put("key-1", b"data").await.unwrap();
+        assert_eq!(version, 1);
+    }
+
+    #[tokio::test]
+    async fn put_existing_key_increments_version() {
+        let backend = InMemoryBackend::new();
+        let v1 = backend.put("key-1", b"first").await.unwrap();
+        let v2 = backend.put("key-1", b"second").await.unwrap();
+        assert_eq!(v1, 1);
+        assert_eq!(v2, 2);
+
+        let record = backend.get("key-1").await.unwrap();
+        assert_eq!(record.data, b"second");
+        assert_eq!(record.version, 2);
+    }
+
+    #[tokio::test]
+    async fn put_overwrites_data() {
+        let backend = InMemoryBackend::new();
+        backend.put("key-1", b"original").await.unwrap();
+        backend.put("key-1", b"updated").await.unwrap();
+
+        let record = backend.get("key-1").await.unwrap();
+        assert_eq!(record.data, b"updated");
+    }
+
+    // ---- put_if_version tests ----
+
+    #[tokio::test]
+    async fn put_if_version_succeeds_on_match() {
+        let backend = InMemoryBackend::new();
+        let v1 = backend.put("key-1", b"data-v1").await.unwrap();
+        let v2 = backend
+            .put_if_version("key-1", b"data-v2", v1)
+            .await
+            .unwrap();
+        assert_eq!(v2, v1 + 1);
+    }
+
+    #[tokio::test]
+    async fn put_if_version_fails_on_mismatch() {
+        let backend = InMemoryBackend::new();
+        backend.put("key-1", b"data").await.unwrap();
+
+        let result = backend.put_if_version("key-1", b"new-data", 999).await;
+        match result {
+            Err(StorageError::VersionConflict {
+                key,
+                expected,
+                actual,
+            }) => {
+                assert_eq!(key, "key-1");
+                assert_eq!(expected, 999);
+                assert_eq!(actual, 1);
+            },
+            other => panic!("expected VersionConflict, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn put_if_version_fails_on_missing_key() {
+        let backend = InMemoryBackend::new();
+        let result = backend.put_if_version("nonexistent", b"data", 1).await;
+        assert!(
+            matches!(&result, Err(StorageError::NotFound { key }) if key == "nonexistent"),
+            "expected NotFound, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn put_if_version_updates_data() {
+        let backend = InMemoryBackend::new();
+        let v1 = backend.put("key-1", b"original").await.unwrap();
+        backend
+            .put_if_version("key-1", b"cas-updated", v1)
+            .await
+            .unwrap();
+
+        let record = backend.get("key-1").await.unwrap();
+        assert_eq!(record.data, b"cas-updated");
+    }
+
+    // ---- delete tests ----
+
+    #[tokio::test]
+    async fn delete_existing_returns_true() {
+        let backend = InMemoryBackend::new();
+        backend.put("key-1", b"data").await.unwrap();
+        let deleted = backend.delete("key-1").await.unwrap();
+        assert!(deleted);
+    }
+
+    #[tokio::test]
+    async fn delete_missing_returns_false() {
+        let backend = InMemoryBackend::new();
+        let deleted = backend.delete("nonexistent").await.unwrap();
+        assert!(!deleted);
+    }
+
+    #[tokio::test]
+    async fn delete_then_get_returns_not_found() {
+        let backend = InMemoryBackend::new();
+        backend.put("key-1", b"data").await.unwrap();
+        backend.delete("key-1").await.unwrap();
+
+        let result = backend.get("key-1").await;
+        assert!(matches!(result, Err(StorageError::NotFound { .. })));
+    }
+
+    // ---- list_by_prefix tests ----
+
+    #[tokio::test]
+    async fn list_by_prefix_returns_matching() {
+        let backend = InMemoryBackend::new();
+        backend.put("owner:a", b"data-a").await.unwrap();
+        backend.put("owner:b", b"data-b").await.unwrap();
+        backend.put("other:c", b"data-c").await.unwrap();
+
+        let results = backend.list_by_prefix("owner:").await.unwrap();
+        assert_eq!(results.len(), 2);
+        let keys: Vec<&str> = results.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"owner:a"));
+        assert!(keys.contains(&"owner:b"));
+    }
+
+    #[tokio::test]
+    async fn list_by_prefix_empty_on_no_match() {
+        let backend = InMemoryBackend::new();
+        backend.put("owner:a", b"data").await.unwrap();
+
+        let results = backend.list_by_prefix("nomatch:").await.unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_by_prefix_returns_correct_data_and_versions() {
+        let backend = InMemoryBackend::new();
+        backend.put("owner:a", b"data-a").await.unwrap();
+        let v2 = backend.put("owner:b", b"data-b").await.unwrap();
+        // Update owner:b to get version 2
+        let v2b = backend.put("owner:b", b"data-b-v2").await.unwrap();
+
+        let results = backend.list_by_prefix("owner:").await.unwrap();
+        assert_eq!(results.len(), 2);
+
+        for (key, record) in &results {
+            match key.as_str() {
+                "owner:a" => {
+                    assert_eq!(record.data, b"data-a");
+                    assert_eq!(record.version, 1);
+                },
+                "owner:b" => {
+                    assert_eq!(record.data, b"data-b-v2");
+                    assert_eq!(record.version, v2b);
+                },
+                other => panic!("unexpected key: {other}"),
+            }
+        }
+        // Suppress unused variable warning
+        let _ = v2;
+    }
+
+    // ---- cleanup_expired tests ----
+
+    #[tokio::test]
+    async fn cleanup_expired_removes_expired_records() {
+        let backend = InMemoryBackend::new();
+
+        let mut record =
+            TaskRecord::new("owner".to_string(), "tools/call".to_string(), Some(60_000));
+        record.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(10));
+        let bytes = serde_json::to_vec(&record).unwrap();
+        backend.put("owner:task-expired", &bytes).await.unwrap();
+
+        let removed = backend.cleanup_expired().await.unwrap();
+        assert_eq!(removed, 1);
+
+        let result = backend.get("owner:task-expired").await;
+        assert!(matches!(result, Err(StorageError::NotFound { .. })));
+    }
+
+    #[tokio::test]
+    async fn cleanup_expired_keeps_non_expired_records() {
+        let backend = InMemoryBackend::new();
+
+        let record = TaskRecord::new(
+            "owner".to_string(),
+            "tools/call".to_string(),
+            Some(3_600_000),
+        );
+        let bytes = serde_json::to_vec(&record).unwrap();
+        backend.put("owner:task-alive", &bytes).await.unwrap();
+
+        let removed = backend.cleanup_expired().await.unwrap();
+        assert_eq!(removed, 0);
+
+        let result = backend.get("owner:task-alive").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn cleanup_expired_returns_zero_on_empty() {
+        let backend = InMemoryBackend::new();
+        let removed = backend.cleanup_expired().await.unwrap();
+        assert_eq!(removed, 0);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::backend::make_key;
