@@ -27,7 +27,7 @@ Requirements for pluggable storage backend milestone. Each maps to roadmap phase
 - [x] **DYNA-03**: ConditionExpression for atomic state transitions (concurrent mutation safety)
 - [x] **DYNA-04**: Native DynamoDB TTL for automatic expired task cleanup
 - [x] **DYNA-05**: Automatic variable size cap at ~350KB to stay within DynamoDB's 400KB item limit
-- [ ] **DYNA-06**: Cloud-only integration tests against real DynamoDB table
+- [x] **DYNA-06**: Cloud-only integration tests against real DynamoDB table
 
 ### Redis Backend
 
@@ -40,7 +40,7 @@ Requirements for pluggable storage backend milestone. Each maps to roadmap phase
 ### Testing
 
 - [x] **TEST-01**: Per-backend unit tests for InMemoryBackend validating StorageBackend contract
-- [ ] **TEST-02**: Per-backend integration tests for DynamoDbBackend against cloud DynamoDB
+- [x] **TEST-02**: Per-backend integration tests for DynamoDbBackend against cloud DynamoDB
 - [ ] **TEST-03**: Per-backend integration tests for RedisBackend against Redis instance
 - [ ] **TEST-04**: Feature flag compilation verification (each backend compiles independently)
 
@@ -91,14 +91,14 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DYNA-03 | Phase 11 | Complete |
 | DYNA-04 | Phase 11 | Complete |
 | DYNA-05 | Phase 11 | Complete |
-| DYNA-06 | Phase 11 | Pending |
+| DYNA-06 | Phase 11 | Complete |
 | RDIS-01 | Phase 12 | Pending |
 | RDIS-02 | Phase 12 | Pending |
 | RDIS-03 | Phase 12 | Pending |
 | RDIS-04 | Phase 12 | Pending |
 | RDIS-05 | Phase 12 | Pending |
 | TEST-01 | Phase 10 | Complete |
-| TEST-02 | Phase 11 | Pending |
+| TEST-02 | Phase 11 | Complete |
 | TEST-03 | Phase 12 | Pending |
 | TEST-04 | Phase 13 | Pending |
 

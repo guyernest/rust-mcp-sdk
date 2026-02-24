@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-23)
 
 Milestone: v1.2 Pluggable Storage Backends
 Phase: 11 of 13 (DynamoDB Backend)
-Plan: 1 of 2
-Status: Plan 11-01 complete, ready for Plan 11-02
-Last activity: 2026-02-24 -- Plan 11-01 complete
+Plan: 2 of 2 (Phase 11 complete)
+Status: Phase 11 complete, ready for Phase 12
+Last activity: 2026-02-24 -- Plan 11-02 complete
 
-Progress: [█████░░░░░] 23% (5/~11 estimated plans)
+Progress: [██████░░░░] 27% (6/~11 estimated plans)
 
 ## Performance Metrics
 
@@ -46,6 +46,7 @@ Progress: [█████░░░░░] 23% (5/~11 estimated plans)
 | Phase 10 P01 | 7 | 1 task | 4 files |
 | Phase 10 P02 | 4 | 2 tasks | 2 files |
 | Phase 11 P01 | 5 | 2 tasks | 4 files |
+| Phase 11 P02 | 5 | 2 tasks | 1 file |
 
 ## Accumulated Context
 
@@ -74,6 +75,9 @@ Recent decisions affecting current work:
 - [Phase 11]: Data stored as AttributeValue::S (String) for DynamoDB console readability
 - [Phase 11]: extract_ttl_epoch parses expiresAt from JSON data blob for DynamoDB native TTL
 - [Phase 11]: Unconditional put uses GetItem + PutItem to maintain monotonic version chain
+- [Phase 11]: put_if_version on missing key returns VersionConflict (DynamoDB ConditionExpression)
+- [Phase 11]: TTL tests verify expires_at attribute via raw GetItem, not actual TTL deletion
+- [Phase 11]: UUID-based test isolation (test-{uuid} prefix) -- no cleanup needed
 
 ### Pending Todos
 
@@ -86,5 +90,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Completed 11-01-PLAN.md
-Resume file: .planning/phases/11-dynamodb-backend/11-01-SUMMARY.md
+Stopped at: Completed 11-02-PLAN.md (Phase 11 complete)
+Resume file: .planning/phases/11-dynamodb-backend/11-02-SUMMARY.md
