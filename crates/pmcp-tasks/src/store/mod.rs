@@ -23,6 +23,9 @@
 //! - [`InMemoryBackend`](crate::store::memory::InMemoryBackend) -- Thread-safe
 //!   in-memory backend using `DashMap`. Used by
 //!   [`InMemoryTaskStore`](crate::store::memory::InMemoryTaskStore).
+//! - [`DynamoDbBackend`](crate::store::dynamodb::DynamoDbBackend) -- DynamoDB
+//!   backend for production AWS/Lambda deployments. Available behind the
+//!   `dynamodb` feature flag.
 //!
 //! # Supporting Types
 //!
@@ -31,6 +34,8 @@
 //! - [`TaskPage`] - A page of task results with optional next cursor.
 
 pub mod backend;
+#[cfg(feature = "dynamodb")]
+pub mod dynamodb;
 pub mod generic;
 pub mod memory;
 

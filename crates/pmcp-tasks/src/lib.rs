@@ -51,6 +51,8 @@ pub use domain::{TaskRecord, TaskWithVariables};
 pub use error::TaskError;
 pub use router::TaskRouterImpl;
 pub use security::{resolve_owner_id, TaskSecurityConfig, DEFAULT_LOCAL_OWNER};
+#[cfg(feature = "dynamodb")]
+pub use store::dynamodb::DynamoDbBackend;
 pub use store::generic::GenericTaskStore;
 pub use store::memory::InMemoryBackend;
 pub use store::memory::InMemoryTaskStore;
