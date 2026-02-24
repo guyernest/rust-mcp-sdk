@@ -53,7 +53,7 @@ use crate::types::task::TaskStatus;
 ///
 /// # Type Parameters
 ///
-/// * `B` - A [`StorageBackend`] implementation (in-memory, DynamoDB, Redis, etc.)
+/// * `B` - A [`StorageBackend`] implementation (in-memory, `DynamoDB`, Redis, etc.)
 #[derive(Debug)]
 pub struct GenericTaskStore<B: StorageBackend> {
     backend: B,

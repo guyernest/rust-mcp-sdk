@@ -14,7 +14,7 @@
 //!
 //! Keys are composite strings in the format `{owner_id}:{task_id}`. The
 //! colon separator is safe because `owner_id` comes from OAuth/session
-//! tokens (no colons) and `task_id` is a UUIDv4 (no colons). Prefix
+//! tokens (no colons) and `task_id` is a `UUIDv4` (no colons). Prefix
 //! queries use `{owner_id}:` to scope listings to an owner.
 //!
 //! # Versioning
@@ -249,7 +249,7 @@ pub trait StorageBackend: Send + Sync {
     /// This is a best-effort operation. Different backends handle TTL
     /// differently:
     /// - In-memory: scans all records, checks TTL, removes expired ones.
-    /// - DynamoDB: no-op (native TTL handles cleanup automatically).
+    /// - `DynamoDB`: no-op (native TTL handles cleanup automatically).
     /// - Redis: scans and removes expired records.
     ///
     /// Returns the count of records actually removed. Callers should not
@@ -265,7 +265,7 @@ pub trait StorageBackend: Send + Sync {
 ///
 /// The key format is `{owner_id}:{task_id}`. The colon separator is safe
 /// because `owner_id` comes from OAuth/session tokens (no colons) and
-/// `task_id` is a UUIDv4 (no colons).
+/// `task_id` is a `UUIDv4` (no colons).
 ///
 /// # Examples
 ///
