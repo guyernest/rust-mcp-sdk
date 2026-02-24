@@ -80,6 +80,22 @@ pub enum TaskError {
         actual_bytes: usize,
     },
 
+    /// Concurrent modification detected via CAS failure.
+    ConcurrentModification {
+        /// The task ID.
+        task_id: String,
+        /// The version that was expected.
+        expected_version: u64,
+        /// The actual version found in storage.
+        actual_version: u64,
+    },
+
+    /// Storage backend is full or at capacity.
+    StorageFull {
+        /// Description of the capacity issue.
+        message: String,
+    },
+
     /// Backend storage error.
     StoreError(String),
 }
@@ -125,6 +141,15 @@ impl fmt::Display for TaskError {
                 f,
                 "variable size limit exceeded: {actual_bytes} bytes exceeds {limit_bytes} byte limit"
             ),
+            Self::ConcurrentModification {
+                task_id,
+                expected_version,
+                actual_version,
+            } => write!(
+                f,
+                "concurrent modification on task {task_id}: expected version {expected_version}, found {actual_version}"
+            ),
+            Self::StorageFull { message } => write!(f, "storage full: {message}"),
             Self::StoreError(msg) => write!(f, "store error: {msg}"),
         }
     }
@@ -137,7 +162,8 @@ impl TaskError {
     ///
     /// - `-32602` (Invalid params): `InvalidTransition`, `NotFound`, `Expired`,
     ///   `NotReady`, `OwnerMismatch`, `VariableSizeExceeded`
-    /// - `-32603` (Internal error): `ResourceExhausted`, `StoreError`
+    /// - `-32603` (Internal error): `ResourceExhausted`, `ConcurrentModification`,
+    ///   `StorageFull`, `StoreError`
     ///
     /// # Examples
     ///
@@ -163,7 +189,10 @@ impl TaskError {
             | Self::NotReady { .. }
             | Self::OwnerMismatch { .. }
             | Self::VariableSizeExceeded { .. } => -32602,
-            Self::ResourceExhausted { .. } | Self::StoreError(_) => -32603,
+            Self::ResourceExhausted { .. }
+            | Self::ConcurrentModification { .. }
+            | Self::StorageFull { .. }
+            | Self::StoreError(_) => -32603,
         }
     }
 }
@@ -223,5 +252,44 @@ mod tests {
             TaskError::StoreError("fail".to_string()).error_code(),
             -32603
         );
+    }
+
+    #[test]
+    fn concurrent_modification_display() {
+        let err = TaskError::ConcurrentModification {
+            task_id: "task-42".to_string(),
+            expected_version: 3,
+            actual_version: 5,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("task-42"));
+        assert!(msg.contains("expected version 3"));
+        assert!(msg.contains("found 5"));
+    }
+
+    #[test]
+    fn concurrent_modification_error_code() {
+        let err = TaskError::ConcurrentModification {
+            task_id: "t".to_string(),
+            expected_version: 1,
+            actual_version: 2,
+        };
+        assert_eq!(err.error_code(), -32603);
+    }
+
+    #[test]
+    fn storage_full_display() {
+        let err = TaskError::StorageFull {
+            message: "max 10000 records reached".to_string(),
+        };
+        assert_eq!(err.to_string(), "storage full: max 10000 records reached");
+    }
+
+    #[test]
+    fn storage_full_error_code() {
+        let err = TaskError::StorageFull {
+            message: "full".to_string(),
+        };
+        assert_eq!(err.error_code(), -32603);
     }
 }

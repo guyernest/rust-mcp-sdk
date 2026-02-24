@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -37,7 +38,8 @@ use crate::types::task::{Task, TaskStatus};
 /// assert_eq!(record.owner_id, "session-abc");
 /// assert!(record.expires_at.is_some());
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TaskRecord {
     /// The wire-format task (serialized as-is for MCP responses).
     pub task: Task,
@@ -57,8 +59,14 @@ pub struct TaskRecord {
     pub request_method: String,
 
     /// Computed absolute expiry time based on TTL. `None` means the task
-    /// does not expire (unlimited TTL).
+    /// does not expire (unlimited TTL). Serialized as ISO 8601 via
+    /// chrono's serde support.
     pub expires_at: Option<DateTime<Utc>>,
+
+    /// Monotonic version for CAS operations. Not part of the serialized
+    /// record -- managed by the storage backend.
+    #[serde(skip)]
+    pub version: u64,
 }
 
 impl TaskRecord {
@@ -123,6 +131,7 @@ impl TaskRecord {
             result: None,
             request_method,
             expires_at,
+            version: 0,
         }
     }
 
@@ -199,6 +208,128 @@ impl TaskRecord {
 
         task
     }
+}
+
+/// Validates that a JSON value does not exceed the maximum nesting depth.
+///
+/// Recursively walks the value. Arrays and objects increment the current
+/// depth. Returns an error string if the depth exceeds `max_depth`.
+///
+/// # Arguments
+///
+/// * `value` - The JSON value to validate.
+/// * `max_depth` - Maximum allowed nesting depth (e.g., 10).
+///
+/// # Examples
+///
+/// ```
+/// use pmcp_tasks::domain::record::validate_variable_depth;
+/// use serde_json::json;
+///
+/// assert!(validate_variable_depth(&json!(42), 10).is_ok());
+/// assert!(validate_variable_depth(&json!({"a": {"b": 1}}), 10).is_ok());
+/// ```
+pub fn validate_variable_depth(value: &Value, max_depth: usize) -> Result<(), String> {
+    check_depth(value, 0, max_depth)
+}
+
+fn check_depth(value: &Value, current_depth: usize, max_depth: usize) -> Result<(), String> {
+    if current_depth > max_depth {
+        return Err(format!(
+            "variable nesting depth {current_depth} exceeds maximum {max_depth}"
+        ));
+    }
+    match value {
+        Value::Array(arr) => {
+            for item in arr {
+                check_depth(item, current_depth + 1, max_depth)?;
+            }
+        },
+        Value::Object(map) => {
+            for v in map.values() {
+                check_depth(v, current_depth + 1, max_depth)?;
+            }
+        },
+        _ => {},
+    }
+    Ok(())
+}
+
+/// Validates that no string value within a JSON structure exceeds the
+/// maximum byte length.
+///
+/// Recursively walks the value. Returns an error string if any string
+/// value exceeds `max_length` bytes.
+///
+/// # Arguments
+///
+/// * `value` - The JSON value to validate.
+/// * `max_length` - Maximum allowed string length in bytes (e.g., 65536).
+///
+/// # Examples
+///
+/// ```
+/// use pmcp_tasks::domain::record::validate_variable_string_lengths;
+/// use serde_json::json;
+///
+/// assert!(validate_variable_string_lengths(&json!("short"), 65536).is_ok());
+/// ```
+pub fn validate_variable_string_lengths(value: &Value, max_length: usize) -> Result<(), String> {
+    match value {
+        Value::String(s) if s.len() > max_length => Err(format!(
+            "string value length {} bytes exceeds maximum {max_length} bytes",
+            s.len()
+        )),
+        Value::Array(arr) => {
+            for item in arr {
+                validate_variable_string_lengths(item, max_length)?;
+            }
+            Ok(())
+        },
+        Value::Object(map) => {
+            for v in map.values() {
+                validate_variable_string_lengths(v, max_length)?;
+            }
+            Ok(())
+        },
+        _ => Ok(()),
+    }
+}
+
+/// Validates all variable values for safety against depth bombs and
+/// excessively long strings.
+///
+/// Iterates over each value in the `variables` map and applies both
+/// [`validate_variable_depth`] and [`validate_variable_string_lengths`].
+///
+/// # Arguments
+///
+/// * `variables` - The variable map to validate.
+/// * `max_depth` - Maximum allowed JSON nesting depth.
+/// * `max_string_length` - Maximum allowed string value length in bytes.
+///
+/// # Examples
+///
+/// ```
+/// use pmcp_tasks::domain::record::validate_variables;
+/// use serde_json::json;
+/// use std::collections::HashMap;
+///
+/// let mut vars = HashMap::new();
+/// vars.insert("key".to_string(), json!({"nested": "value"}));
+/// assert!(validate_variables(&vars, 10, 65536).is_ok());
+/// ```
+pub fn validate_variables(
+    variables: &HashMap<String, Value>,
+    max_depth: usize,
+    max_string_length: usize,
+) -> Result<(), String> {
+    for (key, value) in variables {
+        validate_variable_depth(value, max_depth).map_err(|e| format!("variable '{key}': {e}"))?;
+        validate_variable_string_lengths(value, max_string_length)
+            .map_err(|e| format!("variable '{key}': {e}"))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -352,5 +483,203 @@ mod tests {
         let record = TaskRecord::new("session-xyz".to_string(), "tools/call".to_string(), None);
         assert_eq!(record.owner_id, "session-xyz");
         assert_eq!(record.request_method, "tools/call");
+    }
+
+    #[test]
+    fn new_record_version_is_zero() {
+        let record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
+        assert_eq!(record.version, 0);
+    }
+
+    // ---- Serialization round-trip tests ----
+
+    #[test]
+    fn serialization_round_trip() {
+        let mut record = TaskRecord::new(
+            "owner-1".to_string(),
+            "tools/call".to_string(),
+            Some(60_000),
+        );
+        record.variables.insert("progress".to_string(), json!(42));
+        record.result = Some(json!({"status": "done"}));
+        record.version = 5; // Set non-zero version to verify skip
+
+        let bytes = serde_json::to_vec(&record).expect("serialization should succeed");
+        let deserialized: TaskRecord =
+            serde_json::from_slice(&bytes).expect("deserialization should succeed");
+
+        assert_eq!(deserialized.task.task_id, record.task.task_id);
+        assert_eq!(deserialized.owner_id, record.owner_id);
+        assert_eq!(deserialized.request_method, record.request_method);
+        assert_eq!(deserialized.task.status, record.task.status);
+        assert_eq!(deserialized.variables, record.variables);
+        assert_eq!(deserialized.result, record.result);
+        assert_eq!(deserialized.task.ttl, record.task.ttl);
+        // expires_at should round-trip (chrono serde)
+        assert!(deserialized.expires_at.is_some());
+    }
+
+    #[test]
+    fn version_not_in_serialized_json() {
+        let mut record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
+        record.version = 42;
+
+        let json_value = serde_json::to_value(&record).expect("serialization should succeed");
+        assert!(
+            json_value.get("version").is_none(),
+            "version should not be present in serialized JSON"
+        );
+    }
+
+    #[test]
+    fn deserialized_version_defaults_to_zero() {
+        let record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), None);
+        let bytes = serde_json::to_vec(&record).expect("serialization should succeed");
+        let deserialized: TaskRecord =
+            serde_json::from_slice(&bytes).expect("deserialization should succeed");
+        assert_eq!(
+            deserialized.version, 0,
+            "version should default to 0 on deserialization"
+        );
+    }
+
+    #[test]
+    fn serialization_uses_camel_case() {
+        let record = TaskRecord::new("owner".to_string(), "tools/call".to_string(), Some(60_000));
+        let json_value = serde_json::to_value(&record).expect("serialization should succeed");
+        // Check camelCase field names
+        assert!(
+            json_value.get("ownerId").is_some(),
+            "should use camelCase ownerId"
+        );
+        assert!(
+            json_value.get("requestMethod").is_some(),
+            "should use camelCase requestMethod"
+        );
+        assert!(
+            json_value.get("expiresAt").is_some(),
+            "should use camelCase expiresAt"
+        );
+        // Verify snake_case is NOT used
+        assert!(
+            json_value.get("owner_id").is_none(),
+            "should not use snake_case"
+        );
+        assert!(
+            json_value.get("request_method").is_none(),
+            "should not use snake_case"
+        );
+    }
+
+    // ---- Variable validation tests ----
+
+    #[test]
+    fn validate_variable_depth_normal_values_pass() {
+        assert!(validate_variable_depth(&json!(42), 10).is_ok());
+        assert!(validate_variable_depth(&json!("hello"), 10).is_ok());
+        assert!(validate_variable_depth(&json!(null), 10).is_ok());
+        assert!(validate_variable_depth(&json!(true), 10).is_ok());
+        assert!(validate_variable_depth(&json!({"a": 1}), 10).is_ok());
+        assert!(validate_variable_depth(&json!([1, 2, 3]), 10).is_ok());
+    }
+
+    #[test]
+    fn validate_variable_depth_nested_within_limit() {
+        // depth 3: {a: {b: {c: 1}}}
+        let value = json!({"a": {"b": {"c": 1}}});
+        assert!(validate_variable_depth(&value, 10).is_ok());
+    }
+
+    #[test]
+    fn validate_variable_depth_bomb_rejected() {
+        // Build a depth-11 nested object
+        let mut value = json!(1);
+        for _ in 0..11 {
+            value = json!({"nested": value});
+        }
+        let result = validate_variable_depth(&value, 10);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("exceeds maximum 10"));
+    }
+
+    #[test]
+    fn validate_variable_depth_at_exact_limit_passes() {
+        // Build exactly depth-10 nested object
+        let mut value = json!(1);
+        for _ in 0..10 {
+            value = json!({"n": value});
+        }
+        assert!(validate_variable_depth(&value, 10).is_ok());
+    }
+
+    #[test]
+    fn validate_variable_string_lengths_normal_pass() {
+        assert!(validate_variable_string_lengths(&json!("short"), 65536).is_ok());
+        assert!(validate_variable_string_lengths(&json!(42), 65536).is_ok());
+        assert!(validate_variable_string_lengths(&json!(null), 65536).is_ok());
+    }
+
+    #[test]
+    fn validate_variable_string_lengths_long_string_rejected() {
+        let long_string = "x".repeat(65537);
+        let value = json!(long_string);
+        let result = validate_variable_string_lengths(&value, 65536);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("exceeds maximum 65536"));
+    }
+
+    #[test]
+    fn validate_variable_string_lengths_nested_long_string_rejected() {
+        let long_string = "x".repeat(65537);
+        let value = json!({"nested": {"deep": long_string}});
+        let result = validate_variable_string_lengths(&value, 65536);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_variables_mixed_valid_pass() {
+        let mut vars = HashMap::new();
+        vars.insert("int_val".to_string(), json!(42));
+        vars.insert("str_val".to_string(), json!("hello"));
+        vars.insert("obj_val".to_string(), json!({"a": 1}));
+        vars.insert("arr_val".to_string(), json!([1, 2, 3]));
+        vars.insert("null_val".to_string(), json!(null));
+        assert!(validate_variables(&vars, 10, 65536).is_ok());
+    }
+
+    #[test]
+    fn validate_variables_empty_map_passes() {
+        let vars: HashMap<String, Value> = HashMap::new();
+        assert!(validate_variables(&vars, 10, 65536).is_ok());
+    }
+
+    #[test]
+    fn validate_variables_null_values_pass() {
+        let mut vars = HashMap::new();
+        vars.insert("null_key".to_string(), json!(null));
+        assert!(validate_variables(&vars, 10, 65536).is_ok());
+    }
+
+    #[test]
+    fn validate_variables_depth_bomb_detected() {
+        let mut value = json!(1);
+        for _ in 0..11 {
+            value = json!({"n": value});
+        }
+        let mut vars = HashMap::new();
+        vars.insert("bad".to_string(), value);
+        let result = validate_variables(&vars, 10, 65536);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("bad"));
+    }
+
+    #[test]
+    fn validate_variables_long_string_detected() {
+        let long_string = "x".repeat(65537);
+        let mut vars = HashMap::new();
+        vars.insert("long".to_string(), json!(long_string));
+        let result = validate_variables(&vars, 10, 65536);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("long"));
     }
 }

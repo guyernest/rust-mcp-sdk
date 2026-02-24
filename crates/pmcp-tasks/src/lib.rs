@@ -52,5 +52,8 @@ pub use error::TaskError;
 pub use router::TaskRouterImpl;
 pub use security::{resolve_owner_id, TaskSecurityConfig, DEFAULT_LOCAL_OWNER};
 pub use store::memory::InMemoryTaskStore;
-pub use store::{ListTasksOptions, StoreConfig, TaskPage, TaskStore};
+pub use store::{
+    ListTasksOptions, StorageBackend, StorageError, StoreConfig, TaskPage, TaskStore,
+    VersionedRecord,
+};
 pub use types::*;

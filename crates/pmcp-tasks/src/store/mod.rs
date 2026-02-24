@@ -32,18 +32,21 @@ use crate::domain::TaskRecord;
 use crate::error::TaskError;
 use crate::types::task::TaskStatus;
 
-/// Configuration for variable size limits and TTL enforcement.
+/// Configuration for variable size limits, TTL enforcement, and variable
+/// validation.
 ///
 /// Applied at the trait level across all backends. Store implementations
 /// should respect these limits when processing variable and TTL operations.
 ///
 /// # Defaults
 ///
-/// | Setting                 | Default      | Description                |
-/// |-------------------------|--------------|----------------------------|
-/// | `max_variable_size_bytes` | 1,048,576  | 1 MB per variable payload  |
-/// | `default_ttl_ms`        | 3,600,000    | 1 hour                     |
-/// | `max_ttl_ms`            | 86,400,000   | 24 hours                   |
+/// | Setting                   | Default      | Description                          |
+/// |---------------------------|--------------|--------------------------------------|
+/// | `max_variable_size_bytes` | 1,048,576    | 1 MB per variable payload            |
+/// | `default_ttl_ms`          | 3,600,000    | 1 hour                               |
+/// | `max_ttl_ms`              | 86,400,000   | 24 hours                             |
+/// | `max_variable_depth`      | 10           | Max JSON nesting depth for variables |
+/// | `max_string_length`       | 65,536       | Max bytes per string value (64 KB)   |
 ///
 /// # Examples
 ///
@@ -54,13 +57,18 @@ use crate::types::task::TaskStatus;
 /// assert_eq!(config.max_variable_size_bytes, 1_048_576);
 /// assert_eq!(config.default_ttl_ms, Some(3_600_000));
 /// assert_eq!(config.max_ttl_ms, Some(86_400_000));
+/// assert_eq!(config.max_variable_depth, 10);
+/// assert_eq!(config.max_string_length, 65_536);
 ///
 /// let custom = StoreConfig {
 ///     max_variable_size_bytes: 512_000,
 ///     default_ttl_ms: Some(1_800_000), // 30 minutes
 ///     max_ttl_ms: Some(7_200_000),     // 2 hours
+///     max_variable_depth: 5,
+///     max_string_length: 32_768,
 /// };
 /// assert_eq!(custom.max_variable_size_bytes, 512_000);
+/// assert_eq!(custom.max_variable_depth, 5);
 /// ```
 #[derive(Debug, Clone)]
 pub struct StoreConfig {
@@ -79,6 +87,18 @@ pub struct StoreConfig {
     /// reject TTL values that exceed this limit. `None` means no upper
     /// bound on TTL.
     pub max_ttl_ms: Option<u64>,
+
+    /// Maximum nesting depth for variable JSON values.
+    ///
+    /// Prevents depth bombs (deeply nested objects/arrays that can cause
+    /// stack overflow during processing). Default: 10.
+    pub max_variable_depth: usize,
+
+    /// Maximum length in bytes for any single string value within variables.
+    ///
+    /// Prevents extremely long strings that could consume excessive memory
+    /// or storage. Default: 65,536 (64 KB).
+    pub max_string_length: usize,
 }
 
 impl Default for StoreConfig {
@@ -87,6 +107,8 @@ impl Default for StoreConfig {
             max_variable_size_bytes: 1_048_576, // 1 MB
             default_ttl_ms: Some(3_600_000),    // 1 hour
             max_ttl_ms: Some(86_400_000),       // 24 hours
+            max_variable_depth: 10,
+            max_string_length: 65_536, // 64 KB
         }
     }
 }
@@ -378,10 +400,14 @@ mod tests {
             max_variable_size_bytes: 512_000,
             default_ttl_ms: None,
             max_ttl_ms: Some(7_200_000),
+            max_variable_depth: 5,
+            max_string_length: 32_768,
         };
         assert_eq!(config.max_variable_size_bytes, 512_000);
         assert!(config.default_ttl_ms.is_none());
         assert_eq!(config.max_ttl_ms, Some(7_200_000));
+        assert_eq!(config.max_variable_depth, 5);
+        assert_eq!(config.max_string_length, 32_768);
     }
 
     #[test]
