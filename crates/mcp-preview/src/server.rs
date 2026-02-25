@@ -13,6 +13,7 @@ use tracing::info;
 
 use crate::handlers;
 use crate::proxy::McpProxy;
+use crate::wasm_builder::{find_workspace_root, WasmBuilder};
 
 /// Configuration for the preview server
 #[derive(Debug, Clone)]
@@ -45,6 +46,7 @@ impl Default for PreviewConfig {
 pub struct AppState {
     pub config: PreviewConfig,
     pub proxy: McpProxy,
+    pub wasm_builder: WasmBuilder,
 }
 
 /// MCP Preview Server
@@ -55,9 +57,17 @@ impl PreviewServer {
     pub async fn start(config: PreviewConfig) -> Result<()> {
         let proxy = McpProxy::new(&config.mcp_url);
 
+        // Locate the workspace root to find the WASM client source
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let workspace_root = find_workspace_root(&cwd).unwrap_or_else(|| cwd.clone());
+        let wasm_source_dir = workspace_root.join("examples").join("wasm-client");
+        let wasm_cache_dir = workspace_root.join("target").join("wasm-bridge");
+        let wasm_builder = WasmBuilder::new(wasm_source_dir, wasm_cache_dir);
+
         let state = Arc::new(AppState {
             config: config.clone(),
             proxy,
+            wasm_builder,
         });
 
         // Build CORS layer
@@ -80,6 +90,11 @@ impl PreviewServer {
             // API endpoints - session management
             .route("/api/reconnect", post(handlers::api::reconnect))
             .route("/api/status", get(handlers::api::status))
+            // API endpoints - WASM bridge
+            .route("/api/wasm/build", post(handlers::wasm::trigger_build))
+            .route("/api/wasm/status", get(handlers::wasm::build_status))
+            // WASM artifact serving
+            .route("/wasm/{filename}", get(handlers::wasm::serve_artifact))
             // Static assets
             .route("/assets/{*path}", get(handlers::assets::serve))
             // WebSocket for live updates

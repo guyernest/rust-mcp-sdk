@@ -21,5 +21,6 @@ mod assets;
 mod handlers;
 mod proxy;
 mod server;
+pub mod wasm_builder;
 
 pub use server::{PreviewConfig, PreviewServer};
