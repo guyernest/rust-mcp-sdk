@@ -1388,7 +1388,7 @@
 
         // Find widget HTML in content
         const widgetContent = result.content.find(c =>
-          c.content_type === 'resource' &&
+          c.type === 'resource' &&
           c.mime_type &&
           c.mime_type.includes('html')
         );
@@ -1397,7 +1397,7 @@
           this.loadWidget(widgetContent.text);
         } else {
           // Check for text content
-          const textContent = result.content.find(c => c.content_type === 'text');
+          const textContent = result.content.find(c => c.type === 'text');
           if (textContent) {
             this.logConsole('log', `Tool returned: ${textContent.text}`);
           }
@@ -1432,6 +1432,7 @@
       }
 
       wrapWidgetHtmlProxy(html) {
+        const sc = '<' + '/script>';
         return `
 <!DOCTYPE html>
 <html>
@@ -1453,6 +1454,7 @@
         preview.logEvent('bridgeCall', { method: 'callTool', name, args });
 
         const startTime = Date.now();
+        let rawResult;
         let result;
         let success = true;
 
@@ -1462,28 +1464,38 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, arguments: args || {} })
           });
-          result = await response.json();
-          success = !!result.success;
+          rawResult = await response.json();
+          success = !!rawResult.success;
 
-          if (result.success && result.content) {
+          if (success && rawResult.content) {
             // Handle widget response if HTML is returned
-            const widgetContent = result.content.find(c =>
-              c.content_type === 'resource' &&
+            const widgetContent = rawResult.content.find(c =>
+              c.type === 'resource' &&
               c.mime_type &&
               c.mime_type.includes('html')
             );
             if (widgetContent && widgetContent.text) {
               preview.loadWidget(widgetContent.text);
             }
+
+            // Extract parsed tool output from text content
+            const textItem = rawResult.content.find(c => c.type === 'text');
+            if (textItem && textItem.text) {
+              try { result = JSON.parse(textItem.text); } catch (e) { result = textItem.text; }
+            }
           }
+          if (result === undefined) result = rawResult;
+          if (!success) throw new Error(rawResult.error || 'Tool call failed');
         } catch (e) {
-          result = { error: e.message };
+          rawResult = rawResult || { error: e.message };
+          if (result === undefined) result = rawResult;
           success = false;
         }
 
         const duration = Date.now() - startTime;
-        preview.logBridgeCall(name, args || {}, result, duration, success);
+        preview.logBridgeCall(name, args || {}, rawResult || result, duration, success);
 
+        if (!success) throw new Error(rawResult?.error || 'Tool call failed');
         return result;
       },
 
@@ -1577,7 +1589,7 @@
     setTimeout(() => {
       preview.logEvent('widgetReady', {});
     }, 100);
-  </script>
+  ${sc}
 </head>
 <body>
 ${html}
@@ -1587,6 +1599,7 @@ ${html}
 
       wrapWidgetHtmlWasm(html) {
         const mcpUrl = this.mcpUrl;
+        const sc = '<' + '/script>';
         return `
 <!DOCTYPE html>
 <html>
@@ -1614,37 +1627,43 @@ ${html}
           preview.logEvent('bridgeCall', { method: 'callTool', name, args });
 
           const startTime = Date.now();
+          let rawResult;
           let result;
           let success = true;
 
           try {
             const mcpResult = await client.call_tool(name, args || {});
-            // Normalize WASM CallToolResult to proxy bridge shape
             success = !mcpResult.isError;
-            result = {
-              success: success,
-              content: mcpResult.content || [],
-              _meta: mcpResult._meta || null
-            };
+            rawResult = mcpResult;
 
-            if (success && result.content) {
-              const widgetContent = result.content.find(c =>
-                c.content_type === 'resource' &&
+            if (success && mcpResult.content) {
+              const widgetContent = mcpResult.content.find(c =>
+                c.type === 'resource' &&
                 c.mime_type &&
                 c.mime_type.includes('html')
               );
               if (widgetContent && widgetContent.text) {
                 preview.loadWidget(widgetContent.text);
               }
+
+              // Extract parsed tool output from text content
+              const textItem = mcpResult.content.find(c => c.type === 'text');
+              if (textItem && textItem.text) {
+                try { result = JSON.parse(textItem.text); } catch (e) { result = textItem.text; }
+              }
             }
+            if (result === undefined) result = mcpResult;
+            if (!success) throw new Error('Tool call failed');
           } catch (e) {
-            result = { success: false, content: [], error: e.message };
+            rawResult = rawResult || { error: e.message };
+            if (result === undefined) result = rawResult;
             success = false;
           }
 
           const duration = Date.now() - startTime;
-          preview.logBridgeCall(name, args || {}, result, duration, success);
+          preview.logBridgeCall(name, args || {}, rawResult || result, duration, success);
 
+          if (!success) throw new Error(rawResult?.error || 'Tool call failed');
           return result;
         },
 
@@ -1737,7 +1756,7 @@ ${html}
     setTimeout(() => {
       preview.logEvent('widgetReady', {});
     }, 100);
-  </script>
+  ${sc}
 </head>
 <body>
 ${html}

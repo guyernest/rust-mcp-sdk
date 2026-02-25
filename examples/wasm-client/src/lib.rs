@@ -8,6 +8,18 @@ use serde_json::Value;
 use wasm_bindgen::prelude::*;
 use web_sys::console;
 
+/// Convert a typed Request into a proper JSON-RPC 2.0 object.
+///
+/// Request serializes as `{"method": "...", "params": {...}}` via serde.
+/// This function adds the required `jsonrpc` and `id` fields to produce
+/// a valid JSON-RPC request that MCP servers expect.
+fn to_jsonrpc(id: i64, request: &pmcp::types::Request) -> Value {
+    let mut json = serde_json::to_value(request).unwrap_or_default();
+    json["jsonrpc"] = Value::String("2.0".to_string());
+    json["id"] = Value::Number(id.into());
+    json
+}
+
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(typescript_type = "Error")]
@@ -121,10 +133,10 @@ impl WasmClient {
             };
             let mut client = WasmHttpClient::new(config);
 
-            // Initialize the connection - wrap in TransportMessage
-            let init_request = pmcp::shared::TransportMessage::Request {
-                id: self.next_id().into(),
-                request: pmcp::types::Request::Client(Box::new(
+            // Build a proper JSON-RPC initialize request
+            let json_request = to_jsonrpc(
+                self.next_id(),
+                &pmcp::types::Request::Client(Box::new(
                     pmcp::types::ClientRequest::Initialize(pmcp::types::InitializeParams {
                         protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
                         capabilities: ClientCapabilities::default(),
@@ -134,37 +146,27 @@ impl WasmClient {
                         },
                     }),
                 )),
-            };
+            );
 
-            let response: pmcp::shared::TransportMessage =
-                client.request(init_request).await.map_err(to_js_error)?;
+            let response: Value = client.request(json_request).await.map_err(to_js_error)?;
 
             // Verify we got a successful initialization response
-            if let pmcp::shared::TransportMessage::Response(resp) = response {
-                if let pmcp::types::jsonrpc::ResponsePayload::Result(_) = resp.payload {
-                    console::log_1(
-                        &format!(
-                            "HTTP connection successful. Session: {:?}",
-                            client.session_id()
-                        )
-                        .into(),
-                    );
-                } else {
-                    return Err(new_js_error(
-                        "Invalid initialization response".to_string(),
-                        None,
-                        JsValue::NULL,
-                    )
-                    .into());
-                }
-            } else {
+            if response.get("error").is_some() {
                 return Err(new_js_error(
-                    "Expected response message".to_string(),
+                    "Invalid initialization response".to_string(),
                     None,
                     JsValue::NULL,
                 )
                 .into());
             }
+
+            console::log_1(
+                &format!(
+                    "HTTP connection successful. Session: {:?}",
+                    client.session_id()
+                )
+                .into(),
+            );
 
             self.http_client = Some(client);
         } else {
@@ -191,32 +193,28 @@ impl WasmClient {
                 serde_wasm_bindgen::to_value(&result.tools).map_err(|e| e.into())
             },
             Some(ConnectionType::Http) => {
+                let req_id = self.next_id();
                 let client = self.http_client.as_mut().ok_or_else(|| {
                     new_js_error("Not connected".to_string(), None, JsValue::NULL)
                 })?;
 
-                // Create list tools request as TransportMessage
-                let request = pmcp::shared::TransportMessage::Request {
-                    id: self.next_id().into(),
-                    request: pmcp::types::Request::Client(Box::new(
+                let json_request = to_jsonrpc(
+                    req_id,
+                    &pmcp::types::Request::Client(Box::new(
                         pmcp::types::ClientRequest::ListTools(pmcp::types::ListToolsRequest {
                             cursor: None,
                         }),
                     )),
-                };
+                );
 
-                let response: pmcp::shared::TransportMessage =
-                    client.request(request).await.map_err(to_js_error)?;
+                let response: Value = client.request(json_request).await.map_err(to_js_error)?;
 
-                // Extract tools from response
-                if let pmcp::shared::TransportMessage::Response(resp) = response {
-                    if let pmcp::types::jsonrpc::ResponsePayload::Result(value) = resp.payload {
-                        if let Ok(result) =
-                            serde_json::from_value::<pmcp::types::ListToolsResult>(value)
-                        {
-                            return serde_wasm_bindgen::to_value(&result.tools)
-                                .map_err(|e| e.into());
-                        }
+                if let Some(result) = response.get("result") {
+                    if let Ok(list_result) =
+                        serde_json::from_value::<pmcp::types::ListToolsResult>(result.clone())
+                    {
+                        return serde_wasm_bindgen::to_value(&list_result.tools)
+                            .map_err(|e| e.into());
                     }
                 }
 
@@ -248,14 +246,14 @@ impl WasmClient {
                 serde_wasm_bindgen::to_value(&result).map_err(|e| e.into())
             },
             Some(ConnectionType::Http) => {
+                let req_id = self.next_id();
                 let client = self.http_client.as_mut().ok_or_else(|| {
                     new_js_error("Not connected".to_string(), None, JsValue::NULL)
                 })?;
 
-                // Create call tool request as TransportMessage
-                let request = pmcp::shared::TransportMessage::Request {
-                    id: self.next_id().into(),
-                    request: pmcp::types::Request::Client(Box::new(
+                let json_request = to_jsonrpc(
+                    req_id,
+                    &pmcp::types::Request::Client(Box::new(
                         pmcp::types::ClientRequest::CallTool(pmcp::types::CallToolRequest {
                             name,
                             arguments,
@@ -263,19 +261,15 @@ impl WasmClient {
                             task: None,
                         }),
                     )),
-                };
+                );
 
-                let response: pmcp::shared::TransportMessage =
-                    client.request(request).await.map_err(to_js_error)?;
+                let response: Value = client.request(json_request).await.map_err(to_js_error)?;
 
-                // Extract result from response
-                if let pmcp::shared::TransportMessage::Response(resp) = response {
-                    if let pmcp::types::jsonrpc::ResponsePayload::Result(value) = resp.payload {
-                        if let Ok(result) =
-                            serde_json::from_value::<pmcp::types::CallToolResult>(value)
-                        {
-                            return serde_wasm_bindgen::to_value(&result).map_err(|e| e.into());
-                        }
+                if let Some(result) = response.get("result") {
+                    if let Ok(call_result) =
+                        serde_json::from_value::<pmcp::types::CallToolResult>(result.clone())
+                    {
+                        return serde_wasm_bindgen::to_value(&call_result).map_err(|e| e.into());
                     }
                 }
 

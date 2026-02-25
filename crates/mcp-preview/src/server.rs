@@ -93,10 +93,10 @@ impl PreviewServer {
             // API endpoints - WASM bridge
             .route("/api/wasm/build", post(handlers::wasm::trigger_build))
             .route("/api/wasm/status", get(handlers::wasm::build_status))
-            // WASM artifact serving
-            .route("/wasm/{filename}", get(handlers::wasm::serve_artifact))
+            // WASM artifact serving (catch-all for nested snippets/ paths)
+            .route("/wasm/*path", get(handlers::wasm::serve_artifact))
             // Static assets
-            .route("/assets/{*path}", get(handlers::assets::serve))
+            .route("/assets/*path", get(handlers::assets::serve))
             // WebSocket for live updates
             .route("/ws", get(handlers::websocket::handler))
             .layer(cors)

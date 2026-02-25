@@ -38,9 +38,12 @@ pub async fn build_status(State(state): State<Arc<AppState>>) -> impl IntoRespon
     Json(json!({"status": status}))
 }
 
-/// Serve a compiled WASM artifact by filename.
+/// Serve a compiled WASM artifact by path.
 ///
-/// **GET /wasm/:filename**
+/// **GET /wasm/*path**
+///
+/// Supports nested paths for wasm-pack snippet files (e.g.,
+/// `snippets/mcp-wasm-client-xxx/src/utils.js`).
 ///
 /// Sets `Content-Type` based on the file extension:
 /// - `.wasm` -> `application/wasm` (required for streaming compilation)
@@ -50,7 +53,7 @@ pub async fn build_status(State(state): State<Arc<AppState>>) -> impl IntoRespon
 /// Returns 404 if the WASM build is not ready or the file does not exist.
 pub async fn serve_artifact(
     State(state): State<Arc<AppState>>,
-    Path(filename): Path<String>,
+    Path(file_path_str): Path<String>,
 ) -> impl IntoResponse {
     let artifact_dir = match state.wasm_builder.artifact_dir().await {
         Some(dir) => dir,
@@ -63,21 +66,37 @@ pub async fn serve_artifact(
         }
     };
 
-    let file_path = artifact_dir.join(&filename);
+    let file_path = artifact_dir.join(&file_path_str);
 
-    // Prevent path traversal
-    if !file_path.starts_with(&artifact_dir) {
-        return (StatusCode::BAD_REQUEST, "Invalid filename").into_response();
+    // Canonicalize to prevent path traversal via .. segments
+    let canonical = match file_path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                format!("Artifact not found: {file_path_str}"),
+            )
+                .into_response();
+        }
+    };
+    let canonical_base = match artifact_dir.canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            return (StatusCode::NOT_FOUND, "WASM build directory not found").into_response();
+        }
+    };
+    if !canonical.starts_with(&canonical_base) {
+        return (StatusCode::BAD_REQUEST, "Invalid path").into_response();
     }
 
-    match tokio::fs::read(&file_path).await {
+    match tokio::fs::read(&canonical).await {
         Ok(contents) => {
-            let content_type = mime_for_extension(&filename);
+            let content_type = mime_for_extension(&file_path_str);
             ([(header::CONTENT_TYPE, content_type)], contents).into_response()
         }
         Err(_) => (
             StatusCode::NOT_FOUND,
-            format!("Artifact not found: {filename}"),
+            format!("Artifact not found: {file_path_str}"),
         )
             .into_response(),
     }

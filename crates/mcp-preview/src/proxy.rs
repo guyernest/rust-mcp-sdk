@@ -194,8 +194,15 @@ impl McpProxy {
             id: self.next_id(),
         };
 
-        let url = format!("{}/mcp", self.base_url);
-        let response = self.client.post(&url).json(&request_body).send().await?;
+        let url = self.base_url.clone();
+        let response = self
+            .client
+            .post(&url)
+            .header("Accept", "application/json, text/event-stream")
+            .header("Content-Type", "application/json")
+            .json(&request_body)
+            .send()
+            .await?;
 
         let status = response.status();
         if !status.is_success() {
@@ -246,9 +253,14 @@ impl McpProxy {
             id: self.next_id(),
         };
 
-        let url = format!("{}/mcp", self.base_url);
+        let url = self.base_url.clone();
 
-        let mut req_builder = self.client.post(&url).json(&request);
+        let mut req_builder = self
+            .client
+            .post(&url)
+            .header("Accept", "application/json, text/event-stream")
+            .header("Content-Type", "application/json")
+            .json(&request);
 
         // Forward session ID header if we have one
         {
@@ -286,9 +298,14 @@ impl McpProxy {
             method: method.to_string(),
         };
 
-        let url = format!("{}/mcp", self.base_url);
+        let url = self.base_url.clone();
 
-        let mut req_builder = self.client.post(&url).json(&notification);
+        let mut req_builder = self
+            .client
+            .post(&url)
+            .header("Accept", "application/json, text/event-stream")
+            .header("Content-Type", "application/json")
+            .json(&notification);
 
         // Forward session ID header if we have one
         {

@@ -412,6 +412,7 @@ where
             input_schema: self.input_schema.clone(),
             annotations: None,
             _meta: None,
+            execution: None,
         }
     }
 }
