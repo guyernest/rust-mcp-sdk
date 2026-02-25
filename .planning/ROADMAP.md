@@ -51,7 +51,7 @@ See: `.planning/milestones/v1.2-ROADMAP.md` for full phase details
 **Milestone Goal:** Polish MCP Apps into a production-ready developer experience -- from authoring through preview to publishing -- making it easy for developers to build, test, demo, and publish MCP Apps with rich UI widgets.
 
 - [x] **Phase 14: Preview Bridge Infrastructure** - Widget iframe rendering with working MCP bridge proxy in mcp-preview (completed 2026-02-24)
-- [ ] **Phase 15: WASM Widget Bridge** - In-browser WASM MCP client as alternative bridge mode for widget testing
+- [x] **Phase 15: WASM Widget Bridge** - In-browser WASM MCP client as alternative bridge mode for widget testing (completed 2026-02-25)
 - [ ] **Phase 16: Shared Bridge Library** - Canonical widget-runtime.js eliminating bridge code duplication across widgets
 - [ ] **Phase 17: Widget Authoring DX and Scaffolding** - File-based widgets, scaffolding template, and developer ergonomics
 - [ ] **Phase 18: Publishing Pipeline** - ChatGPT manifest generation and standalone demo landing pages
@@ -161,7 +161,7 @@ Plans:
 | 12. Redis Backend | v1.2 | 2/2 | Complete | 2026-02-24 |
 | 13. Feature Flags | v1.2 | 1/1 | Complete | 2026-02-24 |
 | 14. Preview Bridge | 2/2 | Complete    | 2026-02-24 | - |
-| 15. WASM Bridge | 1/2 | In Progress|  | - |
+| 15. WASM Bridge | 2/2 | Complete   | 2026-02-25 | - |
 | 16. Shared Bridge Lib | v1.3 | 0/? | Not started | - |
 | 17. Authoring DX | v1.3 | 0/? | Not started | - |
 | 18. Publishing | v1.3 | 0/? | Not started | - |

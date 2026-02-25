@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Developers can author, preview, test, and publish MCP Apps with rich UI widgets entirely from the Rust toolchain.
-**Current focus:** Milestone v1.3 -- MCP Apps Developer Experience (Phase 15 in progress)
+**Current focus:** Milestone v1.3 -- MCP Apps Developer Experience (Phase 15 complete, ready for Phase 16)
 
 ## Current Position
 
 Milestone: v1.3 MCP Apps Developer Experience
-Phase: 15 of 19 (WASM Widget Bridge) -- IN PROGRESS
-Plan: 1 of 2 complete
-Status: Executing
-Last activity: 2026-02-25 -- Completed 15-01 (WASM client ID fix + WasmBuilder + WASM API routes)
+Phase: 15 of 19 (WASM Widget Bridge) -- COMPLETE
+Plan: 2 of 2 complete
+Status: Phase complete
+Last activity: 2026-02-25 -- Completed 15-02 (WASM bridge frontend toggle and widget-runtime.js)
 
-Progress: [==========================.........] 74% (14/19 phases across all milestones; 2/6 in v1.3)
+Progress: [============================.......] 79% (15/19 phases across all milestones; 3/6 in v1.3)
 
 ## Shipped Milestones
 
@@ -28,8 +28,8 @@ Progress: [==========================.........] 74% (14/19 phases across all mil
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 32 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 4)
-- v1.3 plans completed: 4
+- Total plans completed: 33 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 5)
+- v1.3 plans completed: 5
 
 ## Accumulated Context
 
@@ -48,6 +48,9 @@ Recent decisions affecting current work:
 - Used tokio::sync::RwLock for WasmBuilder build status (async-safe across await points)
 - Workspace root detection walks up from cwd looking for [workspace] in Cargo.toml
 - Cache check at startup: existing WASM artifacts initialize WasmBuilder as Ready without rebuild
+- WASM bridge adapter normalizes CallToolResult { content, isError } to proxy shape { success, content, _meta } -- widget code is bridge-mode-agnostic
+- widget-runtime.js resolves WASM artifact URLs relative to script src for deployment portability
+- Bridge toggle defaults to Proxy; WASM requires explicit opt-in
 
 ### Pending Todos
 
@@ -63,5 +66,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-25
-Stopped at: Completed 15-01-PLAN.md (WASM client ID fix + WasmBuilder + WASM API routes)
-Resume: Continue Phase 15 with Plan 02 (WASM bridge frontend toggle and widget-runtime.js).
+Stopped at: Completed 15-02-PLAN.md (WASM bridge frontend toggle and widget-runtime.js)
+Resume: Continue with Phase 16 (next phase in v1.3 milestone).
