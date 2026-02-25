@@ -111,6 +111,85 @@
       color: var(--text-primary);
     }
 
+    /* Bridge Mode Toggle */
+    .bridge-toggle {
+      display: flex;
+      gap: 0;
+      background: var(--bg-tertiary);
+      border-radius: 6px;
+      padding: 2px;
+      border: 1px solid var(--border-color);
+    }
+
+    .bridge-toggle button {
+      padding: 6px 14px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 500;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    .bridge-toggle button.active[data-bridge="proxy"] {
+      background: #4a9eff;
+      color: white;
+    }
+
+    .bridge-toggle button.active[data-bridge="wasm"] {
+      background: #7c3aed;
+      color: white;
+    }
+
+    .bridge-toggle button:disabled {
+      cursor: not-allowed;
+      opacity: 0.7;
+    }
+
+    .bridge-toggle button .building-indicator {
+      display: none;
+    }
+
+    .bridge-toggle button.building .building-indicator {
+      display: inline;
+    }
+
+    .bridge-toggle button.building .bridge-label {
+      display: none;
+    }
+
+    @keyframes buildPulse {
+      0%, 100% { opacity: 0.6; }
+      50% { opacity: 1; }
+    }
+
+    .bridge-toggle button.building {
+      animation: buildPulse 1.5s ease-in-out infinite;
+    }
+
+    /* Build Error Toast */
+    .build-error-toast {
+      position: fixed;
+      top: 60px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--error-color);
+      color: white;
+      padding: 10px 20px;
+      border-radius: 6px;
+      font-size: 13px;
+      z-index: 2000;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+      animation: toastIn 0.3s ease;
+    }
+
+    @keyframes toastIn {
+      from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+      to { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+
     /* Main Layout */
     .main {
       display: flex;
@@ -715,6 +794,10 @@
       <span id="status-text">Connecting...</span>
       <button id="reconnect-btn">Reconnect</button>
     </div>
+    <div class="bridge-toggle" id="bridge-toggle">
+      <button class="active" data-bridge="proxy"><span class="bridge-label">Proxy</span><span class="building-indicator">Building...</span></button>
+      <button data-bridge="wasm"><span class="bridge-label">WASM</span><span class="building-indicator">Building...</span></button>
+    </div>
     <div class="theme-toggle">
       <button class="active" data-theme="light">Light</button>
       <button data-theme="dark">Dark</button>
@@ -844,6 +927,11 @@
         this.uiResources = [];
         this.activeResourceUri = null;
 
+        // Bridge mode
+        this.bridgeMode = 'proxy';
+        this.wasmReady = false;
+        this.mcpUrl = '';
+
         // Network badge
         this.networkUnreadCount = 0;
 
@@ -860,6 +948,7 @@
 
       async init() {
         this.setupThemeToggle();
+        this.setupBridgeToggle();
         this.setupDevToolsTabs();
         this.setupEnvironmentControls();
         this.setupExecuteButton();
@@ -884,6 +973,9 @@
 
           if (config.initial_tool) {
             this.initialTool = config.initial_tool;
+          }
+          if (config.mcp_url) {
+            this.mcpUrl = config.mcp_url;
           }
         } catch (e) {
           console.error('Failed to load config:', e);
@@ -932,11 +1024,26 @@
           }
 
           this.setStatus(true, `Connected (${this.tools.length} tools, ${this.uiResources.length} resources)`);
+
+          // Check WASM status for instant toggling if previously built
+          this.checkWasmStatus();
         } catch (e) {
           this.setStatus(false, 'Connection failed');
           this.showWidgetError('Failed to connect to MCP server. Check that the server is running.');
           document.getElementById('tool-list').innerHTML =
             `<div class="empty-state">Failed to connect to MCP server</div>`;
+        }
+      }
+
+      async checkWasmStatus() {
+        try {
+          const resp = await fetch('/api/wasm/status');
+          const data = await resp.json();
+          if (data.status === 'ready') {
+            this.wasmReady = true;
+          }
+        } catch (e) {
+          // WASM status check is non-critical; ignore errors
         }
       }
 
@@ -1318,6 +1425,13 @@
       }
 
       wrapWidgetHtml(html) {
+        if (this.bridgeMode === 'wasm') {
+          return this.wrapWidgetHtmlWasm(html);
+        }
+        return this.wrapWidgetHtmlProxy(html);
+      }
+
+      wrapWidgetHtmlProxy(html) {
         return `
 <!DOCTYPE html>
 <html>
@@ -1469,6 +1583,237 @@
 ${html}
 </body>
 </html>`;
+      }
+
+      wrapWidgetHtmlWasm(html) {
+        const mcpUrl = this.mcpUrl;
+        return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { margin: 0; padding: 16px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+  </style>
+  <script type="module">
+    // WASM Bridge: direct MCP connection via WASM client
+    const preview = window.parent.previewRuntime;
+
+    try {
+      const { default: init, WasmClient } = await import('/wasm/mcp_wasm_client.js');
+      await init('/wasm/mcp_wasm_client_bg.wasm');
+
+      const client = new WasmClient();
+      await client.connect('${mcpUrl}');
+
+      // WASM bridge adapter -- normalizes responses to match proxy bridge shape exactly
+      window.mcpBridge = {
+        callTool: async (name, args) => {
+          preview.logConsole('log', 'callTool: ' + name);
+          preview.logEvent('bridgeCall', { method: 'callTool', name, args });
+
+          const startTime = Date.now();
+          let result;
+          let success = true;
+
+          try {
+            const mcpResult = await client.call_tool(name, args || {});
+            // Normalize WASM CallToolResult to proxy bridge shape
+            success = !mcpResult.isError;
+            result = {
+              success: success,
+              content: mcpResult.content || [],
+              _meta: mcpResult._meta || null
+            };
+
+            if (success && result.content) {
+              const widgetContent = result.content.find(c =>
+                c.content_type === 'resource' &&
+                c.mime_type &&
+                c.mime_type.includes('html')
+              );
+              if (widgetContent && widgetContent.text) {
+                preview.loadWidget(widgetContent.text);
+              }
+            }
+          } catch (e) {
+            result = { success: false, content: [], error: e.message };
+            success = false;
+          }
+
+          const duration = Date.now() - startTime;
+          preview.logBridgeCall(name, args || {}, result, duration, success);
+
+          return result;
+        },
+
+        getState: () => preview.widgetState,
+        setState: (state) => {
+          preview.widgetState = { ...preview.widgetState, ...state };
+          preview.updateStateView();
+          preview.logEvent('setState', state);
+        },
+
+        get toolInput() { return preview.toolInput; },
+        get toolOutput() { return preview.toolOutput; },
+        get toolResponseMetadata() { return preview.toolResponseMetadata; },
+
+        sendMessage: (msg) => {
+          preview.logConsole('log', 'sendMessage: ' + msg);
+          preview.logEvent('sendMessage', { message: msg });
+        },
+        openExternal: (url) => {
+          preview.logEvent('openExternal', { url });
+          window.open(url, '_blank');
+        },
+
+        uploadFile: async (file) => {
+          preview.logEvent('uploadFile', { name: file.name, size: file.size });
+          return { fileId: 'mock-file-' + Date.now() };
+        },
+        getFileDownloadUrl: async (fileId) => {
+          preview.logEvent('getFileDownloadUrl', { fileId });
+          return { downloadUrl: '#mock-download' };
+        },
+
+        requestDisplayMode: async (mode) => {
+          preview.displayMode = mode;
+          preview.updateDisplayMode();
+          preview.logEvent('requestDisplayMode', { mode });
+          return true;
+        },
+        requestClose: () => {
+          preview.logEvent('requestClose', {});
+        },
+        notifyIntrinsicHeight: (height) => {
+          preview.logEvent('notifyIntrinsicHeight', { height });
+        },
+        setOpenInAppUrl: (href) => {
+          preview.logEvent('setOpenInAppUrl', { href });
+        },
+
+        get theme() { return preview.theme; },
+        get locale() { return preview.locale; },
+        get displayMode() { return preview.displayMode; },
+        get maxHeight() { return preview.maxHeight; },
+        get safeArea() { return preview.safeArea; },
+        get view() { return preview.view; },
+        get userAgent() { return navigator.userAgent; },
+      };
+
+      // ChatGPT compatibility
+      window.openai = window.mcpBridge;
+
+      preview.logEvent('wasmBridgeReady', {});
+    } catch (e) {
+      // WASM bridge failed; log error but do not throw
+      if (window.parent.previewRuntime) {
+        window.parent.previewRuntime.logConsole('error', 'WASM bridge init failed: ' + e.message);
+      }
+    }
+
+    // Console capture
+    const originalConsole = { ...console };
+    ['log', 'warn', 'error', 'info'].forEach(method => {
+      console[method] = (...cArgs) => {
+        originalConsole[method](...cArgs);
+        preview.logConsole(method, cArgs.map(a =>
+          typeof a === 'object' ? JSON.stringify(a) : String(a)
+        ).join(' '));
+      };
+    });
+
+    // Listen for globals updates
+    window.addEventListener('message', (e) => {
+      if (e.data && e.data.type === 'openai/setGlobals') {
+        window.dispatchEvent(new CustomEvent('openai/setGlobals', {
+          detail: e.data
+        }));
+      }
+    });
+
+    // Signal ready
+    setTimeout(() => {
+      preview.logEvent('widgetReady', {});
+    }, 100);
+  </script>
+</head>
+<body>
+${html}
+</body>
+</html>`;
+      }
+
+      setupBridgeToggle() {
+        document.querySelectorAll('#bridge-toggle button').forEach(btn => {
+          btn.addEventListener('click', () => {
+            this.toggleBridgeMode(btn.dataset.bridge);
+          });
+        });
+      }
+
+      async toggleBridgeMode(mode) {
+        if (mode === this.bridgeMode) return;
+        this.bridgeMode = mode;
+        this.updateToggleUI();
+
+        if (mode === 'wasm') {
+          if (!this.wasmReady) {
+            this.setToggleBuilding(true);
+            try {
+              const resp = await fetch('/api/wasm/build', { method: 'POST' });
+              const data = await resp.json();
+              if (data.status === 'ready') {
+                this.wasmReady = true;
+              } else {
+                this.showBuildError(data.error || 'WASM build failed');
+                this.bridgeMode = 'proxy';
+                this.updateToggleUI();
+                return;
+              }
+            } catch (e) {
+              this.showBuildError(e.message);
+              this.bridgeMode = 'proxy';
+              this.updateToggleUI();
+              return;
+            } finally {
+              this.setToggleBuilding(false);
+            }
+          }
+        }
+
+        // Reload the active widget with the new bridge mode
+        if (this.activeResourceUri) {
+          await this.loadResourceWidget(this.activeResourceUri);
+        }
+      }
+
+      updateToggleUI() {
+        document.querySelectorAll('#bridge-toggle button').forEach(btn => {
+          btn.classList.toggle('active', btn.dataset.bridge === this.bridgeMode);
+        });
+      }
+
+      setToggleBuilding(isBuilding) {
+        const wasmBtn = document.querySelector('#bridge-toggle button[data-bridge="wasm"]');
+        if (wasmBtn) {
+          wasmBtn.classList.toggle('building', isBuilding);
+          wasmBtn.disabled = isBuilding;
+        }
+        // Also disable proxy button during build to prevent rapid toggling
+        const proxyBtn = document.querySelector('#bridge-toggle button[data-bridge="proxy"]');
+        if (proxyBtn) {
+          proxyBtn.disabled = isBuilding;
+        }
+      }
+
+      showBuildError(message) {
+        const toast = document.createElement('div');
+        toast.className = 'build-error-toast';
+        toast.textContent = 'WASM build error: ' + message;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 5000);
       }
 
       emitGlobalsUpdate() {
