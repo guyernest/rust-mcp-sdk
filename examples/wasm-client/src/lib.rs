@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use pmcp::client::Client;
 use pmcp::types::ClientCapabilities;
 use pmcp::{WasmHttpClient, WasmHttpConfig, WasmWebSocketTransport};
@@ -64,9 +66,9 @@ pub enum ConnectionType {
 #[wasm_bindgen]
 pub struct WasmClient {
     connection_type: Option<ConnectionType>,
-    // We use Option to handle both client types
     ws_client: Option<Client<WasmWebSocketTransport>>,
     http_client: Option<WasmHttpClient>,
+    next_request_id: AtomicU64,
 }
 
 #[wasm_bindgen]
@@ -79,7 +81,16 @@ impl WasmClient {
             connection_type: None,
             ws_client: None,
             http_client: None,
+            next_request_id: AtomicU64::new(1),
         }
+    }
+
+    /// Generate a unique request ID for each MCP call.
+    ///
+    /// Uses an atomic counter to avoid concurrent call corruption
+    /// that previously occurred with hardcoded IDs.
+    fn next_id(&self) -> i64 {
+        self.next_request_id.fetch_add(1, Ordering::Relaxed) as i64
     }
 
     /// Connect to an MCP server.
@@ -112,7 +123,7 @@ impl WasmClient {
 
             // Initialize the connection - wrap in TransportMessage
             let init_request = pmcp::shared::TransportMessage::Request {
-                id: 1i64.into(),
+                id: self.next_id().into(),
                 request: pmcp::types::Request::Client(Box::new(
                     pmcp::types::ClientRequest::Initialize(pmcp::types::InitializeParams {
                         protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
@@ -186,7 +197,7 @@ impl WasmClient {
 
                 // Create list tools request as TransportMessage
                 let request = pmcp::shared::TransportMessage::Request {
-                    id: 2i64.into(),
+                    id: self.next_id().into(),
                     request: pmcp::types::Request::Client(Box::new(
                         pmcp::types::ClientRequest::ListTools(pmcp::types::ListToolsRequest {
                             cursor: None,
@@ -243,7 +254,7 @@ impl WasmClient {
 
                 // Create call tool request as TransportMessage
                 let request = pmcp::shared::TransportMessage::Request {
-                    id: 3i64.into(), // TODO: Implement proper request ID tracking
+                    id: self.next_id().into(),
                     request: pmcp::types::Request::Client(Box::new(
                         pmcp::types::ClientRequest::CallTool(pmcp::types::CallToolRequest {
                             name,
