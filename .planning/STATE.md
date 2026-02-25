@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Developers can author, preview, test, and publish MCP Apps with rich UI widgets entirely from the Rust toolchain.
-**Current focus:** Milestone v1.3 -- MCP Apps Developer Experience (Phase 14 complete, ready for Phase 15)
+**Current focus:** Milestone v1.3 -- MCP Apps Developer Experience (Phase 15 in progress)
 
 ## Current Position
 
 Milestone: v1.3 MCP Apps Developer Experience
-Phase: 14 of 19 (Preview Bridge Infrastructure) -- COMPLETE
-Plan: 2 of 2 complete
-Status: Phase Complete
-Last activity: 2026-02-24 -- Completed 14-02 (preview UI: resource picker, auto-load, DevTools enhancements, connection status)
+Phase: 15 of 19 (WASM Widget Bridge) -- IN PROGRESS
+Plan: 1 of 2 complete
+Status: Executing
+Last activity: 2026-02-25 -- Completed 15-01 (WASM client ID fix + WasmBuilder + WASM API routes)
 
-Progress: [==========================.........] 74% (14/19 phases across all milestones; 1/6 in v1.3)
+Progress: [==========================.........] 74% (14/19 phases across all milestones; 2/6 in v1.3)
 
 ## Shipped Milestones
 
@@ -28,8 +28,8 @@ Progress: [==========================.........] 74% (14/19 phases across all mil
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 31 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 3)
-- v1.3 plans completed: 3
+- Total plans completed: 32 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 4)
+- v1.3 plans completed: 4
 
 ## Accumulated Context
 
@@ -45,6 +45,9 @@ Recent decisions affecting current work:
 - Used native HTML details/summary for expandable bridge call entries (no JS toggle library needed)
 - Resource picker shows label for single resource, clickable list for multiple (avoids unnecessary dropdown)
 - Badge count auto-clears when Network tab is selected
+- Used tokio::sync::RwLock for WasmBuilder build status (async-safe across await points)
+- Workspace root detection walks up from cwd looking for [workspace] in Cargo.toml
+- Cache check at startup: existing WASM artifacts initialize WasmBuilder as Ready without rebuild
 
 ### Pending Todos
 
@@ -54,11 +57,11 @@ None.
 
 - ~~McpProxy re-initializes MCP session on every request (no session stickiness)~~ -- FIXED in 14-01
 - postMessage wildcard origin ('*') in bridge code is a CVE-class vulnerability -- must fix in Phase 14
-- WASM client uses hardcoded request IDs causing concurrent call corruption -- must fix in Phase 15
+- ~~WASM client uses hardcoded request IDs causing concurrent call corruption~~ -- FIXED in 15-01
 - Bridge contract divergence between preview mock and ChatGPT Skybridge -- must address across Phases 14-16
 
 ## Session Continuity
 
-Last session: 2026-02-24
-Stopped at: Completed 14-02-PLAN.md (preview UI: resource picker, auto-load, DevTools enhancements)
-Resume: Phase 14 complete. Start Phase 15 (WASM Bridge) planning or execution.
+Last session: 2026-02-25
+Stopped at: Completed 15-01-PLAN.md (WASM client ID fix + WasmBuilder + WASM API routes)
+Resume: Continue Phase 15 with Plan 02 (WASM bridge frontend toggle and widget-runtime.js).

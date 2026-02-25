@@ -19,10 +19,10 @@ Requirements for the MCP Apps Developer Experience milestone. Each maps to roadm
 
 ### WASM Bridge
 
-- [ ] **WASM-01**: WASM MCP client loads in preview iframe context and connects to MCP server
+- [x] **WASM-01**: WASM MCP client loads in preview iframe context and connects to MCP server
 - [ ] **WASM-02**: Bridge adapter translates WASM `call_tool()` response to `window.mcpBridge.callTool()` shape
-- [ ] **WASM-03**: WASM client handles CORS for cross-origin HTTP transport to local MCP server
-- [ ] **WASM-04**: MCP server URL is injected into WASM client from preview server configuration
+- [x] **WASM-03**: WASM client handles CORS for cross-origin HTTP transport to local MCP server
+- [x] **WASM-04**: MCP server URL is injected into WASM client from preview server configuration
 - [ ] **WASM-05**: Standalone `widget-runtime.js` bundles WASM client as drop-in `window.mcpBridge` polyfill
 
 ### Publishing
@@ -103,10 +103,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PREV-05 | Phase 14 | Complete |
 | PREV-06 | Phase 14 | Complete |
 | PREV-07 | Phase 14 | Complete |
-| WASM-01 | Phase 15 | Pending |
+| WASM-01 | Phase 15 | Complete |
 | WASM-02 | Phase 15 | Pending |
-| WASM-03 | Phase 15 | Pending |
-| WASM-04 | Phase 15 | Pending |
+| WASM-03 | Phase 15 | Complete |
+| WASM-04 | Phase 15 | Complete |
 | WASM-05 | Phase 15 | Pending |
 | DEVX-03 | Phase 16 | Pending |
 | DEVX-05 | Phase 16 | Pending |
