@@ -83,11 +83,11 @@ Plans:
   1. WASM MCP client loads in the preview iframe context and successfully connects to the local MCP server
   2. Widget code calling `window.mcpBridge.callTool()` works identically whether using the proxy bridge or the WASM bridge
   3. A standalone `widget-runtime.js` file bundles the WASM client and exposes it as a drop-in `window.mcpBridge` polyfill usable outside the preview context
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 15-01: TBD
-- [ ] 15-02: TBD
+- [ ] 15-01-PLAN.md — Backend: fix WASM client request IDs, WasmBuilder module, WASM API routes and artifact serving
+- [ ] 15-02-PLAN.md — Frontend: Proxy/WASM toggle, WASM bridge adapter injection, standalone widget-runtime.js
 
 ### Phase 16: Shared Bridge Library
 **Goal**: A single canonical bridge library eliminates duplicated JavaScript across widgets and guarantees API consistency between preview, WASM, and production bridge modes
