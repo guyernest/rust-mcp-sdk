@@ -61,3 +61,29 @@
 
 ---
 
+
+## v1.3 MCP Apps Developer Experience (Shipped: 2026-02-26)
+
+**Phases completed:** 6 phases, 12 plans, 23 tasks
+**Code changes:** +9,197 / -423 across 47 files
+**Timeline:** 2026-02-24 → 2026-02-26
+
+**Delivered:** Production-ready MCP Apps developer experience for the PMCP SDK — from `cargo pmcp app new` scaffolding through `cargo pmcp preview` with dual bridge modes to `cargo pmcp app build` for ChatGPT manifest and demo landing page generation, with 20 E2E browser tests proving the full widget pipeline.
+
+**Key accomplishments:**
+1. Session-persistent MCP proxy with resource picker, bridge call logging in DevTools, and connection status lifecycle in preview UI
+2. WASM in-browser MCP client with proxy/WASM toggle, CallToolResult response normalization, and standalone widget-runtime.js polyfill
+3. MCP Apps-aligned TypeScript bridge library (App, PostMessageTransport, AppBridge) eliminating ~250 lines of duplicated inline JavaScript
+4. File-based widget authoring via WidgetDir with hot-reload disk reads, bridge auto-injection, and `cargo pmcp app new` CLI scaffolding
+5. ChatGPT-compatible ai-plugin.json manifest generation and standalone demo landing pages with mock bridge
+6. Chess, map, and dataviz MCP App examples with 20 chromiumoxide CDP browser tests across 3 widget suites
+
+**Requirements:** 26/26 satisfied (PREV-01..07, WASM-01..05, DEVX-01..07, PUBL-01..02, SHIP-01..05)
+
+### Known Tech Debt
+- Dual `inject_bridge_script` implementations (mcp-preview vs pmcp core) — architectural decision, not a bug
+- E2E tests use mock bridge injection (CDP), not the real postMessage bridge chain
+- Unused API endpoints in preview server (GET /api/status, GET /ws)
+
+---
+

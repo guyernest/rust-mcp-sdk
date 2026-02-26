@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Extensions for the PMCP SDK: a `pmcp-tasks` crate implementing MCP Tasks (experimental spec 2025-11-25) with pluggable storage backends, and MCP Apps developer tooling (`mcp-preview`, WASM test client, scaffolding, publishing) enabling rich UI widgets served from MCP servers across ChatGPT, Claude, and other MCP clients.
+Extensions for the PMCP SDK: a `pmcp-tasks` crate implementing MCP Tasks (experimental spec 2025-11-25) with pluggable storage backends, and a complete MCP Apps developer experience — from `cargo pmcp app new` scaffolding through live preview with dual bridge modes to ChatGPT manifest generation and demo landing pages — enabling rich UI widgets served from MCP servers across ChatGPT, Claude, and other MCP clients.
 
 ## Core Value
 
@@ -38,21 +38,21 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 - ✓ DynamoDB backend behind `dynamodb` feature flag (cloud-only tests) — v1.2
 - ✓ Redis backend behind `redis` feature flag (proving the trait) — v1.2
 - ✓ Automated feature-flag verification across all backend combinations — v1.2
+- ✓ mcp-preview widget iframe rendering with working MCP bridge proxy — v1.3
+- ✓ WASM in-browser MCP client with proxy/WASM toggle and standalone polyfill — v1.3
+- ✓ Shared bridge library (App, PostMessageTransport, AppBridge) eliminating inline JS — v1.3
+- ✓ File-based widget authoring with WidgetDir hot-reload and bridge auto-injection — v1.3
+- ✓ `cargo pmcp app new` CLI scaffolding with documented bridge API and CSP helpers — v1.3
+- ✓ ChatGPT-compatible ai-plugin.json manifest generation — v1.3
+- ✓ Standalone demo landing pages with mock bridge — v1.3
+- ✓ Chess, map, and dataviz MCP App examples shipping — v1.3
+- ✓ 20 chromiumoxide CDP E2E browser tests across 3 widget suites — v1.3
 
 ### Active
 
-<!-- Current milestone: v1.3 MCP Apps Developer Experience -->
+<!-- No active milestone — planning next -->
 
-- [ ] mcp-preview widget iframe rendering with working MCP bridge proxy
-- [ ] WASM-based in-browser MCP Apps test client (connect to server, render widget, inject bridge)
-- [ ] cargo pmcp deploy extended for MCP Apps widget serving
-- [ ] Auto-generated demo landing page with mock bridge for stakeholder demos
-- [ ] ChatGPT-compatible manifest generation for registering MCP Apps
-- [ ] File-based widget authoring (separate HTML from Rust inline strings)
-- [ ] Shared bridge library reducing JavaScript boilerplate in widgets
-- [ ] cargo pmcp new --mcp-apps scaffolding template
-- [ ] Ship existing chess and map MCP Apps examples
-- [ ] Playwright E2E test integration for widgets
+(None — planning next milestone)
 
 ### Future
 
@@ -64,16 +64,15 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 - [ ] StepExecution user API for runtime step mode customization
 - [ ] Examples: code mode, DynamoDB backend
 
-## Current Milestone: v1.3 MCP Apps Developer Experience
+## Current State
 
-**Goal:** Polish MCP Apps into a production-ready developer experience — from authoring through preview to publishing — making it easy for developers to build, test, demo, and publish MCP Apps with rich UI widgets.
+Shipped v1.3 with complete MCP Apps developer experience. All 4 milestones (v1.0-v1.3) shipped.
 
-**Target features:**
-- mcp-preview: widget iframe rendering with working MCP bridge proxy
-- WASM test client: in-browser MCP Apps testing (connect, render, bridge injection)
-- Publishing: deploy targets for Apps, auto demo landing page, ChatGPT manifest generation
-- Authoring DX: file-based widgets, shared bridge library, `cargo pmcp new --mcp-apps` scaffolding
-- Polish: ship chess/map examples, Playwright E2E tests
+**Shipped milestones:**
+- v1.0: MCP Tasks Foundation (types, store, server integration)
+- v1.1: Task-Prompt Bridge (workflow execution, handoff, continuation)
+- v1.2: Pluggable Storage Backends (DynamoDB, Redis, feature flags)
+- v1.3: MCP Apps Developer Experience (preview, WASM, authoring, publishing, examples, E2E)
 
 ### Out of Scope
 
@@ -91,17 +90,16 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ## Context
 
-Shipped v1.2 with ~32,000 Rust LOC across `pmcp-tasks` crate and `pmcp` core modifications (v1.0: ~11,500 + v1.1: +10,697 + v1.2: +9,802).
-Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, parking_lot; optional: aws-sdk-dynamodb, redis) + `pmcp` core (protocol types, ServerCore routing, workflow system).
+Shipped v1.3 with ~41,000+ Rust LOC across the workspace (v1.0: ~11,500 + v1.1: +10,697 + v1.2: +9,802 + v1.3: +9,197).
+Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, parking_lot; optional: aws-sdk-dynamodb, redis) + `pmcp` core (protocol types, ServerCore routing, workflow system, MCP Apps) + `cargo-pmcp` (CLI tooling) + `mcp-preview` (browser preview) + `mcp-e2e-tests` (chromiumoxide CDP) + `packages/widget-runtime` (TypeScript bridge library).
 
 - The MCP Tasks spec is experimental (2025-11-25). Most MCP clients don't support it yet, so the feature is optional and isolated in `pmcp-tasks`.
 - PMCP extends the minimal spec with task variables — a shared scratchpad visible to both client and server via `_meta`. This is the key innovation for servers without LLM capabilities.
 - v1.1 bridges the `SequentialWorkflow` system with tasks: workflows pause mid-execution and the client continues via structured handoff guidance.
 - v1.2 introduced pluggable storage backends: `StorageBackend` KV trait with `GenericTaskStore<B>` centralizing all domain logic. Three backends ship: `InMemoryBackend` (default), `DynamoDbBackend` (feature-flagged), `RedisBackend` (feature-flagged).
-- The workflow-as-prompt model: domain experts design MCP prompts that chain tools and resources. The prompt defines steps, the server executes what it can, the task tracks what's done, and the LLM client picks up the rest.
-- `cargo-pmcp` has pluggable deployment targets (Lambda+CFN, Google Run+Docker, Cloudflare Workers+wrangler). Task storage backends should follow the same plugin pattern, starting with DynamoDB+CFN.
+- v1.3 shipped the complete MCP Apps developer experience: `mcp-preview` with dual proxy/WASM bridge modes, `WidgetDir` file-based widget authoring with hot-reload, `cargo pmcp app new` scaffolding, `cargo pmcp app build` for manifest+landing generation, and 3 example apps (chess, map, dataviz) with 20 E2E browser tests.
 - MCP Apps is an OpenAI extension (ChatGPT Apps / SEP-1865) adding rich HTML UI widgets to MCP servers. PMCP SDK supports multiple MIME types: `text/html+skybridge` (ChatGPT), `text/html+mcp` (standard MCP Apps), `text/html` (MCP-UI). Core types and adapters are in `src/types/mcp_apps.rs` behind `mcp-apps` feature flag.
-- Existing MCP Apps infrastructure: `crates/mcp-preview/` (browser preview server, ~50% complete), WASM client (`examples/wasm-client/`), two example apps (chess, map) with preview.html files, and Playwright test scaffolding.
+- The shared bridge library (`packages/widget-runtime/`) provides App, PostMessageTransport, and AppBridge classes with TypeScript type definitions, compiled to ESM/CJS.
 - Detailed design document: `docs/design/tasks-feature-design.md`
 
 ## Constraints
@@ -139,6 +137,13 @@ Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, park
 | Composite string keys (v1.2) | `{owner_id}:{task_id}` for universal backend support | ✓ Good — maps naturally to DynamoDB partition keys and Redis key prefixes |
 | Feature-flagged backends (v1.2) | DynamoDB/Redis behind feature flags, InMemory always available | ✓ Good — zero-cost default, opt-in for production backends |
 | Lua scripts for Redis CAS (v1.2) | Atomic check-and-set without WATCH/MULTI race conditions | ✓ Good — 19 integration tests verify atomicity |
+| Session-once RwLock for MCP proxy (v1.3) | Resettable session support for reconnect button; OnceCell cannot reset | ✓ Good — session persists across requests, reconnect works |
+| Bridge-first approach (v1.3) | Preview bridge is the load-bearing dependency for all downstream phases | ✓ Good — phase ordering validated as correct |
+| Extract shared library after proving (v1.3) | Build 2 bridge implementations before extracting widget-runtime.js | ✓ Good — abstraction covers both proxy and WASM cases |
+| App class uses document.referrer for origin (v1.3) | Prevents CVE-class wildcard postMessage vulnerability | ✓ Good — security fix for the blocked concern |
+| WidgetDir disk reads on every call (v1.3) | Zero-config hot-reload without file watchers | ✓ Good — simplest approach, no caching bugs |
+| chromiumoxide over Playwright (v1.3) | Pure Rust E2E tests, no Node.js dependency | ✓ Good — 20 tests pass, auto-downloads Chromium |
+| Standalone examples (workspace exclude) (v1.3) | Avoids feature flag unification conflicts | ✓ Good — each example builds independently |
 
 ---
-*Last updated: 2026-02-24 after v1.3 milestone start*
+*Last updated: 2026-02-26 after v1.3 milestone*
