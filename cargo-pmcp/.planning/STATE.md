@@ -10,28 +10,28 @@ See: .planning/PROJECT.md (updated 2026-02-26)
 ## Current Position
 
 Phase: 1 of 4 (Foundation)
-Plan: 1 of 4 in current phase
+Plan: 4 of 4 in current phase
 Status: Executing
-Last activity: 2026-02-26 -- Completed 01-01 TOML config types and loadtest module bootstrap
+Last activity: 2026-02-26 -- Completed 01-02 McpClient with MCP handshake and error classification
 
-Progress: [█░░░░░░░░░] 8%
+Progress: [███░░░░░░░] 23%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 1
+- Total plans completed: 3
 - Average duration: 5min
-- Total execution time: 0.08 hours
+- Total execution time: 0.25 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 1. Foundation | 1/4 | 5min | 5min |
+| 1. Foundation | 3/4 | 15min | 5min |
 
 **Recent Trend:**
-- Last 5 plans: 01-01 (5min)
-- Trend: Starting
+- Last 5 plans: 01-01 (5min), 01-03 (5min), 01-02 (5min)
+- Trend: Consistent
 
 *Updated after each plan completion*
 
@@ -49,6 +49,12 @@ Recent decisions affecting current work:
 - [01-01]: Serde tagged enum for ScenarioStep enables natural TOML type="tools/call" syntax
 - [01-01]: Dual lib+bin crate layout (cargo_pmcp:: library + cargo-pmcp binary) for fuzz/test/example imports
 - [01-01]: No url field in Settings -- target server URL from --url CLI flag only
+- [01-03]: Histogram::new(3) with auto-resize instead of new_with_bounds -- avoids silent recording failures on outlier values
+- [01-03]: success_count()/error_count() return histogram len (includes synthetic fills) for accurate percentile denominators
+- [01-03]: operation_counts use logical counts (one per record() call) not histogram entries for business-level counting
+- [01-02]: JSON-RPC bodies via serde_json::json! macro -- no dependency on parent SDK types for load test client
+- [01-02]: McpClient accepts reqwest::Client by value for Phase 2 connection pool sharing
+- [01-02]: Timing boundary: response bytes captured before JSON parsing -- parse time excluded from latency
 
 ### Pending Todos
 
@@ -62,5 +68,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Completed 01-01-PLAN.md (TOML config types and loadtest module bootstrap)
+Stopped at: Completed 01-02-PLAN.md (McpClient with MCP handshake and error classification)
 Resume file: None

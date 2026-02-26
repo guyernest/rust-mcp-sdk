@@ -33,8 +33,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 Plans:
 - [x] 01-01: TOML config types and parsing
-- [ ] 01-02: MCP-aware HTTP client with session lifecycle
-- [ ] 01-03: HdrHistogram metrics pipeline with coordinated omission correction
+- [x] 01-02: MCP-aware HTTP client with session lifecycle
+- [x] 01-03: HdrHistogram metrics pipeline with coordinated omission correction
 - [ ] 01-04: Property tests, fuzz testing, and runnable example
 
 ### Phase 2: Engine Core
@@ -91,7 +91,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 0/4 | Not started | - |
+| 1. Foundation | 3/4 | In progress | - |
 | 2. Engine Core | 0/3 | Not started | - |
 | 3. CLI and Reports | 0/3 | Not started | - |
 | 4. Load Shaping and Tool Metrics | 0/3 | Not started | - |

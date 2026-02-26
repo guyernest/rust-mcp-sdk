@@ -16,13 +16,13 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### MCP Protocol
 
-- [ ] **MCP-01**: Each virtual user performs its own MCP initialize handshake and maintains its session
+- [x] **MCP-01**: Each virtual user performs its own MCP initialize handshake and maintains its session
 - [ ] **MCP-02**: Metrics are reported per MCP tool (latency, throughput, errors per tool)
 - [x] **MCP-03**: JSON-RPC errors are classified separately from HTTP errors
 
 ### Metrics & Reporting
 
-- [ ] **METR-01**: Load test reports latency percentiles (P50/P95/P99) using HdrHistogram
+- [x] **METR-01**: Load test reports latency percentiles (P50/P95/P99) using HdrHistogram
 - [ ] **METR-02**: Load test reports throughput (requests/second) and error rate with classification
 - [ ] **METR-03**: Load test shows live terminal progress (current RPS, error count, elapsed time)
 - [ ] **METR-04**: Load test produces colorized terminal summary report at completion
@@ -72,9 +72,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | CONF-01 | Phase 1: Foundation | Complete |
 | LOAD-03 | Phase 1: Foundation | Complete |
-| MCP-01 | Phase 1: Foundation | Pending |
+| MCP-01 | Phase 1: Foundation | Complete |
 | MCP-03 | Phase 1: Foundation | Complete |
-| METR-01 | Phase 1: Foundation | Pending |
+| METR-01 | Phase 1: Foundation | Complete |
 | LOAD-01 | Phase 2: Engine Core | Pending |
 | LOAD-02 | Phase 2: Engine Core | Pending |
 | METR-02 | Phase 2: Engine Core | Pending |
