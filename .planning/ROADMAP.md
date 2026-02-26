@@ -52,7 +52,7 @@ See: `.planning/milestones/v1.2-ROADMAP.md` for full phase details
 
 - [x] **Phase 14: Preview Bridge Infrastructure** - Widget iframe rendering with working MCP bridge proxy in mcp-preview (completed 2026-02-24)
 - [x] **Phase 15: WASM Widget Bridge** - In-browser WASM MCP client as alternative bridge mode for widget testing (completed 2026-02-25)
-- [ ] **Phase 16: Shared Bridge Library** - Canonical widget-runtime.js eliminating bridge code duplication across widgets
+- [x] **Phase 16: Shared Bridge Library** - Canonical widget-runtime.js eliminating bridge code duplication across widgets (completed 2026-02-26)
 - [ ] **Phase 17: Widget Authoring DX and Scaffolding** - File-based widgets, scaffolding template, and developer ergonomics
 - [ ] **Phase 18: Publishing Pipeline** - ChatGPT manifest generation and standalone demo landing pages
 - [ ] **Phase 19: Ship Examples and Playwright E2E** - Chess and map examples finalized with passing Playwright test suites
@@ -163,7 +163,7 @@ Plans:
 | 13. Feature Flags | v1.2 | 1/1 | Complete | 2026-02-24 |
 | 14. Preview Bridge | 2/2 | Complete    | 2026-02-24 | - |
 | 15. WASM Bridge | 2/2 | Complete    | 2026-02-25 | - |
-| 16. Shared Bridge Lib | 1/2 | In Progress|  | - |
+| 16. Shared Bridge Lib | 2/2 | Complete   | 2026-02-26 | - |
 | 17. Authoring DX | v1.3 | 0/? | Not started | - |
 | 18. Publishing | v1.3 | 0/? | Not started | - |
 | 19. Ship + E2E | v1.3 | 0/? | Not started | - |

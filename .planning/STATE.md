@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Developers can author, preview, test, and publish MCP Apps with rich UI widgets entirely from the Rust toolchain.
-**Current focus:** Milestone v1.3 -- MCP Apps Developer Experience (Phase 16 in progress)
+**Current focus:** Milestone v1.3 -- MCP Apps Developer Experience (Phase 16 complete, Phase 17 next)
 
 ## Current Position
 
 Milestone: v1.3 MCP Apps Developer Experience
-Phase: 16 of 19 (Shared Bridge Library) -- IN PROGRESS
-Plan: 1 of 2 complete
-Status: Executing
-Last activity: 2026-02-26 -- Completed 16-01 (shared bridge library TypeScript modules)
+Phase: 16 of 19 (Shared Bridge Library) -- COMPLETE
+Plan: 2 of 2 complete
+Status: Phase complete
+Last activity: 2026-02-26 -- Completed 16-02 (preview server integration and build orchestration)
 
-Progress: [============================.......] 79% (15/19 phases across all milestones; 3/6 in v1.3)
+Progress: [==============================.....] 84% (16/19 phases across all milestones; 4/6 in v1.3)
 
 ## Shipped Milestones
 
@@ -28,8 +28,8 @@ Progress: [============================.......] 79% (15/19 phases across all mil
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 34 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 6)
-- v1.3 plans completed: 6
+- Total plans completed: 35 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 7)
+- v1.3 plans completed: 7
 
 ## Accumulated Context
 
@@ -55,6 +55,11 @@ Recent decisions affecting current work:
 - PostMessageTransport uses auto-incrementing integer IDs for JSON-RPC correlation
 - Backward-compat shim normalizes CallToolResult to legacy { success, content } shape
 - AppBridge responds with JSON-RPC -32601 for unknown methods
+- AppBridge toolCallHandler dispatches based on bridgeMode (proxy fetch vs WASM client) on the host side
+- Widget iframe uses dynamic import('/assets/widget-runtime.mjs') with App + installCompat for backward compat
+- Unified wrapWidgetHtml() replaces separate proxy/WASM wrappers -- widget-side code is identical regardless of bridge mode
+- WASM client initialization moved to host-side toggleBridgeMode() for cleaner separation
+- Makefile build/build-release targets depend on build-widget-runtime for correct TypeScript-before-Rust ordering
 
 ### Pending Todos
 
@@ -70,5 +75,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Completed 16-01-PLAN.md (shared bridge library TypeScript modules)
-Resume: Continue with 16-02 (integration into preview server and WASM bridge modes).
+Stopped at: Completed 16-02-PLAN.md (preview server integration and build orchestration)
+Resume: Phase 16 complete. Continue with Phase 17 (App Scaffolding).
