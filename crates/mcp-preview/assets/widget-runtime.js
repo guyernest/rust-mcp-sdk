@@ -1,12 +1,15 @@
 /**
- * MCP Widget Runtime -- Standalone WASM Bridge Polyfill
+ * MCP Widget Runtime -- Standalone WASM Bridge Loader
  *
- * Provides `window.mcpBridge` powered by the WASM MCP client for use
- * outside the preview context. Widget authors include this script in
- * their HTML and specify the MCP server URL via a data attribute.
+ * Creates a mini-host that connects to an MCP server via the WASM client
+ * and exposes `window.mcpBridge` for backward compatibility.
+ *
+ * This is a thin loader that delegates to the shared widget-runtime ESM
+ * library for all bridge API implementation. The bridge code is NOT
+ * duplicated here -- it comes from the compiled ES module.
  *
  * Usage:
- *   <script src="widget-runtime.js" data-mcp-url="http://localhost:3000/mcp"></script>
+ *   <script type="module" src="widget-runtime.js" data-mcp-url="http://localhost:3000/mcp"></script>
  *   <script>
  *     window.addEventListener('mcpBridgeReady', async () => {
  *       const result = await window.mcpBridge.callTool('my_tool', { arg: 'value' });
@@ -18,15 +21,15 @@
  *   - mcpBridgeReady: Fired when the WASM client is connected and the bridge is ready.
  *   - mcpBridgeError: Fired (CustomEvent) with { detail: { error } } if initialization fails.
  *
- * The bridge exposes the same API as the preview proxy bridge:
+ * The bridge exposes the same API as the preview proxy bridge via installCompat():
  *   - callTool(name, args)  -- returns { success, content }
- *   - getState()            -- returns window.__mcpState or {}
- *   - setState(s)           -- merges into window.__mcpState
- *   - sendMessage(msg)      -- console.log
- *   - openExternal(url)     -- window.open
- *   - theme (getter)        -- reads document.documentElement.dataset.theme or 'light'
- *   - locale (getter)       -- navigator.language
- *   - displayMode (getter)  -- 'inline'
+ *   - getState()            -- returns {}
+ *   - setState(s)           -- no-op (forward compat)
+ *   - sendMessage(msg)      -- sends via App.sendMessage
+ *   - openExternal(url)     -- opens via App.openLink
+ *   - theme (getter)        -- from host context or 'light'
+ *   - locale (getter)       -- from host context or navigator.language
+ *   - displayMode (getter)  -- from host context or 'inline'
  */
 (async function () {
   'use strict';
@@ -36,99 +39,52 @@
   const serverUrl = scriptTag ? scriptTag.getAttribute('data-mcp-url') : null;
 
   if (!serverUrl) {
-    console.error('[mcpBridge] Missing data-mcp-url attribute on script tag. Cannot initialize WASM bridge.');
+    console.error('[widget-runtime] Missing data-mcp-url attribute on script tag.');
     return;
   }
 
-  // Determine WASM artifact URLs relative to this script's location
+  // Determine artifact URLs relative to this script's location
   const scriptUrl = new URL(scriptTag.src);
+  const runtimeUrl = new URL('widget-runtime.mjs', scriptUrl);
   const wasmJsUrl = new URL('mcp_wasm_client.js', scriptUrl);
   const wasmBinaryUrl = new URL('mcp_wasm_client_bg.wasm', scriptUrl);
 
-  // Shared widget state (standalone -- no preview runtime)
-  if (!window.__mcpState) {
-    window.__mcpState = {};
-  }
-
   try {
-    // Dynamically import the WASM JS module
-    const wasmModule = await import(wasmJsUrl.href);
+    // Import shared library and WASM client in parallel
+    const [runtimeModule, wasmModule] = await Promise.all([
+      import(runtimeUrl.href),
+      import(wasmJsUrl.href),
+    ]);
+
+    const { App, AppBridge, installCompat } = runtimeModule;
     const init = wasmModule.default;
     const WasmClient = wasmModule.WasmClient;
 
-    // Initialize WASM binary
+    // Initialize WASM binary and connect to MCP server
     await init(wasmBinaryUrl.href);
-
-    // Create WASM client and connect to MCP server
     const client = new WasmClient();
     await client.connect(serverUrl);
 
-    // Expose window.mcpBridge with standalone implementations
-    window.mcpBridge = {
-      /**
-       * Call an MCP tool by name with the given arguments.
-       * Returns { success: boolean, content: Array }.
-       */
-      callTool: async function (name, args) {
-        try {
-          const mcpResult = await client.call_tool(name, args || {});
-          const success = !mcpResult.isError;
-          return {
-            success: success,
-            content: mcpResult.content || []
-          };
-        } catch (e) {
-          return {
-            success: false,
-            content: [],
-            error: e.message
-          };
-        }
-      },
+    // Create App instance and install backward-compat shim
+    const app = new App({ name: 'StandaloneWidget', version: '1.0.0' });
+    installCompat(app);
 
-      /** Get the current widget state object. */
-      getState: function () {
-        return window.__mcpState || {};
-      },
-
-      /** Merge partial state into the widget state. */
-      setState: function (s) {
-        window.__mcpState = Object.assign(window.__mcpState || {}, s);
-      },
-
-      /** Log a message (standalone: writes to console). */
-      sendMessage: function (msg) {
-        console.log('[mcpBridge] sendMessage:', msg);
-      },
-
-      /** Open a URL in a new browser tab. */
-      openExternal: function (url) {
-        window.open(url, '_blank');
-      },
-
-      /** Current theme from the document root data-theme attribute. */
-      get theme() {
-        return document.documentElement.dataset.theme || 'light';
-      },
-
-      /** Browser locale. */
-      get locale() {
-        return navigator.language;
-      },
-
-      /** Display mode (always 'inline' in standalone context). */
-      get displayMode() {
-        return 'inline';
+    // Override the compat shim's callTool to route through the WASM client
+    // since we are running standalone (no host iframe to postMessage through)
+    window.mcpBridge.callTool = async function (name, args) {
+      try {
+        const mcpResult = await client.call_tool(name, args || {});
+        const success = !mcpResult.isError;
+        return { success, content: mcpResult.content || [] };
+      } catch (e) {
+        return { success: false, content: [], error: e.message };
       }
     };
-
-    // ChatGPT compatibility alias
-    window.openai = window.mcpBridge;
 
     // Signal that the bridge is ready
     window.dispatchEvent(new Event('mcpBridgeReady'));
   } catch (e) {
-    console.error('[mcpBridge] Initialization failed:', e);
+    console.error('[widget-runtime] Initialization failed:', e);
     window.dispatchEvent(
       new CustomEvent('mcpBridgeError', { detail: { error: e.message || String(e) } })
     );

@@ -95,15 +95,34 @@ cloudflare-sdk-test:
 		-d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' \
 		| jq . || echo "$(YELLOW)⚠ Make sure 'cloudflare-sdk-dev' is running$(NC)"
 
+# Widget Runtime (TypeScript -> ESM) build targets
+.PHONY: build-widget-runtime
+build-widget-runtime:
+	@echo "$(BLUE)Building widget-runtime TypeScript library...$(NC)"
+	@if [ -d "packages/widget-runtime" ] && command -v npm &> /dev/null; then \
+		cd packages/widget-runtime && npm run build; \
+		cp dist/index.mjs ../../crates/mcp-preview/assets/widget-runtime.mjs; \
+		echo "$(GREEN)✓ widget-runtime built and copied to preview assets$(NC)"; \
+	else \
+		echo "$(YELLOW)⚠ Skipping widget-runtime build (missing packages/widget-runtime or npm)$(NC)"; \
+	fi
+
+.PHONY: clean-widget-runtime
+clean-widget-runtime:
+	@echo "$(BLUE)Cleaning widget-runtime build artifacts...$(NC)"
+	rm -rf packages/widget-runtime/dist/
+	rm -f crates/mcp-preview/assets/widget-runtime.mjs
+	@echo "$(GREEN)✓ widget-runtime cleaned$(NC)"
+
 # Build targets
 .PHONY: build
-build:
+build: build-widget-runtime
 	@echo "$(BLUE)Building project...$(NC)"
 	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO) build --all-features
 	@echo "$(GREEN)✓ Build successful$(NC)"
 
 .PHONY: build-release
-build-release:
+build-release: build-widget-runtime
 	@echo "$(BLUE)Building release...$(NC)"
 	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO) build --release --all-features
 	@echo "$(GREEN)✓ Release build successful$(NC)"
