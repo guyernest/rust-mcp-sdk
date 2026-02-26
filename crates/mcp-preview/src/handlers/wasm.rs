@@ -63,7 +63,7 @@ pub async fn serve_artifact(
                 "WASM build not ready. Trigger a build first via POST /api/wasm/build",
             )
                 .into_response();
-        }
+        },
     };
 
     let file_path = artifact_dir.join(&file_path_str);
@@ -77,13 +77,13 @@ pub async fn serve_artifact(
                 format!("Artifact not found: {file_path_str}"),
             )
                 .into_response();
-        }
+        },
     };
     let canonical_base = match artifact_dir.canonicalize() {
         Ok(p) => p,
         Err(_) => {
             return (StatusCode::NOT_FOUND, "WASM build directory not found").into_response();
-        }
+        },
     };
     if !canonical.starts_with(&canonical_base) {
         return (StatusCode::BAD_REQUEST, "Invalid path").into_response();
@@ -93,7 +93,7 @@ pub async fn serve_artifact(
         Ok(contents) => {
             let content_type = mime_for_extension(&file_path_str);
             ([(header::CONTENT_TYPE, content_type)], contents).into_response()
-        }
+        },
         Err(_) => (
             StatusCode::NOT_FOUND,
             format!("Artifact not found: {file_path_str}"),

@@ -22,10 +22,7 @@
 /// assert!(result.contains(r#"<script type="module" src="/assets/widget-runtime.mjs"></script>"#));
 /// ```
 pub fn inject_bridge_script(html: &str, bridge_url: &str) -> String {
-    let script_tag = format!(
-        r#"<script type="module" src="{}"></script>"#,
-        bridge_url
-    );
+    let script_tag = format!(r#"<script type="module" src="{}"></script>"#, bridge_url);
 
     if let Some(pos) = html.find("</head>") {
         // Insert before </head>

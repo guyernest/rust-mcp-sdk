@@ -163,7 +163,7 @@ impl WasmBuilder {
                 let mut status = self.build_status.write().await;
                 *status = BuildStatus::Ready(pkg_dir.clone());
                 Ok(pkg_dir)
-            }
+            },
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -177,14 +177,14 @@ impl WasmBuilder {
                 let mut status = self.build_status.write().await;
                 *status = BuildStatus::Failed(msg.clone());
                 Err(msg)
-            }
+            },
             Err(e) => {
                 let msg = format!("Failed to spawn wasm-pack: {e}");
                 warn!("{}", msg);
                 let mut status = self.build_status.write().await;
                 *status = BuildStatus::Failed(msg.clone());
                 Err(msg)
-            }
+            },
         }
     }
 
@@ -224,7 +224,7 @@ impl WasmBuilder {
                 BuildStatus::Building => continue,
                 BuildStatus::NotBuilt => {
                     return Err("Build was reset while waiting".to_string());
-                }
+                },
             }
         }
     }

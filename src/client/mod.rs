@@ -22,11 +22,11 @@ use uuid::Uuid;
 use tokio::sync::{mpsc, oneshot, RwLock};
 
 #[cfg(target_arch = "wasm32")]
+use futures::SinkExt;
+#[cfg(target_arch = "wasm32")]
 use futures_channel::{mpsc, oneshot};
 #[cfg(target_arch = "wasm32")]
 use futures_locks::RwLock;
-#[cfg(target_arch = "wasm32")]
-use futures::SinkExt;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod auth;

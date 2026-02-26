@@ -90,17 +90,16 @@ pub async fn list_resources(State(state): State<Arc<AppState>>) -> Json<Value> {
             Ok(entries) => {
                 let mut widget_entries: Vec<_> = entries
                     .filter_map(|e| e.ok())
-                    .filter(|e| {
-                        e.path()
-                            .extension()
-                            .and_then(|ext| ext.to_str())
-                            == Some("html")
-                    })
+                    .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("html"))
                     .collect();
                 widget_entries.sort_by_key(|e| e.file_name());
 
                 for entry in widget_entries {
-                    if let Some(stem) = entry.path().file_stem().and_then(|s| s.to_str().map(String::from)) {
+                    if let Some(stem) = entry
+                        .path()
+                        .file_stem()
+                        .and_then(|s| s.to_str().map(String::from))
+                    {
                         all_resources.push(json!({
                             "uri": format!("ui://app/{}", stem),
                             "name": stem,
@@ -115,28 +114,30 @@ pub async fn list_resources(State(state): State<Arc<AppState>>) -> Json<Value> {
                     all_resources.len(),
                     widgets_dir.display()
                 );
-            }
+            },
             Err(e) => {
-                tracing::warn!("Failed to read widgets directory {}: {}", widgets_dir.display(), e);
-            }
+                tracing::warn!(
+                    "Failed to read widgets directory {}: {}",
+                    widgets_dir.display(),
+                    e
+                );
+            },
         }
     }
 
     // Also fetch proxy resources (from the MCP server)
     match state.proxy.list_resources().await {
         Ok(resources) => {
-            let ui_resources = resources
-                .into_iter()
-                .filter(|r| {
-                    r.mime_type
-                        .as_deref()
-                        .is_some_and(|m| m.to_lowercase().contains("html"))
-                });
+            let ui_resources = resources.into_iter().filter(|r| {
+                r.mime_type
+                    .as_deref()
+                    .is_some_and(|m| m.to_lowercase().contains("html"))
+            });
             for r in ui_resources {
                 // Avoid duplicates: skip proxy resources whose URI matches a disk widget
-                let dominated = all_resources.iter().any(|existing| {
-                    existing.get("uri").and_then(|v| v.as_str()) == Some(&r.uri)
-                });
+                let dominated = all_resources
+                    .iter()
+                    .any(|existing| existing.get("uri").and_then(|v| v.as_str()) == Some(&r.uri));
                 if !dominated {
                     all_resources.push(json!({
                         "uri": r.uri,
@@ -146,13 +147,13 @@ pub async fn list_resources(State(state): State<Arc<AppState>>) -> Json<Value> {
                     }));
                 }
             }
-        }
+        },
         Err(e) => {
             tracing::warn!("Proxy list_resources failed: {}", e);
             if all_resources.is_empty() {
                 return json_response(json!({ "resources": [], "error": e.to_string() }));
             }
-        }
+        },
     }
 
     json_response(json!({ "resources": all_resources }))
@@ -182,11 +183,11 @@ pub async fn read_resource(
                     );
                     // Auto-inject bridge script
                     inject_bridge_script(&content, "/assets/widget-runtime.mjs")
-                }
+                },
                 Err(err) => {
                     tracing::warn!("Failed to read widget {}: {}", file_path.display(), err);
                     widget_error_html(widget_name, &file_path, &err.to_string())
-                }
+                },
             };
 
             return json_response(json!({

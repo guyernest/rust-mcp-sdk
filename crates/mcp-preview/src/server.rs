@@ -130,7 +130,10 @@ impl PreviewServer {
                 "\x1b[1;36m║\x1b[0m  Widgets:    \x1b[1;35m{:<30}\x1b[0m   \x1b[1;36m║\x1b[0m",
                 truncate_url(&widgets_dir.display().to_string(), 30)
             );
-            info!("Widgets directory: {} (hot-reload enabled)", widgets_dir.display());
+            info!(
+                "Widgets directory: {} (hot-reload enabled)",
+                widgets_dir.display()
+            );
         }
         println!("\x1b[1;36m╠══════════════════════════════════════════════════╣\x1b[0m");
         println!(
