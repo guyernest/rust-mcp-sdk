@@ -124,10 +124,11 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. Running `cargo pmcp manifest` produces a ChatGPT-compatible JSON file containing server URL, tool-to-widget mapping, and required metadata fields
   2. Running `cargo pmcp landing` generates a standalone HTML page that renders the widget with a mock bridge, viewable without a running MCP server
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 18-01: TBD
+- [ ] 18-01-PLAN.md — Project detection, manifest JSON generation, and `cargo pmcp app manifest` CLI command
+- [ ] 18-02-PLAN.md — Landing page HTML generation with mock bridge, `cargo pmcp app landing` and `app build` commands, scaffold template update
 
 ### Phase 19: Ship Examples and Playwright E2E
 **Goal**: Chess and map MCP Apps examples compile, run, and pass automated end-to-end Playwright tests proving the complete widget pipeline works
