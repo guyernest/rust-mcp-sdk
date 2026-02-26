@@ -27,7 +27,7 @@ Requirements for the MCP Apps Developer Experience milestone. Each maps to roadm
 
 ### Publishing
 
-- [ ] **PUBL-01**: `cargo pmcp manifest` generates ChatGPT-compatible JSON with server URL and tool-to-widget mapping
+- [x] **PUBL-01**: `cargo pmcp manifest` generates ChatGPT-compatible JSON with server URL and tool-to-widget mapping
 - [ ] **PUBL-02**: `cargo pmcp landing` generates standalone HTML demo page with mock bridge (no server required)
 
 ### Developer Experience
@@ -115,7 +115,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DEVX-04 | Phase 17 | Complete |
 | DEVX-06 | Phase 17 | Complete |
 | DEVX-07 | Phase 17 | Complete |
-| PUBL-01 | Phase 18 | Pending |
+| PUBL-01 | Phase 18 | Complete |
 | PUBL-02 | Phase 18 | Pending |
 | SHIP-01 | Phase 19 | Pending |
 | SHIP-02 | Phase 19 | Pending |
