@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 mod commands;
 mod deployment;
 mod landing;
+mod publishing;
 mod secrets;
 mod templates;
 mod utils;
