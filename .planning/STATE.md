@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Developers can author, preview, test, and publish MCP Apps with rich UI widgets entirely from the Rust toolchain.
-**Current focus:** Milestone v1.3 -- MCP Apps Developer Experience (Phase 16 complete, Phase 17 next)
+**Current focus:** Milestone v1.3 -- MCP Apps Developer Experience (Phase 17 in progress)
 
 ## Current Position
 
 Milestone: v1.3 MCP Apps Developer Experience
-Phase: 16 of 19 (Shared Bridge Library) -- COMPLETE
-Plan: 2 of 2 complete
-Status: Phase complete
-Last activity: 2026-02-26 -- Completed 16-02 (preview server integration and build orchestration)
+Phase: 17 of 19 (Widget Authoring DX and Scaffolding)
+Plan: 1 of 2 complete
+Status: Executing
+Last activity: 2026-02-26 -- Completed 17-01 (file-based widget system and hot-reload)
 
-Progress: [==============================.....] 84% (16/19 phases across all milestones; 4/6 in v1.3)
+Progress: [===============================....] 86% (16.5/19 phases across all milestones; 4.5/6 in v1.3)
 
 ## Shipped Milestones
 
@@ -28,8 +28,8 @@ Progress: [==============================.....] 84% (16/19 phases across all mil
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 35 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 7)
-- v1.3 plans completed: 7
+- Total plans completed: 36 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 8)
+- v1.3 plans completed: 8
 
 ## Accumulated Context
 
@@ -60,6 +60,11 @@ Recent decisions affecting current work:
 - Unified wrapWidgetHtml() replaces separate proxy/WASM wrappers -- widget-side code is identical regardless of bridge mode
 - WASM client initialization moved to host-side toggleBridgeMode() for cleaner separation
 - Makefile build/build-release targets depend on build-widget-runtime for correct TypeScript-before-Rust ordering
+- WidgetDir reads from disk on every call (no caching) for zero-config hot-reload
+- Bridge script auto-injected as type=module before </head> or after <body>
+- Widget URI convention: widgets/board.html maps to ui://app/board
+- Preview server implements own inject_bridge_script (mirrors WidgetDir) since mcp-preview crate does not depend on pmcp
+- Examples use CARGO_MANIFEST_DIR to resolve widgets/ path at compile time
 
 ### Pending Todos
 
@@ -75,5 +80,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Completed 16-02-PLAN.md (preview server integration and build orchestration)
-Resume: Phase 16 complete. Continue with Phase 17 (App Scaffolding).
+Stopped at: Completed 17-01-PLAN.md (file-based widget system and hot-reload)
+Resume: Continue with 17-02-PLAN.md (widget scaffolding templates).

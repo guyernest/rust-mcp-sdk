@@ -32,10 +32,10 @@ Requirements for the MCP Apps Developer Experience milestone. Each maps to roadm
 
 ### Developer Experience
 
-- [ ] **DEVX-01**: Widget HTML files live in `widgets/` directory separate from Rust source code
+- [x] **DEVX-01**: Widget HTML files live in `widgets/` directory separate from Rust source code
 - [ ] **DEVX-02**: `cargo pmcp new --mcp-apps` scaffolds a complete MCP Apps project with server, widget, and preview.html
 - [x] **DEVX-03**: Shared bridge library (`widget-runtime.js`) eliminates copy-pasted bridge code across widgets
-- [ ] **DEVX-04**: Widget preview refreshes on browser reload without server restart
+- [x] **DEVX-04**: Widget preview refreshes on browser reload without server restart
 - [x] **DEVX-05**: Bridge API TypeScript type definitions (`widget-runtime.d.ts`) ship with bridge library
 - [ ] **DEVX-06**: Scaffolded project includes README explaining bridge API, stateless pattern, and CSP configuration
 - [ ] **DEVX-07**: Scaffolded `main.rs` includes `WidgetCSP` configuration helper with commented examples
@@ -110,9 +110,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | WASM-05 | Phase 15 | Complete |
 | DEVX-03 | Phase 16 | Complete |
 | DEVX-05 | Phase 16 | Complete |
-| DEVX-01 | Phase 17 | Pending |
+| DEVX-01 | Phase 17 | Complete |
 | DEVX-02 | Phase 17 | Pending |
-| DEVX-04 | Phase 17 | Pending |
+| DEVX-04 | Phase 17 | Complete |
 | DEVX-06 | Phase 17 | Pending |
 | DEVX-07 | Phase 17 | Pending |
 | PUBL-01 | Phase 18 | Pending |

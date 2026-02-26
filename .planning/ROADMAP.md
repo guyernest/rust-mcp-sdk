@@ -164,6 +164,6 @@ Plans:
 | 14. Preview Bridge | 2/2 | Complete    | 2026-02-24 | - |
 | 15. WASM Bridge | 2/2 | Complete    | 2026-02-25 | - |
 | 16. Shared Bridge Lib | 2/2 | Complete    | 2026-02-26 | - |
-| 17. Authoring DX | v1.3 | 0/? | Not started | - |
+| 17. Authoring DX | 1/2 | In Progress|  | - |
 | 18. Publishing | v1.3 | 0/? | Not started | - |
 | 19. Ship + E2E | v1.3 | 0/? | Not started | - |
