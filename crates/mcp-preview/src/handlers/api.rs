@@ -208,35 +208,9 @@ pub async fn read_resource(
 
 /// Insert a bridge script tag into widget HTML.
 ///
-/// Mirrors the injection logic from `WidgetDir::inject_bridge_script` in pmcp core.
+/// Delegates to the shared `pmcp-widget-utils` crate (single source of truth).
 fn inject_bridge_script(html: &str, bridge_url: &str) -> String {
-    let script_tag = format!(
-        r#"<script type="module" src="{}"></script>"#,
-        bridge_url
-    );
-
-    if let Some(pos) = html.find("</head>") {
-        let mut result = String::with_capacity(html.len() + script_tag.len() + 1);
-        result.push_str(&html[..pos]);
-        result.push_str(&script_tag);
-        result.push('\n');
-        result.push_str(&html[pos..]);
-        result
-    } else if let Some(pos) = html.find("<body") {
-        if let Some(close) = html[pos..].find('>') {
-            let insert_at = pos + close + 1;
-            let mut result = String::with_capacity(html.len() + script_tag.len() + 1);
-            result.push_str(&html[..insert_at]);
-            result.push('\n');
-            result.push_str(&script_tag);
-            result.push_str(&html[insert_at..]);
-            result
-        } else {
-            format!("{}\n{}", script_tag, html)
-        }
-    } else {
-        format!("{}\n{}", script_tag, html)
-    }
+    pmcp_widget_utils::inject_bridge_script(html, bridge_url)
 }
 
 /// Generate a styled HTML error page for a widget that failed to load from disk.

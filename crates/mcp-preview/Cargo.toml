@@ -25,6 +25,9 @@ serde_json = "1"
 # HTTP client for MCP proxy
 reqwest = { version = "0.12", features = ["json"] }
 
+# Widget utilities (shared with pmcp core)
+pmcp-widget-utils = { path = "../pmcp-widget-utils" }
+
 # Utilities
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"

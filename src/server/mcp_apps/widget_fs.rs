@@ -153,36 +153,7 @@ impl WidgetDir {
     /// This allows widget authors to write plain HTML without bridge boilerplate;
     /// the server handles injection automatically.
     pub fn inject_bridge_script(html: &str, bridge_url: &str) -> String {
-        let script_tag = format!(
-            r#"<script type="module" src="{}"></script>"#,
-            bridge_url
-        );
-
-        if let Some(pos) = html.find("</head>") {
-            // Insert before </head>
-            let mut result = String::with_capacity(html.len() + script_tag.len() + 1);
-            result.push_str(&html[..pos]);
-            result.push_str(&script_tag);
-            result.push('\n');
-            result.push_str(&html[pos..]);
-            result
-        } else if let Some(pos) = html.find("<body") {
-            // Find the closing '>' of the <body> tag
-            if let Some(close) = html[pos..].find('>') {
-                let insert_at = pos + close + 1;
-                let mut result = String::with_capacity(html.len() + script_tag.len() + 1);
-                result.push_str(&html[..insert_at]);
-                result.push('\n');
-                result.push_str(&script_tag);
-                result.push_str(&html[insert_at..]);
-                result
-            } else {
-                format!("{}\n{}", script_tag, html)
-            }
-        } else {
-            // No </head> or <body> — prepend
-            format!("{}\n{}", script_tag, html)
-        }
+        pmcp_widget_utils::inject_bridge_script(html, bridge_url)
     }
 
     /// Generate a styled HTML error page for a widget that failed to load.
