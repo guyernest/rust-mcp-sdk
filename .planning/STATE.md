@@ -5,17 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Developers can author, preview, test, and publish MCP Apps with rich UI widgets entirely from the Rust toolchain.
-**Current focus:** Milestone v1.3 -- MCP Apps Developer Experience (Phase 19 in progress)
+**Current focus:** Milestone v1.3 -- MCP Apps Developer Experience (Phase 19 complete)
 
 ## Current Position
 
 Milestone: v1.3 MCP Apps Developer Experience
 Phase: 19 of 19 (Ship Examples & E2E Tests)
-Plan: 1 of 2 complete
-Status: In Progress
-Last activity: 2026-02-26 -- Completed 19-01 (Ship examples and justfile)
+Plan: 2 of 2 complete
+Status: Complete
+Last activity: 2026-02-26 -- Completed 19-02 (E2E test crate with chromiumoxide)
 
-Progress: [===================================] 97% (18.5/19 phases across all milestones; 6.5/7 in v1.3)
+Progress: [====================================] 100% (19/19 phases across all milestones; 7/7 in v1.3)
 
 ## Shipped Milestones
 
@@ -28,8 +28,8 @@ Progress: [===================================] 97% (18.5/19 phases across all m
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 40 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12)
-- v1.3 plans completed: 12
+- Total plans completed: 41 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 13)
+- v1.3 plans completed: 13
 
 ## Accumulated Context
 
@@ -80,6 +80,9 @@ Recent decisions affecting current work:
 - Contractual element IDs (chart, chartType, dataTable, queryInput, runQueryBtn, loading) for E2E test stability
 - Examples remain in workspace exclude list (standalone builds per RESEARCH.md Pitfall 3)
 - Justfile replaces ad-hoc scripts per CLAUDE.md convention
+- chromiumoxide fetcher/rustls/zip0 features (not _fetcher-rustls-tokio which doesn't exist in v0.9.1)
+- Map city detail test calls getCityDetails() directly -- Leaflet marker.openPopup() triggers tile loading blocking CDP
+- Each E2E test creates fresh browser + server (no shared state; fetcher caches Chromium on disk)
 
 ### Pending Todos
 
@@ -95,5 +98,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Completed 19-01-PLAN.md (Ship examples and justfile)
-Resume: Continue with 19-02 (E2E test crate with chromiumoxide).
+Stopped at: Completed 19-02-PLAN.md (E2E test crate with chromiumoxide)
+Resume: All v1.3 phases complete. Milestone ready for final review.

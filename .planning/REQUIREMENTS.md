@@ -44,9 +44,9 @@ Requirements for the MCP Apps Developer Experience milestone. Each maps to roadm
 
 - [x] **SHIP-01**: Chess MCP App example compiles and runs with `cargo build --features mcp-apps`
 - [x] **SHIP-02**: Map MCP App example compiles and runs with `cargo build --features mcp-apps`
-- [ ] **SHIP-03**: Playwright test server serves widget files at expected paths
-- [ ] **SHIP-04**: All chess widget Playwright tests pass
-- [ ] **SHIP-05**: Map widget Playwright tests written and passing
+- [x] **SHIP-03**: Playwright test server serves widget files at expected paths
+- [x] **SHIP-04**: All chess widget Playwright tests pass
+- [x] **SHIP-05**: Map widget Playwright tests written and passing
 
 ## Future Requirements
 
@@ -119,9 +119,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PUBL-02 | Phase 18 | Complete |
 | SHIP-01 | Phase 19 | Complete |
 | SHIP-02 | Phase 19 | Complete |
-| SHIP-03 | Phase 19 | Pending |
-| SHIP-04 | Phase 19 | Pending |
-| SHIP-05 | Phase 19 | Pending |
+| SHIP-03 | Phase 19 | Complete |
+| SHIP-04 | Phase 19 | Complete |
+| SHIP-05 | Phase 19 | Complete |
 
 **Coverage:**
 - v1.3 requirements: 26 total

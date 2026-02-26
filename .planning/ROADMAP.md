@@ -55,7 +55,7 @@ See: `.planning/milestones/v1.2-ROADMAP.md` for full phase details
 - [x] **Phase 16: Shared Bridge Library** - Canonical widget-runtime.js eliminating bridge code duplication across widgets (completed 2026-02-26)
 - [x] **Phase 17: Widget Authoring DX and Scaffolding** - File-based widgets, scaffolding template, and developer ergonomics (completed 2026-02-26)
 - [x] **Phase 18: Publishing Pipeline** - ChatGPT manifest generation and standalone demo landing pages (completed 2026-02-26)
-- [ ] **Phase 19: Ship Examples and Playwright E2E** - Chess and map examples finalized with passing Playwright test suites
+- [x] **Phase 19: Ship Examples and Playwright E2E** - Chess and map examples finalized with passing Playwright test suites (completed 2026-02-26)
 
 ## Phase Details
 
@@ -167,4 +167,4 @@ Plans:
 | 16. Shared Bridge Lib | 2/2 | Complete    | 2026-02-26 | - |
 | 17. Authoring DX | 2/2 | Complete   | 2026-02-26 | - |
 | 18. Publishing | 2/2 | Complete   | 2026-02-26 | - |
-| 19. Ship + E2E | 1/2 | In Progress|  | - |
+| 19. Ship + E2E | 2/2 | Complete   | 2026-02-26 | - |
