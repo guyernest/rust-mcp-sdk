@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-24)
 
 Milestone: v1.3 MCP Apps Developer Experience
 Phase: 17 of 19 (Widget Authoring DX and Scaffolding)
-Plan: 1 of 2 complete
-Status: Executing
-Last activity: 2026-02-26 -- Completed 17-01 (file-based widget system and hot-reload)
+Plan: 2 of 2 complete
+Status: Phase Complete
+Last activity: 2026-02-26 -- Completed 17-02 (CLI scaffolding command and project templates)
 
-Progress: [===============================....] 86% (16.5/19 phases across all milestones; 4.5/6 in v1.3)
+Progress: [================================...] 89% (17/19 phases across all milestones; 5/6 in v1.3)
 
 ## Shipped Milestones
 
@@ -28,8 +28,8 @@ Progress: [===============================....] 86% (16.5/19 phases across all m
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 36 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 8)
-- v1.3 plans completed: 8
+- Total plans completed: 37 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 9)
+- v1.3 plans completed: 9
 
 ## Accumulated Context
 
@@ -65,6 +65,9 @@ Recent decisions affecting current work:
 - Widget URI convention: widgets/board.html maps to ui://app/board
 - Preview server implements own inject_bridge_script (mirrors WidgetDir) since mcp-preview crate does not depend on pmcp
 - Examples use CARGO_MANIFEST_DIR to resolve widgets/ path at compile time
+- WidgetCSP commented examples use actual API (.connect/.resources/.redirect) not the nonexistent .default_src/.script_src
+- App subcommand namespace: cargo pmcp app new leaves room for future app build, app test
+- One-shot scaffolding with error-if-exists matching cargo new semantics
 
 ### Pending Todos
 
@@ -80,5 +83,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Completed 17-01-PLAN.md (file-based widget system and hot-reload)
-Resume: Continue with 17-02-PLAN.md (widget scaffolding templates).
+Stopped at: Completed 17-02-PLAN.md (CLI scaffolding command and project templates)
+Resume: Continue with Phase 18.
