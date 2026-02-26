@@ -912,7 +912,10 @@
     </aside>
   </main>
 
-  <script>
+  <script type="module">
+    // Import AppBridge from the shared widget-runtime library
+    import { AppBridge } from '/assets/widget-runtime.mjs';
+
     // Preview Runtime
     class PreviewRuntime {
       constructor() {
@@ -931,6 +934,9 @@
         this.bridgeMode = 'proxy';
         this.wasmReady = false;
         this.mcpUrl = '';
+
+        // AppBridge instance (host-side)
+        this.appBridge = null;
 
         // Network badge
         this.networkUnreadCount = 0;
@@ -1406,6 +1412,70 @@
         this.logEvent('toolResponse', { tool: this.selectedTool.name });
       }
 
+      /**
+       * Create a toolCallHandler for AppBridge that dispatches based on bridge mode.
+       * Proxy mode: fetch('/api/tools/call', ...) on the host side.
+       * WASM mode: use the WASM client's call_tool() directly.
+       */
+      createToolCallHandler() {
+        const runtime = this;
+        return async (name, args) => {
+          runtime.logConsole('log', 'callTool: ' + name);
+          runtime.logEvent('bridgeCall', { method: 'callTool', name, args });
+
+          const startTime = Date.now();
+          let rawResult;
+          let success = true;
+
+          try {
+            if (runtime.bridgeMode === 'wasm' && runtime._wasmClient) {
+              // WASM mode: direct tool call via WASM MCP client
+              const mcpResult = await runtime._wasmClient.call_tool(name, args || {});
+              success = !mcpResult.isError;
+              rawResult = mcpResult;
+              if (!success) {
+                throw new Error('Tool call failed');
+              }
+              // Normalize WASM result to CallToolResult shape
+              return { content: mcpResult.content || [], isError: false };
+            } else {
+              // Proxy mode: HTTP request to preview server
+              const response = await fetch('/api/tools/call', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, arguments: args || {} })
+              });
+              rawResult = await response.json();
+              success = !!rawResult.success;
+
+              if (success && rawResult.content) {
+                // Handle widget re-render if HTML is returned
+                const widgetContent = rawResult.content.find(c =>
+                  c.type === 'resource' &&
+                  c.mimeType &&
+                  c.mimeType.includes('html')
+                );
+                if (widgetContent && widgetContent.text) {
+                  runtime.loadWidget(widgetContent.text);
+                }
+              }
+              if (!success) {
+                throw new Error(rawResult.error || 'Tool call failed');
+              }
+              // Return in CallToolResult shape for the compat shim
+              return { content: rawResult.content || [], isError: false };
+            }
+          } catch (e) {
+            rawResult = rawResult || { error: e.message };
+            success = false;
+            throw e;
+          } finally {
+            const duration = Date.now() - startTime;
+            runtime.logBridgeCall(name, args || {}, rawResult || {}, duration, success);
+          }
+        };
+      }
+
       loadWidget(html) {
         const placeholder = document.getElementById('widget-placeholder');
         const frame = document.getElementById('widget-frame');
@@ -1417,191 +1487,43 @@
         placeholder.style.display = 'none';
         frame.style.display = 'block';
 
-        // Create wrapped HTML with bridge
+        // Destroy previous AppBridge if any
+        if (this.appBridge) {
+          this.appBridge.destroy();
+          this.appBridge = null;
+        }
+
+        // Create wrapped HTML with shared library bridge loader
         const wrappedHtml = this.wrapWidgetHtml(html);
         frame.srcdoc = wrappedHtml;
+
+        // Set up AppBridge on the host side after iframe loads
+        const runtime = this;
+        frame.onload = () => {
+          runtime.appBridge = new AppBridge({
+            iframe: frame,
+            toolCallHandler: runtime.createToolCallHandler(),
+            origin: window.location.origin,
+            hostContext: {
+              theme: runtime.theme,
+              locale: runtime.locale,
+              displayMode: runtime.displayMode,
+            },
+          });
+          runtime.appBridge.initialize();
+        };
 
         this.logEvent('widgetLoaded', {});
       }
 
+      /**
+       * Unified widget HTML wrapper.
+       * Instead of duplicating bridge code inline, injects a minimal loader
+       * that uses dynamic import() to load the shared library and installCompat.
+       */
       wrapWidgetHtml(html) {
-        if (this.bridgeMode === 'wasm') {
-          return this.wrapWidgetHtmlWasm(html);
-        }
-        return this.wrapWidgetHtmlProxy(html);
-      }
-
-      wrapWidgetHtmlProxy(html) {
         const sc = '<' + '/script>';
-        return `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>
-    body { margin: 0; padding: 16px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-  </style>
-  <script>
-    // Bridge communication with parent
-    const preview = window.parent.previewRuntime;
-
-    // Full MCP Bridge implementation
-    window.mcpBridge = {
-      // Core
-      callTool: async (name, args) => {
-        preview.logConsole('log', 'callTool: ' + name);
-        preview.logEvent('bridgeCall', { method: 'callTool', name, args });
-
-        const startTime = Date.now();
-        let rawResult;
-        let result;
-        let success = true;
-
-        try {
-          const response = await fetch('/api/tools/call', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, arguments: args || {} })
-          });
-          rawResult = await response.json();
-          success = !!rawResult.success;
-
-          if (success && rawResult.content) {
-            // Handle widget response if HTML is returned
-            const widgetContent = rawResult.content.find(c =>
-              c.type === 'resource' &&
-              c.mimeType &&
-              c.mimeType.includes('html')
-            );
-            if (widgetContent && widgetContent.text) {
-              preview.loadWidget(widgetContent.text);
-            }
-
-            // Extract parsed tool output from text content
-            const textItem = rawResult.content.find(c => c.type === 'text');
-            if (textItem && textItem.text) {
-              try { result = JSON.parse(textItem.text); } catch (e) { result = textItem.text; }
-            }
-          }
-          if (result === undefined) result = rawResult;
-          if (!success) throw new Error(rawResult.error || 'Tool call failed');
-        } catch (e) {
-          rawResult = rawResult || { error: e.message };
-          if (result === undefined) result = rawResult;
-          success = false;
-        }
-
-        const duration = Date.now() - startTime;
-        preview.logBridgeCall(name, args || {}, rawResult || result, duration, success);
-
-        if (!success) throw new Error(rawResult?.error || 'Tool call failed');
-        return result;
-      },
-
-      getState: () => preview.widgetState,
-      setState: (state) => {
-        preview.widgetState = { ...preview.widgetState, ...state };
-        preview.updateStateView();
-        preview.logEvent('setState', state);
-      },
-
-      // Tool context
-      get toolInput() { return preview.toolInput; },
-      get toolOutput() { return preview.toolOutput; },
-      get toolResponseMetadata() { return preview.toolResponseMetadata; },
-
-      // Communication
-      sendMessage: (msg) => {
-        preview.logConsole('log', 'sendMessage: ' + msg);
-        preview.logEvent('sendMessage', { message: msg });
-      },
-      openExternal: (url) => {
-        preview.logEvent('openExternal', { url });
-        window.open(url, '_blank');
-      },
-
-      // File operations (simulated)
-      uploadFile: async (file) => {
-        preview.logEvent('uploadFile', { name: file.name, size: file.size });
-        return { fileId: 'mock-file-' + Date.now() };
-      },
-      getFileDownloadUrl: async (fileId) => {
-        preview.logEvent('getFileDownloadUrl', { fileId });
-        return { downloadUrl: '#mock-download' };
-      },
-
-      // Display modes
-      requestDisplayMode: async (mode) => {
-        preview.displayMode = mode;
-        document.getElementById('display-mode', window.parent.document).value = mode;
-        preview.updateDisplayMode();
-        preview.logEvent('requestDisplayMode', { mode });
-        return true;
-      },
-      requestClose: () => {
-        preview.logEvent('requestClose', {});
-        // Reset widget
-        document.getElementById('widget-placeholder', window.parent.document).style.display = 'flex';
-        document.getElementById('widget-frame', window.parent.document).style.display = 'none';
-      },
-      notifyIntrinsicHeight: (height) => {
-        preview.logEvent('notifyIntrinsicHeight', { height });
-      },
-      setOpenInAppUrl: (href) => {
-        preview.logEvent('setOpenInAppUrl', { href });
-      },
-
-      // Environment (reactive)
-      get theme() { return preview.theme; },
-      get locale() { return preview.locale; },
-      get displayMode() { return preview.displayMode; },
-      get maxHeight() { return preview.maxHeight; },
-      get safeArea() { return preview.safeArea; },
-      get view() { return preview.view; },
-      get userAgent() { return navigator.userAgent; },
-    };
-
-    // ChatGPT compatibility
-    window.openai = window.mcpBridge;
-
-    // Console capture
-    const originalConsole = { ...console };
-    ['log', 'warn', 'error', 'info'].forEach(method => {
-      console[method] = (...args) => {
-        originalConsole[method](...args);
-        preview.logConsole(method, args.map(a =>
-          typeof a === 'object' ? JSON.stringify(a) : String(a)
-        ).join(' '));
-      };
-    });
-
-    // Listen for globals updates
-    window.addEventListener('message', (e) => {
-      if (e.data && e.data.type === 'openai/setGlobals') {
-        window.dispatchEvent(new CustomEvent('openai/setGlobals', {
-          detail: e.data
-        }));
-      }
-    });
-
-    // Signal ready
-    setTimeout(() => {
-      preview.logEvent('widgetReady', {});
-    }, 100);
-  ${sc}
-</head>
-<body>
-${html}
-</body>
-</html>`;
-      }
-
-      wrapWidgetHtmlWasm(html) {
-        const mcpUrl = this.mcpUrl;
-        const sc = '<' + '/script>';
-        return `
-<!DOCTYPE html>
+        return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
@@ -1610,152 +1532,39 @@ ${html}
     body { margin: 0; padding: 16px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
   </style>
   <script type="module">
-    // WASM Bridge: direct MCP connection via WASM client
+    // Load bridge from shared library via dynamic import
+    const { App, installCompat } = await import('/assets/widget-runtime.mjs');
+    const app = new App({ name: 'PreviewWidget', version: '1.0.0' });
+    installCompat(app);
+    await app.connect();
+
+    // Console capture for DevTools
     const preview = window.parent.previewRuntime;
-
-    try {
-      const { default: init, WasmClient } = await import('/wasm/mcp_wasm_client.js');
-      await init('/wasm/mcp_wasm_client_bg.wasm');
-
-      const client = new WasmClient();
-      await client.connect('${mcpUrl}');
-
-      // WASM bridge adapter -- normalizes responses to match proxy bridge shape exactly
-      window.mcpBridge = {
-        callTool: async (name, args) => {
-          preview.logConsole('log', 'callTool: ' + name);
-          preview.logEvent('bridgeCall', { method: 'callTool', name, args });
-
-          const startTime = Date.now();
-          let rawResult;
-          let result;
-          let success = true;
-
+    if (preview) {
+      const originalConsole = { ...console };
+      ['log', 'warn', 'error', 'info'].forEach(method => {
+        console[method] = (...cArgs) => {
+          originalConsole[method](...cArgs);
           try {
-            const mcpResult = await client.call_tool(name, args || {});
-            success = !mcpResult.isError;
-            rawResult = mcpResult;
+            preview.logConsole(method, cArgs.map(a =>
+              typeof a === 'object' ? JSON.stringify(a) : String(a)
+            ).join(' '));
+          } catch (e) { /* parent access may fail */ }
+        };
+      });
 
-            if (success && mcpResult.content) {
-              const widgetContent = mcpResult.content.find(c =>
-                c.type === 'resource' &&
-                c.mimeType &&
-                c.mimeType.includes('html')
-              );
-              if (widgetContent && widgetContent.text) {
-                preview.loadWidget(widgetContent.text);
-              }
+      // Listen for globals updates from host
+      window.addEventListener('message', (e) => {
+        if (e.data && e.data.type === 'openai/setGlobals') {
+          window.dispatchEvent(new CustomEvent('openai/setGlobals', {
+            detail: e.data
+          }));
+        }
+      });
 
-              // Extract parsed tool output from text content
-              const textItem = mcpResult.content.find(c => c.type === 'text');
-              if (textItem && textItem.text) {
-                try { result = JSON.parse(textItem.text); } catch (e) { result = textItem.text; }
-              }
-            }
-            if (result === undefined) result = mcpResult;
-            if (!success) throw new Error('Tool call failed');
-          } catch (e) {
-            rawResult = rawResult || { error: e.message };
-            if (result === undefined) result = rawResult;
-            success = false;
-          }
-
-          const duration = Date.now() - startTime;
-          preview.logBridgeCall(name, args || {}, rawResult || result, duration, success);
-
-          if (!success) throw new Error(rawResult?.error || 'Tool call failed');
-          return result;
-        },
-
-        getState: () => preview.widgetState,
-        setState: (state) => {
-          preview.widgetState = { ...preview.widgetState, ...state };
-          preview.updateStateView();
-          preview.logEvent('setState', state);
-        },
-
-        get toolInput() { return preview.toolInput; },
-        get toolOutput() { return preview.toolOutput; },
-        get toolResponseMetadata() { return preview.toolResponseMetadata; },
-
-        sendMessage: (msg) => {
-          preview.logConsole('log', 'sendMessage: ' + msg);
-          preview.logEvent('sendMessage', { message: msg });
-        },
-        openExternal: (url) => {
-          preview.logEvent('openExternal', { url });
-          window.open(url, '_blank');
-        },
-
-        uploadFile: async (file) => {
-          preview.logEvent('uploadFile', { name: file.name, size: file.size });
-          return { fileId: 'mock-file-' + Date.now() };
-        },
-        getFileDownloadUrl: async (fileId) => {
-          preview.logEvent('getFileDownloadUrl', { fileId });
-          return { downloadUrl: '#mock-download' };
-        },
-
-        requestDisplayMode: async (mode) => {
-          preview.displayMode = mode;
-          preview.updateDisplayMode();
-          preview.logEvent('requestDisplayMode', { mode });
-          return true;
-        },
-        requestClose: () => {
-          preview.logEvent('requestClose', {});
-        },
-        notifyIntrinsicHeight: (height) => {
-          preview.logEvent('notifyIntrinsicHeight', { height });
-        },
-        setOpenInAppUrl: (href) => {
-          preview.logEvent('setOpenInAppUrl', { href });
-        },
-
-        get theme() { return preview.theme; },
-        get locale() { return preview.locale; },
-        get displayMode() { return preview.displayMode; },
-        get maxHeight() { return preview.maxHeight; },
-        get safeArea() { return preview.safeArea; },
-        get view() { return preview.view; },
-        get userAgent() { return navigator.userAgent; },
-      };
-
-      // ChatGPT compatibility
-      window.openai = window.mcpBridge;
-
-      preview.logEvent('wasmBridgeReady', {});
-    } catch (e) {
-      // WASM bridge failed; log error but do not throw
-      if (window.parent.previewRuntime) {
-        window.parent.previewRuntime.logConsole('error', 'WASM bridge init failed: ' + e.message);
-      }
+      // Signal ready
+      setTimeout(() => { preview.logEvent('widgetReady', {}); }, 100);
     }
-
-    // Console capture
-    const originalConsole = { ...console };
-    ['log', 'warn', 'error', 'info'].forEach(method => {
-      console[method] = (...cArgs) => {
-        originalConsole[method](...cArgs);
-        preview.logConsole(method, cArgs.map(a =>
-          typeof a === 'object' ? JSON.stringify(a) : String(a)
-        ).join(' '));
-      };
-    });
-
-    // Listen for globals updates
-    window.addEventListener('message', (e) => {
-      if (e.data && e.data.type === 'openai/setGlobals') {
-        window.dispatchEvent(new CustomEvent('openai/setGlobals', {
-          detail: e.data
-        }));
-      }
-    });
-
-    // Signal ready
-    setTimeout(() => {
-      preview.logEvent('widgetReady', {});
-    }, 100);
   ${sc}
 </head>
 <body>
@@ -1798,6 +1607,22 @@ ${html}
               return;
             } finally {
               this.setToggleBuilding(false);
+            }
+          }
+
+          // Initialize WASM client for the host-side toolCallHandler
+          if (!this._wasmClient) {
+            try {
+              const { default: init, WasmClient } = await import('/wasm/mcp_wasm_client.js');
+              await init('/wasm/mcp_wasm_client_bg.wasm');
+              this._wasmClient = new WasmClient();
+              await this._wasmClient.connect(this.mcpUrl);
+              this.logEvent('wasmClientReady', {});
+            } catch (e) {
+              this.showBuildError('WASM client init failed: ' + e.message);
+              this.bridgeMode = 'proxy';
+              this.updateToggleUI();
+              return;
             }
           }
         }
@@ -1849,6 +1674,15 @@ ${html}
               view: this.view
             }
           }, '*');
+        }
+
+        // Also update AppBridge host context if active
+        if (this.appBridge) {
+          this.appBridge.sendHostContextChanged({
+            theme: this.theme,
+            locale: this.locale,
+            displayMode: this.displayMode,
+          });
         }
       }
 
