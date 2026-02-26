@@ -163,7 +163,7 @@ Plans:
 | 13. Feature Flags | v1.2 | 1/1 | Complete | 2026-02-24 |
 | 14. Preview Bridge | 2/2 | Complete    | 2026-02-24 | - |
 | 15. WASM Bridge | 2/2 | Complete    | 2026-02-25 | - |
-| 16. Shared Bridge Lib | v1.3 | 0/? | Not started | - |
+| 16. Shared Bridge Lib | 1/2 | In Progress|  | - |
 | 17. Authoring DX | v1.3 | 0/? | Not started | - |
 | 18. Publishing | v1.3 | 0/? | Not started | - |
 | 19. Ship + E2E | v1.3 | 0/? | Not started | - |

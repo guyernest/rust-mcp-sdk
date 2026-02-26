@@ -5,15 +5,15 @@
 See: .planning/PROJECT.md (updated 2026-02-24)
 
 **Core value:** Developers can author, preview, test, and publish MCP Apps with rich UI widgets entirely from the Rust toolchain.
-**Current focus:** Milestone v1.3 -- MCP Apps Developer Experience (Phase 15 complete, ready for Phase 16)
+**Current focus:** Milestone v1.3 -- MCP Apps Developer Experience (Phase 16 in progress)
 
 ## Current Position
 
 Milestone: v1.3 MCP Apps Developer Experience
-Phase: 15 of 19 (WASM Widget Bridge) -- COMPLETE
-Plan: 2 of 2 complete
-Status: Phase complete
-Last activity: 2026-02-25 -- Completed 15-02 (WASM bridge frontend toggle and widget-runtime.js)
+Phase: 16 of 19 (Shared Bridge Library) -- IN PROGRESS
+Plan: 1 of 2 complete
+Status: Executing
+Last activity: 2026-02-26 -- Completed 16-01 (shared bridge library TypeScript modules)
 
 Progress: [============================.......] 79% (15/19 phases across all milestones; 3/6 in v1.3)
 
@@ -28,8 +28,8 @@ Progress: [============================.......] 79% (15/19 phases across all mil
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 33 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 5)
-- v1.3 plans completed: 5
+- Total plans completed: 34 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 6)
+- v1.3 plans completed: 6
 
 ## Accumulated Context
 
@@ -51,6 +51,10 @@ Recent decisions affecting current work:
 - WASM bridge adapter normalizes CallToolResult { content, isError } to proxy shape { success, content, _meta } -- widget code is bridge-mode-agnostic
 - widget-runtime.js resolves WASM artifact URLs relative to script src for deployment portability
 - Bridge toggle defaults to Proxy; WASM requires explicit opt-in
+- App class resolves target origin from document.referrer (not wildcard '*') for postMessage security
+- PostMessageTransport uses auto-incrementing integer IDs for JSON-RPC correlation
+- Backward-compat shim normalizes CallToolResult to legacy { success, content } shape
+- AppBridge responds with JSON-RPC -32601 for unknown methods
 
 ### Pending Todos
 
@@ -65,6 +69,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-25
-Stopped at: Completed 15-02-PLAN.md (WASM bridge frontend toggle and widget-runtime.js)
-Resume: Continue with Phase 16 (next phase in v1.3 milestone).
+Last session: 2026-02-26
+Stopped at: Completed 16-01-PLAN.md (shared bridge library TypeScript modules)
+Resume: Continue with 16-02 (integration into preview server and WASM bridge modes).
