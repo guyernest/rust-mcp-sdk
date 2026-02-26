@@ -4,4 +4,5 @@
 //! MCP Apps through ChatGPT-compatible app directories.
 
 pub mod detect;
+pub mod landing;
 pub mod manifest;
