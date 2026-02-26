@@ -96,10 +96,11 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. Preview server serves `widget-runtime.js` at a stable URL and widgets reference it via a single `<script>` tag instead of inline bridge code
   2. TypeScript type definitions (`widget-runtime.d.ts`) ship alongside the bridge library, providing autocomplete for `callTool`, `getState`, `setState`, and lifecycle events
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 16-01: TBD
+- [ ] 16-01-PLAN.md — TypeScript bridge library: App class, PostMessageTransport, AppBridge, compat shim, and ESM+DTS build
+- [ ] 16-02-PLAN.md — Preview integration: replace inline bridge injection with shared library, update standalone loader, Makefile build orchestration
 
 ### Phase 17: Widget Authoring DX and Scaffolding
 **Goal**: Developer can scaffold a new MCP Apps project from the command line and author widgets as standalone HTML files with full bridge support and documented patterns
