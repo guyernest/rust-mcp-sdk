@@ -458,7 +458,7 @@ impl StorageBackend for DynamoDbBackend {
 // Test-only accessors
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
+#[cfg(all(test, feature = "dynamodb"))]
 impl DynamoDbBackend {
     /// Returns a reference to the underlying DynamoDB client.
     ///
