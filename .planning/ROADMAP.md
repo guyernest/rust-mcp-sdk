@@ -114,8 +114,8 @@ Plans:
 **Plans**: TBD
 
 Plans:
-- [ ] 17-01: TBD
-- [ ] 17-02: TBD
+- [ ] 17-01-PLAN.md — File-based widget system: WidgetDir discovery module, preview hot-reload integration, chess/map example migration
+- [ ] 17-02-PLAN.md — CLI scaffolding: `cargo pmcp app new` command, project templates with README, CSP helpers, starter widget
 
 ### Phase 18: Publishing Pipeline
 **Goal**: Developer can generate deployment artifacts for ChatGPT App Directory submission and shareable demo pages from their MCP Apps project
