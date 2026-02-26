@@ -6,6 +6,7 @@ use axum::{
     Router,
 };
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
@@ -28,6 +29,13 @@ pub struct PreviewConfig {
     pub theme: String,
     /// Initial locale
     pub locale: String,
+    /// Optional directory containing widget `.html` files for file-based authoring.
+    ///
+    /// When set, the preview server reads widget HTML directly from disk on each
+    /// request (hot-reload without file watchers). Widgets are discovered by
+    /// scanning this directory for `.html` files and mapping each to a
+    /// `ui://app/{stem}` resource URI.
+    pub widgets_dir: Option<PathBuf>,
 }
 
 impl Default for PreviewConfig {
@@ -38,6 +46,7 @@ impl Default for PreviewConfig {
             initial_tool: None,
             theme: "light".to_string(),
             locale: "en-US".to_string(),
+            widgets_dir: None,
         }
     }
 }
@@ -116,6 +125,13 @@ impl PreviewServer {
             "\x1b[1;36m║\x1b[0m  MCP Server: \x1b[1;32m{:<30}\x1b[0m   \x1b[1;36m║\x1b[0m",
             truncate_url(&config.mcp_url, 30)
         );
+        if let Some(ref widgets_dir) = config.widgets_dir {
+            println!(
+                "\x1b[1;36m║\x1b[0m  Widgets:    \x1b[1;35m{:<30}\x1b[0m   \x1b[1;36m║\x1b[0m",
+                truncate_url(&widgets_dir.display().to_string(), 30)
+            );
+            info!("Widgets directory: {} (hot-reload enabled)", widgets_dir.display());
+        }
         println!("\x1b[1;36m╠══════════════════════════════════════════════════╣\x1b[0m");
         println!(
             "\x1b[1;36m║\x1b[0m  Press Ctrl+C to stop                           \x1b[1;36m║\x1b[0m"

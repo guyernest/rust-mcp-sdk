@@ -159,6 +159,14 @@ enum Commands {
         /// Initial locale
         #[arg(long, default_value = "en-US")]
         locale: String,
+
+        /// Path to widgets directory for file-based authoring (hot-reload)
+        ///
+        /// When set, widget HTML files are read directly from this directory
+        /// on each request. Browser refresh shows the latest HTML without
+        /// server restart.
+        #[arg(long)]
+        widgets_dir: Option<String>,
     },
 }
 
@@ -291,10 +299,11 @@ fn execute_command(command: Commands) -> Result<()> {
             tool,
             theme,
             locale,
+            widgets_dir,
         } => {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(commands::preview::execute(
-                url, port, open, tool, theme, locale,
+                url, port, open, tool, theme, locale, widgets_dir,
             ))?;
         },
     }
