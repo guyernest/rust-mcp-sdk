@@ -103,9 +103,7 @@ pub fn load_mock_data(project_dir: &Path) -> Result<HashMap<String, serde_json::
     let mock_dir = project_dir.join("mock-data");
 
     if !mock_dir.is_dir() {
-        bail!(
-            "No mock data found. Create mock-data/tool-name.json for each tool."
-        );
+        bail!("No mock data found. Create mock-data/tool-name.json for each tool.");
     }
 
     let mut data = HashMap::new();
@@ -136,9 +134,7 @@ pub fn load_mock_data(project_dir: &Path) -> Result<HashMap<String, serde_json::
     }
 
     if data.is_empty() {
-        bail!(
-            "No mock data found. Create mock-data/tool-name.json for each tool."
-        );
+        bail!("No mock data found. Create mock-data/tool-name.json for each tool.");
     }
 
     Ok(data)
@@ -238,8 +234,8 @@ pub fn generate_landing(
             .context("No widgets found in project")?
     };
 
-    let mock_data_json = serde_json::to_string(mock_data)
-        .context("Failed to serialize mock data")?;
+    let mock_data_json =
+        serde_json::to_string(mock_data).context("Failed to serialize mock data")?;
 
     let widget_with_bridge = inject_mock_bridge(&widget.html, &mock_data_json);
     let escaped = escape_for_srcdoc(&widget_with_bridge);
@@ -286,8 +282,7 @@ pub fn write_landing(output_dir: &str, content: &str) -> Result<()> {
         .with_context(|| format!("Failed to create output directory: {}", output_dir))?;
 
     let path = std::path::Path::new(output_dir).join("landing.html");
-    fs::write(&path, content)
-        .with_context(|| format!("Failed to write {}", path.display()))?;
+    fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))?;
 
     println!("  {} Generated {}/landing.html", "ok".green(), output_dir);
 
@@ -345,7 +340,10 @@ mod tests {
         // Script should appear before </head>
         let script_pos = result.find("<script type=\"module\">").unwrap();
         let head_close_pos = result.find("</head>").unwrap();
-        assert!(script_pos < head_close_pos, "Script should be before </head>");
+        assert!(
+            script_pos < head_close_pos,
+            "Script should be before </head>"
+        );
     }
 
     #[test]
@@ -356,10 +354,7 @@ mod tests {
         // Script should appear after <body>
         let body_pos = result.find("<body>").unwrap();
         let script_pos = result.find("<script type=\"module\">").unwrap();
-        assert!(
-            script_pos > body_pos,
-            "Script should be after <body>"
-        );
+        assert!(script_pos > body_pos, "Script should be after <body>");
     }
 
     #[test]
@@ -453,16 +448,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mock_dir = dir.path().join("mock-data");
         fs::create_dir_all(&mock_dir).unwrap();
-        fs::write(
-            mock_dir.join("hello.json"),
-            r#"{"greeting": "Hi"}"#,
-        )
-        .unwrap();
-        fs::write(
-            mock_dir.join("greet.json"),
-            r#"{"message": "Greetings"}"#,
-        )
-        .unwrap();
+        fs::write(mock_dir.join("hello.json"), r#"{"greeting": "Hi"}"#).unwrap();
+        fs::write(mock_dir.join("greet.json"), r#"{"message": "Greetings"}"#).unwrap();
 
         let data = load_mock_data(dir.path()).unwrap();
         assert_eq!(data.len(), 2);

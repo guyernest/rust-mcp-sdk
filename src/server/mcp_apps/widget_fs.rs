@@ -90,9 +90,7 @@ impl WidgetDir {
                     let abs_path = if path.is_absolute() {
                         path.clone()
                     } else {
-                        std::env::current_dir()
-                            .unwrap_or_default()
-                            .join(&path)
+                        std::env::current_dir().unwrap_or_default().join(&path)
                     };
 
                     entries.push(WidgetEntry {
@@ -131,7 +129,7 @@ impl WidgetDir {
                     content.len()
                 );
                 content
-            }
+            },
             Err(err) => {
                 tracing::warn!(
                     "Failed to read widget file {}: {}",
@@ -139,7 +137,7 @@ impl WidgetDir {
                     err
                 );
                 Self::error_page(name, &file_path, &err.to_string())
-            }
+            },
         }
     }
 
@@ -292,7 +290,9 @@ mod tests {
         let html = "<html><head><title>Test</title></head><body>Content</body></html>";
         let result = WidgetDir::inject_bridge_script(html, "/assets/widget-runtime.mjs");
 
-        assert!(result.contains(r#"<script type="module" src="/assets/widget-runtime.mjs"></script>"#));
+        assert!(
+            result.contains(r#"<script type="module" src="/assets/widget-runtime.mjs"></script>"#)
+        );
         // Script should appear before </head>
         let script_pos = result.find("widget-runtime.mjs").unwrap();
         let head_close_pos = result.find("</head>").unwrap();
@@ -304,7 +304,9 @@ mod tests {
         let html = "<html><body>Content</body></html>";
         let result = WidgetDir::inject_bridge_script(html, "/assets/widget-runtime.mjs");
 
-        assert!(result.contains(r#"<script type="module" src="/assets/widget-runtime.mjs"></script>"#));
+        assert!(
+            result.contains(r#"<script type="module" src="/assets/widget-runtime.mjs"></script>"#)
+        );
         // Script should appear after <body>
         let body_pos = result.find("<body>").unwrap();
         let script_pos = result.find("widget-runtime.mjs").unwrap();
@@ -316,12 +318,14 @@ mod tests {
         let html = "<div>Just content</div>";
         let result = WidgetDir::inject_bridge_script(html, "/assets/widget-runtime.mjs");
 
-        assert!(result.starts_with(r#"<script type="module" src="/assets/widget-runtime.mjs"></script>"#));
+        assert!(result
+            .starts_with(r#"<script type="module" src="/assets/widget-runtime.mjs"></script>"#));
     }
 
     #[test]
     fn test_error_page_contains_details() {
-        let page = WidgetDir::error_page("board", Path::new("/widgets/board.html"), "file not found");
+        let page =
+            WidgetDir::error_page("board", Path::new("/widgets/board.html"), "file not found");
 
         assert!(page.contains("Widget Load Error"));
         assert!(page.contains("/widgets/board.html"));
