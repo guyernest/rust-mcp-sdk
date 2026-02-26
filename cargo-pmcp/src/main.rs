@@ -131,6 +131,14 @@ enum Commands {
     /// Secrets are namespaced by server ID to avoid conflicts.
     Secret(commands::secret::SecretCommand),
 
+    /// MCP Apps project management
+    ///
+    /// Scaffold and manage MCP Apps projects with interactive widgets.
+    App {
+        #[command(subcommand)]
+        command: commands::app::AppCommand,
+    },
+
     /// Preview MCP Apps widgets in browser
     ///
     /// Launch a browser-based preview environment for testing MCP servers
@@ -292,6 +300,9 @@ fn execute_command(command: Commands) -> Result<()> {
         Commands::Secret(secret_cmd) => {
             secret_cmd.execute()?;
         },
+        Commands::App { command } => {
+            command.execute()?;
+        },
         Commands::Preview {
             url,
             port,
@@ -303,7 +314,13 @@ fn execute_command(command: Commands) -> Result<()> {
         } => {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(commands::preview::execute(
-                url, port, open, tool, theme, locale, widgets_dir,
+                url,
+                port,
+                open,
+                tool,
+                theme,
+                locale,
+                widgets_dir,
             ))?;
         },
     }
