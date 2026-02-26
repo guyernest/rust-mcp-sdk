@@ -877,7 +877,7 @@ var PostMessageTransport = class {
   // Private
   // ===========================================================================
   _handleMessage(event) {
-    if (event.origin !== this._targetOrigin) {
+    if (this._targetOrigin !== "*" && event.origin !== this._targetOrigin && event.origin !== "null") {
       return;
     }
     const data = event.data;
@@ -1099,6 +1099,9 @@ var App = class {
   // Private
   // ===========================================================================
   _resolveTargetOrigin() {
+    if (window.origin === "null" || window.location.origin === "null") {
+      return "*";
+    }
     try {
       if (document.referrer) {
         const url = new URL(document.referrer);
@@ -1276,12 +1279,22 @@ var AppBridge = class {
 
 // src/compat.ts
 var deprecationWarned = false;
-function normalizeToolResult(result) {
+function unwrapToolResult(result) {
   if (result.isError) {
     const errorText = result.content?.[0]?.text ?? "Unknown error";
-    return { success: false, content: errorText };
+    return { success: false, error: errorText };
   }
-  return { success: true, content: result.content ?? result.structuredContent };
+  const textItem = result.content?.find(
+    (c) => c.type === "text" && typeof c.text === "string"
+  );
+  if (textItem) {
+    try {
+      return JSON.parse(textItem.text);
+    } catch {
+      return textItem.text;
+    }
+  }
+  return result.content ?? result.structuredContent;
 }
 function installCompat(app) {
   if (typeof window === "undefined") {
@@ -1300,7 +1313,7 @@ function installCompat(app) {
     callTool: async (name, args) => {
       warnDeprecation();
       const result = await app.callServerTool({ name, arguments: args });
-      return normalizeToolResult(result);
+      return unwrapToolResult(result);
     },
     getState: () => {
       warnDeprecation();
@@ -1348,312 +1361,6 @@ function installCompat(app) {
 
 // src/types.ts
 var SET_GLOBALS_EVENT_TYPE = "openai:set_globals";
-
-// src/hooks.ts
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-var globalRuntime = null;
-function getRuntime() {
-  if (!globalRuntime) {
-    globalRuntime = new WidgetRuntime();
-  }
-  return globalRuntime;
-}
-function useWidgetRuntime() {
-  return getRuntime();
-}
-function useWidgetReady() {
-  const runtime = getRuntime();
-  const [isReady, setIsReady] = useState(runtime.isReady);
-  useEffect(() => {
-    if (runtime.isReady) {
-      setIsReady(true);
-      return;
-    }
-    runtime.ready().then(() => setIsReady(true));
-  }, [runtime]);
-  return isReady;
-}
-function useWidgetHost() {
-  const runtime = getRuntime();
-  const [host, setHost] = useState(runtime.host);
-  useEffect(() => {
-    const update = () => setHost(runtime.host);
-    runtime.ready().then(update);
-    return runtime.on("ready", update);
-  }, [runtime]);
-  return host;
-}
-function useWidgetState(initialState) {
-  const runtime = getRuntime();
-  const getInitialState = useCallback(() => {
-    const existing = runtime.getState();
-    if (Object.keys(existing).length > 0) {
-      return existing;
-    }
-    runtime.setState(initialState);
-    return initialState;
-  }, [runtime, initialState]);
-  const [state, setLocalState] = useState(getInitialState);
-  useEffect(() => {
-    return runtime.on("stateUpdate", (newState) => {
-      setLocalState(newState);
-    });
-  }, [runtime]);
-  const setState = useCallback(
-    (newState) => {
-      setLocalState((prev) => {
-        const merged = { ...prev, ...newState };
-        runtime.setState(merged);
-        return merged;
-      });
-    },
-    [runtime]
-  );
-  return [state, setState];
-}
-function useToolCall(toolName, options) {
-  const runtime = getRuntime();
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [result, setResult] = useState(null);
-  const call = useCallback(
-    async (args) => {
-      setLoading(true);
-      setError(null);
-      const toolResult = await runtime.callTool(toolName, args, options);
-      setLoading(false);
-      if (toolResult.success && toolResult.data !== void 0) {
-        setResult(toolResult.data);
-      } else if (!toolResult.success && toolResult.error) {
-        setError(toolResult.error);
-      }
-      return toolResult;
-    },
-    [runtime, toolName, options]
-  );
-  const reset = useCallback(() => {
-    setLoading(false);
-    setError(null);
-    setResult(null);
-  }, []);
-  return { call, loading, error, result, reset };
-}
-function useLazyToolCall(toolName) {
-  const runtime = getRuntime();
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [data, setData] = useState(null);
-  const fetch = useCallback(
-    async (args) => {
-      setLoading(true);
-      setError(null);
-      const result = await runtime.callTool(toolName, args);
-      setLoading(false);
-      if (result.success && result.data !== void 0) {
-        setData(result.data);
-        return result.data;
-      } else if (!result.success && result.error) {
-        setError(result.error);
-      }
-      return null;
-    },
-    [runtime, toolName]
-  );
-  return { fetch, data, loading, error };
-}
-function useWidgetNotification(handler) {
-  const runtime = getRuntime();
-  const handlerRef = useRef(handler);
-  handlerRef.current = handler;
-  useEffect(() => {
-    return runtime.on("notification", (notification) => {
-      handlerRef.current(notification);
-    });
-  }, [runtime]);
-}
-function useOpenAiGlobal(key) {
-  const runtime = getRuntime();
-  const subscribe = useCallback(
-    (onChange) => {
-      const handleSetGlobal = (event) => {
-        const customEvent = event;
-        const value = customEvent.detail?.globals?.[key];
-        if (value !== void 0) {
-          onChange();
-        }
-      };
-      window.addEventListener(SET_GLOBALS_EVENT_TYPE, handleSetGlobal, { passive: true });
-      return () => {
-        window.removeEventListener(SET_GLOBALS_EVENT_TYPE, handleSetGlobal);
-      };
-    },
-    [key]
-  );
-  const getSnapshot = useCallback(() => {
-    switch (key) {
-      case "toolInput":
-        return runtime.getToolInput();
-      case "toolOutput":
-        return runtime.getToolOutput();
-      case "toolResponseMetadata":
-        return runtime.getToolResponseMetadata();
-      case "widgetState":
-        return runtime.getState();
-      case "theme":
-        return runtime.theme;
-      case "displayMode":
-        return runtime.currentDisplayMode;
-      case "maxHeight":
-        return runtime.maxHeight;
-      case "safeArea":
-        return runtime.safeArea;
-      case "view":
-        return runtime.view;
-      case "userAgent":
-        return runtime.userAgent;
-      case "locale":
-        return runtime.locale;
-      default:
-        return void 0;
-    }
-  }, [runtime, key]);
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-}
-function useToolInput() {
-  const runtime = getRuntime();
-  const [input, setInput] = useState(() => runtime.getToolInput());
-  useEffect(() => {
-    const handleUpdate = () => setInput(runtime.getToolInput());
-    window.addEventListener(SET_GLOBALS_EVENT_TYPE, handleUpdate, { passive: true });
-    return () => window.removeEventListener(SET_GLOBALS_EVENT_TYPE, handleUpdate);
-  }, [runtime]);
-  return input;
-}
-function useToolOutput() {
-  const runtime = getRuntime();
-  const [output, setOutput] = useState(() => runtime.getToolOutput());
-  useEffect(() => {
-    const handleUpdate = () => setOutput(runtime.getToolOutput());
-    window.addEventListener(SET_GLOBALS_EVENT_TYPE, handleUpdate, { passive: true });
-    return () => window.removeEventListener(SET_GLOBALS_EVENT_TYPE, handleUpdate);
-  }, [runtime]);
-  return output;
-}
-function useToolResponseMetadata() {
-  const runtime = getRuntime();
-  const [meta, setMeta] = useState(
-    () => runtime.getToolResponseMetadata()
-  );
-  useEffect(() => {
-    const handleUpdate = () => setMeta(runtime.getToolResponseMetadata());
-    window.addEventListener(SET_GLOBALS_EVENT_TYPE, handleUpdate, { passive: true });
-    return () => window.removeEventListener(SET_GLOBALS_EVENT_TYPE, handleUpdate);
-  }, [runtime]);
-  return meta;
-}
-function useTheme() {
-  const runtime = getRuntime();
-  const [theme, setTheme] = useState(() => runtime.theme);
-  useEffect(() => {
-    const handleUpdate = () => setTheme(runtime.theme);
-    window.addEventListener(SET_GLOBALS_EVENT_TYPE, handleUpdate, { passive: true });
-    return () => window.removeEventListener(SET_GLOBALS_EVENT_TYPE, handleUpdate);
-  }, [runtime]);
-  return theme;
-}
-function useLocale() {
-  const runtime = getRuntime();
-  const [locale, setLocale] = useState(() => runtime.locale);
-  useEffect(() => {
-    const handleUpdate = () => setLocale(runtime.locale);
-    window.addEventListener(SET_GLOBALS_EVENT_TYPE, handleUpdate, { passive: true });
-    return () => window.removeEventListener(SET_GLOBALS_EVENT_TYPE, handleUpdate);
-  }, [runtime]);
-  return locale;
-}
-function useDisplayMode() {
-  const runtime = getRuntime();
-  const [mode, setMode] = useState(() => runtime.currentDisplayMode);
-  useEffect(() => {
-    const handleUpdate = () => setMode(runtime.currentDisplayMode);
-    window.addEventListener(SET_GLOBALS_EVENT_TYPE, handleUpdate, { passive: true });
-    return () => window.removeEventListener(SET_GLOBALS_EVENT_TYPE, handleUpdate);
-  }, [runtime]);
-  return mode;
-}
-function useMaxHeight() {
-  const runtime = getRuntime();
-  const [height, setHeight] = useState(() => runtime.maxHeight);
-  useEffect(() => {
-    const handleUpdate = () => setHeight(runtime.maxHeight);
-    window.addEventListener(SET_GLOBALS_EVENT_TYPE, handleUpdate, { passive: true });
-    return () => window.removeEventListener(SET_GLOBALS_EVENT_TYPE, handleUpdate);
-  }, [runtime]);
-  return height;
-}
-function useSafeArea() {
-  const runtime = getRuntime();
-  const [safeArea, setSafeArea] = useState(() => runtime.safeArea);
-  useEffect(() => {
-    const handleUpdate = () => setSafeArea(runtime.safeArea);
-    window.addEventListener(SET_GLOBALS_EVENT_TYPE, handleUpdate, { passive: true });
-    return () => window.removeEventListener(SET_GLOBALS_EVENT_TYPE, handleUpdate);
-  }, [runtime]);
-  return safeArea;
-}
-function useWidgetView() {
-  const runtime = getRuntime();
-  const [view, setView] = useState(() => runtime.view);
-  useEffect(() => {
-    const handleUpdate = () => setView(runtime.view);
-    window.addEventListener(SET_GLOBALS_EVENT_TYPE, handleUpdate, { passive: true });
-    return () => window.removeEventListener(SET_GLOBALS_EVENT_TYPE, handleUpdate);
-  }, [runtime]);
-  return view;
-}
-function useFileUpload() {
-  const runtime = getRuntime();
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [fileId, setFileId] = useState(null);
-  const upload = useCallback(
-    async (file) => {
-      setLoading(true);
-      setError(null);
-      const result = await runtime.uploadFile(file);
-      setLoading(false);
-      if (result) {
-        setFileId(result.fileId);
-        return result.fileId;
-      } else {
-        setError("Failed to upload file");
-        return null;
-      }
-    },
-    [runtime]
-  );
-  const reset = useCallback(() => {
-    setLoading(false);
-    setError(null);
-    setFileId(null);
-  }, []);
-  return { upload, loading, error, fileId, reset };
-}
-function useDisplayModeRequest() {
-  const runtime = getRuntime();
-  const [loading, setLoading] = useState(false);
-  const current = useDisplayMode();
-  const request = useCallback(
-    async (mode) => {
-      setLoading(true);
-      const success = await runtime.requestDisplayMode(mode);
-      setLoading(false);
-      return success;
-    },
-    [runtime]
-  );
-  return { request, current, loading };
-}
 
 // src/utils.ts
 function detectHost() {
@@ -1798,24 +1505,5 @@ export {
   mergeState,
   serializeState,
   throttle,
-  useDisplayMode,
-  useDisplayModeRequest,
-  useFileUpload,
-  useLazyToolCall,
-  useLocale,
-  useMaxHeight,
-  useOpenAiGlobal,
-  useSafeArea,
-  useTheme,
-  useToolCall,
-  useToolInput,
-  useToolOutput,
-  useToolResponseMetadata,
-  useWidgetHost,
-  useWidgetNotification,
-  useWidgetReady,
-  useWidgetRuntime,
-  useWidgetState,
-  useWidgetView,
   waitForBridge
 };

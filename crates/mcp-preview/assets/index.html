@@ -1445,6 +1445,10 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name, arguments: args || {} })
               });
+              if (!response.ok) {
+                const text = await response.text();
+                throw new Error(`API error ${response.status}: ${text}`);
+              }
               rawResult = await response.json();
               success = !!rawResult.success;
 
@@ -1493,25 +1497,24 @@
           this.appBridge = null;
         }
 
+        // Set up AppBridge BEFORE setting srcdoc so it's already listening
+        // when the widget's bridge script sends ui/initialize and tool calls.
+        // iframe.contentWindow persists across srcdoc navigations.
+        this.appBridge = new AppBridge({
+          iframe: frame,
+          toolCallHandler: this.createToolCallHandler(),
+          origin: '*',  // srcdoc iframes have origin "null" — use wildcard
+          hostContext: {
+            theme: this.theme,
+            locale: this.locale,
+            displayMode: this.displayMode,
+          },
+        });
+        this.appBridge.initialize();
+
         // Create wrapped HTML with shared library bridge loader
         const wrappedHtml = this.wrapWidgetHtml(html);
         frame.srcdoc = wrappedHtml;
-
-        // Set up AppBridge on the host side after iframe loads
-        const runtime = this;
-        frame.onload = () => {
-          runtime.appBridge = new AppBridge({
-            iframe: frame,
-            toolCallHandler: runtime.createToolCallHandler(),
-            origin: window.location.origin,
-            hostContext: {
-              theme: runtime.theme,
-              locale: runtime.locale,
-              displayMode: runtime.displayMode,
-            },
-          });
-          runtime.appBridge.initialize();
-        };
 
         this.logEvent('widgetLoaded', {});
       }

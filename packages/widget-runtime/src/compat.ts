@@ -12,17 +12,35 @@ import type { CallToolResult, HostContext } from './types';
 let deprecationWarned = false;
 
 /**
- * Normalize a CallToolResult into the legacy `{ success, content }` shape
- * expected by widgets using window.mcpBridge.callTool().
+ * Extract the raw tool result from an MCP CallToolResult.
+ *
+ * Tool handlers return JSON values that get wrapped in MCP content format:
+ *   { content: [{ type: "text", text: '{"board":...}' }] }
+ *
+ * The legacy bridge returned the raw parsed value, so we unwrap it here
+ * for backward compatibility with existing widgets.
  */
-function normalizeToolResult(result: CallToolResult): { success: boolean; content: unknown } {
+function unwrapToolResult(result: CallToolResult): unknown {
   if (result.isError) {
     const errorText = result.content?.[0]?.text ?? 'Unknown error';
-    return { success: false, content: errorText };
+    return { success: false, error: errorText };
   }
 
-  // Return raw content array for widgets that expect it
-  return { success: true, content: result.content ?? result.structuredContent };
+  // Extract first text content item and parse as JSON
+  const textItem = result.content?.find(
+    (c: Record<string, unknown>) => c.type === 'text' && typeof c.text === 'string'
+  );
+  if (textItem) {
+    try {
+      return JSON.parse(textItem.text as string);
+    } catch {
+      // Not JSON — return raw text
+      return textItem.text;
+    }
+  }
+
+  // Fallback: return content array or structured content
+  return result.content ?? result.structuredContent;
 }
 
 /**
@@ -69,7 +87,7 @@ export function installCompat(app: App): void {
     callTool: async (name: string, args?: Record<string, unknown>): Promise<unknown> => {
       warnDeprecation();
       const result = await app.callServerTool({ name, arguments: args });
-      return normalizeToolResult(result);
+      return unwrapToolResult(result);
     },
 
     getState: (): Record<string, unknown> => {

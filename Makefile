@@ -101,7 +101,7 @@ build-widget-runtime:
 	@echo "$(BLUE)Building widget-runtime TypeScript library...$(NC)"
 	@if [ -d "packages/widget-runtime" ] && command -v npm &> /dev/null; then \
 		cd packages/widget-runtime && npm run build; \
-		cp dist/index.mjs ../../crates/mcp-preview/assets/widget-runtime.mjs; \
+		cp dist/browser/browser.mjs ../../crates/mcp-preview/assets/widget-runtime.mjs; \
 		echo "$(GREEN)✓ widget-runtime built and copied to preview assets$(NC)"; \
 	else \
 		echo "$(YELLOW)⚠ Skipping widget-runtime build (missing packages/widget-runtime or npm)$(NC)"; \

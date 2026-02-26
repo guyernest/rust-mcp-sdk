@@ -239,9 +239,13 @@ export class App {
   // ===========================================================================
 
   private _resolveTargetOrigin(): string {
-    // In an iframe, the parent's origin is what we need to validate.
-    // Use document.referrer to extract origin when available, otherwise
-    // fall back to '*' for local development (preview server).
+    // srcdoc iframes have origin "null" and cannot target a specific origin.
+    // Detect this case and use "*" to allow communication with the host.
+    if (window.origin === 'null' || window.location.origin === 'null') {
+      return '*';
+    }
+
+    // In a regular iframe, use document.referrer to find the parent's origin.
     try {
       if (document.referrer) {
         const url = new URL(document.referrer);
@@ -251,7 +255,7 @@ export class App {
       // Ignore URL parsing errors
     }
 
-    // Fallback: same origin or wildcard for dev
+    // Fallback: same origin
     return window.location.origin;
   }
 

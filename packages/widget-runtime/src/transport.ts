@@ -206,8 +206,10 @@ export class PostMessageTransport {
   // ===========================================================================
 
   private _handleMessage(event: MessageEvent): void {
-    // Origin validation: reject messages from unexpected origins
-    if (event.origin !== this._targetOrigin) {
+    // Origin validation: reject messages from unexpected origins.
+    // Special case: srcdoc iframes have origin "null" (the string).
+    // When targetOrigin is "*", accept all origins (dev/preview mode).
+    if (this._targetOrigin !== '*' && event.origin !== this._targetOrigin && event.origin !== 'null') {
       return;
     }
 
