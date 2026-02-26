@@ -11,11 +11,11 @@ See: .planning/PROJECT.md (updated 2026-02-24)
 
 Milestone: v1.3 MCP Apps Developer Experience
 Phase: 18 of 19 (Publishing Pipeline)
-Plan: 1 of 2 complete
-Status: In Progress
-Last activity: 2026-02-26 -- Completed 18-01 (Manifest generation command)
+Plan: 2 of 2 complete
+Status: Phase Complete
+Last activity: 2026-02-26 -- Completed 18-02 (Landing page & build command)
 
-Progress: [=================================..] 92% (17.5/19 phases across all milestones; 5.5/6 in v1.3)
+Progress: [==================================.] 95% (18/19 phases across all milestones; 6/6 in v1.3)
 
 ## Shipped Milestones
 
@@ -28,8 +28,8 @@ Progress: [=================================..] 92% (17.5/19 phases across all m
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 38 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 10)
-- v1.3 plans completed: 10
+- Total plans completed: 39 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 11)
+- v1.3 plans completed: 11
 
 ## Accumulated Context
 
@@ -72,6 +72,10 @@ Recent decisions affecting current work:
 - WidgetInfo.html field included for future packaging pipeline (marked allow(dead_code))
 - name_for_model replaces hyphens and spaces with underscores for ChatGPT compatibility
 - server_url trailing slash stripped before /openapi.json path construction
+- Mock bridge uses type=module script with window.mcpBridge matching live bridge API
+- srcdoc escaping only escapes & and " (minimum for attribute context)
+- load_mock_data takes explicit Path parameter for testability (matching detect_project pattern)
+- Build command shares single detect_project call for both manifest and landing generation
 
 ### Pending Todos
 
@@ -87,5 +91,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-26
-Stopped at: Completed 18-01-PLAN.md (Manifest generation command)
-Resume: Continue with 18-02-PLAN.md.
+Stopped at: Completed 18-02-PLAN.md (Landing page & build command)
+Resume: Continue with Phase 19 or milestone wrap-up.
