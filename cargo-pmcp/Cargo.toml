@@ -23,7 +23,7 @@ clap = { version = "4", features = ["derive", "env"] }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.9"
+toml = "1.0"
 walkdir = "2"
 colored = "3"
 indicatif = "0.18"
@@ -37,7 +37,7 @@ mcp-preview = { version = "0.1.0", path = "../crates/mcp-preview" }
 urlencoding = "2"
 async-trait = "0.1.89"
 pathdiff = "0.2.3"
-cargo_metadata = "0.19"
+cargo_metadata = "0.23"
 
 # For pmcp-run target and landing pages
 oauth2 = "5.0"                          # OAuth 2.0 authentication
@@ -46,7 +46,7 @@ tiny_http = "0.12"                      # OAuth callback server
 open = "5.0"                            # Browser launch
 chrono = "0.4"                          # Token expiry handling
 rpassword = "7.3"                       # Secret input (for other features)
-zip = "7.0"                             # Zip file creation for landing page deployment
+zip = "8.1"                             # Zip file creation for landing page deployment
 
 # For schema discovery and code generation
 console = "0.16"                        # Terminal styling for schema commands
@@ -55,7 +55,8 @@ thiserror = "2"                         # Error types for generated code
 # For secrets management
 secrecy = { version = "0.10", features = ["serde"] }  # Secure secret handling with zeroization
 zeroize = "1"                           # Secure memory clearing
-rand = "0.8"                            # Random secret generation
+rand = "0.10"                            # Random secret generation
+atty = "0.2"                            # Terminal detection for security warnings
 regex = "1"                             # Secret reference parsing
 
 # AWS Secrets Manager (optional, for AWS provider)

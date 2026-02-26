@@ -47,7 +47,7 @@ http = "1.1"
 # Utility dependencies (needed on all platforms)
 glob = "0.3"
 url = "2.5"
-toml = "0.9"
+toml = "1.0"
 uuid = { version = "1.17", features = ["v4", "serde", "js"] }
 chrono = { version = "0.4", features = ["serde"] }
 regex = "1.11"
@@ -69,7 +69,7 @@ http-body-util = "0.1"
 # OAuth dependencies
 sha2 = "0.10"
 base64 = "0.22"
-jsonwebtoken = { version = "9.3", optional = true }
+jsonwebtoken = { version = "10.3", optional = true }
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 
 # Transport dependencies (optional, feature-gated)
@@ -105,7 +105,7 @@ web-sys = { version = "0.3", features = ["console", "Window", "Document", "WebSo
 js-sys = "0.3"
 futures-channel = "0.3"
 futures-locks = { version = "0.7", default-features = false }
-getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
 # Testing
