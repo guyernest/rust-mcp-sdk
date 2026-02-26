@@ -76,14 +76,9 @@ pub fn write_manifest(output_dir: &str, content: &str) -> Result<()> {
         .with_context(|| format!("Failed to create output directory: {}", output_dir))?;
 
     let path = std::path::Path::new(output_dir).join("manifest.json");
-    fs::write(&path, content)
-        .with_context(|| format!("Failed to write {}", path.display()))?;
+    fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))?;
 
-    println!(
-        "  {} Generated {}/manifest.json",
-        "ok".green(),
-        output_dir
-    );
+    println!("  {} Generated {}/manifest.json", "ok".green(), output_dir);
 
     Ok(())
 }
@@ -116,8 +111,7 @@ mod tests {
     #[test]
     fn test_manifest_schema_version() {
         let project = sample_project();
-        let json_str =
-            generate_manifest(&project, "https://example.com", None).unwrap();
+        let json_str = generate_manifest(&project, "https://example.com", None).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
         assert_eq!(parsed["schema_version"], "v1");
@@ -126,8 +120,7 @@ mod tests {
     #[test]
     fn test_manifest_names() {
         let project = sample_project();
-        let json_str =
-            generate_manifest(&project, "https://example.com", None).unwrap();
+        let json_str = generate_manifest(&project, "https://example.com", None).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
         assert_eq!(parsed["name_for_human"], "my-chess-app");
@@ -139,8 +132,7 @@ mod tests {
         let mut project = sample_project();
         project.name = "my chess-app v2".to_string();
 
-        let json_str =
-            generate_manifest(&project, "https://example.com", None).unwrap();
+        let json_str = generate_manifest(&project, "https://example.com", None).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
         assert_eq!(parsed["name_for_model"], "my_chess_app_v2");
@@ -149,8 +141,7 @@ mod tests {
     #[test]
     fn test_manifest_descriptions() {
         let project = sample_project();
-        let json_str =
-            generate_manifest(&project, "https://example.com", None).unwrap();
+        let json_str = generate_manifest(&project, "https://example.com", None).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
         assert_eq!(parsed["description_for_human"], "A chess game");
@@ -160,8 +151,7 @@ mod tests {
     #[test]
     fn test_manifest_auth_none() {
         let project = sample_project();
-        let json_str =
-            generate_manifest(&project, "https://example.com", None).unwrap();
+        let json_str = generate_manifest(&project, "https://example.com", None).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
         assert_eq!(parsed["auth"]["type"], "none");
@@ -170,39 +160,27 @@ mod tests {
     #[test]
     fn test_manifest_api_url() {
         let project = sample_project();
-        let json_str =
-            generate_manifest(&project, "https://example.com", None).unwrap();
+        let json_str = generate_manifest(&project, "https://example.com", None).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
         assert_eq!(parsed["api"]["type"], "openapi");
-        assert_eq!(
-            parsed["api"]["url"],
-            "https://example.com/openapi.json"
-        );
+        assert_eq!(parsed["api"]["url"], "https://example.com/openapi.json");
     }
 
     #[test]
     fn test_manifest_server_url_trailing_slash_trimmed() {
         let project = sample_project();
-        let json_str =
-            generate_manifest(&project, "https://example.com/", None).unwrap();
+        let json_str = generate_manifest(&project, "https://example.com/", None).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
-        assert_eq!(
-            parsed["api"]["url"],
-            "https://example.com/openapi.json"
-        );
-        assert_eq!(
-            parsed["mcp_apps"]["server_url"],
-            "https://example.com"
-        );
+        assert_eq!(parsed["api"]["url"], "https://example.com/openapi.json");
+        assert_eq!(parsed["mcp_apps"]["server_url"], "https://example.com");
     }
 
     #[test]
     fn test_manifest_logo_from_project() {
         let project = sample_project();
-        let json_str =
-            generate_manifest(&project, "https://example.com", None).unwrap();
+        let json_str = generate_manifest(&project, "https://example.com", None).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
         assert_eq!(parsed["logo_url"], "https://example.com/chess.png");
@@ -219,10 +197,7 @@ mod tests {
         .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
-        assert_eq!(
-            parsed["logo_url"],
-            "https://cdn.example.com/override.png"
-        );
+        assert_eq!(parsed["logo_url"], "https://cdn.example.com/override.png");
     }
 
     #[test]
@@ -230,8 +205,7 @@ mod tests {
         let mut project = sample_project();
         project.logo = None;
 
-        let json_str =
-            generate_manifest(&project, "https://example.com", None).unwrap();
+        let json_str = generate_manifest(&project, "https://example.com", None).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
         assert_eq!(parsed["logo_url"], "");
@@ -240,8 +214,7 @@ mod tests {
     #[test]
     fn test_manifest_widget_mappings() {
         let project = sample_project();
-        let json_str =
-            generate_manifest(&project, "https://example.com", None).unwrap();
+        let json_str = generate_manifest(&project, "https://example.com", None).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
         let widgets = parsed["mcp_apps"]["widgets"].as_array().unwrap();
@@ -256,21 +229,16 @@ mod tests {
     #[test]
     fn test_manifest_mcp_apps_server_url() {
         let project = sample_project();
-        let json_str =
-            generate_manifest(&project, "https://example.com", None).unwrap();
+        let json_str = generate_manifest(&project, "https://example.com", None).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
-        assert_eq!(
-            parsed["mcp_apps"]["server_url"],
-            "https://example.com"
-        );
+        assert_eq!(parsed["mcp_apps"]["server_url"], "https://example.com");
     }
 
     #[test]
     fn test_manifest_empty_fields() {
         let project = sample_project();
-        let json_str =
-            generate_manifest(&project, "https://example.com", None).unwrap();
+        let json_str = generate_manifest(&project, "https://example.com", None).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
         assert_eq!(parsed["contact_email"], "");
@@ -280,8 +248,7 @@ mod tests {
     #[test]
     fn test_manifest_is_valid_json() {
         let project = sample_project();
-        let json_str =
-            generate_manifest(&project, "https://example.com", None).unwrap();
+        let json_str = generate_manifest(&project, "https://example.com", None).unwrap();
 
         // Verify it round-trips through serde_json
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
@@ -323,8 +290,7 @@ mod tests {
             widgets: vec![],
         };
 
-        let json_str =
-            generate_manifest(&project, "https://example.com", None).unwrap();
+        let json_str = generate_manifest(&project, "https://example.com", None).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
 
         let widgets = parsed["mcp_apps"]["widgets"].as_array().unwrap();

@@ -14,7 +14,8 @@ pub struct WidgetInfo {
     pub name: String,
     /// MCP resource URI (e.g. "ui://app/board").
     pub uri: String,
-    /// Full HTML content read from disk.
+    /// Full HTML content read from disk (used by packaging pipeline).
+    #[allow(dead_code)]
     pub html: String,
 }
 
@@ -39,12 +40,10 @@ pub struct ProjectInfo {
 /// directory is not a valid MCP Apps project.
 pub fn detect_project(project_dir: &Path) -> Result<ProjectInfo> {
     let cargo_toml_path = project_dir.join("Cargo.toml");
-    let raw = fs::read_to_string(&cargo_toml_path).with_context(|| {
-        "No Cargo.toml found. Are you in a Rust project directory?"
-    })?;
+    let raw = fs::read_to_string(&cargo_toml_path)
+        .with_context(|| "No Cargo.toml found. Are you in a Rust project directory?")?;
 
-    let doc: toml::Value =
-        toml::from_str(&raw).context("Failed to parse Cargo.toml")?;
+    let doc: toml::Value = toml::from_str(&raw).context("Failed to parse Cargo.toml")?;
 
     // Verify pmcp dependency has mcp-apps or full feature
     verify_mcp_apps_feature(&doc)?;
@@ -86,9 +85,7 @@ pub fn detect_project(project_dir: &Path) -> Result<ProjectInfo> {
 
 /// Verify that the `pmcp` dependency includes `mcp-apps` or `full` features.
 fn verify_mcp_apps_feature(doc: &toml::Value) -> Result<()> {
-    let pmcp_dep = doc
-        .get("dependencies")
-        .and_then(|d| d.get("pmcp"));
+    let pmcp_dep = doc.get("dependencies").and_then(|d| d.get("pmcp"));
 
     let Some(pmcp) = pmcp_dep else {
         bail!(
@@ -107,9 +104,7 @@ fn verify_mcp_apps_feature(doc: &toml::Value) -> Result<()> {
         );
     }
 
-    let features = pmcp
-        .get("features")
-        .and_then(|f| f.as_array());
+    let features = pmcp.get("features").and_then(|f| f.as_array());
 
     let has_required_feature = features
         .map(|arr| {
@@ -430,10 +425,7 @@ pmcp = { version = "1.10", features = ["mcp-apps"] }
         setup_widgets(dir.path(), &[("hello.html", "<p>Hi</p>")]);
 
         let info = detect_project(dir.path()).unwrap();
-        assert_eq!(
-            info.logo,
-            Some("https://example.com/logo.png".to_string())
-        );
+        assert_eq!(info.logo, Some("https://example.com/logo.png".to_string()));
     }
 
     #[test]

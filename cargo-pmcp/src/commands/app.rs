@@ -1,7 +1,8 @@
 //! MCP Apps project management commands.
 //!
-//! Provides the `cargo pmcp app new <name>` subcommand for scaffolding
-//! complete MCP Apps projects with a starter widget and server code.
+//! Provides `cargo pmcp app new <name>` for scaffolding and
+//! `cargo pmcp app manifest --url <URL>` for generating ChatGPT-compatible
+//! manifest JSON.
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
@@ -9,6 +10,7 @@ use colored::Colorize;
 use std::fs;
 use std::path::PathBuf;
 
+use crate::publishing;
 use crate::templates;
 
 /// MCP Apps project commands.
@@ -22,6 +24,18 @@ pub enum AppCommand {
         #[arg(long)]
         path: Option<String>,
     },
+    /// Generate ChatGPT-compatible manifest JSON
+    Manifest {
+        /// Server URL (required)
+        #[arg(long)]
+        url: String,
+        /// Logo URL (overrides [package.metadata.pmcp].logo)
+        #[arg(long)]
+        logo: Option<String>,
+        /// Output directory
+        #[arg(long, default_value = "dist")]
+        output: String,
+    },
 }
 
 impl AppCommand {
@@ -29,6 +43,7 @@ impl AppCommand {
     pub fn execute(self) -> Result<()> {
         match self {
             AppCommand::New { name, path } => create_app(name, path),
+            AppCommand::Manifest { url, logo, output } => run_manifest(url, logo, output),
         }
     }
 }
@@ -75,6 +90,31 @@ fn create_app(name: String, path: Option<String>) -> Result<()> {
 
     // Print next steps
     print_next_steps(&name);
+
+    Ok(())
+}
+
+/// Generate a ChatGPT-compatible manifest JSON from the current project.
+///
+/// Detects the MCP Apps project in the current directory, auto-discovers
+/// widgets, and writes `manifest.json` to the output directory.
+fn run_manifest(url: String, logo: Option<String>, output: String) -> Result<()> {
+    println!("\n{}", "Generating manifest".bright_cyan().bold());
+    println!("{}", "------------------------------------".bright_cyan());
+
+    let cwd = std::env::current_dir().context("Failed to read current directory")?;
+    let project = publishing::detect::detect_project(&cwd)?;
+
+    let widget_count = project.widgets.len();
+    let json = publishing::manifest::generate_manifest(&project, &url, logo.as_deref())?;
+    publishing::manifest::write_manifest(&output, &json)?;
+
+    println!("  {} Found {} widget(s)", "ok".green(), widget_count);
+    println!(
+        "\n{} Manifest written to {}/manifest.json",
+        "ok".green().bold(),
+        output
+    );
 
     Ok(())
 }
