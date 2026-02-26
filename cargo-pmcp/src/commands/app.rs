@@ -1,8 +1,9 @@
 //! MCP Apps project management commands.
 //!
-//! Provides `cargo pmcp app new <name>` for scaffolding and
+//! Provides `cargo pmcp app new <name>` for scaffolding,
 //! `cargo pmcp app manifest --url <URL>` for generating ChatGPT-compatible
-//! manifest JSON.
+//! manifest JSON, `cargo pmcp app landing` for generating a standalone demo
+//! page, and `cargo pmcp app build --url <URL>` for producing both artifacts.
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
@@ -36,6 +37,30 @@ pub enum AppCommand {
         #[arg(long, default_value = "dist")]
         output: String,
     },
+    /// Generate standalone landing page HTML
+    Landing {
+        /// Widget to showcase (defaults to first alphabetically)
+        #[arg(long)]
+        widget: Option<String>,
+        /// Output directory
+        #[arg(long, default_value = "dist")]
+        output: String,
+    },
+    /// Generate both manifest and landing page
+    Build {
+        /// Server URL (required for manifest)
+        #[arg(long)]
+        url: String,
+        /// Logo URL
+        #[arg(long)]
+        logo: Option<String>,
+        /// Widget to showcase in landing page (defaults to first)
+        #[arg(long)]
+        widget: Option<String>,
+        /// Output directory
+        #[arg(long, default_value = "dist")]
+        output: String,
+    },
 }
 
 impl AppCommand {
@@ -44,6 +69,13 @@ impl AppCommand {
         match self {
             AppCommand::New { name, path } => create_app(name, path),
             AppCommand::Manifest { url, logo, output } => run_manifest(url, logo, output),
+            AppCommand::Landing { widget, output } => create_landing(widget, output),
+            AppCommand::Build {
+                url,
+                logo,
+                widget,
+                output,
+            } => build_all(url, logo, widget, output),
         }
     }
 }
@@ -115,6 +147,67 @@ fn run_manifest(url: String, logo: Option<String>, output: String) -> Result<()>
         "ok".green().bold(),
         output
     );
+
+    Ok(())
+}
+
+/// Generate a standalone landing page from the current project.
+///
+/// Detects the project, loads mock data, generates a self-contained HTML
+/// page with the widget embedded in an iframe using a mock bridge, and
+/// writes it to the output directory.
+fn create_landing(widget: Option<String>, output: String) -> Result<()> {
+    println!("\n{}", "Generating landing page".bright_cyan().bold());
+    println!("{}", "------------------------------------".bright_cyan());
+
+    let cwd = std::env::current_dir().context("Failed to read current directory")?;
+    let project = publishing::detect::detect_project(&cwd)?;
+    let mock_data = publishing::landing::load_mock_data(&cwd)?;
+    let html = publishing::landing::generate_landing(&project, &mock_data, widget.as_deref())?;
+    publishing::landing::write_landing(&output, &html)?;
+
+    println!(
+        "\n{} Landing page written to {}/landing.html",
+        "ok".green().bold(),
+        output
+    );
+
+    Ok(())
+}
+
+/// Generate both manifest JSON and landing page HTML.
+///
+/// Detects the project once and produces `manifest.json` (for app directory
+/// listing) and `landing.html` (for standalone demo) in the output directory.
+fn build_all(
+    url: String,
+    logo: Option<String>,
+    widget: Option<String>,
+    output: String,
+) -> Result<()> {
+    println!("\n{}", "Building MCP App".bright_cyan().bold());
+    println!("{}", "------------------------------------".bright_cyan());
+
+    let cwd = std::env::current_dir().context("Failed to read current directory")?;
+    let project = publishing::detect::detect_project(&cwd)?;
+
+    // Generate manifest
+    let manifest_json = publishing::manifest::generate_manifest(&project, &url, logo.as_deref())?;
+    publishing::manifest::write_manifest(&output, &manifest_json)?;
+
+    // Generate landing page
+    let mock_data = publishing::landing::load_mock_data(&cwd)?;
+    let landing_html =
+        publishing::landing::generate_landing(&project, &mock_data, widget.as_deref())?;
+    publishing::landing::write_landing(&output, &landing_html)?;
+
+    println!(
+        "\n{} Built MCP App artifacts in {}/",
+        "ok".green().bold(),
+        output
+    );
+    println!("    - manifest.json");
+    println!("    - landing.html");
 
     Ok(())
 }

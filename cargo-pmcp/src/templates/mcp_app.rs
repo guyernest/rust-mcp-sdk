@@ -11,9 +11,10 @@ use std::path::Path;
 
 /// Generate all files for a new MCP Apps project.
 ///
-/// Creates `Cargo.toml`, `src/main.rs`, `widgets/hello.html`, and `README.md`
-/// in the given project directory. The directory structure (including `src/`
-/// and `widgets/`) must already exist.
+/// Creates `Cargo.toml`, `src/main.rs`, `widgets/hello.html`,
+/// `mock-data/hello.json`, and `README.md` in the given project directory.
+/// The directory structure (including `src/` and `widgets/`) must already
+/// exist; `mock-data/` is created automatically.
 pub fn generate(project_dir: &Path, name: &str) -> Result<()> {
     // Cargo.toml
     let cargo_toml = generate_cargo_toml(name);
@@ -30,6 +31,14 @@ pub fn generate(project_dir: &Path, name: &str) -> Result<()> {
     fs::write(project_dir.join("widgets/hello.html"), hello_html)
         .context("Failed to write widgets/hello.html")?;
     println!("  {} Generated widgets/hello.html", "ok".green());
+
+    // mock-data/hello.json
+    let mock_data_dir = project_dir.join("mock-data");
+    fs::create_dir_all(&mock_data_dir).context("Failed to create mock-data/ directory")?;
+    let mock_hello = generate_mock_hello();
+    fs::write(mock_data_dir.join("hello.json"), mock_hello)
+        .context("Failed to write mock-data/hello.json")?;
+    println!("  {} Generated mock-data/hello.json", "ok".green());
 
     // README.md
     let readme = generate_readme(name);
@@ -277,6 +286,20 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {{
 }}
 "#
     )
+}
+
+/// Generate mock data for the hello tool.
+///
+/// Returns a JSON string matching the response shape of the scaffolded
+/// `hello_handler` tool, used by `cargo pmcp app landing` to demonstrate
+/// the widget without a running server.
+fn generate_mock_hello() -> String {
+    r#"{
+  "greeting": "Hello, World!",
+  "name": "World"
+}
+"#
+    .to_string()
 }
 
 /// Generate the starter `hello.html` widget demonstrating the bridge pattern.
@@ -626,6 +649,34 @@ mod tests {
         assert!(project_dir.join("Cargo.toml").exists());
         assert!(project_dir.join("src/main.rs").exists());
         assert!(project_dir.join("widgets/hello.html").exists());
+        assert!(project_dir.join("mock-data/hello.json").exists());
         assert!(project_dir.join("README.md").exists());
+    }
+
+    #[test]
+    fn test_generate_creates_mock_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_dir = dir.path().join("mock-test");
+        std::fs::create_dir_all(project_dir.join("src")).unwrap();
+        std::fs::create_dir_all(project_dir.join("widgets")).unwrap();
+
+        generate(&project_dir, "mock-test").unwrap();
+
+        let mock_path = project_dir.join("mock-data/hello.json");
+        assert!(mock_path.exists(), "mock-data/hello.json should exist");
+
+        let content = std::fs::read_to_string(&mock_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed["greeting"], "Hello, World!");
+        assert_eq!(parsed["name"], "World");
+    }
+
+    #[test]
+    fn test_generate_mock_hello_is_valid_json() {
+        let content = generate_mock_hello();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(parsed.is_object());
+        assert!(parsed.get("greeting").is_some());
+        assert!(parsed.get("name").is_some());
     }
 }
