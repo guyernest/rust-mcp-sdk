@@ -1,0 +1,8 @@
+[package]
+name = "mcp-e2e-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "End-to-end browser tests for MCP App widgets"
+
+[dependencies]

@@ -407,7 +407,7 @@ path = "examples/60_tasks_basic.rs"
 name = "comprehensive_benchmarks"
 harness = false
 [workspace]
-members = ["pmcp-macros", "crates/mcp-tester", "crates/mcp-preview", "crates/pmcp-tasks", "examples/25-oauth-basic", "examples/test-basic", "cargo-pmcp"]
+members = ["pmcp-macros", "crates/mcp-tester", "crates/mcp-preview", "crates/pmcp-tasks", "crates/mcp-e2e-tests", "examples/25-oauth-basic", "examples/test-basic", "cargo-pmcp"]
 # WASM examples and standalone examples are excluded from regular workspace tests
 exclude = ["fuzz", "examples/cloudflare-worker-mcp", "examples/26-server-tester", "examples/27-course-server-minimal", "examples/wasm-client", "examples/mcp-apps-chess", "examples/mcp-apps-map", "examples/mcp-apps-dataviz"]
 
