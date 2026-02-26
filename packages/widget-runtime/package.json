@@ -16,9 +16,11 @@
     "dist",
     "src"
   ],
+  "sideEffects": false,
   "scripts": {
-    "build": "tsup src/index.ts --format cjs,esm --dts",
-    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean",
+    "build:copy": "cp dist/index.mjs ../../crates/mcp-preview/assets/widget-runtime.mjs",
+    "dev": "tsup src/index.ts --format esm,cjs --dts --watch",
     "lint": "eslint src --ext .ts",
     "test": "vitest run",
     "test:watch": "vitest",
