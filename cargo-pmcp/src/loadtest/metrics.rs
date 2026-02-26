@@ -189,12 +189,10 @@ impl MetricsRecorder {
     /// Histograms are created with 3 significant figures of precision and
     /// auto-resize enabled.
     pub fn new(expected_interval_ms: u64) -> Self {
-        let mut success_histogram =
-            Histogram::<u64>::new(3).expect("3 sigfigs is always valid");
+        let mut success_histogram = Histogram::<u64>::new(3).expect("3 sigfigs is always valid");
         success_histogram.auto(true);
 
-        let mut error_histogram =
-            Histogram::<u64>::new(3).expect("3 sigfigs is always valid");
+        let mut error_histogram = Histogram::<u64>::new(3).expect("3 sigfigs is always valid");
         error_histogram.auto(true);
 
         Self {
@@ -225,20 +223,20 @@ impl MetricsRecorder {
                     .success_histogram
                     .record_correct(ms, self.expected_interval_ms);
                 self.total_success += 1;
-            }
+            },
             Err(_) => {
                 let _ = self
                     .error_histogram
                     .record_correct(ms, self.expected_interval_ms);
                 self.total_errors += 1;
                 *self.error_counts.entry(sample.operation).or_insert(0) += 1;
-            }
+            },
         }
     }
 
     /// Success latency P50 in milliseconds. Returns 0 if no samples recorded.
     pub fn p50(&self) -> u64 {
-        if self.success_histogram.len() == 0 {
+        if self.success_histogram.is_empty() {
             return 0;
         }
         self.success_histogram.value_at_quantile(0.50)
@@ -246,7 +244,7 @@ impl MetricsRecorder {
 
     /// Success latency P95 in milliseconds. Returns 0 if no samples recorded.
     pub fn p95(&self) -> u64 {
-        if self.success_histogram.len() == 0 {
+        if self.success_histogram.is_empty() {
             return 0;
         }
         self.success_histogram.value_at_quantile(0.95)
@@ -254,7 +252,7 @@ impl MetricsRecorder {
 
     /// Success latency P99 in milliseconds. Returns 0 if no samples recorded.
     pub fn p99(&self) -> u64 {
-        if self.success_histogram.len() == 0 {
+        if self.success_histogram.is_empty() {
             return 0;
         }
         self.success_histogram.value_at_quantile(0.99)
@@ -262,7 +260,7 @@ impl MetricsRecorder {
 
     /// Error latency P50 in milliseconds. Returns 0 if no samples recorded.
     pub fn error_p50(&self) -> u64 {
-        if self.error_histogram.len() == 0 {
+        if self.error_histogram.is_empty() {
             return 0;
         }
         self.error_histogram.value_at_quantile(0.50)
@@ -270,7 +268,7 @@ impl MetricsRecorder {
 
     /// Error latency P95 in milliseconds. Returns 0 if no samples recorded.
     pub fn error_p95(&self) -> u64 {
-        if self.error_histogram.len() == 0 {
+        if self.error_histogram.is_empty() {
             return 0;
         }
         self.error_histogram.value_at_quantile(0.95)
@@ -278,7 +276,7 @@ impl MetricsRecorder {
 
     /// Error latency P99 in milliseconds. Returns 0 if no samples recorded.
     pub fn error_p99(&self) -> u64 {
-        if self.error_histogram.len() == 0 {
+        if self.error_histogram.is_empty() {
             return 0;
         }
         self.error_histogram.value_at_quantile(0.99)
@@ -362,10 +360,8 @@ mod tests {
     fn test_record_success_increments_count() {
         let mut recorder = MetricsRecorder::new(100);
         for _ in 0..5 {
-            let sample = RequestSample::success(
-                OperationType::ToolsCall,
-                Duration::from_millis(50),
-            );
+            let sample =
+                RequestSample::success(OperationType::ToolsCall, Duration::from_millis(50));
             recorder.record(&sample);
         }
         assert_eq!(recorder.success_count(), 5);
@@ -391,10 +387,7 @@ mod tests {
     #[test]
     fn test_percentiles_single_value() {
         let mut recorder = MetricsRecorder::new(10_000);
-        let sample = RequestSample::success(
-            OperationType::ToolsCall,
-            Duration::from_millis(50),
-        );
+        let sample = RequestSample::success(OperationType::ToolsCall, Duration::from_millis(50));
         recorder.record(&sample);
         assert_eq!(recorder.p50(), 50);
         assert_eq!(recorder.p95(), 50);
@@ -405,10 +398,7 @@ mod tests {
     fn test_percentiles_known_distribution() {
         let mut recorder = MetricsRecorder::new(10_000);
         for i in 1..=100 {
-            let sample = RequestSample::success(
-                OperationType::ToolsCall,
-                Duration::from_millis(i),
-            );
+            let sample = RequestSample::success(OperationType::ToolsCall, Duration::from_millis(i));
             recorder.record(&sample);
         }
         let p50 = recorder.p50() as i64;
@@ -422,10 +412,7 @@ mod tests {
     #[test]
     fn test_coordinated_omission_correction() {
         let mut recorder = MetricsRecorder::new(10);
-        let sample = RequestSample::success(
-            OperationType::ToolsCall,
-            Duration::from_millis(100),
-        );
+        let sample = RequestSample::success(OperationType::ToolsCall, Duration::from_millis(100));
         recorder.record(&sample);
         // With correction, HdrHistogram fills in synthetic samples at
         // 90ms, 80ms, 70ms, ..., 10ms. So total count > 1.
@@ -446,10 +433,8 @@ mod tests {
     fn test_success_and_error_separate_buckets() {
         let mut recorder = MetricsRecorder::new(10_000);
         for _ in 0..10 {
-            let sample = RequestSample::success(
-                OperationType::ToolsCall,
-                Duration::from_millis(10),
-            );
+            let sample =
+                RequestSample::success(OperationType::ToolsCall, Duration::from_millis(10));
             recorder.record(&sample);
         }
         for _ in 0..10 {

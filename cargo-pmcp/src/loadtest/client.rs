@@ -167,10 +167,7 @@ impl McpClient {
         })?;
 
         if let Some(error_obj) = parsed.get("error") {
-            let code = error_obj
-                .get("code")
-                .and_then(|c| c.as_i64())
-                .unwrap_or(0) as i32;
+            let code = error_obj.get("code").and_then(|c| c.as_i64()).unwrap_or(0) as i32;
             let message = error_obj
                 .get("message")
                 .and_then(|m| m.as_str())
@@ -261,9 +258,10 @@ impl McpClient {
             request = request.header(SESSION_HEADER, sid.as_str());
         }
 
-        let response = request.send().await.map_err(|e| {
-            McpError::classify_reqwest(&e)
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|e| McpError::classify_reqwest(&e))?;
 
         let status = response.status();
         let headers = response.headers().clone();
@@ -271,9 +269,10 @@ impl McpClient {
         // CRITICAL timing boundary: capture bytes BEFORE any JSON parsing.
         // The caller uses the time before send_request() and after it returns
         // to compute latency. JSON parse time must NOT be included.
-        let bytes = response.bytes().await.map_err(|e| {
-            McpError::classify_reqwest(&e)
-        })?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| McpError::classify_reqwest(&e))?;
 
         if !status.is_success() {
             let body_text = String::from_utf8_lossy(&bytes).into_owned();
@@ -321,10 +320,7 @@ mod tests {
         assert_eq!(body["jsonrpc"], "2.0");
         assert_eq!(body["method"], "initialize");
         assert_eq!(body["params"]["protocolVersion"], "2025-06-18");
-        assert_eq!(
-            body["params"]["clientInfo"]["name"],
-            "cargo-pmcp-loadtest"
-        );
+        assert_eq!(body["params"]["clientInfo"]["name"], "cargo-pmcp-loadtest");
         assert_eq!(
             body["params"]["clientInfo"]["version"],
             env!("CARGO_PKG_VERSION")
@@ -387,13 +383,14 @@ mod tests {
 
     #[test]
     fn test_parse_jsonrpc_error_response() {
-        let body = br#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}"#;
+        let body =
+            br#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}"#;
         let result = McpClient::parse_response(body);
         match result {
             Err(McpError::JsonRpc { code, message }) => {
                 assert_eq!(code, -32601);
                 assert_eq!(message, "Method not found");
-            }
+            },
             other => panic!("Expected McpError::JsonRpc, got: {:?}", other),
         }
     }

@@ -219,7 +219,7 @@ arguments = { text = "hello" }
                 assert_eq!(*weight, 100);
                 assert_eq!(tool, "echo");
                 assert_eq!(arguments["text"], "hello");
-            }
+            },
             other => panic!("Expected ToolCall, got {:?}", other),
         }
     }
