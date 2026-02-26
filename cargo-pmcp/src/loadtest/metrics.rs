@@ -4,6 +4,17 @@
 //! separate success/error HdrHistogram buckets, with per-operation-type tracking.
 //! Coordinated omission correction is applied at recording time via
 //! [`hdrhistogram::Histogram::record_correct`].
+//!
+//! # Design
+//!
+//! - **Single-owner**: No `Arc<Mutex>` -- designed for Phase 2's mpsc channel
+//!   aggregation pattern where one thread owns the recorder.
+//! - **Separate buckets**: Success and error latencies are tracked in independent
+//!   histograms so error spikes don't pollute success percentiles.
+//! - **Coordinated omission correction**: Applied at recording time via
+//!   `record_correct()`, not post-hoc. This fills in synthetic samples for
+//!   intervals missed when the system was stalled.
+//! - **Millisecond resolution**: Matches how users think about latency.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -14,6 +25,9 @@ use hdrhistogram::Histogram;
 use crate::loadtest::error::McpError;
 
 /// Type of MCP operation being measured.
+///
+/// Each variant maps to an MCP protocol method. The [`fmt::Display`] impl
+/// produces the wire-format string (e.g., `"tools/call"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OperationType {
     /// MCP initialize handshake.
@@ -34,32 +48,41 @@ pub enum OperationType {
 
 impl fmt::Display for OperationType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Initialize => write!(f, "initialize"),
-            Self::ToolsCall => write!(f, "tools/call"),
-            Self::ResourcesRead => write!(f, "resources/read"),
-            Self::PromptsGet => write!(f, "prompts/get"),
-            Self::ToolsList => write!(f, "tools/list"),
-            Self::ResourcesList => write!(f, "resources/list"),
-            Self::PromptsList => write!(f, "prompts/list"),
-        }
+        let s = match self {
+            Self::Initialize => "initialize",
+            Self::ToolsCall => "tools/call",
+            Self::ResourcesRead => "resources/read",
+            Self::PromptsGet => "prompts/get",
+            Self::ToolsList => "tools/list",
+            Self::ResourcesList => "resources/list",
+            Self::PromptsList => "prompts/list",
+        };
+        f.write_str(s)
     }
 }
 
 /// A single request measurement sample.
+///
+/// Created via [`RequestSample::success`] or [`RequestSample::error`] convenience
+/// constructors. Passed to [`MetricsRecorder::record`] for ingestion.
 pub struct RequestSample {
     /// The MCP operation type that was measured.
     pub operation: OperationType,
     /// Wall-clock duration of the request.
     pub duration: Duration,
-    /// Ok(()) for success, Err(McpError) for failure.
+    /// `Ok(())` for success, `Err(McpError)` for failure.
     pub result: Result<(), McpError>,
-    /// When the sample was recorded.
+    /// When the sample was taken.
     pub timestamp: Instant,
 }
 
 impl RequestSample {
-    /// Creates a success sample.
+    /// Create a success sample with the current timestamp.
+    ///
+    /// # Arguments
+    ///
+    /// * `operation` - The MCP operation type that was measured.
+    /// * `duration` - Wall-clock duration of the request.
     pub fn success(operation: OperationType, duration: Duration) -> Self {
         Self {
             operation,
@@ -69,7 +92,13 @@ impl RequestSample {
         }
     }
 
-    /// Creates an error sample.
+    /// Create an error sample with the current timestamp.
+    ///
+    /// # Arguments
+    ///
+    /// * `operation` - The MCP operation type that was measured.
+    /// * `duration` - Wall-clock duration of the request.
+    /// * `err` - The MCP error that occurred.
     pub fn error(operation: OperationType, duration: Duration, err: McpError) -> Self {
         Self {
             operation,
@@ -80,130 +109,238 @@ impl RequestSample {
     }
 }
 
-/// Point-in-time snapshot of metrics.
+/// Point-in-time snapshot of all metrics state.
+///
+/// Captured via [`MetricsRecorder::snapshot`]. All percentile values are in
+/// milliseconds.
 #[derive(Debug, Clone)]
 pub struct MetricsSnapshot {
-    /// Total successful requests.
+    /// Success latency P50 (milliseconds).
+    pub p50: u64,
+    /// Success latency P95 (milliseconds).
+    pub p95: u64,
+    /// Success latency P99 (milliseconds).
+    pub p99: u64,
+    /// Error latency P50 (milliseconds).
+    pub error_p50: u64,
+    /// Error latency P95 (milliseconds).
+    pub error_p95: u64,
+    /// Error latency P99 (milliseconds).
+    pub error_p99: u64,
+    /// Total successful requests recorded.
     pub success_count: u64,
-    /// Total failed requests.
+    /// Total failed requests recorded.
     pub error_count: u64,
     /// Total requests (success + error).
     pub total_requests: u64,
-    /// 50th percentile latency in milliseconds (success histogram).
-    pub p50: u64,
-    /// 95th percentile latency in milliseconds (success histogram).
-    pub p95: u64,
-    /// 99th percentile latency in milliseconds (success histogram).
-    pub p99: u64,
-    /// 99th percentile latency in milliseconds (error histogram).
-    pub error_p99: u64,
+    /// Fraction of requests that were errors (0.0..=1.0).
+    pub error_rate: f64,
+    /// Per-operation total request counts.
+    pub operation_counts: HashMap<OperationType, u64>,
+    /// Per-operation error counts.
+    pub per_operation_errors: HashMap<OperationType, u64>,
 }
 
-/// Metrics recorder with HdrHistogram.
+/// HdrHistogram-backed metrics recorder with coordinated omission correction.
 ///
-/// Full implementation in Plan 01-03.
+/// Records MCP request latency samples into separate success/error histograms.
+/// Designed for single-owner usage -- no internal locking. Phase 2 will use
+/// mpsc channels to feed samples from worker tasks to a single recorder.
+///
+/// # Example
+///
+/// ```
+/// use std::time::Duration;
+/// use cargo_pmcp::loadtest::metrics::{MetricsRecorder, RequestSample, OperationType};
+///
+/// let mut recorder = MetricsRecorder::new(100);
+/// let sample = RequestSample::success(OperationType::ToolsCall, Duration::from_millis(42));
+/// recorder.record(&sample);
+///
+/// assert_eq!(recorder.success_count(), 1);
+/// assert_eq!(recorder.p50(), 42);
+/// ```
 pub struct MetricsRecorder {
+    /// Histogram for successful request latencies.
     success_histogram: Histogram<u64>,
+    /// Histogram for failed request latencies.
     error_histogram: Histogram<u64>,
-    operation_counts: HashMap<OperationType, u64>,
+    /// Expected interval between requests in milliseconds.
+    /// Used by `record_correct()` for coordinated omission correction.
     expected_interval_ms: u64,
+    /// Per-operation total request counts (success + error).
+    operation_counts: HashMap<OperationType, u64>,
+    /// Per-operation error counts.
+    error_counts: HashMap<OperationType, u64>,
+    /// Running total of successful requests (logical, not histogram entries).
+    total_success: u64,
+    /// Running total of failed requests (logical, not histogram entries).
+    total_errors: u64,
 }
 
 impl MetricsRecorder {
-    /// Creates a new recorder with the given expected interval (ms) for
-    /// coordinated omission correction.
+    /// Create a new recorder with the given expected request interval.
+    ///
+    /// The `expected_interval_ms` is used for coordinated omission correction:
+    /// when a request takes much longer than expected, synthetic samples are
+    /// filled in to account for requests that *would have* been sent during
+    /// the stall.
+    ///
+    /// Histograms are created with 3 significant figures of precision and
+    /// auto-resize enabled.
     pub fn new(expected_interval_ms: u64) -> Self {
+        let mut success_histogram =
+            Histogram::<u64>::new(3).expect("3 sigfigs is always valid");
+        success_histogram.auto(true);
+
+        let mut error_histogram =
+            Histogram::<u64>::new(3).expect("3 sigfigs is always valid");
+        error_histogram.auto(true);
+
         Self {
-            success_histogram: Histogram::<u64>::new_with_bounds(1, 60_000, 3)
-                .expect("valid histogram params"),
-            error_histogram: Histogram::<u64>::new_with_bounds(1, 60_000, 3)
-                .expect("valid histogram params"),
-            operation_counts: HashMap::new(),
+            success_histogram,
+            error_histogram,
             expected_interval_ms,
+            operation_counts: HashMap::new(),
+            error_counts: HashMap::new(),
+            total_success: 0,
+            total_errors: 0,
         }
     }
 
-    /// Records a request sample into the appropriate histogram.
+    /// Record a request sample with coordinated omission correction.
+    ///
+    /// The sample is routed to the success or error histogram based on its
+    /// `result` field. `record_correct()` is used instead of plain `record()`
+    /// to apply coordinated omission correction.
     pub fn record(&mut self, sample: &RequestSample) {
-        let ms = sample.duration.as_millis().max(1) as u64;
-        *self
-            .operation_counts
-            .entry(sample.operation)
-            .or_insert(0) += 1;
+        let ms = sample.duration.as_millis() as u64;
+
+        // Increment per-operation total count
+        *self.operation_counts.entry(sample.operation).or_insert(0) += 1;
 
         match &sample.result {
             Ok(()) => {
                 let _ = self
                     .success_histogram
                     .record_correct(ms, self.expected_interval_ms);
+                self.total_success += 1;
             }
             Err(_) => {
                 let _ = self
                     .error_histogram
                     .record_correct(ms, self.expected_interval_ms);
+                self.total_errors += 1;
+                *self.error_counts.entry(sample.operation).or_insert(0) += 1;
             }
         }
     }
 
-    /// Total successful request count (from histogram).
+    /// Success latency P50 in milliseconds. Returns 0 if no samples recorded.
+    pub fn p50(&self) -> u64 {
+        if self.success_histogram.len() == 0 {
+            return 0;
+        }
+        self.success_histogram.value_at_quantile(0.50)
+    }
+
+    /// Success latency P95 in milliseconds. Returns 0 if no samples recorded.
+    pub fn p95(&self) -> u64 {
+        if self.success_histogram.len() == 0 {
+            return 0;
+        }
+        self.success_histogram.value_at_quantile(0.95)
+    }
+
+    /// Success latency P99 in milliseconds. Returns 0 if no samples recorded.
+    pub fn p99(&self) -> u64 {
+        if self.success_histogram.len() == 0 {
+            return 0;
+        }
+        self.success_histogram.value_at_quantile(0.99)
+    }
+
+    /// Error latency P50 in milliseconds. Returns 0 if no samples recorded.
+    pub fn error_p50(&self) -> u64 {
+        if self.error_histogram.len() == 0 {
+            return 0;
+        }
+        self.error_histogram.value_at_quantile(0.50)
+    }
+
+    /// Error latency P95 in milliseconds. Returns 0 if no samples recorded.
+    pub fn error_p95(&self) -> u64 {
+        if self.error_histogram.len() == 0 {
+            return 0;
+        }
+        self.error_histogram.value_at_quantile(0.95)
+    }
+
+    /// Error latency P99 in milliseconds. Returns 0 if no samples recorded.
+    pub fn error_p99(&self) -> u64 {
+        if self.error_histogram.len() == 0 {
+            return 0;
+        }
+        self.error_histogram.value_at_quantile(0.99)
+    }
+
+    /// Total number of successful requests recorded.
+    ///
+    /// Note: this returns histogram entry count which includes synthetic
+    /// fill-ins from coordinated omission correction. Use this for accurate
+    /// percentile denominators.
     pub fn success_count(&self) -> u64 {
         self.success_histogram.len()
     }
 
-    /// Total error request count (from histogram).
+    /// Total number of failed requests recorded.
+    ///
+    /// Note: this returns histogram entry count which includes synthetic
+    /// fill-ins from coordinated omission correction.
     pub fn error_count(&self) -> u64 {
         self.error_histogram.len()
     }
 
-    /// Total request count (success + error).
+    /// Total requests recorded (success + error histogram entries).
     pub fn total_requests(&self) -> u64 {
-        self.success_count() + self.error_count()
+        self.success_histogram.len() + self.error_histogram.len()
     }
 
-    /// 50th percentile latency in ms (success histogram).
-    pub fn p50(&self) -> u64 {
-        self.success_histogram.value_at_quantile(0.50)
-    }
-
-    /// 95th percentile latency in ms (success histogram).
-    pub fn p95(&self) -> u64 {
-        self.success_histogram.value_at_quantile(0.95)
-    }
-
-    /// 99th percentile latency in ms (success histogram).
-    pub fn p99(&self) -> u64 {
-        self.success_histogram.value_at_quantile(0.99)
-    }
-
-    /// 99th percentile latency in ms (error histogram).
-    pub fn error_p99(&self) -> u64 {
-        self.error_histogram.value_at_quantile(0.99)
-    }
-
-    /// Error rate as a fraction (0.0 to 1.0).
+    /// Error rate as a fraction (0.0..=1.0). Returns 0.0 if no requests recorded.
     pub fn error_rate(&self) -> f64 {
         let total = self.total_requests();
         if total == 0 {
             return 0.0;
         }
-        self.error_count() as f64 / total as f64
+        self.error_histogram.len() as f64 / total as f64
     }
 
-    /// Returns the count for a specific operation type.
+    /// Total requests for a specific operation type (success + error).
+    ///
+    /// This is the *logical* count (one per `record()` call), not inflated
+    /// by coordinated omission correction.
     pub fn operation_count(&self, op: OperationType) -> u64 {
         self.operation_counts.get(&op).copied().unwrap_or(0)
     }
 
-    /// Takes a point-in-time snapshot of all metrics.
+    /// Capture a point-in-time snapshot of all metrics.
+    ///
+    /// The snapshot is a self-contained value that can be sent across threads
+    /// or serialized without holding a reference to the recorder.
     pub fn snapshot(&self) -> MetricsSnapshot {
         MetricsSnapshot {
-            success_count: self.success_count(),
-            error_count: self.error_count(),
-            total_requests: self.total_requests(),
             p50: self.p50(),
             p95: self.p95(),
             p99: self.p99(),
+            error_p50: self.error_p50(),
+            error_p95: self.error_p95(),
             error_p99: self.error_p99(),
+            success_count: self.success_histogram.len(),
+            error_count: self.error_histogram.len(),
+            total_requests: self.total_requests(),
+            error_rate: self.error_rate(),
+            operation_counts: self.operation_counts.clone(),
+            per_operation_errors: self.error_counts.clone(),
         }
     }
 }

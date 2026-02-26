@@ -10,11 +10,27 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::Duration;
 
+/// MCP protocol version used in the initialize handshake.
+const PROTOCOL_VERSION: &str = "2025-06-18";
+
+/// Client name sent in the initialize handshake.
+const CLIENT_NAME: &str = "cargo-pmcp-loadtest";
+
+/// HTTP header name for the MCP session identifier.
+const SESSION_HEADER: &str = "mcp-session-id";
+
 /// MCP-aware HTTP client for load testing.
 ///
 /// Each virtual user owns one instance with its own session. The client
-/// constructs JSON-RPC requests directly using `serde_json::json!` rather
+/// constructs JSON-RPC requests directly using [`serde_json::json!`] rather
 /// than depending on the parent SDK's transport layer.
+///
+/// # Session lifecycle
+///
+/// 1. Call [`McpClient::initialize`] to perform the full MCP handshake.
+/// 2. The `mcp-session-id` header is automatically extracted and stored.
+/// 3. Subsequent calls to [`McpClient::call_tool`], [`McpClient::read_resource`],
+///    and [`McpClient::get_prompt`] attach the session header automatically.
 pub struct McpClient {
     http: Client,
     base_url: String,
@@ -26,8 +42,10 @@ pub struct McpClient {
 impl McpClient {
     /// Creates a new MCP client.
     ///
-    /// Takes a `reqwest::Client` by value (allows shared client via `Clone`),
-    /// a base URL for the MCP server, and a per-request timeout duration.
+    /// Takes a [`reqwest::Client`] by value (allows shared client via `Clone`
+    /// for connection pool sharing in Phase 2), a base URL for the MCP server,
+    /// and a per-request timeout duration.
+    ///
     /// Starts with no session and request ID counter at 1.
     pub fn new(http: Client, base_url: String, timeout: Duration) -> Self {
         Self {
@@ -52,39 +70,91 @@ impl McpClient {
     }
 
     /// Builds the JSON-RPC request body for the `initialize` method.
+    ///
+    /// Includes the MCP protocol version and client identification info.
     pub fn build_initialize_body(&mut self) -> Value {
-        todo!("GREEN phase")
+        let id = self.next_id();
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {
+                    "name": CLIENT_NAME,
+                    "version": env!("CARGO_PKG_VERSION")
+                }
+            }
+        })
     }
 
     /// Builds the JSON-RPC notification body for `notifications/initialized`.
     ///
-    /// This is a notification (no `id` field).
+    /// This is a notification (no `id` field) sent after a successful
+    /// initialize response to complete the handshake.
     pub fn build_initialized_notification(&self) -> Value {
-        todo!("GREEN phase")
+        json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        })
     }
 
     /// Builds the JSON-RPC request body for `tools/call`.
-    pub fn build_tool_call_body(&mut self, _tool: &str, _arguments: &Value) -> Value {
-        todo!("GREEN phase")
+    pub fn build_tool_call_body(&mut self, tool: &str, arguments: &Value) -> Value {
+        let id = self.next_id();
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": {
+                "name": tool,
+                "arguments": arguments
+            }
+        })
     }
 
     /// Builds the JSON-RPC request body for `resources/read`.
-    pub fn build_resource_read_body(&mut self, _uri: &str) -> Value {
-        todo!("GREEN phase")
+    pub fn build_resource_read_body(&mut self, uri: &str) -> Value {
+        let id = self.next_id();
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "resources/read",
+            "params": {
+                "uri": uri
+            }
+        })
     }
 
     /// Builds the JSON-RPC request body for `prompts/get`.
     pub fn build_prompt_get_body(
         &mut self,
-        _prompt: &str,
-        _arguments: &HashMap<String, String>,
+        prompt: &str,
+        arguments: &HashMap<String, String>,
     ) -> Value {
-        todo!("GREEN phase")
+        let id = self.next_id();
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "prompts/get",
+            "params": {
+                "name": prompt,
+                "arguments": arguments
+            }
+        })
     }
 
     /// Extracts the `mcp-session-id` header from response headers and stores it.
-    pub fn extract_session_id(&mut self, _headers: &reqwest::header::HeaderMap) {
-        todo!("GREEN phase")
+    ///
+    /// If the header is not present or not valid UTF-8, the session ID is
+    /// left unchanged.
+    pub fn extract_session_id(&mut self, headers: &reqwest::header::HeaderMap) {
+        if let Some(value) = headers.get(SESSION_HEADER) {
+            if let Ok(s) = value.to_str() {
+                self.session_id = Some(s.to_owned());
+            }
+        }
     }
 
     /// Parses a JSON-RPC response body.
@@ -92,50 +162,128 @@ impl McpClient {
     /// Returns the `result` field on success, or an [`McpError::JsonRpc`] if
     /// the response contains an `error` object.
     pub fn parse_response(body: &[u8]) -> Result<Value, McpError> {
-        let _ = body;
-        todo!("GREEN phase")
+        let parsed: Value = serde_json::from_slice(body).map_err(|e| McpError::Connection {
+            message: format!("Invalid JSON response: {e}"),
+        })?;
+
+        if let Some(error_obj) = parsed.get("error") {
+            let code = error_obj
+                .get("code")
+                .and_then(|c| c.as_i64())
+                .unwrap_or(0) as i32;
+            let message = error_obj
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Unknown error")
+                .to_owned();
+            return Err(McpError::JsonRpc { code, message });
+        }
+
+        if let Some(result) = parsed.get("result") {
+            return Ok(result.clone());
+        }
+
+        // If there is neither result nor error, return the full response
+        Ok(parsed)
     }
 
     /// Performs the full MCP initialize handshake.
     ///
-    /// Sends the `initialize` request, extracts the session ID from response
-    /// headers, then sends the `notifications/initialized` notification.
+    /// 1. Sends the `initialize` request.
+    /// 2. Extracts the `mcp-session-id` from response headers.
+    /// 3. Parses the JSON-RPC response.
+    /// 4. Sends the `notifications/initialized` notification with the session
+    ///    ID attached.
+    ///
+    /// Returns the initialize result value.
     pub async fn initialize(&mut self) -> Result<Value, McpError> {
-        todo!("GREEN phase")
+        let body = self.build_initialize_body();
+        let (headers, response_bytes) = self.send_request(&body).await?;
+
+        self.extract_session_id(&headers);
+        let result = Self::parse_response(&response_bytes)?;
+
+        // Send the initialized notification to complete the handshake
+        let notification = self.build_initialized_notification();
+        let _ = self.send_request(&notification).await;
+
+        Ok(result)
     }
 
     /// Sends a `tools/call` request to the MCP server.
-    pub async fn call_tool(&mut self, _tool: &str, _arguments: &Value) -> Result<Value, McpError> {
-        todo!("GREEN phase")
+    pub async fn call_tool(&mut self, tool: &str, arguments: &Value) -> Result<Value, McpError> {
+        let body = self.build_tool_call_body(tool, arguments);
+        let (_headers, response_bytes) = self.send_request(&body).await?;
+        Self::parse_response(&response_bytes)
     }
 
     /// Sends a `resources/read` request to the MCP server.
-    pub async fn read_resource(&mut self, _uri: &str) -> Result<Value, McpError> {
-        todo!("GREEN phase")
+    pub async fn read_resource(&mut self, uri: &str) -> Result<Value, McpError> {
+        let body = self.build_resource_read_body(uri);
+        let (_headers, response_bytes) = self.send_request(&body).await?;
+        Self::parse_response(&response_bytes)
     }
 
     /// Sends a `prompts/get` request to the MCP server.
     pub async fn get_prompt(
         &mut self,
-        _prompt: &str,
-        _arguments: &HashMap<String, String>,
+        prompt: &str,
+        arguments: &HashMap<String, String>,
     ) -> Result<Value, McpError> {
-        todo!("GREEN phase")
+        let body = self.build_prompt_get_body(prompt, arguments);
+        let (_headers, response_bytes) = self.send_request(&body).await?;
+        Self::parse_response(&response_bytes)
     }
 
     /// Sends an HTTP POST request with the given JSON-RPC body.
     ///
-    /// Attaches the session ID header if present. Applies per-request timeout.
+    /// Attaches the `mcp-session-id` header if a session has been established.
+    /// Applies per-request timeout via [`reqwest::RequestBuilder::timeout`].
     /// Returns response headers and body bytes.
     ///
     /// **Timing boundary:** The caller captures `Instant::now()` before calling
     /// this method. The returned bytes represent the raw response -- JSON parsing
-    /// happens after timing measurement is complete.
+    /// happens after timing measurement is complete, ensuring parse time is not
+    /// included in latency measurements.
     async fn send_request(
         &mut self,
-        _body: &Value,
+        body: &Value,
     ) -> Result<(reqwest::header::HeaderMap, Vec<u8>), McpError> {
-        todo!("GREEN phase")
+        let mut request = self
+            .http
+            .post(&self.base_url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .timeout(self.request_timeout)
+            .json(body);
+
+        if let Some(ref sid) = self.session_id {
+            request = request.header(SESSION_HEADER, sid.as_str());
+        }
+
+        let response = request.send().await.map_err(|e| {
+            McpError::classify_reqwest(&e)
+        })?;
+
+        let status = response.status();
+        let headers = response.headers().clone();
+
+        // CRITICAL timing boundary: capture bytes BEFORE any JSON parsing.
+        // The caller uses the time before send_request() and after it returns
+        // to compute latency. JSON parse time must NOT be included.
+        let bytes = response.bytes().await.map_err(|e| {
+            McpError::classify_reqwest(&e)
+        })?;
+
+        if !status.is_success() {
+            let body_text = String::from_utf8_lossy(&bytes).into_owned();
+            return Err(McpError::Http {
+                status: status.as_u16(),
+                body: body_text,
+            });
+        }
+
+        Ok((headers, bytes.to_vec()))
     }
 }
 
