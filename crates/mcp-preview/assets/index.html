@@ -1389,8 +1389,8 @@
         // Find widget HTML in content
         const widgetContent = result.content.find(c =>
           c.type === 'resource' &&
-          c.mime_type &&
-          c.mime_type.includes('html')
+          c.mimeType &&
+          c.mimeType.includes('html')
         );
 
         if (widgetContent && widgetContent.text) {
@@ -1471,8 +1471,8 @@
             // Handle widget response if HTML is returned
             const widgetContent = rawResult.content.find(c =>
               c.type === 'resource' &&
-              c.mime_type &&
-              c.mime_type.includes('html')
+              c.mimeType &&
+              c.mimeType.includes('html')
             );
             if (widgetContent && widgetContent.text) {
               preview.loadWidget(widgetContent.text);
@@ -1639,8 +1639,8 @@ ${html}
             if (success && mcpResult.content) {
               const widgetContent = mcpResult.content.find(c =>
                 c.type === 'resource' &&
-                c.mime_type &&
-                c.mime_type.includes('html')
+                c.mimeType &&
+                c.mimeType.includes('html')
               );
               if (widgetContent && widgetContent.text) {
                 preview.loadWidget(widgetContent.text);
