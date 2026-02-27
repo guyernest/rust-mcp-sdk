@@ -5,5 +5,8 @@
 
 pub mod client;
 pub mod config;
+pub mod display;
+pub mod engine;
 pub mod error;
 pub mod metrics;
+pub mod vu;

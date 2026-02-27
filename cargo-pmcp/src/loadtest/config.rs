@@ -36,7 +36,7 @@
 //! Note: The target server URL is NOT part of the config file. It is provided
 //! via the `--url` CLI flag per user decision.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
@@ -47,7 +47,7 @@ use crate::loadtest::error::LoadTestError;
 ///
 /// Contains general settings (VU count, duration, timeout) and a list of
 /// weighted scenario steps defining the mix of MCP operations to execute.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct LoadTestConfig {
     /// General load test settings.
     pub settings: Settings,
@@ -59,7 +59,7 @@ pub struct LoadTestConfig {
 ///
 /// The target server URL is intentionally absent -- it is provided via the
 /// `--url` CLI flag, not the config file.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Settings {
     /// Number of concurrent virtual users to simulate.
     pub virtual_users: u32,
@@ -84,7 +84,7 @@ fn default_expected_interval() -> u64 {
 ///
 /// The `type` field in TOML determines the variant via serde's internally tagged
 /// enum support. Supported types: `"tools/call"`, `"resources/read"`, `"prompts/get"`.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(tag = "type")]
 pub enum ScenarioStep {
     /// A `tools/call` MCP request.
