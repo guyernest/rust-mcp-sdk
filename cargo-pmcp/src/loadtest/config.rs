@@ -43,16 +43,57 @@ use std::time::Duration;
 
 use crate::loadtest::error::LoadTestError;
 
+/// A load-shaping stage defining a target VU count and duration.
+///
+/// Stages are defined as `[[stage]]` blocks in the TOML config and enable
+/// multi-phase load profiles (ramp-up, hold, ramp-down). The engine linearly
+/// ramps VU count to `target_vus` over the stage's `duration_secs`.
+///
+/// # Example TOML
+///
+/// ```toml
+/// [[stage]]
+/// target_vus = 10
+/// duration_secs = 30
+///
+/// [[stage]]
+/// target_vus = 50
+/// duration_secs = 60
+///
+/// [[stage]]
+/// target_vus = 0
+/// duration_secs = 30
+/// ```
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct Stage {
+    /// Target number of virtual users at the end of this stage.
+    pub target_vus: u32,
+    /// Duration of this stage in seconds.
+    pub duration_secs: u64,
+}
+
 /// Top-level load test configuration parsed from a TOML file.
 ///
-/// Contains general settings (VU count, duration, timeout) and a list of
-/// weighted scenario steps defining the mix of MCP operations to execute.
+/// Contains general settings (VU count, duration, timeout), a list of
+/// weighted scenario steps defining the mix of MCP operations to execute,
+/// and optional `[[stage]]` blocks for multi-phase load shaping.
+///
+/// When stages are present, the engine ramps VU count linearly through
+/// each stage. When absent, flat load is applied (all VUs start immediately).
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct LoadTestConfig {
     /// General load test settings.
     pub settings: Settings,
     /// Weighted scenario steps defining the MCP operation mix.
     pub scenario: Vec<ScenarioStep>,
+    /// Optional load-shaping stages for multi-phase profiles.
+    ///
+    /// When present, the engine ramps VU count through each stage linearly.
+    /// When absent (empty), flat load is applied with `settings.virtual_users`.
+    /// The field name is `stage` (not `stages`) because TOML `[[stage]]`
+    /// array-of-tables syntax creates a key called `stage`.
+    #[serde(default)]
+    pub stage: Vec<Stage>,
 }
 
 /// General load test settings controlling execution parameters.
@@ -142,11 +183,35 @@ impl LoadTestConfig {
         Self::from_toml(&content)
     }
 
+    /// Returns `true` if the config defines load-shaping stages.
+    pub fn has_stages(&self) -> bool {
+        !self.stage.is_empty()
+    }
+
+    /// Returns the sum of all stage durations in seconds (0 if no stages).
+    pub fn total_stage_duration(&self) -> u64 {
+        self.stage.iter().map(|s| s.duration_secs).sum()
+    }
+
+    /// Returns the effective test duration in seconds.
+    ///
+    /// When stages are present, returns the sum of stage durations.
+    /// When absent, returns `settings.duration_secs`.
+    pub fn effective_duration_secs(&self) -> u64 {
+        if self.has_stages() {
+            self.total_stage_duration()
+        } else {
+            self.settings.duration_secs
+        }
+    }
+
     /// Validate that the config is semantically correct.
     ///
     /// Checks:
     /// - At least one scenario step is defined
     /// - Total weight across all steps is greater than zero
+    /// - If stages present: each stage must have `duration_secs > 0`
+    /// - If stages absent: require valid `virtual_users` and `duration_secs`
     pub fn validate(&self) -> Result<(), LoadTestError> {
         if self.scenario.is_empty() {
             return Err(LoadTestError::ConfigValidation {
@@ -159,6 +224,28 @@ impl LoadTestConfig {
             return Err(LoadTestError::ConfigValidation {
                 message: "Total scenario weights must be greater than 0".to_string(),
             });
+        }
+
+        if self.has_stages() {
+            // Validate stage-specific rules
+            for (i, stage) in self.stage.iter().enumerate() {
+                if stage.duration_secs == 0 {
+                    return Err(LoadTestError::ConfigValidation {
+                        message: format!(
+                            "Stage {} has duration_secs=0; each stage must have a positive duration",
+                            i + 1
+                        ),
+                    });
+                }
+            }
+
+            // Warn if virtual_users is also set (stages take precedence)
+            if self.settings.virtual_users > 0 {
+                eprintln!(
+                    "Warning: settings.virtual_users={} is ignored when [[stage]] blocks are present",
+                    self.settings.virtual_users
+                );
+            }
         }
 
         Ok(())
@@ -311,6 +398,7 @@ tool = "ping"
                 expected_interval_ms: 100,
             },
             scenario: vec![],
+            stage: vec![],
         };
         let result = config.validate();
         assert!(result.is_err());
@@ -340,6 +428,7 @@ tool = "ping"
                     uri: "file:///data".to_string(),
                 },
             ],
+            stage: vec![],
         };
         let result = config.validate();
         assert!(result.is_err());
@@ -363,6 +452,7 @@ tool = "ping"
                 tool: "echo".to_string(),
                 arguments: serde_json::json!({"text": "hello"}),
             }],
+            stage: vec![],
         };
         assert!(config.validate().is_ok());
     }
@@ -408,5 +498,246 @@ tool = "echo"
             expected_interval_ms: 100,
         };
         assert_eq!(settings.timeout_as_duration(), Duration::from_millis(5000));
+    }
+
+    #[test]
+    fn test_parse_config_with_stages() {
+        let toml_str = r#"
+[settings]
+virtual_users = 10
+duration_secs = 60
+timeout_ms = 5000
+
+[[scenario]]
+type = "tools/call"
+weight = 100
+tool = "echo"
+
+[[stage]]
+target_vus = 10
+duration_secs = 30
+
+[[stage]]
+target_vus = 50
+duration_secs = 60
+
+[[stage]]
+target_vus = 0
+duration_secs = 30
+"#;
+        let config = LoadTestConfig::from_toml(toml_str).unwrap();
+        assert_eq!(config.stage.len(), 3);
+        assert_eq!(config.stage[0].target_vus, 10);
+        assert_eq!(config.stage[0].duration_secs, 30);
+        assert_eq!(config.stage[1].target_vus, 50);
+        assert_eq!(config.stage[1].duration_secs, 60);
+        assert_eq!(config.stage[2].target_vus, 0);
+        assert_eq!(config.stage[2].duration_secs, 30);
+    }
+
+    #[test]
+    fn test_parse_config_without_stages_backwards_compatible() {
+        let toml_str = r#"
+[settings]
+virtual_users = 10
+duration_secs = 60
+timeout_ms = 5000
+
+[[scenario]]
+type = "tools/call"
+weight = 100
+tool = "echo"
+"#;
+        let config = LoadTestConfig::from_toml(toml_str).unwrap();
+        assert!(config.stage.is_empty());
+        assert!(!config.has_stages());
+    }
+
+    #[test]
+    fn test_validate_stage_with_zero_duration_fails() {
+        let config = LoadTestConfig {
+            settings: Settings {
+                virtual_users: 10,
+                duration_secs: 60,
+                timeout_ms: 5000,
+                expected_interval_ms: 100,
+            },
+            scenario: vec![ScenarioStep::ToolCall {
+                weight: 100,
+                tool: "echo".to_string(),
+                arguments: serde_json::Value::Null,
+            }],
+            stage: vec![
+                Stage {
+                    target_vus: 10,
+                    duration_secs: 30,
+                },
+                Stage {
+                    target_vus: 20,
+                    duration_secs: 0,
+                },
+            ],
+        };
+        let result = config.validate();
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("duration_secs=0"),
+            "Error should mention zero duration: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_validate_stages_present_is_valid() {
+        let config = LoadTestConfig {
+            settings: Settings {
+                virtual_users: 1,
+                duration_secs: 10,
+                timeout_ms: 5000,
+                expected_interval_ms: 100,
+            },
+            scenario: vec![ScenarioStep::ToolCall {
+                weight: 100,
+                tool: "echo".to_string(),
+                arguments: serde_json::Value::Null,
+            }],
+            stage: vec![Stage {
+                target_vus: 50,
+                duration_secs: 60,
+            }],
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_has_stages() {
+        let config_no_stages = LoadTestConfig {
+            settings: Settings {
+                virtual_users: 10,
+                duration_secs: 60,
+                timeout_ms: 5000,
+                expected_interval_ms: 100,
+            },
+            scenario: vec![ScenarioStep::ToolCall {
+                weight: 100,
+                tool: "echo".to_string(),
+                arguments: serde_json::Value::Null,
+            }],
+            stage: vec![],
+        };
+        assert!(!config_no_stages.has_stages());
+
+        let config_with_stages = LoadTestConfig {
+            settings: Settings {
+                virtual_users: 10,
+                duration_secs: 60,
+                timeout_ms: 5000,
+                expected_interval_ms: 100,
+            },
+            scenario: vec![ScenarioStep::ToolCall {
+                weight: 100,
+                tool: "echo".to_string(),
+                arguments: serde_json::Value::Null,
+            }],
+            stage: vec![Stage {
+                target_vus: 10,
+                duration_secs: 30,
+            }],
+        };
+        assert!(config_with_stages.has_stages());
+    }
+
+    #[test]
+    fn test_total_stage_duration() {
+        let config = LoadTestConfig {
+            settings: Settings {
+                virtual_users: 10,
+                duration_secs: 60,
+                timeout_ms: 5000,
+                expected_interval_ms: 100,
+            },
+            scenario: vec![ScenarioStep::ToolCall {
+                weight: 100,
+                tool: "echo".to_string(),
+                arguments: serde_json::Value::Null,
+            }],
+            stage: vec![
+                Stage {
+                    target_vus: 10,
+                    duration_secs: 30,
+                },
+                Stage {
+                    target_vus: 50,
+                    duration_secs: 60,
+                },
+                Stage {
+                    target_vus: 0,
+                    duration_secs: 20,
+                },
+            ],
+        };
+        assert_eq!(config.total_stage_duration(), 110);
+
+        let config_no_stages = LoadTestConfig {
+            settings: Settings {
+                virtual_users: 10,
+                duration_secs: 60,
+                timeout_ms: 5000,
+                expected_interval_ms: 100,
+            },
+            scenario: vec![ScenarioStep::ToolCall {
+                weight: 100,
+                tool: "echo".to_string(),
+                arguments: serde_json::Value::Null,
+            }],
+            stage: vec![],
+        };
+        assert_eq!(config_no_stages.total_stage_duration(), 0);
+    }
+
+    #[test]
+    fn test_effective_duration_secs() {
+        // With stages: sum of stage durations
+        let config_with_stages = LoadTestConfig {
+            settings: Settings {
+                virtual_users: 10,
+                duration_secs: 60,
+                timeout_ms: 5000,
+                expected_interval_ms: 100,
+            },
+            scenario: vec![ScenarioStep::ToolCall {
+                weight: 100,
+                tool: "echo".to_string(),
+                arguments: serde_json::Value::Null,
+            }],
+            stage: vec![
+                Stage {
+                    target_vus: 10,
+                    duration_secs: 30,
+                },
+                Stage {
+                    target_vus: 50,
+                    duration_secs: 60,
+                },
+            ],
+        };
+        assert_eq!(config_with_stages.effective_duration_secs(), 90);
+
+        // Without stages: settings.duration_secs
+        let config_no_stages = LoadTestConfig {
+            settings: Settings {
+                virtual_users: 10,
+                duration_secs: 120,
+                timeout_ms: 5000,
+                expected_interval_ms: 100,
+            },
+            scenario: vec![ScenarioStep::ToolCall {
+                weight: 100,
+                tool: "echo".to_string(),
+                arguments: serde_json::Value::Null,
+            }],
+            stage: vec![],
+        };
+        assert_eq!(config_no_stages.effective_duration_secs(), 120);
     }
 }

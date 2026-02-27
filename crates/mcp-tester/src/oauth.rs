@@ -221,7 +221,7 @@ impl OAuthHelper {
 
         // Try authorization code flow first (more common, works with MCP Inspector-like servers)
         match self.authorization_code_flow(&metadata).await {
-            Ok(token) => return Ok(token),
+            Ok(token) => Ok(token),
             Err(e) => {
                 eprintln!(
                     "{}",
@@ -294,7 +294,8 @@ impl OAuthHelper {
         eprintln!();
         eprintln!(
             "{}",
-            format!("IMPORTANT: Ensure the redirect URI is registered in your OAuth provider:")
+            "IMPORTANT: Ensure the redirect URI is registered in your OAuth provider:"
+                .to_string()
                 .yellow()
                 .bold()
         );

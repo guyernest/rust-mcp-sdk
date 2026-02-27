@@ -35,7 +35,7 @@ pub async fn execute_init(url: Option<String>, force: bool) -> Result<()> {
                     e
                 );
                 generate_default_template()
-            }
+            },
         }
     } else {
         generate_default_template()
@@ -80,9 +80,10 @@ async fn discover_schema(url: &str) -> Result<DiscoveredSchema> {
     let mut client = McpClient::new(http, url.to_owned(), timeout);
 
     // Initialize session
-    client.initialize().await.map_err(|e| {
-        anyhow::anyhow!("Failed to connect to server: {}", e)
-    })?;
+    client
+        .initialize()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to server: {}", e))?;
 
     // Extract URL and session ID for direct HTTP requests
     let base_url = client.base_url().to_owned();
@@ -152,9 +153,7 @@ async fn discover_tools(url: &str, session_id: Option<&str>) -> Vec<DiscoveredTo
                 .filter_map(|item| {
                     item.get("name")
                         .and_then(|n| n.as_str())
-                        .map(|n| DiscoveredTool {
-                            name: n.to_owned(),
-                        })
+                        .map(|n| DiscoveredTool { name: n.to_owned() })
                 })
                 .collect()
         })
@@ -184,9 +183,7 @@ async fn discover_resources(url: &str, session_id: Option<&str>) -> Vec<Discover
                 .filter_map(|item| {
                     item.get("uri")
                         .and_then(|u| u.as_str())
-                        .map(|u| DiscoveredResource {
-                            uri: u.to_owned(),
-                        })
+                        .map(|u| DiscoveredResource { uri: u.to_owned() })
                 })
                 .collect()
         })
@@ -216,9 +213,7 @@ async fn discover_prompts(url: &str, session_id: Option<&str>) -> Vec<Discovered
                 .filter_map(|item| {
                     item.get("name")
                         .and_then(|n| n.as_str())
-                        .map(|n| DiscoveredPrompt {
-                            name: n.to_owned(),
-                        })
+                        .map(|n| DiscoveredPrompt { name: n.to_owned() })
                 })
                 .collect()
         })

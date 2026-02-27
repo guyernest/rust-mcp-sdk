@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-02-26
+
+### v1.3 MCP Apps Developer Experience
+
+This release delivers the complete MCP Apps milestone — a full widget authoring, preview, and publishing pipeline for building interactive UI extensions on top of MCP servers.
+
+### Added
+- **MCP Apps Preview Server** (`mcp-preview` crate): Live widget preview with dual proxy and WASM bridge modes
+  - Axum-based dev server with WebSocket hot-reload
+  - Embedded bridge runtime for browser-based MCP communication
+- **Widget Authoring**: File-based `WidgetDir` hot-reload and `cargo pmcp app new` scaffolding
+  - Automatic bridge script injection via shared `pmcp-widget-utils` crate
+- **Publishing Pipeline**: `cargo pmcp app manifest` (ChatGPT action manifest), `cargo pmcp app landing` (standalone demo pages), `cargo pmcp app build` (production bundles)
+- **Shared Bridge Library**: TypeScript `App`, `PostMessageTransport`, and `AppBridge` classes for browser ↔ MCP communication
+- **New crates**: `pmcp-widget-utils` (shared bridge injection), `mcp-e2e-tests` (browser test harness)
+- **Example Apps**: Chess analyzer, interactive map, and data-viz dashboard — each with full preview support
+- **E2E Browser Tests**: 20 chromiumoxide CDP tests across all three widget suites
+- **cargo-pmcp loadtest module**: TOML config types, MCP client with full handshake and error classification
+
+### Changed
+- Bumped `cargo-pmcp` to 0.2.0 (new app subcommands)
+- Bumped `mcp-preview` to 0.1.1
+
 ## [1.9.1] - 2025-12-29
 
 ### Added

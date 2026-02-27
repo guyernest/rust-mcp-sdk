@@ -151,11 +151,7 @@ pub fn extract_doc_comment(attrs: &[syn::Attribute]) -> Option<String> {
                 if let Some(doc_end) = attr_str[doc_start..].find('"') {
                     let line = &attr_str[doc_start..doc_start + doc_end];
                     // Remove leading space if present
-                    let line = if line.starts_with(' ') {
-                        &line[1..]
-                    } else {
-                        line
-                    };
+                    let line = line.strip_prefix(' ').unwrap_or(line);
                     doc_lines.push(line.to_string());
                 }
             }

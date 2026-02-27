@@ -59,10 +59,12 @@ struct ToolArgs {
 struct ToolAnnotations {
     /// Category for tool organization
     #[darling(default)]
+    #[allow(dead_code)]
     category: Option<String>,
 
     /// Complexity hint (e.g., "simple", "complex")
     #[darling(default)]
+    #[allow(dead_code)]
     complexity: Option<String>,
 
     /// If true, the tool does not modify any state (MCP standard annotation)

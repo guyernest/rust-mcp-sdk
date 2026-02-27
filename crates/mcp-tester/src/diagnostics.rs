@@ -118,10 +118,8 @@ async fn run_diagnostics_internal(
                 print_diagnostic_result(&tls_result);
             }
 
-            if tls_result.status == TestStatus::Failed {
-                if !quiet {
-                    print_suggestions_for_tls();
-                }
+            if tls_result.status == TestStatus::Failed && !quiet {
+                print_suggestions_for_tls();
             }
         }
     }
@@ -133,10 +131,8 @@ async fn run_diagnostics_internal(
         print_diagnostic_result(&http_result);
     }
 
-    if http_result.status != TestStatus::Passed {
-        if !quiet {
-            print_suggestions_for_http(url);
-        }
+    if http_result.status != TestStatus::Passed && !quiet {
+        print_suggestions_for_http(url);
     }
 
     // MCP protocol test

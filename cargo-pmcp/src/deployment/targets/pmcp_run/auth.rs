@@ -348,6 +348,7 @@ struct ClientCredentialsResponse {
     #[serde(default)]
     expires_in: Option<u64>,
     #[serde(default)]
+    #[allow(dead_code)]
     token_type: Option<String>,
 }
 

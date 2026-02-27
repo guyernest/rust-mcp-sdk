@@ -84,17 +84,17 @@ async fn execute_step(
         } => {
             let result = client.call_tool(tool, arguments).await;
             (OperationType::ToolsCall, result.map(|_| ()))
-        }
+        },
         ScenarioStep::ResourceRead { uri, .. } => {
             let result = client.read_resource(uri).await;
             (OperationType::ResourcesRead, result.map(|_| ()))
-        }
+        },
         ScenarioStep::PromptGet {
             prompt, arguments, ..
         } => {
             let result = client.get_prompt(prompt, arguments).await;
             (OperationType::PromptsGet, result.map(|_| ()))
-        }
+        },
     }
 }
 
@@ -153,13 +153,13 @@ async fn try_initialize(
 
         match result {
             Ok(_) => {
-                let sample = RequestSample::success(OperationType::Initialize, duration);
+                let sample = RequestSample::success(OperationType::Initialize, duration, None);
                 let _ = sample_tx.send(sample).await;
                 return Some(client);
-            }
+            },
             Err(err) => {
                 let sample =
-                    RequestSample::error(OperationType::Initialize, duration, err.clone());
+                    RequestSample::error(OperationType::Initialize, duration, err.clone(), None);
                 let _ = sample_tx.send(sample).await;
                 eprintln!(
                     "VU {vu_id}: initialize failed (attempt {}/{}): {err}",
@@ -169,7 +169,7 @@ async fn try_initialize(
                 if !respawn_with_backoff(attempt, cancel).await {
                     return None;
                 }
-            }
+            },
         }
     }
     None
@@ -238,10 +238,17 @@ async fn vu_loop_inner(
     let timeout = config.settings.timeout_as_duration();
 
     // Initialize phase
-    let mut client =
-        try_initialize(vu_id, http_client, base_url, timeout, sample_tx, cancel, MAX_RESPAWN_ATTEMPTS)
-            .await
-            .ok_or_else(|| "all initialize attempts failed".to_string())?;
+    let mut client = try_initialize(
+        vu_id,
+        http_client,
+        base_url,
+        timeout,
+        sample_tx,
+        cancel,
+        MAX_RESPAWN_ATTEMPTS,
+    )
+    .await
+    .ok_or_else(|| "all initialize attempts failed".to_string())?;
 
     // Build weighted distribution for step selection
     let weights: Vec<u32> = config.scenario.iter().map(|s| s.weight()).collect();
@@ -273,10 +280,17 @@ async fn vu_loop_inner(
         let (op_type, result) = execute_step(&mut client, step).await;
         let duration = start.elapsed();
 
+        // Extract tool_name from the scenario step for per-tool metrics
+        let tool_name = match step {
+            ScenarioStep::ToolCall { tool, .. } => Some(tool.clone()),
+            ScenarioStep::ResourceRead { uri, .. } => Some(uri.clone()),
+            ScenarioStep::PromptGet { prompt, .. } => Some(prompt.clone()),
+        };
+
         // Build and send the metrics sample
         let sample = match &result {
-            Ok(()) => RequestSample::success(op_type, duration),
-            Err(err) => RequestSample::error(op_type, duration, err.clone()),
+            Ok(()) => RequestSample::success(op_type, duration, tool_name),
+            Err(err) => RequestSample::error(op_type, duration, err.clone(), tool_name),
         };
 
         if sample_tx.send(sample).await.is_err() {
@@ -355,7 +369,10 @@ mod tests {
     async fn test_respawn_with_backoff_returns_false_at_max() {
         let cancel = CancellationToken::new();
         let result = respawn_with_backoff(MAX_RESPAWN_ATTEMPTS, &cancel).await;
-        assert!(!result, "Should return false at max attempts without sleeping");
+        assert!(
+            !result,
+            "Should return false at max attempts without sleeping"
+        );
     }
 
     #[tokio::test]

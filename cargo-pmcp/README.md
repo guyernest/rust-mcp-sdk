@@ -13,6 +13,9 @@ Production-grade MCP server development toolkit.
 - **Development Mode**: Hot-reload MCP servers with HTTP transport for rapid development
 - **Automated Testing**: Generate and run comprehensive test scenarios for your MCP servers
 - **Smart Test Generation**: Automatically creates meaningful test cases with realistic values
+- **Load Testing**: Stress-test deployed MCP servers with concurrent virtual users, live progress, and detailed performance reports
+- **MCP Apps**: Scaffold interactive widget projects with `cargo pmcp app new`, generate ChatGPT manifests, and build landing pages
+- **Widget Preview**: Browser-based preview environment with dual proxy/WASM bridge modes and hot-reload
 - **Multi-Target Deployment**: Deploy to AWS Lambda, Google Cloud Run, or Cloudflare Workers with one command
 - **Secrets Management**: Multi-provider secret storage (local, pmcp.run, AWS Secrets Manager)
 - **WASM Support**: Automatic WASM compilation for edge deployments
@@ -131,6 +134,104 @@ cargo pmcp dev --server calculator
 # Terminal 2: Generate and run tests
 cargo pmcp test --server calculator --generate-scenarios
 cargo pmcp test --server calculator --detailed
+```
+
+### `loadtest`
+
+Load test a deployed MCP server with concurrent virtual users. Measures latency percentiles, throughput, error rates, and can auto-detect breaking points.
+
+**Subcommands:**
+- `loadtest run <URL>` - Run a load test against a deployed MCP server
+- `loadtest init [URL]` - Generate a starter `loadtest.toml` config (optionally discovers server schema)
+
+**Options (run):**
+- `--config` - Path to loadtest config file (default: auto-discovers `.pmcp/loadtest.toml`)
+- `--vus` - Override number of virtual users
+- `--duration` - Override test duration (seconds)
+- `--iterations` - Override iteration count
+- `--no-color` - Disable colored output
+- `--no-report` - Skip JSON report file generation
+
+**Example:**
+```bash
+# Generate starter config with server schema discovery
+cargo pmcp loadtest init https://my-server.example.com
+
+# Run load test (uses .pmcp/loadtest.toml)
+cargo pmcp loadtest run https://my-server.example.com
+
+# Quick test with CLI overrides
+cargo pmcp loadtest run https://my-server.example.com --vus 20 --duration 60
+```
+
+**Features:**
+- TOML-based scenario config with weighted MCP operation mix (tools/call, resources/read, prompts/get)
+- HdrHistogram latency percentiles with coordinated omission correction
+- k6-style live terminal progress and colorized summary report
+- Stage-driven load shaping with ramp-up/hold/ramp-down phases
+- Automatic breaking point detection
+- Per-tool metrics breakdown
+- Schema-versioned JSON reports for CI/CD pipelines
+
+### `app`
+
+Scaffold and manage MCP Apps projects with interactive widgets.
+
+**Subcommands:**
+- `app new <name>` - Create a new MCP Apps project with widget scaffolding
+- `app manifest --url <URL>` - Generate a ChatGPT-compatible action manifest
+- `app landing` - Generate a standalone demo landing page
+- `app build --url <URL>` - Generate both manifest and landing page
+
+**Options (new):**
+- `--path` - Directory to create project in (defaults to current directory)
+
+**Options (manifest):**
+- `--url` - Server URL (required)
+- `--logo` - Logo URL
+- `--output` - Output directory (default: `dist`)
+
+**Options (landing):**
+- `--widget` - Widget to showcase (defaults to first alphabetically)
+- `--output` - Output directory (default: `dist`)
+
+**Example:**
+```bash
+# Create a new MCP Apps project
+cargo pmcp app new my-widget-app
+cd my-widget-app
+
+# Develop with hot-reload preview (see `preview` command)
+cargo run &
+cargo pmcp preview --url http://localhost:3000 --open
+
+# Build for production
+cargo pmcp app build --url https://my-server.example.com
+```
+
+### `preview`
+
+Launch a browser-based preview environment for testing MCP server widgets. Simulates the ChatGPT Apps runtime with dual proxy/WASM bridge modes.
+
+**Options:**
+- `--url` - URL of the running MCP server (required)
+- `--port` - Port for the preview server (default: 8765)
+- `--open` - Open browser automatically
+- `--tool` - Auto-select this tool on start
+- `--theme` - Initial theme: `light` or `dark` (default: light)
+- `--locale` - Initial locale (default: en-US)
+- `--widgets-dir` - Path to widgets directory for file-based authoring with hot-reload
+
+**Example:**
+```bash
+# Basic preview with auto-open
+cargo pmcp preview --url http://localhost:3000 --open
+
+# File-based widget authoring with hot-reload
+cargo pmcp preview --url http://localhost:3000 --widgets-dir ./widgets --open
+
+# Dark theme, auto-select a specific tool
+cargo pmcp preview --url http://localhost:3000 --theme dark --tool chess_board
 ```
 
 ### `deploy`
@@ -564,12 +665,16 @@ The typical development workflow:
 5. **Generate tests**: `cargo pmcp test --server myserver --generate-scenarios`
 6. **Customize tests**: Edit `scenarios/myserver/generated.yaml`
 7. **Run tests**: `cargo pmcp test --server myserver`
-8. **Deploy with OAuth**:
-   - AWS Lambda: `cargo pmcp deploy init --target aws-lambda --oauth cognito && cargo pmcp deploy`
-   - Google Cloud Run: `cargo pmcp deploy init --target google-cloud-run && cargo pmcp deploy`
-   - Cloudflare Workers: `cargo pmcp deploy init --target cloudflare-workers && cargo pmcp deploy`
-9. **Monitor**: `cargo pmcp deploy logs --tail` and `cargo pmcp deploy metrics`
-10. **Iterate**: Make changes and repeat from step 4
+8. **Load test**: `cargo pmcp loadtest init https://my-server.example.com && cargo pmcp loadtest run https://my-server.example.com`
+9. **Add widgets**: `cargo pmcp app new my-widget-app` (or add `widgets/` directory to existing project)
+10. **Preview widgets**: `cargo pmcp preview --url http://localhost:3000 --open`
+11. **Build for production**: `cargo pmcp app build --url https://my-server.example.com`
+12. **Deploy with OAuth**:
+    - AWS Lambda: `cargo pmcp deploy init --target aws-lambda --oauth cognito && cargo pmcp deploy`
+    - Google Cloud Run: `cargo pmcp deploy init --target google-cloud-run && cargo pmcp deploy`
+    - Cloudflare Workers: `cargo pmcp deploy init --target cloudflare-workers && cargo pmcp deploy`
+13. **Monitor**: `cargo pmcp deploy logs --tail` and `cargo pmcp deploy metrics`
+14. **Iterate**: Make changes and repeat from step 4
 
 ## Architecture
 

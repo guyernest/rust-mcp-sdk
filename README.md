@@ -233,6 +233,8 @@ Scaffolding and development toolkit for MCP servers.
 - **Scaffold servers** in seconds with proven patterns
 - **Hot-reload dev server** for rapid iteration
 - **Generate test scenarios** automatically
+- **Load test servers** with concurrent virtual users and latency percentiles
+- **Build MCP Apps** - scaffold widget projects, preview in browser, generate manifests
 - **Validate quality gates** (fmt, clippy, tests)
 - **Deploy to production** - AWS Lambda, Google Cloud Run, or Cloudflare Workers
 - **Manage deployments** - logs, metrics, secrets, rollback
@@ -243,6 +245,10 @@ cargo pmcp new <workspace>              # Create workspace
 cargo pmcp add server <name>            # Add server
 cargo pmcp dev --server <name>          # Start dev server
 cargo pmcp test --server <name>         # Run tests
+cargo pmcp loadtest run <url>           # Load test a server
+cargo pmcp app new <name>              # Scaffold widget project
+cargo pmcp preview --url <url> --open  # Preview widgets in browser
+cargo pmcp app build --url <url>       # Build manifest + landing page
 cargo pmcp deploy --target <target>     # Deploy to production
 cargo pmcp deploy logs --tail           # Stream logs
 cargo pmcp deploy destroy --clean       # Remove deployment
@@ -378,7 +384,7 @@ cargo pmcp app build --url https://my-server.example.com
 
 ---
 
-## Latest Release: v1.10.2
+## Latest Release: v1.11.0
 
 **v1.3 MCP Apps Developer Experience (2026-02-26):**
 - **🎨 MCP Apps Preview**: Live widget preview with dual proxy/WASM bridge modes

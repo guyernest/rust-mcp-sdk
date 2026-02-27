@@ -1,10 +1,13 @@
 //! `cargo pmcp loadtest run` command implementation.
 
 use anyhow::Result;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use cargo_pmcp::loadtest::config::LoadTestConfig;
 use cargo_pmcp::loadtest::engine::LoadTestEngine;
+use cargo_pmcp::loadtest::report::{write_report, LoadTestReport};
+use cargo_pmcp::loadtest::summary::render_summary;
 
 /// Execute the `loadtest run` command.
 ///
@@ -16,7 +19,7 @@ pub async fn execute_run(
     vus: Option<u32>,
     duration: Option<u64>,
     iterations: Option<u64>,
-    _no_report: bool,
+    no_report: bool,
     no_color: bool,
 ) -> Result<()> {
     // Step 1: Load config
@@ -29,7 +32,7 @@ pub async fn execute_run(
                 );
             }
             path
-        }
+        },
         None => match discover_config() {
             Some(path) => path,
             None => {
@@ -38,21 +41,20 @@ pub async fn execute_run(
                      Run `cargo pmcp loadtest init` to create .pmcp/loadtest.toml,\n\
                      or use `--config path/to/file.toml` to specify one."
                 );
-            }
+            },
         },
     };
 
     eprintln!("Loading config from: {}", config_file.display());
 
-    let mut config = LoadTestConfig::load(&config_file).map_err(|e| {
-        anyhow::anyhow!("Failed to load config '{}': {}", config_file.display(), e)
-    })?;
+    let mut config = LoadTestConfig::load(&config_file)
+        .map_err(|e| anyhow::anyhow!("Failed to load config '{}': {}", config_file.display(), e))?;
 
     // Step 2: Apply CLI overrides
     apply_overrides(&mut config, vus, duration);
 
     // Step 3: Build and run the engine
-    let mut engine = LoadTestEngine::new(config, url);
+    let mut engine = LoadTestEngine::new(config, url.clone());
     if let Some(n) = iterations {
         engine = engine.with_iterations(n);
     }
@@ -63,29 +65,48 @@ pub async fn execute_run(
         .await
         .map_err(|e| anyhow::anyhow!("Load test failed: {}", e))?;
 
-    // Step 4: Output results
-    // Plan 03-02 will add the terminal summary renderer here.
-    // Plan 03-03 will add the JSON report writer here.
-    eprintln!();
-    eprintln!("Load test complete.");
-    eprintln!("  Total requests: {}", result.snapshot.total_requests);
-    eprintln!(
-        "  Success: {} | Errors: {}",
-        result.snapshot.success_count, result.snapshot.error_count
-    );
-    eprintln!(
-        "  Latency P50: {}ms | P95: {}ms | P99: {}ms",
-        result.snapshot.p50, result.snapshot.p95, result.snapshot.p99
-    );
-    eprintln!("  Duration: {:.1}s", result.elapsed.as_secs_f64());
+    // Step 4: Output k6-style terminal summary
+    // Set color override based on --no-color flag and TTY detection
+    if no_color || !std::io::stdout().is_terminal() {
+        colored::control::set_override(false);
+    }
+
+    let summary = render_summary(&result, engine.config(), &url);
+    println!("{summary}");
+
+    // Step 5: Write JSON report (unless --no-report)
+    if !no_report {
+        let report = LoadTestReport::from_result(&result, engine.config(), &url);
+        let cwd = std::env::current_dir()?;
+        match write_report(&report, &cwd) {
+            Ok(path) => {
+                eprintln!();
+                eprintln!("Report written to: {}", path.display());
+            },
+            Err(e) => {
+                eprintln!();
+                eprintln!("Warning: Failed to write report: {}", e);
+                // Non-fatal -- the test still completed successfully
+            },
+        }
+    }
 
     Ok(())
 }
 
 /// Apply CLI flag overrides to a loaded config.
+///
+/// When stages are present, `--vus` is ignored (stages define VU targets)
+/// and a warning is logged. Duration override still applies as safety ceiling.
 fn apply_overrides(config: &mut LoadTestConfig, vus: Option<u32>, duration: Option<u64>) {
     if let Some(v) = vus {
-        config.settings.virtual_users = v;
+        if config.has_stages() {
+            eprintln!(
+                "Warning: --vus={v} ignored because config contains [[stage]] blocks (stages define VU targets)"
+            );
+        } else {
+            config.settings.virtual_users = v;
+        }
     }
     if let Some(d) = duration {
         config.settings.duration_secs = d;
@@ -137,6 +158,7 @@ mod tests {
                 tool: "echo".to_string(),
                 arguments: serde_json::json!({"text": "hello"}),
             }],
+            stage: vec![],
         };
 
         apply_overrides(&mut config, Some(50), None);
@@ -158,6 +180,7 @@ mod tests {
                 tool: "echo".to_string(),
                 arguments: serde_json::json!({"text": "hello"}),
             }],
+            stage: vec![],
         };
 
         apply_overrides(&mut config, None, Some(120));
@@ -179,6 +202,7 @@ mod tests {
                 tool: "echo".to_string(),
                 arguments: serde_json::json!({"text": "hello"}),
             }],
+            stage: vec![],
         };
 
         apply_overrides(&mut config, Some(25), Some(300));
@@ -200,6 +224,7 @@ mod tests {
                 tool: "echo".to_string(),
                 arguments: serde_json::json!({"text": "hello"}),
             }],
+            stage: vec![],
         };
 
         apply_overrides(&mut config, None, None);
