@@ -18,7 +18,7 @@ name = "mcp-tester"
 path = "src/main.rs"
 
 [dependencies]
-pmcp = { version = "1.10.3", path = "../../", features = ["streamable-http"] }
+pmcp = { version = "1.11.0", path = "../../", features = ["streamable-http"] }
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }

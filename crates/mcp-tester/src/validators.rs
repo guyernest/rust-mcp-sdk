@@ -9,14 +9,20 @@ pub struct ValidationResult {
     pub info: HashMap<String, String>,
 }
 
-impl ValidationResult {
-    pub fn new() -> Self {
+impl Default for ValidationResult {
+    fn default() -> Self {
         Self {
             valid: true,
             errors: Vec::new(),
             warnings: Vec::new(),
             info: HashMap::new(),
         }
+    }
+}
+
+impl ValidationResult {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn add_error(&mut self, error: impl Into<String>) {
@@ -33,13 +39,14 @@ impl ValidationResult {
     }
 }
 
+#[derive(Default)]
 pub struct Validator {
     strict_mode: bool,
 }
 
 impl Validator {
     pub fn new() -> Self {
-        Self { strict_mode: false }
+        Self::default()
     }
 
     #[allow(dead_code)]

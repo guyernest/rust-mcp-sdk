@@ -1,6 +1,6 @@
 [package]
 name = "cargo-pmcp"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 authors = ["PMCP SDK Contributors"]
 description = "Production-grade MCP server development toolkit"
@@ -32,6 +32,7 @@ glob = "0.3"
 # For load testing metrics
 hdrhistogram = "7.5"
 tokio = { version = "1", features = ["full", "rt-multi-thread"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 mcp-tester = { version = "0.2.0", path = "../crates/mcp-tester" }
 mcp-preview = { version = "0.1.0", path = "../crates/mcp-preview" }
 urlencoding = "2"

@@ -59,8 +59,8 @@ pub struct TestSummary {
     pub skipped: usize,
 }
 
-impl TestReport {
-    pub fn new() -> Self {
+impl Default for TestReport {
+    fn default() -> Self {
         Self {
             tests: Vec::new(),
             duration: Duration::from_secs(0),
@@ -73,6 +73,12 @@ impl TestReport {
                 skipped: 0,
             },
         }
+    }
+}
+
+impl TestReport {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn from_error(error: anyhow::Error) -> Self {

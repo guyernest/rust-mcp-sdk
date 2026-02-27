@@ -2644,7 +2644,7 @@ impl ServerTester {
                 match self.send_json_rpc_request(request).await {
                     Ok(response) => {
                         if let Some(error) = response.error {
-                            return Err(anyhow::anyhow!("JSON-RPC error: {:?}", error));
+                            Err(anyhow::anyhow!("JSON-RPC error: {:?}", error))
                         } else if let Some(result) = response.result {
                             match serde_json::from_value::<pmcp::types::ReadResourceResult>(result)
                             {
@@ -2757,7 +2757,7 @@ impl ServerTester {
                 match self.send_json_rpc_request(request).await {
                     Ok(response) => {
                         if let Some(error) = response.error {
-                            return Err(anyhow::anyhow!("JSON-RPC error: {:?}", error));
+                            Err(anyhow::anyhow!("JSON-RPC error: {:?}", error))
                         } else if let Some(result) = response.result {
                             match serde_json::from_value::<pmcp::types::GetPromptResult>(result) {
                                 Ok(prompt) => Ok(prompt),

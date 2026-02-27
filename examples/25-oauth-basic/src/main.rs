@@ -137,10 +137,10 @@ async fn main() -> Result<()> {
 
             eprintln!("Starting OAuth MCP server on HTTP port {}", port);
             eprintln!("Server endpoint: http://0.0.0.0:{}/", port);
-            eprintln!("");
+            eprintln!();
             eprintln!("Connect with MCP client using:");
             eprintln!("  URL: http://localhost:{}/", port);
-            eprintln!("");
+            eprintln!();
             eprintln!("Available tools:");
             eprintln!("  - public_info: No authentication required");
             eprintln!("  - protected_data: Requires 'read' scope (NoOpAuthProvider grants all)");
@@ -161,7 +161,7 @@ async fn main() -> Result<()> {
                 let (bound_addr, server_handle) = http_server.start().await?;
 
                 eprintln!("Server successfully started on: http://{}", bound_addr);
-                eprintln!("");
+                eprintln!();
                 eprintln!("For remote access, use your public IP:");
                 eprintln!("  http://<your-public-ip>:{}/", port);
 
@@ -178,7 +178,7 @@ async fn main() -> Result<()> {
         },
         _ => {
             eprintln!("Usage: {} <stdio|http> [port]", args[0]);
-            eprintln!("");
+            eprintln!();
             eprintln!("Examples:");
             eprintln!("  {} stdio              # Run on stdio", args[0]);
             eprintln!("  {} http               # Run on HTTP port 8080", args[0]);

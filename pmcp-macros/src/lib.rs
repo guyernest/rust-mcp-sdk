@@ -57,6 +57,7 @@ use syn::{parse_macro_input, ItemFn, ItemImpl};
 
 mod tool;
 mod tool_router;
+#[allow(dead_code)]
 mod utils;
 
 /// Defines a tool handler with automatic schema generation.

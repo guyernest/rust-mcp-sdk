@@ -244,7 +244,7 @@ impl<'a> ScenarioExecutor<'a> {
                                 format_value_compact(actual)
                             );
                         } else {
-                            println!("        {} {}", "Actual:".yellow(), "null (path not found)");
+                            println!("        {} null (path not found)", "Actual:".yellow());
                         }
                     }
                 }

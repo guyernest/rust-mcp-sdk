@@ -69,6 +69,11 @@ impl McpClient {
         self.session_id.as_deref()
     }
 
+    /// Returns the base URL of the MCP server.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     /// Builds the JSON-RPC request body for the `initialize` method.
     ///
     /// Includes the MCP protocol version and client identification info.

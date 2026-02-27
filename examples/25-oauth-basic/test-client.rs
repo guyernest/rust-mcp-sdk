@@ -1,7 +1,6 @@
 use pmcp::shared::streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig};
 use pmcp::{Client, ClientCapabilities};
 use serde_json::json;
-use tracing_subscriber;
 use url::Url;
 
 #[tokio::main]

@@ -25,6 +25,10 @@ pub enum LoadTestError {
         source: std::io::Error,
         path: String,
     },
+
+    /// CLI-level error (config not found, file I/O for reports).
+    #[error("{message}")]
+    Cli { message: String },
 }
 
 /// MCP protocol and transport errors encountered during load test requests.

@@ -1,0 +1,31 @@
+[package]
+name = "cargo-pmcp-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+cargo-pmcp = { path = ".." }
+toml = "0.9"
+
+# Prevent this from interfering with workspace
+[workspace]
+
+[[bin]]
+name = "fuzz_config_parse"
+path = "fuzz_targets/fuzz_config_parse.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_metrics_record"
+path = "fuzz_targets/fuzz_metrics_record.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_breaking_point"
+path = "fuzz_targets/fuzz_breaking_point.rs"
+doc = false

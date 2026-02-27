@@ -2,6 +2,21 @@
 //!
 //! This tool provides a batteries-included experience for building MCP servers in Rust,
 //! based on proven patterns from 6 production servers.
+#![allow(
+    clippy::needless_borrows_for_generic_args,
+    clippy::ptr_arg,
+    clippy::double_ended_iterator_last,
+    clippy::useless_format,
+    clippy::deref_addrof,
+    clippy::uninlined_format_args,
+    clippy::too_many_arguments,
+    clippy::collapsible_else_if,
+    clippy::redundant_static_lifetimes,
+    clippy::to_string_in_format_args,
+    clippy::module_inception,
+    clippy::print_literal,
+    clippy::needless_borrow
+)]
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -131,6 +146,14 @@ enum Commands {
     /// Store and retrieve secrets across multiple providers (local, pmcp.run, AWS).
     /// Secrets are namespaced by server ID to avoid conflicts.
     Secret(commands::secret::SecretCommand),
+
+    /// Run load tests against MCP servers
+    ///
+    /// Execute load tests with configurable virtual users, scenarios, and reports.
+    Loadtest {
+        #[command(subcommand)]
+        command: commands::loadtest::LoadtestCommand,
+    },
 
     /// MCP Apps project management
     ///
@@ -300,6 +323,9 @@ fn execute_command(command: Commands) -> Result<()> {
         },
         Commands::Secret(secret_cmd) => {
             secret_cmd.execute()?;
+        },
+        Commands::Loadtest { command } => {
+            command.execute()?;
         },
         Commands::App { command } => {
             command.execute()?;

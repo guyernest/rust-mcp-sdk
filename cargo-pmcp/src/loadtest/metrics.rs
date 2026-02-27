@@ -74,6 +74,8 @@ pub struct RequestSample {
     pub result: Result<(), McpError>,
     /// When the sample was taken.
     pub timestamp: Instant,
+    /// Optional tool/resource/prompt name for per-tool metrics tracking.
+    pub tool_name: Option<String>,
 }
 
 impl RequestSample {
@@ -83,12 +85,18 @@ impl RequestSample {
     ///
     /// * `operation` - The MCP operation type that was measured.
     /// * `duration` - Wall-clock duration of the request.
-    pub fn success(operation: OperationType, duration: Duration) -> Self {
+    /// * `tool_name` - Optional tool, resource URI, or prompt name.
+    pub fn success(
+        operation: OperationType,
+        duration: Duration,
+        tool_name: Option<String>,
+    ) -> Self {
         Self {
             operation,
             duration,
             result: Ok(()),
             timestamp: Instant::now(),
+            tool_name,
         }
     }
 
@@ -99,14 +107,54 @@ impl RequestSample {
     /// * `operation` - The MCP operation type that was measured.
     /// * `duration` - Wall-clock duration of the request.
     /// * `err` - The MCP error that occurred.
-    pub fn error(operation: OperationType, duration: Duration, err: McpError) -> Self {
+    /// * `tool_name` - Optional tool, resource URI, or prompt name.
+    pub fn error(
+        operation: OperationType,
+        duration: Duration,
+        err: McpError,
+        tool_name: Option<String>,
+    ) -> Self {
         Self {
             operation,
             duration,
             result: Err(err),
             timestamp: Instant::now(),
+            tool_name,
         }
     }
+}
+
+/// Per-tool metrics snapshot with latency percentiles and error breakdown.
+///
+/// Produced by [`MetricsRecorder::snapshot`] for each distinct tool name
+/// encountered during recording. Sorted alphabetically by name for
+/// deterministic terminal output.
+#[derive(Debug, Clone)]
+pub struct ToolSnapshot {
+    /// Tool name, resource URI, or prompt name.
+    pub name: String,
+    /// Success latency P50 (milliseconds).
+    pub p50: u64,
+    /// Success latency P95 (milliseconds).
+    pub p95: u64,
+    /// Success latency P99 (milliseconds).
+    pub p99: u64,
+    /// Minimum latency across all requests (milliseconds).
+    pub min: u64,
+    /// Maximum latency across all requests (milliseconds).
+    pub max: u64,
+    /// Mean latency across all requests (milliseconds).
+    pub mean: f64,
+    /// Total requests for this tool (success + error).
+    pub total_requests: u64,
+    /// Total successful requests for this tool.
+    pub success_count: u64,
+    /// Total failed requests for this tool.
+    pub error_count: u64,
+    /// Error rate as a fraction (0.0..=1.0).
+    pub error_rate: f64,
+    /// Error counts by classification for this tool.
+    pub error_categories: HashMap<String, u64>,
 }
 
 /// Point-in-time snapshot of all metrics state.
@@ -139,6 +187,47 @@ pub struct MetricsSnapshot {
     pub operation_counts: HashMap<OperationType, u64>,
     /// Per-operation error counts.
     pub per_operation_errors: HashMap<OperationType, u64>,
+    /// Error counts by classification (jsonrpc, http, timeout, connection).
+    pub error_category_counts: HashMap<String, u64>,
+    /// Per-tool metrics, sorted alphabetically by tool name.
+    pub per_tool: Vec<ToolSnapshot>,
+}
+
+/// Per-tool HdrHistogram pair tracking success and error latencies independently.
+///
+/// Created on-demand inside [`MetricsRecorder`] when a sample with a non-`None`
+/// `tool_name` is recorded. Uses the same histogram configuration (3 significant
+/// figures, auto-resize) as the main recorder.
+struct ToolMetrics {
+    /// Histogram for successful request latencies for this tool.
+    success_histogram: Histogram<u64>,
+    /// Histogram for failed request latencies for this tool.
+    error_histogram: Histogram<u64>,
+    /// Running total of successful requests for this tool.
+    total_success: u64,
+    /// Running total of failed requests for this tool.
+    total_errors: u64,
+    /// Per-error-category counts for this tool.
+    error_category_counts: HashMap<String, u64>,
+}
+
+impl ToolMetrics {
+    /// Create a new per-tool metrics tracker with auto-resizing histograms.
+    fn new() -> Self {
+        let mut success_histogram = Histogram::<u64>::new(3).expect("3 sigfigs is always valid");
+        success_histogram.auto(true);
+
+        let mut error_histogram = Histogram::<u64>::new(3).expect("3 sigfigs is always valid");
+        error_histogram.auto(true);
+
+        Self {
+            success_histogram,
+            error_histogram,
+            total_success: 0,
+            total_errors: 0,
+            error_category_counts: HashMap::new(),
+        }
+    }
 }
 
 /// HdrHistogram-backed metrics recorder with coordinated omission correction.
@@ -154,7 +243,7 @@ pub struct MetricsSnapshot {
 /// use cargo_pmcp::loadtest::metrics::{MetricsRecorder, RequestSample, OperationType};
 ///
 /// let mut recorder = MetricsRecorder::new(100);
-/// let sample = RequestSample::success(OperationType::ToolsCall, Duration::from_millis(42));
+/// let sample = RequestSample::success(OperationType::ToolsCall, Duration::from_millis(42), None);
 /// recorder.record(&sample);
 ///
 /// assert_eq!(recorder.success_count(), 1);
@@ -176,6 +265,10 @@ pub struct MetricsRecorder {
     total_success: u64,
     /// Running total of failed requests (logical, not histogram entries).
     total_errors: u64,
+    /// Per-error-category counts (jsonrpc, http, timeout, connection).
+    error_category_counts: HashMap<String, u64>,
+    /// Per-tool metrics keyed by tool name.
+    per_tool: HashMap<String, ToolMetrics>,
 }
 
 impl MetricsRecorder {
@@ -203,6 +296,8 @@ impl MetricsRecorder {
             error_counts: HashMap::new(),
             total_success: 0,
             total_errors: 0,
+            error_category_counts: HashMap::new(),
+            per_tool: HashMap::new(),
         }
     }
 
@@ -211,6 +306,9 @@ impl MetricsRecorder {
     /// The sample is routed to the success or error histogram based on its
     /// `result` field. `record_correct()` is used instead of plain `record()`
     /// to apply coordinated omission correction.
+    ///
+    /// If the sample has a `tool_name`, it is also recorded into per-tool
+    /// histograms for tool-level metrics breakdown.
     pub fn record(&mut self, sample: &RequestSample) {
         let ms = sample.duration.as_millis() as u64;
 
@@ -224,13 +322,44 @@ impl MetricsRecorder {
                     .record_correct(ms, self.expected_interval_ms);
                 self.total_success += 1;
             },
-            Err(_) => {
+            Err(ref err) => {
                 let _ = self
                     .error_histogram
                     .record_correct(ms, self.expected_interval_ms);
                 self.total_errors += 1;
                 *self.error_counts.entry(sample.operation).or_insert(0) += 1;
+                *self
+                    .error_category_counts
+                    .entry(err.error_category().to_owned())
+                    .or_insert(0) += 1;
             },
+        }
+
+        // Record into per-tool histograms if tool_name is present
+        if let Some(ref name) = sample.tool_name {
+            let tool = self
+                .per_tool
+                .entry(name.clone())
+                .or_insert_with(ToolMetrics::new);
+
+            match &sample.result {
+                Ok(()) => {
+                    let _ = tool
+                        .success_histogram
+                        .record_correct(ms, self.expected_interval_ms);
+                    tool.total_success += 1;
+                },
+                Err(ref err) => {
+                    let _ = tool
+                        .error_histogram
+                        .record_correct(ms, self.expected_interval_ms);
+                    tool.total_errors += 1;
+                    *tool
+                        .error_category_counts
+                        .entry(err.error_category().to_owned())
+                        .or_insert(0) += 1;
+                },
+            }
         }
     }
 
@@ -325,7 +454,83 @@ impl MetricsRecorder {
     ///
     /// The snapshot is a self-contained value that can be sent across threads
     /// or serialized without holding a reference to the recorder.
+    ///
+    /// Per-tool snapshots are sorted alphabetically by tool name for
+    /// deterministic terminal and JSON output.
     pub fn snapshot(&self) -> MetricsSnapshot {
+        // Build per-tool snapshots sorted by name
+        let mut per_tool: Vec<ToolSnapshot> = self
+            .per_tool
+            .iter()
+            .map(|(name, tool)| {
+                let success_count = tool.success_histogram.len();
+                let error_count = tool.error_histogram.len();
+                let total = success_count + error_count;
+                let error_rate = if total == 0 {
+                    0.0
+                } else {
+                    error_count as f64 / total as f64
+                };
+
+                // Combine min/max/mean across both histograms
+                let (min, max, mean) = if success_count > 0 && error_count > 0 {
+                    let min = tool.success_histogram.min().min(tool.error_histogram.min());
+                    let max = tool.success_histogram.max().max(tool.error_histogram.max());
+                    let mean = (tool.success_histogram.mean() * success_count as f64
+                        + tool.error_histogram.mean() * error_count as f64)
+                        / total as f64;
+                    (min, max, mean)
+                } else if success_count > 0 {
+                    (
+                        tool.success_histogram.min(),
+                        tool.success_histogram.max(),
+                        tool.success_histogram.mean(),
+                    )
+                } else if error_count > 0 {
+                    (
+                        tool.error_histogram.min(),
+                        tool.error_histogram.max(),
+                        tool.error_histogram.mean(),
+                    )
+                } else {
+                    (0, 0, 0.0)
+                };
+
+                // P50/P95/P99 from success histogram (primary latency view)
+                let p50 = if tool.success_histogram.is_empty() {
+                    0
+                } else {
+                    tool.success_histogram.value_at_quantile(0.50)
+                };
+                let p95 = if tool.success_histogram.is_empty() {
+                    0
+                } else {
+                    tool.success_histogram.value_at_quantile(0.95)
+                };
+                let p99 = if tool.success_histogram.is_empty() {
+                    0
+                } else {
+                    tool.success_histogram.value_at_quantile(0.99)
+                };
+
+                ToolSnapshot {
+                    name: name.clone(),
+                    p50,
+                    p95,
+                    p99,
+                    min,
+                    max,
+                    mean,
+                    total_requests: total,
+                    success_count,
+                    error_count,
+                    error_rate,
+                    error_categories: tool.error_category_counts.clone(),
+                }
+            })
+            .collect();
+        per_tool.sort_by(|a, b| a.name.cmp(&b.name));
+
         MetricsSnapshot {
             p50: self.p50(),
             p95: self.p95(),
@@ -339,6 +544,8 @@ impl MetricsRecorder {
             error_rate: self.error_rate(),
             operation_counts: self.operation_counts.clone(),
             per_operation_errors: self.error_counts.clone(),
+            error_category_counts: self.error_category_counts.clone(),
+            per_tool,
         }
     }
 }
@@ -361,7 +568,7 @@ mod tests {
         let mut recorder = MetricsRecorder::new(100);
         for _ in 0..5 {
             let sample =
-                RequestSample::success(OperationType::ToolsCall, Duration::from_millis(50));
+                RequestSample::success(OperationType::ToolsCall, Duration::from_millis(50), None);
             recorder.record(&sample);
         }
         assert_eq!(recorder.success_count(), 5);
@@ -377,6 +584,7 @@ mod tests {
                 OperationType::ToolsCall,
                 Duration::from_millis(50),
                 McpError::Timeout,
+                None,
             );
             recorder.record(&sample);
         }
@@ -387,7 +595,8 @@ mod tests {
     #[test]
     fn test_percentiles_single_value() {
         let mut recorder = MetricsRecorder::new(10_000);
-        let sample = RequestSample::success(OperationType::ToolsCall, Duration::from_millis(50));
+        let sample =
+            RequestSample::success(OperationType::ToolsCall, Duration::from_millis(50), None);
         recorder.record(&sample);
         assert_eq!(recorder.p50(), 50);
         assert_eq!(recorder.p95(), 50);
@@ -398,7 +607,8 @@ mod tests {
     fn test_percentiles_known_distribution() {
         let mut recorder = MetricsRecorder::new(10_000);
         for i in 1..=100 {
-            let sample = RequestSample::success(OperationType::ToolsCall, Duration::from_millis(i));
+            let sample =
+                RequestSample::success(OperationType::ToolsCall, Duration::from_millis(i), None);
             recorder.record(&sample);
         }
         let p50 = recorder.p50() as i64;
@@ -412,7 +622,8 @@ mod tests {
     #[test]
     fn test_coordinated_omission_correction() {
         let mut recorder = MetricsRecorder::new(10);
-        let sample = RequestSample::success(OperationType::ToolsCall, Duration::from_millis(100));
+        let sample =
+            RequestSample::success(OperationType::ToolsCall, Duration::from_millis(100), None);
         recorder.record(&sample);
         // With correction, HdrHistogram fills in synthetic samples at
         // 90ms, 80ms, 70ms, ..., 10ms. So total count > 1.
@@ -434,7 +645,7 @@ mod tests {
         let mut recorder = MetricsRecorder::new(10_000);
         for _ in 0..10 {
             let sample =
-                RequestSample::success(OperationType::ToolsCall, Duration::from_millis(10));
+                RequestSample::success(OperationType::ToolsCall, Duration::from_millis(10), None);
             recorder.record(&sample);
         }
         for _ in 0..10 {
@@ -442,6 +653,7 @@ mod tests {
                 OperationType::ToolsCall,
                 Duration::from_millis(500),
                 McpError::Timeout,
+                None,
             );
             recorder.record(&sample);
         }
@@ -456,18 +668,21 @@ mod tests {
             recorder.record(&RequestSample::success(
                 OperationType::ToolsCall,
                 Duration::from_millis(10),
+                None,
             ));
         }
         for _ in 0..2 {
             recorder.record(&RequestSample::success(
                 OperationType::ResourcesRead,
                 Duration::from_millis(10),
+                None,
             ));
         }
         recorder.record(&RequestSample::error(
             OperationType::PromptsGet,
             Duration::from_millis(10),
             McpError::Timeout,
+            None,
         ));
         assert_eq!(recorder.operation_count(OperationType::ToolsCall), 3);
         assert_eq!(recorder.operation_count(OperationType::ResourcesRead), 2);
@@ -481,12 +696,14 @@ mod tests {
             recorder.record(&RequestSample::success(
                 OperationType::ToolsCall,
                 Duration::from_millis(i),
+                None,
             ));
         }
         recorder.record(&RequestSample::error(
             OperationType::PromptsGet,
             Duration::from_millis(200),
             McpError::Timeout,
+            None,
         ));
         let snap = recorder.snapshot();
         assert_eq!(snap.success_count, 100);
@@ -514,6 +731,7 @@ mod tests {
             recorder.record(&RequestSample::success(
                 OperationType::ToolsCall,
                 Duration::from_millis(10),
+                None,
             ));
         }
         for _ in 0..3 {
@@ -521,6 +739,7 @@ mod tests {
                 OperationType::ToolsCall,
                 Duration::from_millis(10),
                 McpError::Timeout,
+                None,
             ));
         }
         let rate = recorder.error_rate();
@@ -536,5 +755,186 @@ mod tests {
         assert_eq!(recorder.p50(), 0);
         assert_eq!(recorder.p95(), 0);
         assert_eq!(recorder.p99(), 0);
+    }
+
+    #[test]
+    fn test_error_category_counts_tracked() {
+        let mut recorder = MetricsRecorder::new(10_000);
+        recorder.record(&RequestSample::error(
+            OperationType::ToolsCall,
+            Duration::from_millis(10),
+            McpError::Timeout,
+            None,
+        ));
+        recorder.record(&RequestSample::error(
+            OperationType::ToolsCall,
+            Duration::from_millis(10),
+            McpError::Timeout,
+            None,
+        ));
+        recorder.record(&RequestSample::error(
+            OperationType::ResourcesRead,
+            Duration::from_millis(10),
+            McpError::JsonRpc {
+                code: -32601,
+                message: "Not found".to_string(),
+            },
+            None,
+        ));
+        recorder.record(&RequestSample::error(
+            OperationType::ToolsCall,
+            Duration::from_millis(10),
+            McpError::Http {
+                status: 500,
+                body: "Internal error".to_string(),
+            },
+            None,
+        ));
+
+        let snap = recorder.snapshot();
+        assert_eq!(snap.error_category_counts.get("timeout"), Some(&2));
+        assert_eq!(snap.error_category_counts.get("jsonrpc"), Some(&1));
+        assert_eq!(snap.error_category_counts.get("http"), Some(&1));
+        assert_eq!(snap.error_category_counts.get("connection"), None);
+    }
+
+    #[test]
+    fn test_error_category_counts_empty_for_success_only() {
+        let mut recorder = MetricsRecorder::new(10_000);
+        recorder.record(&RequestSample::success(
+            OperationType::ToolsCall,
+            Duration::from_millis(10),
+            None,
+        ));
+        let snap = recorder.snapshot();
+        assert!(snap.error_category_counts.is_empty());
+    }
+
+    #[test]
+    fn test_per_tool_metrics_recorded() {
+        let mut recorder = MetricsRecorder::new(10_000);
+        // Record samples for two different tools
+        for _ in 0..5 {
+            recorder.record(&RequestSample::success(
+                OperationType::ToolsCall,
+                Duration::from_millis(50),
+                Some("calculate".to_string()),
+            ));
+        }
+        for _ in 0..3 {
+            recorder.record(&RequestSample::success(
+                OperationType::ResourcesRead,
+                Duration::from_millis(20),
+                Some("file:///data".to_string()),
+            ));
+        }
+        let snap = recorder.snapshot();
+        assert_eq!(snap.per_tool.len(), 2);
+
+        let calc = snap
+            .per_tool
+            .iter()
+            .find(|t| t.name == "calculate")
+            .unwrap();
+        assert_eq!(calc.success_count, 5);
+        assert_eq!(calc.error_count, 0);
+        assert_eq!(calc.total_requests, 5);
+        assert_eq!(calc.p50, 50);
+
+        let file = snap
+            .per_tool
+            .iter()
+            .find(|t| t.name == "file:///data")
+            .unwrap();
+        assert_eq!(file.success_count, 3);
+        assert_eq!(file.total_requests, 3);
+        assert_eq!(file.p50, 20);
+    }
+
+    #[test]
+    fn test_per_tool_metrics_empty_when_no_tool_name() {
+        let mut recorder = MetricsRecorder::new(10_000);
+        for _ in 0..5 {
+            recorder.record(&RequestSample::success(
+                OperationType::ToolsCall,
+                Duration::from_millis(50),
+                None,
+            ));
+        }
+        let snap = recorder.snapshot();
+        assert!(
+            snap.per_tool.is_empty(),
+            "per_tool should be empty when no tool_name is set"
+        );
+    }
+
+    #[test]
+    fn test_per_tool_snapshot_sorted_by_name() {
+        let mut recorder = MetricsRecorder::new(10_000);
+        recorder.record(&RequestSample::success(
+            OperationType::ToolsCall,
+            Duration::from_millis(50),
+            Some("beta".to_string()),
+        ));
+        recorder.record(&RequestSample::success(
+            OperationType::ToolsCall,
+            Duration::from_millis(50),
+            Some("alpha".to_string()),
+        ));
+        recorder.record(&RequestSample::success(
+            OperationType::ToolsCall,
+            Duration::from_millis(50),
+            Some("gamma".to_string()),
+        ));
+        let snap = recorder.snapshot();
+        assert_eq!(snap.per_tool.len(), 3);
+        assert_eq!(snap.per_tool[0].name, "alpha");
+        assert_eq!(snap.per_tool[1].name, "beta");
+        assert_eq!(snap.per_tool[2].name, "gamma");
+    }
+
+    #[test]
+    fn test_per_tool_error_categories() {
+        let mut recorder = MetricsRecorder::new(10_000);
+        // Tool "calc" gets 2 successes and 1 timeout error
+        for _ in 0..2 {
+            recorder.record(&RequestSample::success(
+                OperationType::ToolsCall,
+                Duration::from_millis(50),
+                Some("calc".to_string()),
+            ));
+        }
+        recorder.record(&RequestSample::error(
+            OperationType::ToolsCall,
+            Duration::from_millis(100),
+            McpError::Timeout,
+            Some("calc".to_string()),
+        ));
+        // Tool "search" gets 1 jsonrpc error
+        recorder.record(&RequestSample::error(
+            OperationType::ToolsCall,
+            Duration::from_millis(200),
+            McpError::JsonRpc {
+                code: -32601,
+                message: "Not found".to_string(),
+            },
+            Some("search".to_string()),
+        ));
+
+        let snap = recorder.snapshot();
+        assert_eq!(snap.per_tool.len(), 2);
+
+        let calc = snap.per_tool.iter().find(|t| t.name == "calc").unwrap();
+        assert_eq!(calc.success_count, 2);
+        assert_eq!(calc.error_count, 1);
+        assert_eq!(calc.error_categories.get("timeout"), Some(&1));
+        assert!(calc.error_rate > 0.0);
+
+        let search = snap.per_tool.iter().find(|t| t.name == "search").unwrap();
+        assert_eq!(search.success_count, 0);
+        assert_eq!(search.error_count, 1);
+        assert_eq!(search.error_categories.get("jsonrpc"), Some(&1));
+        // search has no timeout errors
+        assert_eq!(search.error_categories.get("timeout"), None);
     }
 }

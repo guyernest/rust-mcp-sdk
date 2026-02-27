@@ -61,7 +61,7 @@ pub fn expand_tool_router(args: TokenStream, mut input: ItemImpl) -> syn::Result
     }
 
     // Generate router field name
-    let router_field = Ident::new(&args.router, proc_macro2::Span::call_site());
+    let _router_field = Ident::new(&args.router, proc_macro2::Span::call_site());
 
     // Generate visibility
     let vis = parse_visibility(&args.vis)?;

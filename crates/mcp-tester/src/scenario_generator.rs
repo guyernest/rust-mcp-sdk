@@ -269,8 +269,8 @@ impl ScenarioGenerator {
             name: format!(
                 "Test tool: {} {}",
                 tool.name,
-                if tool.description.is_some() {
-                    format!("({})", tool.description.as_ref().unwrap())
+                if let Some(desc) = &tool.description {
+                    format!("({})", desc)
                 } else {
                     "".to_string()
                 }
