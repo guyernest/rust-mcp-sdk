@@ -138,6 +138,7 @@ mod tests {
                 name: tool_name.to_string(),
                 arguments: json!({ "test": "data" }),
                 _meta: None,
+                task: None,
             }))),
         }
     }
@@ -468,6 +469,7 @@ mod tests {
                     name: "echo".to_string(),
                     arguments: json!({ "id": i }),
                     _meta: None,
+                    task: None,
                 })));
                 adapter
                     .add_request(RequestId::from(i as i64), request)

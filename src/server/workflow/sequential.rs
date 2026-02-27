@@ -28,6 +28,11 @@ pub struct SequentialWorkflow {
     /// Instruction messages for the workflow
     /// `SmallVec` optimized for 2-3 instructions
     instructions: SmallVec<[InternalPromptMessage; 3]>,
+    /// Whether this workflow should be backed by a task for durable progress tracking.
+    /// When true and a task router is configured on the server, the workflow will be
+    /// wrapped in a [`TaskWorkflowPromptHandler`](super::TaskWorkflowPromptHandler)
+    /// that creates a task on invocation.
+    task_support: bool,
 }
 
 /// Specification for a prompt argument
@@ -64,6 +69,7 @@ impl SequentialWorkflow {
             arguments: IndexMap::new(),
             steps: SmallVec::new(),
             instructions: SmallVec::new(),
+            task_support: false,
         }
     }
 
@@ -161,6 +167,38 @@ impl SequentialWorkflow {
     pub fn instruction(mut self, message: InternalPromptMessage) -> Self {
         self.instructions.push(message);
         self
+    }
+
+    /// Enable task support for this workflow.
+    ///
+    /// When task support is enabled and a task router is configured on the server
+    /// (via [`ServerCoreBuilder::with_task_store()`](crate::server::builder::ServerCoreBuilder::with_task_store)),
+    /// invoking this workflow prompt will create a task and track step progress
+    /// in task variables.
+    ///
+    /// If task support is enabled but no task router is configured, the builder
+    /// will return an error at build time.
+    ///
+    /// # Example
+    /// ```
+    /// use pmcp::server::workflow::{SequentialWorkflow, WorkflowStep, ToolHandle};
+    ///
+    /// let workflow = SequentialWorkflow::new("deploy", "Deploy a service")
+    ///     .step(WorkflowStep::new("validate", ToolHandle::new("validate_config")))
+    ///     .step(WorkflowStep::new("deploy", ToolHandle::new("deploy_service")))
+    ///     .with_task_support(true);
+    ///
+    /// assert!(workflow.has_task_support());
+    /// ```
+    #[must_use]
+    pub fn with_task_support(mut self, enabled: bool) -> Self {
+        self.task_support = enabled;
+        self
+    }
+
+    /// Returns whether this workflow has task support enabled.
+    pub fn has_task_support(&self) -> bool {
+        self.task_support
     }
 
     /// Get workflow name
@@ -414,6 +452,33 @@ mod tests {
             arg_type: None,
         };
         assert!(!spec.required);
+    }
+
+    #[test]
+    fn test_task_support_defaults_to_false() {
+        let workflow = SequentialWorkflow::new("workflow", "description");
+        assert!(!workflow.has_task_support());
+    }
+
+    #[test]
+    fn test_with_task_support_enabled() {
+        let workflow = SequentialWorkflow::new("workflow", "description").with_task_support(true);
+        assert!(workflow.has_task_support());
+    }
+
+    #[test]
+    fn test_with_task_support_disabled() {
+        let workflow = SequentialWorkflow::new("workflow", "description")
+            .with_task_support(true)
+            .with_task_support(false);
+        assert!(!workflow.has_task_support());
+    }
+
+    #[test]
+    fn test_task_support_preserved_on_clone() {
+        let workflow = SequentialWorkflow::new("workflow", "description").with_task_support(true);
+        let cloned = workflow.clone();
+        assert!(cloned.has_task_support());
     }
 
     #[test]

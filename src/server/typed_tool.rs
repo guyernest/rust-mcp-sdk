@@ -239,6 +239,7 @@ where
             input_schema: self.input_schema.clone(),
             annotations: self.annotations.clone(),
             _meta: meta,
+            execution: None,
         })
     }
 }
@@ -373,6 +374,7 @@ where
             input_schema: self.input_schema.clone(),
             annotations: self.annotations.clone(),
             _meta: None,
+            execution: None,
         })
     }
 }
@@ -680,6 +682,7 @@ where
                 None
             },
             _meta: None,
+            execution: None,
         })
     }
 }

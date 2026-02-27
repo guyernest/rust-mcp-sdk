@@ -96,6 +96,7 @@ mod tests {
                         text: format!("Prompt with args: {:?}", args),
                     },
                 }],
+                _meta: None,
             })
         }
     }
@@ -364,6 +365,7 @@ mod tests {
                 "b": 3
             }),
             _meta: None,
+            task: None,
         })));
 
         let response = server
@@ -397,6 +399,7 @@ mod tests {
             name: "nonexistent".to_string(),
             arguments: json!({}),
             _meta: None,
+            task: None,
         })));
 
         let response = server
@@ -432,6 +435,7 @@ mod tests {
             name: "failing_tool".to_string(),
             arguments: json!({}),
             _meta: None,
+            task: None,
         })));
 
         let response = server
@@ -666,6 +670,7 @@ mod tests {
                     name: "concurrent_tool".to_string(),
                     arguments: json!({ "id": i }),
                     _meta: None,
+                    task: None,
                 })));
                 server_clone
                     .handle_request(RequestId::from(i as i64), request, None)

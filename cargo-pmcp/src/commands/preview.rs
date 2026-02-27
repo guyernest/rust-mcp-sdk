@@ -11,6 +11,7 @@ pub async fn execute(
     tool: Option<String>,
     theme: String,
     locale: String,
+    widgets_dir: Option<String>,
 ) -> Result<()> {
     println!("\n{}", "Starting MCP Apps Preview".bright_cyan().bold());
     println!("{}", "─────────────────────────────────".bright_cyan());
@@ -20,7 +21,16 @@ pub async fn execute(
         "→".blue(),
         format!("http://localhost:{}", port).bright_green()
     );
+    if let Some(ref dir) = widgets_dir {
+        println!(
+            "  {} Widgets Dir: {} (hot-reload)",
+            "→".blue(),
+            dir.bright_magenta()
+        );
+    }
     println!();
+
+    let widgets_path = widgets_dir.map(std::path::PathBuf::from);
 
     let config = mcp_preview::PreviewConfig {
         mcp_url: url,
@@ -28,6 +38,7 @@ pub async fn execute(
         initial_tool: tool,
         theme,
         locale,
+        widgets_dir: widgets_path,
     };
 
     // Open browser if requested

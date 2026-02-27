@@ -1,0 +1,21 @@
+{
+  "execute_query": {
+    "columns": ["Genre", "TrackCount"],
+    "rows": [
+      ["Rock", 1297],
+      ["Latin", 579],
+      ["Metal", 374],
+      ["Alternative & Punk", 332],
+      ["Jazz", 130],
+      ["Blues", 81],
+      ["Classical", 74],
+      ["R&B/Soul", 61],
+      ["Reggae", 58],
+      ["Pop", 48]
+    ],
+    "row_count": 10
+  },
+  "list_tables": {
+    "tables": ["Album", "Artist", "Customer", "Employee", "Genre", "Invoice", "InvoiceLine", "MediaType", "Playlist", "PlaylistTrack", "Track"]
+  }
+}

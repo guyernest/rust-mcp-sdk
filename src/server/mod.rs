@@ -66,6 +66,9 @@ pub mod simple_resources;
 /// Simple tool implementations with schema support.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simple_tool;
+/// Task routing trait for MCP Tasks integration.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tasks;
 /// Tool middleware for cross-cutting concerns in tool execution.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tool_middleware;
@@ -927,6 +930,14 @@ impl Server {
                 }
                 Ok(serde_json::json!({}))
             },
+            // Task requests (experimental MCP Tasks) -- routing handled in Plan 02
+            ClientRequest::TasksGet(_)
+            | ClientRequest::TasksResult(_)
+            | ClientRequest::TasksList(_)
+            | ClientRequest::TasksCancel(_) => Err(crate::Error::protocol(
+                crate::ErrorCode::METHOD_NOT_FOUND,
+                "Tasks not supported: no task router configured",
+            )),
         }
     }
 
@@ -2264,6 +2275,7 @@ impl ServerBuilder {
     ///                     text: format!("Please review this {} code:", language),
     ///                 },
     ///             }],
+    ///             _meta: None,
     ///         })
     ///     }
     /// }
@@ -3292,6 +3304,7 @@ mod tests {
         let prompt_result = crate::types::GetPromptResult {
             description: Some("Test prompt".to_string()),
             messages: vec![],
+            _meta: None,
         };
 
         let resource_content = crate::types::ReadResourceResult {
@@ -3386,6 +3399,7 @@ mod tests {
             name: "test-tool".to_string(),
             arguments: json!({"input": "test"}),
             _meta: None,
+            task: None,
         })));
 
         let response = server
@@ -3414,6 +3428,7 @@ mod tests {
             name: "nonexistent-tool".to_string(),
             arguments: json!({}),
             _meta: None,
+            task: None,
         })));
 
         let response = server
@@ -3433,6 +3448,7 @@ mod tests {
         let prompt_result = crate::types::GetPromptResult {
             description: Some("Test prompt".to_string()),
             messages: vec![],
+            _meta: None,
         };
 
         let server = Server::builder()
@@ -3464,6 +3480,7 @@ mod tests {
         let prompt_result = crate::types::GetPromptResult {
             description: Some("Test prompt".to_string()),
             messages: vec![],
+            _meta: None,
         };
 
         let server = Server::builder()
@@ -3688,6 +3705,7 @@ mod tests {
             name: "test_tool".to_string(),
             arguments: json!({}),
             _meta: None,
+            task: None,
         })));
 
         let response = server
@@ -3755,6 +3773,7 @@ mod tests {
             name: "test_tool".to_string(),
             arguments: json!({}),
             _meta: None,
+            task: None,
         })));
 
         let _response = server
@@ -3826,6 +3845,7 @@ mod tests {
             name: "typed_tool".to_string(),
             arguments: json!({}),
             _meta: None,
+            task: None,
         })));
 
         let response = server
@@ -3876,6 +3896,7 @@ mod tests {
             name: "test_tool".to_string(),
             arguments: json!({}),
             _meta: None,
+            task: None,
         })));
 
         let response = server
@@ -3904,6 +3925,7 @@ mod tests {
                 MockPrompt::new(crate::types::GetPromptResult {
                     description: None,
                     messages: vec![],
+                    _meta: None,
                 }),
             )
             .resources(MockResource::new())

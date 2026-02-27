@@ -97,6 +97,9 @@ where
             name: self.name.clone(),
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
+            annotations: None,
+            _meta: None,
+            execution: None,
         }
     }
 }
@@ -189,6 +192,9 @@ where
             name: self.name.clone(),
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
+            annotations: None,
+            _meta: None,
+            execution: None,
         }
     }
 }

@@ -15,7 +15,7 @@ use pmcp::client::auth::{OidcDiscoveryClient, TokenExchangeClient};
 use pmcp::client::http_middleware::HttpMiddlewareChain;
 use pmcp::client::oauth_middleware::{BearerToken, OAuthClientMiddleware};
 use pmcp::server::auth::oauth2::OidcDiscoveryMetadata;
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;

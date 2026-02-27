@@ -1,0 +1,10 @@
+[package]
+name = "pmcp-widget-utils"
+version = "0.1.0"
+edition = "2021"
+description = "Shared widget utilities for PMCP SDK — bridge script injection"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/paiml/rust-mcp-sdk"
+
+[dependencies]
+# Zero dependencies — pure string manipulation

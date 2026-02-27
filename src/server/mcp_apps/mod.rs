@@ -57,6 +57,8 @@
 
 mod adapter;
 mod builder;
+mod widget_fs;
 
 pub use adapter::{ChatGptAdapter, McpAppsAdapter, McpUiAdapter, UIAdapter};
 pub use builder::{MultiPlatformResource, UIResourceBuilder};
+pub use widget_fs::{WidgetDir, WidgetEntry};

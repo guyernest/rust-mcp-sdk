@@ -60,6 +60,12 @@
 // Core runtime
 export { WidgetRuntime } from './runtime';
 
+// MCP Apps protocol classes
+export { App } from './app';
+export { AppBridge } from './app-bridge';
+export { PostMessageTransport } from './transport';
+export { installCompat } from './compat';
+
 // Types
 export type {
   HostType,
@@ -91,7 +97,16 @@ export type {
   ToolContext,
   OpenAiGlobals,
   SetGlobalsEvent,
+  // MCP Apps protocol types
+  CallToolParams,
+  CallToolResult,
+  HostContext,
+  AppOptions,
+  AppBridgeOptions,
 } from './types';
+
+// Transport types (re-exported from transport module)
+export type { JsonRpcRequest, JsonRpcResponse, JsonRpcNotification, TransportOptions } from './transport';
 
 // Event type constant
 export { SET_GLOBALS_EVENT_TYPE } from './types';

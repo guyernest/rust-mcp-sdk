@@ -96,6 +96,7 @@ impl PromptHandler for TestPromptHandler {
                     text: format!("Please greet {}", name),
                 },
             }],
+            _meta: None,
         })
     }
 }

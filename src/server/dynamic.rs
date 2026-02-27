@@ -505,6 +505,7 @@ mod tests {
             Ok(GetPromptResult {
                 description: Some("Test prompt".to_string()),
                 messages: vec![],
+                _meta: None,
             })
         }
     }

@@ -69,6 +69,16 @@ pub struct WorkflowStep {
     ///     .with_template_binding("doc_id", field("query_result", "document_id"))
     /// ```
     template_bindings: HashMap<String, DataSource>,
+    /// Whether this step's tool is expected to be retryable on transient failure.
+    ///
+    /// When `true`, the execution engine treats errors from this step as
+    /// potentially transient and may set `retryable: true` in the
+    /// [`PauseReason::ToolError`] variant. The workflow author sets this
+    /// flag because they know which steps are expected to experience
+    /// transient failures (e.g., network calls, external APIs).
+    ///
+    /// Defaults to `false`.
+    retryable: bool,
 }
 
 impl WorkflowStep {
@@ -92,6 +102,7 @@ impl WorkflowStep {
             guidance: None,
             resources: Vec::new(),
             template_bindings: HashMap::new(),
+            retryable: false,
         }
     }
 
@@ -135,6 +146,7 @@ impl WorkflowStep {
             guidance: None,
             resources: Vec::new(),
             template_bindings: HashMap::new(),
+            retryable: false,
         }
     }
 
@@ -316,6 +328,36 @@ impl WorkflowStep {
     /// Get template bindings for resource URI interpolation
     pub fn template_bindings(&self) -> &HashMap<String, DataSource> {
         &self.template_bindings
+    }
+
+    /// Mark this step as retryable on transient failure (chainable)
+    ///
+    /// When `retryable` is `true`, the execution engine treats tool errors
+    /// from this step as potentially transient. This hint is carried into
+    /// the [`PauseReason::ToolError`] variant so clients know they can
+    /// safely retry the same tool call.
+    ///
+    /// # Example
+    /// ```
+    /// use pmcp::server::workflow::{WorkflowStep, ToolHandle};
+    ///
+    /// let step = WorkflowStep::new("deploy", ToolHandle::new("deploy_service"))
+    ///     .retryable(true);
+    ///
+    /// assert!(step.is_retryable());
+    /// ```
+    #[must_use]
+    pub fn retryable(mut self, retryable: bool) -> Self {
+        self.retryable = retryable;
+        self
+    }
+
+    /// Check if this step is retryable on transient failure
+    ///
+    /// Returns the value set via [`WorkflowStep::retryable`], defaulting to
+    /// `false` if never explicitly configured.
+    pub fn is_retryable(&self) -> bool {
+        self.retryable
     }
 
     /// Validate the step

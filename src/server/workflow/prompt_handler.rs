@@ -40,22 +40,22 @@ use std::sync::Arc;
 
 /// Stores step execution results (bindings) during workflow execution
 #[derive(Debug)]
-struct ExecutionContext {
+pub(crate) struct ExecutionContext {
     bindings: HashMap<BindingName, Value>,
 }
 
 impl ExecutionContext {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             bindings: HashMap::new(),
         }
     }
 
-    fn store_binding(&mut self, name: BindingName, value: Value) {
+    pub(crate) fn store_binding(&mut self, name: BindingName, value: Value) {
         self.bindings.insert(name, value);
     }
 
-    fn get_binding(&self, name: &BindingName) -> Option<&Value> {
+    pub(crate) fn get_binding(&self, name: &BindingName) -> Option<&Value> {
         self.bindings.get(name)
     }
 }
@@ -179,7 +179,7 @@ impl WorkflowPromptHandler {
     /// let result = substitute_arguments(template, &args);
     /// // result: "Find page matching 'MCP Tester' in the list"
     /// ```
-    fn substitute_arguments(template: &str, args: &HashMap<String, String>) -> String {
+    pub(crate) fn substitute_arguments(template: &str, args: &HashMap<String, String>) -> String {
         let mut result = template.to_string();
         for (key, value) in args {
             result = result.replace(&format!("{{{}}}", key), value);
@@ -341,7 +341,9 @@ impl WorkflowPromptHandler {
     ///
     /// Returns true if any binding uses `DataSource::StepOutput`, meaning the
     /// resource must be fetched AFTER tool execution.
-    fn template_bindings_use_step_outputs(bindings: &HashMap<String, DataSource>) -> bool {
+    pub(crate) fn template_bindings_use_step_outputs(
+        bindings: &HashMap<String, DataSource>,
+    ) -> bool {
         bindings
             .values()
             .any(|source| matches!(source, DataSource::StepOutput { .. }))
@@ -353,7 +355,7 @@ impl WorkflowPromptHandler {
     /// and adds resource messages to the message list.
     ///
     /// Returns `Ok(())` if all resources fetched successfully, or `Err` if any fetch failed.
-    async fn fetch_step_resources(
+    pub(crate) async fn fetch_step_resources(
         &self,
         step: &WorkflowStep,
         args: &HashMap<String, String>,
@@ -408,7 +410,7 @@ impl WorkflowPromptHandler {
     }
 
     /// Create user intent message from workflow description and arguments
-    fn create_user_intent(&self, args: &HashMap<String, String>) -> PromptMessage {
+    pub(crate) fn create_user_intent(&self, args: &HashMap<String, String>) -> PromptMessage {
         let description = self.workflow.description();
 
         // Format arguments nicely
@@ -433,7 +435,7 @@ impl WorkflowPromptHandler {
     }
 
     /// Create assistant plan message listing all workflow steps
-    fn create_assistant_plan(&self) -> Result<PromptMessage> {
+    pub(crate) fn create_assistant_plan(&self) -> Result<PromptMessage> {
         let mut plan = String::from("Here's my plan:\n");
 
         for (idx, step) in self.workflow.steps().iter().enumerate() {
@@ -472,7 +474,7 @@ impl WorkflowPromptHandler {
     }
 
     /// Create assistant message announcing the tool call with resolved parameters
-    fn create_tool_call_announcement(
+    pub(crate) fn create_tool_call_announcement(
         &self,
         step: &WorkflowStep,
         args: &HashMap<String, String>,
@@ -559,9 +561,15 @@ impl WorkflowPromptHandler {
 
     /// Check if resolved parameters satisfy the tool's input schema
     ///
-    /// Returns true if the params object contains all required fields defined in the tool's schema.
-    /// This prevents attempting to execute tools with incomplete parameters.
-    fn params_satisfy_tool_schema(&self, step: &WorkflowStep, params: &Value) -> Result<bool> {
+    /// Returns a list of missing required field names. An empty vec means all
+    /// required fields are present. This collects ALL missing fields rather
+    /// than short-circuiting on the first one, giving callers complete
+    /// diagnostic information.
+    pub(crate) fn params_satisfy_tool_schema(
+        &self,
+        step: &WorkflowStep,
+        params: &Value,
+    ) -> Result<Vec<String>> {
         let tool_handle = step.tool().ok_or_else(|| {
             crate::Error::Internal(format!(
                 "Cannot check schema for resource-only step '{}'",
@@ -577,6 +585,8 @@ impl WorkflowPromptHandler {
             ))
         })?;
 
+        let mut missing_fields = Vec::new();
+
         // Check if params object has all required fields from schema
         if let Some(schema_obj) = tool_info.input_schema.as_object() {
             if let Some(required) = schema_obj.get("required").and_then(|r| r.as_array()) {
@@ -585,27 +595,29 @@ impl WorkflowPromptHandler {
                     for req_field in required {
                         if let Some(field_name) = req_field.as_str() {
                             if !params_obj.contains_key(field_name) {
-                                // Missing required field - params don't satisfy schema
-                                return Ok(false);
+                                missing_fields.push(field_name.to_string());
                             }
                         }
                     }
                 } else if !required.is_empty() {
-                    // Params is not an object, but schema requires fields
-                    return Ok(false);
+                    // Params is not an object but schema requires fields -- all are missing
+                    for req_field in required {
+                        if let Some(field_name) = req_field.as_str() {
+                            missing_fields.push(field_name.to_string());
+                        }
+                    }
                 }
             }
         }
 
-        // All required fields present (or no required fields/schema)
-        Ok(true)
+        Ok(missing_fields)
     }
 
     /// Execute a workflow step by calling the actual tool handler
     ///
     /// If a middleware executor is available, routes through it to ensure consistent
     /// middleware application (OAuth, logging, etc.). Otherwise, calls tool handler directly.
-    async fn execute_tool_step(
+    pub(crate) async fn execute_tool_step(
         &self,
         step: &WorkflowStep,
         args: &HashMap<String, String>,
@@ -654,7 +666,7 @@ impl WorkflowPromptHandler {
     }
 
     /// Resolve tool parameters from `DataSources` (prompt args, bindings, constants)
-    fn resolve_tool_parameters(
+    pub(crate) fn resolve_tool_parameters(
         &self,
         step: &WorkflowStep,
         args: &HashMap<String, String>,
@@ -832,6 +844,7 @@ impl PromptHandler for WorkflowPromptHandler {
                     return Ok(GetPromptResult {
                         description: Some(self.workflow.description().to_string()),
                         messages,
+                        _meta: None,
                     });
                 }
             }
@@ -864,6 +877,7 @@ impl PromptHandler for WorkflowPromptHandler {
                     return Ok(GetPromptResult {
                         description: Some(self.workflow.description().to_string()),
                         messages,
+                        _meta: None,
                     });
                 }
 
@@ -882,13 +896,12 @@ impl PromptHandler for WorkflowPromptHandler {
                     };
 
                     // Check if resolved params satisfy tool's required fields
-                    let Ok(satisfies_schema) = self.params_satisfy_tool_schema(step, &params)
-                    else {
+                    let Ok(ref missing) = self.params_satisfy_tool_schema(step, &params) else {
                         // Schema check error (tool not found, etc.)
                         break;
                     };
 
-                    if !satisfies_schema {
+                    if !missing.is_empty() {
                         // Params resolved but incomplete (missing required fields)
                         // This is a graceful handoff - client should provide missing params
                         // Guidance message (if present) was already added above
@@ -973,6 +986,7 @@ impl PromptHandler for WorkflowPromptHandler {
         Ok(GetPromptResult {
             description: Some(self.workflow.description().to_string()),
             messages,
+            _meta: None,
         })
     }
 

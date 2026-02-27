@@ -364,6 +364,7 @@ pub fn build_calculator_server() -> Result<Server> {
                         a, b, c
                     )),
                     messages,
+                    _meta: None,
                 })
             }) as std::pin::Pin<Box<dyn std::future::Future<Output = Result<GetPromptResult>> + Send>>
         })

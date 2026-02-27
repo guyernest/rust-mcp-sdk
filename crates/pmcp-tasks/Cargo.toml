@@ -1,0 +1,39 @@
+[package]
+name = "pmcp-tasks"
+version = "0.1.0"
+edition = "2021"
+description = "MCP Tasks support for the PMCP SDK (experimental)"
+license = "MIT"
+rust-version = "1.82.0"
+
+[dependencies]
+pmcp = { path = "../..", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+async-trait = "0.1"
+thiserror = "2.0"
+uuid = { version = "1.17", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["sync", "time"] }
+tracing = "0.1"
+parking_lot = "0.12"
+dashmap = "6.1"
+aws-sdk-dynamodb = { version = "1", optional = true }
+aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
+redis = { version = "1.0", features = ["tokio-comp", "script"], optional = true }
+
+[features]
+dynamodb = ["dep:aws-sdk-dynamodb", "dep:aws-config"]
+dynamodb-tests = ["dynamodb"]
+redis = ["dep:redis"]
+redis-tests = ["redis"]
+
+[dev-dependencies]
+pmcp = { path = "../..", features = ["full"] }
+tokio = { version = "1", features = ["full"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+pretty_assertions = "1.4"
+proptest = "1.7"
+futures = "0.3"
+uuid = { version = "1.17", features = ["v4"] }
+async-trait = "0.1"

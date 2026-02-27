@@ -54,6 +54,7 @@ impl PromptHandler for DatabaseQueryPrompt {
                     },
                 },
             ],
+            _meta: None,
         })
     }
 }
@@ -115,6 +116,7 @@ impl PromptHandler for DeploymentPrompt {
                     },
                 },
             ],
+            _meta: None,
         })
     }
 }

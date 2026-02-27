@@ -9,6 +9,7 @@ use crate::server::observability::{
     CloudWatchBackend, ConsoleBackend, McpObservabilityMiddleware, NullBackend,
     ObservabilityBackend, ObservabilityConfig,
 };
+use crate::server::tasks::TaskRouter;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::server::tool_middleware::{ToolMiddleware, ToolMiddlewareChain};
 use crate::server::{PromptHandler, ResourceHandler, SamplingHandler, ToolHandler};
@@ -64,6 +65,9 @@ pub struct ServerCoreBuilder {
     protocol_middleware: Arc<RwLock<EnhancedMiddlewareChain>>,
     #[cfg(not(target_arch = "wasm32"))]
     tool_middlewares: Vec<Arc<dyn ToolMiddleware>>,
+    /// Task router for experimental MCP Tasks support (optional)
+    #[cfg(not(target_arch = "wasm32"))]
+    task_router: Option<Arc<dyn TaskRouter>>,
     /// Stateless mode for serverless deployments (None = auto-detect)
     stateless_mode: Option<bool>,
 }
@@ -90,6 +94,8 @@ impl ServerCoreBuilder {
             protocol_middleware: Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             #[cfg(not(target_arch = "wasm32"))]
             tool_middlewares: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            task_router: None,
             stateless_mode: None, // Auto-detect by default
         }
     }
@@ -519,6 +525,45 @@ impl ServerCoreBuilder {
         self
     }
 
+    /// Enable experimental MCP Tasks support with a task router.
+    ///
+    /// The task router handles task lifecycle operations (`tasks/get`, `tasks/result`,
+    /// `tasks/list`, `tasks/cancel`) and task-augmented `tools/call` requests.
+    ///
+    /// This method:
+    /// - Stores the task router for use during request handling
+    /// - Auto-configures `experimental.tasks` in server capabilities so clients
+    ///   know the server supports the tasks protocol extension
+    ///
+    /// The `router` parameter is typically created by the `pmcp-tasks` crate,
+    /// which wraps a `TaskStore` with routing logic.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use pmcp::server::builder::ServerCoreBuilder;
+    /// use pmcp_tasks::TaskRouterImpl;
+    ///
+    /// let task_router = TaskRouterImpl::new(store);
+    /// let server = ServerCoreBuilder::new()
+    ///     .name("task-server")
+    ///     .version("1.0.0")
+    ///     .with_task_store(Arc::new(task_router))
+    ///     .build()?;
+    /// ```
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_task_store(mut self, router: Arc<dyn TaskRouter>) -> Self {
+        // Auto-configure experimental.tasks capability
+        let experimental = self
+            .capabilities
+            .experimental
+            .get_or_insert_with(HashMap::new);
+        experimental.insert("tasks".to_string(), router.task_capabilities());
+
+        self.task_router = Some(router);
+        self
+    }
+
     /// Detect if running in a stateless/serverless environment.
     ///
     /// Checks for environment variables that indicate serverless platforms:
@@ -607,19 +652,34 @@ impl ServerCoreBuilder {
             self.tool_middlewares.clone(),
         )) as Arc<dyn MiddlewareExecutor>;
 
-        // Get workflow name before moving
+        // Get workflow name and task support flag before moving
         let name = workflow.name().to_string();
+        let has_task_support = workflow.has_task_support();
 
         // Create workflow handler with middleware
         let handler = workflow::WorkflowPromptHandler::with_middleware_executor(
-            workflow,
+            workflow.clone(),
             tool_registry,
             middleware_executor,
             self.resources.clone(),
         );
 
-        // Register as prompt
-        self.prompts.insert(name, Arc::new(handler));
+        // Wrap in TaskWorkflowPromptHandler if task support is enabled
+        if has_task_support {
+            let task_router = self.task_router.as_ref().ok_or_else(|| {
+                Error::validation(format!(
+                    "Workflow '{}' has task support enabled but no task router is configured. \
+                     Call .with_task_store() on the builder before registering task-enabled workflows.",
+                    name
+                ))
+            })?;
+
+            let task_handler =
+                workflow::TaskWorkflowPromptHandler::new(handler, task_router.clone(), workflow);
+            self.prompts.insert(name, Arc::new(task_handler));
+        } else {
+            self.prompts.insert(name, Arc::new(handler));
+        }
 
         // Update capabilities to include prompts
         // This ensures prompts/list returns the workflow prompts
@@ -675,6 +735,8 @@ impl ServerCoreBuilder {
             self.protocol_middleware,
             #[cfg(not(target_arch = "wasm32"))]
             tool_middleware,
+            #[cfg(not(target_arch = "wasm32"))]
+            self.task_router,
             stateless_mode,
         ))
     }
@@ -774,5 +836,208 @@ mod tests {
             .unwrap();
 
         assert_eq!(server.capabilities().tools, custom_caps.tools);
+    }
+
+    #[test]
+    fn test_builder_with_task_store_sets_capabilities() {
+        use crate::server::tasks::TaskRouter;
+
+        /// Mock task router for testing.
+        struct MockTaskRouter;
+
+        #[async_trait]
+        impl TaskRouter for MockTaskRouter {
+            async fn handle_task_call(
+                &self,
+                _tool_name: &str,
+                _arguments: Value,
+                _task_params: Value,
+                _owner_id: &str,
+                _progress_token: Option<Value>,
+            ) -> Result<Value> {
+                Ok(Value::Null)
+            }
+            async fn handle_tasks_get(&self, _params: Value, _owner_id: &str) -> Result<Value> {
+                Ok(Value::Null)
+            }
+            async fn handle_tasks_result(&self, _params: Value, _owner_id: &str) -> Result<Value> {
+                Ok(Value::Null)
+            }
+            async fn handle_tasks_list(&self, _params: Value, _owner_id: &str) -> Result<Value> {
+                Ok(Value::Null)
+            }
+            async fn handle_tasks_cancel(&self, _params: Value, _owner_id: &str) -> Result<Value> {
+                Ok(Value::Null)
+            }
+            fn resolve_owner(
+                &self,
+                _subject: Option<&str>,
+                _client_id: Option<&str>,
+                _session_id: Option<&str>,
+            ) -> String {
+                "test-owner".to_string()
+            }
+            fn tool_requires_task(
+                &self,
+                _tool_name: &str,
+                _tool_execution: Option<&Value>,
+            ) -> bool {
+                false
+            }
+            fn task_capabilities(&self) -> Value {
+                serde_json::json!({
+                    "supported": true,
+                    "maxTtl": 86_400_000
+                })
+            }
+        }
+
+        let router = Arc::new(MockTaskRouter);
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .with_task_store(router)
+            .build()
+            .unwrap();
+
+        // Verify experimental.tasks capability was set
+        let caps = server.capabilities();
+        let experimental = caps
+            .experimental
+            .as_ref()
+            .expect("experimental should be set");
+        let tasks_cap = experimental
+            .get("tasks")
+            .expect("tasks capability should be set");
+        assert_eq!(tasks_cap["supported"], true);
+        assert_eq!(tasks_cap["maxTtl"], 86_400_000);
+    }
+
+    #[test]
+    fn test_builder_without_task_store_has_no_experimental() {
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .build()
+            .unwrap();
+
+        // No experimental capabilities by default
+        assert!(server.capabilities().experimental.is_none());
+    }
+
+    /// Shared mock task router for workflow task tests.
+    struct WorkflowMockTaskRouter;
+
+    #[async_trait]
+    impl crate::server::tasks::TaskRouter for WorkflowMockTaskRouter {
+        async fn handle_task_call(
+            &self,
+            _tool_name: &str,
+            _arguments: Value,
+            _task_params: Value,
+            _owner_id: &str,
+            _progress_token: Option<Value>,
+        ) -> Result<Value> {
+            Ok(Value::Null)
+        }
+        async fn handle_tasks_get(&self, _params: Value, _owner_id: &str) -> Result<Value> {
+            Ok(Value::Null)
+        }
+        async fn handle_tasks_result(&self, _params: Value, _owner_id: &str) -> Result<Value> {
+            Ok(Value::Null)
+        }
+        async fn handle_tasks_list(&self, _params: Value, _owner_id: &str) -> Result<Value> {
+            Ok(Value::Null)
+        }
+        async fn handle_tasks_cancel(&self, _params: Value, _owner_id: &str) -> Result<Value> {
+            Ok(Value::Null)
+        }
+        fn resolve_owner(
+            &self,
+            _subject: Option<&str>,
+            _client_id: Option<&str>,
+            _session_id: Option<&str>,
+        ) -> String {
+            "test-owner".to_string()
+        }
+        fn tool_requires_task(&self, _tool_name: &str, _tool_execution: Option<&Value>) -> bool {
+            false
+        }
+        fn task_capabilities(&self) -> Value {
+            serde_json::json!({
+                "supported": true,
+                "maxTtl": 86_400_000
+            })
+        }
+    }
+
+    #[test]
+    fn test_workflow_without_task_support_registers_normally() {
+        use crate::server::workflow::{SequentialWorkflow, ToolHandle, WorkflowStep};
+
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .tool("my_tool", TestTool)
+            .prompt_workflow(
+                SequentialWorkflow::new("test_workflow", "A test workflow")
+                    .step(WorkflowStep::new("step1", ToolHandle::new("my_tool"))),
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Verify the workflow was registered as a prompt
+        assert!(server.capabilities().prompts.is_some());
+    }
+
+    #[test]
+    fn test_workflow_with_task_support_and_router_wraps_in_task_handler() {
+        use crate::server::workflow::{SequentialWorkflow, ToolHandle, WorkflowStep};
+
+        let router = Arc::new(WorkflowMockTaskRouter);
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .tool("my_tool", TestTool)
+            .with_task_store(router)
+            .prompt_workflow(
+                SequentialWorkflow::new("task_workflow", "A task-enabled workflow")
+                    .step(WorkflowStep::new("step1", ToolHandle::new("my_tool")))
+                    .with_task_support(true),
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Verify the workflow was registered (the TaskWorkflowPromptHandler wrapping
+        // is internal, but we verify it compiled and the prompt is available)
+        assert!(server.capabilities().prompts.is_some());
+    }
+
+    #[test]
+    fn test_workflow_with_task_support_but_no_router_errors() {
+        use crate::server::workflow::{SequentialWorkflow, ToolHandle, WorkflowStep};
+
+        let result = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .tool("my_tool", TestTool)
+            .prompt_workflow(
+                SequentialWorkflow::new("task_workflow", "A task-enabled workflow")
+                    .step(WorkflowStep::new("step1", ToolHandle::new("my_tool")))
+                    .with_task_support(true),
+            );
+
+        assert!(result.is_err());
+        let err_msg = match result {
+            Err(e) => format!("{}", e),
+            Ok(_) => panic!("Expected error but got Ok"),
+        };
+        assert!(
+            err_msg.contains("no task router is configured"),
+            "Error should mention missing task router, got: {}",
+            err_msg
+        );
     }
 }

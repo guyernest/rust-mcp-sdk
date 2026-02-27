@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Explorer</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            padding: 16px;
+        }
+
+        h1 {
+            font-size: 1.4rem;
+            margin-bottom: 12px;
+            color: #fff;
+        }
+
+        .controls {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        textarea {
+            flex: 1;
+            min-width: 200px;
+            min-height: 60px;
+            padding: 8px 12px;
+            background: #16213e;
+            color: #eee;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.85rem;
+            resize: vertical;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: #e94560;
+        }
+
+        .control-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        button {
+            padding: 8px 20px;
+            background: #e94560;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+
+        button:hover { background: #c73a52; }
+
+        select {
+            padding: 8px 12px;
+            background: #16213e;
+            color: #eee;
+            border: 1px solid #0f3460;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            cursor: pointer;
+        }
+
+        select:focus {
+            outline: none;
+            border-color: #e94560;
+        }
+
+        .chart-container {
+            position: relative;
+            width: 100%;
+            max-height: 400px;
+            margin-bottom: 16px;
+            background: #16213e;
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .table-container {
+            overflow-x: auto;
+            border-radius: 8px;
+            background: #16213e;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+
+        th {
+            background: #0f3460;
+            padding: 10px 12px;
+            text-align: left;
+            cursor: pointer;
+            user-select: none;
+            white-space: nowrap;
+            position: sticky;
+            top: 0;
+        }
+
+        th:hover { background: #1a4a7a; }
+
+        th .sort-indicator {
+            margin-left: 4px;
+            opacity: 0.5;
+        }
+
+        th .sort-indicator.active { opacity: 1; }
+
+        td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        tr:nth-child(even) td { background: rgba(15, 52, 96, 0.3); }
+        tr:hover td { background: rgba(233, 69, 96, 0.1); }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            color: #e94560;
+            font-size: 0.9rem;
+        }
+
+        .loading.active { display: block; }
+
+        .table-list {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+
+        .table-tag {
+            padding: 4px 10px;
+            background: #0f3460;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .table-tag:hover { background: #e94560; }
+
+        .status-bar {
+            margin-top: 8px;
+            font-size: 0.8rem;
+            color: #888;
+        }
+
+        .error {
+            color: #e94560;
+            padding: 12px;
+            background: rgba(233, 69, 96, 0.1);
+            border-radius: 6px;
+            margin-bottom: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Data Explorer</h1>
+
+    <div class="table-list" id="tableList"></div>
+
+    <div class="controls">
+        <textarea id="queryInput" rows="3">SELECT g.Name AS Genre, COUNT(t.TrackId) AS TrackCount FROM Genre g JOIN Track t ON g.GenreId = t.GenreId GROUP BY g.Name ORDER BY TrackCount DESC LIMIT 10</textarea>
+        <div class="control-buttons">
+            <button id="runQueryBtn">Run Query</button>
+            <select id="chartType">
+                <option value="bar">Bar</option>
+                <option value="line">Line</option>
+                <option value="pie">Pie</option>
+            </select>
+        </div>
+    </div>
+
+    <div id="loading" class="loading">Running query...</div>
+
+    <div class="chart-container">
+        <canvas id="chart"></canvas>
+    </div>
+
+    <div class="table-container">
+        <table id="dataTable">
+            <thead></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div class="status-bar" id="statusBar"></div>
+
+    <script>
+        // =====================================================================
+        // State
+        // =====================================================================
+        let currentChart = null;
+        let currentColumns = [];
+        let currentRows = [];
+        let sortColumn = -1;
+        let sortAscending = true;
+
+        const COLORS = [
+            '#e94560', '#0f3460', '#533483', '#00b4d8',
+            '#06d6a0', '#ffd166', '#ef476f', '#118ab2',
+            '#073b4c', '#8338ec', '#ff006e', '#3a86ff'
+        ];
+
+        // =====================================================================
+        // Bridge Integration
+        // =====================================================================
+        async function callTool(name, args) {
+            if (window.mcpBridge) {
+                try {
+                    return await window.mcpBridge.callTool(name, args);
+                } catch (err) {
+                    console.error('Bridge callTool error:', err);
+                    return { error: String(err) };
+                }
+            }
+            return { error: 'MCP bridge not available' };
+        }
+
+        function saveState() {
+            if (window.mcpBridge && window.mcpBridge.setState) {
+                window.mcpBridge.setState({
+                    query: document.getElementById('queryInput').value,
+                    chartType: document.getElementById('chartType').value,
+                    columns: currentColumns,
+                    rows: currentRows
+                });
+            }
+        }
+
+        async function loadState() {
+            if (window.mcpBridge && window.mcpBridge.getState) {
+                const state = await window.mcpBridge.getState();
+                if (state && state.query) {
+                    document.getElementById('queryInput').value = state.query;
+                }
+                if (state && state.chartType) {
+                    document.getElementById('chartType').value = state.chartType;
+                }
+                if (state && state.columns && state.rows) {
+                    currentColumns = state.columns;
+                    currentRows = state.rows;
+                    renderChart(currentColumns, currentRows, document.getElementById('chartType').value);
+                    renderTable(currentColumns, currentRows);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // =====================================================================
+        // Rendering
+        // =====================================================================
+        function renderChart(columns, rows, chartType) {
+            if (currentChart) {
+                currentChart.destroy();
+                currentChart = null;
+            }
+
+            if (!columns || columns.length < 2 || !rows || rows.length === 0) return;
+
+            const ctx = document.getElementById('chart').getContext('2d');
+            const labels = rows.map(r => String(r[0]));
+            const data = rows.map(r => Number(r[1]) || 0);
+
+            const bgColors = data.map((_, i) => COLORS[i % COLORS.length]);
+            const borderColors = bgColors.map(c => c);
+
+            currentChart = new Chart(ctx, {
+                type: chartType,
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: columns[1],
+                        data: data,
+                        backgroundColor: chartType === 'line'
+                            ? 'rgba(233, 69, 96, 0.2)'
+                            : bgColors,
+                        borderColor: chartType === 'line'
+                            ? '#e94560'
+                            : borderColors,
+                        borderWidth: chartType === 'pie' ? 2 : 1,
+                        tension: 0.3,
+                        fill: chartType === 'line'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: {
+                            display: chartType === 'pie',
+                            labels: { color: '#eee' }
+                        }
+                    },
+                    scales: chartType !== 'pie' ? {
+                        x: {
+                            ticks: { color: '#aaa' },
+                            grid: { color: 'rgba(255,255,255,0.05)' }
+                        },
+                        y: {
+                            ticks: { color: '#aaa' },
+                            grid: { color: 'rgba(255,255,255,0.05)' }
+                        }
+                    } : {}
+                }
+            });
+        }
+
+        function renderTable(columns, rows) {
+            const thead = document.querySelector('#dataTable thead');
+            const tbody = document.querySelector('#dataTable tbody');
+
+            // Header
+            thead.innerHTML = '<tr>' + columns.map((col, i) => {
+                const indicator = sortColumn === i
+                    ? (sortAscending ? ' &#9650;' : ' &#9660;')
+                    : '';
+                const cls = sortColumn === i ? 'active' : '';
+                return '<th onclick="sortBy(' + i + ')">' + escapeHtml(col) +
+                    '<span class="sort-indicator ' + cls + '">' + indicator + '</span></th>';
+            }).join('') + '</tr>';
+
+            // Body
+            tbody.innerHTML = rows.map(row =>
+                '<tr>' + row.map(cell =>
+                    '<td>' + escapeHtml(String(cell === null ? '' : cell)) + '</td>'
+                ).join('') + '</tr>'
+            ).join('');
+        }
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        // =====================================================================
+        // Sorting
+        // =====================================================================
+        function sortBy(columnIndex) {
+            if (sortColumn === columnIndex) {
+                sortAscending = !sortAscending;
+            } else {
+                sortColumn = columnIndex;
+                sortAscending = true;
+            }
+
+            currentRows.sort((a, b) => {
+                let va = a[columnIndex];
+                let vb = b[columnIndex];
+
+                // Numeric comparison if both are numbers
+                const na = Number(va);
+                const nb = Number(vb);
+                if (!isNaN(na) && !isNaN(nb)) {
+                    return sortAscending ? na - nb : nb - na;
+                }
+
+                // String comparison
+                va = String(va || '');
+                vb = String(vb || '');
+                return sortAscending ? va.localeCompare(vb) : vb.localeCompare(va);
+            });
+
+            renderTable(currentColumns, currentRows);
+        }
+
+        // =====================================================================
+        // Query Execution
+        // =====================================================================
+        async function runQuery() {
+            const sql = document.getElementById('queryInput').value.trim();
+            if (!sql) return;
+
+            const loading = document.getElementById('loading');
+            const statusBar = document.getElementById('statusBar');
+            loading.classList.add('active');
+            statusBar.textContent = '';
+
+            const result = await callTool('execute_query', { sql: sql });
+
+            loading.classList.remove('active');
+
+            if (result.error) {
+                statusBar.innerHTML = '<span class="error">' + escapeHtml(result.error) + '</span>';
+                return;
+            }
+
+            currentColumns = result.columns || [];
+            currentRows = result.rows || [];
+            sortColumn = -1;
+            sortAscending = true;
+
+            const chartType = document.getElementById('chartType').value;
+            renderChart(currentColumns, currentRows, chartType);
+            renderTable(currentColumns, currentRows);
+
+            statusBar.textContent = result.row_count + ' row' + (result.row_count !== 1 ? 's' : '') + ' returned';
+            saveState();
+        }
+
+        async function loadTables() {
+            const result = await callTool('list_tables', {});
+            const container = document.getElementById('tableList');
+
+            if (result.tables && Array.isArray(result.tables)) {
+                container.innerHTML = result.tables.map(t =>
+                    '<span class="table-tag" onclick="describeTable(\'' + escapeHtml(t) + '\')">' +
+                    escapeHtml(t) + '</span>'
+                ).join('');
+            }
+        }
+
+        async function describeTable(name) {
+            document.getElementById('queryInput').value = 'SELECT * FROM ' + name + ' LIMIT 25';
+            await runQuery();
+        }
+
+        // =====================================================================
+        // Event Listeners
+        // =====================================================================
+        document.getElementById('runQueryBtn').addEventListener('click', runQuery);
+
+        document.getElementById('chartType').addEventListener('change', function() {
+            if (currentColumns.length > 0 && currentRows.length > 0) {
+                renderChart(currentColumns, currentRows, this.value);
+                saveState();
+            }
+        });
+
+        document.getElementById('queryInput').addEventListener('keydown', function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                runQuery();
+            }
+        });
+
+        // =====================================================================
+        // Initialization
+        // =====================================================================
+        (async function init() {
+            const restored = await loadState();
+            await loadTables();
+            if (!restored) {
+                await runQuery();
+            }
+        })();
+    </script>
+</body>
+</html>

@@ -59,6 +59,7 @@ parking_lot = "0.12"
 dashmap = "6.1"
 bytes = { version = "1.10", optional = true }
 futures = "0.3"
+pmcp-widget-utils = { path = "crates/pmcp-widget-utils" }
 futures-util = { version = "0.3", optional = true }
 futures-channel = { version = "0.3", optional = true }
 futures-locks = { version = "0.7", optional = true, default-features = false }
@@ -125,6 +126,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 clap = { version = "4.5", features = ["derive"] }
 env_logger = "0.11"
 dashmap = "6.1"  # Already in main deps but needed for examples
+pmcp-tasks = { path = "crates/pmcp-tasks" }  # For task examples (60_tasks_*)
 
 [features]
 default = ["validation"]
@@ -398,13 +400,17 @@ name = "hotel_gallery"
 path = "examples/hotel_gallery.rs"
 required-features = ["schema-generation"]
 
+[[example]]
+name = "60_tasks_basic"
+path = "examples/60_tasks_basic.rs"
+
 [[bench]]
 name = "comprehensive_benchmarks"
 harness = false
 [workspace]
-members = ["pmcp-macros", "crates/mcp-tester", "crates/mcp-preview", "examples/25-oauth-basic", "examples/test-basic", "cargo-pmcp"]
+members = ["pmcp-macros", "crates/mcp-tester", "crates/mcp-preview", "crates/pmcp-tasks", "crates/mcp-e2e-tests", "crates/pmcp-widget-utils", "examples/25-oauth-basic", "examples/test-basic", "cargo-pmcp"]
 # WASM examples and standalone examples are excluded from regular workspace tests
-exclude = ["fuzz", "examples/cloudflare-worker-mcp", "examples/26-server-tester", "examples/27-course-server-minimal", "examples/wasm-client", "examples/mcp-apps-chess", "examples/mcp-apps-map"]
+exclude = ["fuzz", "examples/cloudflare-worker-mcp", "examples/26-server-tester", "examples/27-course-server-minimal", "examples/wasm-client", "examples/mcp-apps-chess", "examples/mcp-apps-map", "examples/mcp-apps-dataviz"]
 
 [package.metadata.docs.rs]
 all-features = true

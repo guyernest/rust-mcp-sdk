@@ -2775,6 +2775,7 @@ impl ServerTester {
                 Ok(pmcp::types::GetPromptResult {
                     messages: vec![],
                     description: None,
+                    _meta: None,
                 })
             },
         }

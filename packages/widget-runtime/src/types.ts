@@ -474,3 +474,79 @@ export interface SetGlobalsEvent extends CustomEvent {
  * Event type name for OpenAI globals updates.
  */
 export const SET_GLOBALS_EVENT_TYPE = 'openai:set_globals' as const;
+
+// =============================================================================
+// MCP Apps Protocol Types
+// =============================================================================
+
+/**
+ * Parameters for calling a server-side MCP tool.
+ * Aligned with `@modelcontextprotocol/ext-apps` type surface.
+ */
+export interface CallToolParams {
+  /** The name of the tool to call */
+  name: string;
+  /** Optional arguments for the tool */
+  arguments?: Record<string, unknown>;
+}
+
+/**
+ * Result from a tool call.
+ * Aligned with `@modelcontextprotocol/ext-apps` type surface.
+ */
+export interface CallToolResult {
+  /** Content items returned by the tool */
+  content?: Array<{
+    type: string;
+    text?: string;
+    mimeType?: string;
+  }>;
+  /** Structured content returned by the tool (alternative to content array) */
+  structuredContent?: unknown;
+  /** Whether the tool call resulted in an error */
+  isError?: boolean;
+}
+
+/**
+ * Host context provided during initialization.
+ * Contains environment information about the host platform.
+ */
+export interface HostContext {
+  /** Current color theme */
+  theme?: 'light' | 'dark';
+  /** User locale (e.g., 'en-US') */
+  locale?: string;
+  /** User timezone (e.g., 'America/New_York') */
+  timezone?: string;
+  /** Current widget display mode */
+  displayMode?: 'inline' | 'pip' | 'fullscreen';
+  /** Container size available to the widget */
+  containerSize?: {
+    width: number;
+    height: number;
+  };
+}
+
+/**
+ * Options for creating an App instance (widget-side).
+ */
+export interface AppOptions {
+  /** The widget/app name */
+  name: string;
+  /** The widget/app version */
+  version: string;
+}
+
+/**
+ * Options for creating an AppBridge instance (host-side).
+ */
+export interface AppBridgeOptions {
+  /** The iframe element containing the widget */
+  iframe: HTMLIFrameElement;
+  /** Handler for tool call requests from the widget */
+  toolCallHandler: (name: string, args?: Record<string, unknown>) => Promise<CallToolResult>;
+  /** Expected origin for postMessage validation. Defaults to window.location.origin. */
+  origin?: string;
+  /** Initial host context to send to the widget on initialization */
+  hostContext?: HostContext;
+}

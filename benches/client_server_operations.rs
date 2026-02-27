@@ -131,6 +131,7 @@ fn bench_request_processing(c: &mut Criterion) {
                 name: "simple_tool".to_string(),
                 arguments: json!({"input": "test"}),
                 _meta: None,
+                task: None,
             }),
         ),
         (
@@ -142,6 +143,7 @@ fn bench_request_processing(c: &mut Criterion) {
                     "operation": "average"
                 }),
                 _meta: None,
+                task: None,
             }),
         ),
         (
@@ -387,6 +389,7 @@ fn bench_batch_operations(c: &mut Criterion) {
                     "index": i
                 }),
                 _meta: None,
+                task: None,
             })
         })
         .collect();

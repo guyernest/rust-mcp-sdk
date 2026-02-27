@@ -72,6 +72,7 @@ fn create_code_review_prompt() -> SimplePrompt<AsyncPromptHandler> {
                         "Code review for {} code focusing on {}",
                         language, focus
                     )),
+                    _meta: None,
                 })
             }) as std::pin::Pin<Box<dyn std::future::Future<Output = pmcp::Result<GetPromptResult>> + Send>>
         }) as AsyncPromptHandler,
@@ -127,6 +128,7 @@ fn create_data_analysis_prompt(
         Ok(GetPromptResult {
             messages,
             description: Some(format!("Data analysis for {} data", data_type)),
+            _meta: None,
         })
     })
     .with_description("Generate a data analysis prompt for the provided data")
@@ -187,6 +189,7 @@ fn create_writing_assistant_prompt(
                     "Writing assistance for '{}' in {} style",
                     topic, style
                 )),
+                _meta: None,
             })
         },
     )

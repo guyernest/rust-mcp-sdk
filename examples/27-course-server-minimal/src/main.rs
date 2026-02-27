@@ -419,6 +419,7 @@ async fn main() -> anyhow::Result<()> {
                     ),
                 },
             }],
+            _meta: None,
         })
     })
     .with_description("Begin your MCP learning journey");
@@ -449,6 +450,7 @@ async fn main() -> anyhow::Result<()> {
                     ),
                 },
             }],
+            _meta: None,
         })
     })
     .with_description("Review key concepts from a chapter")

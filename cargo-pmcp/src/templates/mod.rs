@@ -1,5 +1,6 @@
 pub mod calculator;
 pub mod complete_calculator;
+pub mod mcp_app;
 pub mod oauth;
 pub mod server;
 pub mod server_common;

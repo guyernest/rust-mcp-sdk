@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 mod commands;
 mod deployment;
 mod landing;
+mod publishing;
 mod secrets;
 mod templates;
 mod utils;
@@ -131,6 +132,14 @@ enum Commands {
     /// Secrets are namespaced by server ID to avoid conflicts.
     Secret(commands::secret::SecretCommand),
 
+    /// MCP Apps project management
+    ///
+    /// Scaffold and manage MCP Apps projects with interactive widgets.
+    App {
+        #[command(subcommand)]
+        command: commands::app::AppCommand,
+    },
+
     /// Preview MCP Apps widgets in browser
     ///
     /// Launch a browser-based preview environment for testing MCP servers
@@ -159,6 +168,14 @@ enum Commands {
         /// Initial locale
         #[arg(long, default_value = "en-US")]
         locale: String,
+
+        /// Path to widgets directory for file-based authoring (hot-reload)
+        ///
+        /// When set, widget HTML files are read directly from this directory
+        /// on each request. Browser refresh shows the latest HTML without
+        /// server restart.
+        #[arg(long)]
+        widgets_dir: Option<String>,
     },
 }
 
@@ -284,6 +301,9 @@ fn execute_command(command: Commands) -> Result<()> {
         Commands::Secret(secret_cmd) => {
             secret_cmd.execute()?;
         },
+        Commands::App { command } => {
+            command.execute()?;
+        },
         Commands::Preview {
             url,
             port,
@@ -291,10 +311,17 @@ fn execute_command(command: Commands) -> Result<()> {
             tool,
             theme,
             locale,
+            widgets_dir,
         } => {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(commands::preview::execute(
-                url, port, open, tool, theme, locale,
+                url,
+                port,
+                open,
+                tool,
+                theme,
+                locale,
+                widgets_dir,
             ))?;
         },
     }

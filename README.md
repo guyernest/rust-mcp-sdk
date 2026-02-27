@@ -342,21 +342,57 @@ AI agent configurations that teach Kiro and Claude Code how to build MCP servers
 
 ---
 
-## Latest Release: v1.8.3
+### 🎨 MCP Apps (Rich UI Widgets)
 
-**Highlights:**
+Build rich HTML UI widgets served from MCP servers — works with ChatGPT, Claude, and other MCP clients.
 
+**What it does:**
+- **Preview**: Live widget preview with dual proxy/WASM bridge modes
+- **Author**: File-based widgets in `widgets/` directory with hot-reload
+- **Scaffold**: `cargo pmcp app new` generates a complete MCP Apps project
+- **Publish**: ChatGPT-compatible manifest and standalone demo landing pages
+- **Test**: 20 E2E browser tests via chromiumoxide CDP
+
+**Quick start:**
+```bash
+# Scaffold a new MCP Apps project
+cargo pmcp app new my-widget-app
+cd my-widget-app
+
+# Run the server
+cargo run
+
+# Preview in browser (separate terminal)
+cargo pmcp preview --url http://localhost:3000 --open
+
+# Generate deployment artifacts
+cargo pmcp app build --url https://my-server.example.com
+```
+
+**Examples:**
+- [Chess App](examples/mcp-apps-chess/) — Interactive chess board with move validation
+- [Map App](examples/mcp-apps-map/) — Leaflet.js geospatial city explorer
+- [Data Viz App](examples/mcp-apps-dataviz/) — Chart.js dashboard with SQL queries
+
+**Learn more**: [Widget Runtime](packages/widget-runtime/) | [Preview Server](crates/mcp-preview/) | [E2E Tests](crates/mcp-e2e-tests/)
+
+---
+
+## Latest Release: v1.10.2
+
+**v1.3 MCP Apps Developer Experience (2026-02-26):**
+- **🎨 MCP Apps Preview**: Live widget preview with dual proxy/WASM bridge modes
+- **📦 Widget Authoring**: File-based widgets, `cargo pmcp app new` scaffolding, hot-reload
+- **🚀 Publishing Pipeline**: ChatGPT manifest generation and standalone demo landing pages
+- **🧪 E2E Testing**: 20 chromiumoxide CDP browser tests across 3 widget suites
+- **🔗 Shared Bridge Library**: TypeScript App/PostMessageTransport/AppBridge classes
+
+**Previous highlights:**
 - **🔐 OAuth Auth Context**: Full token pass-through from transport → middleware → tools
-- **📋 Workflow Array Indexing**: Access array elements in workflow templates
-- **🛡️ Spec Compliance**: Fixed ClientCapabilities schema for Cursor IDE compatibility
 - **🔧 Type-Safe Tools**: Production-ready typed tools with schema generation
 - **⚡ Performance**: SIMD-accelerated parsing (10.3x speedup)
 
 **Full changelog**: [CHANGELOG.md](CHANGELOG.md)
-
-**Migration guides:**
-- [v1.8.0 OAuth Migration](docs/oauth-migration-guide.md)
-- [v1.7.0 ClientCapabilities Fix](docs/capabilities-migration.md)
 
 ---
 

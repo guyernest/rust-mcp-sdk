@@ -1,6 +1,6 @@
 //! Secure secret value handling with automatic zeroization.
 
-use rand::Rng;
+use rand::RngExt;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -48,7 +48,7 @@ impl SecretValue {
 
     /// Generate a random secret value.
     pub fn generate(length: usize, charset: SecretCharset) -> Self {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let chars: Vec<char> = match charset {
             SecretCharset::Alphanumeric => {
                 "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -60,7 +60,7 @@ impl SecretValue {
         };
 
         let value: String = (0..length)
-            .map(|_| chars[rng.gen_range(0..chars.len())])
+            .map(|_| chars[rng.random_range(0..chars.len())])
             .collect();
 
         Self::new(value)

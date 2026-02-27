@@ -22,6 +22,8 @@ use uuid::Uuid;
 use tokio::sync::{mpsc, oneshot, RwLock};
 
 #[cfg(target_arch = "wasm32")]
+use futures::SinkExt;
+#[cfg(target_arch = "wasm32")]
 use futures_channel::{mpsc, oneshot};
 #[cfg(target_arch = "wasm32")]
 use futures_locks::RwLock;
@@ -413,6 +415,7 @@ impl<T: Transport> Client<T> {
             name,
             arguments,
             _meta: None,
+            task: None,
         })));
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
@@ -1352,7 +1355,8 @@ impl<T: Transport> Client<T> {
                     // Forward to notification handler if registered
                     if let Some(tx) = &self.notification_tx {
                         // Clone the sender because send() requires &mut self
-                        let tx_clone = tx.clone();
+                        #[allow(unused_mut)]
+                        let mut tx_clone = tx.clone();
                         if let Err(e) = tx_clone.send(notification).await {
                             tracing::debug!("Notification channel closed: {}", e);
                         }

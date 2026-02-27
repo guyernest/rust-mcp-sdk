@@ -95,15 +95,34 @@ cloudflare-sdk-test:
 		-d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' \
 		| jq . || echo "$(YELLOW)⚠ Make sure 'cloudflare-sdk-dev' is running$(NC)"
 
+# Widget Runtime (TypeScript -> ESM) build targets
+.PHONY: build-widget-runtime
+build-widget-runtime:
+	@echo "$(BLUE)Building widget-runtime TypeScript library...$(NC)"
+	@if [ -d "packages/widget-runtime" ] && command -v npm &> /dev/null; then \
+		cd packages/widget-runtime && npm run build; \
+		cp dist/browser/browser.mjs ../../crates/mcp-preview/assets/widget-runtime.mjs; \
+		echo "$(GREEN)✓ widget-runtime built and copied to preview assets$(NC)"; \
+	else \
+		echo "$(YELLOW)⚠ Skipping widget-runtime build (missing packages/widget-runtime or npm)$(NC)"; \
+	fi
+
+.PHONY: clean-widget-runtime
+clean-widget-runtime:
+	@echo "$(BLUE)Cleaning widget-runtime build artifacts...$(NC)"
+	rm -rf packages/widget-runtime/dist/
+	rm -f crates/mcp-preview/assets/widget-runtime.mjs
+	@echo "$(GREEN)✓ widget-runtime cleaned$(NC)"
+
 # Build targets
 .PHONY: build
-build:
+build: build-widget-runtime
 	@echo "$(BLUE)Building project...$(NC)"
 	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO) build --all-features
 	@echo "$(GREEN)✓ Build successful$(NC)"
 
 .PHONY: build-release
-build-release:
+build-release: build-widget-runtime
 	@echo "$(BLUE)Building release...$(NC)"
 	RUSTFLAGS="$(RUSTFLAGS)" $(CARGO) build --release --all-features
 	@echo "$(GREEN)✓ Release build successful$(NC)"
@@ -272,6 +291,42 @@ test-integration:
 	@echo "$(BLUE)Running integration tests...$(NC)"
 	RUST_LOG=$(RUST_LOG) RUST_BACKTRACE=$(RUST_BACKTRACE) $(CARGO) test --test '*' --features "full"
 	@echo "$(GREEN)✓ Integration tests passed$(NC)"
+
+# Feature flag verification for pmcp-tasks crate
+.PHONY: test-feature-flags
+test-feature-flags:
+	@echo "$(BLUE)Verifying feature flag combinations for pmcp-tasks...$(NC)"
+	@echo "$(YELLOW)1/4: No features (InMemory only)...$(NC)"
+	$(CARGO) check -p pmcp-tasks --no-default-features
+	$(CARGO) clippy -p pmcp-tasks --no-default-features -- -D warnings
+	$(CARGO) test -p pmcp-tasks --no-default-features --no-run
+	$(CARGO) test -p pmcp-tasks --no-default-features --doc
+	RUSTDOCFLAGS="-D warnings" $(CARGO) doc -p pmcp-tasks --no-default-features --no-deps
+	@echo "$(GREEN)✓ 1/4 passed: no features$(NC)"
+	@echo "$(YELLOW)2/4: dynamodb only...$(NC)"
+	$(CARGO) check -p pmcp-tasks --features dynamodb
+	$(CARGO) clippy -p pmcp-tasks --features dynamodb -- -D warnings
+	$(CARGO) test -p pmcp-tasks --features dynamodb --no-run
+	$(CARGO) test -p pmcp-tasks --features dynamodb --doc
+	RUSTDOCFLAGS="-D warnings" $(CARGO) doc -p pmcp-tasks --features dynamodb --no-deps
+	@echo "$(GREEN)✓ 2/4 passed: dynamodb$(NC)"
+	@echo "$(YELLOW)3/4: redis only...$(NC)"
+	$(CARGO) check -p pmcp-tasks --features redis
+	$(CARGO) clippy -p pmcp-tasks --features redis -- -D warnings
+	$(CARGO) test -p pmcp-tasks --features redis --no-run
+	$(CARGO) test -p pmcp-tasks --features redis --doc
+	RUSTDOCFLAGS="-D warnings" $(CARGO) doc -p pmcp-tasks --features redis --no-deps
+	@echo "$(GREEN)✓ 3/4 passed: redis$(NC)"
+	@echo "$(YELLOW)4/4: dynamodb + redis...$(NC)"
+	$(CARGO) check -p pmcp-tasks --features "dynamodb,redis"
+	$(CARGO) clippy -p pmcp-tasks --features "dynamodb,redis" -- -D warnings
+	$(CARGO) test -p pmcp-tasks --features "dynamodb,redis" --no-run
+	$(CARGO) test -p pmcp-tasks --features "dynamodb,redis" --doc
+	RUSTDOCFLAGS="-D warnings" $(CARGO) doc -p pmcp-tasks --features "dynamodb,redis" --no-deps
+	@echo "$(GREEN)✓ 4/4 passed: dynamodb + redis$(NC)"
+	@echo "$(GREEN)═══════════════════════════════════════════════════════$(NC)"
+	@echo "$(GREEN)  All 4 feature flag combinations verified for pmcp-tasks$(NC)"
+	@echo "$(GREEN)═══════════════════════════════════════════════════════$(NC)"
 
 # Playwright UI Widget Tests
 .PHONY: test-playwright-setup
@@ -708,6 +763,7 @@ help:
 	@echo "  test-doc        - Run doctests"
 	@echo "  test-property   - Run property tests"
 	@echo "  test-all        - Run all tests"
+	@echo "  test-feature-flags - Verify pmcp-tasks feature flag combinations"
 	@echo "  coverage        - Generate coverage report"
 	@echo "  mutants         - Run mutation testing"
 	@echo ""

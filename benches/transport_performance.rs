@@ -148,6 +148,7 @@ fn bench_protocol_helpers(c: &mut Criterion) {
                     "options": {"format": "json"}
                 }),
                 _meta: None,
+                task: None,
             }));
             black_box(request)
         })
@@ -232,6 +233,7 @@ fn bench_concurrent_processing(c: &mut Criterion) {
                     "data": format!("Message data for request {}", i)
                 }),
                 _meta: None,
+                task: None,
             }))
             .unwrap()
         })
@@ -253,6 +255,7 @@ fn bench_concurrent_processing(c: &mut Criterion) {
                 name: format!("tool_{}", i),
                 arguments: serde_json::json!({"id": i}),
                 _meta: None,
+                task: None,
             })
         })
         .collect();

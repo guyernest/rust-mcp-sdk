@@ -32,6 +32,8 @@ use super::roots::RootsManager;
 #[cfg(not(target_arch = "wasm32"))]
 use super::subscriptions::SubscriptionManager;
 #[cfg(not(target_arch = "wasm32"))]
+use super::tasks::TaskRouter;
+#[cfg(not(target_arch = "wasm32"))]
 use super::tool_middleware::{ToolContext, ToolMiddlewareChain};
 use super::{PromptHandler, ResourceHandler, SamplingHandler, ToolHandler};
 
@@ -151,6 +153,10 @@ pub struct ServerCore {
     #[cfg(not(target_arch = "wasm32"))]
     tool_middleware: Arc<RwLock<ToolMiddlewareChain>>,
 
+    /// Task router for experimental MCP Tasks support (optional)
+    #[cfg(not(target_arch = "wasm32"))]
+    task_router: Option<Arc<dyn TaskRouter>>,
+
     /// Stateless mode flag for serverless deployments
     ///
     /// When true, the server skips initialization state checking, allowing
@@ -177,6 +183,7 @@ impl ServerCore {
         tool_authorizer: Option<Arc<dyn ToolAuthorizer>>,
         protocol_middleware: Arc<RwLock<EnhancedMiddlewareChain>>,
         #[cfg(not(target_arch = "wasm32"))] tool_middleware: Arc<RwLock<ToolMiddlewareChain>>,
+        #[cfg(not(target_arch = "wasm32"))] task_router: Option<Arc<dyn TaskRouter>>,
         stateless_mode: bool,
     ) -> Self {
         Self {
@@ -196,6 +203,8 @@ impl ServerCore {
             protocol_middleware,
             #[cfg(not(target_arch = "wasm32"))]
             tool_middleware,
+            #[cfg(not(target_arch = "wasm32"))]
+            task_router,
             stateless_mode,
         }
     }
@@ -659,6 +668,20 @@ impl ProtocolHandler for ServerCore {
 }
 
 impl ServerCore {
+    /// Resolve the owner ID from the authentication context using the task router.
+    ///
+    /// Returns `None` if no task router is configured. When a task router is
+    /// available, it delegates to [`TaskRouter::resolve_owner`] which uses
+    /// the priority chain: OAuth subject > client ID > session ID > "local".
+    #[cfg(not(target_arch = "wasm32"))]
+    fn resolve_task_owner(&self, auth_context: Option<&AuthContext>) -> Option<String> {
+        let router = self.task_router.as_ref()?;
+        Some(match auth_context {
+            Some(ctx) => router.resolve_owner(Some(&ctx.subject), ctx.client_id.as_deref(), None),
+            None => router.resolve_owner(None, None, None),
+        })
+    }
+
     /// Internal request handler without middleware processing.
     async fn handle_request_internal(
         &self,
@@ -699,8 +722,83 @@ impl ServerCore {
                         Err(e) => Self::error_response(id, -32603, e.to_string()),
                     },
                     ClientRequest::CallTool(req) => {
+                        // Check for task-augmented call: explicit task field or tool requires task
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if let Some(ref task_router) = self.task_router {
+                            // Determine if this tool requires task augmentation
+                            let tool_execution = self
+                                .tools
+                                .get(&req.name)
+                                .and_then(|h| h.metadata())
+                                .and_then(|m| m.execution);
+                            let needs_task = req.task.is_some()
+                                || task_router
+                                    .tool_requires_task(&req.name, tool_execution.as_ref());
+                            if needs_task {
+                                let owner_id = self
+                                    .resolve_task_owner(auth_context.as_ref())
+                                    .unwrap_or_else(|| "local".to_string());
+                                let task_params =
+                                    req.task.clone().unwrap_or_else(|| serde_json::json!({}));
+                                #[allow(clippy::used_underscore_binding)]
+                                let progress_token = req
+                                    ._meta
+                                    .as_ref()
+                                    .and_then(|m| m.progress_token.as_ref())
+                                    .map(|t| serde_json::to_value(t).unwrap());
+                                return match task_router
+                                    .handle_task_call(
+                                        &req.name,
+                                        req.arguments.clone(),
+                                        task_params,
+                                        &owner_id,
+                                        progress_token,
+                                    )
+                                    .await
+                                {
+                                    Ok(result) => Self::success_response(id, result),
+                                    Err(e) => Self::error_response(id, -32603, e.to_string()),
+                                };
+                            }
+                        }
+                        // Normal tool call path (no task augmentation)
+                        // Extract continuation context before the handler call
+                        #[cfg(not(target_arch = "wasm32"))]
+                        #[allow(clippy::used_underscore_binding)]
+                        let continuation_ctx = req
+                            ._meta
+                            .as_ref()
+                            .and_then(|m| m._task_id.clone())
+                            .map(|task_id| (task_id, req.name.clone()));
+
                         match self.handle_call_tool(req, auth_context.clone()).await {
                             Ok(result) => {
+                                // Fire-and-forget workflow continuation recording
+                                #[cfg(not(target_arch = "wasm32"))]
+                                if let (Some((task_id, tool_name)), Some(ref task_router)) =
+                                    (continuation_ctx, &self.task_router)
+                                {
+                                    let owner_id = self
+                                        .resolve_task_owner(auth_context.as_ref())
+                                        .unwrap_or_else(|| "local".to_string());
+                                    let tool_result_value =
+                                        serde_json::to_value(&result).unwrap_or_default();
+                                    if let Err(e) = task_router
+                                        .handle_workflow_continuation(
+                                            &task_id,
+                                            &tool_name,
+                                            tool_result_value,
+                                            &owner_id,
+                                        )
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            "Workflow continuation recording failed for task {}: {}",
+                                            task_id,
+                                            e
+                                        );
+                                    }
+                                }
                                 Self::success_response(id, serde_json::to_value(result).unwrap())
                             },
                             Err(e) => Self::error_response(id, -32603, e.to_string()),
@@ -742,6 +840,75 @@ impl ServerCore {
                                 Self::success_response(id, serde_json::to_value(result).unwrap())
                             },
                             Err(e) => Self::error_response(id, -32603, e.to_string()),
+                        }
+                    },
+                    // Task endpoint routing (experimental MCP Tasks)
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ClientRequest::TasksGet(params) => {
+                        if let Some(ref task_router) = self.task_router {
+                            let owner_id = self
+                                .resolve_task_owner(auth_context.as_ref())
+                                .unwrap_or_else(|| "local".to_string());
+                            match task_router
+                                .handle_tasks_get(params.clone(), &owner_id)
+                                .await
+                            {
+                                Ok(result) => Self::success_response(id, result),
+                                Err(e) => Self::error_response(id, -32603, e.to_string()),
+                            }
+                        } else {
+                            Self::error_response(id, -32601, "Tasks not enabled".to_string())
+                        }
+                    },
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ClientRequest::TasksResult(params) => {
+                        if let Some(ref task_router) = self.task_router {
+                            let owner_id = self
+                                .resolve_task_owner(auth_context.as_ref())
+                                .unwrap_or_else(|| "local".to_string());
+                            match task_router
+                                .handle_tasks_result(params.clone(), &owner_id)
+                                .await
+                            {
+                                Ok(result) => Self::success_response(id, result),
+                                Err(e) => Self::error_response(id, -32603, e.to_string()),
+                            }
+                        } else {
+                            Self::error_response(id, -32601, "Tasks not enabled".to_string())
+                        }
+                    },
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ClientRequest::TasksList(params) => {
+                        if let Some(ref task_router) = self.task_router {
+                            let owner_id = self
+                                .resolve_task_owner(auth_context.as_ref())
+                                .unwrap_or_else(|| "local".to_string());
+                            match task_router
+                                .handle_tasks_list(params.clone(), &owner_id)
+                                .await
+                            {
+                                Ok(result) => Self::success_response(id, result),
+                                Err(e) => Self::error_response(id, -32603, e.to_string()),
+                            }
+                        } else {
+                            Self::error_response(id, -32601, "Tasks not enabled".to_string())
+                        }
+                    },
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ClientRequest::TasksCancel(params) => {
+                        if let Some(ref task_router) = self.task_router {
+                            let owner_id = self
+                                .resolve_task_owner(auth_context.as_ref())
+                                .unwrap_or_else(|| "local".to_string());
+                            match task_router
+                                .handle_tasks_cancel(params.clone(), &owner_id)
+                                .await
+                            {
+                                Ok(result) => Self::success_response(id, result),
+                                Err(e) => Self::error_response(id, -32603, e.to_string()),
+                            }
+                        } else {
+                            Self::error_response(id, -32601, "Tasks not enabled".to_string())
                         }
                     },
                     _ => Self::error_response(id, -32601, "Method not supported".to_string()),
@@ -798,6 +965,7 @@ mod tests {
             None,
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             Arc::new(RwLock::new(ToolMiddlewareChain::new())),
+            None,  // task_router
             false, // stateless_mode
         );
 
@@ -846,6 +1014,7 @@ mod tests {
             None,
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             Arc::new(RwLock::new(ToolMiddlewareChain::new())),
+            None,  // task_router
             false, // stateless_mode
         );
 
@@ -903,6 +1072,7 @@ mod tests {
             None,
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             Arc::new(RwLock::new(ToolMiddlewareChain::new())),
+            None, // task_router
             true, // stateless_mode enabled
         );
 
@@ -951,6 +1121,7 @@ mod tests {
             None,
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             Arc::new(RwLock::new(ToolMiddlewareChain::new())),
+            None,  // task_router
             false, // stateless_mode disabled (normal mode)
         );
 

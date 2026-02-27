@@ -254,6 +254,11 @@ fn client_request_to_jsonrpc(req: ClientRequest) -> (String, Option<Value>) {
         ClientRequest::ElicitInputResponse(params) => {
             create_method_params("elicitation/response", params)
         },
+        // Task requests (experimental MCP Tasks)
+        ClientRequest::TasksGet(params) => ("tasks/get".to_string(), Some(params)),
+        ClientRequest::TasksResult(params) => ("tasks/result".to_string(), Some(params)),
+        ClientRequest::TasksList(params) => ("tasks/list".to_string(), Some(params)),
+        ClientRequest::TasksCancel(params) => ("tasks/cancel".to_string(), Some(params)),
     }
 }
 
@@ -629,6 +634,7 @@ mod tests {
             name: "test-tool".to_string(),
             arguments: json!({"input": "test"}),
             _meta: None,
+            task: None,
         })));
 
         let jsonrpc_request = create_request(id.clone(), request);
