@@ -9,8 +9,8 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Load Generation
 
-- [ ] **LOAD-01**: User can run a load test with N concurrent virtual users against a deployed MCP server
-- [ ] **LOAD-02**: User can set test duration by time (seconds) or iteration count
+- [x] **LOAD-01**: User can run a load test with N concurrent virtual users against a deployed MCP server
+- [x] **LOAD-02**: User can set test duration by time (seconds) or iteration count
 - [x] **LOAD-03**: User can configure per-request timeout
 - [ ] **LOAD-04**: User can define ramp-up/hold/ramp-down phases to gradually increase load
 
@@ -23,8 +23,8 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Metrics & Reporting
 
 - [x] **METR-01**: Load test reports latency percentiles (P50/P95/P99) using HdrHistogram
-- [ ] **METR-02**: Load test reports throughput (requests/second) and error rate with classification
-- [ ] **METR-03**: Load test shows live terminal progress (current RPS, error count, elapsed time)
+- [x] **METR-02**: Load test reports throughput (requests/second) and error rate with classification
+- [x] **METR-03**: Load test shows live terminal progress (current RPS, error count, elapsed time)
 - [ ] **METR-04**: Load test produces colorized terminal summary report at completion
 - [ ] **METR-05**: Load test outputs JSON report file for CI/CD pipelines
 - [ ] **METR-06**: Load test can auto-detect breaking point where performance degrades
@@ -32,8 +32,8 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Configuration & CLI
 
 - [x] **CONF-01**: User can define load test scenarios in TOML config file
-- [ ] **CONF-02**: User can run load tests via `cargo pmcp loadtest` CLI command
-- [ ] **CONF-03**: User can generate starter loadtest config via `cargo pmcp loadtest init`
+- [x] **CONF-02**: User can run load tests via `cargo pmcp loadtest` CLI command
+- [x] **CONF-03**: User can generate starter loadtest config via `cargo pmcp loadtest init`
 
 ## v2 Requirements
 
@@ -75,12 +75,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MCP-01 | Phase 1: Foundation | Complete |
 | MCP-03 | Phase 1: Foundation | Complete |
 | METR-01 | Phase 1: Foundation | Complete |
-| LOAD-01 | Phase 2: Engine Core | Pending |
-| LOAD-02 | Phase 2: Engine Core | Pending |
-| METR-02 | Phase 2: Engine Core | Pending |
-| METR-03 | Phase 2: Engine Core | Pending |
-| CONF-02 | Phase 3: CLI and Reports | Pending |
-| CONF-03 | Phase 3: CLI and Reports | Pending |
+| LOAD-01 | Phase 2: Engine Core | Complete |
+| LOAD-02 | Phase 2: Engine Core | Complete |
+| METR-02 | Phase 2: Engine Core | Complete |
+| METR-03 | Phase 2: Engine Core | Complete |
+| CONF-02 | Phase 3: CLI and Reports | Complete |
+| CONF-03 | Phase 3: CLI and Reports | Complete |
 | METR-04 | Phase 3: CLI and Reports | Pending |
 | METR-05 | Phase 3: CLI and Reports | Pending |
 | LOAD-04 | Phase 4: Load Shaping and Tool Metrics | Pending |

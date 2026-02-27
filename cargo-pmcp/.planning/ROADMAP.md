@@ -12,7 +12,7 @@ This roadmap delivers a load testing capability for `cargo pmcp` in four phases,
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Foundation** - Config types, MCP-aware HTTP client, and HdrHistogram metrics primitives
+- [x] **Phase 1: Foundation** - Config types, MCP-aware HTTP client, and HdrHistogram metrics primitives
 - [ ] **Phase 2: Engine Core** - Concurrent VU scheduler, phase-driven executor, and live terminal progress
 - [ ] **Phase 3: CLI and Reports** - `cargo pmcp loadtest` command integration with terminal summary and JSON report output
 - [ ] **Phase 4: Load Shaping and Tool Metrics** - Ramp-up/ramp-down phases, breaking point detection, and per-tool metric breakdown
@@ -35,7 +35,7 @@ Plans:
 - [x] 01-01: TOML config types and parsing
 - [x] 01-02: MCP-aware HTTP client with session lifecycle
 - [x] 01-03: HdrHistogram metrics pipeline with coordinated omission correction
-- [ ] 01-04: Property tests, fuzz testing, and runnable example
+- [x] 01-04: Property tests, fuzz testing, and runnable example
 
 ### Phase 2: Engine Core
 **Goal**: Developers can run a concurrent load test with N virtual users against a deployed MCP server and see live progress in the terminal
@@ -46,12 +46,12 @@ Plans:
   2. The test runs for a specified duration (seconds) or iteration count, then stops cleanly
   3. Live terminal output shows current requests/second, cumulative error count, active VU count, and elapsed time, updated on a timer (not per-request)
   4. Throughput (requests/second) and error rate are computed correctly from the metrics pipeline
-**Plans**: TBD
+**Plans**: 3 plans across 3 waves
 
 Plans:
-- [ ] 02-01: VU scheduler with tokio tasks and channel-based metrics
-- [ ] 02-02: Phase-driven executor with duration/iteration control
-- [ ] 02-03: Live terminal display with indicatif
+- [ ] 02-01: VU scheduler, engine orchestrator, and channel-based metrics aggregation (Wave 1)
+- [ ] 02-02: Live terminal display with indicatif and engine integration (Wave 2)
+- [ ] 02-03: Property tests, fuzz target, and runnable example (Wave 3)
 
 ### Phase 3: CLI and Reports
 **Goal**: Developers run load tests through the standard `cargo pmcp loadtest` command and get both human-readable terminal output and machine-readable JSON reports
@@ -91,7 +91,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 3/4 | In progress | - |
+| 1. Foundation | 4/4 | Complete | 2026-02-26 |
 | 2. Engine Core | 0/3 | Not started | - |
 | 3. CLI and Reports | 0/3 | Not started | - |
 | 4. Load Shaping and Tool Metrics | 0/3 | Not started | - |
