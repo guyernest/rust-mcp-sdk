@@ -92,6 +92,16 @@ jobs:
         echo "Publishing mcp-tester..."
         cargo publish -p mcp-tester || echo "mcp-tester already published or unchanged, continuing..."
 
+    - name: Publish pmcp-widget-utils
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      run: |
+        echo "Publishing pmcp-widget-utils..."
+        cargo publish -p pmcp-widget-utils || echo "pmcp-widget-utils already published or unchanged, continuing..."
+
+    - name: Wait for crates.io to index pmcp-widget-utils
+      run: sleep 30
+
     - name: Publish mcp-preview
       env:
         CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
