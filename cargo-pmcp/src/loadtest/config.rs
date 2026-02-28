@@ -14,6 +14,7 @@
 //! virtual_users = 10
 //! duration_secs = 60
 //! timeout_ms = 5000
+//! # request_interval_ms = 15000  # optional pacing delay per VU
 //!
 //! [[scenario]]
 //! type = "tools/call"
@@ -114,6 +115,14 @@ pub struct Settings {
     /// `record_correct()`. Defaults to 100ms if not specified.
     #[serde(default = "default_expected_interval")]
     pub expected_interval_ms: u64,
+    /// Optional delay between consecutive requests from a single VU (ms).
+    ///
+    /// When set, each VU sleeps this long after completing a request before
+    /// starting the next one. This enables realistic steady-state load patterns
+    /// (e.g., 15000ms = 4 requests/minute per VU). When `None` (the default),
+    /// VUs fire requests as fast as possible (closed-loop).
+    #[serde(default)]
+    pub request_interval_ms: Option<u64>,
 }
 
 /// Default expected interval for coordinated omission correction: 100ms.
@@ -396,6 +405,7 @@ tool = "ping"
                 duration_secs: 60,
                 timeout_ms: 5000,
                 expected_interval_ms: 100,
+                request_interval_ms: None,
             },
             scenario: vec![],
             stage: vec![],
@@ -416,6 +426,7 @@ tool = "ping"
                 duration_secs: 60,
                 timeout_ms: 5000,
                 expected_interval_ms: 100,
+                request_interval_ms: None,
             },
             scenario: vec![
                 ScenarioStep::ToolCall {
@@ -446,6 +457,7 @@ tool = "ping"
                 duration_secs: 60,
                 timeout_ms: 5000,
                 expected_interval_ms: 100,
+                request_interval_ms: None,
             },
             scenario: vec![ScenarioStep::ToolCall {
                 weight: 100,
@@ -496,6 +508,7 @@ tool = "echo"
             duration_secs: 60,
             timeout_ms: 5000,
             expected_interval_ms: 100,
+            request_interval_ms: None,
         };
         assert_eq!(settings.timeout_as_duration(), Duration::from_millis(5000));
     }
@@ -561,6 +574,7 @@ tool = "echo"
                 duration_secs: 60,
                 timeout_ms: 5000,
                 expected_interval_ms: 100,
+                request_interval_ms: None,
             },
             scenario: vec![ScenarioStep::ToolCall {
                 weight: 100,
@@ -595,6 +609,7 @@ tool = "echo"
                 duration_secs: 10,
                 timeout_ms: 5000,
                 expected_interval_ms: 100,
+                request_interval_ms: None,
             },
             scenario: vec![ScenarioStep::ToolCall {
                 weight: 100,
@@ -617,6 +632,7 @@ tool = "echo"
                 duration_secs: 60,
                 timeout_ms: 5000,
                 expected_interval_ms: 100,
+                request_interval_ms: None,
             },
             scenario: vec![ScenarioStep::ToolCall {
                 weight: 100,
@@ -633,6 +649,7 @@ tool = "echo"
                 duration_secs: 60,
                 timeout_ms: 5000,
                 expected_interval_ms: 100,
+                request_interval_ms: None,
             },
             scenario: vec![ScenarioStep::ToolCall {
                 weight: 100,
@@ -655,6 +672,7 @@ tool = "echo"
                 duration_secs: 60,
                 timeout_ms: 5000,
                 expected_interval_ms: 100,
+                request_interval_ms: None,
             },
             scenario: vec![ScenarioStep::ToolCall {
                 weight: 100,
@@ -684,6 +702,7 @@ tool = "echo"
                 duration_secs: 60,
                 timeout_ms: 5000,
                 expected_interval_ms: 100,
+                request_interval_ms: None,
             },
             scenario: vec![ScenarioStep::ToolCall {
                 weight: 100,
@@ -704,6 +723,7 @@ tool = "echo"
                 duration_secs: 60,
                 timeout_ms: 5000,
                 expected_interval_ms: 100,
+                request_interval_ms: None,
             },
             scenario: vec![ScenarioStep::ToolCall {
                 weight: 100,
@@ -730,6 +750,7 @@ tool = "echo"
                 duration_secs: 120,
                 timeout_ms: 5000,
                 expected_interval_ms: 100,
+                request_interval_ms: None,
             },
             scenario: vec![ScenarioStep::ToolCall {
                 weight: 100,

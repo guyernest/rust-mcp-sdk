@@ -314,6 +314,14 @@ async fn vu_loop_inner(
                 .ok_or_else(|| "all respawn attempts failed".to_string())?;
             }
         }
+
+        // Pace requests when request_interval_ms is configured
+        if let Some(interval_ms) = config.settings.request_interval_ms {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(interval_ms)) => {},
+                _ = cancel.cancelled() => return Ok(()),
+            }
+        }
     }
 }
 

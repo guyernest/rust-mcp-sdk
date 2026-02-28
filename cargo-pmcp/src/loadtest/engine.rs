@@ -703,6 +703,7 @@ mod tests {
                 duration_secs: 10,
                 timeout_ms: 5000,
                 expected_interval_ms: 100,
+                request_interval_ms: None,
             },
             scenario: vec![ScenarioStep::ToolCall {
                 weight: 100,
@@ -840,6 +841,7 @@ mod tests {
                 duration_secs: 5,
                 timeout_ms: 500,
                 expected_interval_ms: 100,
+                request_interval_ms: None,
             },
             scenario: vec![ScenarioStep::ToolCall {
                 weight: 100,
@@ -886,6 +888,7 @@ mod tests {
                 duration_secs: 10,
                 timeout_ms: 5000,
                 expected_interval_ms: 100,
+                request_interval_ms: None,
             },
             scenario: vec![ScenarioStep::ToolCall {
                 weight: 100,

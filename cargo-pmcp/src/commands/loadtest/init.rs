@@ -238,6 +238,10 @@ timeout_ms = 5000
 # Expected interval between requests (ms) for coordinated omission correction
 # expected_interval_ms = 100
 
+# Optional delay between requests per VU (ms). Omit for closed-loop (fire as fast as possible).
+# Example: 15000 = one request every 15s per VU (50 VUs x 4 req/min = ~200 req/min)
+# request_interval_ms = 15000
+
 # Define your scenario steps below. Each step has a type, weight, and parameters.
 # Weights determine the relative frequency of each operation.
 
@@ -280,6 +284,10 @@ timeout_ms = 5000
 
 # Expected interval between requests (ms) for coordinated omission correction
 # expected_interval_ms = 100
+
+# Optional delay between requests per VU (ms). Omit for closed-loop (fire as fast as possible).
+# Example: 15000 = one request every 15s per VU (50 VUs x 4 req/min = ~200 req/min)
+# request_interval_ms = 15000
 
 # Scenario steps discovered from server capabilities.
 # Adjust weights to control the mix of operations.
