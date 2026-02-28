@@ -9,9 +9,9 @@ Requirements for the Book & Course Update milestone. Each maps to roadmap phases
 
 ### Book Load Testing (BKLT)
 
-- [ ] **BKLT-01**: Ch 14 (Performance) rewritten from stub with full load testing documentation covering `cargo pmcp loadtest` CLI, TOML configuration, scenario definition, and execution modes (flat and staged)
-- [ ] **BKLT-02**: Ch 14 includes HdrHistogram metrics explanation, breaking point detection, coordinated omission correction, and how to interpret results
-- [ ] **BKLT-03**: Ch 14 includes CI/CD integration section with JSON report consumption and GitHub Actions example
+- [x] **BKLT-01**: Ch 14 (Performance) rewritten from stub with full load testing documentation covering `cargo pmcp loadtest` CLI, TOML configuration, scenario definition, and execution modes (flat and staged)
+- [x] **BKLT-02**: Ch 14 includes HdrHistogram metrics explanation, breaking point detection, coordinated omission correction, and how to interpret results
+- [x] **BKLT-03**: Ch 14 includes CI/CD integration section with JSON report consumption and GitHub Actions example
 - [x] **BKLT-04**: Ch 15 (Testing) updated with brief "Load Testing" section cross-referencing Ch 14 for full details
 
 ### Book MCP Apps Refresh (BKAP)
@@ -59,9 +59,9 @@ None — this milestone is self-contained documentation work.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BKLT-01 | Phase 20 | Pending |
-| BKLT-02 | Phase 20 | Pending |
-| BKLT-03 | Phase 20 | Pending |
+| BKLT-01 | Phase 20 | Complete |
+| BKLT-02 | Phase 20 | Complete |
+| BKLT-03 | Phase 20 | Complete |
 | BKLT-04 | Phase 20 | Complete |
 | BKAP-01 | Phase 21 | Pending |
 | BKAP-02 | Phase 21 | Pending |

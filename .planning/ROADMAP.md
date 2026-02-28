@@ -65,7 +65,7 @@ See: `.planning/milestones/v1.3-ROADMAP.md` for full phase details
 
 **Milestone Goal:** Update pmcp-book and pmcp-course with load testing documentation and refresh MCP Apps chapters to reflect the latest SDK features.
 
-- [ ] **Phase 20: Book Load Testing** — Write Ch 14 performance chapter and update Ch 15 with load testing cross-reference
+- [x] **Phase 20: Book Load Testing** — Write Ch 14 performance chapter and update Ch 15 with load testing cross-reference (completed 2026-02-28)
 - [ ] **Phase 21: Book MCP Apps Refresh** — Update Ch 12.5 with WidgetDir, cargo pmcp app workflow, and adapter pattern
 - [ ] **Phase 22: Course Load Testing** — Write Ch 18-03 hands-on tutorial and update Ch 12 with cross-reference
 - [ ] **Phase 23: Course MCP Apps Refresh** — Update Ch 20 sub-chapters with latest SDK features and examples
@@ -82,7 +82,7 @@ See: `.planning/milestones/v1.3-ROADMAP.md` for full phase details
   2. Ch 14 covers HdrHistogram metrics, breaking point detection, coordinated omission correction, and result interpretation so readers understand what the numbers mean
   3. Ch 14 includes a CI/CD integration section with JSON report consumption and a GitHub Actions workflow example
   4. Ch 15 contains a brief "Load Testing" section that introduces the concept and cross-references Ch 14 for full details
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 20-01-PLAN.md — Write complete Ch 14 (Performance & Load Testing) covering CLI, config, execution modes, metrics, breaking point, and CI/CD
@@ -172,7 +172,7 @@ Phase 20 and 21 are independent (can run in parallel). Phase 22 and 23 are indep
 | 17. Authoring DX | v1.3 | 2/2 | Complete | 2026-02-26 |
 | 18. Publishing | v1.3 | 2/2 | Complete | 2026-02-26 |
 | 19. Ship + E2E | v1.3 | 2/2 | Complete | 2026-02-26 |
-| 20. Book Load Testing | 1/2 | In Progress|  | - |
+| 20. Book Load Testing | 2/2 | Complete   | 2026-02-28 | - |
 | 21. Book MCP Apps | v1.4 | 0/? | Not started | - |
 | 22. Course Load Testing | v1.4 | 0/? | Not started | - |
 | 23. Course MCP Apps | v1.4 | 0/? | Not started | - |

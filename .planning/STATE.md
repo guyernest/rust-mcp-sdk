@@ -6,9 +6,9 @@ status: executing
 last_updated: "2026-02-28"
 progress:
   total_phases: 5
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-02-27)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state, plus developers can build rich UI widgets served from MCP servers.
-**Current focus:** v1.4 Book & Course Update — Phase 20 plan 02 complete
+**Current focus:** v1.4 Book & Course Update — Phase 20 complete (both plans done)
 
 ## Current Position
 
 Phase: 20 of 24 (Book Load Testing)
-Plan: 02 of 2 (complete)
-Status: Executing phase 20
-Last activity: 2026-02-28 — Completed 20-02 (Ch 15 load testing cross-reference)
+Plan: 02 of 2 (phase complete)
+Status: Phase 20 complete
+Last activity: 2026-02-28 — Completed 20-01 (Ch 14 Performance and Load Testing)
 
-Progress: [#░░░░░░░░░] 10%
+Progress: [##░░░░░░░░] 20%
 
 ## Shipped Milestones
 
@@ -41,8 +41,8 @@ Progress: [#░░░░░░░░░] 10%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 41 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 1)
-- Total phases completed: 19
+- Total plans completed: 42 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 2)
+- Total phases completed: 20
 
 ## Accumulated Context
 
@@ -56,6 +56,7 @@ See PROJECT.md Key Decisions table for full history.
 - Phase 24 depends on 22/23 (quizzes need content first)
 - Load Testing section in Ch 15 placed between CI/CD and Best Practices with pyramid update
 - Added Load Testing as top layer of Testing Pyramid in Ch 15
+- Ch 14 written as 961-line comprehensive chapter with all details from source code
 
 ### Pending Todos
 
@@ -68,5 +69,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 20-02-PLAN.md (Ch 15 load testing cross-reference)
-Resume: Execute remaining phase 20 plan (20-01) or proceed to phase 21
+Stopped at: Completed 20-01-PLAN.md (Ch 14 Performance and Load Testing)
+Resume: Proceed to phase 21 (Book MCP Apps)
