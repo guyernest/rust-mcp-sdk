@@ -35,17 +35,16 @@ pub async fn execute(
     if let Err(e) = LoadTestConfig::from_toml(&content) {
         eprintln!("\n  {} {}", "Error:".red().bold(), e);
         eprintln!();
-        eprintln!("  {}", "The config file failed validation. To fix:".yellow());
-        eprintln!("    - Ensure the file is valid TOML syntax");
         eprintln!(
-            "    - Include a [settings] block with virtual_users, duration_secs, timeout_ms"
+            "  {}",
+            "The config file failed validation. To fix:".yellow()
         );
+        eprintln!("    - Ensure the file is valid TOML syntax");
+        eprintln!("    - Include a [settings] block with virtual_users, duration_secs, timeout_ms");
         eprintln!(
             "    - Include at least one [[scenario]] block with type, weight, and operation fields"
         );
-        eprintln!(
-            "    - Run `cargo pmcp loadtest init` to generate a valid starter config"
-        );
+        eprintln!("    - Run `cargo pmcp loadtest init` to generate a valid starter config");
         anyhow::bail!("Config validation failed: {}", e);
     }
 
@@ -60,10 +59,7 @@ pub async fn execute(
     println!("  {} Config: {}", "->".blue(), path.display());
     println!("  {} Name: {}", "->".blue(), config_name);
     println!("  {} Server ID: {}", "->".blue(), server_id);
-    println!(
-        "  {} Validated: config has valid scenarios",
-        "OK".green()
-    );
+    println!("  {} Validated: config has valid scenarios", "OK".green());
 
     // Step 4: Authenticate with pmcp.run
     let credentials = auth::get_credentials().await?;

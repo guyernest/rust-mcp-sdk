@@ -1,9 +1,11 @@
 //! `cargo pmcp loadtest` CLI subcommands.
 //!
-//! Provides `run` (execute a load test) and `init` (generate starter config).
+//! Provides `run` (execute a load test), `init` (generate starter config),
+//! and `upload` (send config to pmcp.run for cloud execution).
 
 mod init;
 mod run;
+mod upload;
 
 use anyhow::Result;
 use clap::Subcommand;
@@ -59,6 +61,28 @@ pub enum LoadtestCommand {
         #[arg(long)]
         force: bool,
     },
+
+    /// Upload a loadtest config to pmcp.run
+    ///
+    /// Validates the TOML config locally (parses it and checks that scenarios
+    /// exist), then uploads it to pmcp.run for cloud-based load test execution.
+    Upload {
+        /// Server ID (deployment ID) on pmcp.run
+        #[arg(long)]
+        server_id: String,
+
+        /// Path to the loadtest TOML config file
+        #[arg(required = true)]
+        path: PathBuf,
+
+        /// Override config name (defaults to filename stem)
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Description for the config
+        #[arg(long)]
+        description: Option<String>,
+    },
 }
 
 impl LoadtestCommand {
@@ -82,6 +106,15 @@ impl LoadtestCommand {
             LoadtestCommand::Init { url, force } => {
                 let runtime = tokio::runtime::Runtime::new()?;
                 runtime.block_on(init::execute_init(url, force))
+            },
+            LoadtestCommand::Upload {
+                server_id,
+                path,
+                name,
+                description,
+            } => {
+                let runtime = tokio::runtime::Runtime::new()?;
+                runtime.block_on(upload::execute(server_id, path, name, description))
             },
         }
     }
