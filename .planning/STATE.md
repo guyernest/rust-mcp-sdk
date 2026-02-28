@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Book & Course Update
 status: unknown
-last_updated: "2026-02-28T04:04:24.465Z"
+last_updated: "2026-02-28T04:33:57Z"
 progress:
   total_phases: 3
   completed_phases: 3
@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-02-27)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state, plus developers can build rich UI widgets served from MCP servers.
-**Current focus:** v1.4 Book & Course Update — Phase 23 in progress (23-02 complete)
+**Current focus:** v1.4 Book & Course Update — Phase 23 complete (2 of 2 plans done)
 
 ## Current Position
 
 Phase: 23 of 24 (Course MCP Apps Refresh)
-Plan: 02 of 2 (23-02 complete)
-Status: Phase 23 in progress
-Last activity: 2026-02-28 — Completed 23-02 (Ch 20-03 Example Walkthroughs)
+Plan: 02 of 2 (23-01 and 23-02 complete -- phase done)
+Status: Phase 23 complete
+Last activity: 2026-02-28 — Completed 23-01 (Ch 20 parent + Ch 20-01/20-02 rewrite)
 
-Progress: [#######░░░] 70%
+Progress: [########░░] 80%
 
 ## Shipped Milestones
 
@@ -41,8 +41,8 @@ Progress: [#######░░░] 70%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 47 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 7)
-- Total phases completed: 22
+- Total plans completed: 48 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 8)
+- Total phases completed: 23
 
 ## Accumulated Context
 
@@ -63,6 +63,7 @@ See PROJECT.md Key Decisions table for full history.
 - Ch 18-03 written as 952-line hands-on tutorial covering cargo pmcp loadtest from first run to capacity planning
 - [Phase 22]: Ch 18-03 written as 952-line hands-on tutorial with progressive difficulty structure
 - [Phase 23]: Ch 20-03 rewritten as 575-line hands-on example walkthroughs (chess, map, dataviz) with 4-step common pattern
+- [Phase 23]: Ch 20 parent + Ch 20-01/20-02 rewritten from UIResourceBuilder to WidgetDir/mcpBridge/adapter paradigm in course style
 
 ### Pending Todos
 
@@ -75,5 +76,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 23-02-PLAN.md (Ch 20-03 Example Walkthroughs)
-Resume: Complete 23-01 (Ch 20-01/20-02), then proceed to Phase 24 (Quizzes)
+Stopped at: Completed 23-01-PLAN.md (Ch 20 parent + Ch 20-01/20-02 rewrite)
+Resume: Proceed to Phase 24 (Quizzes) -- Phase 23 is now fully complete
