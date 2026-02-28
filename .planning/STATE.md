@@ -1,30 +1,31 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.3
-milestone_name: MCP Apps Developer Experience
-status: shipped
-last_updated: "2026-02-26"
+milestone: v1.4
+milestone_name: Book & Course Update
+status: defining_requirements
+last_updated: "2026-02-27"
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 12
-  completed_plans: 12
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-26)
+See: .planning/PROJECT.md (updated 2026-02-27)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state, plus developers can build rich UI widgets served from MCP servers.
-**Current focus:** Planning next milestone
+**Current focus:** v1.4 Book & Course Update — defining requirements
 
 ## Current Position
 
-Milestone: v1.3 MCP Apps Developer Experience — SHIPPED
-All milestones complete (v1.0 through v1.3).
-Last activity: 2026-02-26 — Milestone v1.3 archived
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-02-27 — Milestone v1.4 started
 
 ## Shipped Milestones
 

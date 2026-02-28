@@ -50,9 +50,15 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ### Active
 
-<!-- No active milestone — planning next -->
+<!-- Current milestone: v1.4 Book & Course Update -->
 
-(None — planning next milestone)
+- [ ] Add load testing section to pmcp-book testing chapter (Ch 15) with brief overview and cross-reference
+- [ ] Build out pmcp-book performance chapter (Ch 14) with full load testing documentation
+- [ ] Add load testing section to pmcp-course testing chapters (Ch 11-12) with brief overview and cross-reference
+- [ ] Build out pmcp-course performance optimization section (Ch 18-03) with full load testing content
+- [ ] Review and update pmcp-book MCP Apps chapter (Ch 12.5) to reflect latest SDK features
+- [ ] Review and update pmcp-course MCP Apps chapter (Ch 20) to reflect latest SDK features
+- [ ] Add quizzes and exercises for new/updated course chapters
 
 ### Future
 
@@ -63,6 +69,16 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 - [ ] Workflow resume from task state (re-invoke prompt with task ID to continue from last step)
 - [ ] StepExecution user API for runtime step mode customization
 - [ ] Examples: code mode, DynamoDB backend
+
+## Current Milestone: v1.4 Book & Course Update
+
+**Goal:** Update pmcp-book and pmcp-course with load testing documentation and refresh MCP Apps chapters to reflect the latest SDK features.
+
+**Target features:**
+- Load testing docs in performance chapters (book Ch 14, course Ch 18-03)
+- Load testing cross-references in testing chapters (book Ch 15, course Ch 11-12)
+- MCP Apps chapter refresh (book Ch 12.5, course Ch 20) with WidgetDir, cargo pmcp app, adapters
+- New quizzes and exercises for updated course content
 
 ## Current State
 
@@ -146,4 +162,4 @@ Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, park
 | Standalone examples (workspace exclude) (v1.3) | Avoids feature flag unification conflicts | ✓ Good — each example builds independently |
 
 ---
-*Last updated: 2026-02-26 after v1.3 milestone*
+*Last updated: 2026-02-27 after v1.4 milestone start*
