@@ -129,4 +129,4 @@ Plans:
 | 22. Course Load Testing | v1.4 | 2/2 | Complete | 2026-02-28 |
 | 23. Course MCP Apps | v1.4 | 2/2 | Complete | 2026-02-28 |
 | 24. Course Quizzes | v1.4 | 2/2 | Complete | 2026-02-28 |
-| 25. Loadtest Upload | 2/2 | Complete   | 2026-02-28 | - |
+| 25. Loadtest Upload | 2/2 | Complete    | 2026-02-28 | - |
