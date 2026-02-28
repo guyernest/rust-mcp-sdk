@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Book & Course Update
-status: unknown
-last_updated: "2026-02-28T02:35:26.933Z"
+status: in-progress
+last_updated: "2026-02-28T03:58:10.957Z"
 progress:
-  total_phases: 2
+  total_phases: 3
   completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
+  total_plans: 6
+  completed_plans: 5
 ---
 
 # Project State
@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-02-27)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state, plus developers can build rich UI widgets served from MCP servers.
-**Current focus:** v1.4 Book & Course Update — Phase 21 complete (2 of 2 plans done)
+**Current focus:** v1.4 Book & Course Update — Phase 22 in progress (1 of 2 plans done)
 
 ## Current Position
 
-Phase: 21 of 24 (Book MCP Apps Refresh)
-Plan: 02 of 2 (21-02 complete -- phase done)
-Status: Phase 21 complete
-Last activity: 2026-02-28 — Completed 21-02 (Ch 12.5 adapter pattern and example walkthroughs)
+Phase: 22 of 24 (Course Load Testing)
+Plan: 02 of 2 (22-02 complete)
+Status: Phase 22 in progress
+Last activity: 2026-02-28 — Completed 22-02 (Ch 12 Load Testing cross-reference)
 
-Progress: [####░░░░░░] 40%
+Progress: [#####░░░░░] 50%
 
 ## Shipped Milestones
 
@@ -41,7 +41,7 @@ Progress: [####░░░░░░] 40%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 44 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 4)
+- Total plans completed: 45 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 5)
 - Total phases completed: 21
 
 ## Accumulated Context
@@ -59,6 +59,7 @@ See PROJECT.md Key Decisions table for full history.
 - Ch 14 written as 961-line comprehensive chapter with all details from source code
 - Ch 12.5 rewritten from UIResourceBuilder to WidgetDir file-based authoring with full cargo pmcp CLI workflow
 - Ch 12.5 completed with adapter pattern docs, chess/map/dataviz walkthroughs, and 4-step common architecture pattern
+- Ch 12 Load Testing section placed between Regression Testing and Chapter Summary with cross-reference to Ch 18-03
 
 ### Pending Todos
 
@@ -71,5 +72,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 21-02-PLAN.md (Ch 12.5 adapter pattern and example walkthroughs)
-Resume: Proceed to Phase 22 (Course chapters)
+Stopped at: Completed 22-02-PLAN.md (Ch 12 Load Testing cross-reference)
+Resume: Continue Phase 22 (22-01 still needed) or proceed to Phase 23
