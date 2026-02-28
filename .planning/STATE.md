@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.4
 milestone_name: Book & Course Update
-status: defining_requirements
+status: ready_to_plan
 last_updated: "2026-02-27"
 progress:
-  total_phases: 0
+  total_phases: 5
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -18,14 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-02-27)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state, plus developers can build rich UI widgets served from MCP servers.
-**Current focus:** v1.4 Book & Course Update — defining requirements
+**Current focus:** v1.4 Book & Course Update — Phase 20 ready to plan
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-02-27 — Milestone v1.4 started
+Phase: 20 of 24 (Book Load Testing)
+Plan: --
+Status: Ready to plan
+Last activity: 2026-02-27 — Roadmap created for v1.4
+
+Progress: [░░░░░░░░░░] 0%
 
 ## Shipped Milestones
 
@@ -48,20 +50,21 @@ Last activity: 2026-02-27 — Milestone v1.4 started
 
 See PROJECT.md Key Decisions table for full history.
 
+- v1.4 is documentation-only (no code changes)
+- Phase 20/21 independent (book chapters, can run in parallel)
+- Phase 22/23 independent (course chapters, can run in parallel)
+- Phase 24 depends on 22/23 (quizzes need content first)
+
 ### Pending Todos
 
 None.
 
 ### Blockers/Concerns
 
-All v1.3 blockers resolved:
-- ~~McpProxy re-initializes MCP session on every request~~ — FIXED in 14-01
-- ~~postMessage wildcard origin vulnerability~~ — FIXED in 16-01 (App uses document.referrer)
-- ~~WASM client uses hardcoded request IDs~~ — FIXED in 15-01
-- ~~Bridge contract divergence~~ — RESOLVED by shared widget-runtime.js library
+None.
 
 ## Session Continuity
 
-Last session: 2026-02-26
-Stopped at: Milestone v1.3 archived and completed
-Resume: Start next milestone with `/gsd:new-milestone`
+Last session: 2026-02-27
+Stopped at: Roadmap created for v1.4 milestone
+Resume: `/gsd:plan-phase 20`

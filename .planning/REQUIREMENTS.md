@@ -59,31 +59,31 @@ None — this milestone is self-contained documentation work.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BKLT-01 | Phase ? | Pending |
-| BKLT-02 | Phase ? | Pending |
-| BKLT-03 | Phase ? | Pending |
-| BKLT-04 | Phase ? | Pending |
-| BKAP-01 | Phase ? | Pending |
-| BKAP-02 | Phase ? | Pending |
-| BKAP-03 | Phase ? | Pending |
-| BKAP-04 | Phase ? | Pending |
-| CRLT-01 | Phase ? | Pending |
-| CRLT-02 | Phase ? | Pending |
-| CRLT-03 | Phase ? | Pending |
-| CRLT-04 | Phase ? | Pending |
-| CRAP-01 | Phase ? | Pending |
-| CRAP-02 | Phase ? | Pending |
-| CRAP-03 | Phase ? | Pending |
-| CRQE-01 | Phase ? | Pending |
-| CRQE-02 | Phase ? | Pending |
-| CRQE-03 | Phase ? | Pending |
-| CRQE-04 | Phase ? | Pending |
+| BKLT-01 | Phase 20 | Pending |
+| BKLT-02 | Phase 20 | Pending |
+| BKLT-03 | Phase 20 | Pending |
+| BKLT-04 | Phase 20 | Pending |
+| BKAP-01 | Phase 21 | Pending |
+| BKAP-02 | Phase 21 | Pending |
+| BKAP-03 | Phase 21 | Pending |
+| BKAP-04 | Phase 21 | Pending |
+| CRLT-01 | Phase 22 | Pending |
+| CRLT-02 | Phase 22 | Pending |
+| CRLT-03 | Phase 22 | Pending |
+| CRLT-04 | Phase 22 | Pending |
+| CRAP-01 | Phase 23 | Pending |
+| CRAP-02 | Phase 23 | Pending |
+| CRAP-03 | Phase 23 | Pending |
+| CRQE-01 | Phase 24 | Pending |
+| CRQE-02 | Phase 24 | Pending |
+| CRQE-03 | Phase 24 | Pending |
+| CRQE-04 | Phase 24 | Pending |
 
 **Coverage:**
 - v1.4 requirements: 19 total
-- Mapped to phases: 0
-- Unmapped: 19
+- Mapped to phases: 19
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-27*
-*Last updated: 2026-02-27 after initial definition*
+*Last updated: 2026-02-27 after roadmap creation*
