@@ -1291,4 +1291,4 @@ This chapter covered the MCP Apps Extension -- the system for building interacti
 
 The common architecture pattern across all examples is: define tool input types with `Deserialize` + `JsonSchema`, write synchronous handlers, create a `ResourceHandler` with `ChatGptAdapter` + `WidgetDir`, build with `ServerBuilder`, and run with `StreamableHttpServer`.
 
-For production deployment, see Chapter 13 (Security and Authentication) for securing your MCP server, Chapter 14 (Performance and Load Testing) for benchmarking widget-heavy workloads, and Chapter 15 (Testing Strategies) for integration testing MCP Apps servers.
+For production deployment, see [Chapter 13: Building Production Servers](ch13-production.md) for server hardening, [Chapter 14: Performance and Load Testing](ch14-performance.md) for benchmarking widget-heavy workloads, and [Chapter 15: Testing MCP Servers](ch15-testing.md) for integration testing MCP Apps servers.
