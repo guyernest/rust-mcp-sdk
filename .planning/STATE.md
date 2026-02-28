@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-02-27)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state, plus developers can build rich UI widgets served from MCP servers.
-**Current focus:** v1.4 Book & Course Update — Phase 22 complete (2 of 2 plans done)
+**Current focus:** v1.4 Book & Course Update — Phase 23 in progress (23-02 complete)
 
 ## Current Position
 
-Phase: 22 of 24 (Course Load Testing)
-Plan: 02 of 2 (22-01 and 22-02 complete -- phase done)
-Status: Phase 22 complete
-Last activity: 2026-02-28 — Completed 22-01 (Ch 18-03 Performance Optimization tutorial)
+Phase: 23 of 24 (Course MCP Apps Refresh)
+Plan: 02 of 2 (23-02 complete)
+Status: Phase 23 in progress
+Last activity: 2026-02-28 — Completed 23-02 (Ch 20-03 Example Walkthroughs)
 
-Progress: [######░░░░] 60%
+Progress: [#######░░░] 70%
 
 ## Shipped Milestones
 
@@ -41,7 +41,7 @@ Progress: [######░░░░] 60%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 46 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 6)
+- Total plans completed: 47 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 7)
 - Total phases completed: 22
 
 ## Accumulated Context
@@ -62,6 +62,7 @@ See PROJECT.md Key Decisions table for full history.
 - Ch 12 Load Testing section placed between Regression Testing and Chapter Summary with cross-reference to Ch 18-03
 - Ch 18-03 written as 952-line hands-on tutorial covering cargo pmcp loadtest from first run to capacity planning
 - [Phase 22]: Ch 18-03 written as 952-line hands-on tutorial with progressive difficulty structure
+- [Phase 23]: Ch 20-03 rewritten as 575-line hands-on example walkthroughs (chess, map, dataviz) with 4-step common pattern
 
 ### Pending Todos
 
@@ -74,5 +75,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 22-01-PLAN.md (Ch 18-03 Performance Optimization tutorial)
-Resume: Proceed to Phase 23 (Course Best Practices) or Phase 24 (Quizzes)
+Stopped at: Completed 23-02-PLAN.md (Ch 20-03 Example Walkthroughs)
+Resume: Complete 23-01 (Ch 20-01/20-02), then proceed to Phase 24 (Quizzes)

@@ -32,7 +32,7 @@ Requirements for the Book & Course Update milestone. Each maps to roadmap phases
 
 - [ ] **CRAP-01**: Ch 20 sub-chapters updated with WidgetDir, `cargo pmcp app` workflow, and adapter pattern APIs
 - [ ] **CRAP-02**: Ch 20 updated with bridge communication patterns (postMessage, window.mcpBridge, window.openai)
-- [ ] **CRAP-03**: Ch 20 references current examples (chess, map, dataviz) with hands-on walkthrough style
+- [x] **CRAP-03**: Ch 20 references current examples (chess, map, dataviz) with hands-on walkthrough style
 
 ### Course Quizzes & Exercises (CRQE)
 
@@ -73,7 +73,7 @@ None — this milestone is self-contained documentation work.
 | CRLT-04 | Phase 22 | Complete |
 | CRAP-01 | Phase 23 | Pending |
 | CRAP-02 | Phase 23 | Pending |
-| CRAP-03 | Phase 23 | Pending |
+| CRAP-03 | Phase 23 | Complete |
 | CRQE-01 | Phase 24 | Pending |
 | CRQE-02 | Phase 24 | Pending |
 | CRQE-03 | Phase 24 | Pending |

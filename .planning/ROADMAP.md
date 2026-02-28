@@ -126,10 +126,11 @@ Plans:
   1. Ch 20 sub-chapters document WidgetDir, `cargo pmcp app` workflow, and adapter pattern APIs in course teaching style
   2. Ch 20 explains bridge communication patterns (postMessage, window.mcpBridge, window.openai) so learners understand the widget-server interaction
   3. Ch 20 references chess, map, and dataviz examples with hands-on walkthrough style that learners can reproduce
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 23-01: TBD
+- [ ] 23-01-PLAN.md — Rewrite Ch 20 parent chapter, Ch 20-01 (Widget Authoring and Developer Workflow), and Ch 20-02 (Bridge Communication and Adapters) with WidgetDir/mcpBridge paradigm; update SUMMARY.md
+- [ ] 23-02-PLAN.md — Rewrite Ch 20-03 (Example Walkthroughs) with chess, map, and dataviz hands-on tutorials and common 4-step pattern
 
 ### Phase 24: Course Quizzes & Exercises
 **Goal**: New and updated course content has corresponding quizzes and exercises, and the course SUMMARY.md reflects all additions
@@ -175,5 +176,5 @@ Phase 20 and 21 are independent (can run in parallel). Phase 22 and 23 are indep
 | 20. Book Load Testing | 2/2 | Complete    | 2026-02-28 | - |
 | 21. Book MCP Apps | 2/2 | Complete    | 2026-02-28 | - |
 | 22. Course Load Testing | 2/2 | Complete    | 2026-02-28 | - |
-| 23. Course MCP Apps | v1.4 | 0/? | Not started | - |
+| 23. Course MCP Apps | 1/2 | In Progress|  | - |
 | 24. Course Quizzes | v1.4 | 0/? | Not started | - |
