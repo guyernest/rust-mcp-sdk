@@ -47,18 +47,17 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 - ✓ Standalone demo landing pages with mock bridge — v1.3
 - ✓ Chess, map, and dataviz MCP App examples shipping — v1.3
 - ✓ 20 chromiumoxide CDP E2E browser tests across 3 widget suites — v1.3
+- ✓ Book Ch 14 (Performance & Load Testing) — 961-line comprehensive chapter with CLI, config, metrics, CI/CD — v1.4
+- ✓ Book Ch 15 Load Testing cross-reference section — v1.4
+- ✓ Book Ch 12.5 (MCP Apps) rewritten with WidgetDir, cargo pmcp app, adapter pattern — v1.4
+- ✓ Course Ch 18-03 hands-on load testing tutorial (952 lines) — v1.4
+- ✓ Course Ch 12 Load Testing cross-reference section — v1.4
+- ✓ Course Ch 20 sub-chapters rewritten with WidgetDir/mcpBridge/adapter paradigm — v1.4
+- ✓ Course quizzes and exercises for load testing and MCP Apps content — v1.4
 
 ### Active
 
-<!-- Current milestone: v1.4 Book & Course Update -->
-
-- [ ] Add load testing section to pmcp-book testing chapter (Ch 15) with brief overview and cross-reference
-- [ ] Build out pmcp-book performance chapter (Ch 14) with full load testing documentation
-- [ ] Add load testing section to pmcp-course testing chapters (Ch 11-12) with brief overview and cross-reference
-- [ ] Build out pmcp-course performance optimization section (Ch 18-03) with full load testing content
-- [ ] Review and update pmcp-book MCP Apps chapter (Ch 12.5) to reflect latest SDK features
-- [ ] Review and update pmcp-course MCP Apps chapter (Ch 20) to reflect latest SDK features
-- [ ] Add quizzes and exercises for new/updated course chapters
+(No active milestone — all v1.0-v1.4 shipped)
 
 ### Future
 
@@ -70,25 +69,16 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 - [ ] StepExecution user API for runtime step mode customization
 - [ ] Examples: code mode, DynamoDB backend
 
-## Current Milestone: v1.4 Book & Course Update
-
-**Goal:** Update pmcp-book and pmcp-course with load testing documentation and refresh MCP Apps chapters to reflect the latest SDK features.
-
-**Target features:**
-- Load testing docs in performance chapters (book Ch 14, course Ch 18-03)
-- Load testing cross-references in testing chapters (book Ch 15, course Ch 11-12)
-- MCP Apps chapter refresh (book Ch 12.5, course Ch 20) with WidgetDir, cargo pmcp app, adapters
-- New quizzes and exercises for updated course content
-
 ## Current State
 
-Shipped v1.3 with complete MCP Apps developer experience. All 4 milestones (v1.0-v1.3) shipped.
+All 5 milestones (v1.0-v1.4) shipped. No active milestone.
 
 **Shipped milestones:**
 - v1.0: MCP Tasks Foundation (types, store, server integration)
 - v1.1: Task-Prompt Bridge (workflow execution, handoff, continuation)
 - v1.2: Pluggable Storage Backends (DynamoDB, Redis, feature flags)
 - v1.3: MCP Apps Developer Experience (preview, WASM, authoring, publishing, examples, E2E)
+- v1.4: Book & Course Update (load testing docs, MCP Apps chapter refresh, quizzes, exercises)
 
 ### Out of Scope
 
@@ -106,7 +96,7 @@ Shipped v1.3 with complete MCP Apps developer experience. All 4 milestones (v1.0
 
 ## Context
 
-Shipped v1.3 with ~41,000+ Rust LOC across the workspace (v1.0: ~11,500 + v1.1: +10,697 + v1.2: +9,802 + v1.3: +9,197).
+Shipped v1.4 with ~41,000+ Rust LOC across the workspace (v1.0: ~11,500 + v1.1: +10,697 + v1.2: +9,802 + v1.3: +9,197) plus 8,140 lines of documentation content in v1.4.
 Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, parking_lot; optional: aws-sdk-dynamodb, redis) + `pmcp` core (protocol types, ServerCore routing, workflow system, MCP Apps) + `cargo-pmcp` (CLI tooling) + `mcp-preview` (browser preview) + `mcp-e2e-tests` (chromiumoxide CDP) + `packages/widget-runtime` (TypeScript bridge library).
 
 - The MCP Tasks spec is experimental (2025-11-25). Most MCP clients don't support it yet, so the feature is optional and isolated in `pmcp-tasks`.
@@ -162,4 +152,4 @@ Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, park
 | Standalone examples (workspace exclude) (v1.3) | Avoids feature flag unification conflicts | ✓ Good — each example builds independently |
 
 ---
-*Last updated: 2026-02-27 after v1.4 milestone start*
+*Last updated: 2026-02-28 after v1.4 milestone*
