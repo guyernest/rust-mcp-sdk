@@ -69,7 +69,7 @@ See: `.planning/milestones/v1.3-ROADMAP.md` for full phase details
 - [x] **Phase 21: Book MCP Apps Refresh** — Update Ch 12.5 with WidgetDir, cargo pmcp app workflow, and adapter pattern (completed 2026-02-28)
 - [x] **Phase 22: Course Load Testing** — Write Ch 18-03 hands-on tutorial and update Ch 12 with cross-reference (completed 2026-02-28)
 - [x] **Phase 23: Course MCP Apps Refresh** — Update Ch 20 sub-chapters with latest SDK features and examples (completed 2026-02-28)
-- [ ] **Phase 24: Course Quizzes & Exercises** — Add quizzes, exercises, and update SUMMARY.md for new content
+- [x] **Phase 24: Course Quizzes & Exercises** — Add quizzes, exercises, and update SUMMARY.md for new content (completed 2026-02-28)
 
 ## Phase Details
 
@@ -177,4 +177,4 @@ Phase 20 and 21 are independent (can run in parallel). Phase 22 and 23 are indep
 | 21. Book MCP Apps | 2/2 | Complete    | 2026-02-28 | - |
 | 22. Course Load Testing | 2/2 | Complete    | 2026-02-28 | - |
 | 23. Course MCP Apps | 2/2 | Complete    | 2026-02-28 | - |
-| 24. Course Quizzes | 1/2 | In Progress|  | - |
+| 24. Course Quizzes | 2/2 | Complete   | 2026-02-28 | - |
