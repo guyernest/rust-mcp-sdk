@@ -112,11 +112,11 @@ Plans:
   2. Ch 18-03 covers TOML config authoring, `loadtest init` schema discovery, staged load profiles, and result interpretation in a teaching-oriented format
   3. Ch 18-03 includes a practical example of load testing a deployed MCP server with capacity planning guidance
   4. Ch 12 (Remote Testing) contains a brief load testing section cross-referencing Ch 18-03 for full hands-on content
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 22-01: TBD
-- [ ] 22-02: TBD
+- [ ] 22-01-PLAN.md — Write complete Ch 18-03 hands-on load testing tutorial (config, schema discovery, staged profiles, metrics, breaking points, deployed server example, capacity planning)
+- [ ] 22-02-PLAN.md — Add load testing cross-reference section to course Ch 12 (Remote Testing)
 
 ### Phase 23: Course MCP Apps Refresh
 **Goal**: Course learners can follow updated Ch 20 sub-chapters that teach the current MCP Apps workflow with hands-on examples
@@ -174,6 +174,6 @@ Phase 20 and 21 are independent (can run in parallel). Phase 22 and 23 are indep
 | 19. Ship + E2E | v1.3 | 2/2 | Complete | 2026-02-26 |
 | 20. Book Load Testing | 2/2 | Complete    | 2026-02-28 | - |
 | 21. Book MCP Apps | 2/2 | Complete    | 2026-02-28 | - |
-| 22. Course Load Testing | v1.4 | 0/? | Not started | - |
+| 22. Course Load Testing | v1.4 | 0/2 | Not started | - |
 | 23. Course MCP Apps | v1.4 | 0/? | Not started | - |
 | 24. Course Quizzes | v1.4 | 0/? | Not started | - |
