@@ -23,9 +23,9 @@ Requirements for the Book & Course Update milestone. Each maps to roadmap phases
 
 ### Course Load Testing (CRLT)
 
-- [ ] **CRLT-01**: Ch 18-03 (Performance Optimization) rewritten from stub with hands-on load testing tutorial using `cargo pmcp loadtest`
-- [ ] **CRLT-02**: Ch 18-03 covers TOML config authoring, `loadtest init` schema discovery, staged load profiles, and result interpretation
-- [ ] **CRLT-03**: Ch 18-03 includes practical example: load testing a deployed MCP server with capacity planning guidance
+- [x] **CRLT-01**: Ch 18-03 (Performance Optimization) rewritten from stub with hands-on load testing tutorial using `cargo pmcp loadtest`
+- [x] **CRLT-02**: Ch 18-03 covers TOML config authoring, `loadtest init` schema discovery, staged load profiles, and result interpretation
+- [x] **CRLT-03**: Ch 18-03 includes practical example: load testing a deployed MCP server with capacity planning guidance
 - [x] **CRLT-04**: Ch 12 (Remote Testing) updated with brief load testing section cross-referencing Ch 18-03
 
 ### Course MCP Apps Refresh (CRAP)
@@ -67,9 +67,9 @@ None — this milestone is self-contained documentation work.
 | BKAP-02 | Phase 21 | Complete |
 | BKAP-03 | Phase 21 | Complete |
 | BKAP-04 | Phase 21 | Complete |
-| CRLT-01 | Phase 22 | Pending |
-| CRLT-02 | Phase 22 | Pending |
-| CRLT-03 | Phase 22 | Pending |
+| CRLT-01 | Phase 22 | Complete |
+| CRLT-02 | Phase 22 | Complete |
+| CRLT-03 | Phase 22 | Complete |
 | CRLT-04 | Phase 22 | Complete |
 | CRAP-01 | Phase 23 | Pending |
 | CRAP-02 | Phase 23 | Pending |
