@@ -57,7 +57,16 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ### Active
 
-(No active milestone — all v1.0-v1.4 shipped)
+## Current Milestone: v1.5 Cloud Load Testing Upload
+
+**Goal:** Enable uploading loadtest TOML configs to cloud providers (pmcp.run first) for remote execution.
+
+**Target features:**
+- `cargo pmcp loadtest upload` command mirroring `cargo pmcp test upload` pattern
+- GraphQL mutation to upload loadtest config to pmcp.run
+- Reuse existing auth infrastructure (OAuth, client credentials, access token)
+- Config validation before upload (parse TOML, validate scenarios)
+- User feedback with next steps (view/trigger on pmcp.run dashboard)
 
 ### Future
 
@@ -68,10 +77,13 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 - [ ] Workflow resume from task state (re-invoke prompt with task ID to continue from last step)
 - [ ] StepExecution user API for runtime step mode customization
 - [ ] Examples: code mode, DynamoDB backend
+- [ ] Loadtest provider trait abstraction (when second provider appears)
+- [ ] Remote execution trigger from CLI (`cargo pmcp loadtest run --remote`)
+- [ ] Result download/polling from CLI
 
 ## Current State
 
-All 5 milestones (v1.0-v1.4) shipped. No active milestone.
+v1.5 in progress. All prior milestones (v1.0-v1.4) shipped.
 
 **Shipped milestones:**
 - v1.0: MCP Tasks Foundation (types, store, server integration)
@@ -152,4 +164,4 @@ Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, park
 | Standalone examples (workspace exclude) (v1.3) | Avoids feature flag unification conflicts | ✓ Good — each example builds independently |
 
 ---
-*Last updated: 2026-02-28 after v1.4 milestone*
+*Last updated: 2026-02-27 after v1.5 milestone start*
