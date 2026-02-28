@@ -38,8 +38,8 @@ Requirements for the Book & Course Update milestone. Each maps to roadmap phases
 
 - [ ] **CRQE-01**: New quiz TOML for load testing/performance (ch18 quiz, ~10 questions, matching existing quiz format)
 - [ ] **CRQE-02**: New AI-guided exercise TOML for load testing (ch18/loadtest exercise with phases, scaffolding, assessment)
-- [ ] **CRQE-03**: Existing ch20-mcp-apps.toml quiz refreshed with questions covering WidgetDir, cargo pmcp app, and adapter pattern
-- [ ] **CRQE-04**: Course SUMMARY.md updated to reflect any new sub-chapters or exercises added
+- [x] **CRQE-03**: Existing ch20-mcp-apps.toml quiz refreshed with questions covering WidgetDir, cargo pmcp app, and adapter pattern
+- [x] **CRQE-04**: Course SUMMARY.md updated to reflect any new sub-chapters or exercises added
 
 ## Future Requirements
 
@@ -76,8 +76,8 @@ None — this milestone is self-contained documentation work.
 | CRAP-03 | Phase 23 | Complete |
 | CRQE-01 | Phase 24 | Pending |
 | CRQE-02 | Phase 24 | Pending |
-| CRQE-03 | Phase 24 | Pending |
-| CRQE-04 | Phase 24 | Pending |
+| CRQE-03 | Phase 24 | Complete |
+| CRQE-04 | Phase 24 | Complete |
 
 **Coverage:**
 - v1.4 requirements: 19 total

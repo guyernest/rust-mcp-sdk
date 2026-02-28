@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Book & Course Update
-status: unknown
-last_updated: "2026-02-28T04:37:51.186Z"
+status: in-progress
+last_updated: "2026-02-28T04:53:00Z"
 progress:
   total_phases: 4
   completed_phases: 4
   total_plans: 8
-  completed_plans: 8
+  completed_plans: 9
 ---
 
 # Project State
@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-02-27)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state, plus developers can build rich UI widgets served from MCP servers.
-**Current focus:** v1.4 Book & Course Update — Phase 23 complete (2 of 2 plans done)
+**Current focus:** v1.4 Book & Course Update — Phase 24 in progress (24-02 complete, 24-01 remaining)
 
 ## Current Position
 
-Phase: 23 of 24 (Course MCP Apps Refresh)
-Plan: 02 of 2 (23-01 and 23-02 complete -- phase done)
-Status: Phase 23 complete
-Last activity: 2026-02-28 — Completed 23-01 (Ch 20 parent + Ch 20-01/20-02 rewrite)
+Phase: 24 of 24 (Course Quizzes and Exercises)
+Plan: 02 of 2 (24-02 complete)
+Status: Phase 24 in progress
+Last activity: 2026-02-28 — Completed 24-02 (Ch20 quiz refresh + SUMMARY.md update)
 
-Progress: [########░░] 80%
+Progress: [#########░] 90%
 
 ## Shipped Milestones
 
@@ -41,7 +41,7 @@ Progress: [########░░] 80%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 48 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 8)
+- Total plans completed: 49 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 9)
 - Total phases completed: 23
 
 ## Accumulated Context
@@ -64,6 +64,8 @@ See PROJECT.md Key Decisions table for full history.
 - [Phase 22]: Ch 18-03 written as 952-line hands-on tutorial with progressive difficulty structure
 - [Phase 23]: Ch 20-03 rewritten as 575-line hands-on example walkthroughs (chess, map, dataviz) with 4-step common pattern
 - [Phase 23]: Ch 20 parent + Ch 20-01/20-02 rewritten from UIResourceBuilder to WidgetDir/mcpBridge/adapter paradigm in course style
+- [Phase 24]: Ch20 quiz refreshed to 14 questions covering WidgetDir, cargo pmcp app, mcpBridge, adapter pattern
+- [Phase 24]: Created ch18-exercises.md and added SUMMARY.md entry for Phase 22-23 content
 
 ### Pending Todos
 
@@ -76,5 +78,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 23-01-PLAN.md (Ch 20 parent + Ch 20-01/20-02 rewrite)
-Resume: Proceed to Phase 24 (Quizzes) -- Phase 23 is now fully complete
+Stopped at: Completed 24-02-PLAN.md (Ch20 quiz refresh + SUMMARY.md update)
+Resume: Execute 24-01-PLAN.md to complete Phase 24

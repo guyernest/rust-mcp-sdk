@@ -141,11 +141,11 @@ Plans:
   2. A new ch18/loadtest AI-guided exercise TOML exists with phases, scaffolding, and assessment matching the existing exercise format
   3. The existing ch20-mcp-apps.toml quiz is refreshed with questions covering WidgetDir, cargo pmcp app, and adapter pattern
   4. Course SUMMARY.md is updated to include any new sub-chapters or exercises added in Phases 22-23
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 24-01: TBD
-- [ ] 24-02: TBD
+- [ ] 24-01-PLAN.md — Create ch18 quiz TOML (~10 load testing questions) and ch18/loadtest AI-guided exercise TOML
+- [ ] 24-02-PLAN.md — Refresh ch20-mcp-apps.toml quiz with WidgetDir/cargo pmcp app/adapter questions and update SUMMARY.md
 
 ## Progress
 
@@ -177,4 +177,4 @@ Phase 20 and 21 are independent (can run in parallel). Phase 22 and 23 are indep
 | 21. Book MCP Apps | 2/2 | Complete    | 2026-02-28 | - |
 | 22. Course Load Testing | 2/2 | Complete    | 2026-02-28 | - |
 | 23. Course MCP Apps | 2/2 | Complete    | 2026-02-28 | - |
-| 24. Course Quizzes | v1.4 | 0/? | Not started | - |
+| 24. Course Quizzes | 1/2 | In Progress|  | - |
