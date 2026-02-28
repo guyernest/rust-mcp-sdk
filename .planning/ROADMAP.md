@@ -7,11 +7,12 @@
 - ✅ **v1.2 Pluggable Storage Backends** — Phases 9-13 (shipped 2026-02-24)
 - ✅ **v1.3 MCP Apps Developer Experience** — Phases 14-19 (shipped 2026-02-26)
 - ✅ **v1.4 Book & Course Update** — Phases 20-24 (shipped 2026-02-28)
+- **v1.5 Cloud Load Testing Upload** — Phase 25 (in progress)
 
 ## Phases
 
 <details>
-<summary>✅ v1.0 MCP Tasks Foundation (Phases 1-3) — SHIPPED 2026-02-22</summary>
+<summary>v1.0 MCP Tasks Foundation (Phases 1-3) — SHIPPED 2026-02-22</summary>
 
 - [x] Phase 1: Foundation Types and Store Contract (3/3 plans) — completed 2026-02-21
 - [x] Phase 2: In-Memory Backend and Owner Security (3/3 plans) — completed 2026-02-22
@@ -22,7 +23,7 @@ See: `.planning/milestones/v1.0-ROADMAP.md` for full phase details
 </details>
 
 <details>
-<summary>✅ v1.1 Task-Prompt Bridge (Phases 4-8) — SHIPPED 2026-02-23</summary>
+<summary>v1.1 Task-Prompt Bridge (Phases 4-8) — SHIPPED 2026-02-23</summary>
 
 - [x] Phase 4: Foundation Types and Contracts (2/2 plans) — completed 2026-02-22
 - [x] Phase 5: Partial Execution Engine (2/2 plans) — completed 2026-02-23
@@ -35,7 +36,7 @@ See: `.planning/milestones/v1.1-ROADMAP.md` for full phase details
 </details>
 
 <details>
-<summary>✅ v1.2 Pluggable Storage Backends (Phases 9-13) — SHIPPED 2026-02-24</summary>
+<summary>v1.2 Pluggable Storage Backends (Phases 9-13) — SHIPPED 2026-02-24</summary>
 
 - [x] Phase 9: Storage Abstraction Layer (2/2 plans) — completed 2026-02-24
 - [x] Phase 10: InMemory Backend Refactor (2/2 plans) — completed 2026-02-24
@@ -48,7 +49,7 @@ See: `.planning/milestones/v1.2-ROADMAP.md` for full phase details
 </details>
 
 <details>
-<summary>✅ v1.3 MCP Apps Developer Experience (Phases 14-19) — SHIPPED 2026-02-26</summary>
+<summary>v1.3 MCP Apps Developer Experience (Phases 14-19) — SHIPPED 2026-02-26</summary>
 
 - [x] Phase 14: Preview Bridge Infrastructure (2/2 plans) — completed 2026-02-24
 - [x] Phase 15: WASM Widget Bridge (2/2 plans) — completed 2026-02-25
@@ -62,7 +63,7 @@ See: `.planning/milestones/v1.3-ROADMAP.md` for full phase details
 </details>
 
 <details>
-<summary>✅ v1.4 Book & Course Update (Phases 20-24) — SHIPPED 2026-02-28</summary>
+<summary>v1.4 Book & Course Update (Phases 20-24) — SHIPPED 2026-02-28</summary>
 
 - [x] Phase 20: Book Load Testing (2/2 plans) — completed 2026-02-28
 - [x] Phase 21: Book MCP Apps Refresh (2/2 plans) — completed 2026-02-28
@@ -74,7 +75,32 @@ See: `.planning/milestones/v1.4-ROADMAP.md` for full phase details
 
 </details>
 
+### v1.5 Cloud Load Testing Upload (In Progress)
+
+**Milestone Goal:** Users can upload loadtest TOML configs to pmcp.run for cloud execution via `cargo pmcp loadtest upload`.
+
+- [ ] **Phase 25: Loadtest Config Upload** - Validate and upload loadtest TOML configs to pmcp.run with auth reuse and user feedback
+
+## Phase Details
+
+### Phase 25: Loadtest Config Upload
+**Goal**: Users can validate a loadtest TOML config locally and upload it to pmcp.run for remote execution
+**Depends on**: Phase 24 (v1.4 complete)
+**Requirements**: CLI-01, CLI-02, CLI-03, CLI-04, UPLD-01, UPLD-02, UPLD-03, VALD-01, VALD-02
+**Success Criteria** (what must be TRUE):
+  1. User can run `cargo pmcp loadtest upload --server-id <id> config.toml` and the config arrives on pmcp.run
+  2. User sees a clear, actionable error when the TOML file is missing, malformed, or contains no scenarios
+  3. User sees the uploaded config's identifier and version echoed back on success
+  4. User sees next-steps guidance pointing to the pmcp.run dashboard after a successful upload
+  5. Upload reuses the same OAuth/client-credentials auth flow as `cargo pmcp test upload` with no additional login
+**Plans**: TBD
+
+Plans:
+- [ ] 25-01: TBD (run /gsd:plan-phase 25 to break down)
+
 ## Progress
+
+**Execution Order:** Phase 25
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -102,3 +128,4 @@ See: `.planning/milestones/v1.4-ROADMAP.md` for full phase details
 | 22. Course Load Testing | v1.4 | 2/2 | Complete | 2026-02-28 |
 | 23. Course MCP Apps | v1.4 | 2/2 | Complete | 2026-02-28 |
 | 24. Course Quizzes | v1.4 | 2/2 | Complete | 2026-02-28 |
+| 25. Loadtest Upload | v1.5 | 0/? | Not started | - |

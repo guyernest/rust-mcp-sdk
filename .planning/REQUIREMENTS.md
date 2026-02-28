@@ -59,21 +59,21 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CLI-01 | — | Pending |
-| CLI-02 | — | Pending |
-| CLI-03 | — | Pending |
-| CLI-04 | — | Pending |
-| UPLD-01 | — | Pending |
-| UPLD-02 | — | Pending |
-| UPLD-03 | — | Pending |
-| VALD-01 | — | Pending |
-| VALD-02 | — | Pending |
+| CLI-01 | Phase 25 | Pending |
+| CLI-02 | Phase 25 | Pending |
+| CLI-03 | Phase 25 | Pending |
+| CLI-04 | Phase 25 | Pending |
+| UPLD-01 | Phase 25 | Pending |
+| UPLD-02 | Phase 25 | Pending |
+| UPLD-03 | Phase 25 | Pending |
+| VALD-01 | Phase 25 | Pending |
+| VALD-02 | Phase 25 | Pending |
 
 **Coverage:**
 - v1.5 requirements: 9 total
-- Mapped to phases: 0
-- Unmapped: 9 ⚠️
+- Mapped to phases: 9
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-27*
-*Last updated: 2026-02-27 after initial definition*
+*Last updated: 2026-02-27 after roadmap creation*
