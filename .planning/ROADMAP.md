@@ -97,11 +97,11 @@ Plans:
   2. Ch 12.5 walks through the `cargo pmcp app new/build/preview` developer workflow end-to-end
   3. Ch 12.5 explains the multi-platform adapter pattern (ChatGPT, MCP Apps, MCP-UI) and bridge communication API
   4. Ch 12.5 references chess, map, and dataviz examples with architecture explanations readers can follow
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 21-01: TBD
-- [ ] 21-02: TBD
+- [ ] 21-01-PLAN.md — Rewrite Ch 12.5 with WidgetDir authoring, bridge communication, and cargo pmcp app developer workflow
+- [ ] 21-02-PLAN.md — Add multi-platform adapter pattern and chess/map/dataviz example walkthroughs
 
 ### Phase 22: Course Load Testing
 **Goal**: Course learners can follow a hands-on load testing tutorial and understand where load testing fits in the broader testing curriculum
