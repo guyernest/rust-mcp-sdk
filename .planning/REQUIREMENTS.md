@@ -1,0 +1,89 @@
+# Requirements: PMCP SDK Extensions
+
+**Defined:** 2026-02-27
+**Core Value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state — giving servers memory without an LLM.
+
+## v1.4 Requirements
+
+Requirements for the Book & Course Update milestone. Each maps to roadmap phases.
+
+### Book Load Testing (BKLT)
+
+- [ ] **BKLT-01**: Ch 14 (Performance) rewritten from stub with full load testing documentation covering `cargo pmcp loadtest` CLI, TOML configuration, scenario definition, and execution modes (flat and staged)
+- [ ] **BKLT-02**: Ch 14 includes HdrHistogram metrics explanation, breaking point detection, coordinated omission correction, and how to interpret results
+- [ ] **BKLT-03**: Ch 14 includes CI/CD integration section with JSON report consumption and GitHub Actions example
+- [ ] **BKLT-04**: Ch 15 (Testing) updated with brief "Load Testing" section cross-referencing Ch 14 for full details
+
+### Book MCP Apps Refresh (BKAP)
+
+- [ ] **BKAP-01**: Ch 12.5 updated with WidgetDir file-based authoring pattern and hot-reload development workflow
+- [ ] **BKAP-02**: Ch 12.5 updated with `cargo pmcp app new/build/preview` developer workflow
+- [ ] **BKAP-03**: Ch 12.5 updated with multi-platform adapter pattern (ChatGPT, MCP Apps, MCP-UI) and bridge API
+- [ ] **BKAP-04**: Ch 12.5 references current examples (chess, map, dataviz) with architecture explanations
+
+### Course Load Testing (CRLT)
+
+- [ ] **CRLT-01**: Ch 18-03 (Performance Optimization) rewritten from stub with hands-on load testing tutorial using `cargo pmcp loadtest`
+- [ ] **CRLT-02**: Ch 18-03 covers TOML config authoring, `loadtest init` schema discovery, staged load profiles, and result interpretation
+- [ ] **CRLT-03**: Ch 18-03 includes practical example: load testing a deployed MCP server with capacity planning guidance
+- [ ] **CRLT-04**: Ch 12 (Remote Testing) updated with brief load testing section cross-referencing Ch 18-03
+
+### Course MCP Apps Refresh (CRAP)
+
+- [ ] **CRAP-01**: Ch 20 sub-chapters updated with WidgetDir, `cargo pmcp app` workflow, and adapter pattern APIs
+- [ ] **CRAP-02**: Ch 20 updated with bridge communication patterns (postMessage, window.mcpBridge, window.openai)
+- [ ] **CRAP-03**: Ch 20 references current examples (chess, map, dataviz) with hands-on walkthrough style
+
+### Course Quizzes & Exercises (CRQE)
+
+- [ ] **CRQE-01**: New quiz TOML for load testing/performance (ch18 quiz, ~10 questions, matching existing quiz format)
+- [ ] **CRQE-02**: New AI-guided exercise TOML for load testing (ch18/loadtest exercise with phases, scaffolding, assessment)
+- [ ] **CRQE-03**: Existing ch20-mcp-apps.toml quiz refreshed with questions covering WidgetDir, cargo pmcp app, and adapter pattern
+- [ ] **CRQE-04**: Course SUMMARY.md updated to reflect any new sub-chapters or exercises added
+
+## Future Requirements
+
+None — this milestone is self-contained documentation work.
+
+## Out of Scope
+
+| Feature | Reason |
+|---------|--------|
+| New book chapters beyond Ch 14/15/12.5 | Other stub chapters (13, 16, 18, etc.) not in scope for this milestone |
+| Course chapters beyond Ch 12/18-03/20 | Focus on load testing and MCP Apps only |
+| Video content or interactive demos | Text-based documentation only |
+| pmcp-book build/deployment pipeline | Separate concern from content authoring |
+| Translating content to other languages | English only for now |
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| BKLT-01 | Phase ? | Pending |
+| BKLT-02 | Phase ? | Pending |
+| BKLT-03 | Phase ? | Pending |
+| BKLT-04 | Phase ? | Pending |
+| BKAP-01 | Phase ? | Pending |
+| BKAP-02 | Phase ? | Pending |
+| BKAP-03 | Phase ? | Pending |
+| BKAP-04 | Phase ? | Pending |
+| CRLT-01 | Phase ? | Pending |
+| CRLT-02 | Phase ? | Pending |
+| CRLT-03 | Phase ? | Pending |
+| CRLT-04 | Phase ? | Pending |
+| CRAP-01 | Phase ? | Pending |
+| CRAP-02 | Phase ? | Pending |
+| CRAP-03 | Phase ? | Pending |
+| CRQE-01 | Phase ? | Pending |
+| CRQE-02 | Phase ? | Pending |
+| CRQE-03 | Phase ? | Pending |
+| CRQE-04 | Phase ? | Pending |
+
+**Coverage:**
+- v1.4 requirements: 19 total
+- Mapped to phases: 0
+- Unmapped: 19
+
+---
+*Requirements defined: 2026-02-27*
+*Last updated: 2026-02-27 after initial definition*
