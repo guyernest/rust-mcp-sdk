@@ -964,3 +964,331 @@ if let Some(transformed) = multi.for_host(HostType::ChatGpt) {
 For most projects today, using `ChatGptAdapter` directly (as all the shipped examples do) is the simplest path. Switch to `MultiPlatformResource` when you need to serve the same widgets to multiple hosts from a single server.
 
 ---
+
+## Example Walkthroughs
+
+Three shipped examples demonstrate different MCP Apps patterns. Each follows the same structure: tool handlers + `WidgetDir` + `ChatGptAdapter` + `StreamableHttpServer`. What varies is the domain logic and the widget's visualization approach.
+
+### Chess: Stateless Game Widget
+
+The chess example (`examples/mcp-apps-chess/`) demonstrates the stateless widget pattern -- the widget holds ALL game state in memory, and each tool call includes the full `GameState` struct. The server validates and processes moves without storing any state between requests.
+
+**Why stateless?** Stateless tools do not require server-side sessions, session ID generators, or state cleanup. The widget is the source of truth. If the user refreshes the page, the widget reloads with default state. This simplicity is the recommended default for MCP Apps widgets.
+
+**Architecture:**
+
+```text
+Widget (board.html)
+    |
+    |  mcpBridge.callTool("chess_move", { state: {...}, move: "e2e4" })
+    |
+    v
+Server
+    |  Validates move against GameState
+    |  Returns new GameState or error
+    v
+Widget updates board from new state
+```
+
+**Tools:**
+
+| Tool               | Input                                | Output                             |
+|--------------------|--------------------------------------|------------------------------------|
+| `chess_new_game`   | (none)                               | Initial `GameState` with pieces    |
+| `chess_move`       | `GameState` + move (e.g., `"e2e4"`) | New `GameState` or error           |
+| `chess_valid_moves`| `GameState` + position (e.g., `"e2"`)| List of valid destination squares  |
+
+**Key types:**
+
+The `GameState` struct carries the full board state with every request:
+
+```rust
+pub struct GameState {
+    pub board: [[Option<Piece>; 8]; 8],  // 8x8 board
+    pub turn: Color,                      // Whose turn
+    pub history: Vec<String>,             // Move history (algebraic)
+    pub castling: CastlingRights,         // Castling availability
+    pub en_passant: Option<Position>,     // En passant target
+    pub status: GameStatus,               // InProgress, Check, etc.
+}
+```
+
+The widget sends this entire struct with `chess_move` and `chess_valid_moves` calls. The server validates the move against the state, applies it, and returns the updated `GameState`. The widget then re-renders the board.
+
+**Tool registration:**
+
+```rust
+let server = ServerBuilder::new()
+    .name("chess-server")
+    .version("1.0.0")
+    .tool_typed_sync_with_description(
+        "chess_new_game",
+        "Start a new chess game. Returns the initial game state.",
+        new_game_handler,
+    )
+    .tool_typed_sync_with_description(
+        "chess_move",
+        "Make a chess move. Requires current game state and move in algebraic notation.",
+        move_handler,
+    )
+    .tool_typed_sync_with_description(
+        "chess_valid_moves",
+        "Get all valid moves for a piece at the given position.",
+        valid_moves_handler,
+    )
+    .resources(ChessResources::new(widgets_path))
+    .build()?;
+```
+
+Each tool handler is a synchronous function registered with `tool_typed_sync_with_description`. The input type (`MoveInput`, `ValidMovesInput`) derives `Deserialize` and `JsonSchema` for automatic schema generation. The server automatically validates incoming JSON against the schema before calling the handler.
+
+**Server configuration:**
+
+```rust
+let config = StreamableHttpServerConfig {
+    session_id_generator: None,   // No sessions needed -- stateless
+    enable_json_response: true,
+    event_store: None,
+    on_session_initialized: None,
+    on_session_closed: None,
+    http_middleware: None,
+};
+
+let http_server = StreamableHttpServer::with_config(addr, server, config);
+```
+
+Note `session_id_generator: None` -- because the chess server is fully stateless, it does not need session tracking. This is the simplest `StreamableHttpServer` configuration.
+
+**Widget:** `widgets/board.html` renders an interactive chess board. Clicking a piece calls `chess_valid_moves` to highlight valid destinations. Clicking a destination calls `chess_move` to apply the move. All state lives in the widget's JavaScript -- the server never stores game state.
+
+**Running:**
+
+```bash
+cd examples/mcp-apps-chess
+cargo run
+# Server starts on http://localhost:3000
+
+# In another terminal:
+cargo pmcp preview --url http://localhost:3000 --open
+```
+
+### Map: Geographic Data Explorer
+
+The map example (`examples/mcp-apps-map/`) demonstrates a data exploration widget with Leaflet.js for interactive map rendering.
+
+**Architecture:** The server holds a mock database of world cities with geographic coordinates, categories, and descriptions. The widget renders a Leaflet.js map with markers and popups. Search queries and category filters flow from the widget to the server, and city data flows back for map display.
+
+**Tools:**
+
+| Tool               | Input                                             | Output                               |
+|--------------------|----------------------------------------------------|--------------------------------------|
+| `search_cities`    | Optional query, optional category, optional `MapState` | Matching cities with coordinates  |
+| `get_city_details` | City ID                                            | Full city details + suggested zoom   |
+| `get_nearby_cities`| Center coordinates + radius in km                  | Cities within radius + distances     |
+
+**Context-aware queries:** The `search_cities` tool accepts an optional `MapState` parameter with the current map view (center coordinates, zoom level, selected city, active filter). This lets the server return context-aware responses -- for example, prioritizing cities visible in the current viewport.
+
+```rust
+pub struct MapState {
+    pub center: Coordinates,
+    pub zoom: u8,
+    pub selected_city: Option<String>,
+    pub filter: Option<CityCategory>,
+}
+```
+
+**City categories:** Cities are tagged with a `CityCategory` enum (`Capital`, `Tech`, `Cultural`, `Financial`, `Historical`) that the widget can use for filtering.
+
+**Distance calculation:** The `get_nearby_cities` tool uses the Haversine formula to calculate great-circle distances between geographic points:
+
+```rust
+fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    const EARTH_RADIUS_KM: f64 = 6371.0;
+    let lat1_rad = lat1.to_radians();
+    let lat2_rad = lat2.to_radians();
+    let delta_lat = (lat2 - lat1).to_radians();
+    let delta_lon = (lon2 - lon1).to_radians();
+    let a = (delta_lat / 2.0).sin().powi(2)
+        + lat1_rad.cos() * lat2_rad.cos() * (delta_lon / 2.0).sin().powi(2);
+    let c = 2.0 * a.sqrt().asin();
+    EARTH_RADIUS_KM * c
+}
+```
+
+**Widget:** `widgets/map.html` loads Leaflet.js from CDN (`https://unpkg.com/leaflet@1.9.4/`) and renders an interactive map. The search bar calls `search_cities`, markers show city locations, and clicking a marker shows details via `get_city_details`. Category filter buttons narrow results by type.
+
+**Running:**
+
+```bash
+cd examples/mcp-apps-map
+cargo run
+# Server starts on http://localhost:3001
+
+cargo pmcp preview --url http://localhost:3001 --open
+```
+
+### Dataviz: SQL Dashboard
+
+The dataviz example (`examples/mcp-apps-dataviz/`) demonstrates a database exploration widget with Chart.js for interactive data visualization.
+
+**Architecture:** The server opens a local Chinook SQLite database (a standard sample database with music store data -- artists, albums, tracks, invoices) and exposes SQL query tools. The widget renders query results as bar, line, and pie charts plus a sortable data table.
+
+**Tools:**
+
+| Tool              | Input          | Output                                    |
+|-------------------|----------------|-------------------------------------------|
+| `execute_query`   | SQL string     | Columns, rows (as JSON arrays), row count |
+| `list_tables`     | (none)         | List of table names                       |
+| `describe_table`  | Table name     | Column metadata (name, type, nullable, PK)|
+
+**SQL injection prevention:** The `describe_table` handler validates the table name to allow only alphanumeric characters and underscores before using it in a `PRAGMA` query:
+
+```rust
+if !input.table_name.chars()
+    .all(|c| c.is_alphanumeric() || c == '_')
+{
+    return Ok(json!({
+        "error": "Invalid table name: only alphanumeric characters \
+                  and underscores are allowed"
+    }));
+}
+```
+
+The `execute_query` tool accepts arbitrary SQL and returns structured results. In a production server you would add authorization checks and query whitelisting, but for a demo the open query interface lets users explore the data freely.
+
+**Structured error handling:** All three tool handlers return JSON error objects rather than panicking. If the database file is missing, the handler returns a helpful error message with download instructions:
+
+```rust
+fn open_db() -> Result<Connection, String> {
+    let db_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Chinook.db");
+    if !db_path.exists() {
+        return Err(format!(
+            "Chinook.db not found at {}. Please download it:\n\
+             cd examples/mcp-apps-dataviz\n\
+             curl -L -o Chinook.db https://github.com/lerocha/chinook-database/\
+             releases/download/v1.4.5/Chinook_Sqlite.sqlite",
+            db_path.display()
+        ));
+    }
+    Connection::open(&db_path).map_err(|e| format!("Failed to open database: {}", e))
+}
+```
+
+**Widget:** `widgets/dashboard.html` loads Chart.js from CDN (`https://cdn.jsdelivr.net/npm/chart.js@4`) and renders an interactive dashboard. Users type SQL queries in a text area, click "Run", and the results appear as both a chart and a sortable data table. The widget auto-detects numeric columns for charting and supports bar, line, and pie chart types.
+
+**Prerequisites:**
+
+```bash
+cd examples/mcp-apps-dataviz
+# Download the Chinook sample database
+curl -L -o Chinook.db \
+  https://github.com/lerocha/chinook-database/releases/download/v1.4.5/Chinook_Sqlite.sqlite
+```
+
+**Running:**
+
+```bash
+cargo run
+# Server starts on http://localhost:3002
+
+cargo pmcp preview --url http://localhost:3002 --open
+```
+
+### Common Architecture Pattern
+
+All three examples share the same structure. Once you understand this pattern, you can build any widget-based MCP server:
+
+**Step 1: Define tool input types**
+
+```rust
+#[derive(Deserialize, JsonSchema)]
+struct MyToolInput {
+    query: String,
+    filter: Option<String>,
+}
+```
+
+Derive `Deserialize` for JSON parsing and `JsonSchema` for automatic schema generation. The server advertises the schema to clients so they know what arguments each tool accepts.
+
+**Step 2: Write synchronous tool handlers**
+
+```rust
+fn my_tool_handler(input: MyToolInput, _extra: RequestHandlerExtra) -> Result<Value> {
+    // Process input, return JSON result
+    Ok(json!({ "result": "data" }))
+}
+```
+
+Handlers are pure functions: input in, JSON out. No `async` needed for most tools.
+
+**Step 3: Create a ResourceHandler with ChatGptAdapter + WidgetDir**
+
+```rust
+struct AppResources {
+    chatgpt_adapter: ChatGptAdapter,
+    widget_dir: WidgetDir,
+}
+```
+
+This struct holds the adapter and widget directory. The `ResourceHandler` implementation follows the three-step pattern from the Widget Authoring section: extract name from URI, read HTML from disk, transform with adapter.
+
+**Step 4: Build and run the server**
+
+```rust
+let server = ServerBuilder::new()
+    .name("my-server")
+    .version("1.0.0")
+    .tool_typed_sync_with_description("my_tool", "Description", my_tool_handler)
+    .resources(AppResources::new(widgets_path))
+    .build()?;
+
+let http_server = StreamableHttpServer::with_config(addr, Arc::new(Mutex::new(server)), config);
+let (bound_addr, handle) = http_server.start().await?;
+```
+
+`StreamableHttpServer` provides HTTP access to the MCP server. The `with_config` constructor accepts a `StreamableHttpServerConfig` where you can optionally enable sessions, event stores, and middleware.
+
+This four-step pattern is the recommended way to build MCP Apps. All three shipped examples follow it exactly.
+
+---
+
+## Best Practices
+
+- **Keep widgets as single self-contained HTML files.** External CDN libraries (Leaflet.js, Chart.js) are fine -- they are loaded at runtime and do not affect the server. Avoid multi-file widget bundles; the `WidgetDir` convention is one `.html` file per widget.
+
+- **Use `window.mcpBridge.callTool()` as the universal bridge API.** This works on all platforms. Do not call `window.openai` or `window.parent.postMessage` directly -- the bridge handles platform differences for you.
+
+- **Design stateless tools when possible.** Let the widget own state and send it with each request. The server validates and processes without storing anything. This eliminates session management, simplifies scaling, and makes widgets portable between hosts.
+
+- **Use hot-reload during development.** Start the server once with `cargo run`, then edit widget HTML and refresh the browser. `WidgetDir` re-reads files from disk on every request -- no server restart needed.
+
+- **Test with `cargo pmcp preview` before deploying.** The preview environment simulates the ChatGPT Apps runtime, including theme switching, locale testing, and tool parameter editing. Use `--theme dark` and `--locale ja-JP` to verify your widget handles different environments.
+
+- **Use `cargo pmcp app build` to produce distribution artifacts.** The manifest and landing page are generated from your running server and mock data, ready for upload to a ChatGPT Apps directory or sharing as a demo.
+
+- **Handle errors gracefully in both server and widget.** Server handlers should return JSON error objects, not panic. Widget code should wrap `mcpBridge` calls in try/catch and show user-friendly error messages.
+
+- **Validate inputs on the server side.** Even though the widget sends structured data, treat all input as untrusted. The dataviz example shows table name validation to prevent SQL injection; apply similar patterns to your domain.
+
+---
+
+## Summary
+
+This chapter covered the MCP Apps Extension -- the system for building interactive UIs served from MCP servers:
+
+- **WidgetDir** provides file-based widget authoring with hot-reload. Widgets are `.html` files in a `widgets/` directory, read from disk on every request for instant iteration.
+
+- **`window.mcpBridge`** is the universal bridge API for widget-server communication. Write `mcpBridge.callTool()` once, and the adapter injects the correct platform-specific bridge script.
+
+- **`cargo pmcp`** provides the full developer workflow: `app new` to scaffold, `preview` for live testing with theme/locale simulation, and `app build` to produce `manifest.json` and `landing.html` for distribution.
+
+- **The adapter pattern** enables write-once deployment across ChatGPT Apps (`ChatGptAdapter`, `text/html+skybridge`), MCP Apps (`McpAppsAdapter`, `text/html+mcp`), and MCP-UI hosts (`McpUiAdapter`, `text/html`). `MultiPlatformResource` serves all three from a single server.
+
+- **Three shipped examples** demonstrate real-world patterns:
+  - **Chess** -- stateless game state, move validation, interactive board widget
+  - **Map** -- geographic data with Leaflet.js, Haversine distance, category filtering
+  - **Dataviz** -- SQL query execution with Chart.js dashboard, table name validation
+
+The common architecture pattern across all examples is: define tool input types with `Deserialize` + `JsonSchema`, write synchronous handlers, create a `ResourceHandler` with `ChatGptAdapter` + `WidgetDir`, build with `ServerBuilder`, and run with `StreamableHttpServer`.
+
+For production deployment, see Chapter 13 (Security and Authentication) for securing your MCP server, Chapter 14 (Performance and Load Testing) for benchmarking widget-heavy workloads, and Chapter 15 (Testing Strategies) for integration testing MCP Apps servers.
