@@ -142,6 +142,7 @@
   - [pmcp.run Dashboard](./part7-observability/ch18-01-pmcp-run.md)
   - [Alerting and Incidents](./part7-observability/ch18-02-alerting.md)
   - [Performance Optimization](./part7-observability/ch18-03-performance.md)
+  - [Chapter 18 Exercises](./part7-observability/ch18-exercises.md)
 
 ---
 
