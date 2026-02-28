@@ -521,4 +521,192 @@ The `mcpBridgeReady` event is dispatched by the injected bridge script after it 
 
 ---
 
+## Developer Workflow
+
+The full development cycle for an MCP Apps project follows five stages:
+
+```
+  scaffold          author           run            preview          build
+  ────────►  ──────────────►  ──────────►  ──────────────►  ──────────►
+  cargo pmcp   Edit HTML in    cargo run    cargo pmcp       cargo pmcp
+  app new      widgets/                     preview          app build
+               (hot-reload)                 --url ... --open --url ...
+```
+
+1. **Scaffold** -- generate a project with `cargo pmcp app new`
+2. **Author widgets** -- write HTML files in `widgets/`, iterate with browser refresh
+3. **Run the server** -- `cargo run` starts the MCP server
+4. **Preview** -- `cargo pmcp preview` opens a browser-based testing environment
+5. **Build** -- `cargo pmcp app build` produces `manifest.json` and `landing.html` for distribution
+
+Each stage is covered in detail below.
+
+### Scaffolding with `cargo pmcp app new`
+
+```bash
+cargo pmcp app new my-widget-app
+```
+
+This creates a complete project directory:
+
+```
+my-widget-app/
+  src/
+    main.rs          # MCP server with tool handlers and ResourceHandler
+  widgets/
+    hello.html       # Starter widget demonstrating bridge pattern
+  mock-data/
+    hello.json       # Mock tool response for landing page generation
+  Cargo.toml         # pmcp dependency with mcp-apps feature enabled
+  README.md          # Getting started guide with bridge API docs
+```
+
+**Flags:**
+
+| Flag            | Description                              | Default            |
+|-----------------|------------------------------------------|--------------------|
+| `<name>`        | Project name (required, positional)      | --                 |
+| `--path <DIR>`  | Parent directory to create project in    | Current directory  |
+
+If the target directory already exists, the command errors with a message matching `cargo new` semantics:
+
+```
+Error: directory 'my-widget-app' already exists.
+Use a different name or remove the existing directory.
+```
+
+The generated `Cargo.toml` includes the required dependency:
+
+```toml
+[dependencies]
+pmcp = { version = "1.10", features = ["mcp-apps"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "0.8"
+async-trait = "0.1"
+tracing-subscriber = "0.3"
+```
+
+After scaffolding, the next steps are printed to the terminal:
+
+```
+  Next steps:
+    cd my-widget-app
+    cargo build
+    cargo run &
+    cargo pmcp preview --url http://localhost:3000 --open
+```
+
+### Live Preview with `cargo pmcp preview`
+
+The preview command connects to a running MCP server and renders widgets in a browser-based testing environment that simulates the ChatGPT Apps runtime.
+
+```bash
+cargo pmcp preview --url http://localhost:3000 --open
+```
+
+**Flags:**
+
+| Flag                    | Description                                       | Default    |
+|-------------------------|---------------------------------------------------|------------|
+| `--url <URL>`           | URL of the running MCP server (required)          | --         |
+| `--port <PORT>`         | Port for the preview server                       | `8765`     |
+| `--open`                | Open browser automatically                        | `false`    |
+| `--tool <NAME>`         | Auto-select this tool on start                    | --         |
+| `--theme <light\|dark>` | Initial theme for the preview environment         | `light`    |
+| `--locale <LOCALE>`     | Initial locale (e.g., `en-US`, `ja-JP`)           | `en-US`    |
+| `--widgets-dir <PATH>`  | Path to widgets directory for hot-reload          | --         |
+
+The preview server starts on `http://localhost:{port}` and connects to your MCP server via the MCP protocol. When `--open` is set, the browser opens automatically after a short delay.
+
+**Typical development loop:**
+
+```bash
+# Terminal 1: Start the MCP server
+cargo run
+
+# Terminal 2: Start the preview with hot-reload
+cargo pmcp preview --url http://localhost:3000 --open --widgets-dir ./widgets
+```
+
+With `--widgets-dir` set, the preview reads widget HTML directly from the specified directory on each request, enabling the hot-reload workflow. Edit a widget file, refresh the browser, and see your changes immediately.
+
+**Environment simulation:** The `--theme` and `--locale` flags let you test how your widget behaves in different environments without switching hosts. The `--tool` flag auto-selects a specific tool when the preview loads, which is useful when your server has many tools and you want to jump straight to the one you are developing.
+
+### Building with `cargo pmcp app build`
+
+When your widgets are ready for distribution, the build command produces deployment artifacts:
+
+```bash
+cargo pmcp app build --url https://my-server.example.com
+```
+
+This generates two files in the output directory:
+
+```
+dist/
+  manifest.json    # ChatGPT-compatible app directory listing
+  landing.html     # Standalone demo page with embedded widget
+```
+
+**Flags:**
+
+| Flag              | Description                                     | Default  |
+|-------------------|-------------------------------------------------|----------|
+| `--url <URL>`     | Server URL for manifest (required)              | --       |
+| `--logo <URL>`    | Logo URL for the manifest                       | --       |
+| `--widget <NAME>` | Widget to showcase in landing page              | First alphabetically |
+| `--output <DIR>`  | Output directory for generated files            | `dist`   |
+
+**What each artifact is for:**
+
+- **`manifest.json`** -- A ChatGPT-compatible app directory listing following the `ai-plugin.json` schema (v1). Contains your server URL, package name, description, logo, and auto-discovered widget-to-tool mappings. Upload this to a ChatGPT Apps directory to make your server discoverable.
+
+- **`landing.html`** -- A standalone demo page that embeds your widget in an iframe with a mock bridge. The mock bridge returns hardcoded responses from `mock-data/*.json` files, so the page works without a running server. Use this as a product page or share it for quick demos.
+
+**Individual artifact commands:**
+
+If you only need one artifact, use the subcommands directly:
+
+```bash
+# Generate only manifest.json
+cargo pmcp app manifest --url https://my-server.example.com
+cargo pmcp app manifest --url https://my-server.example.com --logo https://example.com/logo.png
+
+# Generate only landing.html
+cargo pmcp app landing
+cargo pmcp app landing --widget board --output build
+```
+
+The `manifest` subcommand requires `--url` (the server URL is embedded in the manifest). The `landing` subcommand does not require `--url` because it uses mock data.
+
+Both subcommands accept `--output <DIR>` (default: `dist`).
+
+### Project Detection
+
+The `cargo pmcp app` commands auto-detect your project by reading `Cargo.toml` in the current directory. The detection verifies:
+
+1. A `pmcp` dependency exists with either `mcp-apps` or `full` feature enabled
+2. A `widgets/` directory exists with at least one `.html` file
+
+If detection fails, you get a descriptive error:
+
+```
+Error: Not an MCP Apps project.
+The `pmcp` dependency does not enable `mcp-apps` or `full` features.
+Run `cargo pmcp app new` first.
+```
+
+**Optional metadata:** Add a `[package.metadata.pmcp]` section to your `Cargo.toml` for additional customization:
+
+```toml
+[package.metadata.pmcp]
+logo = "https://example.com/my-logo.png"
+```
+
+The `logo` field is used by `cargo pmcp app manifest` as the default logo URL. You can override it at build time with the `--logo` flag.
+
+---
+
 <!-- CONTINUED IN PLAN 21-02: Adapter Pattern and Example Walkthroughs -->
