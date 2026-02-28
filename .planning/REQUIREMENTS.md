@@ -16,8 +16,8 @@ Requirements for the Book & Course Update milestone. Each maps to roadmap phases
 
 ### Book MCP Apps Refresh (BKAP)
 
-- [ ] **BKAP-01**: Ch 12.5 updated with WidgetDir file-based authoring pattern and hot-reload development workflow
-- [ ] **BKAP-02**: Ch 12.5 updated with `cargo pmcp app new/build/preview` developer workflow
+- [x] **BKAP-01**: Ch 12.5 updated with WidgetDir file-based authoring pattern and hot-reload development workflow
+- [x] **BKAP-02**: Ch 12.5 updated with `cargo pmcp app new/build/preview` developer workflow
 - [ ] **BKAP-03**: Ch 12.5 updated with multi-platform adapter pattern (ChatGPT, MCP Apps, MCP-UI) and bridge API
 - [ ] **BKAP-04**: Ch 12.5 references current examples (chess, map, dataviz) with architecture explanations
 
@@ -63,8 +63,8 @@ None — this milestone is self-contained documentation work.
 | BKLT-02 | Phase 20 | Complete |
 | BKLT-03 | Phase 20 | Complete |
 | BKLT-04 | Phase 20 | Complete |
-| BKAP-01 | Phase 21 | Pending |
-| BKAP-02 | Phase 21 | Pending |
+| BKAP-01 | Phase 21 | Complete |
+| BKAP-02 | Phase 21 | Complete |
 | BKAP-03 | Phase 21 | Pending |
 | BKAP-04 | Phase 21 | Pending |
 | CRLT-01 | Phase 22 | Pending |
