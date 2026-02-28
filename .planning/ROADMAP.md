@@ -79,7 +79,7 @@ See: `.planning/milestones/v1.4-ROADMAP.md` for full phase details
 
 **Milestone Goal:** Users can upload loadtest TOML configs to pmcp.run for cloud execution via `cargo pmcp loadtest upload`.
 
-- [ ] **Phase 25: Loadtest Config Upload** - Validate and upload loadtest TOML configs to pmcp.run with auth reuse and user feedback
+- [x] **Phase 25: Loadtest Config Upload** - Validate and upload loadtest TOML configs to pmcp.run with auth reuse and user feedback (completed 2026-02-28)
 
 ## Phase Details
 
@@ -129,4 +129,4 @@ Plans:
 | 22. Course Load Testing | v1.4 | 2/2 | Complete | 2026-02-28 |
 | 23. Course MCP Apps | v1.4 | 2/2 | Complete | 2026-02-28 |
 | 24. Course Quizzes | v1.4 | 2/2 | Complete | 2026-02-28 |
-| 25. Loadtest Upload | v1.5 | 1/2 | In Progress | - |
+| 25. Loadtest Upload | 2/2 | Complete   | 2026-02-28 | - |
