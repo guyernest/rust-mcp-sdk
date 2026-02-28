@@ -1,843 +1,524 @@
-# Chapter 12.5: MCP Apps Extension — Interactive UIs
+# Chapter 12.5: MCP Apps Extension -- Interactive UIs
 
-The MCP Apps Extension lets your server provide rich, interactive user interfaces alongside tools—turning your MCP server into a full application platform. Think charts, maps, galleries, and custom dashboards that run securely in the host and communicate seamlessly with your Rust backend.
+The MCP Apps Extension lets your server serve rich, interactive UIs -- charts, maps, games, dashboards -- as **widgets** alongside your tools. Widgets are plain HTML files that communicate with your Rust backend through a bridge API, and adapters transform them for different hosts (ChatGPT, MCP Apps, MCP-UI) without any changes to your widget code.
 
-This chapter shows you how to build interactive UIs that elevate your MCP server from pure API to complete user experience.
+The modern developer experience is straightforward: write HTML files in a `widgets/` directory, point `WidgetDir` at that directory, and the server reads them from disk on every request. A browser refresh shows your latest changes instantly -- no server restart required.
 
-## Quick Start: Your First Interactive UI (30 lines)
+This chapter covers:
 
-Let's build a simple data viewer with an interactive UI:
+1. **Widget authoring** with `WidgetDir` -- the file-based convention, API, and hot-reload workflow
+2. **Bridge communication** -- the `window.mcpBridge` API that widgets use to call tools, read resources, and manage state
+3. **Developer workflow** -- scaffolding, live preview, and building for distribution with `cargo pmcp`
+4. **Adapter pattern** -- how a single widget works across ChatGPT, MCP Apps, and MCP-UI hosts (Chapter 12.5 continued)
+5. **Example walkthroughs** -- the chess, map, and dataviz examples step by step (Chapter 12.5 continued)
 
-```rust
-use pmcp::{Server, TypedTool, UIResourceBuilder, ResourceCollection, ServerCapabilities};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+**Feature flag requirement:** Enable the `mcp-apps` feature in your `Cargo.toml`:
 
-#[derive(Debug, Deserialize, JsonSchema)]
-struct GetDataArgs {
-    query: String,
-}
-
-async fn get_data(args: GetDataArgs, _extra: pmcp::RequestHandlerExtra)
-    -> pmcp::Result<serde_json::Value>
-{
-    Ok(serde_json::json!({
-        "results": vec!["Apple", "Banana", "Cherry"],
-        "count": 3
-    }))
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create UI resource with embedded HTML
-    let (ui_resource, ui_contents) = UIResourceBuilder::new(
-        "ui://app/viewer",
-        "Data Viewer"
-    )
-    .html_template(r#"
-        <html><body>
-            <h1>Data Viewer</h1>
-            <div id="results"></div>
-            <script>
-                window.addEventListener('message', (e) => {
-                    if (e.data.type === 'mcp-tool-result') {
-                        document.getElementById('results').innerHTML =
-                            e.data.result.results.join(', ');
-                    }
-                });
-                window.parent.postMessage({
-                    jsonrpc: '2.0',
-                    method: 'tools/call',
-                    params: { name: 'get_data', arguments: { query: 'fruits' } },
-                    id: 1
-                }, '*');
-            </script>
-        </body></html>
-    "#)
-    .build_with_contents()?;
-
-    // Create tool with UI association
-    let tool = TypedTool::new("get_data", |args, extra| {
-        Box::pin(get_data(args, extra))
-    })
-    .with_ui("ui://app/viewer");
-
-    // Build server with resources and tool
-    let server = Server::builder()
-        .name("data-viewer")
-        .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            resources: Some(Default::default()),
-            tools: Some(Default::default()),
-            ..Default::default()
-        })
-        .resources(ResourceCollection::new().add_ui_resource(ui_resource, ui_contents))
-        .tool("get_data", tool)
-        .build()?;
-
-    server.run_stdio().await?;
-    Ok(())
-}
+```toml
+[dependencies]
+pmcp = { version = "1.10", features = ["mcp-apps"] }
 ```
 
-**Test it:**
+---
+
+## Quick Start: Your First Widget (5 Minutes)
+
+Let's go from zero to a working interactive widget in three steps.
+
+### Step 1: Scaffold the Project
+
 ```bash
-# In Cargo.toml, enable schema-generation feature:
-# pmcp = { version = "1.8", features = ["schema-generation"] }
-
-cargo run
-
-# In Claude Desktop or another MCP host, the tool will show
-# an interactive UI when called!
+cargo pmcp app new my-widget-app
+cd my-widget-app
 ```
 
-That's it! You've created an MCP server with an interactive UI. The UI runs securely in a sandboxed iframe and communicates with your Rust backend via JSON-RPC.
-
----
-
-## Understanding MCP Apps Extension
-
-### The Three-Piece Architecture
-
-MCP Apps Extension connects three components:
+This creates a ready-to-run project:
 
 ```
-┌─────────────────┐      MCP Protocol      ┌──────────────────┐
-│   MCP Host      │◄─────JSON-RPC─────────►│  Your Rust       │
-│  (Claude, IDE)  │                        │  Server          │
-└────────┬────────┘                        └──────────────────┘
-         │                                           │
-         │ Renders UI                                │ Declares UI
-         │ in iframe                                 │ Resources
-         ▼                                           │
-┌─────────────────┐                                 │
-│  UI (HTML/JS)   │                                 │
-│  Sandboxed      │                                 │
-└─────────────────┘                                 │
-         │                                           │
-         └──── postMessage (JSON-RPC) ──────────────┘
-              Calls tools, receives results
+my-widget-app/
+  src/
+    main.rs          # MCP server with tool handlers
+  widgets/
+    hello.html       # Starter widget (add more .html files here)
+  mock-data/
+    hello.json       # Mock data for landing page generation
+  Cargo.toml
+  README.md
 ```
 
-1. **Your Rust Server**: Declares UI resources and tools with `.with_ui()`
-2. **MCP Host**: Renders the UI in a sandboxed iframe
-3. **UI (HTML/JavaScript)**: Calls tools via `postMessage`, renders results
+### Step 2: Write a Widget
 
-### When to Use MCP Apps
-
-Use MCP Apps when you need:
-
-- **Visualization**: Charts, graphs, maps that are easier to understand visually
-- **Rich interaction**: Galleries, forms, dashboards with complex user input
-- **Real-time updates**: Live data feeds, monitoring dashboards
-- **Complex layouts**: Multi-panel interfaces that don't fit in text
-
-**Don't use MCP Apps** for:
-- Simple data retrieval (use regular tools)
-- Text-based Q&A (use prompts)
-- File access (use resources)
-
----
-
-## Core Concepts
-
-### UI Resources
-
-UI Resources are HTML templates declared with the `ui://` URI scheme:
-
-```rust
-use pmcp::UIResourceBuilder;
-
-let (ui_resource, ui_contents) = UIResourceBuilder::new(
-    "ui://myapp/dashboard",        // Unique URI
-    "Analytics Dashboard"           // Display name
-)
-.description("Real-time analytics")
-.html_template(include_str!("dashboard.html"))  // Or inline HTML
-.build_with_contents()?;
-```
-
-**Key points:**
-- Use `ui://` scheme (required)
-- MIME type is `text/html+mcp` (automatic)
-- HTML can be inline or from file
-- Multiple UIs per server supported
-
-### Tool-UI Association
-
-Associate tools with UIs using `.with_ui()`:
-
-```rust
-let analytics_tool = TypedTool::new("analyze", |args, extra| {
-    Box::pin(analyze_data(args, extra))
-})
-.with_description("Analyze business metrics")
-.with_ui("ui://myapp/dashboard");  // Link to UI
-```
-
-When the host calls this tool, it displays the associated UI.
-
-### Communication Protocol
-
-The UI communicates via MCP JSON-RPC over `postMessage`:
-
-**From UI to Server** (call a tool):
-```javascript
-window.parent.postMessage({
-    jsonrpc: '2.0',
-    method: 'tools/call',
-    params: {
-        name: 'analyze',
-        arguments: { metric: 'sales', period: '30d' }
-    },
-    id: 1
-}, '*');
-```
-
-**From Server to UI** (receive result):
-```javascript
-window.addEventListener('message', (event) => {
-    if (event.data.type === 'mcp-tool-result') {
-        const data = event.data.result;
-        // Render data in your UI
-        renderChart(data);
-    }
-});
-```
-
----
-
-## Example 1: Interactive Conference Map
-
-Let's build a real-world example: an interactive map showing conference venues.
-
-**Goal**: Display multiple conference venues on a map with popups showing details.
-
-### Step 1: Define Data Types
-
-```rust
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct GetVenuesArgs {
-    conference_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct Venue {
-    id: String,
-    name: String,
-    description: String,
-    lat: f64,
-    lon: f64,
-    capacity: u32,
-}
-
-#[derive(Debug, Serialize)]
-struct VenuesResult {
-    conference: String,
-    venues: Vec<Venue>,
-}
-```
-
-### Step 2: Implement Tool Handler
-
-```rust
-async fn get_conference_venues(
-    args: GetVenuesArgs,
-    _extra: pmcp::RequestHandlerExtra,
-) -> pmcp::Result<serde_json::Value> {
-    // In production, fetch from database
-    let venues = match args.conference_id.as_str() {
-        "aws-reinvent-2025" => vec![
-            Venue {
-                id: "mandalay-bay".to_string(),
-                name: "Mandalay Bay Convention Center".to_string(),
-                description: "Main keynote venue".to_string(),
-                lat: 36.0915,
-                lon: -115.1739,
-                capacity: 20000,
-            },
-            Venue {
-                id: "venetian".to_string(),
-                name: "The Venetian".to_string(),
-                description: "Breakout sessions".to_string(),
-                lat: 36.1212,
-                lon: -115.1697,
-                capacity: 5000,
-            },
-        ],
-        _ => vec![],
-    };
-
-    Ok(serde_json::to_value(VenuesResult {
-        conference: args.conference_id,
-        venues,
-    })?)
-}
-```
-
-### Step 3: Create Interactive Map UI
-
-We'll use Leaflet.js for the map. Create a file `venue_map.html`:
+The scaffold includes `widgets/hello.html`, which demonstrates the bridge pattern. Here is a minimal widget that calls a tool and displays the result:
 
 ```html
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Conference Venue Map</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <meta charset="UTF-8">
+    <title>Hello Widget</title>
+    <!-- The bridge script tag is auto-injected by the server.
+         Do NOT add it manually. -->
     <style>
-        body { margin: 0; padding: 0; }
-        #map { height: 100vh; width: 100%; }
-        .venue-popup h3 { margin: 0 0 8px 0; color: #2c3e50; }
-        .venue-popup p { margin: 4px 0; color: #555; }
-        .capacity { font-weight: bold; color: #3498db; }
-    </style>
-</head>
-<body>
-    <div id="map"></div>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script>
-        // Initialize map centered on Las Vegas
-        const map = L.map('map').setView([36.1147, -115.1728], 12);
-
-        // Add map tiles
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '© OpenStreetMap contributors'
-        }).addTo(map);
-
-        // Listen for tool results
-        window.addEventListener('message', (event) => {
-            if (event.data.type === 'mcp-tool-result') {
-                const data = event.data.result;
-                const bounds = [];
-
-                // Add marker for each venue
-                data.venues.forEach(venue => {
-                    const marker = L.marker([venue.lat, venue.lon]).addTo(map);
-                    bounds.push([venue.lat, venue.lon]);
-
-                    // Create popup
-                    marker.bindPopup(`
-                        <div class="venue-popup">
-                            <h3>${venue.name}</h3>
-                            <p>${venue.description}</p>
-                            <p class="capacity">
-                                Capacity: ${venue.capacity.toLocaleString()}
-                            </p>
-                        </div>
-                    `);
-                });
-
-                // Fit map to show all venues
-                if (bounds.length > 0) {
-                    map.fitBounds(bounds, { padding: [50, 50] });
-                }
-            }
-        });
-
-        // Request venue data
-        window.parent.postMessage({
-            jsonrpc: '2.0',
-            method: 'tools/call',
-            params: {
-                name: 'get_conference_venues',
-                arguments: { conference_id: 'aws-reinvent-2025' }
-            },
-            id: 1
-        }, '*');
-    </script>
-</body>
-</html>
-```
-
-### Step 4: Wire It Together
-
-```rust
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create UI resource
-    let (ui_resource, ui_contents) = UIResourceBuilder::new(
-        "ui://conference/venue-map",
-        "Conference Venue Map"
-    )
-    .description("Interactive map showing all conference venues")
-    .html_template(include_str!("venue_map.html"))
-    .build_with_contents()?;
-
-    // Create resource collection
-    let resources = ResourceCollection::new()
-        .add_ui_resource(ui_resource, ui_contents);
-
-    // Create tool with UI association
-    let tool = TypedTool::new("get_conference_venues", |args, extra| {
-        Box::pin(get_conference_venues(args, extra))
-    })
-    .with_description("Get venues with location data")
-    .with_ui("ui://conference/venue-map");
-
-    // Build server
-    let server = Server::builder()
-        .name("conference-map-server")
-        .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            resources: Some(Default::default()),
-            tools: Some(Default::default()),
-            ..Default::default()
-        })
-        .resources(resources)
-        .tool("get_conference_venues", tool)
-        .build()?;
-
-    server.run_stdio().await?;
-    Ok(())
-}
-```
-
-**Run it:**
-```bash
-cargo run --features schema-generation
-```
-
-**Full example:** See [`examples/conference_venue_map.rs`](../../examples/conference_venue_map.rs)
-
----
-
-## Example 2: Hotel Room Gallery
-
-Build an image gallery with lightbox functionality.
-
-**Goal**: Show multiple hotel room photos in a responsive grid with full-size view.
-
-### Step 1: Define Types
-
-```rust
-#[derive(Debug, Deserialize, JsonSchema)]
-struct GetRoomImagesArgs {
-    hotel_id: String,
-    room_type: String,  // "deluxe", "suite", etc.
-}
-
-#[derive(Debug, Serialize)]
-struct RoomImage {
-    id: String,
-    url: String,              // Full-size image
-    thumbnail_url: String,    // Thumbnail
-    title: String,
-    description: String,
-}
-
-#[derive(Debug, Serialize)]
-struct RoomGalleryResult {
-    hotel: String,
-    room_type: String,
-    images: Vec<RoomImage>,
-}
-```
-
-### Step 2: Tool Handler
-
-```rust
-async fn get_room_images(
-    args: GetRoomImagesArgs,
-    _extra: pmcp::RequestHandlerExtra,
-) -> pmcp::Result<serde_json::Value> {
-    let images = vec![
-        RoomImage {
-            id: "room-1".to_string(),
-            url: "https://images.unsplash.com/photo-1590490360182-c33d57733427?w=1200"
-                .to_string(),
-            thumbnail_url:
-                "https://images.unsplash.com/photo-1590490360182-c33d57733427?w=400"
-                .to_string(),
-            title: "Deluxe King Room".to_string(),
-            description: "Spacious room with city views".to_string(),
-        },
-        // ... more images
-    ];
-
-    Ok(serde_json::to_value(RoomGalleryResult {
-        hotel: args.hotel_id,
-        room_type: args.room_type,
-        images,
-    })?)
-}
-```
-
-### Step 3: Gallery UI
-
-The UI uses CSS Grid for responsive layout and a lightbox for full-size viewing:
-
-```html
-<!DOCTYPE html>
-<html>
-<head>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: system-ui, sans-serif;
-            background: #f5f5f5;
-            padding: 20px;
-        }
-        .gallery {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 20px;
-        }
-        .gallery-item {
-            background: white;
-            border-radius: 12px;
-            overflow: hidden;
-            cursor: pointer;
-            transition: transform 0.2s;
-        }
-        .gallery-item:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-        }
-        .gallery-item img {
-            width: 100%;
-            height: 200px;
-            object-fit: cover;
-        }
-        .lightbox {
-            display: none;
-            position: fixed;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-            background: rgba(0,0,0,0.9);
+            display: flex;
             align-items: center;
             justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            background: #f8f9fa;
         }
-        .lightbox.active { display: flex; }
+        .card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+            padding: 32px;
+            max-width: 400px;
+            width: 100%;
+        }
     </style>
 </head>
 <body>
-    <h1 id="title">Hotel Gallery</h1>
-    <div class="gallery" id="gallery"></div>
-
-    <div class="lightbox" id="lightbox" onclick="closeLightbox()">
-        <img id="lightbox-img" src="">
+    <div class="card">
+        <h1>Say Hello</h1>
+        <input type="text" id="name" placeholder="Enter a name..." />
+        <button id="greet">Say Hello</button>
+        <div id="result"></div>
     </div>
 
     <script>
-        let images = [];
+        document.getElementById('greet').addEventListener('click', async () => {
+            const name = document.getElementById('name').value.trim();
+            if (!name) return;
 
-        function openLightbox(index) {
-            document.getElementById('lightbox-img').src = images[index].url;
-            document.getElementById('lightbox').classList.add('active');
-        }
-
-        function closeLightbox() {
-            document.getElementById('lightbox').classList.remove('active');
-        }
-
-        window.addEventListener('message', (e) => {
-            if (e.data.type === 'mcp-tool-result') {
-                const data = e.data.result;
-                images = data.images;
-
-                document.getElementById('title').textContent =
-                    `${data.room_type} Room - ${data.hotel}`;
-
-                const gallery = document.getElementById('gallery');
-                images.forEach((img, i) => {
-                    const item = document.createElement('div');
-                    item.className = 'gallery-item';
-                    item.onclick = () => openLightbox(i);
-                    item.innerHTML = `
-                        <img src="${img.thumbnail_url}" alt="${img.title}">
-                        <div style="padding: 16px;">
-                            <h3>${img.title}</h3>
-                            <p>${img.description}</p>
-                        </div>
-                    `;
-                    gallery.appendChild(item);
-                });
+            try {
+                // Call the "hello" tool via the MCP bridge
+                const response = await window.mcpBridge.callTool('hello', { name });
+                document.getElementById('result').textContent = response.greeting;
+            } catch (err) {
+                document.getElementById('result').textContent = 'Error: ' + err.message;
             }
         });
-
-        // Load images
-        window.parent.postMessage({
-            jsonrpc: '2.0',
-            method: 'tools/call',
-            params: {
-                name: 'get_room_images',
-                arguments: { hotel_id: 'grand-resort', room_type: 'deluxe' }
-            },
-            id: 1
-        }, '*');
     </script>
 </body>
 </html>
 ```
 
-**Full example:** See [`examples/hotel_gallery.rs`](../../examples/hotel_gallery.rs)
+### Step 3: Run and Preview
 
----
+```bash
+# Build and start the server
+cargo run &
 
-## Advanced Patterns
-
-### Multiple Tool Calls
-
-Coordinate multiple tool calls for complex UIs:
-
-```javascript
-async function callTool(name, args) {
-    return new Promise((resolve) => {
-        const id = Date.now() + Math.random();
-
-        const handler = (event) => {
-            if (event.data.id === id) {
-                window.removeEventListener('message', handler);
-                resolve(event.data.result);
-            }
-        };
-
-        window.addEventListener('message', handler);
-
-        window.parent.postMessage({
-            jsonrpc: '2.0',
-            method: 'tools/call',
-            params: { name, arguments: args },
-            id
-        }, '*');
-    });
-}
-
-// Use it:
-async function loadDashboard() {
-    const [metrics, trends] = await Promise.all([
-        callTool('get_metrics', { period: '30d' }),
-        callTool('get_trends', { metric: 'sales' })
-    ]);
-
-    renderDashboard(metrics, trends);
-}
+# Open the browser-based preview
+cargo pmcp preview --url http://localhost:3000 --open
 ```
 
-### Real-Time Updates
+The preview opens in your browser. Type a name, click the button, and the widget calls the `hello` tool on your MCP server, displaying the greeting it returns.
 
-Poll for live data:
+### What the Server Looks Like
 
-```javascript
-let updateInterval = setInterval(async () => {
-    const data = await callTool('get_latest_data', {});
-    updateChart(data);
-}, 5000);  // Update every 5 seconds
+The scaffolded `src/main.rs` uses `ServerBuilder` with `WidgetDir` and `ChatGptAdapter`:
 
-// Clean up on close
-window.addEventListener('beforeunload', () => {
-    clearInterval(updateInterval);
-});
-```
+```rust
+use async_trait::async_trait;
+use pmcp::server::mcp_apps::{ChatGptAdapter, UIAdapter, WidgetDir};
+use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
+use pmcp::server::ServerBuilder;
+use pmcp::types::mcp_apps::{ExtendedUIMimeType, WidgetMeta};
+use pmcp::types::protocol::Content;
+use pmcp::types::{ListResourcesResult, ReadResourceResult, ResourceInfo};
+use pmcp::{RequestHandlerExtra, ResourceHandler, Result};
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::json;
+use std::path::PathBuf;
 
-### Error Handling
+// Tool input type
+#[derive(Deserialize, JsonSchema)]
+struct HelloInput {
+    name: String,
+}
 
-Handle errors gracefully:
+// Tool handler -- a pure function
+fn hello_handler(input: HelloInput, _extra: RequestHandlerExtra) -> Result<serde_json::Value> {
+    Ok(json!({
+        "greeting": format!("Hello, {}!", input.name),
+        "name": input.name
+    }))
+}
 
-```javascript
-window.addEventListener('message', (event) => {
-    if (event.data.type === 'mcp-tool-result') {
-        const data = event.data.result;
+// Resource handler that serves widgets from the widgets/ directory
+struct AppResources {
+    chatgpt_adapter: ChatGptAdapter,
+    widget_dir: WidgetDir,
+}
 
-        if (data.isError) {
-            showError(data.content[0].text);
-            return;
+impl AppResources {
+    fn new(widgets_path: PathBuf) -> Self {
+        let widget_meta = WidgetMeta::new()
+            .prefers_border(true)
+            .description("my widget app widget");
+        let chatgpt_adapter = ChatGptAdapter::new().with_widget_meta(widget_meta);
+        let widget_dir = WidgetDir::new(widgets_path);
+        Self { chatgpt_adapter, widget_dir }
+    }
+}
+
+#[async_trait]
+impl ResourceHandler for AppResources {
+    async fn read(&self, uri: &str, _extra: RequestHandlerExtra) -> Result<ReadResourceResult> {
+        let name = uri
+            .strip_prefix("ui://app/")
+            .and_then(|s| s.strip_suffix(".html").or(Some(s)));
+
+        if let Some(widget_name) = name {
+            let html = self.widget_dir.read_widget(widget_name);
+            let transformed = self.chatgpt_adapter.transform(uri, widget_name, &html);
+
+            Ok(ReadResourceResult {
+                contents: vec![Content::Resource {
+                    uri: uri.to_string(),
+                    text: Some(transformed.content),
+                    mime_type: Some(ExtendedUIMimeType::HtmlSkybridge.to_string()),
+                }],
+            })
+        } else {
+            Err(pmcp::Error::protocol(
+                pmcp::ErrorCode::METHOD_NOT_FOUND,
+                format!("Resource not found: {}", uri),
+            ))
         }
+    }
 
-        try {
-            renderData(data);
-        } catch (err) {
-            showError(`Rendering failed: ${err.message}`);
+    async fn list(
+        &self,
+        _cursor: Option<String>,
+        _extra: RequestHandlerExtra,
+    ) -> Result<ListResourcesResult> {
+        let entries = self.widget_dir.discover().unwrap_or_default();
+        let resources = entries
+            .into_iter()
+            .map(|entry| ResourceInfo {
+                uri: entry.uri,
+                name: entry.filename.clone(),
+                description: Some(format!("Interactive {} widget", entry.filename)),
+                mime_type: Some(ExtendedUIMimeType::HtmlSkybridge.to_string()),
+            })
+            .collect();
+
+        Ok(ListResourcesResult {
+            resources,
+            next_cursor: None,
+        })
+    }
+}
+```
+
+The server registers the tool and the resource handler with `ServerBuilder`, then runs on an HTTP transport:
+
+```rust
+let widgets_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("widgets");
+
+let server = ServerBuilder::new()
+    .name("my-widget-app")
+    .version("0.1.0")
+    .tool_typed_sync_with_description("hello", "Greet someone by name", hello_handler)
+    .resources(AppResources::new(widgets_path))
+    .build()?;
+```
+
+This pattern -- `WidgetDir` for widget discovery, `ChatGptAdapter` for bridge injection, `ResourceHandler` for serving -- is identical across all three shipped examples (chess, map, and dataviz).
+
+---
+
+## Widget Authoring with WidgetDir
+
+### Convention
+
+Widgets are `.html` files in a `widgets/` directory. The filename maps directly to an MCP resource URI:
+
+| File                   | MCP Resource URI    |
+|------------------------|---------------------|
+| `widgets/board.html`   | `ui://app/board`    |
+| `widgets/map.html`     | `ui://app/map`      |
+| `widgets/hello.html`   | `ui://app/hello`    |
+
+Each widget is a single, self-contained HTML file. The server auto-injects the bridge script tag via the adapter -- widget authors never add bridge boilerplate manually.
+
+### WidgetDir API
+
+`WidgetDir` lives in `pmcp::server::mcp_apps` and provides three operations:
+
+**Construction:**
+
+```rust
+use pmcp::server::mcp_apps::WidgetDir;
+
+// Point at the widgets directory
+let widget_dir = WidgetDir::new("widgets");
+
+// The path does not need to exist at construction time.
+// Errors are returned when discover() or read_widget() are called.
+```
+
+**Discovery:**
+
+```rust
+// Scan for .html files, returns Vec<WidgetEntry> sorted by filename
+let entries = widget_dir.discover()?;
+
+for entry in &entries {
+    println!("{} -> {}", entry.filename, entry.uri);
+    // "board" -> "ui://app/board"
+    // "map"   -> "ui://app/map"
+}
+```
+
+The `WidgetEntry` struct has three fields:
+
+| Field      | Type       | Description                                    |
+|------------|------------|------------------------------------------------|
+| `filename` | `String`   | Stem of the HTML file (e.g., `"board"`)        |
+| `uri`      | `String`   | MCP resource URI (e.g., `"ui://app/board"`)    |
+| `path`     | `PathBuf`  | Absolute path to the `.html` file on disk      |
+
+**Reading:**
+
+```rust
+// Read widget HTML from disk -- fresh on every call
+let html = widget_dir.read_widget("board");
+```
+
+`read_widget` reads from disk on every call. There is no cache. This is intentional -- it enables the hot-reload development workflow described below.
+
+If the file does not exist or cannot be read, `read_widget` returns a styled HTML error page showing the widget name, the file path that was attempted, and the error message. The error page includes a hint: "Create or fix the widget file and refresh the browser to retry."
+
+**Bridge injection:**
+
+```rust
+// Insert a <script> tag into widget HTML
+let html_with_bridge = WidgetDir::inject_bridge_script(
+    &html,
+    "/assets/widget-runtime.mjs",
+);
+```
+
+The injection strategy inserts the script tag just before `</head>` if present, at the start of `<body>` otherwise, or at the very beginning of the document if neither tag is found. This is how the bridge script reaches the widget without the author adding it manually.
+
+### Hot-Reload Development
+
+Because `WidgetDir` reads from disk on every request, the development workflow feels like frontend development:
+
+1. Start your server: `cargo run`
+2. Open the preview: `cargo pmcp preview --url http://localhost:3000 --open`
+3. Edit your HTML file in `widgets/`
+4. Refresh the browser -- your changes appear instantly
+
+No server restart is needed. The server re-reads the file from disk each time a client requests the widget resource. This is safe because widgets are small HTML files and disk I/O is negligible compared to network latency.
+
+### The ResourceHandler Pattern
+
+Every MCP Apps server needs a `ResourceHandler` implementation that connects `WidgetDir` to the MCP resource protocol. The pattern is the same across all shipped examples:
+
+```rust
+struct AppResources {
+    chatgpt_adapter: ChatGptAdapter,
+    widget_dir: WidgetDir,
+}
+
+#[async_trait]
+impl ResourceHandler for AppResources {
+    async fn read(&self, uri: &str, _extra: RequestHandlerExtra)
+        -> Result<ReadResourceResult>
+    {
+        // 1. Extract widget name from URI
+        let name = uri
+            .strip_prefix("ui://app/")
+            .and_then(|s| s.strip_suffix(".html").or(Some(s)));
+
+        if let Some(widget_name) = name {
+            // 2. Read HTML from disk (hot-reload)
+            let html = self.widget_dir.read_widget(widget_name);
+
+            // 3. Transform for target host (injects bridge script)
+            let transformed = self.chatgpt_adapter
+                .transform(uri, widget_name, &html);
+
+            Ok(ReadResourceResult {
+                contents: vec![Content::Resource {
+                    uri: uri.to_string(),
+                    text: Some(transformed.content),
+                    mime_type: Some(
+                        ExtendedUIMimeType::HtmlSkybridge.to_string()
+                    ),
+                }],
+            })
+        } else {
+            Err(pmcp::Error::protocol(
+                pmcp::ErrorCode::METHOD_NOT_FOUND,
+                format!("Resource not found: {}", uri),
+            ))
         }
     }
-});
-```
 
----
+    async fn list(
+        &self,
+        _cursor: Option<String>,
+        _extra: RequestHandlerExtra,
+    ) -> Result<ListResourcesResult> {
+        // Discover all widgets and map to ResourceInfo
+        let entries = self.widget_dir.discover().unwrap_or_default();
+        let resources = entries
+            .into_iter()
+            .map(|entry| ResourceInfo {
+                uri: entry.uri,
+                name: entry.filename.clone(),
+                description: Some(format!("Interactive {} widget", entry.filename)),
+                mime_type: Some(
+                    ExtendedUIMimeType::HtmlSkybridge.to_string()
+                ),
+            })
+            .collect();
 
-## Best Practices
-
-### Performance
-
-**Minimize initial load:**
-- Use CDN links for libraries
-- Lazy load images: `<img loading="lazy">`
-- Minimize inline CSS/JS
-
-**Efficient rendering:**
-```javascript
-// Good: Update only what changed
-chart.data.datasets[0].data = newData;
-chart.update('none');
-
-// Avoid: Full re-render
-chart.destroy();
-createChart(newData);  // Slow!
-```
-
-### Accessibility
-
-Make UIs accessible:
-
-```html
-<!-- Add ARIA labels -->
-<button onclick="openLightbox(0)" aria-label="View full image">
-    <img src="thumb.jpg" alt="Hotel room">
-</button>
-
-<!-- Keyboard navigation -->
-<script>
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeLightbox();
-    if (e.key === 'ArrowRight') nextImage();
-    if (e.key === 'ArrowLeft') previousImage();
-});
-</script>
-```
-
-### Mobile Responsiveness
-
-Use mobile-first CSS:
-
-```css
-/* Mobile first */
-.gallery {
-    grid-template-columns: 1fr;
-}
-
-/* Tablet */
-@media (min-width: 640px) {
-    .gallery {
-        grid-template-columns: repeat(2, 1fr);
-    }
-}
-
-/* Desktop */
-@media (min-width: 1024px) {
-    .gallery {
-        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        Ok(ListResourcesResult { resources, next_cursor: None })
     }
 }
 ```
 
+The three steps in `read()` are always the same:
+
+1. **Extract widget name** from the `ui://app/{name}` URI
+2. **Read from disk** via `widget_dir.read_widget(name)` -- no cache, hot-reload
+3. **Transform** via `adapter.transform()` -- injects the bridge script for the target host
+
+The `list()` method calls `widget_dir.discover()` and maps each `WidgetEntry` to a `ResourceInfo` for the MCP protocol.
+
+This pattern is identical in the chess example (`ChessResources`), the map example, and the dataviz example. Once you understand it, you can build any widget-based MCP server.
+
 ---
 
-## Security Considerations
+## Bridge Communication
 
-### Sandboxed Execution
+Widgets communicate with the MCP server through the `window.mcpBridge` API. The bridge script is auto-injected by the adapter -- widget authors never write `postMessage` code or manage JSON-RPC framing manually.
 
-UIs run in sandboxed iframes with restricted permissions. The host controls:
-- Network access
-- Storage access
-- Script execution context
+### window.mcpBridge API
 
-### Input Validation
+The bridge exposes these methods:
 
-Always validate tool results:
+**Core Operations:**
+
+| Method                        | Returns     | Description                              |
+|-------------------------------|-------------|------------------------------------------|
+| `mcpBridge.callTool(name, args)` | `Promise`  | Call an MCP tool, get the result         |
+| `mcpBridge.readResource(uri)`    | `Promise`  | Read an MCP resource                     |
+| `mcpBridge.getPrompt(name, args)`| `Promise`  | Get a prompt                             |
+| `mcpBridge.notify(method, params)` | `void`   | Send a notification (fire-and-forget)    |
+
+**State Management (ChatGPT host only):**
+
+| Method                        | Returns     | Description                              |
+|-------------------------------|-------------|------------------------------------------|
+| `mcpBridge.setState(state)`   | `void`      | Update widget state (persists in session)|
+| `mcpBridge.getState()`        | `Object`    | Read current widget state                |
+
+**Communication (ChatGPT host only):**
+
+| Method                           | Returns  | Description                              |
+|----------------------------------|----------|------------------------------------------|
+| `mcpBridge.sendMessage(message)` | `void`   | Send a follow-up message to the conversation |
+| `mcpBridge.openExternal(url)`    | `void`   | Open an external URL                     |
+
+**Display Modes (ChatGPT host only):**
+
+| Method                                | Returns   | Description                             |
+|---------------------------------------|-----------|-----------------------------------------|
+| `mcpBridge.requestDisplayMode(mode)`  | `Promise` | Request inline, pip, or fullscreen      |
+| `mcpBridge.requestClose()`            | `void`    | Close the widget                        |
+| `mcpBridge.notifyIntrinsicHeight(h)`  | `void`    | Report the widget's content height      |
+| `mcpBridge.setOpenInAppUrl(href)`     | `void`    | Set the "Open in App" button URL        |
+
+**Environment Context (read-only properties, ChatGPT host only):**
+
+| Property                | Type     | Description                              |
+|-------------------------|----------|------------------------------------------|
+| `mcpBridge.theme`       | `string` | Current theme (`'light'` or `'dark'`)    |
+| `mcpBridge.locale`      | `string` | Current locale (e.g., `'en-US'`)         |
+| `mcpBridge.displayMode` | `string` | Current display mode                     |
+| `mcpBridge.toolInput`   | `object` | Arguments supplied when the tool was invoked |
+| `mcpBridge.toolOutput`  | `object` | The structuredContent returned by the tool   |
+
+The core operations (`callTool`, `readResource`, `getPrompt`, `notify`) work across all hosts. The state management, communication, and display mode methods are available when running inside ChatGPT.
+
+### Communication Flow
+
+Here is how a tool call flows through the system:
+
+```
+Widget (iframe)                    Host                      MCP Server
+     │                              │                            │
+     │  mcpBridge.callTool(         │                            │
+     │    'hello', { name: 'World' }│                            │
+     │  )                           │                            │
+     │                              │                            │
+     │  ──── bridge script ────►    │                            │
+     │       (postMessage or        │                            │
+     │        window.openai)        │                            │
+     │                              │                            │
+     │                              │  ── tools/call ──────►     │
+     │                              │     { name: 'hello',       │
+     │                              │       arguments: {...} }   │
+     │                              │                            │
+     │                              │  ◄── result ──────────     │
+     │                              │     { greeting: '...' }    │
+     │                              │                            │
+     │  ◄── response ─────────     │                            │
+     │      Promise resolves        │                            │
+     │      with { greeting: '...' }│                            │
+     ▼                              ▼                            ▼
+```
+
+The bridge script handles all the protocol plumbing:
+
+- **ChatGPT host:** Uses `window.openai.callTool()` under the hood
+- **MCP Apps host:** Uses `postMessage` with JSON-RPC 2.0 framing
+- **MCP-UI host:** Uses `postMessage` with JSON-RPC 2.0 framing
+
+Widget authors write the same `mcpBridge.callTool()` call regardless of which host runs their widget. The adapter selects the correct bridge implementation at serve time.
+
+### Error Handling in Widgets
+
+Always wrap bridge calls in try/catch:
 
 ```javascript
-function validateVenue(venue) {
-    if (typeof venue.lat !== 'number' ||
-        typeof venue.lon !== 'number') {
-        throw new Error('Invalid coordinates');
+async function greet(name) {
+    try {
+        const result = await window.mcpBridge.callTool('hello', { name });
+        document.getElementById('result').textContent = result.greeting;
+    } catch (err) {
+        document.getElementById('result').textContent =
+            'Error: ' + (err.message || String(err));
     }
-
-    if (venue.lat < -90 || venue.lat > 90) {
-        throw new Error('Latitude out of range');
-    }
-
-    return true;
 }
-
-// Use it:
-data.venues.forEach(validateVenue);
 ```
 
-### XSS Prevention
-
-Sanitize user content:
+If your widget needs to wait for the bridge to initialize before making calls, listen for the `mcpBridgeReady` event:
 
 ```javascript
-function escapeHTML(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}
+// Wait for bridge initialization
+window.addEventListener('mcpBridgeReady', () => {
+    // Bridge is ready -- safe to call mcpBridge methods
+    loadInitialData();
+});
 
-// Safe rendering
-element.innerHTML = `<h3>${escapeHTML(venue.name)}</h3>`;
+// If bridge is already ready (script loaded synchronously)
+if (window.mcpBridge) {
+    loadInitialData();
+}
 ```
+
+The `mcpBridgeReady` event is dispatched by the injected bridge script after it sets up `window.mcpBridge`. In most cases the bridge is available immediately, but the event pattern is useful for widgets that load asynchronously.
 
 ---
 
-## Testing Your UIs
-
-### Browser DevTools
-
-Debug in the browser:
-
-```javascript
-// Add logging
-window.addEventListener('message', (event) => {
-    console.log('Received:', event.data);
-});
-
-// Expose for debugging
-window.DEBUG = { state, callTool, currentData };
-```
-
-### Manual Testing
-
-Test with MCP Inspector or Claude Desktop:
-
-1. Start your server: `cargo run --features schema-generation`
-2. Connect from an MCP host
-3. Call your UI-associated tool
-4. Verify the UI renders correctly
-5. Test interactions (clicks, keyboard, etc.)
-
-### Error Boundaries
-
-Catch all errors:
-
-```javascript
-window.addEventListener('error', (event) => {
-    console.error('Error:', event.error);
-    showError(`Error: ${event.error.message}`);
-});
-
-window.addEventListener('unhandledrejection', (event) => {
-    console.error('Promise rejection:', event.reason);
-});
-```
-
----
-
-## Summary
-
-MCP Apps Extension turns your server into a complete application platform:
-
-✅ **Declare UI resources** with `UIResourceBuilder`
-✅ **Associate tools with UIs** using `.with_ui()`
-✅ **Communicate via postMessage** with JSON-RPC
-✅ **Build rich experiences**: maps, galleries, dashboards
-✅ **Run securely** in sandboxed iframes
-✅ **Optimize for performance** and accessibility
-
-**Next steps:**
-1. Try the [conference map example](../../examples/conference_venue_map.rs)
-2. Build the [hotel gallery](../../examples/hotel_gallery.rs)
-3. Create your own interactive UI for your use case
-4. Share your creations with the community!
-
-**Further reading:**
-- [MCP Apps Extension Spec (SEP-1865)](https://spec.modelcontextprotocol.io/)
-- [Chapter 6: Resources](ch06-resources.md)
-- [Chapter 5: Tools](ch05-tools.md)
-- [Advanced guide](../docs/advanced/mcp-apps-extension.md)
+<!-- CONTINUED IN PLAN 21-02: Adapter Pattern and Example Walkthroughs -->
