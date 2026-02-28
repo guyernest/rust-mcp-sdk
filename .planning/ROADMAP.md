@@ -176,5 +176,5 @@ Phase 20 and 21 are independent (can run in parallel). Phase 22 and 23 are indep
 | 20. Book Load Testing | 2/2 | Complete    | 2026-02-28 | - |
 | 21. Book MCP Apps | 2/2 | Complete    | 2026-02-28 | - |
 | 22. Course Load Testing | 2/2 | Complete    | 2026-02-28 | - |
-| 23. Course MCP Apps | 2/2 | Complete   | 2026-02-28 | - |
+| 23. Course MCP Apps | 2/2 | Complete    | 2026-02-28 | - |
 | 24. Course Quizzes | v1.4 | 0/? | Not started | - |
