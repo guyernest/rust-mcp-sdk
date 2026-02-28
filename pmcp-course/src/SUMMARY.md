@@ -153,10 +153,10 @@
   - [Orchestration Patterns](./part8-advanced/ch19-03-orchestration.md)
   - [Chapter 19 Exercises](./part8-advanced/ch19-exercises.md)
 
-- [MCP Applications](./part8-advanced/ch20-applications.md)
-  - [Building UIs for MCP](./part8-advanced/ch20-01-ui.md)
-  - [High Availability](./part8-advanced/ch20-02-ha.md)
-  - [Migration Strategies](./part8-advanced/ch20-03-migration.md)
+- [MCP Apps: Interactive Widgets](./part8-advanced/ch20-mcp-apps.md)
+  - [Widget Authoring and Developer Workflow](./part8-advanced/ch20-01-ui-resources.md)
+  - [Bridge Communication and Adapters](./part8-advanced/ch20-02-tool-ui-association.md)
+  - [Example Walkthroughs](./part8-advanced/ch20-03-postmessage.md)
   - [Chapter 20 Exercises](./part8-advanced/ch20-exercises.md)
 
 ---
