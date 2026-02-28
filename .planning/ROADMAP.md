@@ -93,10 +93,11 @@ See: `.planning/milestones/v1.4-ROADMAP.md` for full phase details
   3. User sees the uploaded config's identifier and version echoed back on success
   4. User sees next-steps guidance pointing to the pmcp.run dashboard after a successful upload
   5. Upload reuses the same OAuth/client-credentials auth flow as `cargo pmcp test upload` with no additional login
-**Plans**: TBD
+**Plans**: 2
 
 Plans:
-- [ ] 25-01: TBD (run /gsd:plan-phase 25 to break down)
+- [x] 25-01: GraphQL mutation + upload module + CLI wiring (wave 1) -- completed 2026-02-28
+- [ ] 25-02: Build verification + quality gates (wave 2, depends on 25-01)
 
 ## Progress
 
@@ -128,4 +129,4 @@ Plans:
 | 22. Course Load Testing | v1.4 | 2/2 | Complete | 2026-02-28 |
 | 23. Course MCP Apps | v1.4 | 2/2 | Complete | 2026-02-28 |
 | 24. Course Quizzes | v1.4 | 2/2 | Complete | 2026-02-28 |
-| 25. Loadtest Upload | v1.5 | 0/? | Not started | - |
+| 25. Loadtest Upload | v1.5 | 1/2 | In Progress | - |

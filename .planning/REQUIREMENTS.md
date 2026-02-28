@@ -9,21 +9,21 @@ Requirements for cloud load testing upload. Each maps to roadmap phases.
 
 ### CLI Command
 
-- [ ] **CLI-01**: User can run `cargo pmcp loadtest upload` with `--server-id` and path to TOML config
-- [ ] **CLI-02**: User receives clear error if TOML config is invalid or has no scenarios
-- [ ] **CLI-03**: User sees upload success with config identifier and version from pmcp.run
-- [ ] **CLI-04**: User sees next steps guidance (view on pmcp.run dashboard, trigger remote run)
+- [x] **CLI-01**: User can run `cargo pmcp loadtest upload` with `--server-id` and path to TOML config
+- [x] **CLI-02**: User receives clear error if TOML config is invalid or has no scenarios
+- [x] **CLI-03**: User sees upload success with config identifier and version from pmcp.run
+- [x] **CLI-04**: User sees next steps guidance (view on pmcp.run dashboard, trigger remote run)
 
 ### Upload
 
-- [ ] **UPLD-01**: Loadtest TOML config content is uploaded via GraphQL mutation to pmcp.run
-- [ ] **UPLD-02**: Upload reuses existing pmcp.run auth (OAuth, client credentials, access token)
-- [ ] **UPLD-03**: Upload sends config content, format, name, and server association
+- [x] **UPLD-01**: Loadtest TOML config content is uploaded via GraphQL mutation to pmcp.run
+- [x] **UPLD-02**: Upload reuses existing pmcp.run auth (OAuth, client credentials, access token)
+- [x] **UPLD-03**: Upload sends config content, format, name, and server association
 
 ### Validation
 
-- [ ] **VALD-01**: Config file is parsed and validated before upload (valid TOML, has scenarios)
-- [ ] **VALD-02**: User receives actionable error messages for invalid configs
+- [x] **VALD-01**: Config file is parsed and validated before upload (valid TOML, has scenarios)
+- [x] **VALD-02**: User receives actionable error messages for invalid configs
 
 ## Future Requirements
 
@@ -59,15 +59,15 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CLI-01 | Phase 25 | Pending |
-| CLI-02 | Phase 25 | Pending |
-| CLI-03 | Phase 25 | Pending |
-| CLI-04 | Phase 25 | Pending |
-| UPLD-01 | Phase 25 | Pending |
-| UPLD-02 | Phase 25 | Pending |
-| UPLD-03 | Phase 25 | Pending |
-| VALD-01 | Phase 25 | Pending |
-| VALD-02 | Phase 25 | Pending |
+| CLI-01 | Phase 25 | Complete |
+| CLI-02 | Phase 25 | Complete |
+| CLI-03 | Phase 25 | Complete |
+| CLI-04 | Phase 25 | Complete |
+| UPLD-01 | Phase 25 | Complete |
+| UPLD-02 | Phase 25 | Complete |
+| UPLD-03 | Phase 25 | Complete |
+| VALD-01 | Phase 25 | Complete |
+| VALD-02 | Phase 25 | Complete |
 
 **Coverage:**
 - v1.5 requirements: 9 total
