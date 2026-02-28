@@ -709,4 +709,258 @@ The `logo` field is used by `cargo pmcp app manifest` as the default logo URL. Y
 
 ---
 
-<!-- CONTINUED IN PLAN 21-02: Adapter Pattern and Example Walkthroughs -->
+## Multi-Platform Adapter Pattern
+
+### The Problem
+
+MCP widgets need to communicate with the host application that embeds them, but different hosts use different communication mechanisms:
+
+- **ChatGPT Apps:** The host injects a `window.openai` JavaScript API. Widgets use MIME type `text/html+skybridge`. The host manages state, display modes, and file operations natively.
+- **MCP Apps (SEP-1865):** Widgets run in an iframe and communicate via `postMessage` using JSON-RPC 2.0 framing. MIME type is `text/html+mcp`.
+- **MCP-UI (community):** Also uses `postMessage` with JSON-RPC 2.0, but supports additional output formats beyond HTML -- URL references for CDN-hosted widgets and Remote DOM for non-iframe rendering. MIME type is `text/html` for HTML format.
+
+If widget authors had to write platform-specific code for each host, they would need to maintain three separate implementations of the same UI. The adapter pattern solves this.
+
+### Architecture Overview
+
+The adapter architecture follows a simple principle: widget authors write ONE HTML file using `window.mcpBridge` as their API. At serve time, an adapter injects the correct bridge script that translates `mcpBridge` calls into the platform's native communication mechanism.
+
+```text
++----------------------------------------------------------------+
+|                       UIResource (Core)                        |
+|                                                                |
+|   +--------------+    +--------------+    +----------------+   |
+|   | ChatGptAdapter|    | McpAppsAdapter|    |  McpUiAdapter  |   |
+|   +--------------+    +--------------+    +----------------+   |
+|           |                   |                    |           |
+|           v                   v                    v           |
+|   text/html+skybridge   text/html+mcp        text/html        |
+|   window.openai         postMessage          postMessage       |
++----------------------------------------------------------------+
+```
+
+The `UIAdapter` trait defines the interface. Three concrete adapters implement it. Each adapter's `transform()` method reads the widget HTML, calls `inject_bridge()` to insert the platform-specific bridge script, and returns a `TransformedResource` with the correct MIME type and metadata.
+
+### The UIAdapter Trait
+
+The `UIAdapter` trait is defined in `pmcp::server::mcp_apps` and has five methods:
+
+```rust
+pub trait UIAdapter: Send + Sync {
+    /// Which host platform this adapter targets.
+    fn host_type(&self) -> HostType;
+
+    /// The MIME type this adapter produces.
+    fn mime_type(&self) -> ExtendedUIMimeType;
+
+    /// Transform HTML content for this host platform.
+    /// Returns the transformed resource with platform-specific metadata.
+    fn transform(&self, uri: &str, name: &str, html: &str) -> TransformedResource;
+
+    /// Inject platform-specific communication bridge into HTML content.
+    fn inject_bridge(&self, html: &str) -> String;
+
+    /// Get CSP headers required by this platform.
+    fn required_csp(&self) -> Option<WidgetCSP>;
+}
+```
+
+The `TransformedResource` returned by `transform()` carries everything needed to serve the widget:
+
+| Field      | Type                 | Description                                     |
+|------------|----------------------|-------------------------------------------------|
+| `uri`      | `String`             | Original resource URI                           |
+| `name`     | `String`             | Display name                                    |
+| `mime_type`| `ExtendedUIMimeType` | Platform-specific MIME type                     |
+| `content`  | `String`             | Transformed HTML with bridge script injected    |
+| `metadata` | `HashMap<String, Value>` | Platform-specific metadata (e.g., WidgetMeta) |
+
+The `HostType` enum identifies known MCP hosts:
+
+| Variant   | Description                        | Preferred MIME type        |
+|-----------|------------------------------------|----------------------------|
+| `ChatGpt` | OpenAI ChatGPT                     | `text/html+skybridge`      |
+| `Claude`  | Anthropic Claude                   | `text/html+mcp`            |
+| `Nanobot` | MCP-UI host (Nanobot)              | `text/html`                |
+| `McpJam`  | MCP-UI host (MCPJam)               | `text/html`                |
+| `Generic` | Any standard MCP host              | `text/html+mcp`            |
+
+### ChatGptAdapter
+
+The `ChatGptAdapter` targets ChatGPT Apps (OpenAI Apps SDK). It injects a bridge script that wraps `window.openai` behind the universal `window.mcpBridge` API.
+
+**Construction:**
+
+```rust
+use pmcp::server::mcp_apps::ChatGptAdapter;
+use pmcp::types::mcp_apps::WidgetMeta;
+
+let adapter = ChatGptAdapter::new()
+    .with_widget_meta(
+        WidgetMeta::new()
+            .prefers_border(true)
+            .description("Interactive chess board")
+    );
+```
+
+**MIME type:** `text/html+skybridge` (`ExtendedUIMimeType::HtmlSkybridge`)
+
+**Bridge mechanism:** The injected script checks for `window.openai` and wraps it behind `window.mcpBridge`. When the widget calls `mcpBridge.callTool()`, the bridge forwards to `window.openai.callTool()`. When it calls `mcpBridge.setState()`, the bridge calls `window.openai.setWidgetState()`.
+
+**Bridge capabilities:** The ChatGptAdapter bridge is the most feature-rich, providing the full OpenAI Apps SDK surface:
+
+| Category            | Method / Property                  | Description                                |
+|---------------------|------------------------------------|--------------------------------------------|
+| Core                | `callTool(name, args)`             | Call an MCP tool                           |
+| State               | `getState()`                       | Read current widget state                  |
+| State               | `setState(state)`                  | Update widget state (persists in session)  |
+| Context             | `toolInput` (getter)               | Arguments supplied when the tool was invoked|
+| Context             | `toolOutput` (getter)              | The structuredContent returned by the tool |
+| Context             | `toolResponseMetadata` (getter)    | The `_meta` payload (widget-only)          |
+| Communication       | `sendMessage(message)`             | Send a follow-up message to the conversation|
+| Communication       | `openExternal(url)`                | Open an external URL                       |
+| Files               | `uploadFile(file)`                 | Upload a file and get a file ID            |
+| Files               | `getFileDownloadUrl(fileId)`       | Get a temporary download URL for a file    |
+| Display             | `requestDisplayMode(mode)`         | Request inline, pip, or fullscreen         |
+| Display             | `requestClose()`                   | Close the widget                           |
+| Display             | `notifyIntrinsicHeight(height)`    | Report the widget's content height         |
+| Display             | `setOpenInAppUrl(href)`            | Set the "Open in App" button URL           |
+| Environment         | `theme` (getter)                   | Current theme (`'light'` or `'dark'`)      |
+| Environment         | `locale` (getter)                  | Current locale (e.g., `'en-US'`)           |
+| Environment         | `displayMode` (getter)             | Current display mode                       |
+| Environment         | `maxHeight` (getter)               | Maximum widget height in pixels            |
+| Environment         | `safeArea` (getter)                | Safe area insets                           |
+| Environment         | `userAgent` (getter)               | User agent string                          |
+| Environment         | `view` (getter)                    | Widget view type (`'default'` or `'compact'`)|
+
+**WidgetMeta:** ChatGPT-specific metadata that controls how the host renders the widget. Added to the resource's `_meta` field:
+
+| Field            | Serde key                    | Description                                    |
+|------------------|------------------------------|------------------------------------------------|
+| `prefers_border` | `openai/widgetPrefersBorder` | Whether the widget should have a border        |
+| `domain`         | `openai/widgetDomain`        | Dedicated origin for the widget sandbox        |
+| `description`    | `openai/widgetDescription`   | Widget self-description (reduces redundant text)|
+| `csp`            | `openai/widgetCSP`           | Content Security Policy configuration          |
+
+**CSP (Content Security Policy):** None by default. ChatGPT has its own CSP management. Use the `csp` field on `WidgetMeta` if your widget needs to fetch from external APIs or load external resources.
+
+### McpAppsAdapter
+
+The `McpAppsAdapter` targets the SEP-1865 standard for MCP Apps. It injects a `postMessage`-based JSON-RPC 2.0 bridge.
+
+**Construction:**
+
+```rust
+use pmcp::server::mcp_apps::McpAppsAdapter;
+use pmcp::types::mcp_apps::WidgetCSP;
+
+let adapter = McpAppsAdapter::new()
+    .with_csp(
+        WidgetCSP::new()
+            .connect("https://api.example.com")
+            .resources("https://cdn.example.com")
+    );
+```
+
+**MIME type:** `text/html+mcp` (`ExtendedUIMimeType::HtmlMcp`)
+
+**Bridge mechanism:** The injected script uses `window.parent.postMessage()` to send JSON-RPC 2.0 requests to the host and listens for responses via `window.addEventListener('message', ...)`. Each request gets a unique ID, and the bridge matches responses to pending promises with a 30-second timeout.
+
+**Bridge capabilities:**
+
+| Method                      | Description                              |
+|-----------------------------|------------------------------------------|
+| `callTool(name, args)`      | Call an MCP tool via JSON-RPC            |
+| `readResource(uri)`         | Read an MCP resource                     |
+| `getPrompt(name, args)`     | Get a prompt                             |
+| `notify(method, params)`    | Send a notification (fire-and-forget)    |
+
+The McpAppsAdapter bridge is intentionally minimal -- it supports the core MCP operations without platform-specific features like state management or display modes. The bridge automatically sends a `ui/ready` notification when the widget loads.
+
+**CSP:** Optional via `with_csp()`. The CSP is returned by `required_csp()` and can be used by the host to configure iframe sandbox permissions.
+
+### McpUiAdapter
+
+The `McpUiAdapter` targets MCP-UI community hosts (Nanobot, MCPJam, and others). It supports three output formats, not just HTML.
+
+**Construction:**
+
+```rust
+use pmcp::server::mcp_apps::{McpUiAdapter, McpUiFormat};
+
+// HTML format with postMessage bridge (default)
+let adapter = McpUiAdapter::new();
+
+// URL format -- returns a URL reference instead of HTML
+let adapter = McpUiAdapter::new().with_format(McpUiFormat::Url);
+
+// Remote DOM -- non-iframe rendering via Shopify Remote DOM
+let adapter = McpUiAdapter::new().with_format(McpUiFormat::RemoteDom);
+```
+
+**Output formats:**
+
+| Format      | MIME type                                              | Description                          |
+|-------------|--------------------------------------------------------|--------------------------------------|
+| `Html`      | `text/html`                                            | HTML with postMessage bridge         |
+| `Url`       | `text/uri-list`                                        | URL reference (CDN-hosted widget)    |
+| `RemoteDom` | `application/vnd.mcp-ui.remote-dom+javascript`         | Non-iframe JavaScript rendering      |
+
+**Bridge capabilities (Html format):**
+
+| Method                          | Description                              |
+|---------------------------------|------------------------------------------|
+| `callTool(name, args)`          | Call an MCP tool via JSON-RPC            |
+| `readResource(uri)`             | Read an MCP resource                     |
+| `getPrompt(name, args)`         | Get a prompt                             |
+| `sendIntent(action, data)`      | Send a high-level intent to the host     |
+| `notify(level, message)`        | Send a notification with severity level  |
+| `openLink(url)`                 | Open a URL in the host                   |
+
+The MCP-UI bridge includes `sendIntent` and `openLink` methods not present in the MCP Apps bridge, reflecting MCP-UI's richer host integration. The `notify` method takes a severity level (`info`, `success`, `warning`, `error`) rather than raw JSON-RPC method/params.
+
+When using the `Url` format, `transform()` returns the URI string directly instead of HTML -- the host fetches the widget from the URL. When using `RemoteDom`, `transform()` returns a JSON descriptor with the resource URI and name.
+
+**CSP:** None. MCP-UI hosts manage their own security policies.
+
+### Choosing an Adapter
+
+| Adapter          | Host          | MIME Type              | Bridge API               | Best For                    |
+|------------------|---------------|------------------------|---------------------------|-----------------------------|
+| `ChatGptAdapter` | ChatGPT       | `text/html+skybridge`  | `window.openai` wrapper   | ChatGPT Apps deployment     |
+| `McpAppsAdapter` | Generic MCP   | `text/html+mcp`        | postMessage JSON-RPC      | Standard MCP hosts          |
+| `McpUiAdapter`   | MCP-UI hosts  | `text/html` (or URL/RemoteDom) | postMessage JSON-RPC | Community MCP-UI hosts      |
+
+All three shipped examples (chess, map, dataviz) use `ChatGptAdapter` because ChatGPT is the most mature host for interactive widgets. To support multiple hosts from a single server, use `MultiPlatformResource`:
+
+```rust
+use pmcp::server::mcp_apps::{
+    MultiPlatformResource, ChatGptAdapter, McpAppsAdapter, McpUiAdapter,
+};
+
+let mut multi = MultiPlatformResource::new(
+    "ui://app/board.html",
+    "Chess Board",
+    html,
+)
+.with_adapter(ChatGptAdapter::new())
+.with_adapter(McpAppsAdapter::new())
+.with_adapter(McpUiAdapter::new());
+
+// Or add all standard adapters at once:
+let mut multi = MultiPlatformResource::new(uri, name, html)
+    .with_all_adapters();
+
+// Get transformed content for a specific host:
+use pmcp::types::mcp_apps::HostType;
+if let Some(transformed) = multi.for_host(HostType::ChatGpt) {
+    // transformed.content has the bridge-injected HTML
+    // transformed.mime_type is text/html+skybridge
+}
+```
+
+`MultiPlatformResource` caches transformations -- calling `for_host()` with the same host type twice reuses the cached result. Call `all_transforms()` to get every platform's version at once.
+
+For most projects today, using `ChatGptAdapter` directly (as all the shipped examples do) is the simplest path. Switch to `MultiPlatformResource` when you need to serve the same widgets to multiple hosts from a single server.
+
+---
