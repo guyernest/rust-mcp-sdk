@@ -1187,3 +1187,64 @@ pub async fn list_test_scenarios(
 
     Ok(ListScenariosResult { scenarios })
 }
+
+// ========== Loadtest Config Upload GraphQL Functions ==========
+
+/// Response from uploadLoadtestConfig mutation
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct UploadLoadtestConfigResult {
+    #[serde(rename = "configId")]
+    pub config_id: String,
+    pub version: i32,
+}
+
+/// Upload a loadtest config to pmcp.run
+pub async fn upload_loadtest_config(
+    access_token: &str,
+    server_id: &str,
+    name: &str,
+    description: Option<&str>,
+    content: &str,
+    format: &str,
+) -> Result<UploadLoadtestConfigResult> {
+    let query = r#"
+        mutation UploadLoadtestConfig(
+            $serverId: String!
+            $name: String!
+            $description: String
+            $content: String!
+            $format: String
+        ) {
+            uploadLoadtestConfig(
+                serverId: $serverId
+                name: $name
+                description: $description
+                content: $content
+                format: $format
+            ) {
+                configId
+                version
+            }
+        }
+    "#;
+
+    let variables = serde_json::json!({
+        "serverId": server_id,
+        "name": name,
+        "description": description,
+        "content": content,
+        "format": format.to_lowercase()
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct UploadLoadtestConfigResponse {
+        #[serde(rename = "uploadLoadtestConfig")]
+        upload_loadtest_config: UploadLoadtestConfigResult,
+    }
+
+    let response: UploadLoadtestConfigResponse =
+        execute_graphql(access_token, query, variables).await?;
+
+    Ok(response.upload_loadtest_config)
+}
