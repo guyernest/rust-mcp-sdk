@@ -82,7 +82,7 @@ See: `.planning/milestones/v1.3-ROADMAP.md` for full phase details
   2. Ch 14 covers HdrHistogram metrics, breaking point detection, coordinated omission correction, and result interpretation so readers understand what the numbers mean
   3. Ch 14 includes a CI/CD integration section with JSON report consumption and a GitHub Actions workflow example
   4. Ch 15 contains a brief "Load Testing" section that introduces the concept and cross-references Ch 14 for full details
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 20-01-PLAN.md — Write complete Ch 14 (Performance & Load Testing) covering CLI, config, execution modes, metrics, breaking point, and CI/CD
@@ -172,7 +172,7 @@ Phase 20 and 21 are independent (can run in parallel). Phase 22 and 23 are indep
 | 17. Authoring DX | v1.3 | 2/2 | Complete | 2026-02-26 |
 | 18. Publishing | v1.3 | 2/2 | Complete | 2026-02-26 |
 | 19. Ship + E2E | v1.3 | 2/2 | Complete | 2026-02-26 |
-| 20. Book Load Testing | v1.4 | 0/2 | Planned | - |
+| 20. Book Load Testing | 1/2 | In Progress|  | - |
 | 21. Book MCP Apps | v1.4 | 0/? | Not started | - |
 | 22. Course Load Testing | v1.4 | 0/? | Not started | - |
 | 23. Course MCP Apps | v1.4 | 0/? | Not started | - |
