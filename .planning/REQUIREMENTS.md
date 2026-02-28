@@ -18,8 +18,8 @@ Requirements for the Book & Course Update milestone. Each maps to roadmap phases
 
 - [x] **BKAP-01**: Ch 12.5 updated with WidgetDir file-based authoring pattern and hot-reload development workflow
 - [x] **BKAP-02**: Ch 12.5 updated with `cargo pmcp app new/build/preview` developer workflow
-- [ ] **BKAP-03**: Ch 12.5 updated with multi-platform adapter pattern (ChatGPT, MCP Apps, MCP-UI) and bridge API
-- [ ] **BKAP-04**: Ch 12.5 references current examples (chess, map, dataviz) with architecture explanations
+- [x] **BKAP-03**: Ch 12.5 updated with multi-platform adapter pattern (ChatGPT, MCP Apps, MCP-UI) and bridge API
+- [x] **BKAP-04**: Ch 12.5 references current examples (chess, map, dataviz) with architecture explanations
 
 ### Course Load Testing (CRLT)
 
@@ -65,8 +65,8 @@ None — this milestone is self-contained documentation work.
 | BKLT-04 | Phase 20 | Complete |
 | BKAP-01 | Phase 21 | Complete |
 | BKAP-02 | Phase 21 | Complete |
-| BKAP-03 | Phase 21 | Pending |
-| BKAP-04 | Phase 21 | Pending |
+| BKAP-03 | Phase 21 | Complete |
+| BKAP-04 | Phase 21 | Complete |
 | CRLT-01 | Phase 22 | Pending |
 | CRLT-02 | Phase 22 | Pending |
 | CRLT-03 | Phase 22 | Pending |

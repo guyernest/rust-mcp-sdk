@@ -66,7 +66,7 @@ See: `.planning/milestones/v1.3-ROADMAP.md` for full phase details
 **Milestone Goal:** Update pmcp-book and pmcp-course with load testing documentation and refresh MCP Apps chapters to reflect the latest SDK features.
 
 - [x] **Phase 20: Book Load Testing** — Write Ch 14 performance chapter and update Ch 15 with load testing cross-reference (completed 2026-02-28)
-- [ ] **Phase 21: Book MCP Apps Refresh** — Update Ch 12.5 with WidgetDir, cargo pmcp app workflow, and adapter pattern
+- [x] **Phase 21: Book MCP Apps Refresh** — Update Ch 12.5 with WidgetDir, cargo pmcp app workflow, and adapter pattern (completed 2026-02-28)
 - [ ] **Phase 22: Course Load Testing** — Write Ch 18-03 hands-on tutorial and update Ch 12 with cross-reference
 - [ ] **Phase 23: Course MCP Apps Refresh** — Update Ch 20 sub-chapters with latest SDK features and examples
 - [ ] **Phase 24: Course Quizzes & Exercises** — Add quizzes, exercises, and update SUMMARY.md for new content
@@ -173,7 +173,7 @@ Phase 20 and 21 are independent (can run in parallel). Phase 22 and 23 are indep
 | 18. Publishing | v1.3 | 2/2 | Complete | 2026-02-26 |
 | 19. Ship + E2E | v1.3 | 2/2 | Complete | 2026-02-26 |
 | 20. Book Load Testing | 2/2 | Complete    | 2026-02-28 | - |
-| 21. Book MCP Apps | 1/2 | In Progress|  | - |
+| 21. Book MCP Apps | 2/2 | Complete   | 2026-02-28 | - |
 | 22. Course Load Testing | v1.4 | 0/? | Not started | - |
 | 23. Course MCP Apps | v1.4 | 0/? | Not started | - |
 | 24. Course Quizzes | v1.4 | 0/? | Not started | - |

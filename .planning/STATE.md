@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Book & Course Update
 status: in-progress
-last_updated: "2026-02-28T02:24:00Z"
+last_updated: "2026-02-28T02:30:08Z"
 progress:
   total_phases: 1
   completed_phases: 1
   total_plans: 2
-  completed_plans: 3
+  completed_plans: 4
 ---
 
 # Project State
@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-02-27)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state, plus developers can build rich UI widgets served from MCP servers.
-**Current focus:** v1.4 Book & Course Update — Phase 21 in progress (plan 01 of 2 done)
+**Current focus:** v1.4 Book & Course Update — Phase 21 complete (2 of 2 plans done)
 
 ## Current Position
 
 Phase: 21 of 24 (Book MCP Apps Refresh)
-Plan: 01 of 2 (21-01 complete)
-Status: Phase 21 in progress
-Last activity: 2026-02-28 — Completed 21-01 (Ch 12.5 MCP Apps rewrite: WidgetDir, bridge, CLI workflow)
+Plan: 02 of 2 (21-02 complete -- phase done)
+Status: Phase 21 complete
+Last activity: 2026-02-28 — Completed 21-02 (Ch 12.5 adapter pattern and example walkthroughs)
 
-Progress: [###░░░░░░░] 30%
+Progress: [####░░░░░░] 40%
 
 ## Shipped Milestones
 
@@ -41,8 +41,8 @@ Progress: [###░░░░░░░] 30%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 43 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 3)
-- Total phases completed: 20
+- Total plans completed: 44 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 4)
+- Total phases completed: 21
 
 ## Accumulated Context
 
@@ -58,6 +58,7 @@ See PROJECT.md Key Decisions table for full history.
 - Added Load Testing as top layer of Testing Pyramid in Ch 15
 - Ch 14 written as 961-line comprehensive chapter with all details from source code
 - Ch 12.5 rewritten from UIResourceBuilder to WidgetDir file-based authoring with full cargo pmcp CLI workflow
+- Ch 12.5 completed with adapter pattern docs, chess/map/dataviz walkthroughs, and 4-step common architecture pattern
 
 ### Pending Todos
 
@@ -70,5 +71,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 21-01-PLAN.md (Ch 12.5 MCP Apps rewrite first half)
-Resume: Proceed to 21-02 (Adapter pattern and example walkthroughs)
+Stopped at: Completed 21-02-PLAN.md (Ch 12.5 adapter pattern and example walkthroughs)
+Resume: Proceed to Phase 22 (Course chapters)
