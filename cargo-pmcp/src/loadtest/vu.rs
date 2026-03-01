@@ -10,6 +10,7 @@ use crate::loadtest::config::{LoadTestConfig, ScenarioStep};
 use crate::loadtest::error::McpError;
 use crate::loadtest::metrics::{OperationType, RequestSample};
 
+use pmcp::client::http_middleware::HttpMiddlewareChain;
 use rand::distr::weighted::WeightedIndex;
 use rand::prelude::*;
 use reqwest::Client;
@@ -140,13 +141,19 @@ async fn try_initialize(
     sample_tx: &mpsc::Sender<RequestSample>,
     cancel: &CancellationToken,
     max_attempts: u32,
+    http_middleware_chain: Option<Arc<HttpMiddlewareChain>>,
 ) -> Option<McpClient> {
     for attempt in 0..max_attempts {
         if cancel.is_cancelled() {
             return None;
         }
 
-        let mut client = McpClient::new(http_client.clone(), base_url.to_owned(), timeout);
+        let mut client = McpClient::new(
+            http_client.clone(),
+            base_url.to_owned(),
+            timeout,
+            http_middleware_chain.clone(),
+        );
         let start = Instant::now();
         let result = client.initialize().await;
         let duration = start.elapsed();
@@ -198,6 +205,7 @@ pub async fn vu_loop(
     iteration_counter: Option<Arc<AtomicU64>>,
     max_iterations: Option<u64>,
     active_vus: ActiveVuCounter,
+    http_middleware_chain: Option<Arc<HttpMiddlewareChain>>,
 ) {
     active_vus.increment();
 
@@ -211,6 +219,7 @@ pub async fn vu_loop(
         &cancel,
         iteration_counter.as_ref(),
         max_iterations,
+        http_middleware_chain,
     )
     .await;
 
@@ -234,6 +243,7 @@ async fn vu_loop_inner(
     cancel: &CancellationToken,
     iteration_counter: Option<&Arc<AtomicU64>>,
     max_iterations: Option<u64>,
+    http_middleware_chain: Option<Arc<HttpMiddlewareChain>>,
 ) -> Result<(), String> {
     let timeout = config.settings.timeout_as_duration();
 
@@ -246,6 +256,7 @@ async fn vu_loop_inner(
         sample_tx,
         cancel,
         MAX_RESPAWN_ATTEMPTS,
+        http_middleware_chain.clone(),
     )
     .await
     .ok_or_else(|| "all initialize attempts failed".to_string())?;
@@ -309,6 +320,7 @@ async fn vu_loop_inner(
                     sample_tx,
                     cancel,
                     MAX_RESPAWN_ATTEMPTS,
+                    http_middleware_chain.clone(),
                 )
                 .await
                 .ok_or_else(|| "all respawn attempts failed".to_string())?;

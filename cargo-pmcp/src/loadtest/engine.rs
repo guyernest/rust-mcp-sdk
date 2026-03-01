@@ -17,6 +17,7 @@ use crate::loadtest::error::LoadTestError;
 use crate::loadtest::metrics::{MetricsRecorder, MetricsSnapshot, RequestSample};
 use crate::loadtest::vu::{vu_loop, ActiveVuCounter};
 
+use pmcp::client::http_middleware::HttpMiddlewareChain;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -61,6 +62,7 @@ pub struct LoadTestEngine {
     max_iterations: Option<u64>,
     ramp_up: Option<Duration>,
     no_color: bool,
+    http_middleware_chain: Option<Arc<HttpMiddlewareChain>>,
 }
 
 impl LoadTestEngine {
@@ -72,6 +74,7 @@ impl LoadTestEngine {
             max_iterations: None,
             ramp_up: None,
             no_color: false,
+            http_middleware_chain: None,
         }
     }
 
@@ -93,6 +96,19 @@ impl LoadTestEngine {
     /// Disables colored output.
     pub fn with_no_color(mut self, no_color: bool) -> Self {
         self.no_color = no_color;
+        self
+    }
+
+    /// Sets an optional HTTP middleware chain for authentication.
+    ///
+    /// The middleware chain is shared (via `Arc`) across all virtual users.
+    /// It is applied in [`McpClient::send_request`] before each HTTP POST,
+    /// allowing transparent injection of `Authorization` headers.
+    pub fn with_http_middleware(
+        mut self,
+        chain: Option<Arc<HttpMiddlewareChain>>,
+    ) -> Self {
+        self.http_middleware_chain = chain;
         self
     }
 
@@ -174,6 +190,7 @@ impl LoadTestEngine {
                     iteration_counter.clone(),
                     self.max_iterations,
                     active_vus.clone(),
+                    self.http_middleware_chain.clone(),
                 ));
                 if i < vu_count - 1 {
                     tokio::time::sleep(delay_per_vu).await;
@@ -192,6 +209,7 @@ impl LoadTestEngine {
                     iteration_counter.clone(),
                     self.max_iterations,
                     active_vus.clone(),
+                    self.http_middleware_chain.clone(),
                 ));
             }
             ramp_up_end = test_start; // No ramp-up, all metrics count
@@ -397,6 +415,7 @@ impl LoadTestEngine {
                                 iteration_counter.clone(),
                                 self.max_iterations,
                                 active_vus.clone(),
+                                self.http_middleware_chain.clone(),
                             ));
                             next_vu_id += 1;
 
