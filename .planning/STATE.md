@@ -72,5 +72,13 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 25-02-PLAN.md — Phase 25 complete
-Resume file: None
+Stopped at: Phase 26 context gathered — ready for planning
+Resume: /gsd:plan-phase 26
+
+### Important Notes
+- Phase 25 (loadtest config upload) is COMPLETE — all 9 requirements satisfied
+- Phase 26 (add OAuth to loadtest) has CONTEXT.md written with CORRECT pattern
+- Key insight: Auth is CLI-flag based (--oauth-client-id etc), NOT in TOML config
+- Must reuse OAuthHelper from crates/mcp-tester — NOT reinvent auth
+- Mirror `cargo pmcp test` auth pattern exactly for consistency
+- Previous auto-answered discussion was wrong (invented [auth] TOML section) — corrected CONTEXT.md committed
