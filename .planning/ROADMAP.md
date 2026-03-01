@@ -136,7 +136,7 @@ Plans:
 **Goal:** Generalize OAuthHelper into the core SDK and wire OAuth/API-key authentication into `cargo pmcp loadtest run` so VUs can target protected MCP servers
 **Requirements**: OAUTH-01, OAUTH-02, OAUTH-03, OAUTH-04, OAUTH-05, OAUTH-06
 **Depends on:** Phase 25
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 
 Plans:
 - [x] 26-01-PLAN.md — Move OAuthHelper to core SDK (src/client/oauth.rs) with oauth feature gate (wave 1) -- completed 2026-03-01

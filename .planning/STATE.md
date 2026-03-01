@@ -23,11 +23,11 @@ See: .planning/PROJECT.md (updated 2026-02-27)
 ## Current Position
 
 Phase: 26 (Add OAuth Support to Load-Testing)
-Plan: 2 of 4 in current phase
+Plan: 3 of 4 in current phase
 Status: In Progress
-Last activity: 2026-03-01 — Completed 26-02 (2 tasks, 4 files)
+Last activity: 2026-03-01 — Completed 26-03 (2 tasks, 7 files)
 
-Progress: [█████-----] 50%
+Progress: [███████---] 75%
 
 ## Shipped Milestones
 
@@ -42,7 +42,7 @@ Progress: [█████-----] 50%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 54 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 2, v1.6: 2)
+- Total plans completed: 55 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 2, v1.6: 3)
 - Total phases completed: 25
 
 ## Accumulated Context
@@ -62,6 +62,9 @@ v1.6 decisions:
 - All colored terminal output replaced with tracing calls in extracted OAuthHelper
 - OAuth module double-gated: not(wasm32) + feature="oauth"
 - Kept base64/rand/url in mcp-tester (used by tester.rs independently), removed sha2/webbrowser/dirs (oauth-only)
+- API key takes precedence over OAuth when both provided (simpler, no flow needed)
+- Middleware chain Arc-wrapped and shared across VUs (not per-VU allocation)
+- Auth acquired ONCE at startup before VU spawn -- fail fast on bad config
 
 ### Roadmap Evolution
 
@@ -78,8 +81,8 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-01
-Stopped at: Completed 26-02-PLAN.md (Wire mcp-tester to SDK OAuthHelper)
-Resume: /gsd:execute-phase 26 (plan 26-03 next)
+Stopped at: Completed 26-03-PLAN.md (Wire OAuth Middleware into Loadtest Subsystem)
+Resume: /gsd:execute-phase 26 (plan 26-04 next)
 
 ### Important Notes
 - Phase 25 (loadtest config upload) is COMPLETE — all 9 requirements satisfied
