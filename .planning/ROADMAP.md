@@ -101,7 +101,7 @@ Plans:
 
 ## Progress
 
-**Execution Order:** Phase 25
+**Execution Order:** Phase 26
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -130,3 +130,14 @@ Plans:
 | 23. Course MCP Apps | v1.4 | 2/2 | Complete | 2026-02-28 |
 | 24. Course Quizzes | v1.4 | 2/2 | Complete | 2026-02-28 |
 | 25. Loadtest Upload | 2/2 | Complete    | 2026-02-28 | - |
+
+### Phase 26: Add OAuth support to Load-Testing
+
+**Goal:** Add OAuth and API key authentication to `cargo pmcp loadtest run` so VUs can target OAuth-protected MCP servers, mirroring the `cargo pmcp test` auth pattern
+**Requirements**: OAUTH-01, OAUTH-02, OAUTH-03, OAUTH-04, OAUTH-05, OAUTH-06
+**Depends on:** Phase 25
+**Plans:** 2 plans
+
+Plans:
+- [ ] 26-01-PLAN.md — Thread auth header through McpClient, VU loop, engine + add CLI flags and OAuth/API-key setup
+- [ ] 26-02-PLAN.md — Quality gates, clippy, fmt, tests + auth type display
