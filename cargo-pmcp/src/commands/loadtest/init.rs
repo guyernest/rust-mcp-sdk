@@ -77,7 +77,7 @@ struct DiscoveredPrompt {
 async fn discover_schema(url: &str) -> Result<DiscoveredSchema> {
     let http = reqwest::Client::new();
     let timeout = Duration::from_secs(10);
-    let mut client = McpClient::new(http, url.to_owned(), timeout);
+    let mut client = McpClient::new(http, url.to_owned(), timeout, None);
 
     // Initialize session
     client

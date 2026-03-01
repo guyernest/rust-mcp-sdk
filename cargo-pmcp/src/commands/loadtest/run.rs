@@ -1,8 +1,10 @@
 //! `cargo pmcp loadtest run` command implementation.
 
 use anyhow::Result;
+use pmcp::client::http_middleware::HttpMiddlewareChain;
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use cargo_pmcp::loadtest::config::LoadTestConfig;
 use cargo_pmcp::loadtest::engine::LoadTestEngine;
@@ -21,6 +23,12 @@ pub async fn execute_run(
     iterations: Option<u64>,
     no_report: bool,
     no_color: bool,
+    api_key: Option<String>,
+    oauth_client_id: Option<String>,
+    oauth_issuer: Option<String>,
+    oauth_scopes: Option<Vec<String>>,
+    oauth_no_cache: bool,
+    oauth_redirect_port: u16,
 ) -> Result<()> {
     // Step 1: Load config
     let config_file = match config_path {
@@ -53,12 +61,32 @@ pub async fn execute_run(
     // Step 2: Apply CLI overrides
     apply_overrides(&mut config, vus, duration);
 
+    // Step 2.5: Set up authentication middleware (acquire token ONCE before spawning VUs)
+    let is_oauth = oauth_client_id.is_some();
+    let http_middleware_chain = resolve_auth_middleware(
+        &url,
+        api_key,
+        oauth_client_id,
+        oauth_issuer,
+        oauth_scopes,
+        oauth_no_cache,
+        oauth_redirect_port,
+    )
+    .await?;
+
+    match &http_middleware_chain {
+        Some(_) if is_oauth => eprintln!("Authentication: OAuth 2.0 (token acquired)"),
+        Some(_) => eprintln!("Authentication: API key"),
+        None => eprintln!("Authentication: none"),
+    }
+
     // Step 3: Build and run the engine
     let mut engine = LoadTestEngine::new(config, url.clone());
     if let Some(n) = iterations {
         engine = engine.with_iterations(n);
     }
     engine = engine.with_no_color(no_color);
+    engine = engine.with_http_middleware(http_middleware_chain);
 
     let result = engine
         .run()
@@ -129,6 +157,71 @@ fn discover_config() -> Option<PathBuf> {
             return None;
         }
     }
+}
+
+/// Resolve authentication middleware from CLI flags.
+///
+/// Checks for API key (simpler, takes precedence) or OAuth client ID
+/// (triggers full OAuth flow). Returns `None` when no auth is configured.
+/// OAuth token acquisition happens once at startup (fail-fast on bad config).
+async fn resolve_auth_middleware(
+    mcp_server_url: &str,
+    api_key: Option<String>,
+    oauth_client_id: Option<String>,
+    oauth_issuer: Option<String>,
+    oauth_scopes: Option<Vec<String>>,
+    oauth_no_cache: bool,
+    oauth_redirect_port: u16,
+) -> Result<Option<Arc<HttpMiddlewareChain>>> {
+    // API key takes precedence (simpler, no flow needed)
+    if let Some(key) = api_key {
+        use pmcp::client::oauth_middleware::{BearerToken, OAuthClientMiddleware};
+
+        eprintln!("Using API key authentication");
+        let bearer_token = BearerToken::new(key);
+        let middleware = OAuthClientMiddleware::new(bearer_token);
+        let mut chain = HttpMiddlewareChain::new();
+        chain.add(Arc::new(middleware));
+        return Ok(Some(Arc::new(chain)));
+    }
+
+    // OAuth flow if client_id is provided
+    if let Some(client_id) = oauth_client_id {
+        use pmcp::client::oauth::{default_cache_path, OAuthConfig, OAuthHelper};
+
+        let scopes = oauth_scopes.unwrap_or_else(|| vec!["openid".to_string()]);
+        let cache_file = if oauth_no_cache {
+            None
+        } else {
+            Some(default_cache_path())
+        };
+
+        let config = OAuthConfig {
+            issuer: oauth_issuer.clone(),
+            mcp_server_url: Some(mcp_server_url.to_string()),
+            client_id,
+            scopes,
+            cache_file,
+            redirect_port: oauth_redirect_port,
+        };
+
+        let helper = OAuthHelper::new(config)
+            .map_err(|e| anyhow::anyhow!("OAuth setup failed: {e}"))?;
+        let chain = helper
+            .create_middleware_chain()
+            .await
+            .map_err(|e| anyhow::anyhow!("OAuth authentication failed: {e}"))?;
+        return Ok(Some(chain));
+    }
+
+    // Warn if issuer provided without client_id
+    if oauth_issuer.is_some() {
+        eprintln!(
+            "Warning: --oauth-issuer provided but --oauth-client-id missing. OAuth disabled."
+        );
+    }
+
+    Ok(None)
 }
 
 #[cfg(test)]

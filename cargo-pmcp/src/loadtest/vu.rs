@@ -133,6 +133,7 @@ fn is_session_fatal(err: &McpError) -> bool {
 ///
 /// Returns the initialized client and the request sample for the initialize call,
 /// or `None` if initialization failed after all respawn attempts.
+#[allow(clippy::too_many_arguments)]
 async fn try_initialize(
     vu_id: u32,
     http_client: &Client,

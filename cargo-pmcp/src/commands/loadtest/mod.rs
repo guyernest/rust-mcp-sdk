@@ -46,6 +46,30 @@ pub enum LoadtestCommand {
         /// Disable colored output
         #[arg(long)]
         no_color: bool,
+
+        /// API key for authentication (sent as Bearer token)
+        #[arg(long, env = "MCP_API_KEY")]
+        api_key: Option<String>,
+
+        /// OAuth client ID (triggers OAuth flow)
+        #[arg(long, env = "MCP_OAUTH_CLIENT_ID")]
+        oauth_client_id: Option<String>,
+
+        /// OAuth issuer URL (auto-discovered from server if omitted)
+        #[arg(long, env = "MCP_OAUTH_ISSUER")]
+        oauth_issuer: Option<String>,
+
+        /// OAuth scopes (comma-separated, default: openid)
+        #[arg(long, env = "MCP_OAUTH_SCOPES", value_delimiter = ',')]
+        oauth_scopes: Option<Vec<String>>,
+
+        /// Disable OAuth token caching
+        #[arg(long)]
+        oauth_no_cache: bool,
+
+        /// OAuth redirect port for localhost callback (default: 8080)
+        #[arg(long, env = "MCP_OAUTH_REDIRECT_PORT", default_value = "8080")]
+        oauth_redirect_port: u16,
     },
 
     /// Generate a starter loadtest config file
@@ -97,10 +121,28 @@ impl LoadtestCommand {
                 iterations,
                 no_report,
                 no_color,
+                api_key,
+                oauth_client_id,
+                oauth_issuer,
+                oauth_scopes,
+                oauth_no_cache,
+                oauth_redirect_port,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
                 runtime.block_on(run::execute_run(
-                    url, config, vus, duration, iterations, no_report, no_color,
+                    url,
+                    config,
+                    vus,
+                    duration,
+                    iterations,
+                    no_report,
+                    no_color,
+                    api_key,
+                    oauth_client_id,
+                    oauth_issuer,
+                    oauth_scopes,
+                    oauth_no_cache,
+                    oauth_redirect_port,
                 ))
             },
             LoadtestCommand::Init { url, force } => {
