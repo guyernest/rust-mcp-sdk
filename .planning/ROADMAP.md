@@ -133,11 +133,13 @@ Plans:
 
 ### Phase 26: Add OAuth support to Load-Testing
 
-**Goal:** Add OAuth and API key authentication to `cargo pmcp loadtest run` so VUs can target OAuth-protected MCP servers, mirroring the `cargo pmcp test` auth pattern
+**Goal:** Generalize OAuthHelper into the core SDK and wire OAuth/API-key authentication into `cargo pmcp loadtest run` so VUs can target protected MCP servers
 **Requirements**: OAUTH-01, OAUTH-02, OAUTH-03, OAUTH-04, OAUTH-05, OAUTH-06
 **Depends on:** Phase 25
-**Plans:** 2 plans
+**Plans:** 4 plans
 
 Plans:
-- [ ] 26-01-PLAN.md — Thread auth header through McpClient, VU loop, engine + add CLI flags and OAuth/API-key setup
-- [ ] 26-02-PLAN.md — Quality gates, clippy, fmt, tests + auth type display
+- [ ] 26-01-PLAN.md — Move OAuthHelper to core SDK (src/client/oauth.rs) with oauth feature gate (wave 1)
+- [ ] 26-02-PLAN.md — Update mcp-tester to use SDK's OAuthHelper, delete local oauth.rs (wave 2)
+- [ ] 26-03-PLAN.md — Wire OAuth middleware into loadtest: McpClient + engine + VU + CLI flags (wave 2)
+- [ ] 26-04-PLAN.md — Quality gates across all three crates + auth type display (wave 3)
