@@ -72,7 +72,7 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Phase 26 context gathered — ready for planning
+Stopped at: Phase 26 planning initialized — context loaded, ready to spawn planner
 Resume: /gsd:plan-phase 26
 
 ### Important Notes
@@ -81,4 +81,6 @@ Resume: /gsd:plan-phase 26
 - Key insight: Auth is CLI-flag based (--oauth-client-id etc), NOT in TOML config
 - Must reuse OAuthHelper from crates/mcp-tester — NOT reinvent auth
 - Mirror `cargo pmcp test` auth pattern exactly for consistency
-- Previous auto-answered discussion was wrong (invented [auth] TOML section) — corrected CONTEXT.md committed
+- CONTEXT.md corrected and committed (ebb899f)
+- phase_req_ids is null in init — phase 26 was added via /gsd:add-phase without requirements. Planner should derive from CONTEXT.md and ROADMAP.md
+- No REQUIREMENTS.md update needed — phase 26 requirements will be implicit from context
