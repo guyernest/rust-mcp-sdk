@@ -57,6 +57,10 @@ v1.5 decisions:
 - Config name defaults to filename stem when --name not provided
 - Pre-existing unused import in metadata.rs test module left unfixed (out of scope)
 
+### Roadmap Evolution
+
+- Phase 26 added: Add OAuth support to Load-Testing
+
 ### Pending Todos
 
 None.
