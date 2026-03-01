@@ -205,8 +205,8 @@ async fn resolve_auth_middleware(
             redirect_port: oauth_redirect_port,
         };
 
-        let helper = OAuthHelper::new(config)
-            .map_err(|e| anyhow::anyhow!("OAuth setup failed: {e}"))?;
+        let helper =
+            OAuthHelper::new(config).map_err(|e| anyhow::anyhow!("OAuth setup failed: {e}"))?;
         let chain = helper
             .create_middleware_chain()
             .await

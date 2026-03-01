@@ -104,10 +104,7 @@ impl LoadTestEngine {
     /// The middleware chain is shared (via `Arc`) across all virtual users.
     /// It is applied in [`McpClient::send_request`] before each HTTP POST,
     /// allowing transparent injection of `Authorization` headers.
-    pub fn with_http_middleware(
-        mut self,
-        chain: Option<Arc<HttpMiddlewareChain>>,
-    ) -> Self {
+    pub fn with_http_middleware(mut self, chain: Option<Arc<HttpMiddlewareChain>>) -> Self {
         self.http_middleware_chain = chain;
         self
     }

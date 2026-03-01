@@ -261,9 +261,7 @@ impl McpClient {
         body: &Value,
     ) -> Result<(reqwest::header::HeaderMap, Vec<u8>), McpError> {
         if let Some(ref chain) = self.http_middleware_chain {
-            use pmcp::client::http_middleware::{
-                HttpMiddlewareContext, HttpRequest as MwRequest,
-            };
+            use pmcp::client::http_middleware::{HttpMiddlewareContext, HttpRequest as MwRequest};
 
             let body_bytes = serde_json::to_vec(body).map_err(|e| McpError::Connection {
                 message: format!("JSON serialize: {e}"),
@@ -276,8 +274,7 @@ impl McpClient {
                 http_req.add_header(SESSION_HEADER, sid);
             }
 
-            let context =
-                HttpMiddlewareContext::new(self.base_url.clone(), "POST".to_string());
+            let context = HttpMiddlewareContext::new(self.base_url.clone(), "POST".to_string());
             chain
                 .process_request(&mut http_req, &context)
                 .await
