@@ -18,16 +18,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-02-27)
 
 **Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state, plus developers can build rich UI widgets and upload loadtest configs for cloud execution.
-**Current focus:** v1.5 Cloud Load Testing Upload — Phase 25
+**Current focus:** v1.6 OAuth Load Testing — Phase 26
 
 ## Current Position
 
-Phase: 25 of 25 (Loadtest Config Upload)
-Plan: 2 of 2 in current phase
-Status: Complete
-Last activity: 2026-02-28 — Completed 25-02 (2 tasks, 1 file)
+Phase: 26 (Add OAuth Support to Load-Testing)
+Plan: 1 of 4 in current phase
+Status: In Progress
+Last activity: 2026-03-01 — Completed 26-01 (2 tasks, 3 files)
 
-Progress: [██████████] 100%
+Progress: [███-------] 25%
 
 ## Shipped Milestones
 
@@ -42,7 +42,7 @@ Progress: [██████████] 100%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 52 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 2)
+- Total plans completed: 53 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 2, v1.6: 1)
 - Total phases completed: 25
 
 ## Accumulated Context
@@ -56,6 +56,11 @@ v1.5 decisions:
 - Validate TOML config before authenticating -- fail fast on bad configs without wasting OAuth time
 - Config name defaults to filename stem when --name not provided
 - Pre-existing unused import in metadata.rs test module left unfixed (out of scope)
+
+v1.6 decisions:
+- Token cache path changed from ~/.mcp-tester/ to ~/.pmcp/oauth-tokens.json for SDK consistency
+- All colored terminal output replaced with tracing calls in extracted OAuthHelper
+- OAuth module double-gated: not(wasm32) + feature="oauth"
 
 ### Roadmap Evolution
 
@@ -71,9 +76,9 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-28
-Stopped at: Phase 26 planning initialized — context loaded, ready to spawn planner
-Resume: /gsd:plan-phase 26
+Last session: 2026-03-01
+Stopped at: Completed 26-01-PLAN.md (Extract OAuthHelper to core SDK)
+Resume: /gsd:execute-phase 26 (plan 26-02 next)
 
 ### Important Notes
 - Phase 25 (loadtest config upload) is COMPLETE — all 9 requirements satisfied
