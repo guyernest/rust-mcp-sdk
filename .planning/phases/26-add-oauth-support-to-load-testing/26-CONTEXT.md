@@ -6,80 +6,71 @@
 <domain>
 ## Phase Boundary
 
-Add authentication support to the loadtest engine so VUs can target OAuth-protected MCP servers. Three auth types: OAuth client_credentials flow, static bearer tokens, and API key headers. Auth is configured via a new `[auth]` section in the loadtest TOML config.
+Add OAuth and API key authentication support to `cargo pmcp loadtest run` so VUs can target OAuth-protected MCP servers. Mirror the existing `cargo pmcp test` auth pattern for consistency.
 
 </domain>
 
 <decisions>
 ## Implementation Decisions
 
-### Auth config shape
-- New top-level `[auth]` section in loadtest TOML alongside `[settings]` and `[[scenario]]`
-- `type` field discriminates between auth types: `"oauth"`, `"bearer"`, `"api_key"`
-- Omitting `[auth]` entirely means no auth (backward compatible)
-- Secrets via env vars only — env var NAMES specified in TOML, not secret values
-- OAuth config explicitly names env vars: `client_id_env`, `client_secret_env`
+### Auth is CLI-flag based, NOT in TOML config
+- Mirror `cargo pmcp test` exactly: auth via CLI flags and env vars, NOT in the loadtest TOML config
+- Same flags: `--oauth-client-id`, `--oauth-issuer`, `--oauth-scopes`, `--oauth-no-cache`, `--oauth-redirect-port`, `--api-key`
+- Same env vars: `MCP_OAUTH_CLIENT_ID`, `MCP_OAUTH_ISSUER`, `MCP_OAUTH_SCOPES`, `MCP_API_KEY`
+- Loadtest TOML config files stay auth-free (same config works with any auth provider)
 
-### Auth types
-- **OAuth (`type = "oauth"`)**: client_credentials flow with `token_url`, `client_id_env`, `client_secret_env`, `scopes`
-- **Bearer (`type = "bearer"`)**: static token from env var via `token_env`
-- **API Key (`type = "api_key"`)**: configurable header name via `header` field, key from env var via `key_env`
+### Reuse existing OAuthHelper from mcp-tester
+- `crates/mcp-tester/src/oauth.rs` has the complete OAuth implementation: PKCE auth code flow, device code fallback, token caching, refresh
+- Loadtest should reuse `OAuthHelper` and `OAuthClientMiddleware` — not reimplement
+- Token cached to `~/.mcp-tester/tokens.json` (shared with test commands)
 
-### TOML examples
-```toml
-# OAuth client_credentials
-[auth]
-type = "oauth"
-token_url = "https://auth.example.com/token"
-client_id_env = "MY_CLIENT_ID"
-client_secret_env = "MY_CLIENT_SECRET"
-scopes = ["mcp:read", "mcp:write"]
+### Auth flow mirrors test commands
+- Token acquired ONCE at startup before VUs spawn (fail fast on misconfigured auth)
+- Auto-discovery via `/.well-known/openid-configuration` from the MCP server URL
+- Browser-based auth code + PKCE flow (primary), device code flow (fallback)
+- Token refresh if expired, re-auth if refresh fails
 
-# Bearer token
-[auth]
-type = "bearer"
-token_env = "MY_BEARER_TOKEN"
+### Header injection via middleware chain
+- `OAuthClientMiddleware` wraps `reqwest::Client` — adds `Authorization: Bearer <token>` transparently
+- `McpClient` does NOT need manual auth header logic — middleware handles it
+- For `--api-key`: same pattern as test commands (direct header injection)
+
+### Usage should look identical to test commands
+```bash
+# OAuth
+cargo pmcp loadtest run https://api.example.com/mcp \
+  --config loadtest.toml \
+  --oauth-client-id MY_CLIENT_ID
+
+# With explicit issuer
+cargo pmcp loadtest run https://api.example.com/mcp \
+  --config loadtest.toml \
+  --oauth-client-id MY_CLIENT_ID \
+  --oauth-issuer https://auth.example.com
 
 # API key
-[auth]
-type = "api_key"
-header = "X-API-Key"
-key_env = "MY_API_KEY"
+cargo pmcp loadtest run https://api.example.com/mcp \
+  --config loadtest.toml \
+  --api-key my-secret-token
+
+# Environment variables
+export MCP_OAUTH_CLIENT_ID="my-client-id"
+cargo pmcp loadtest run https://api.example.com/mcp --config loadtest.toml
 ```
 
-### Token lifecycle
-- Shared token across all VUs (one fetch, all VUs use it)
-- Pre-fetch before test starts (during setup, before VU spawn) — fail fast on misconfigured auth
-- Token fetch time NOT counted in test metrics
-- Auto-refresh during long-running tests if token expires (check expiry or react to 401)
-- Detailed error guidance on token fetch failure: which env var is missing/empty, what the token URL returned, suggested fixes
-
-### Header injection
-- New `auth_header: Option<(String, String)>` field on `McpClient` struct
-- `send_request()` adds auth header if present (alongside existing Content-Type and session-id)
-- For OAuth: `("Authorization", "Bearer {token}")`
-- For Bearer: `("Authorization", "Bearer {token}")`
-- For API Key: `("{header_name}", "{key_value}")`
-
-### Display and metrics
-- Auth type shown in test summary ASCII header (e.g., "Auth: OAuth (client_credentials)")
-- New `auth` error category alongside existing timeout/jsonrpc/http/connection — 401 responses classified as auth errors
-- Manual config only — no auto-discovery from server well-known endpoints
-
 ### Claude's Discretion
-- Token refresh strategy details (proactive expiry check vs reactive 401 handling)
-- Auth validation ordering within config parse
-- Exact error message wording
-- Whether to cache token with Arc<RwLock> or simpler approach
+- How to thread the middleware chain through the loadtest engine to McpClient instances
+- Whether McpClient needs refactoring to accept a middleware-wrapped client or if reqwest middleware suffices
+- Auth type display in test summary (nice to have, not critical)
 
 </decisions>
 
 <specifics>
 ## Specific Ideas
 
-- OAuth config should mirror the env-var-reference pattern: TOML names the env var, runtime reads the value. This prevents secrets from being committed.
-- The `[auth]` section is optional — existing TOML configs without it continue to work unchanged.
-- Token fetch failure should be actionable: "Environment variable MY_CLIENT_ID is not set. Set it or update client_id_env in your loadtest config."
+- Keep it simple and consistent with `cargo pmcp test` — same flags, same OAuthHelper, same flows
+- If opportunities to improve on the test auth support are discovered during implementation, those can be explored
+- The loadtest TOML config should NOT grow an `[auth]` section — auth is always CLI/env based
 
 </specifics>
 
@@ -87,24 +78,23 @@ key_env = "MY_API_KEY"
 ## Existing Code Insights
 
 ### Reusable Assets
-- `McpClient` (client.rs): Already has optional header pattern (`session_id`). Adding `auth_header` follows the same approach.
-- `LoadTestConfig` (config.rs): serde-based TOML parsing with `#[serde(default)]` for optional sections. `[auth]` can use the same pattern.
-- `McpError` enum (error.rs): Classifies errors into categories. Adding `Auth` variant follows existing pattern.
-- `reqwest::Client`: Shared across VUs via `Clone`. Auth header can be set per-request in `send_request()`.
+- `OAuthHelper` (crates/mcp-tester/src/oauth.rs): Complete OAuth implementation — discovery, PKCE, device code, caching, refresh
+- `OAuthClientMiddleware` (src/client/oauth_middleware.rs): HTTP middleware that injects `Authorization: Bearer <token>` into requests
+- `HttpMiddlewareChain`: Middleware chain pattern used by ServerTester — can be reused by loadtest engine
+- `BearerToken` struct: Token with expiry tracking (`is_expired()`, `expires_soon()`)
 
 ### Established Patterns
-- serde internally-tagged enums: `ScenarioStep` uses `#[serde(tag = "type")]` — same pattern works for auth type discrimination
-- Optional config sections: `stage` field uses `#[serde(default)]` for optional `[[stage]]` blocks
-- Error classification: `McpError::classify_reqwest()` maps reqwest errors to categories
-- Test summary display: `display.rs` renders the ASCII header box with test parameters
+- CLI OAuth flags: `--oauth-client-id`, `--oauth-issuer`, `--oauth-scopes`, `--oauth-no-cache`, `--oauth-redirect-port` (in mcp-tester main.rs and test/mod.rs)
+- Token lifecycle: cache → check expiry → refresh → re-auth (OAuthHelper::get_access_token)
+- Middleware wraps reqwest::Client — auth is transparent to the request-making code
+- Token caching: `~/.mcp-tester/tokens.json`
 
 ### Integration Points
-- `LoadTestConfig` struct in config.rs — add `auth: Option<AuthConfig>` field
-- `McpClient::new()` — add auth_header parameter or setter
-- `McpClient::send_request()` — inject auth header into request builder
-- `display.rs` or `summary.rs` — add auth type line to test header
-- `McpError` enum — add `Auth` variant for 401 classification
-- Engine setup (engine.rs) — pre-fetch token before spawning VUs
+- `cargo-pmcp/src/commands/loadtest/mod.rs` — add OAuth CLI flags to `Run` variant (mirror test/mod.rs)
+- `cargo-pmcp/src/commands/loadtest/run.rs` — create OAuthHelper, get token, build middleware chain before engine start
+- `cargo-pmcp/src/loadtest/engine.rs` — accept middleware chain, pass to VU creation
+- `cargo-pmcp/src/loadtest/client.rs` — McpClient may need to accept middleware-wrapped client or auth header
+- `crates/mcp-tester` — may need to expose OAuthHelper as a public API if not already
 
 </code_context>
 
