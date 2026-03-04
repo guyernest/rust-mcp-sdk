@@ -1188,42 +1188,30 @@ pub async fn list_test_scenarios(
     Ok(ListScenariosResult { scenarios })
 }
 
-// ========== Loadtest Config Upload GraphQL Functions ==========
+// ========== Loadtest Scenario Upload GraphQL Functions ==========
 
-/// Response from uploadLoadtestConfig mutation
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct UploadLoadtestConfigResult {
-    #[serde(rename = "configId")]
-    pub config_id: String,
-    pub version: i32,
-}
-
-/// Upload a loadtest config to pmcp.run
-pub async fn upload_loadtest_config(
+/// Upload a loadtest scenario to pmcp.run
+pub async fn upload_loadtest_scenario(
     access_token: &str,
     server_id: &str,
     name: &str,
     description: Option<&str>,
     content: &str,
-    format: &str,
-) -> Result<UploadLoadtestConfigResult> {
+) -> Result<UploadScenarioResult> {
     let query = r#"
-        mutation UploadLoadtestConfig(
+        mutation UploadLoadTestScenario(
             $serverId: String!
             $name: String!
             $description: String
             $content: String!
-            $format: String
         ) {
-            uploadLoadtestConfig(
+            uploadLoadTestScenario(
                 serverId: $serverId
                 name: $name
                 description: $description
                 content: $content
-                format: $format
             ) {
-                configId
+                scenarioId
                 version
             }
         }
@@ -1234,17 +1222,16 @@ pub async fn upload_loadtest_config(
         "name": name,
         "description": description,
         "content": content,
-        "format": format.to_lowercase()
     });
 
     #[derive(Debug, Deserialize)]
-    struct UploadLoadtestConfigResponse {
-        #[serde(rename = "uploadLoadtestConfig")]
-        upload_loadtest_config: UploadLoadtestConfigResult,
+    struct UploadLoadTestScenarioResponse {
+        #[serde(rename = "uploadLoadTestScenario")]
+        upload_loadtest_scenario: UploadScenarioResult,
     }
 
-    let response: UploadLoadtestConfigResponse =
+    let response: UploadLoadTestScenarioResponse =
         execute_graphql(access_token, query, variables).await?;
 
-    Ok(response.upload_loadtest_config)
+    Ok(response.upload_loadtest_scenario)
 }

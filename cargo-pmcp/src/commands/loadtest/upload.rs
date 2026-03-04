@@ -77,7 +77,7 @@ pub async fn execute(
         println!("\n  Uploading config...");
     }
 
-    match graphql::upload_loadtest_config(
+    match graphql::upload_loadtest_scenario(
         &credentials.access_token,
         &server_id,
         &config_name,
@@ -94,7 +94,7 @@ pub async fn execute(
                     "===========================================".bright_cyan()
                 );
                 println!(
-                    "{} Uploaded '{}' (config: {}, v{})",
+                    "{} Uploaded '{}' (scenario: {}, v{})",
                     "OK".green().bold(),
                     config_name,
                     result.scenario_id,
