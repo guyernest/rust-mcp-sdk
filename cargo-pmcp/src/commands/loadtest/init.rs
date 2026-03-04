@@ -220,9 +220,34 @@ async fn discover_prompts(url: &str, session_id: Option<&str>) -> Vec<Discovered
         .unwrap_or_default()
 }
 
+/// Default ramp-up stage block appended to all generated loadtest configs.
+///
+/// Provides a 3-phase profile: ramp to 5 VUs (10s), ramp to 10 VUs (10s),
+/// hold at 10 VUs (60s). Prevents cold-start thundering herd on cloud execution.
+const DEFAULT_STAGES_TOML: &str = r#"
+# Ramp-up stages: gradual VU increase avoids cold-start thundering herd.
+# Critical for cloud load testing (cargo pmcp loadtest upload) where distributed
+# workers amplify cold-start effects across multiple service layers.
+# Without stages, all VUs launch simultaneously (flat load).
+# Modify target_vus/duration_secs to match your capacity, or delete to use flat load.
+
+[[stage]]
+target_vus = 5
+duration_secs = 10
+
+[[stage]]
+target_vus = 10
+duration_secs = 10
+
+# Hold at peak
+[[stage]]
+target_vus = 10
+duration_secs = 60
+"#;
+
 /// Generate a default TOML template without server discovery.
 fn generate_default_template() -> String {
-    r#"# Load test configuration for cargo-pmcp
+    let mut content = r#"# Load test configuration for cargo-pmcp
 # See: https://github.com/paiml/rust-mcp-sdk/tree/main/cargo-pmcp#load-testing
 
 [settings]
@@ -262,7 +287,9 @@ tool = "your-tool-name"
 # prompt = "your-prompt-name"
 # arguments = { key = "value" }
 "#
-    .to_string()
+    .to_string();
+    content.push_str(DEFAULT_STAGES_TOML);
+    content
 }
 
 /// Generate a TOML template populated from discovered server schema.
@@ -360,6 +387,9 @@ prompt = "{}"
         ));
     }
 
+    // Add default ramp-up stages
+    content.push_str(DEFAULT_STAGES_TOML);
+
     content
 }
 
@@ -376,6 +406,10 @@ mod tests {
         assert!(template.contains("timeout_ms"));
         assert!(template.contains("[[scenario]]"));
         assert!(template.contains("tools/call"));
+        assert!(template.contains("[[stage]]"));
+        assert!(template.contains("target_vus = 5"));
+        assert!(template.contains("target_vus = 10"));
+        assert!(template.contains("cold-start thundering herd"));
     }
 
     #[test]
@@ -396,6 +430,8 @@ mod tests {
         assert!(template.contains("echo"));
         assert!(template.contains("calculate"));
         assert!(template.contains("[settings]"));
+        assert!(template.contains("[[stage]]"));
+        assert!(template.contains("target_vus = 5"));
     }
 
     #[test]
@@ -418,5 +454,7 @@ mod tests {
         assert!(template.contains("tools/call"));
         assert!(template.contains("resources/read"));
         assert!(template.contains("prompts/get"));
+        assert!(template.contains("[[stage]]"));
+        assert!(template.contains("cold-start thundering herd"));
     }
 }
