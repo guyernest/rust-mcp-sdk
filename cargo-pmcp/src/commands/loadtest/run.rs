@@ -2,7 +2,6 @@
 
 use anyhow::Result;
 use pmcp::client::http_middleware::HttpMiddlewareChain;
-use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -97,11 +96,7 @@ pub async fn execute_run(
         .map_err(|e| anyhow::anyhow!("Load test failed: {}", e))?;
 
     // Step 4: Output k6-style terminal summary
-    // Set color override based on --no-color flag and TTY detection
-    if no_color || !std::io::stdout().is_terminal() {
-        colored::control::set_override(false);
-    }
-
+    // Color override is already set globally in main() — no local override needed
     let summary = render_summary(&result, engine.config(), &url);
     println!("{summary}");
 

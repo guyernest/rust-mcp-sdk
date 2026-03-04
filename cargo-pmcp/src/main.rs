@@ -20,6 +20,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::io::IsTerminal;
 
 mod commands;
 mod deployment;
@@ -274,8 +275,21 @@ fn main() -> Result<()> {
         std::env::set_var("PMCP_VERBOSE", "1");
     }
 
+    // Determine effective no_color: explicit flag, NO_COLOR env (no-color.org), or non-TTY
+    let effective_no_color = cli.no_color
+        || std::env::var("NO_COLOR").is_ok()
+        || !std::io::stdout().is_terminal();
+
+    if effective_no_color {
+        // Suppress colored crate output globally
+        colored::control::set_override(false);
+        // Suppress console crate output globally
+        console::set_colors_enabled(false);
+        console::set_colors_enabled_stderr(false);
+    }
+
     // Set global flag env vars for subprocess consumption
-    if cli.no_color {
+    if effective_no_color {
         std::env::set_var("PMCP_NO_COLOR", "1");
     }
     if cli.quiet {
@@ -284,7 +298,7 @@ fn main() -> Result<()> {
 
     let global_flags = GlobalFlags {
         verbose: cli.verbose,
-        no_color: cli.no_color,
+        no_color: effective_no_color,
         quiet: cli.quiet,
     };
 
