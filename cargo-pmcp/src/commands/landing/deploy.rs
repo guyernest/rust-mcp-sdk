@@ -151,11 +151,7 @@ pub async fn deploy_landing_page(
     let zip_path = create_deployment_zip(&out_dir)?;
     let zip_size = std::fs::metadata(&zip_path)?.len();
     if not_quiet {
-        println!(
-            "   Created {} ({} KB)",
-            zip_path.display(),
-            zip_size / 1024
-        );
+        println!("   Created {} ({} KB)", zip_path.display(), zip_size / 1024);
         println!();
 
         // Upload to pmcp.run via GraphQL (same as server deployment)

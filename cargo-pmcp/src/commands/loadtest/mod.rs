@@ -153,7 +153,13 @@ impl LoadtestCommand {
                 description,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
-                runtime.block_on(upload::execute(server_id, path, name, description, global_flags))
+                runtime.block_on(upload::execute(
+                    server_id,
+                    path,
+                    name,
+                    description,
+                    global_flags,
+                ))
             },
         }
     }

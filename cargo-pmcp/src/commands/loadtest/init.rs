@@ -12,7 +12,11 @@ use crate::commands::GlobalFlags;
 /// Creates `.pmcp/loadtest.toml` with sensible defaults. If a server URL
 /// is provided, connects to discover tools/resources/prompts and populates
 /// the scenario with real names.
-pub async fn execute_init(url: Option<String>, force: bool, global_flags: &GlobalFlags) -> Result<()> {
+pub async fn execute_init(
+    url: Option<String>,
+    force: bool,
+    global_flags: &GlobalFlags,
+) -> Result<()> {
     let config_dir = std::env::current_dir()?.join(".pmcp");
     let config_path = config_dir.join("loadtest.toml");
 

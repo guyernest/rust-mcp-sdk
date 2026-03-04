@@ -130,8 +130,12 @@ pub async fn execute(
                     "Transport mismatch detected!".bright_yellow().bold()
                 );
                 println!();
-                println!("   The server response format doesn't match the auto-detected transport.");
-                println!("   This commonly happens with serverless deployments (Lambda, API Gateway).");
+                println!(
+                    "   The server response format doesn't match the auto-detected transport."
+                );
+                println!(
+                    "   This commonly happens with serverless deployments (Lambda, API Gateway)."
+                );
                 println!();
                 println!("   {} Try using JSON-RPC transport:", "→".bright_cyan());
                 println!(

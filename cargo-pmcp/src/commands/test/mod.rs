@@ -182,7 +182,13 @@ impl TestCommand {
                 timeout,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
-                runtime.block_on(check::execute(url, transport, verbose, timeout, global_flags))
+                runtime.block_on(check::execute(
+                    url,
+                    transport,
+                    verbose,
+                    timeout,
+                    global_flags,
+                ))
             },
 
             TestCommand::Run {
@@ -192,7 +198,15 @@ impl TestCommand {
                 scenarios,
                 transport,
                 detailed,
-            } => run::execute(server, url, port, scenarios, transport, detailed, global_flags),
+            } => run::execute(
+                server,
+                url,
+                port,
+                scenarios,
+                transport,
+                detailed,
+                global_flags,
+            ),
 
             TestCommand::Generate {
                 server,
@@ -222,7 +236,13 @@ impl TestCommand {
                 description,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
-                runtime.block_on(upload::execute(server_id, paths, name, description, global_flags))
+                runtime.block_on(upload::execute(
+                    server_id,
+                    paths,
+                    name,
+                    description,
+                    global_flags,
+                ))
             },
 
             TestCommand::Download {

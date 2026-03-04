@@ -271,7 +271,11 @@ mod tests {
             stage: vec![],
         };
 
-        let gf = GlobalFlags { verbose: false, no_color: false, quiet: false };
+        let gf = GlobalFlags {
+            verbose: false,
+            no_color: false,
+            quiet: false,
+        };
         apply_overrides(&mut config, Some(50), None, &gf);
         assert_eq!(config.settings.virtual_users, 50);
         assert_eq!(config.settings.duration_secs, 60);
@@ -295,7 +299,11 @@ mod tests {
             stage: vec![],
         };
 
-        let gf = GlobalFlags { verbose: false, no_color: false, quiet: false };
+        let gf = GlobalFlags {
+            verbose: false,
+            no_color: false,
+            quiet: false,
+        };
         apply_overrides(&mut config, None, Some(120), &gf);
         assert_eq!(config.settings.virtual_users, 10);
         assert_eq!(config.settings.duration_secs, 120);
@@ -319,7 +327,11 @@ mod tests {
             stage: vec![],
         };
 
-        let gf = GlobalFlags { verbose: false, no_color: false, quiet: false };
+        let gf = GlobalFlags {
+            verbose: false,
+            no_color: false,
+            quiet: false,
+        };
         apply_overrides(&mut config, Some(25), Some(300), &gf);
         assert_eq!(config.settings.virtual_users, 25);
         assert_eq!(config.settings.duration_secs, 300);
@@ -343,7 +355,11 @@ mod tests {
             stage: vec![],
         };
 
-        let gf = GlobalFlags { verbose: false, no_color: false, quiet: false };
+        let gf = GlobalFlags {
+            verbose: false,
+            no_color: false,
+            quiet: false,
+        };
         apply_overrides(&mut config, None, None, &gf);
         assert_eq!(config.settings.virtual_users, 10);
         assert_eq!(config.settings.duration_secs, 60);

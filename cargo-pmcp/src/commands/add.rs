@@ -131,10 +131,7 @@ pub fn server(
 
         // Show template-specific information
         if template == "complete" {
-            println!(
-                "\n{}",
-                "Complete Template Includes:".bright_white().bold()
-            );
+            println!("\n{}", "Complete Template Includes:".bright_white().bold());
             println!();
             println!("  Tools (5):");
             println!("    - add, subtract, multiply    - Basic arithmetic");
@@ -159,9 +156,7 @@ pub fn server(
         } else if template == "sqlite-explorer" {
             println!(
                 "\n{}",
-                "SQLite Explorer Template Includes:"
-                    .bright_white()
-                    .bold()
+                "SQLite Explorer Template Includes:".bright_white().bold()
             );
             println!();
             println!("  Tools (3):");

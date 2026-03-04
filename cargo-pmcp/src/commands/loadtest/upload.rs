@@ -45,7 +45,9 @@ pub async fn execute(
                 "The config file failed validation. To fix:".yellow()
             );
             eprintln!("    - Ensure the file is valid TOML syntax");
-            eprintln!("    - Include a [settings] block with virtual_users, duration_secs, timeout_ms");
+            eprintln!(
+                "    - Include a [settings] block with virtual_users, duration_secs, timeout_ms"
+            );
             eprintln!(
                 "    - Include at least one [[scenario]] block with type, weight, and operation fields"
             );

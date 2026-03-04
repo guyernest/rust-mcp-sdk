@@ -276,9 +276,8 @@ fn main() -> Result<()> {
     }
 
     // Determine effective no_color: explicit flag, NO_COLOR env (no-color.org), or non-TTY
-    let effective_no_color = cli.no_color
-        || std::env::var("NO_COLOR").is_ok()
-        || !std::io::stdout().is_terminal();
+    let effective_no_color =
+        cli.no_color || std::env::var("NO_COLOR").is_ok() || !std::io::stdout().is_terminal();
 
     if effective_no_color {
         // Suppress colored crate output globally
