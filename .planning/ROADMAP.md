@@ -107,7 +107,10 @@ See phase details in `.planning/phases/25-*` and `.planning/phases/26-*`
   1. User can pass `--no-color` to any cargo pmcp command and all terminal output is plain text (no ANSI escape codes)
   2. User can pass `--quiet` to any cargo pmcp command and only errors and explicit requested output appear
   3. Both flags work when placed before or after the subcommand (global position)
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 27-01-PLAN.md — GlobalFlags struct, --no-color/--quiet CLI args, wire through all command dispatch, global color suppression
+- [ ] 27-02-PLAN.md — Quiet mode output filtering across all commands, verbose-wins-over-quiet precedence
 
 ### Phase 28: Flag Normalization
 **Goal**: Every existing cargo pmcp command uses the same conventions for URLs, server references, verbosity, confirmations, output, and format values
