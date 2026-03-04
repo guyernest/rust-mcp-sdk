@@ -90,7 +90,7 @@ See phase details in `.planning/phases/25-*` and `.planning/phases/26-*`
 
 **Milestone Goal:** Normalize the cargo pmcp CLI for consistency and developer experience ahead of course recording -- fix flag inconsistencies, propagate auth to all server-facing commands, surface mcp-tester via `cargo pmcp test`, and add doctor/completions commands.
 
-- [ ] **Phase 27: Global Flag Infrastructure** - Add --no-color and --quiet as global flags available on all commands
+- [x] **Phase 27: Global Flag Infrastructure** - Add --no-color and --quiet as global flags available on all commands (completed 2026-03-04)
 - [ ] **Phase 28: Flag Normalization** - Rename and normalize all per-command flags for consistency (positional URL, --server, --verbose, --yes, -o, --format, #[arg()])
 - [ ] **Phase 29: Auth Flag Propagation** - Add shared OAuth and API-key flag structs to all server-facing commands
 - [ ] **Phase 30: Tester CLI Integration** - Surface mcp-tester subcommands through cargo pmcp test with aligned flags
@@ -198,7 +198,7 @@ Plans:
 | 24. Course Quizzes | v1.4 | 2/2 | Complete | 2026-02-28 |
 | 25. Loadtest Upload | v1.5 | 2/2 | Complete | 2026-02-28 |
 | 26. OAuth Load Testing | v1.5 | 4/4 | Complete | 2026-03-01 |
-| 27. Global Flag Infrastructure | 1/2 | In Progress|  | - |
+| 27. Global Flag Infrastructure | 2/2 | Complete   | 2026-03-04 | - |
 | 28. Flag Normalization | v1.6 | 0/? | Not started | - |
 | 29. Auth Flag Propagation | v1.6 | 0/? | Not started | - |
 | 30. Tester CLI Integration | v1.6 | 0/? | Not started | - |
