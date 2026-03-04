@@ -57,16 +57,16 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ### Active
 
-## Current Milestone: v1.5 Cloud Load Testing Upload
+## Current Milestone: v1.6 CLI DX Overhaul
 
-**Goal:** Enable uploading loadtest TOML configs to cloud providers (pmcp.run first) for remote execution.
+**Goal:** Normalize the cargo pmcp CLI for consistency and developer experience ahead of course recording — fix flag inconsistencies, propagate auth to all server-facing commands, surface mcp-tester via cargo pmcp test, and add doctor/completions commands.
 
 **Target features:**
-- `cargo pmcp loadtest upload` command mirroring `cargo pmcp test upload` pattern
-- GraphQL mutation to upload loadtest config to pmcp.run
-- Reuse existing auth infrastructure (OAuth, client credentials, access token)
-- Config validation before upload (parse TOML, validate scenarios)
-- User feedback with next steps (view/trigger on pmcp.run dashboard)
+- Flag consistency: positional URL, unified --server, --verbose/-v, --yes, -o, --format
+- Auth propagation: OAuth + API key flags on test check/run/generate, preview, schema export
+- Tester integration: surface mcp-tester commands through cargo pmcp test with aligned flags
+- New commands: cargo pmcp doctor (workspace health), cargo pmcp completions (shell completions)
+- Help polish: consistent help text, usage examples, global --no-color/--quiet
 
 ### Future
 
@@ -83,7 +83,7 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ## Current State
 
-v1.5 in progress. All prior milestones (v1.0-v1.4) shipped.
+v1.6 in progress. All prior milestones (v1.0-v1.5) shipped.
 
 **Shipped milestones:**
 - v1.0: MCP Tasks Foundation (types, store, server integration)
@@ -91,6 +91,7 @@ v1.5 in progress. All prior milestones (v1.0-v1.4) shipped.
 - v1.2: Pluggable Storage Backends (DynamoDB, Redis, feature flags)
 - v1.3: MCP Apps Developer Experience (preview, WASM, authoring, publishing, examples, E2E)
 - v1.4: Book & Course Update (load testing docs, MCP Apps chapter refresh, quizzes, exercises)
+- v1.5: Cloud Load Testing Upload (loadtest config upload, OAuth for load testing)
 
 ### Out of Scope
 
@@ -164,4 +165,4 @@ Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, park
 | Standalone examples (workspace exclude) (v1.3) | Avoids feature flag unification conflicts | ✓ Good — each example builds independently |
 
 ---
-*Last updated: 2026-02-27 after v1.5 milestone start*
+*Last updated: 2026-03-03 after v1.6 milestone start*
