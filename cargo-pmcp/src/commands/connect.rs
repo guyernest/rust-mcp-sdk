@@ -111,12 +111,6 @@ fn connect_cursor(server: &str, url: &str) -> Result<()> {
         println!("  }}");
         println!();
         println!("  3. Restart Cursor");
-    } else {
-        // Still need home_dir for the actual logic path, but suppress output
-        let _config_path = dirs::home_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?
-            .join(".cursor")
-            .join("mcp.json");
     }
 
     Ok(())

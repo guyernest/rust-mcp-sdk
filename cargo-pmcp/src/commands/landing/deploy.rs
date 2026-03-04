@@ -209,6 +209,7 @@ fn create_deployment_zip(out_dir: &PathBuf) -> Result<PathBuf> {
 
     // Walk the out/ directory and add ALL files (no filtering!)
     // This includes _next/, .html files, etc.
+    let not_quiet = std::env::var("PMCP_QUIET").is_err();
     walkdir::WalkDir::new(out_dir)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -226,7 +227,7 @@ fn create_deployment_zip(out_dir: &PathBuf) -> Result<PathBuf> {
                 .replace('\\', "/");
 
             // Debug: print what we're adding
-            if std::env::var("PMCP_QUIET").is_err() {
+            if not_quiet {
                 println!("      Adding: {}", zip_path);
             }
 
