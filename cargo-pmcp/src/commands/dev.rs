@@ -8,7 +8,12 @@ use std::process::Command;
 use crate::utils::config::WorkspaceConfig;
 
 /// Start development server
-pub fn execute(server: String, mut port: u16, connect_client: Option<String>) -> Result<()> {
+pub fn execute(
+    server: String,
+    mut port: u16,
+    connect_client: Option<String>,
+    _global_flags: &crate::commands::GlobalFlags,
+) -> Result<()> {
     println!("\n{}", "Starting development server".bright_cyan().bold());
     println!("{}", "────────────────────────────────────".bright_cyan());
 
@@ -56,7 +61,7 @@ pub fn execute(server: String, mut port: u16, connect_client: Option<String>) ->
             "\n{}",
             "Step 3: Connecting to MCP client".bright_white().bold()
         );
-        super::connect::execute(server.clone(), client, url.clone())?;
+        super::connect::execute(server.clone(), client, url.clone(), _global_flags)?;
         println!();
     }
 

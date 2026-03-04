@@ -343,7 +343,7 @@ pub enum OAuthAction {
 }
 
 impl DeployCommand {
-    pub fn execute(&self) -> Result<()> {
+    pub fn execute(&self, _global_flags: &crate::commands::GlobalFlags) -> Result<()> {
         // Run async code in tokio runtime
         tokio::runtime::Runtime::new()?.block_on(self.execute_async())
     }

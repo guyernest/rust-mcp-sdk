@@ -5,7 +5,12 @@ use colored::Colorize;
 use std::process::Command;
 
 /// Connect server to an MCP client
-pub fn execute(server: String, client: String, url: String) -> Result<()> {
+pub fn execute(
+    server: String,
+    client: String,
+    url: String,
+    _global_flags: &crate::commands::GlobalFlags,
+) -> Result<()> {
     match client.to_lowercase().as_str() {
         "claude-code" | "claudecode" | "claude" => connect_claude_code(&server, &url),
         "cursor" => connect_cursor(&server, &url),

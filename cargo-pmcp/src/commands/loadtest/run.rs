@@ -11,6 +11,8 @@ use cargo_pmcp::loadtest::engine::LoadTestEngine;
 use cargo_pmcp::loadtest::report::{write_report, LoadTestReport};
 use cargo_pmcp::loadtest::summary::render_summary;
 
+use crate::commands::GlobalFlags;
+
 /// Execute the `loadtest run` command.
 ///
 /// Loads config (via explicit path or auto-discovery), applies CLI overrides,
@@ -22,7 +24,7 @@ pub async fn execute_run(
     duration: Option<u64>,
     iterations: Option<u64>,
     no_report: bool,
-    no_color: bool,
+    global_flags: &GlobalFlags,
     api_key: Option<String>,
     oauth_client_id: Option<String>,
     oauth_issuer: Option<String>,
@@ -30,6 +32,7 @@ pub async fn execute_run(
     oauth_no_cache: bool,
     oauth_redirect_port: u16,
 ) -> Result<()> {
+    let no_color = global_flags.no_color;
     // Step 1: Load config
     let config_file = match config_path {
         Some(path) => {

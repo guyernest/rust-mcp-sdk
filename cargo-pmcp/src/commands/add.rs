@@ -9,7 +9,13 @@ use std::path::PathBuf;
 use crate::templates;
 use crate::utils::config::WorkspaceConfig;
 
-pub fn server(name: String, template: String, port: Option<u16>, replace: bool) -> Result<()> {
+pub fn server(
+    name: String,
+    template: String,
+    port: Option<u16>,
+    replace: bool,
+    _global_flags: &crate::commands::GlobalFlags,
+) -> Result<()> {
     println!("\n{}", "Adding MCP server".bright_cyan().bold());
     println!("{}", "─────────────────────────".bright_cyan());
 
@@ -254,7 +260,11 @@ pub fn server(name: String, template: String, port: Option<u16>, replace: bool) 
     Ok(())
 }
 
-pub fn tool(name: String, server: String) -> Result<()> {
+pub fn tool(
+    name: String,
+    server: String,
+    _global_flags: &crate::commands::GlobalFlags,
+) -> Result<()> {
     println!("\n{}", "Adding tool".bright_cyan().bold());
     println!("{}", "────────────────".bright_cyan());
 
@@ -270,7 +280,11 @@ pub fn tool(name: String, server: String) -> Result<()> {
     Ok(())
 }
 
-pub fn workflow(name: String, server: String) -> Result<()> {
+pub fn workflow(
+    name: String,
+    server: String,
+    _global_flags: &crate::commands::GlobalFlags,
+) -> Result<()> {
     println!("\n{}", "Adding workflow".bright_cyan().bold());
     println!("{}", "──────────────────────".bright_cyan());
 

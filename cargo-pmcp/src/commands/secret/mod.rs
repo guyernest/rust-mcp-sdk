@@ -147,7 +147,7 @@ pub enum SecretAction {
 }
 
 impl SecretCommand {
-    pub fn execute(&self) -> Result<()> {
+    pub fn execute(&self, _global_flags: &crate::commands::GlobalFlags) -> Result<()> {
         tokio::runtime::Runtime::new()?.block_on(self.execute_async())
     }
 

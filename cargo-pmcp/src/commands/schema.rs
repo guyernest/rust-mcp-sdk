@@ -46,7 +46,7 @@ pub enum SchemaCommand {
 }
 
 impl SchemaCommand {
-    pub fn execute(self) -> Result<()> {
+    pub fn execute(self, _global_flags: &crate::commands::GlobalFlags) -> Result<()> {
         let runtime = tokio::runtime::Runtime::new()?;
         runtime.block_on(async {
             match self {

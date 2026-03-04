@@ -65,7 +65,7 @@ pub enum AppCommand {
 
 impl AppCommand {
     /// Execute the app subcommand.
-    pub fn execute(self) -> Result<()> {
+    pub fn execute(self, _global_flags: &crate::commands::GlobalFlags) -> Result<()> {
         match self {
             AppCommand::New { name, path } => create_app(name, path),
             AppCommand::Manifest { url, logo, output } => run_manifest(url, logo, output),

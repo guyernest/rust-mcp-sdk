@@ -32,7 +32,7 @@ pub enum ValidateCommand {
 }
 
 impl ValidateCommand {
-    pub fn execute(self) -> Result<()> {
+    pub fn execute(self, _global_flags: &crate::commands::GlobalFlags) -> Result<()> {
         match self {
             ValidateCommand::Workflows {
                 generate,

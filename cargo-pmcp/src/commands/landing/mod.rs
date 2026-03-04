@@ -71,7 +71,11 @@ pub enum LandingCommand {
 }
 
 impl LandingCommand {
-    pub async fn execute(self, project_root: PathBuf) -> Result<()> {
+    pub async fn execute(
+        self,
+        project_root: PathBuf,
+        _global_flags: &crate::commands::GlobalFlags,
+    ) -> Result<()> {
         match self {
             LandingCommand::Init {
                 template,

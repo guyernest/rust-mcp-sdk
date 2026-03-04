@@ -11,6 +11,8 @@ use anyhow::Result;
 use clap::Subcommand;
 use std::path::PathBuf;
 
+use super::GlobalFlags;
+
 /// Load test commands for MCP servers.
 #[derive(Debug, Subcommand)]
 pub enum LoadtestCommand {
@@ -42,10 +44,6 @@ pub enum LoadtestCommand {
         /// Disable JSON report output
         #[arg(long)]
         no_report: bool,
-
-        /// Disable colored output
-        #[arg(long)]
-        no_color: bool,
 
         /// API key for authentication (sent as Bearer token)
         #[arg(long, env = "MCP_API_KEY")]
@@ -111,7 +109,7 @@ pub enum LoadtestCommand {
 
 impl LoadtestCommand {
     /// Execute the selected loadtest subcommand.
-    pub fn execute(self) -> Result<()> {
+    pub fn execute(self, global_flags: &GlobalFlags) -> Result<()> {
         match self {
             LoadtestCommand::Run {
                 url,
@@ -120,7 +118,6 @@ impl LoadtestCommand {
                 duration,
                 iterations,
                 no_report,
-                no_color,
                 api_key,
                 oauth_client_id,
                 oauth_issuer,
@@ -136,7 +133,7 @@ impl LoadtestCommand {
                     duration,
                     iterations,
                     no_report,
-                    no_color,
+                    global_flags,
                     api_key,
                     oauth_client_id,
                     oauth_issuer,

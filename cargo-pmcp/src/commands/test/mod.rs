@@ -19,6 +19,8 @@ use anyhow::Result;
 use clap::Subcommand;
 use std::path::PathBuf;
 
+use super::GlobalFlags;
+
 #[derive(Debug, Subcommand)]
 pub enum TestCommand {
     /// Quick sanity check of an MCP server
@@ -171,7 +173,7 @@ pub enum TestCommand {
 }
 
 impl TestCommand {
-    pub fn execute(self) -> Result<()> {
+    pub fn execute(self, _global_flags: &GlobalFlags) -> Result<()> {
         match self {
             TestCommand::Check {
                 url,

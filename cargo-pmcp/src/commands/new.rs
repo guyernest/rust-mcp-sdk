@@ -26,7 +26,12 @@ impl ServerTier {
     }
 }
 
-pub fn execute(name: String, path: Option<String>, tier: Option<String>) -> Result<()> {
+pub fn execute(
+    name: String,
+    path: Option<String>,
+    tier: Option<String>,
+    _global_flags: &crate::commands::GlobalFlags,
+) -> Result<()> {
     let tier = tier.as_deref().and_then(ServerTier::from_str);
 
     let tier_label = match tier {

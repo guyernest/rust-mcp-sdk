@@ -12,6 +12,7 @@ pub async fn execute(
     theme: String,
     locale: String,
     widgets_dir: Option<String>,
+    _global_flags: &crate::commands::GlobalFlags,
 ) -> Result<()> {
     println!("\n{}", "Starting MCP Apps Preview".bright_cyan().bold());
     println!("{}", "─────────────────────────────────".bright_cyan());
