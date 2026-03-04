@@ -22,9 +22,12 @@ pub mod validate;
 /// The `quiet` field reflects the *resolved* value after verbose-wins-over-quiet
 /// precedence: if both `--verbose` and `--quiet` are passed, quiet is disabled.
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct GlobalFlags {
     /// Enable verbose output for debugging.
+    ///
+    /// Currently used to resolve quiet precedence (verbose wins over quiet).
+    /// Will be used by individual commands for detailed output in future phases.
+    #[allow(dead_code)]
     pub verbose: bool,
     /// Suppress colored output (resolved: flag, env, or non-TTY).
     pub no_color: bool,

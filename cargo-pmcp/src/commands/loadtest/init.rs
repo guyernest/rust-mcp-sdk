@@ -5,12 +5,14 @@ use std::time::Duration;
 
 use cargo_pmcp::loadtest::client::McpClient;
 
+use crate::commands::GlobalFlags;
+
 /// Execute the `loadtest init` command.
 ///
 /// Creates `.pmcp/loadtest.toml` with sensible defaults. If a server URL
 /// is provided, connects to discover tools/resources/prompts and populates
 /// the scenario with real names.
-pub async fn execute_init(url: Option<String>, force: bool) -> Result<()> {
+pub async fn execute_init(url: Option<String>, force: bool, global_flags: &GlobalFlags) -> Result<()> {
     let config_dir = std::env::current_dir()?.join(".pmcp");
     let config_path = config_dir.join("loadtest.toml");
 
@@ -25,15 +27,19 @@ pub async fn execute_init(url: Option<String>, force: bool) -> Result<()> {
 
     // Generate config content
     let content = if let Some(server_url) = url {
-        eprintln!("Discovering server schema at {}...", server_url);
+        if global_flags.should_output() {
+            eprintln!("Discovering server schema at {}...", server_url);
+        }
         match discover_schema(&server_url).await {
             Ok(schema) => generate_discovered_template(&server_url, &schema),
             Err(e) => {
-                eprintln!(
-                    "Warning: Could not discover server schema: {}\n\
-                     Generating default template instead.",
-                    e
-                );
+                if global_flags.should_output() {
+                    eprintln!(
+                        "Warning: Could not discover server schema: {}\n\
+                         Generating default template instead.",
+                        e
+                    );
+                }
                 generate_default_template()
             },
         }
@@ -48,8 +54,10 @@ pub async fn execute_init(url: Option<String>, force: bool) -> Result<()> {
 
     // Write config file
     std::fs::write(&config_path, &content)?;
-    eprintln!("Created {}", config_path.display());
-    eprintln!("Edit the file to customize your load test scenario.");
+    if global_flags.should_output() {
+        eprintln!("Created {}", config_path.display());
+        eprintln!("Edit the file to customize your load test scenario.");
+    }
 
     Ok(())
 }

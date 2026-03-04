@@ -32,7 +32,8 @@ pub enum ValidateCommand {
 }
 
 impl ValidateCommand {
-    pub fn execute(self, _global_flags: &crate::commands::GlobalFlags) -> Result<()> {
+    pub fn execute(self, global_flags: &crate::commands::GlobalFlags) -> Result<()> {
+        let _ = global_flags; // quiet mode conveyed via PMCP_QUIET env var
         match self {
             ValidateCommand::Workflows {
                 generate,

@@ -173,7 +173,7 @@ pub enum TestCommand {
 }
 
 impl TestCommand {
-    pub fn execute(self, _global_flags: &GlobalFlags) -> Result<()> {
+    pub fn execute(self, global_flags: &GlobalFlags) -> Result<()> {
         match self {
             TestCommand::Check {
                 url,
@@ -182,7 +182,7 @@ impl TestCommand {
                 timeout,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
-                runtime.block_on(check::execute(url, transport, verbose, timeout))
+                runtime.block_on(check::execute(url, transport, verbose, timeout, global_flags))
             },
 
             TestCommand::Run {
@@ -192,7 +192,7 @@ impl TestCommand {
                 scenarios,
                 transport,
                 detailed,
-            } => run::execute(server, url, port, scenarios, transport, detailed),
+            } => run::execute(server, url, port, scenarios, transport, detailed, global_flags),
 
             TestCommand::Generate {
                 server,
@@ -212,6 +212,7 @@ impl TestCommand {
                 all_tools,
                 with_resources,
                 with_prompts,
+                global_flags,
             ),
 
             TestCommand::Upload {
@@ -221,7 +222,7 @@ impl TestCommand {
                 description,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
-                runtime.block_on(upload::execute(server_id, paths, name, description))
+                runtime.block_on(upload::execute(server_id, paths, name, description, global_flags))
             },
 
             TestCommand::Download {
@@ -230,12 +231,12 @@ impl TestCommand {
                 format,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
-                runtime.block_on(download::execute(scenario_id, output, format))
+                runtime.block_on(download::execute(scenario_id, output, format, global_flags))
             },
 
             TestCommand::List { server_id, all } => {
                 let runtime = tokio::runtime::Runtime::new()?;
-                runtime.block_on(list::execute(server_id, all))
+                runtime.block_on(list::execute(server_id, all, global_flags))
             },
         }
     }
@@ -249,6 +250,11 @@ pub fn execute(
     do_generate_scenarios: bool,
     detailed: bool,
 ) -> Result<()> {
+    let gf = GlobalFlags {
+        verbose: false,
+        no_color: false,
+        quiet: false,
+    };
     if do_generate_scenarios {
         generate::execute(
             Some(server.clone()),
@@ -259,8 +265,9 @@ pub fn execute(
             true,
             true,
             true,
+            &gf,
         )?;
     }
 
-    run::execute(Some(server), None, port, None, None, detailed) // transport = None
+    run::execute(Some(server), None, port, None, None, detailed, &gf) // transport = None
 }

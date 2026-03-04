@@ -55,13 +55,15 @@ pub async fn execute_run(
         },
     };
 
-    eprintln!("Loading config from: {}", config_file.display());
+    if global_flags.should_output() {
+        eprintln!("Loading config from: {}", config_file.display());
+    }
 
     let mut config = LoadTestConfig::load(&config_file)
         .map_err(|e| anyhow::anyhow!("Failed to load config '{}': {}", config_file.display(), e))?;
 
     // Step 2: Apply CLI overrides
-    apply_overrides(&mut config, vus, duration);
+    apply_overrides(&mut config, vus, duration, global_flags);
 
     // Step 2.5: Set up authentication middleware (acquire token ONCE before spawning VUs)
     let is_oauth = oauth_client_id.is_some();
@@ -76,10 +78,12 @@ pub async fn execute_run(
     )
     .await?;
 
-    match &http_middleware_chain {
-        Some(_) if is_oauth => eprintln!("Authentication: OAuth 2.0 (token acquired)"),
-        Some(_) => eprintln!("Authentication: API key"),
-        None => eprintln!("Authentication: none"),
+    if global_flags.should_output() {
+        match &http_middleware_chain {
+            Some(_) if is_oauth => eprintln!("Authentication: OAuth 2.0 (token acquired)"),
+            Some(_) => eprintln!("Authentication: API key"),
+            None => eprintln!("Authentication: none"),
+        }
     }
 
     // Step 3: Build and run the engine
@@ -106,12 +110,16 @@ pub async fn execute_run(
         let cwd = std::env::current_dir()?;
         match write_report(&report, &cwd) {
             Ok(path) => {
-                eprintln!();
-                eprintln!("Report written to: {}", path.display());
+                if global_flags.should_output() {
+                    eprintln!();
+                    eprintln!("Report written to: {}", path.display());
+                }
             },
             Err(e) => {
-                eprintln!();
-                eprintln!("Warning: Failed to write report: {}", e);
+                if global_flags.should_output() {
+                    eprintln!();
+                    eprintln!("Warning: Failed to write report: {}", e);
+                }
                 // Non-fatal -- the test still completed successfully
             },
         }
@@ -123,13 +131,21 @@ pub async fn execute_run(
 /// Apply CLI flag overrides to a loaded config.
 ///
 /// When stages are present, `--vus` is ignored (stages define VU targets)
-/// and a warning is logged. Duration override still applies as safety ceiling.
-fn apply_overrides(config: &mut LoadTestConfig, vus: Option<u32>, duration: Option<u64>) {
+/// and a warning is logged if not in quiet mode. Duration override still
+/// applies as safety ceiling.
+fn apply_overrides(
+    config: &mut LoadTestConfig,
+    vus: Option<u32>,
+    duration: Option<u64>,
+    global_flags: &GlobalFlags,
+) {
     if let Some(v) = vus {
         if config.has_stages() {
-            eprintln!(
-                "Warning: --vus={v} ignored because config contains [[stage]] blocks (stages define VU targets)"
-            );
+            if global_flags.should_output() {
+                eprintln!(
+                    "Warning: --vus={v} ignored because config contains [[stage]] blocks (stages define VU targets)"
+                );
+            }
         } else {
             config.settings.virtual_users = v;
         }
@@ -175,7 +191,9 @@ async fn resolve_auth_middleware(
     if let Some(key) = api_key {
         use pmcp::client::oauth_middleware::{BearerToken, OAuthClientMiddleware};
 
-        eprintln!("Using API key authentication");
+        if std::env::var("PMCP_QUIET").is_err() {
+            eprintln!("Using API key authentication");
+        }
         let bearer_token = BearerToken::new(key);
         let middleware = OAuthClientMiddleware::new(bearer_token);
         let mut chain = HttpMiddlewareChain::new();
@@ -213,7 +231,7 @@ async fn resolve_auth_middleware(
     }
 
     // Warn if issuer provided without client_id
-    if oauth_issuer.is_some() {
+    if oauth_issuer.is_some() && std::env::var("PMCP_QUIET").is_err() {
         eprintln!(
             "Warning: --oauth-issuer provided but --oauth-client-id missing. OAuth disabled."
         );
@@ -253,7 +271,8 @@ mod tests {
             stage: vec![],
         };
 
-        apply_overrides(&mut config, Some(50), None);
+        let gf = GlobalFlags { verbose: false, no_color: false, quiet: false };
+        apply_overrides(&mut config, Some(50), None, &gf);
         assert_eq!(config.settings.virtual_users, 50);
         assert_eq!(config.settings.duration_secs, 60);
     }
@@ -276,7 +295,8 @@ mod tests {
             stage: vec![],
         };
 
-        apply_overrides(&mut config, None, Some(120));
+        let gf = GlobalFlags { verbose: false, no_color: false, quiet: false };
+        apply_overrides(&mut config, None, Some(120), &gf);
         assert_eq!(config.settings.virtual_users, 10);
         assert_eq!(config.settings.duration_secs, 120);
     }
@@ -299,7 +319,8 @@ mod tests {
             stage: vec![],
         };
 
-        apply_overrides(&mut config, Some(25), Some(300));
+        let gf = GlobalFlags { verbose: false, no_color: false, quiet: false };
+        apply_overrides(&mut config, Some(25), Some(300), &gf);
         assert_eq!(config.settings.virtual_users, 25);
         assert_eq!(config.settings.duration_secs, 300);
     }
@@ -322,7 +343,8 @@ mod tests {
             stage: vec![],
         };
 
-        apply_overrides(&mut config, None, None);
+        let gf = GlobalFlags { verbose: false, no_color: false, quiet: false };
+        apply_overrides(&mut config, None, None, &gf);
         assert_eq!(config.settings.virtual_users, 10);
         assert_eq!(config.settings.duration_secs, 60);
     }

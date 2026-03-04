@@ -144,7 +144,7 @@ impl LoadtestCommand {
             },
             LoadtestCommand::Init { url, force } => {
                 let runtime = tokio::runtime::Runtime::new()?;
-                runtime.block_on(init::execute_init(url, force))
+                runtime.block_on(init::execute_init(url, force, global_flags))
             },
             LoadtestCommand::Upload {
                 server_id,
@@ -153,7 +153,7 @@ impl LoadtestCommand {
                 description,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
-                runtime.block_on(upload::execute(server_id, path, name, description))
+                runtime.block_on(upload::execute(server_id, path, name, description, global_flags))
             },
         }
     }

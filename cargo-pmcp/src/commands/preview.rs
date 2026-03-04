@@ -12,24 +12,26 @@ pub async fn execute(
     theme: String,
     locale: String,
     widgets_dir: Option<String>,
-    _global_flags: &crate::commands::GlobalFlags,
+    global_flags: &crate::commands::GlobalFlags,
 ) -> Result<()> {
-    println!("\n{}", "Starting MCP Apps Preview".bright_cyan().bold());
-    println!("{}", "─────────────────────────────────".bright_cyan());
-    println!("  {} MCP Server: {}", "→".blue(), url.bright_yellow());
-    println!(
-        "  {} Preview URL: {}",
-        "→".blue(),
-        format!("http://localhost:{}", port).bright_green()
-    );
-    if let Some(ref dir) = widgets_dir {
+    if global_flags.should_output() {
+        println!("\n{}", "Starting MCP Apps Preview".bright_cyan().bold());
+        println!("{}", "─────────────────────────────────".bright_cyan());
+        println!("  {} MCP Server: {}", "→".blue(), url.bright_yellow());
         println!(
-            "  {} Widgets Dir: {} (hot-reload)",
+            "  {} Preview URL: {}",
             "→".blue(),
-            dir.bright_magenta()
+            format!("http://localhost:{}", port).bright_green()
         );
+        if let Some(ref dir) = widgets_dir {
+            println!(
+                "  {} Widgets Dir: {} (hot-reload)",
+                "→".blue(),
+                dir.bright_magenta()
+            );
+        }
+        println!();
     }
-    println!();
 
     let widgets_path = widgets_dir.map(std::path::PathBuf::from);
 
