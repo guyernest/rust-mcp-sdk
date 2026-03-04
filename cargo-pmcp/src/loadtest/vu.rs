@@ -69,6 +69,7 @@ pub fn step_to_operation_type(step: &ScenarioStep) -> OperationType {
         ScenarioStep::ToolCall { .. } => OperationType::ToolsCall,
         ScenarioStep::ResourceRead { .. } => OperationType::ResourcesRead,
         ScenarioStep::PromptGet { .. } => OperationType::PromptsGet,
+        ScenarioStep::CodeMode { .. } => OperationType::CodeMode,
     }
 }
 
@@ -95,6 +96,10 @@ async fn execute_step(
         } => {
             let result = client.get_prompt(prompt, arguments).await;
             (OperationType::PromptsGet, result.map(|_| ()))
+        },
+        ScenarioStep::CodeMode { code, format, .. } => {
+            let result = client.execute_code_mode(code, format).await;
+            (OperationType::CodeMode, result.map(|_| ()))
         },
     }
 }
@@ -297,6 +302,7 @@ async fn vu_loop_inner(
             ScenarioStep::ToolCall { tool, .. } => Some(tool.clone()),
             ScenarioStep::ResourceRead { uri, .. } => Some(uri.clone()),
             ScenarioStep::PromptGet { prompt, .. } => Some(prompt.clone()),
+            ScenarioStep::CodeMode { format, .. } => Some(format!("code_mode/{format}")),
         };
 
         // Build and send the metrics sample

@@ -140,7 +140,7 @@ pub async fn execute(
             );
             println!("  - Configure scheduled testing in the dashboard");
             println!(
-                "  - Or run tests manually: cargo pmcp test remote --server-id {}",
+                "  - Or run tests manually: cargo pmcp test remote --server {}",
                 server_id
             );
         } else {

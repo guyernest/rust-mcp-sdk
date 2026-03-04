@@ -74,7 +74,7 @@ Uploads a validated config to [pmcp.run](https://pmcp.run) for cloud-based load 
 
 ```bash
 cargo pmcp loadtest upload \
-  --server-id your-deployment-id \
+  --server your-deployment-id \
   .pmcp/loadtest.toml \
   --name "baseline" \
   --description "10 VU steady-state baseline"
@@ -84,7 +84,7 @@ cargo pmcp loadtest upload \
 
 | Flag | Description |
 |------|-------------|
-| `--server-id <id>` | **(required)** Deployment ID on pmcp.run |
+| `--server <id>` | **(required)** Deployment ID on pmcp.run |
 | `<path>` | **(required)** Path to the TOML config file |
 | `--name <name>` | Config name (defaults to filename stem) |
 | `--description <text>` | Description for the config |

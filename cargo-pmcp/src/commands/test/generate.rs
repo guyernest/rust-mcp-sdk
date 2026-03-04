@@ -90,7 +90,7 @@ pub fn execute(
                 println!("{}", "Tip:".bright_cyan().bold());
                 println!("  Upload scenarios to pmcp.run for scheduled testing:");
                 println!(
-                    "    cargo pmcp test upload --server-id <id> {}",
+                    "    cargo pmcp test upload --server <id> {}",
                     output_path.display()
                 );
             }

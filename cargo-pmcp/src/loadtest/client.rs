@@ -246,6 +246,44 @@ impl McpClient {
         Self::parse_response(&response_bytes)
     }
 
+    /// Executes a code_mode two-step flow: `validate_code` then `execute_code`.
+    ///
+    /// Step 1: Calls `validate_code` tool with the code and format.
+    /// Step 2: Extracts the `approval_token` from the response and calls
+    /// `execute_code` with the same code and the token.
+    pub async fn execute_code_mode(&mut self, code: &str, format: &str) -> Result<Value, McpError> {
+        // Step 1: validate_code
+        let validate_args = json!({
+            "code": code,
+            "format": format
+        });
+        let validate_result = self.call_tool("validate_code", &validate_args).await?;
+
+        // Extract approval_token from the validate_code response
+        let approval_token = validate_result
+            .get("content")
+            .and_then(|c| c.as_array())
+            .and_then(|arr| {
+                arr.iter()
+                    .find(|item| item.get("type") == Some(&json!("text")))
+            })
+            .and_then(|item| item.get("text"))
+            .and_then(|text| serde_json::from_str::<Value>(text.as_str().unwrap_or("")).ok())
+            .and_then(|parsed| parsed.get("approval_token").cloned())
+            .and_then(|t| t.as_str().map(|s| s.to_string()))
+            .ok_or_else(|| McpError::JsonRpc {
+                code: -1,
+                message: "validate_code response missing approval_token".to_string(),
+            })?;
+
+        // Step 2: execute_code
+        let execute_args = json!({
+            "code": code,
+            "approval_token": approval_token
+        });
+        self.call_tool("execute_code", &execute_args).await
+    }
+
     /// Sends an HTTP POST request with the given JSON-RPC body.
     ///
     /// Attaches the `mcp-session-id` header if a session has been established.
