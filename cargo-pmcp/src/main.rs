@@ -288,18 +288,22 @@ fn main() -> Result<()> {
         console::set_colors_enabled_stderr(false);
     }
 
+    // Verbose wins over quiet (per user decision):
+    // If both --verbose and --quiet are passed, quiet is disabled.
+    let effective_quiet = cli.quiet && !cli.verbose;
+
     // Set global flag env vars for subprocess consumption
     if effective_no_color {
         std::env::set_var("PMCP_NO_COLOR", "1");
     }
-    if cli.quiet {
+    if effective_quiet {
         std::env::set_var("PMCP_QUIET", "1");
     }
 
     let global_flags = GlobalFlags {
         verbose: cli.verbose,
         no_color: effective_no_color,
-        quiet: cli.quiet,
+        quiet: effective_quiet,
     };
 
     execute_command(cli.command, &global_flags)?;
