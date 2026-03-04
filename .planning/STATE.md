@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
-status: defining_requirements
+status: ready_to_plan
 last_updated: "2026-03-03T00:00:00.000Z"
 progress:
-  total_phases: 0
+  total_phases: 6
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -17,15 +17,17 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-03-03)
 
-**Core value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state, plus developers can build rich UI widgets and upload loadtest configs for cloud execution.
-**Current focus:** v1.6 CLI DX Overhaul — Defining requirements
+**Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
+**Current focus:** v1.6 CLI DX Overhaul -- Phase 27 (Global Flag Infrastructure)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-03-03 — Milestone v1.6 started
+Phase: 27 of 32 (Global Flag Infrastructure) -- first of 6 phases in v1.6
+Plan: --
+Status: Ready to plan
+Last activity: 2026-03-03 -- Roadmap created for v1.6
+
+Progress: [░░░░░░░░░░] 0% (v1.6)
 
 ## Shipped Milestones
 
@@ -50,20 +52,10 @@ Last activity: 2026-03-03 — Milestone v1.6 started
 
 See PROJECT.md Key Decisions table for full history.
 
-v1.5 decisions:
-- Single phase (25) for all 9 requirements — scope is one tightly coupled vertical slice mirroring `cargo pmcp test upload`
-- Validate TOML config before authenticating -- fail fast on bad configs without wasting OAuth time
-- Config name defaults to filename stem when --name not provided
-- Token cache path changed from ~/.mcp-tester/ to ~/.pmcp/oauth-tokens.json for SDK consistency
-- All colored terminal output replaced with tracing calls in extracted OAuthHelper
-- OAuth module double-gated: not(wasm32) + feature="oauth"
-- API key takes precedence over OAuth when both provided (simpler, no flow needed)
-- Middleware chain Arc-wrapped and shared across VUs (not per-VU allocation)
-- Auth acquired ONCE at startup before VU spawn -- fail fast on bad config
-
-### Roadmap Evolution
-
-None yet for v1.6.
+v1.6 decisions:
+- 6 phases derived from 5 requirement categories: global flags, flag normalization, auth propagation, tester integration, new commands, help polish
+- Phase 31 (New Commands) depends on Phase 28 (not 30) since doctor/completions don't need tester or auth
+- Help polish is last phase since it touches every command and benefits from all prior changes being stable
 
 ### Pending Todos
 
@@ -76,5 +68,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-03
-Stopped at: Milestone v1.6 initialization
-Resume: Defining requirements for CLI DX Overhaul
+Stopped at: Roadmap created for v1.6 CLI DX Overhaul
+Resume: Plan Phase 27 (Global Flag Infrastructure)

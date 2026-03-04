@@ -7,7 +7,8 @@
 - ✅ **v1.2 Pluggable Storage Backends** — Phases 9-13 (shipped 2026-02-24)
 - ✅ **v1.3 MCP Apps Developer Experience** — Phases 14-19 (shipped 2026-02-26)
 - ✅ **v1.4 Book & Course Update** — Phases 20-24 (shipped 2026-02-28)
-- **v1.5 Cloud Load Testing Upload** — Phase 25 (in progress)
+- ✅ **v1.5 Cloud Load Testing Upload** — Phases 25-26 (shipped 2026-03-01)
+- **v1.6 CLI DX Overhaul** — Phases 27-32 (in progress)
 
 ## Phases
 
@@ -75,33 +76,96 @@ See: `.planning/milestones/v1.4-ROADMAP.md` for full phase details
 
 </details>
 
-### v1.5 Cloud Load Testing Upload (In Progress)
+<details>
+<summary>v1.5 Cloud Load Testing Upload (Phases 25-26) — SHIPPED 2026-03-01</summary>
 
-**Milestone Goal:** Users can upload loadtest TOML configs to pmcp.run for cloud execution via `cargo pmcp loadtest upload`.
+- [x] Phase 25: Loadtest Config Upload (2/2 plans) — completed 2026-02-28
+- [x] Phase 26: Add OAuth Support to Load Testing (4/4 plans) — completed 2026-03-01
 
-- [x] **Phase 25: Loadtest Config Upload** - Validate and upload loadtest TOML configs to pmcp.run with auth reuse and user feedback (completed 2026-02-28)
+See phase details in `.planning/phases/25-*` and `.planning/phases/26-*`
+
+</details>
+
+### v1.6 CLI DX Overhaul (In Progress)
+
+**Milestone Goal:** Normalize the cargo pmcp CLI for consistency and developer experience ahead of course recording -- fix flag inconsistencies, propagate auth to all server-facing commands, surface mcp-tester via `cargo pmcp test`, and add doctor/completions commands.
+
+- [ ] **Phase 27: Global Flag Infrastructure** - Add --no-color and --quiet as global flags available on all commands
+- [ ] **Phase 28: Flag Normalization** - Rename and normalize all per-command flags for consistency (positional URL, --server, --verbose, --yes, -o, --format, #[arg()])
+- [ ] **Phase 29: Auth Flag Propagation** - Add shared OAuth and API-key flag structs to all server-facing commands
+- [ ] **Phase 30: Tester CLI Integration** - Surface mcp-tester subcommands through cargo pmcp test with aligned flags
+- [ ] **Phase 31: New Commands** - Add cargo pmcp doctor and cargo pmcp completions commands
+- [ ] **Phase 32: Help Text Polish** - Consistent help text format with descriptions and usage examples across all commands
 
 ## Phase Details
 
-### Phase 25: Loadtest Config Upload
-**Goal**: Users can validate a loadtest TOML config locally and upload it to pmcp.run for remote execution
-**Depends on**: Phase 24 (v1.4 complete)
-**Requirements**: CLI-01, CLI-02, CLI-03, CLI-04, UPLD-01, UPLD-02, UPLD-03, VALD-01, VALD-02
+### Phase 27: Global Flag Infrastructure
+**Goal**: Every cargo pmcp invocation supports --no-color and --quiet for scripting and CI use
+**Depends on**: Phase 26 (v1.5 complete)
+**Requirements**: FLAG-08, FLAG-09
 **Success Criteria** (what must be TRUE):
-  1. User can run `cargo pmcp loadtest upload --server-id <id> config.toml` and the config arrives on pmcp.run
-  2. User sees a clear, actionable error when the TOML file is missing, malformed, or contains no scenarios
-  3. User sees the uploaded config's identifier and version echoed back on success
-  4. User sees next-steps guidance pointing to the pmcp.run dashboard after a successful upload
-  5. Upload reuses the same OAuth/client-credentials auth flow as `cargo pmcp test upload` with no additional login
-**Plans**: 2
+  1. User can pass `--no-color` to any cargo pmcp command and all terminal output is plain text (no ANSI escape codes)
+  2. User can pass `--quiet` to any cargo pmcp command and only errors and explicit requested output appear
+  3. Both flags work when placed before or after the subcommand (global position)
+**Plans**: TBD
 
-Plans:
-- [x] 25-01: GraphQL mutation + upload module + CLI wiring (wave 1) -- completed 2026-02-28
-- [ ] 25-02: Build verification + quality gates (wave 2, depends on 25-01)
+### Phase 28: Flag Normalization
+**Goal**: Every existing cargo pmcp command uses the same conventions for URLs, server references, verbosity, confirmations, output, and format values
+**Depends on**: Phase 27
+**Requirements**: FLAG-01, FLAG-02, FLAG-03, FLAG-04, FLAG-05, FLAG-06, FLAG-07
+**Success Criteria** (what must be TRUE):
+  1. User can pass a server URL as a positional argument to any command that connects to a server (no more `--url` or `--endpoint`)
+  2. User can use `--server` consistently for pmcp.run server references (no more `--server-id`)
+  3. User can use `--verbose` / `-v` for detailed output on any command (no more `--detailed`)
+  4. User can use `--yes` to skip confirmations and `-o` as shorthand for `--output` on any command that supports them
+  5. All `--format` flags accept `text` and `json` as values (no other human-readable format names)
+**Plans**: TBD
+
+### Phase 29: Auth Flag Propagation
+**Goal**: Every command that connects to an MCP server accepts OAuth and API-key authentication flags
+**Depends on**: Phase 28
+**Requirements**: AUTH-01, AUTH-02, AUTH-03, AUTH-04, AUTH-05, AUTH-06
+**Success Criteria** (what must be TRUE):
+  1. User can pass `--api-key <key>` to test check/run/generate, preview, schema export, and connect commands
+  2. User can pass OAuth flags (--oauth-issuer, --oauth-client-id, --oauth-scopes, --oauth-no-cache, --oauth-redirect-port) to any of those same commands
+  3. Auth flags are defined in a shared struct (AuthFlags or similar) flattened into each command, not duplicated per command
+  4. Commands that already had auth support (e.g., loadtest) continue to work unchanged
+**Plans**: TBD
+
+### Phase 30: Tester CLI Integration
+**Goal**: Users can run all mcp-tester capabilities through cargo pmcp test subcommands with consistent flag conventions
+**Depends on**: Phase 29
+**Requirements**: TEST-01, TEST-02, TEST-03, TEST-04, TEST-05, TEST-06, TEST-07, TEST-08
+**Success Criteria** (what must be TRUE):
+  1. User can run `cargo pmcp test compliance <url>`, `cargo pmcp test diagnose <url>`, and `cargo pmcp test compare <url1> <url2>` to validate MCP servers
+  2. User can run `cargo pmcp test tools <url>`, `cargo pmcp test resources <url>`, `cargo pmcp test prompts <url>`, and `cargo pmcp test health <url>` to inspect server capabilities
+  3. All `cargo pmcp test` subcommands accept the same auth flags (--api-key, OAuth) and global flags (--verbose, --no-color, --quiet) established in prior phases
+  4. The standalone `mcp-tester` binary uses the same flag conventions as `cargo pmcp test` (positional URL, --verbose/-v, --yes)
+**Plans**: TBD
+
+### Phase 31: New Commands
+**Goal**: Users have workspace diagnostics and shell completion generation built into the CLI
+**Depends on**: Phase 28
+**Requirements**: CMD-01, CMD-02
+**Success Criteria** (what must be TRUE):
+  1. User can run `cargo pmcp doctor` and see validation results for workspace structure, Rust toolchain, config files, and optionally server connectivity
+  2. User can run `cargo pmcp completions bash` (or zsh/fish/powershell) and pipe the output to the appropriate shell config file
+  3. Both commands follow all established flag conventions (global flags, --format, help text patterns)
+**Plans**: TBD
+
+### Phase 32: Help Text Polish
+**Goal**: Every cargo pmcp command has professional, consistent help output ready for course recording
+**Depends on**: Phase 31
+**Requirements**: HELP-01, HELP-02
+**Success Criteria** (what must be TRUE):
+  1. Every command's `--help` output includes a description, grouped options (by category: connection, auth, output, etc.), and a usage examples section via `after_help`
+  2. All help text follows the same structural pattern: synopsis line, categorized options, examples section
+  3. Running `cargo pmcp --help` shows a clean top-level overview with all subcommands and their one-line descriptions
+**Plans**: TBD
 
 ## Progress
 
-**Execution Order:** Phase 26
+**Execution Order:** Phase 27 next
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -129,17 +193,11 @@ Plans:
 | 22. Course Load Testing | v1.4 | 2/2 | Complete | 2026-02-28 |
 | 23. Course MCP Apps | v1.4 | 2/2 | Complete | 2026-02-28 |
 | 24. Course Quizzes | v1.4 | 2/2 | Complete | 2026-02-28 |
-| 25. Loadtest Upload | 2/2 | Complete    | 2026-02-28 | - |
-
-### Phase 26: Add OAuth support to Load-Testing
-
-**Goal:** Generalize OAuthHelper into the core SDK and wire OAuth/API-key authentication into `cargo pmcp loadtest run` so VUs can target protected MCP servers
-**Requirements**: OAUTH-01, OAUTH-02, OAUTH-03, OAUTH-04, OAUTH-05, OAUTH-06
-**Depends on:** Phase 25
-**Plans:** 4/4 plans complete
-
-Plans:
-- [x] 26-01-PLAN.md — Move OAuthHelper to core SDK (src/client/oauth.rs) with oauth feature gate (wave 1) -- completed 2026-03-01
-- [x] 26-02-PLAN.md — Update mcp-tester to use SDK's OAuthHelper, delete local oauth.rs (wave 2) -- completed 2026-03-01
-- [x] 26-03-PLAN.md — Wire OAuth middleware into loadtest: McpClient + engine + VU + CLI flags (wave 2) -- completed 2026-03-01
-- [x] 26-04-PLAN.md — Quality gates across all three crates + auth type display (wave 3) -- completed 2026-03-01
+| 25. Loadtest Upload | v1.5 | 2/2 | Complete | 2026-02-28 |
+| 26. OAuth Load Testing | v1.5 | 4/4 | Complete | 2026-03-01 |
+| 27. Global Flag Infrastructure | v1.6 | 0/? | Not started | - |
+| 28. Flag Normalization | v1.6 | 0/? | Not started | - |
+| 29. Auth Flag Propagation | v1.6 | 0/? | Not started | - |
+| 30. Tester CLI Integration | v1.6 | 0/? | Not started | - |
+| 31. New Commands | v1.6 | 0/? | Not started | - |
+| 32. Help Text Polish | v1.6 | 0/? | Not started | - |

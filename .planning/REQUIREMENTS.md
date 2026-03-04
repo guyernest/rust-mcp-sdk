@@ -104,39 +104,39 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FLAG-01 | — | Pending |
-| FLAG-02 | — | Pending |
-| FLAG-03 | — | Pending |
-| FLAG-04 | — | Pending |
-| FLAG-05 | — | Pending |
-| FLAG-06 | — | Pending |
-| FLAG-07 | — | Pending |
-| FLAG-08 | — | Pending |
-| FLAG-09 | — | Pending |
-| AUTH-01 | — | Pending |
-| AUTH-02 | — | Pending |
-| AUTH-03 | — | Pending |
-| AUTH-04 | — | Pending |
-| AUTH-05 | — | Pending |
-| AUTH-06 | — | Pending |
-| TEST-01 | — | Pending |
-| TEST-02 | — | Pending |
-| TEST-03 | — | Pending |
-| TEST-04 | — | Pending |
-| TEST-05 | — | Pending |
-| TEST-06 | — | Pending |
-| TEST-07 | — | Pending |
-| TEST-08 | — | Pending |
-| CMD-01 | — | Pending |
-| CMD-02 | — | Pending |
-| HELP-01 | — | Pending |
-| HELP-02 | — | Pending |
+| FLAG-01 | Phase 28 | Pending |
+| FLAG-02 | Phase 28 | Pending |
+| FLAG-03 | Phase 28 | Pending |
+| FLAG-04 | Phase 28 | Pending |
+| FLAG-05 | Phase 28 | Pending |
+| FLAG-06 | Phase 28 | Pending |
+| FLAG-07 | Phase 28 | Pending |
+| FLAG-08 | Phase 27 | Pending |
+| FLAG-09 | Phase 27 | Pending |
+| AUTH-01 | Phase 29 | Pending |
+| AUTH-02 | Phase 29 | Pending |
+| AUTH-03 | Phase 29 | Pending |
+| AUTH-04 | Phase 29 | Pending |
+| AUTH-05 | Phase 29 | Pending |
+| AUTH-06 | Phase 29 | Pending |
+| TEST-01 | Phase 30 | Pending |
+| TEST-02 | Phase 30 | Pending |
+| TEST-03 | Phase 30 | Pending |
+| TEST-04 | Phase 30 | Pending |
+| TEST-05 | Phase 30 | Pending |
+| TEST-06 | Phase 30 | Pending |
+| TEST-07 | Phase 30 | Pending |
+| TEST-08 | Phase 30 | Pending |
+| CMD-01 | Phase 31 | Pending |
+| CMD-02 | Phase 31 | Pending |
+| HELP-01 | Phase 32 | Pending |
+| HELP-02 | Phase 32 | Pending |
 
 **Coverage:**
 - v1.6 requirements: 27 total
-- Mapped to phases: 0
-- Unmapped: 27 ⚠️
+- Mapped to phases: 27
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-03*
-*Last updated: 2026-03-03 after initial definition*
+*Last updated: 2026-03-03 after roadmap creation*
