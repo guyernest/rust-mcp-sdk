@@ -1,11 +1,55 @@
 # Requirements: PMCP SDK Extensions
 
-**Defined:** 2026-02-27
-**Core Value:** Tool handlers can manage long-running operations through a durable task lifecycle with shared variable state, plus developers can build rich UI widgets and upload loadtest configs for cloud execution.
+**Defined:** 2026-03-03
+**Core Value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording — every command follows the same conventions for URLs, flags, auth, and output.
 
-## v1.5 Requirements
+## v1.6 Requirements
 
-Requirements for cloud load testing upload. Each maps to roadmap phases.
+Requirements for CLI DX Overhaul. Each maps to roadmap phases.
+
+### Flag Consistency
+
+- [ ] **FLAG-01**: All commands taking a server URL accept it as a positional argument (replace `--url`, `--endpoint`)
+- [ ] **FLAG-02**: All pmcp.run server references use `--server` flag consistently (replace `--server-id`)
+- [ ] **FLAG-03**: All verbose output flags use `--verbose` / `-v` (replace `--detailed`)
+- [ ] **FLAG-04**: All confirmation-skip flags use `--yes` (replace `--force`)
+- [ ] **FLAG-05**: All `--output` flags have `-o` short alias
+- [ ] **FLAG-06**: Human-readable format values normalized to `text`/`json` across all `--format` flags
+- [ ] **FLAG-07**: All clap derive attributes use `#[arg()]` style (replace `#[clap()]` in deploy)
+- [ ] **FLAG-08**: `--no-color` available as global flag on all commands
+- [ ] **FLAG-09**: `--quiet` available as global flag on all commands
+
+### Auth Propagation
+
+- [ ] **AUTH-01**: `cargo pmcp test check` accepts `--api-key` and OAuth flags (issuer, client-id, scopes, no-cache, redirect-port)
+- [ ] **AUTH-02**: `cargo pmcp test run` accepts `--api-key` and OAuth flags
+- [ ] **AUTH-03**: `cargo pmcp test generate` accepts `--api-key` and OAuth flags
+- [ ] **AUTH-04**: `cargo pmcp preview` accepts `--api-key` and OAuth flags
+- [ ] **AUTH-05**: `cargo pmcp schema export` accepts `--api-key` and OAuth flags
+- [ ] **AUTH-06**: `cargo pmcp connect` accepts `--api-key` and OAuth flags
+
+### Tester Integration
+
+- [ ] **TEST-01**: `cargo pmcp test compliance <url>` runs MCP spec compliance checks via mcp-tester
+- [ ] **TEST-02**: `cargo pmcp test diagnose <url>` runs server diagnostics via mcp-tester
+- [ ] **TEST-03**: `cargo pmcp test compare <url1> <url2>` compares two MCP servers via mcp-tester
+- [ ] **TEST-04**: `cargo pmcp test tools <url>` lists and optionally tests server tools via mcp-tester
+- [ ] **TEST-05**: `cargo pmcp test resources <url>` lists server resources via mcp-tester
+- [ ] **TEST-06**: `cargo pmcp test prompts <url>` lists server prompts via mcp-tester
+- [ ] **TEST-07**: `cargo pmcp test health <url>` checks server health via mcp-tester
+- [ ] **TEST-08**: mcp-tester standalone binary flags aligned with cargo pmcp conventions (positional URL, `--verbose`/`-v`, `--yes`)
+
+### New Commands
+
+- [ ] **CMD-01**: `cargo pmcp doctor` validates workspace structure, toolchain, config files, and optionally tests server connectivity
+- [ ] **CMD-02**: `cargo pmcp completions <shell>` generates shell completions for bash, zsh, fish, powershell
+
+### Help & Polish
+
+- [ ] **HELP-01**: All commands have consistent help text format with description and usage examples via `after_help`
+- [ ] **HELP-02**: All `--help` output follows pattern: synopsis, options grouped by category, examples section
+
+## Previous Requirements (v1.5 — Complete)
 
 ### CLI Command
 
@@ -40,40 +84,59 @@ Deferred to future release. Tracked but not in current roadmap.
 - **REXE-02**: Poll remote execution status from CLI
 - **REXE-03**: Download remote execution results to local JSON report
 
-### Bulk Upload
+### CLI Enhancements
 
-- **BULK-01**: Upload multiple TOML configs from directory
-- **BULK-02**: Per-file error handling with accumulated statistics
+- **CLIH-01**: `cargo pmcp init` interactive project setup wizard
+- **CLIH-02**: `cargo pmcp config` command for managing .pmcp/config.toml
+- **CLIH-03**: `cargo pmcp update` self-update mechanism
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Provider trait abstraction | Wait for second provider to appear — avoid premature abstraction |
-| Remote execution trigger from CLI | pmcp.run UI handles triggering for now |
-| Result download/polling from CLI | Results viewed on pmcp.run dashboard |
-| Multi-region configuration from CLI | Cloud service manages region distribution |
-| Bulk/directory upload | Single file sufficient for initial release |
+| Deprecation aliases for old flag names | Clean break — course being recorded fresh, no existing users to support |
+| mcp-tester removal as standalone binary | Both `cargo pmcp test` and `mcp-tester` will coexist with aligned flags |
+| New transport types | CLI consistency only, no new protocol work |
+| Loadtest provider abstraction | Deferred to when second provider appears |
+| Book/course content updates | Will be part of course recording, not this milestone |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CLI-01 | Phase 25 | Complete |
-| CLI-02 | Phase 25 | Complete |
-| CLI-03 | Phase 25 | Complete |
-| CLI-04 | Phase 25 | Complete |
-| UPLD-01 | Phase 25 | Complete |
-| UPLD-02 | Phase 25 | Complete |
-| UPLD-03 | Phase 25 | Complete |
-| VALD-01 | Phase 25 | Complete |
-| VALD-02 | Phase 25 | Complete |
+| FLAG-01 | — | Pending |
+| FLAG-02 | — | Pending |
+| FLAG-03 | — | Pending |
+| FLAG-04 | — | Pending |
+| FLAG-05 | — | Pending |
+| FLAG-06 | — | Pending |
+| FLAG-07 | — | Pending |
+| FLAG-08 | — | Pending |
+| FLAG-09 | — | Pending |
+| AUTH-01 | — | Pending |
+| AUTH-02 | — | Pending |
+| AUTH-03 | — | Pending |
+| AUTH-04 | — | Pending |
+| AUTH-05 | — | Pending |
+| AUTH-06 | — | Pending |
+| TEST-01 | — | Pending |
+| TEST-02 | — | Pending |
+| TEST-03 | — | Pending |
+| TEST-04 | — | Pending |
+| TEST-05 | — | Pending |
+| TEST-06 | — | Pending |
+| TEST-07 | — | Pending |
+| TEST-08 | — | Pending |
+| CMD-01 | — | Pending |
+| CMD-02 | — | Pending |
+| HELP-01 | — | Pending |
+| HELP-02 | — | Pending |
 
 **Coverage:**
-- v1.5 requirements: 9 total
-- Mapped to phases: 9
-- Unmapped: 0
+- v1.6 requirements: 27 total
+- Mapped to phases: 0
+- Unmapped: 27 ⚠️
 
 ---
-*Requirements defined: 2026-02-27*
-*Last updated: 2026-02-27 after roadmap creation*
+*Requirements defined: 2026-03-03*
+*Last updated: 2026-03-03 after initial definition*
