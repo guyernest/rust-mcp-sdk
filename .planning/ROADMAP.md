@@ -198,7 +198,7 @@ Plans:
 | 24. Course Quizzes | v1.4 | 2/2 | Complete | 2026-02-28 |
 | 25. Loadtest Upload | v1.5 | 2/2 | Complete | 2026-02-28 |
 | 26. OAuth Load Testing | v1.5 | 4/4 | Complete | 2026-03-01 |
-| 27. Global Flag Infrastructure | v1.6 | 0/? | Not started | - |
+| 27. Global Flag Infrastructure | 1/2 | In Progress|  | - |
 | 28. Flag Normalization | v1.6 | 0/? | Not started | - |
 | 29. Auth Flag Propagation | v1.6 | 0/? | Not started | - |
 | 30. Tester CLI Integration | v1.6 | 0/? | Not started | - |

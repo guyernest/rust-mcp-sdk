@@ -16,7 +16,7 @@ Requirements for CLI DX Overhaul. Each maps to roadmap phases.
 - [ ] **FLAG-05**: All `--output` flags have `-o` short alias
 - [ ] **FLAG-06**: Human-readable format values normalized to `text`/`json` across all `--format` flags
 - [ ] **FLAG-07**: All clap derive attributes use `#[arg()]` style (replace `#[clap()]` in deploy)
-- [ ] **FLAG-08**: `--no-color` available as global flag on all commands
+- [x] **FLAG-08**: `--no-color` available as global flag on all commands
 - [ ] **FLAG-09**: `--quiet` available as global flag on all commands
 
 ### Auth Propagation
@@ -111,7 +111,7 @@ Deferred to future release. Tracked but not in current roadmap.
 | FLAG-05 | Phase 28 | Pending |
 | FLAG-06 | Phase 28 | Pending |
 | FLAG-07 | Phase 28 | Pending |
-| FLAG-08 | Phase 27 | Pending |
+| FLAG-08 | Phase 27 | Complete |
 | FLAG-09 | Phase 27 | Pending |
 | AUTH-01 | Phase 29 | Pending |
 | AUTH-02 | Phase 29 | Pending |
