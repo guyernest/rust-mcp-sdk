@@ -54,11 +54,9 @@ impl ResourceHandler for TestResourceHandler {
                 )))
             },
             |content| {
-                Ok(ReadResourceResult {
-                    contents: vec![Content::Text {
-                        text: content.clone(),
-                    }],
-                })
+                Ok(ReadResourceResult::new(vec![Content::Text {
+                    text: content.clone(),
+                }]))
             },
         )
     }
@@ -81,10 +79,7 @@ impl ResourceHandler for TestResourceHandler {
             })
             .collect();
 
-        Ok(ListResourcesResult {
-            resources: resource_list,
-            next_cursor: None,
-        })
+        Ok(ListResourcesResult::new(resource_list))
     }
 }
 

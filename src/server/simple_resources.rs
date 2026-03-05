@@ -242,11 +242,9 @@ impl ResourceCollection {
     ///         _context: RequestContext,
     ///     ) -> pmcp::Result<ReadResourceResult> {
     ///         let id = params.get("id").unwrap();
-    ///         Ok(ReadResourceResult {
-    ///             contents: vec![Content::Text {
-    ///                 text: format!("Schema for dataset {}", id),
-    ///             }],
-    ///         })
+    ///         Ok(ReadResourceResult::new(vec![Content::Text {
+    ///             text: format!("Schema for dataset {}", id),
+    ///         }]))
     ///     }
     /// }
     ///

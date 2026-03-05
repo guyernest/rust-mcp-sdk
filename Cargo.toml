@@ -1,6 +1,6 @@
 [package]
 name = "pmcp"
-version = "1.11.4"
+version = "1.12.0"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility"

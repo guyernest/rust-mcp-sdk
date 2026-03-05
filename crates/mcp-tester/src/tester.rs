@@ -2304,10 +2304,7 @@ impl ServerTester {
             },
             TransportType::Stdio => {
                 // Skip for stdio in tester
-                Ok(ListToolsResult {
-                    tools: vec![],
-                    next_cursor: None,
-                })
+                Ok(ListToolsResult::new(vec![]))
             },
             TransportType::JsonRpcHttp => {
                 // Test tools/list method
@@ -2328,16 +2325,10 @@ impl ServerTester {
                         } else if let Some(result) = response.result {
                             match serde_json::from_value::<ListToolsResult>(result) {
                                 Ok(tools_result) => Ok(tools_result),
-                                Err(_) => Ok(ListToolsResult {
-                                    tools: vec![],
-                                    next_cursor: None,
-                                }),
+                                Err(_) => Ok(ListToolsResult::new(vec![])),
                             }
                         } else {
-                            Ok(ListToolsResult {
-                                tools: vec![],
-                                next_cursor: None,
-                            })
+                            Ok(ListToolsResult::new(vec![]))
                         }
                     },
                     Err(e) => Err(pmcp::Error::Transport(
@@ -2607,10 +2598,9 @@ impl ServerTester {
             let _ = self.test_tools_list().await;
         }
 
-        Ok(pmcp::types::ListToolsResult {
-            tools: self.tools.clone().unwrap_or_default(),
-            next_cursor: None,
-        })
+        Ok(pmcp::types::ListToolsResult::new(
+            self.tools.clone().unwrap_or_default(),
+        ))
     }
 
     pub async fn read_resource(&mut self, uri: &str) -> Result<pmcp::types::ReadResourceResult> {
@@ -2660,7 +2650,7 @@ impl ServerTester {
             },
             _ => {
                 // Return empty resource for other transport types
-                Ok(pmcp::types::ReadResourceResult { contents: vec![] })
+                Ok(pmcp::types::ReadResourceResult::new(vec![]))
             },
         }
     }
@@ -2686,10 +2676,7 @@ impl ServerTester {
         }
 
         // Fallback implementation
-        Ok(pmcp::types::ListResourcesResult {
-            resources: vec![],
-            next_cursor: None,
-        })
+        Ok(pmcp::types::ListResourcesResult::new(vec![]))
     }
 
     pub async fn list_prompts(&mut self) -> Result<pmcp::types::ListPromptsResult> {
@@ -2703,10 +2690,7 @@ impl ServerTester {
         }
 
         // Fallback implementation
-        Ok(pmcp::types::ListPromptsResult {
-            prompts: vec![],
-            next_cursor: None,
-        })
+        Ok(pmcp::types::ListPromptsResult::new(vec![]))
     }
 
     pub async fn get_prompt(
@@ -2772,11 +2756,7 @@ impl ServerTester {
             },
             _ => {
                 // Return empty prompt for other transport types
-                Ok(pmcp::types::GetPromptResult {
-                    messages: vec![],
-                    description: None,
-                    _meta: None,
-                })
+                Ok(pmcp::types::GetPromptResult::new(vec![], None))
             },
         }
     }
