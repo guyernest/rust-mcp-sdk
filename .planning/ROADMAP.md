@@ -204,3 +204,13 @@ Plans:
 | 30. Tester CLI Integration | v1.6 | 0/? | Not started | - |
 | 31. New Commands | v1.6 | 0/? | Not started | - |
 | 32. Help Text Polish | v1.6 | 0/? | Not started | - |
+
+### Phase 33: Fix mcp-tester failure with v1.12.0
+
+**Goal:** Bump mcp-tester to 0.2.2 and cargo-pmcp to 0.3.4, publish both to crates.io so `cargo install cargo-pmcp` works without `--locked`
+**Requirements**: None (hotfix)
+**Depends on:** Phase 32
+**Plans:** 1 plan
+
+Plans:
+- [ ] 33-01-PLAN.md — Version bumps and crates.io publish
