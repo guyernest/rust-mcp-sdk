@@ -2267,16 +2267,15 @@ impl ServerBuilder {
     /// impl PromptHandler for CodeReviewPrompt {
     ///     async fn handle(&self, args: HashMap<String, String>, _extra: pmcp::RequestHandlerExtra) -> pmcp::Result<GetPromptResult> {
     ///         let language = args.get("language").map(|s| s.as_str()).unwrap_or("unknown");
-    ///         Ok(GetPromptResult {
-    ///             description: Some(format!("Code review prompt for {}", language)),
-    ///             messages: vec![PromptMessage {
+    ///         Ok(GetPromptResult::new(
+    ///             vec![PromptMessage {
     ///                 role: pmcp::Role::User,
     ///                 content: pmcp::Content::Text {
     ///                     text: format!("Please review this {} code:", language),
     ///                 },
     ///             }],
-    ///             _meta: None,
-    ///         })
+    ///             Some(format!("Code review prompt for {}", language)),
+    ///         ))
     ///     }
     /// }
     ///
@@ -2424,23 +2423,18 @@ impl ServerBuilder {
     /// impl ResourceHandler for FileResourceHandler {
     ///     async fn read(&self, uri: &str, _extra: pmcp::RequestHandlerExtra) -> pmcp::Result<ReadResourceResult> {
     ///         // Read file content...
-    ///         Ok(ReadResourceResult {
-    ///             contents: vec![pmcp::Content::Text {
-    ///                 text: "File content here".to_string(),
-    ///             }],
-    ///         })
+    ///         Ok(ReadResourceResult::new(vec![pmcp::Content::Text {
+    ///             text: "File content here".to_string(),
+    ///         }]))
     ///     }
     ///
     ///     async fn list(&self, _cursor: Option<String>, _extra: pmcp::RequestHandlerExtra) -> pmcp::Result<ListResourcesResult> {
-    ///         Ok(ListResourcesResult {
-    ///             resources: vec![pmcp::ResourceInfo {
-    ///                 uri: "file://example.txt".to_string(),
-    ///                 name: "example.txt".to_string(),
-    ///                 description: Some("Example file".to_string()),
-    ///                 mime_type: Some("text/plain".to_string()),
-    ///             }],
-    ///             next_cursor: None,
-    ///         })
+    ///         Ok(ListResourcesResult::new(vec![pmcp::ResourceInfo {
+    ///             uri: "file://example.txt".to_string(),
+    ///             name: "example.txt".to_string(),
+    ///             description: Some("Example file".to_string()),
+    ///             mime_type: Some("text/plain".to_string()),
+    ///         }]))
     ///     }
     /// }
     ///

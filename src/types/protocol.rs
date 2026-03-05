@@ -344,7 +344,21 @@ impl ToolInfo {
 }
 
 /// List tools response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Backward Compatibility
+///
+/// This struct is `#[non_exhaustive]`. Use the constructor to remain
+/// forward-compatible:
+///
+/// ```rust
+/// use pmcp::types::ListToolsResult;
+///
+/// let result = ListToolsResult::new(vec![]);
+/// ```
+///
+/// Within the same crate, struct literal syntax with `..Default::default()` also works.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListToolsResult {
     /// Available tools
@@ -352,6 +366,22 @@ pub struct ListToolsResult {
     /// Pagination cursor for next page
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Cursor,
+}
+
+impl ListToolsResult {
+    /// Create a new list tools result.
+    pub fn new(tools: Vec<ToolInfo>) -> Self {
+        Self {
+            tools,
+            next_cursor: None,
+        }
+    }
+
+    /// Set the pagination cursor for the next page.
+    pub fn with_next_cursor(mut self, cursor: String) -> Self {
+        self.next_cursor = Some(cursor);
+        self
+    }
 }
 
 /// Tool call request.
@@ -620,7 +650,21 @@ pub struct PromptArgument {
 }
 
 /// List prompts response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Backward Compatibility
+///
+/// This struct is `#[non_exhaustive]`. Use the constructor to remain
+/// forward-compatible:
+///
+/// ```rust
+/// use pmcp::types::ListPromptsResult;
+///
+/// let result = ListPromptsResult::new(vec![]);
+/// ```
+///
+/// Within the same crate, struct literal syntax with `..Default::default()` also works.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListPromptsResult {
     /// Available prompts
@@ -628,6 +672,22 @@ pub struct ListPromptsResult {
     /// Pagination cursor
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Cursor,
+}
+
+impl ListPromptsResult {
+    /// Create a new list prompts result.
+    pub fn new(prompts: Vec<PromptInfo>) -> Self {
+        Self {
+            prompts,
+            next_cursor: None,
+        }
+    }
+
+    /// Set the pagination cursor for the next page.
+    pub fn with_next_cursor(mut self, cursor: String) -> Self {
+        self.next_cursor = Some(cursor);
+        self
+    }
 }
 
 /// Get prompt request.
@@ -649,7 +709,21 @@ pub struct GetPromptRequest {
 pub type GetPromptParams = GetPromptRequest;
 
 /// Get prompt result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Backward Compatibility
+///
+/// This struct is `#[non_exhaustive]`. Use the constructor to remain
+/// forward-compatible:
+///
+/// ```rust
+/// use pmcp::types::GetPromptResult;
+///
+/// let result = GetPromptResult::new(vec![], Some("A prompt".to_string()));
+/// ```
+///
+/// Within the same crate, struct literal syntax with `..Default::default()` also works.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetPromptResult {
     /// Prompt description
@@ -667,6 +741,24 @@ pub struct GetPromptResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[allow(clippy::pub_underscore_fields)]
     pub _meta: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+impl GetPromptResult {
+    /// Create a new get prompt result.
+    pub fn new(messages: Vec<PromptMessage>, description: Option<String>) -> Self {
+        Self {
+            description,
+            messages,
+            _meta: None,
+        }
+    }
+
+    /// Add metadata to the prompt result.
+    #[allow(clippy::used_underscore_binding)] // _meta is valid MCP protocol field name
+    pub fn with_meta(mut self, meta: serde_json::Map<String, serde_json::Value>) -> Self {
+        self._meta = Some(meta);
+        self
+    }
 }
 
 /// Message in a prompt.
@@ -730,7 +822,21 @@ pub struct ResourceInfo {
 }
 
 /// List resources response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Backward Compatibility
+///
+/// This struct is `#[non_exhaustive]`. Use the constructor to remain
+/// forward-compatible:
+///
+/// ```rust
+/// use pmcp::types::ListResourcesResult;
+///
+/// let result = ListResourcesResult::new(vec![]);
+/// ```
+///
+/// Within the same crate, struct literal syntax with `..Default::default()` also works.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListResourcesResult {
     /// Available resources
@@ -738,6 +844,22 @@ pub struct ListResourcesResult {
     /// Pagination cursor
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Cursor,
+}
+
+impl ListResourcesResult {
+    /// Create a new list resources result.
+    pub fn new(resources: Vec<ResourceInfo>) -> Self {
+        Self {
+            resources,
+            next_cursor: None,
+        }
+    }
+
+    /// Set the pagination cursor for the next page.
+    pub fn with_next_cursor(mut self, cursor: String) -> Self {
+        self.next_cursor = Some(cursor);
+        self
+    }
 }
 
 /// Read resource request.
@@ -781,7 +903,21 @@ pub struct ResourceTemplate {
 }
 
 /// List resource templates result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Backward Compatibility
+///
+/// This struct is `#[non_exhaustive]`. Use the constructor to remain
+/// forward-compatible:
+///
+/// ```rust
+/// use pmcp::types::ListResourceTemplatesResult;
+///
+/// let result = ListResourceTemplatesResult::new(vec![]);
+/// ```
+///
+/// Within the same crate, struct literal syntax with `..Default::default()` also works.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListResourceTemplatesResult {
     /// Available resource templates
@@ -789,6 +925,22 @@ pub struct ListResourceTemplatesResult {
     /// Pagination cursor
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Cursor,
+}
+
+impl ListResourceTemplatesResult {
+    /// Create a new list resource templates result.
+    pub fn new(resource_templates: Vec<ResourceTemplate>) -> Self {
+        Self {
+            resource_templates,
+            next_cursor: None,
+        }
+    }
+
+    /// Set the pagination cursor for the next page.
+    pub fn with_next_cursor(mut self, cursor: String) -> Self {
+        self.next_cursor = Some(cursor);
+        self
+    }
 }
 
 /// Subscribe to resource request.
@@ -884,11 +1036,32 @@ pub enum LoggingLevel {
 }
 
 /// Read resource result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Backward Compatibility
+///
+/// This struct is `#[non_exhaustive]`. Use the constructor to remain
+/// forward-compatible:
+///
+/// ```rust
+/// use pmcp::types::ReadResourceResult;
+///
+/// let result = ReadResourceResult::new(vec![]);
+/// ```
+///
+/// Within the same crate, struct literal syntax with `..Default::default()` also works.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadResourceResult {
     /// Resource contents
     pub contents: Vec<Content>,
+}
+
+impl ReadResourceResult {
+    /// Create a new read resource result.
+    pub fn new(contents: Vec<Content>) -> Self {
+        Self { contents }
+    }
 }
 
 /// Model preferences for sampling.
