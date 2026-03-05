@@ -378,8 +378,8 @@ impl ListToolsResult {
     }
 
     /// Set the pagination cursor for the next page.
-    pub fn with_next_cursor(mut self, cursor: String) -> Self {
-        self.next_cursor = Some(cursor);
+    pub fn with_next_cursor(mut self, cursor: impl Into<String>) -> Self {
+        self.next_cursor = Some(cursor.into());
         self
     }
 }
@@ -684,8 +684,8 @@ impl ListPromptsResult {
     }
 
     /// Set the pagination cursor for the next page.
-    pub fn with_next_cursor(mut self, cursor: String) -> Self {
-        self.next_cursor = Some(cursor);
+    pub fn with_next_cursor(mut self, cursor: impl Into<String>) -> Self {
+        self.next_cursor = Some(cursor.into());
         self
     }
 }
@@ -856,8 +856,8 @@ impl ListResourcesResult {
     }
 
     /// Set the pagination cursor for the next page.
-    pub fn with_next_cursor(mut self, cursor: String) -> Self {
-        self.next_cursor = Some(cursor);
+    pub fn with_next_cursor(mut self, cursor: impl Into<String>) -> Self {
+        self.next_cursor = Some(cursor.into());
         self
     }
 }
@@ -937,8 +937,8 @@ impl ListResourceTemplatesResult {
     }
 
     /// Set the pagination cursor for the next page.
-    pub fn with_next_cursor(mut self, cursor: String) -> Self {
-        self.next_cursor = Some(cursor);
+    pub fn with_next_cursor(mut self, cursor: impl Into<String>) -> Self {
+        self.next_cursor = Some(cursor.into());
         self
     }
 }
