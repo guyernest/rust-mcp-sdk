@@ -458,13 +458,11 @@ impl ResourceHandler for ChessResources {
             let html = self.widget_dir.read_widget(widget_name);
             let transformed = self.chatgpt_adapter.transform(uri, widget_name, &html);
 
-            Ok(ReadResourceResult {
-                contents: vec![Content::Resource {
+            Ok(ReadResourceResult::new(vec![Content::Resource {
                     uri: uri.to_string(),
                     text: Some(transformed.content),
                     mime_type: Some(ExtendedUIMimeType::HtmlSkybridge.to_string()),
-                }],
-            })
+                }]))
         } else {
             Err(pmcp::Error::protocol(
                 pmcp::ErrorCode::METHOD_NOT_FOUND,
@@ -489,10 +487,7 @@ impl ResourceHandler for ChessResources {
             })
             .collect();
 
-        Ok(ListResourcesResult {
-            resources,
-            next_cursor: None,
-        })
+        Ok(ListResourcesResult::new(resources))
     }
 }
 

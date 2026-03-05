@@ -144,9 +144,7 @@ impl ResourceHandler for FileSystemResourceHandler {
             })
             .unwrap_or("text/plain");
 
-        Ok(ReadResourceResult {
-            contents: vec![Content::Text { text: content }],
-        })
+        Ok(ReadResourceResult::new(vec![Content::Text { text: content }]))
     }
 
     async fn list(
@@ -156,10 +154,7 @@ impl ResourceHandler for FileSystemResourceHandler {
     ) -> PmcpResult<ListResourcesResult> {
         let resources = self.scan_directory().await?;
 
-        Ok(ListResourcesResult {
-            resources,
-            next_cursor: None,
-        })
+        Ok(ListResourcesResult::new(resources))
     }
 }
 

@@ -32,8 +32,7 @@ struct WalkthroughResources;
 impl ResourceHandler for WalkthroughResources {
     async fn read(&self, uri: &str, _extra: RequestHandlerExtra) -> Result<ReadResourceResult> {
         match uri {
-            "if://walkthrough/zork1" => Ok(ReadResourceResult {
-                contents: vec![Content::Text {
+            "if://walkthrough/zork1" => Ok(ReadResourceResult::new(vec![Content::Text {
                     text: r#"
 # Zork I Walkthrough
 
@@ -52,13 +51,10 @@ You are standing in an open field west of a white house, with a boarded front do
 - Finding the lamp: +10 points
 "#
                     .to_string(),
-                }],
-            }),
-            "if://walkthrough/planetfall" => Ok(ReadResourceResult {
-                contents: vec![Content::Text {
+                }])),
+            "if://walkthrough/planetfall" => Ok(ReadResourceResult::new(vec![Content::Text {
                     text: "# Planetfall Walkthrough\n\nYour adventure in space...".to_string(),
-                }],
-            }),
+                }])),
             _ => Err(pmcp::Error::validation(format!(
                 "Unknown resource: {}",
                 uri
@@ -71,8 +67,7 @@ You are standing in an open field west of a white house, with a boarded front do
         _cursor: Option<String>,
         _extra: RequestHandlerExtra,
     ) -> Result<ListResourcesResult> {
-        Ok(ListResourcesResult {
-            resources: vec![
+        Ok(ListResourcesResult::new(vec![
                 ResourceInfo {
                     uri: "if://walkthrough/zork1".to_string(),
                     name: "Zork I Walkthrough".to_string(),
@@ -85,9 +80,7 @@ You are standing in an open field west of a white house, with a boarded front do
                     description: Some("Complete walkthrough for Planetfall".to_string()),
                     mime_type: Some("text/markdown".to_string()),
                 },
-            ],
-            next_cursor: None,
-        })
+            ]))
     }
 }
 
