@@ -55,8 +55,8 @@ impl ResourceHandler for TestResourceHandler {
             },
             |content| {
                 Ok(ReadResourceResult::new(vec![Content::Text {
-                        text: content.clone(),
-                    }]))
+                    text: content.clone(),
+                }]))
             },
         )
     }

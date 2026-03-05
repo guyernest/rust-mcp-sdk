@@ -2598,7 +2598,9 @@ impl ServerTester {
             let _ = self.test_tools_list().await;
         }
 
-        Ok(pmcp::types::ListToolsResult::new(self.tools.clone().unwrap_or_default()))
+        Ok(pmcp::types::ListToolsResult::new(
+            self.tools.clone().unwrap_or_default(),
+        ))
     }
 
     pub async fn read_resource(&mut self, uri: &str) -> Result<pmcp::types::ReadResourceResult> {

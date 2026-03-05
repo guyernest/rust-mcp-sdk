@@ -144,7 +144,9 @@ impl ResourceHandler for FileSystemResourceHandler {
             })
             .unwrap_or("text/plain");
 
-        Ok(ReadResourceResult::new(vec![Content::Text { text: content }]))
+        Ok(ReadResourceResult::new(vec![Content::Text {
+            text: content,
+        }]))
     }
 
     async fn list(

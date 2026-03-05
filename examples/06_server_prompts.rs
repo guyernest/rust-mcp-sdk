@@ -121,7 +121,10 @@ fn create_data_analysis_prompt(
             content: MessageContent::Text { text: user_text },
         });
 
-        Ok(GetPromptResult::new(messages, Some(format!("Data analysis for {} data", data_type))))
+        Ok(GetPromptResult::new(
+            messages,
+            Some(format!("Data analysis for {} data", data_type)),
+        ))
     })
     .with_description("Generate a data analysis prompt for the provided data")
     .with_argument("data_type", "Type of data (CSV, JSON, etc.)", false)

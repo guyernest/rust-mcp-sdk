@@ -208,17 +208,17 @@ fn bench_response_generation(c: &mut Criterion) {
                 id: RequestId::Number(2),
                 payload: pmcp::types::jsonrpc::ResponsePayload::Result(
                     serde_json::to_value(ListToolsResult::new(vec![
-                            ToolInfo::new(
-                                "tool1",
-                                Some("First tool".to_string()),
-                                json!({"type": "object"}),
-                            ),
-                            ToolInfo::new(
-                                "tool2",
-                                Some("Second tool".to_string()),
-                                json!({"type": "object"}),
-                            ),
-                        ]))
+                        ToolInfo::new(
+                            "tool1",
+                            Some("First tool".to_string()),
+                            json!({"type": "object"}),
+                        ),
+                        ToolInfo::new(
+                            "tool2",
+                            Some("Second tool".to_string()),
+                            json!({"type": "object"}),
+                        ),
+                    ]))
                     .unwrap(),
                 ),
             },

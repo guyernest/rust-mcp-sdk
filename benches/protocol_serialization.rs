@@ -140,40 +140,40 @@ fn bench_response_serialization(c: &mut Criterion) {
 
     // List tools response with multiple tools
     let tools_response = ListToolsResult::new(vec![
-            ToolInfo::new(
-                "search",
-                Some("Search for information".to_string()),
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                        "limit": {"type": "number"}
-                    }
-                }),
-            ),
-            ToolInfo::new(
-                "analyze",
-                Some("Analyze data".to_string()),
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "data": {"type": "array"},
-                        "method": {"type": "string"}
-                    }
-                }),
-            ),
-            ToolInfo::new(
-                "generate",
-                Some("Generate content".to_string()),
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "template": {"type": "string"},
-                        "variables": {"type": "object"}
-                    }
-                }),
-            ),
-        ]);
+        ToolInfo::new(
+            "search",
+            Some("Search for information".to_string()),
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "number"}
+                }
+            }),
+        ),
+        ToolInfo::new(
+            "analyze",
+            Some("Analyze data".to_string()),
+            json!({
+                "type": "object",
+                "properties": {
+                    "data": {"type": "array"},
+                    "method": {"type": "string"}
+                }
+            }),
+        ),
+        ToolInfo::new(
+            "generate",
+            Some("Generate content".to_string()),
+            json!({
+                "type": "object",
+                "properties": {
+                    "template": {"type": "string"},
+                    "variables": {"type": "object"}
+                }
+            }),
+        ),
+    ]);
 
     group.bench_function("list_tools_response", |b| {
         b.iter(|| serde_json::to_string(&black_box(&tools_response)).unwrap())
@@ -303,8 +303,8 @@ fn bench_large_messages(c: &mut Criterion) {
         ))
         .collect();
 
-    let large_tools_response = ListToolsResult::new(many_tools)
-        .with_next_cursor("next_page_token_12345".to_string());
+    let large_tools_response =
+        ListToolsResult::new(many_tools).with_next_cursor("next_page_token_12345".to_string());
 
     group.bench_function("large_tools_list_serialize", |b| {
         b.iter(|| serde_json::to_string(&black_box(&large_tools_response)).unwrap())
