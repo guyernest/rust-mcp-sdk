@@ -321,15 +321,13 @@ impl ResourceHandler for AppResources {
             let transformed = self.chatgpt_adapter
                 .transform(uri, widget_name, &html);
 
-            Ok(ReadResourceResult {
-                contents: vec![Content::Resource {
+            Ok(ReadResourceResult::new(vec![Content::Resource {
                     uri: uri.to_string(),
                     text: Some(transformed.content),
                     mime_type: Some(
                         ExtendedUIMimeType::HtmlSkybridge.to_string()
                     ),
-                }],
-            })
+                }]))
         } else {
             Err(pmcp::Error::protocol(
                 pmcp::ErrorCode::METHOD_NOT_FOUND,
@@ -363,14 +361,14 @@ The `list()` method calls `widget_dir.discover()` and maps each `WidgetEntry` to
             .map(|entry| ResourceInfo {
                 uri: entry.uri,
                 name: entry.filename.clone(),
-                description: Some(format!("Interactive {} widget", entry.filename)),
+                Some(format!("Interactive {} widget", entry.filename)),
                 mime_type: Some(
                     ExtendedUIMimeType::HtmlSkybridge.to_string()
                 ),
             })
             .collect();
 
-        Ok(ListResourcesResult { resources, next_cursor: None })
+        Ok(ListResourcesResult::new(resources))
     }
 }
 ```
