@@ -36,7 +36,7 @@ pub async fn execute(server_id: String, show_all: bool, global_flags: &GlobalFla
             println!();
             println!("  2. Upload to pmcp.run:");
             println!(
-                "     cargo pmcp test upload --server-id {} scenarios/",
+                "     cargo pmcp test upload --server {} scenarios/",
                 server_id
             );
         }
@@ -133,7 +133,7 @@ pub async fn execute(server_id: String, show_all: bool, global_flags: &GlobalFla
         println!("{}", "Commands:".bright_white().bold());
         println!("  Download a scenario:  cargo pmcp test download --scenario-id <id>");
         println!(
-            "  Upload scenarios:     cargo pmcp test upload --server-id {} <path>",
+            "  Upload scenarios:     cargo pmcp test upload --server {} <path>",
             server_id
         );
 

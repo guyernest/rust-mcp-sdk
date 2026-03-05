@@ -76,7 +76,7 @@ pub async fn deploy_landing_page(
                     cargo pmcp deploy --target pmcp-run\n\
                  \n\
                  2. Or manually specify server ID:\n\
-                    cargo pmcp landing deploy --target pmcp-run --server-id YOUR_SERVER_ID\n\
+                    cargo pmcp landing deploy --target pmcp-run --server YOUR_SERVER_ID\n\
                  \n\
                  3. Or add to pmcp-landing.toml:\n\
                     [deployment]\n\

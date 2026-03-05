@@ -85,7 +85,7 @@ pub async fn execute(
             output_path.display()
         );
         println!(
-            "  - Upload changes: cargo pmcp test upload --server-id <id> {}",
+            "  - Upload changes: cargo pmcp test upload --server <id> {}",
             output_path.display()
         );
     }

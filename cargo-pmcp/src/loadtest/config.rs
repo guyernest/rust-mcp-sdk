@@ -133,7 +133,8 @@ fn default_expected_interval() -> u64 {
 /// A single scenario step representing an MCP operation with a scheduling weight.
 ///
 /// The `type` field in TOML determines the variant via serde's internally tagged
-/// enum support. Supported types: `"tools/call"`, `"resources/read"`, `"prompts/get"`.
+/// enum support. Supported types: `"tools/call"`, `"resources/read"`, `"prompts/get"`,
+/// `"code_mode"`.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(tag = "type")]
 pub enum ScenarioStep {
@@ -167,6 +168,24 @@ pub enum ScenarioStep {
         #[serde(default)]
         arguments: HashMap<String, String>,
     },
+    /// A `code_mode` two-step flow: `validate_code` then `execute_code`.
+    ///
+    /// Used for servers that support Code Mode (e.g., GraphQL, SQL).
+    /// The code is first validated, then executed if approved.
+    #[serde(rename = "code_mode")]
+    CodeMode {
+        /// Scheduling weight relative to other steps.
+        weight: u32,
+        /// The code to validate and execute.
+        code: String,
+        /// Code format (e.g., "graphql", "sql", "javascript").
+        #[serde(default = "default_code_format")]
+        format: String,
+    },
+}
+
+fn default_code_format() -> String {
+    "graphql".to_string()
 }
 
 impl LoadTestConfig {
@@ -275,6 +294,7 @@ impl ScenarioStep {
             Self::ToolCall { weight, .. } => *weight,
             Self::ResourceRead { weight, .. } => *weight,
             Self::PromptGet { weight, .. } => *weight,
+            Self::CodeMode { weight, .. } => *weight,
         }
     }
 }
@@ -359,6 +379,64 @@ arguments = { text = "Hello world" }
         assert!(matches!(
             &config.scenario[2],
             ScenarioStep::PromptGet { weight: 10, .. }
+        ));
+    }
+
+    #[test]
+    fn test_parse_code_mode_scenario() {
+        let toml_str = r#"
+[settings]
+virtual_users = 5
+duration_secs = 30
+timeout_ms = 5000
+
+[[scenario]]
+type = "tools/call"
+weight = 50
+tool = "list-agents"
+
+[[scenario]]
+type = "code_mode"
+weight = 10
+code = """
+query ListAgents {
+  listAgentsFromRegistry { id name }
+}
+"""
+format = "graphql"
+"#;
+        let config = LoadTestConfig::from_toml(toml_str).unwrap();
+        assert_eq!(config.scenario.len(), 2);
+        assert!(matches!(
+            &config.scenario[1],
+            ScenarioStep::CodeMode {
+                weight: 10,
+                format,
+                ..
+            } if format == "graphql"
+        ));
+    }
+
+    #[test]
+    fn test_parse_code_mode_default_format() {
+        let toml_str = r#"
+[settings]
+virtual_users = 5
+duration_secs = 30
+timeout_ms = 5000
+
+[[scenario]]
+type = "code_mode"
+weight = 5
+code = "SELECT 1"
+"#;
+        let config = LoadTestConfig::from_toml(toml_str).unwrap();
+        assert!(matches!(
+            &config.scenario[0],
+            ScenarioStep::CodeMode {
+                format,
+                ..
+            } if format == "graphql"
         ));
     }
 

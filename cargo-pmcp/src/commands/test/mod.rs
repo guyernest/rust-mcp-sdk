@@ -124,9 +124,9 @@ pub enum TestCommand {
     /// Upload local scenario files to pmcp.run for scheduled testing
     /// and cloud-based test execution.
     Upload {
-        /// Server ID (deployment ID) on pmcp.run
+        /// Server name (deployment ID) on pmcp.run
         #[arg(long)]
-        server_id: String,
+        server: String,
 
         /// Path(s) to scenario files or directories
         #[arg(required = true)]
@@ -162,9 +162,9 @@ pub enum TestCommand {
     ///
     /// Show all scenarios configured for an MCP server on pmcp.run.
     List {
-        /// Server ID (deployment ID) on pmcp.run
+        /// Server name (deployment ID) on pmcp.run
         #[arg(long)]
-        server_id: String,
+        server: String,
 
         /// Show all scenarios including disabled ones
         #[arg(long)]
@@ -230,14 +230,14 @@ impl TestCommand {
             ),
 
             TestCommand::Upload {
-                server_id,
+                server,
                 paths,
                 name,
                 description,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
                 runtime.block_on(upload::execute(
-                    server_id,
+                    server,
                     paths,
                     name,
                     description,
@@ -254,9 +254,9 @@ impl TestCommand {
                 runtime.block_on(download::execute(scenario_id, output, format, global_flags))
             },
 
-            TestCommand::List { server_id, all } => {
+            TestCommand::List { server, all } => {
                 let runtime = tokio::runtime::Runtime::new()?;
-                runtime.block_on(list::execute(server_id, all, global_flags))
+                runtime.block_on(list::execute(server, all, global_flags))
             },
         }
     }

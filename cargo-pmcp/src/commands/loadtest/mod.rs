@@ -89,9 +89,9 @@ pub enum LoadtestCommand {
     /// Validates the TOML config locally (parses it and checks that scenarios
     /// exist), then uploads it to pmcp.run for cloud-based load test execution.
     Upload {
-        /// Server ID (deployment ID) on pmcp.run
+        /// Server name (deployment ID) on pmcp.run
         #[arg(long)]
-        server_id: String,
+        server: String,
 
         /// Path to the loadtest TOML config file
         #[arg(required = true)]
@@ -147,14 +147,14 @@ impl LoadtestCommand {
                 runtime.block_on(init::execute_init(url, force, global_flags))
             },
             LoadtestCommand::Upload {
-                server_id,
+                server,
                 path,
                 name,
                 description,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
                 runtime.block_on(upload::execute(
-                    server_id,
+                    server,
                     path,
                     name,
                     description,
