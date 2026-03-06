@@ -10,8 +10,8 @@ progress:
   total_phases: 13
   completed_phases: 4
   total_plans: 8
-  completed_plans: 7
-  percent: 96
+  completed_plans: 8
+  percent: 97
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** MCP Apps code quality improvements -- Phase 37 (TypedSyncTool UI support)
+**Current focus:** MCP Apps code quality improvements -- Phase 38 (ToolInfo/PromptInfo caching)
 
 ## Current Position
 
-Phase: 37 (add-with-ui-support-to-typedsynctool) -- COMPLETE
+Phase: 38 (cache-toolinfo-at-registration-to-avoid-per-request-cloning) -- COMPLETE
 Plan: 1 of 1 (complete)
-Status: Phase complete -- ready for Phase 38
-Last activity: 2026-03-06 -- Completed 37-01 with_ui() for TypedSyncTool and WasmTypedTool
+Status: Phase complete -- ready for Phase 39
+Last activity: 2026-03-06 -- Completed 38-01 ToolInfo/PromptInfo caching at registration
 
-Progress: [██████████] 96%
+Progress: [██████████] 97%
 
 ## Shipped Milestones
 
@@ -69,6 +69,7 @@ v1.6 decisions:
 - [Phase 34-01]: Nested _meta.ui.resourceUri format with openai/outputTemplate for ChatGPT; HtmlMcpApp MIME type; dual-emit WidgetMeta prefersBorder
 - [Phase 36]: Used explicit match arms (no wildcards) in From/TryFrom bridge for compile-time exhaustiveness
 - [Phase 37]: Mirrored TypedTool::with_ui() exactly for TypedSyncTool and WasmTypedTool; WasmTypedTool tests wasm32-only gated
+- [Phase 38]: Cache is sole source of truth for metadata; no fallback to handler.metadata() in hot paths; prompt_workflow() caches directly
 
 ### Roadmap Evolution
 
@@ -86,6 +87,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-06T22:52:05.996Z
-Stopped at: Phase 38 context gathered
-Resume: Continue with Phase 38 or next planned work
+Last session: 2026-03-06T23:17:30Z
+Stopped at: Completed 38-01-PLAN.md
+Resume: Continue with Phase 39 or next planned work
