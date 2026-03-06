@@ -248,7 +248,7 @@ pub struct ToolInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<ToolAnnotations>,
     /// Optional metadata (e.g., for UI resource association in MCP Apps Extension)
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none", default)]
     #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
     pub _meta: Option<serde_json::Map<String, Value>>,
     /// Execution metadata declaring task support level (experimental MCP Tasks).
