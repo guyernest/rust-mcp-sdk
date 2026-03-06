@@ -176,8 +176,9 @@ where
 
     /// Associate this tool with a UI resource (MCP Apps Extension).
     ///
-    /// This sets the `ui/resourceUri` field in the tool's `_meta` field,
-    /// allowing MCP hosts to display an interactive UI when this tool is invoked.
+    /// This sets the nested `_meta.ui.resourceUri` field and the `openai/outputTemplate`
+    /// alias in the tool's `_meta`, allowing both MCP and `ChatGPT` hosts to display
+    /// an interactive UI when this tool is invoked.
     ///
     /// # Example
     ///
@@ -230,6 +231,10 @@ where
         let meta = self.ui_resource_uri.as_ref().map(|uri| {
             let mut meta = serde_json::Map::new();
             meta.insert("ui".to_string(), serde_json::json!({ "resourceUri": uri }));
+            meta.insert(
+                "openai/outputTemplate".to_string(),
+                serde_json::Value::String(uri.clone()),
+            );
             meta
         });
 
@@ -684,5 +689,46 @@ where
             _meta: None,
             execution: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_typed_tool_metadata_with_ui_has_openai_output_template() {
+        let tool = TypedTool::new_with_schema(
+            "test_tool",
+            json!({"type": "object"}),
+            |_args: serde_json::Value, _extra| Box::pin(async { Ok(json!({})) }),
+        )
+        .with_ui("ui://widgets/chart.html");
+
+        let info = tool.metadata().unwrap();
+        let meta = info._meta.as_ref().expect("_meta should be present");
+
+        // Must have nested ui.resourceUri
+        let ui_obj = meta.get("ui").expect("must have nested 'ui' key");
+        assert_eq!(ui_obj["resourceUri"], "ui://widgets/chart.html");
+
+        // Must have openai/outputTemplate
+        assert_eq!(
+            meta.get("openai/outputTemplate").unwrap(),
+            &serde_json::Value::String("ui://widgets/chart.html".to_string())
+        );
+    }
+
+    #[test]
+    fn test_typed_tool_metadata_without_ui_has_no_meta() {
+        let tool = TypedTool::new_with_schema(
+            "test_tool",
+            json!({"type": "object"}),
+            |_args: serde_json::Value, _extra| Box::pin(async { Ok(json!({})) }),
+        );
+
+        let info = tool.metadata().unwrap();
+        assert!(info._meta.is_none(), "_meta should be None without UI");
     }
 }

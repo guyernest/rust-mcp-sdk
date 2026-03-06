@@ -253,12 +253,22 @@ impl WidgetMeta {
         self
     }
 
-    /// Convert to a serde_json::Map for merging into resource `_meta`.
+    /// Convert to a `serde_json::Map` for merging into resource `_meta`.
+    ///
+    /// Produces both flat `openai/*` keys (via serde) and a nested `"ui"` object
+    /// containing MCP standard equivalents (currently only `prefersBorder`).
+    /// `ChatGPT`-only fields (`domain`, `csp`, `description`) stay flat `openai/*` only.
     pub fn to_meta_map(&self) -> serde_json::Map<String, serde_json::Value> {
-        serde_json::to_value(self)
+        let mut map = serde_json::to_value(self)
             .ok()
             .and_then(|v| v.as_object().cloned())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // Dual-emit: add nested ui object for MCP standard fields
+        if let Some(prefers) = self.prefers_border {
+            let ui_obj = serde_json::json!({ "prefersBorder": prefers });
+            map.insert("ui".to_string(), ui_obj);
+        }
+        map
     }
 
     /// Check if the metadata is empty (all fields are None).
@@ -1066,5 +1076,55 @@ mod tests {
             map.get("openai/outputTemplate"),
             Some(&serde_json::Value::String("ui://test".to_string()))
         );
+    }
+
+    #[test]
+    fn test_widget_meta_dual_emit_prefers_border() {
+        let meta = WidgetMeta::new().prefers_border(true);
+        let map = meta.to_meta_map();
+
+        // Flat openai/* key
+        assert_eq!(
+            map.get("openai/widgetPrefersBorder"),
+            Some(&serde_json::Value::Bool(true))
+        );
+
+        // Nested ui object
+        let ui_obj = map.get("ui").expect("must have nested 'ui' key");
+        assert_eq!(ui_obj["prefersBorder"], true);
+    }
+
+    #[test]
+    fn test_widget_meta_dual_emit_with_domain() {
+        let meta = WidgetMeta::new()
+            .prefers_border(true)
+            .domain("x.com");
+        let map = meta.to_meta_map();
+
+        // prefersBorder in nested ui object
+        let ui_obj = map.get("ui").expect("must have nested 'ui' key");
+        assert_eq!(ui_obj["prefersBorder"], true);
+        // domain is ChatGPT-specific, stays flat only
+        assert!(
+            ui_obj.get("domain").is_none(),
+            "domain should not be in nested ui object"
+        );
+        assert_eq!(
+            map.get("openai/widgetDomain"),
+            Some(&serde_json::Value::String("x.com".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_widget_meta_empty_no_ui_key() {
+        let meta = WidgetMeta::new();
+        let map = meta.to_meta_map();
+
+        // No spurious ui key when no fields set
+        assert!(
+            map.get("ui").is_none(),
+            "empty WidgetMeta should not have 'ui' key"
+        );
+        assert!(map.is_empty(), "empty WidgetMeta should produce empty map");
     }
 }
