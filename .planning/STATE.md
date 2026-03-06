@@ -72,6 +72,7 @@ v1.6 decisions:
 
 - Phase 33 added: Fix mcp-tester failure with v1.12.0
 - Phase 34 added: Fix MCP Apps ChatGPT compatibility
+- Phases 35-39 added: MCP Apps code quality improvements (meta key constants, MIME type unification, TypedSyncTool UI, ToolInfo caching, ui meta merge)
 
 ### Pending Todos
 
