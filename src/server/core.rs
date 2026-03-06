@@ -119,6 +119,12 @@ pub struct ServerCore {
     /// Registered prompt handlers
     prompts: HashMap<String, Arc<dyn PromptHandler>>,
 
+    /// Cached tool metadata (populated at registration, immutable)
+    tool_infos: HashMap<String, ToolInfo>,
+
+    /// Cached prompt metadata (populated at registration, immutable)
+    prompt_infos: HashMap<String, PromptInfo>,
+
     /// Resource handler (optional)
     resources: Option<Arc<dyn ResourceHandler>>,
 
@@ -177,6 +183,8 @@ impl ServerCore {
         capabilities: ServerCapabilities,
         tools: HashMap<String, Arc<dyn ToolHandler>>,
         prompts: HashMap<String, Arc<dyn PromptHandler>>,
+        tool_infos: HashMap<String, ToolInfo>,
+        prompt_infos: HashMap<String, PromptInfo>,
         resources: Option<Arc<dyn ResourceHandler>>,
         sampling: Option<Arc<dyn SamplingHandler>>,
         auth_provider: Option<Arc<dyn AuthProvider>>,
@@ -191,6 +199,8 @@ impl ServerCore {
             capabilities,
             tools,
             prompts,
+            tool_infos,
+            prompt_infos,
             resources,
             sampling,
             client_capabilities: Arc::new(RwLock::new(None)),
@@ -350,13 +360,15 @@ impl ServerCore {
 
         // Convert result to CallToolResult
         let value = result?;
-        Ok(CallToolResult {
-            content: vec![Content::Text {
-                text: serde_json::to_string_pretty(&value)?,
-            }],
-            is_error: false,
-            ..Default::default()
-        })
+        let text = serde_json::to_string_pretty(&value)?;
+        let mut call_result = CallToolResult::new(vec![Content::Text { text }]);
+
+        // Enrich with widget metadata so widgets can access data via toolOutput.
+        if let Some(info) = handler.metadata() {
+            call_result = call_result.with_widget_enrichment(info, value);
+        }
+
+        Ok(call_result)
     }
 
     /// Handle list prompts request.
