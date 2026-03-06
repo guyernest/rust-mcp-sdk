@@ -734,6 +734,47 @@ impl std::str::FromStr for ExtendedUIMimeType {
 }
 
 // =============================================================================
+// UIMimeType <-> ExtendedUIMimeType Bridge
+// =============================================================================
+
+/// Infallible conversion from [`UIMimeType`](crate::types::ui::UIMimeType) to
+/// [`ExtendedUIMimeType`].
+///
+/// Every `UIMimeType` variant has a matching `ExtendedUIMimeType` variant,
+/// so this conversion always succeeds.
+impl From<crate::types::ui::UIMimeType> for ExtendedUIMimeType {
+    fn from(value: crate::types::ui::UIMimeType) -> Self {
+        match value {
+            crate::types::ui::UIMimeType::HtmlMcp => Self::HtmlMcp,
+            crate::types::ui::UIMimeType::HtmlSkybridge => Self::HtmlSkybridge,
+            crate::types::ui::UIMimeType::HtmlMcpApp => Self::HtmlMcpApp,
+        }
+    }
+}
+
+/// Fallible conversion from [`ExtendedUIMimeType`] to
+/// [`UIMimeType`](crate::types::ui::UIMimeType).
+///
+/// Only the three shared variants (`HtmlMcp`, `HtmlSkybridge`, `HtmlMcpApp`)
+/// can be converted. Extended-only variants (`HtmlPlain`, `UriList`,
+/// `RemoteDom`, `RemoteDomReact`) return a descriptive error.
+impl TryFrom<ExtendedUIMimeType> for crate::types::ui::UIMimeType {
+    type Error = String;
+
+    fn try_from(value: ExtendedUIMimeType) -> Result<Self, Self::Error> {
+        match value {
+            ExtendedUIMimeType::HtmlMcp => Ok(Self::HtmlMcp),
+            ExtendedUIMimeType::HtmlSkybridge => Ok(Self::HtmlSkybridge),
+            ExtendedUIMimeType::HtmlMcpApp => Ok(Self::HtmlMcpApp),
+            other => Err(format!(
+                "Cannot convert {} to UIMimeType (extended-only variant)",
+                other
+            )),
+        }
+    }
+}
+
+// =============================================================================
 // UI Content Types
 // =============================================================================
 

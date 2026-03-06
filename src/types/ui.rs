@@ -326,7 +326,7 @@ impl ToolUIMetadata {
         let mut map = self.additional.clone();
         if let Some(uri) = &self.ui_resource_uri {
             let meta = Self::build_meta_map(uri);
-            map.extend(meta.into_iter());
+            map.extend(meta);
         }
         map
     }
