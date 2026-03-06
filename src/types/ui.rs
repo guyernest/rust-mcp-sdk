@@ -125,6 +125,12 @@ pub enum UIMimeType {
     /// `ChatGPT` injects the `window.openai` API for widget communication.
     /// Used exclusively by `ChatGPT` Apps (`OpenAI` Apps SDK).
     HtmlSkybridge,
+
+    /// HTML with MCP App profile (`text/html;profile=mcp-app`)
+    ///
+    /// The profile-based MIME type used by `ChatGPT` for MCP Apps.
+    /// This is the format `ChatGPT` advertises in its developer documentation.
+    HtmlMcpApp,
     // Future MIME types (commented out for Phase 1):
     // /// WebAssembly with MCP support (`application/wasm+mcp`)
     // WasmMcp,
@@ -139,12 +145,13 @@ impl UIMimeType {
         match self {
             Self::HtmlMcp => "text/html+mcp",
             Self::HtmlSkybridge => "text/html+skybridge",
+            Self::HtmlMcpApp => "text/html;profile=mcp-app",
         }
     }
 
     /// Check if this is a `ChatGPT` Apps MIME type
     pub fn is_chatgpt(&self) -> bool {
-        matches!(self, Self::HtmlSkybridge)
+        matches!(self, Self::HtmlSkybridge | Self::HtmlMcpApp)
     }
 
     /// Check if this is a standard MCP Apps MIME type
@@ -166,6 +173,7 @@ impl std::str::FromStr for UIMimeType {
         match s {
             "text/html+mcp" => Ok(Self::HtmlMcp),
             "text/html+skybridge" => Ok(Self::HtmlSkybridge),
+            "text/html;profile=mcp-app" => Ok(Self::HtmlMcpApp),
             _ => Err(format!("Unknown UI MIME type: {}", s)),
         }
     }
@@ -209,7 +217,11 @@ impl UIResourceContents {
 /// Tool metadata for UI resource association
 ///
 /// This extends the tool's `_meta` field to reference a UI resource.
-/// The metadata is optional and backward compatible.
+/// Uses nested `_meta.ui.resourceUri` format for MCP standard compatibility,
+/// plus `openai/outputTemplate` for `ChatGPT` compatibility.
+///
+/// Backward compatible: `from_metadata()` reads both nested `"ui"` object
+/// and legacy flat `"ui/resourceUri"` key.
 ///
 /// # Example
 ///
@@ -218,20 +230,26 @@ impl UIResourceContents {
 /// use std::collections::HashMap;
 /// use serde_json::Value;
 ///
+/// // Nested format (preferred)
 /// let mut meta = HashMap::new();
-/// meta.insert("ui/resourceUri".to_string(), Value::String("ui://settings/form".to_string()));
+/// meta.insert("ui".to_string(), serde_json::json!({"resourceUri": "ui://settings/form"}));
 ///
 /// let ui_meta = ToolUIMetadata::from_metadata(&meta);
 /// assert_eq!(ui_meta.ui_resource_uri, Some("ui://settings/form".to_string()));
+///
+/// // Legacy flat format also works
+/// let mut legacy = HashMap::new();
+/// legacy.insert("ui/resourceUri".to_string(), Value::String("ui://settings/form".to_string()));
+///
+/// let ui_meta = ToolUIMetadata::from_metadata(&legacy);
+/// assert_eq!(ui_meta.ui_resource_uri, Some("ui://settings/form".to_string()));
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ToolUIMetadata {
-    /// UI resource URI (corresponds to `_meta["ui/resourceUri"]`)
-    #[serde(rename = "ui/resourceUri", skip_serializing_if = "Option::is_none")]
+    /// UI resource URI (from `_meta.ui.resourceUri` or legacy `_meta["ui/resourceUri"]`)
     pub ui_resource_uri: Option<String>,
 
     /// Additional metadata fields
-    #[serde(flatten)]
     pub additional: HashMap<String, serde_json::Value>,
 }
 
@@ -248,14 +266,28 @@ impl ToolUIMetadata {
     }
 
     /// Extract from a metadata `HashMap`
+    ///
+    /// Reads from nested `"ui"` object first, falling back to legacy flat
+    /// `"ui/resourceUri"` key for backward compatibility.
     pub fn from_metadata(metadata: &HashMap<String, serde_json::Value>) -> Self {
+        // Try nested format first: {"ui": {"resourceUri": "..."}}
         let ui_resource_uri = metadata
-            .get("ui/resourceUri")
+            .get("ui")
+            .and_then(|v| v.get("resourceUri"))
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(|s| s.to_string())
+            // Fall back to legacy flat format: {"ui/resourceUri": "..."}
+            .or_else(|| {
+                metadata
+                    .get("ui/resourceUri")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            });
 
         let mut additional = metadata.clone();
+        additional.remove("ui");
         additional.remove("ui/resourceUri");
+        additional.remove("openai/outputTemplate");
 
         Self {
             ui_resource_uri,
@@ -264,11 +296,17 @@ impl ToolUIMetadata {
     }
 
     /// Convert to metadata `HashMap`
+    ///
+    /// Emits nested `"ui"` format plus `"openai/outputTemplate"` for `ChatGPT`.
     pub fn to_metadata(&self) -> HashMap<String, serde_json::Value> {
         let mut map = self.additional.clone();
         if let Some(uri) = &self.ui_resource_uri {
             map.insert(
-                "ui/resourceUri".to_string(),
+                "ui".to_string(),
+                serde_json::json!({ "resourceUri": uri }),
+            );
+            map.insert(
+                "openai/outputTemplate".to_string(),
                 serde_json::Value::String(uri.clone()),
             );
         }
@@ -318,6 +356,7 @@ mod tests {
 
         assert_eq!(UIMimeType::HtmlMcp.as_str(), "text/html+mcp");
         assert_eq!(UIMimeType::HtmlSkybridge.as_str(), "text/html+skybridge");
+        assert_eq!(UIMimeType::HtmlMcpApp.as_str(), "text/html;profile=mcp-app");
         assert_eq!(
             UIMimeType::from_str("text/html+mcp"),
             Ok(UIMimeType::HtmlMcp)
@@ -325,6 +364,10 @@ mod tests {
         assert_eq!(
             UIMimeType::from_str("text/html+skybridge"),
             Ok(UIMimeType::HtmlSkybridge)
+        );
+        assert_eq!(
+            UIMimeType::from_str("text/html;profile=mcp-app"),
+            Ok(UIMimeType::HtmlMcpApp)
         );
         assert!(UIMimeType::from_str("invalid").is_err());
     }
@@ -335,6 +378,8 @@ mod tests {
         assert!(!UIMimeType::HtmlSkybridge.is_mcp_apps());
         assert!(UIMimeType::HtmlMcp.is_mcp_apps());
         assert!(!UIMimeType::HtmlMcp.is_chatgpt());
+        assert!(UIMimeType::HtmlMcpApp.is_chatgpt());
+        assert!(!UIMimeType::HtmlMcpApp.is_mcp_apps());
     }
 
     #[test]
@@ -348,20 +393,49 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_ui_metadata() {
+    fn test_tool_ui_metadata_to_nested_format() {
         let meta = ToolUIMetadata::new().with_ui_resource("ui://test");
 
         assert_eq!(meta.ui_resource_uri, Some("ui://test".to_string()));
 
         let map = meta.to_metadata();
+        // Must emit nested format
+        let ui_obj = map.get("ui").expect("must have nested 'ui' key");
+        assert_eq!(ui_obj["resourceUri"], "ui://test");
+        // Must emit openai/outputTemplate
         assert_eq!(
-            map.get("ui/resourceUri"),
+            map.get("openai/outputTemplate"),
             Some(&serde_json::Value::String("ui://test".to_string()))
+        );
+        // Must NOT emit flat key
+        assert!(
+            map.get("ui/resourceUri").is_none(),
+            "must not have flat ui/resourceUri key"
         );
     }
 
     #[test]
-    fn test_tool_ui_metadata_from_hashmap() {
+    fn test_tool_ui_metadata_from_nested_format() {
+        let mut map = HashMap::new();
+        map.insert(
+            "ui".to_string(),
+            serde_json::json!({"resourceUri": "ui://test"}),
+        );
+        map.insert(
+            "custom".to_string(),
+            serde_json::Value::String("value".to_string()),
+        );
+
+        let meta = ToolUIMetadata::from_metadata(&map);
+        assert_eq!(meta.ui_resource_uri, Some("ui://test".to_string()));
+        assert_eq!(
+            meta.additional.get("custom"),
+            Some(&serde_json::Value::String("value".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_tool_ui_metadata_from_legacy_flat_format() {
         let mut map = HashMap::new();
         map.insert(
             "ui/resourceUri".to_string(),
@@ -373,7 +447,6 @@ mod tests {
         );
 
         let meta = ToolUIMetadata::from_metadata(&map);
-
         assert_eq!(meta.ui_resource_uri, Some("ui://test".to_string()));
         assert_eq!(
             meta.additional.get("custom"),

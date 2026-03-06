@@ -320,17 +320,23 @@ impl ToolInfo {
     }
 
     /// Create a new `ToolInfo` with UI resource metadata.
+    ///
+    /// Produces nested `_meta` format compatible with both MCP standard and ChatGPT:
+    /// - `_meta.ui.resourceUri` - MCP standard nested format
+    /// - `_meta["openai/outputTemplate"]` - ChatGPT alias for the same URI
     pub fn with_ui(
         name: impl Into<String>,
         description: Option<String>,
         input_schema: Value,
         ui_resource_uri: impl Into<String>,
     ) -> Self {
+        let uri = ui_resource_uri.into();
         let mut meta = serde_json::Map::new();
         meta.insert(
-            "ui/resourceUri".to_string(),
-            Value::String(ui_resource_uri.into()),
+            "ui".to_string(),
+            serde_json::json!({ "resourceUri": &uri }),
         );
+        meta.insert("openai/outputTemplate".to_string(), Value::String(uri));
 
         Self {
             name: name.into(),
@@ -1863,6 +1869,46 @@ mod tests {
         let meta: RequestMeta = serde_json::from_str(json_str).unwrap();
         assert_eq!(meta._task_id.as_deref(), Some("task-xyz"));
         assert!(meta.progress_token.is_none());
+    }
+
+    #[test]
+    fn test_tool_info_with_ui_nested_format() {
+        let tool = ToolInfo::with_ui(
+            "my_tool",
+            None,
+            json!({"type": "object"}),
+            "ui://w/x.html",
+        );
+
+        let meta = tool._meta.as_ref().unwrap();
+
+        // Must use nested format: {"ui": {"resourceUri": "..."}}
+        let ui_obj = meta.get("ui").expect("must have nested 'ui' key");
+        assert_eq!(ui_obj["resourceUri"], "ui://w/x.html");
+
+        // Must NOT have flat "ui/resourceUri" key
+        assert!(
+            meta.get("ui/resourceUri").is_none(),
+            "must not have flat ui/resourceUri key"
+        );
+    }
+
+    #[test]
+    fn test_tool_info_with_ui_openai_output_template() {
+        let tool = ToolInfo::with_ui(
+            "my_tool",
+            None,
+            json!({"type": "object"}),
+            "ui://w/x.html",
+        );
+
+        let meta = tool._meta.as_ref().unwrap();
+
+        // Must have openai/outputTemplate as ChatGPT alias
+        assert_eq!(
+            meta.get("openai/outputTemplate").unwrap(),
+            &serde_json::Value::String("ui://w/x.html".to_string())
+        );
     }
 
     #[test]

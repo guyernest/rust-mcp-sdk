@@ -633,6 +633,11 @@ pub enum ExtendedUIMimeType {
     /// ChatGPT injects `window.openai` API for widget communication.
     HtmlSkybridge,
 
+    /// HTML with MCP App profile (`text/html;profile=mcp-app`).
+    ///
+    /// The profile-based MIME type used by `ChatGPT` for MCP Apps.
+    HtmlMcpApp,
+
     /// Plain HTML for MCP-UI hosts (`text/html`).
     HtmlPlain,
 
@@ -656,6 +661,7 @@ impl ExtendedUIMimeType {
         match self {
             Self::HtmlMcp => "text/html+mcp",
             Self::HtmlSkybridge => "text/html+skybridge",
+            Self::HtmlMcpApp => "text/html;profile=mcp-app",
             Self::HtmlPlain => "text/html",
             Self::UriList => "text/uri-list",
             Self::RemoteDom => "application/vnd.mcp-ui.remote-dom+javascript",
@@ -665,7 +671,7 @@ impl ExtendedUIMimeType {
 
     /// Check if this MIME type is for ChatGPT Apps.
     pub fn is_chatgpt(&self) -> bool {
-        matches!(self, Self::HtmlSkybridge)
+        matches!(self, Self::HtmlSkybridge | Self::HtmlMcpApp)
     }
 
     /// Check if this MIME type is for standard MCP Apps.
@@ -695,6 +701,7 @@ impl std::str::FromStr for ExtendedUIMimeType {
         match s {
             "text/html+mcp" => Ok(Self::HtmlMcp),
             "text/html+skybridge" => Ok(Self::HtmlSkybridge),
+            "text/html;profile=mcp-app" => Ok(Self::HtmlMcpApp),
             "text/html" => Ok(Self::HtmlPlain),
             "text/uri-list" => Ok(Self::UriList),
             "application/vnd.mcp-ui.remote-dom+javascript" => Ok(Self::RemoteDom),
@@ -988,11 +995,17 @@ mod tests {
             ExtendedUIMimeType::HtmlSkybridge.as_str(),
             "text/html+skybridge"
         );
+        assert_eq!(
+            ExtendedUIMimeType::HtmlMcpApp.as_str(),
+            "text/html;profile=mcp-app"
+        );
         assert_eq!(ExtendedUIMimeType::HtmlPlain.as_str(), "text/html");
 
         assert!(ExtendedUIMimeType::HtmlSkybridge.is_chatgpt());
+        assert!(ExtendedUIMimeType::HtmlMcpApp.is_chatgpt());
         assert!(ExtendedUIMimeType::HtmlMcp.is_mcp_apps());
         assert!(ExtendedUIMimeType::HtmlPlain.is_mcp_ui());
+        assert!(!ExtendedUIMimeType::HtmlMcpApp.is_mcp_apps());
     }
 
     #[test]
@@ -1004,6 +1017,12 @@ mod tests {
         assert_eq!(
             "text/html+skybridge".parse::<ExtendedUIMimeType>().unwrap(),
             ExtendedUIMimeType::HtmlSkybridge
+        );
+        assert_eq!(
+            "text/html;profile=mcp-app"
+                .parse::<ExtendedUIMimeType>()
+                .unwrap(),
+            ExtendedUIMimeType::HtmlMcpApp
         );
         assert_eq!(
             "text/html".parse::<ExtendedUIMimeType>().unwrap(),
