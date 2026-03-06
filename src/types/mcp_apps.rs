@@ -1133,4 +1133,100 @@ mod tests {
         );
         assert!(map.is_empty(), "empty WidgetMeta should produce empty map");
     }
+
+    #[test]
+    fn test_from_ui_mime_type() {
+        use crate::types::ui::UIMimeType;
+
+        // Each UIMimeType variant converts infallibly to its ExtendedUIMimeType counterpart
+        let html_mcp: ExtendedUIMimeType = UIMimeType::HtmlMcp.into();
+        assert_eq!(html_mcp, ExtendedUIMimeType::HtmlMcp);
+        assert_eq!(html_mcp.as_str(), UIMimeType::HtmlMcp.as_str());
+
+        let html_skybridge: ExtendedUIMimeType = UIMimeType::HtmlSkybridge.into();
+        assert_eq!(html_skybridge, ExtendedUIMimeType::HtmlSkybridge);
+        assert_eq!(html_skybridge.as_str(), UIMimeType::HtmlSkybridge.as_str());
+
+        let html_mcp_app: ExtendedUIMimeType = UIMimeType::HtmlMcpApp.into();
+        assert_eq!(html_mcp_app, ExtendedUIMimeType::HtmlMcpApp);
+        assert_eq!(html_mcp_app.as_str(), UIMimeType::HtmlMcpApp.as_str());
+    }
+
+    #[test]
+    fn test_try_from_extended_shared() {
+        use crate::types::ui::UIMimeType;
+        use std::convert::TryFrom;
+
+        // Shared variants convert back successfully
+        let result = UIMimeType::try_from(ExtendedUIMimeType::HtmlMcp);
+        assert_eq!(result, Ok(UIMimeType::HtmlMcp));
+        assert_eq!(
+            result.unwrap().as_str(),
+            ExtendedUIMimeType::HtmlMcp.as_str()
+        );
+
+        let result = UIMimeType::try_from(ExtendedUIMimeType::HtmlSkybridge);
+        assert_eq!(result, Ok(UIMimeType::HtmlSkybridge));
+        assert_eq!(
+            result.unwrap().as_str(),
+            ExtendedUIMimeType::HtmlSkybridge.as_str()
+        );
+
+        let result = UIMimeType::try_from(ExtendedUIMimeType::HtmlMcpApp);
+        assert_eq!(result, Ok(UIMimeType::HtmlMcpApp));
+        assert_eq!(
+            result.unwrap().as_str(),
+            ExtendedUIMimeType::HtmlMcpApp.as_str()
+        );
+    }
+
+    #[test]
+    fn test_try_from_extended_fails() {
+        use crate::types::ui::UIMimeType;
+        use std::convert::TryFrom;
+
+        // Extended-only variants fail conversion with descriptive error
+        let extended_only = [
+            ExtendedUIMimeType::HtmlPlain,
+            ExtendedUIMimeType::UriList,
+            ExtendedUIMimeType::RemoteDom,
+            ExtendedUIMimeType::RemoteDomReact,
+        ];
+
+        for ext in &extended_only {
+            let result = UIMimeType::try_from(*ext);
+            assert!(result.is_err(), "Expected Err for {:?}", ext);
+            let err = result.unwrap_err();
+            assert!(
+                err.contains("extended-only variant"),
+                "Error for {:?} should contain 'extended-only variant', got: {}",
+                ext,
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn test_mime_type_round_trip() {
+        use crate::types::ui::UIMimeType;
+        use std::convert::TryFrom;
+
+        // Round-trip: UIMimeType -> ExtendedUIMimeType -> UIMimeType preserves value
+        let variants = [
+            UIMimeType::HtmlMcp,
+            UIMimeType::HtmlSkybridge,
+            UIMimeType::HtmlMcpApp,
+        ];
+
+        for original in &variants {
+            let extended: ExtendedUIMimeType = (*original).into();
+            let round_tripped = UIMimeType::try_from(extended)
+                .unwrap_or_else(|e| panic!("Round-trip failed for {:?}: {}", original, e));
+            assert_eq!(
+                *original, round_tripped,
+                "Round-trip failed: {:?} != {:?}",
+                original, round_tripped
+            );
+        }
+    }
 }
