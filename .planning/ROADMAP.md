@@ -223,5 +223,5 @@ Plans:
 **Plans:** 1/2 plans executed
 
 Plans:
-- [ ] 34-01-PLAN.md — Fix tool _meta format (nested ui.resourceUri + openai/outputTemplate), add MIME type variant, dual-emit WidgetMeta
+- [x] 34-01-PLAN.md — Fix tool _meta format (nested ui.resourceUri + openai/outputTemplate), add MIME type variant, dual-emit WidgetMeta
 - [ ] 34-02-PLAN.md — Fix mcp-preview axum 0.8 wildcard route panic
