@@ -143,7 +143,7 @@ impl WasmMcpServer {
     }
 
     fn handle_list_tools(&self, _params: ListToolsParams) -> Result<Value> {
-        let tools: Vec<ToolInfo> = self.tools.values().map(|tool| tool.info()).collect();
+        let tools: Vec<ToolInfo> = self.tool_infos.values().cloned().collect();
 
         let result = ListToolsResult {
             tools,
@@ -265,7 +265,7 @@ impl WasmMcpServer {
     }
 
     fn handle_list_prompts(&self, _params: ListPromptsParams) -> Result<Value> {
-        let prompts: Vec<PromptInfo> = self.prompts.values().map(|prompt| prompt.info()).collect();
+        let prompts: Vec<PromptInfo> = self.prompt_infos.values().cloned().collect();
 
         let result = ListPromptsResult {
             prompts,
