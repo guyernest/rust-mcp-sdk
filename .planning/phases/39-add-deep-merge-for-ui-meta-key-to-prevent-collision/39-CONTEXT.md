@@ -6,7 +6,7 @@
 <domain>
 ## Phase Boundary
 
-Prevent `_meta` data loss when multiple systems contribute to the same `_meta` map on `ToolInfo`. Currently, `build_meta_map()` creates a fresh map with only UI keys, and `metadata()` returns it as the entire `_meta`. If anything else needs to add keys to `_meta` (execution config, custom metadata), it overwrites UI keys or vice versa. Fix: make each `with_*()` builder method merge into `_meta` rather than replacing it.
+Prevent `_meta` data loss when multiple systems contribute to the same `_meta` map on `ToolInfo`. Currently, `build_meta_map()` creates a fresh map with only UI keys, and `metadata()` returns it as the entire `_meta`. If anything else needs to add keys to `_meta` (execution config, custom metadata), it overwrites UI keys or vice versa. Fix: make each `with_*()` builder method merge into `_meta` rather than replacing it. Also add `with_ui()` support to `TypedToolWithOutput` since deep merge makes UI + output schema coexistence natural.
 
 </domain>
 
@@ -14,27 +14,30 @@ Prevent `_meta` data loss when multiple systems contribute to the same `_meta` m
 ## Implementation Decisions
 
 ### Merge strategy
-- Deep merge: recursively merge nested objects so `with_ui()` adds `{ui: {resourceUri: ...}}`, `with_execution()` adds `{execution: ...}`, and both coexist
-- If two contributors set the same nested key, last-in wins at the leaf level
+- Deep merge: recursively merge nested JSON objects so `with_ui()` adds `{ui: {resourceUri: ...}}`, `with_execution()` adds `{execution: ...}`, and both coexist
+- Only recurse into JSON objects — arrays are replaced entirely by the overlay (not concatenated)
+- Standalone function: `deep_merge(base: &mut Map, overlay: Map)` — mutates base in-place, avoids allocation
+- Last-in wins at the leaf level when two contributors set the same nested key
 
 ### Collision rules
-- Last-in wins — simple and predictable
-- Builder methods are called in order; the last call sets the final value at that key
-- Matches Rust's `HashMap::insert` semantics — user controls priority by call order
+- Last-in wins — simple, predictable, matches `HashMap::insert` semantics
+- User controls priority by builder call order
+- Log collisions at `tracing::debug` level — useful for debugging, not noisy in production
 
 ### API surface
-- Builder chain pattern: each `with_*()` method (`with_ui`, `with_execution`, etc.) inserts its own keys into `_meta` directly
-- No separate merge function needed — each builder method knows its own key namespace and inserts directly
-- Existing `with_ui()` already knows it needs `ui` and `openai/outputTemplate` — it just inserts those into the existing map rather than replacing the whole map
+- Fix existing internal methods (with_ui, metadata) to use deep merge instead of replacing `_meta`
+- Also add public `with_meta_entry(key: &str, value: Value)` on `ToolInfo` for custom `_meta` contributions — adds one key at a time, composable
+- Keep existing `with_meta()` (replace-all) alongside the new method — different use cases, both valid, no deprecation
 
 ### Scope
-- Fix `ToolInfo._meta` only — this is where the collision actually happens (with_ui + execution + annotations all compete)
-- `CallToolResult._meta` and `GetPromptResult._meta` are set by single sources and don't have the collision problem today
+- Fix `ToolInfo._meta` only — this is where the collision actually happens
+- `CallToolResult._meta` and `GetPromptResult._meta` are set by single sources today — no collision problem
+- Add `with_ui()` to `TypedToolWithOutput` as part of this phase — deep merge makes UI + output schema metadata coexistence natural
 
 ### Claude's Discretion
-- Internal helper function design for the deep-merge utility
-- Whether to add a public `deep_merge_meta()` or keep merge logic inside each `with_*()` method
+- Where to place the standalone deep_merge function (types/ui.rs, types/meta.rs, or a util module)
 - Test structure and naming conventions
+- Whether TypedToolWithOutput.with_ui() needs its own example
 
 </decisions>
 
@@ -43,7 +46,7 @@ Prevent `_meta` data loss when multiple systems contribute to the same `_meta` m
 
 - Phase 37 established `ui_resource_uri: Option<String>` with `_meta` built via `build_meta_map()` in `metadata()`
 - Phase 38 caches `_meta` at registration time — merge only needs to happen once at builder time, not per-request
-- `TypedToolWithOutput::metadata()` currently sets `_meta: None`, losing any UI metadata if both `with_ui()` and output schema are used
+- `TypedToolWithOutput::metadata()` at `src/server/typed_tool.rs:683` currently sets `_meta: None`, losing any UI metadata — this is the primary collision point to fix
 - The `with_meta()` method on `CallToolResult` already replaces entirely — but that's a separate concern (result-time, not registration-time)
 
 </specifics>
@@ -67,7 +70,7 @@ Prevent `_meta` data loss when multiple systems contribute to the same `_meta` m
 ### Integration Points
 - `TypedTool::metadata()` at line 229 — needs to merge `ui_resource_uri` meta with any other `_meta` entries
 - `TypedSyncTool::metadata()` at line 393 — same
-- `TypedToolWithOutput::metadata()` at line 683 — currently ignores UI, needs to merge
+- `TypedToolWithOutput::metadata()` at line 683 — currently ignores UI, needs merge + with_ui() support
 - `WasmTypedTool::info()` at line 95 — same pattern for WASM
 - `ServerCoreBuilder::tool()/tool_arc()` at `src/server/builder.rs` — where cached `_meta` is stored
 
@@ -78,7 +81,7 @@ Prevent `_meta` data loss when multiple systems contribute to the same `_meta` m
 
 - Apply deep-merge to `CallToolResult._meta` and `GetPromptResult._meta` — if middleware collision becomes a problem
 - Meta key constants module (phase 35) — extract string literals to named constants
-- Public `with_meta_entry(key, value)` API for arbitrary `_meta` contributions — if users need custom metadata
+- Deprecate `with_meta()` replace-all in favor of merge-only API — evaluate after adoption
 
 </deferred>
 
