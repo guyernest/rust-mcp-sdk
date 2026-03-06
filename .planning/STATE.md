@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Phase 38 context gathered
-last_updated: "2026-03-06T22:52:05.998Z"
-last_activity: 2026-03-06 -- Completed 37-01 with_ui() for TypedSyncTool and WasmTypedTool
+stopped_at: Completed 38-01-PLAN.md
+last_updated: "2026-03-06T23:21:40.990Z"
+last_activity: 2026-03-06 -- Completed 38-01 ToolInfo/PromptInfo caching at registration
 progress:
   total_phases: 13
-  completed_phases: 4
-  total_plans: 8
+  completed_phases: 5
+  total_plans: 9
   completed_plans: 8
   percent: 97
 ---
