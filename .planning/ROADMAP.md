@@ -258,13 +258,13 @@ Plans:
 
 ### Phase 38: Cache ToolInfo at registration to avoid per-request cloning
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Cache ToolInfo and PromptInfo at builder registration time so handle_list_tools, handle_call_tool, handle_list_prompts, and task routing use cached metadata instead of calling handler.metadata() per request
+**Requirements**: CACHE-01
 **Depends on:** Phase 37
-**Plans:** 0 plans
+**Plans:** 1 plan
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 38 to break down)
+- [ ] 38-01-PLAN.md — Add tool_infos/prompt_infos cache to builders, replace 6 per-request metadata() call sites with cache lookups
 
 ### Phase 39: Add deep-merge for ui meta key to prevent collision
 
