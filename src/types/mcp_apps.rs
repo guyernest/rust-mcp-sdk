@@ -259,14 +259,20 @@ impl WidgetMeta {
     /// containing MCP standard equivalents (currently only `prefersBorder`).
     /// `ChatGPT`-only fields (`domain`, `csp`, `description`) stay flat `openai/*` only.
     pub fn to_meta_map(&self) -> serde_json::Map<String, serde_json::Value> {
-        let mut map = serde_json::to_value(self)
-            .ok()
-            .and_then(|v| v.as_object().cloned())
-            .unwrap_or_default();
+        let mut map = match serde_json::to_value(self).ok() {
+            Some(serde_json::Value::Object(m)) => m,
+            _ => serde_json::Map::new(),
+        };
         // Dual-emit: add nested ui object for MCP standard fields
+        let mut ui_obj = serde_json::Map::new();
         if let Some(prefers) = self.prefers_border {
-            let ui_obj = serde_json::json!({ "prefersBorder": prefers });
-            map.insert("ui".to_string(), ui_obj);
+            ui_obj.insert(
+                "prefersBorder".to_string(),
+                serde_json::Value::Bool(prefers),
+            );
+        }
+        if !ui_obj.is_empty() {
+            map.insert("ui".to_string(), serde_json::Value::Object(ui_obj));
         }
         map
     }
@@ -857,7 +863,7 @@ impl HostType {
     /// Check if this host supports the given MIME type.
     pub fn supports_mime_type(&self, mime_type: ExtendedUIMimeType) -> bool {
         match self {
-            Self::ChatGpt => matches!(mime_type, ExtendedUIMimeType::HtmlSkybridge),
+            Self::ChatGpt => matches!(mime_type, ExtendedUIMimeType::HtmlSkybridge | ExtendedUIMimeType::HtmlMcpApp),
             Self::Claude | Self::Generic => matches!(mime_type, ExtendedUIMimeType::HtmlMcp),
             Self::Nanobot | Self::McpJam => mime_type.is_mcp_ui(),
         }

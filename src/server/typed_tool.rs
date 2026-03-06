@@ -229,13 +229,7 @@ where
     fn metadata(&self) -> Option<ToolInfo> {
         // Build _meta for UI resource if specified
         let meta = self.ui_resource_uri.as_ref().map(|uri| {
-            let mut meta = serde_json::Map::new();
-            meta.insert("ui".to_string(), serde_json::json!({ "resourceUri": uri }));
-            meta.insert(
-                "openai/outputTemplate".to_string(),
-                serde_json::Value::String(uri.clone()),
-            );
-            meta
+            crate::types::ui::ToolUIMetadata::build_meta_map(uri)
         });
 
         Some(ToolInfo {

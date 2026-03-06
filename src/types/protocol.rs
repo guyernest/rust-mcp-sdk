@@ -330,13 +330,8 @@ impl ToolInfo {
         input_schema: Value,
         ui_resource_uri: impl Into<String>,
     ) -> Self {
-        let uri = ui_resource_uri.into();
-        let mut meta = serde_json::Map::new();
-        meta.insert(
-            "ui".to_string(),
-            serde_json::json!({ "resourceUri": &uri }),
-        );
-        meta.insert("openai/outputTemplate".to_string(), Value::String(uri));
+        let uri: String = ui_resource_uri.into();
+        let meta = crate::types::ui::ToolUIMetadata::build_meta_map(&uri);
 
         Self {
             name: name.into(),

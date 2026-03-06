@@ -265,6 +265,29 @@ impl ToolUIMetadata {
         self
     }
 
+    /// Build a `serde_json::Map` with the standard UI resource `_meta` keys.
+    ///
+    /// Produces:
+    /// - `"ui": { "resourceUri": "<uri>" }` — MCP standard nested format
+    /// - `"openai/outputTemplate": "<uri>"` — ChatGPT alias
+    ///
+    /// Used by `ToolInfo::with_ui()`, `TypedTool::metadata()`, and
+    /// `ToolUIMetadata::to_metadata()` to ensure consistent `_meta` format.
+    pub fn build_meta_map(uri: &str) -> serde_json::Map<String, serde_json::Value> {
+        let mut meta = serde_json::Map::with_capacity(2);
+        let mut ui_obj = serde_json::Map::with_capacity(1);
+        ui_obj.insert(
+            "resourceUri".to_string(),
+            serde_json::Value::String(uri.to_string()),
+        );
+        meta.insert("ui".to_string(), serde_json::Value::Object(ui_obj));
+        meta.insert(
+            "openai/outputTemplate".to_string(),
+            serde_json::Value::String(uri.to_string()),
+        );
+        meta
+    }
+
     /// Extract from a metadata `HashMap`
     ///
     /// Reads from nested `"ui"` object first, falling back to legacy flat
@@ -284,10 +307,11 @@ impl ToolUIMetadata {
                     .map(|s| s.to_string())
             });
 
-        let mut additional = metadata.clone();
-        additional.remove("ui");
-        additional.remove("ui/resourceUri");
-        additional.remove("openai/outputTemplate");
+        let additional = metadata
+            .iter()
+            .filter(|(k, _)| !matches!(k.as_str(), "ui" | "ui/resourceUri" | "openai/outputTemplate"))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
 
         Self {
             ui_resource_uri,
@@ -301,14 +325,8 @@ impl ToolUIMetadata {
     pub fn to_metadata(&self) -> HashMap<String, serde_json::Value> {
         let mut map = self.additional.clone();
         if let Some(uri) = &self.ui_resource_uri {
-            map.insert(
-                "ui".to_string(),
-                serde_json::json!({ "resourceUri": uri }),
-            );
-            map.insert(
-                "openai/outputTemplate".to_string(),
-                serde_json::Value::String(uri.clone()),
-            );
+            let meta = Self::build_meta_map(uri);
+            map.extend(meta.into_iter());
         }
         map
     }
