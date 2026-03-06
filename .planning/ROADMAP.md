@@ -248,13 +248,13 @@ Plans:
 
 ### Phase 37: Add with_ui support to TypedSyncTool
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Add with_ui() builder method to TypedSyncTool and WasmTypedTool for API parity with TypedTool, enabling sync and WASM tool authors to declare UI resource associations
+**Requirements**: P37-01, P37-02, P37-03, P37-04
 **Depends on:** Phase 36
-**Plans:** 0 plans
+**Plans:** 1 plan
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 37 to break down)
+- [ ] 37-01-PLAN.md — Add ui_resource_uri field, with_ui() builder, and _meta emission to TypedSyncTool and WasmTypedTool
 
 ### Phase 38: Cache ToolInfo at registration to avoid per-request cloning
 
