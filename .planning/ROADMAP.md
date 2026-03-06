@@ -238,13 +238,13 @@ Plans:
 
 ### Phase 36: Unify UIMimeType and ExtendedUIMimeType with From bridge
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Add From/TryFrom conversion traits between UIMimeType and ExtendedUIMimeType so code can seamlessly convert across the feature-gate boundary
+**Requirements**: MIME-BRIDGE-01
 **Depends on:** Phase 35
-**Plans:** 0 plans
+**Plans:** 1 plan
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 36 to break down)
+- [ ] 36-01-PLAN.md — TDD: From<UIMimeType> for ExtendedUIMimeType and TryFrom<ExtendedUIMimeType> for UIMimeType
 
 ### Phase 37: Add with_ui support to TypedSyncTool
 
