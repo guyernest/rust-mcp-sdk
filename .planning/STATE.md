@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Completed 34-01-PLAN.md execution
-last_updated: "2026-03-06T20:50:21.390Z"
+stopped_at: Completed 36-01-PLAN.md
+last_updated: "2026-03-06T21:41:50.610Z"
 last_activity: 2026-03-04 -- Completed 27-03 validate.rs quiet gap closure, phase 27 fully complete
 progress:
-  total_phases: 8
-  completed_phases: 2
-  total_plans: 6
-  completed_plans: 5
+  total_phases: 13
+  completed_phases: 3
+  total_plans: 7
+  completed_plans: 6
   percent: 17
 ---
 
@@ -67,6 +67,7 @@ v1.6 decisions:
 - [Phase 27]: Threaded not_quiet bool through validate.rs private functions rather than re-checking PMCP_QUIET env var in each function
 - [Phase 34]: Axum 0.8 wildcard routes use {*path} syntax; mcp-preview bumped to 0.1.2
 - [Phase 34-01]: Nested _meta.ui.resourceUri format with openai/outputTemplate for ChatGPT; HtmlMcpApp MIME type; dual-emit WidgetMeta prefersBorder
+- [Phase 36]: Used explicit match arms (no wildcards) in From/TryFrom bridge for compile-time exhaustiveness
 
 ### Roadmap Evolution
 
@@ -84,6 +85,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-06T20:44:34Z
-Stopped at: Completed 34-01-PLAN.md execution
+Last session: 2026-03-06T21:41:50.608Z
+Stopped at: Completed 36-01-PLAN.md
 Resume: Continue with Phase 28 or next planned work
