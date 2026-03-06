@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Phase 37 context gathered
-last_updated: "2026-03-06T22:13:22.717Z"
-last_activity: 2026-03-04 -- Completed 27-03 validate.rs quiet gap closure, phase 27 fully complete
+stopped_at: Completed 37-01-PLAN.md
+last_updated: "2026-03-06T22:30:30.170Z"
+last_activity: 2026-03-06 -- Completed 37-01 with_ui() for TypedSyncTool and WasmTypedTool
 progress:
   total_phases: 13
-  completed_phases: 3
-  total_plans: 7
-  completed_plans: 6
-  percent: 17
+  completed_phases: 4
+  total_plans: 8
+  completed_plans: 7
+  percent: 96
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** v1.6 CLI DX Overhaul -- Phase 27 (Global Flag Infrastructure)
+**Current focus:** MCP Apps code quality improvements -- Phase 37 (TypedSyncTool UI support)
 
 ## Current Position
 
-Phase: 27 of 32 (Global Flag Infrastructure) -- COMPLETE (first of 6 phases in v1.6)
-Plan: 3 of 3 (complete, including gap closure plan 03)
-Status: Phase complete -- ready for Phase 28
-Last activity: 2026-03-04 -- Completed 27-03 validate.rs quiet gap closure, phase 27 fully complete
+Phase: 37 (add-with-ui-support-to-typedsynctool) -- COMPLETE
+Plan: 1 of 1 (complete)
+Status: Phase complete -- ready for Phase 38
+Last activity: 2026-03-06 -- Completed 37-01 with_ui() for TypedSyncTool and WasmTypedTool
 
-Progress: [▓▓░░░░░░░░] 17% (v1.6)
+Progress: [██████████] 96%
 
 ## Shipped Milestones
 
@@ -68,6 +68,7 @@ v1.6 decisions:
 - [Phase 34]: Axum 0.8 wildcard routes use {*path} syntax; mcp-preview bumped to 0.1.2
 - [Phase 34-01]: Nested _meta.ui.resourceUri format with openai/outputTemplate for ChatGPT; HtmlMcpApp MIME type; dual-emit WidgetMeta prefersBorder
 - [Phase 36]: Used explicit match arms (no wildcards) in From/TryFrom bridge for compile-time exhaustiveness
+- [Phase 37]: Mirrored TypedTool::with_ui() exactly for TypedSyncTool and WasmTypedTool; WasmTypedTool tests wasm32-only gated
 
 ### Roadmap Evolution
 
@@ -85,6 +86,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-06T22:13:22.714Z
-Stopped at: Phase 37 context gathered
-Resume: Continue with Phase 28 or next planned work
+Last session: 2026-03-06T22:30:30.168Z
+Stopped at: Completed 37-01-PLAN.md
+Resume: Continue with Phase 38 or next planned work
