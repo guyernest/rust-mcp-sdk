@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Phase 34 context gathered
-last_updated: "2026-03-06T20:20:22.847Z"
+stopped_at: Completed 34-02-PLAN.md
+last_updated: "2026-03-06T20:35:20.988Z"
 last_activity: 2026-03-04 -- Completed 27-03 validate.rs quiet gap closure, phase 27 fully complete
 progress:
   total_phases: 8
   completed_phases: 1
-  total_plans: 4
-  completed_plans: 3
+  total_plans: 6
+  completed_plans: 4
   percent: 17
 ---
 
@@ -65,6 +65,7 @@ v1.6 decisions:
 - Secret module merges local --quiet with global --quiet via effective_quiet parameter
 - Verbose field kept with allow(dead_code) -- used in precedence logic, not yet by individual commands
 - [Phase 27]: Threaded not_quiet bool through validate.rs private functions rather than re-checking PMCP_QUIET env var in each function
+- [Phase 34]: Axum 0.8 wildcard routes use {*path} syntax; mcp-preview bumped to 0.1.2
 
 ### Roadmap Evolution
 
@@ -81,6 +82,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-06T20:20:22.845Z
-Stopped at: Phase 34 context gathered
+Last session: 2026-03-06T20:35:20.985Z
+Stopped at: Completed 34-02-PLAN.md
 Resume: Begin Phase 28 planning/execution
