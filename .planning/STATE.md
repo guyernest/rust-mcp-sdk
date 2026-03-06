@@ -4,7 +4,7 @@ milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
 stopped_at: Completed 37-01-PLAN.md
-last_updated: "2026-03-06T22:30:30.170Z"
+last_updated: "2026-03-06T22:32:57.846Z"
 last_activity: 2026-03-06 -- Completed 37-01 with_ui() for TypedSyncTool and WasmTypedTool
 progress:
   total_phases: 13
