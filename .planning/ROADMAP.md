@@ -214,3 +214,14 @@ Plans:
 
 Plans:
 - [ ] 33-01-PLAN.md — Version bumps and crates.io publish
+
+### Phase 34: Fix MCP Apps ChatGPT compatibility
+
+**Goal:** Fix SDK metadata format, MIME types, and mcp-preview routes to be compatible with ChatGPT's MCP Apps implementation
+**Requirements**: CHATGPT-01, CHATGPT-02, CHATGPT-03, CHATGPT-04, CHATGPT-05, CHATGPT-06
+**Depends on:** Phase 33
+**Plans:** 2 plans
+
+Plans:
+- [ ] 34-01-PLAN.md — Fix tool _meta format (nested ui.resourceUri + openai/outputTemplate), add MIME type variant, dual-emit WidgetMeta
+- [ ] 34-02-PLAN.md — Fix mcp-preview axum 0.8 wildcard route panic
