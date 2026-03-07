@@ -430,6 +430,7 @@ where
             name: self.name.clone(),
             description: Some(self.description.clone()),
             input_schema: self.input_schema.clone(),
+            output_schema: None,
             annotations: None,
             _meta: None,
             execution: None,

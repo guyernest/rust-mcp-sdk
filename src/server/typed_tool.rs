@@ -231,6 +231,7 @@ where
             name: self.name.clone(),
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
+            output_schema: None,
             annotations: self.annotations.clone(),
             _meta: crate::types::ui::build_ui_meta(self.ui_resource_uri.as_deref()),
             execution: None,
@@ -393,6 +394,7 @@ where
             name: self.name.clone(),
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
+            output_schema: None,
             annotations: self.annotations.clone(),
             _meta: crate::types::ui::build_ui_meta(self.ui_resource_uri.as_deref()),
             execution: None,
@@ -689,7 +691,7 @@ where
         // Start with user-provided annotations or empty
         let mut annotations = self.annotations.clone().unwrap_or_default();
 
-        // Add output schema annotation if available
+        // Add output type name annotation if output schema is available
         if let Some(schema) = &self.output_schema {
             // Extract type name from schema's title field (set by schemars)
             let type_name = schema
@@ -698,7 +700,7 @@ where
                 .unwrap_or("Output")
                 .to_string();
 
-            annotations = annotations.with_output_schema(schema.clone(), type_name);
+            annotations = annotations.with_output_type_name(type_name);
         }
 
         // Only include annotations if we have any meaningful content
@@ -706,12 +708,13 @@ where
             || annotations.destructive_hint.is_some()
             || annotations.idempotent_hint.is_some()
             || annotations.open_world_hint.is_some()
-            || annotations.output_schema.is_some();
+            || annotations.output_type_name.is_some();
 
         Some(ToolInfo {
             name: self.name.clone(),
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
+            output_schema: self.output_schema.clone(),
             annotations: if has_annotations {
                 Some(annotations)
             } else {
@@ -858,14 +861,20 @@ mod tests {
             "openai/outputTemplate must be present"
         );
 
-        // annotations must have output_schema
+        // output_schema must be top-level on ToolInfo
+        assert!(
+            info.output_schema.is_some(),
+            "output_schema must be present on ToolInfo"
+        );
+
+        // annotations must have output_type_name
         let annotations = info
             .annotations
             .as_ref()
             .expect("annotations should be present");
         assert!(
-            annotations.output_schema.is_some(),
-            "output_schema annotation must be present"
+            annotations.output_type_name.is_some(),
+            "output_type_name annotation must be present"
         );
     }
 
