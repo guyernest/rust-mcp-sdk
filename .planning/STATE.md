@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: in-progress
-stopped_at: Completed 42-01-PLAN.md
-last_updated: "2026-03-07T22:46:10Z"
-last_activity: 2026-03-07 -- Completed 42-01 outputSchema migration to top-level ToolInfo
+stopped_at: Completed 42-02-PLAN.md
+last_updated: "2026-03-07T23:06:32Z"
+last_activity: 2026-03-07 -- Completed 42-02 update consumers for top-level outputSchema
 progress:
   total_phases: 16
   completed_phases: 8
   total_plans: 16
-  completed_plans: 15
+  completed_plans: 16
   percent: 100
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 ## Current Position
 
 Phase: 42 (add-outputschema-top-level-support)
-Plan: 1 of 1 (complete)
-Status: Completed 42-01 -- outputSchema migrated to top-level ToolInfo field
-Last activity: 2026-03-07 -- Completed 42-01 outputSchema migration to top-level ToolInfo
+Plan: 2 of 2 (complete)
+Status: Completed 42-02 -- all consumers updated for top-level outputSchema
+Last activity: 2026-03-07 -- Completed 42-02 update consumers for top-level outputSchema
 
 Progress: [██████████] 100%
 
@@ -78,6 +78,7 @@ v1.6 decisions:
 - [Phase 41]: Used field name meta with serde rename to _meta since leading underscores not idiomatic Rust
 - [Phase 41-03]: Used TypedSyncTool::new().with_ui() in scaffold instead of tool_typed_sync_with_description() to enable tool-to-widget linking
 - [Phase 42-01]: outputSchema is top-level on ToolInfo (MCP spec 2025-06-18); pmcp:outputTypeName remains in annotations as PMCP codegen extension
+- [Phase 42-02]: cargo-pmcp local ToolSchema mirrors SDK ToolInfo with top-level output_schema; all docs and course content updated
 
 ### Roadmap Evolution
 
@@ -98,6 +99,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-07T22:46:10Z
-Stopped at: Completed 42-01-PLAN.md
-Resume: Phase 42 plan 01 complete -- outputSchema migrated to top-level ToolInfo
+Last session: 2026-03-07T23:06:32Z
+Stopped at: Completed 42-02-PLAN.md
+Resume: Phase 42 complete -- all outputSchema consumers updated for MCP spec 2025-06-18
