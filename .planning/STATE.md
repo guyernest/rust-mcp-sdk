@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Completed 40-01-PLAN.md
-last_updated: "2026-03-07T03:20:41.895Z"
-last_activity: 2026-03-07 -- Completed 40-01 add legacy flat key to build_meta_map
+stopped_at: Completed 40-02-PLAN.md
+last_updated: "2026-03-07T03:29:21.209Z"
+last_activity: 2026-03-07 -- Completed 40-02 dual-emit CSP, domain, visibility
 progress:
   total_phases: 14
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 13
-  completed_plans: 11
+  completed_plans: 12
   percent: 100
 ---
 
