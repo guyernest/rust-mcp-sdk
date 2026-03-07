@@ -342,6 +342,48 @@ impl ToolInfo {
             execution: None,
         }
     }
+
+    /// Add a single key-value pair to `_meta`, merging with existing entries.
+    ///
+    /// If the key already exists and both values are objects, they are
+    /// deep-merged. Otherwise the new value replaces the old (last-in wins).
+    ///
+    /// This is the composable counterpart to [`ToolInfo::with_ui`] --
+    /// multiple calls can be chained without overwriting each other's keys.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use pmcp::types::ToolInfo;
+    /// use serde_json::json;
+    ///
+    /// let tool = ToolInfo::new("my_tool", None, json!({"type": "object"}))
+    ///     .with_meta_entry("ui", json!({"resourceUri": "ui://x"}))
+    ///     .with_meta_entry("execution", json!({"mode": "async"}));
+    /// ```
+    #[allow(clippy::used_underscore_binding)]
+    pub fn with_meta_entry(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
+        let meta = self._meta.get_or_insert_with(serde_json::Map::new);
+        let mut overlay = serde_json::Map::with_capacity(1);
+        overlay.insert(key.into(), value);
+        crate::types::ui::deep_merge(meta, overlay);
+        self
+    }
+
+    /// Return a reference to `_meta` if this tool has widget metadata.
+    ///
+    /// Single-pass check: returns `Some` only when `_meta` contains a
+    /// recognised widget key, `None` otherwise.
+    pub fn widget_meta(&self) -> Option<&serde_json::Map<String, Value>> {
+        self._meta.as_ref().filter(|meta| {
+            meta.contains_key("openai/outputTemplate")
+                || meta.contains_key("ui/resourceUri")
+                || meta
+                    .get("ui")
+                    .and_then(|v| v.get("resourceUri"))
+                    .is_some()
+        })
+    }
 }
 
 /// List tools response.
@@ -515,6 +557,20 @@ impl CallToolResult {
     pub fn with_meta(mut self, meta: serde_json::Map<String, Value>) -> Self {
         self._meta = Some(meta);
         self
+    }
+
+    /// Enrich with widget metadata from a [`ToolInfo`] if it has widget meta.
+    ///
+    /// Sets `structured_content` and `_meta` so widgets can access tool
+    /// output data. No-op for non-widget tools. Only clones `_meta` when
+    /// the tool actually has widget metadata.
+    pub fn with_widget_enrichment(self, info: &ToolInfo, structured_value: Value) -> Self {
+        if let Some(meta) = info.widget_meta() {
+            self.with_structured_content(structured_value)
+                .with_meta(meta.clone())
+        } else {
+            self
+        }
     }
 }
 
@@ -1940,5 +1996,56 @@ mod tests {
             rt_meta.get("taskId").unwrap(),
             &serde_json::Value::String("task-456".to_string())
         );
+    }
+
+    #[test]
+    fn test_with_meta_entry_on_empty_meta() {
+        let tool = ToolInfo::new("t", None, json!({"type": "object"}))
+            .with_meta_entry("ui", json!({"resourceUri": "ui://x"}));
+        let meta = tool._meta.unwrap();
+        assert_eq!(meta["ui"]["resourceUri"], "ui://x");
+    }
+
+    #[test]
+    fn test_with_meta_entry_merges_with_existing() {
+        let mut initial = serde_json::Map::new();
+        initial.insert("ui".into(), json!({"resourceUri": "ui://x"}));
+        let tool = ToolInfo::new("t", None, json!({"type": "object"}));
+        let tool = ToolInfo { _meta: Some(initial), ..tool };
+        let tool = tool.with_meta_entry("execution", json!({"mode": "async"}));
+        let meta = tool._meta.unwrap();
+        assert_eq!(meta["ui"]["resourceUri"], "ui://x");
+        assert_eq!(meta["execution"]["mode"], "async");
+    }
+
+    #[test]
+    fn test_with_meta_entry_deep_merges_nested() {
+        let mut initial = serde_json::Map::new();
+        initial.insert("ui".into(), json!({"resourceUri": "ui://x"}));
+        let tool = ToolInfo::new("t", None, json!({"type": "object"}));
+        let tool = ToolInfo { _meta: Some(initial), ..tool };
+        let tool = tool.with_meta_entry("ui", json!({"prefersBorder": true}));
+        let meta = tool._meta.unwrap();
+        assert_eq!(meta["ui"]["resourceUri"], "ui://x");
+        assert_eq!(meta["ui"]["prefersBorder"], true);
+    }
+
+    #[test]
+    fn test_with_meta_entry_chained() {
+        let tool = ToolInfo::new("t", None, json!({"type": "object"}))
+            .with_meta_entry("a", json!(1))
+            .with_meta_entry("b", json!(2));
+        let meta = tool._meta.unwrap();
+        assert_eq!(meta["a"], 1);
+        assert_eq!(meta["b"], 2);
+    }
+
+    #[test]
+    fn test_existing_with_meta_replace_all_unchanged() {
+        // Ensure the existing with_ui constructor still works (replace-all semantics)
+        let tool = ToolInfo::with_ui("t", None, json!({"type": "object"}), "ui://y");
+        let meta = tool._meta.unwrap();
+        assert_eq!(meta["ui"]["resourceUri"], "ui://y");
+        assert!(meta.contains_key("openai/outputTemplate"));
     }
 }
