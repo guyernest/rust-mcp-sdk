@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
-status: completed
-stopped_at: Phase 42 context gathered
-last_updated: "2026-03-07T22:14:29.058Z"
-last_activity: 2026-03-07 -- Completed 41-03 scaffold template HtmlMcpApp, with_ui, and _meta
+status: in-progress
+stopped_at: Completed 42-01-PLAN.md
+last_updated: "2026-03-07T22:46:10Z"
+last_activity: 2026-03-07 -- Completed 42-01 outputSchema migration to top-level ToolInfo
 progress:
   total_phases: 16
   completed_phases: 8
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** ChatGPT MCP Apps Upgraded Version -- Phase 41
+**Current focus:** Add outputSchema top-level support -- Phase 42
 
 ## Current Position
 
-Phase: 41 (chatgpt-mcp-apps-upgraded-version)
-Plan: 3 of 3 (complete)
-Status: Completed 41-03 -- scaffold template updated for ChatGPT compatibility
-Last activity: 2026-03-07 -- Completed 41-03 scaffold template HtmlMcpApp, with_ui, and _meta
+Phase: 42 (add-outputschema-top-level-support)
+Plan: 1 of 1 (complete)
+Status: Completed 42-01 -- outputSchema migrated to top-level ToolInfo field
+Last activity: 2026-03-07 -- Completed 42-01 outputSchema migration to top-level ToolInfo
 
 Progress: [██████████] 100%
 
@@ -77,6 +77,7 @@ v1.6 decisions:
 - [Phase 41-02]: AppBridge class in widget-runtime.mjs (not index.html); fall-through switch for backward compat; ui/notifications/initialized via setTimeout(0)
 - [Phase 41]: Used field name meta with serde rename to _meta since leading underscores not idiomatic Rust
 - [Phase 41-03]: Used TypedSyncTool::new().with_ui() in scaffold instead of tool_typed_sync_with_description() to enable tool-to-widget linking
+- [Phase 42-01]: outputSchema is top-level on ToolInfo (MCP spec 2025-06-18); pmcp:outputTypeName remains in annotations as PMCP codegen extension
 
 ### Roadmap Evolution
 
@@ -97,6 +98,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-07T22:14:29.055Z
-Stopped at: Phase 42 context gathered
-Resume: Phase 41 complete -- all 3 plans done, scaffold template ChatGPT-compatible
+Last session: 2026-03-07T22:46:10Z
+Stopped at: Completed 42-01-PLAN.md
+Resume: Phase 42 plan 01 complete -- outputSchema migrated to top-level ToolInfo

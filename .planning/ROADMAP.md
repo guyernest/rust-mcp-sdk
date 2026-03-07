@@ -308,5 +308,5 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 42-01-PLAN.md — Core types migration: ToolAnnotations cleanup, ToolInfo field + builder, TypedToolWithOutput rewire, macro codegen
+- [x] 42-01-PLAN.md — Core types migration: ToolAnnotations cleanup, ToolInfo field + builder, TypedToolWithOutput rewire, macro codegen
 - [ ] 42-02-PLAN.md — Consumers: cargo-pmcp schema structs, tests, example, docs update
