@@ -227,17 +227,18 @@ where
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
-        // Build _meta for UI resource if specified
-        let meta = self.ui_resource_uri.as_ref().map(|uri| {
-            crate::types::ui::ToolUIMetadata::build_meta_map(uri)
-        });
+        let mut meta = serde_json::Map::new();
+        if let Some(uri) = &self.ui_resource_uri {
+            let ui_meta = crate::types::ui::ToolUIMetadata::build_meta_map(uri);
+            crate::types::ui::deep_merge(&mut meta, ui_meta);
+        }
 
         Some(ToolInfo {
             name: self.name.clone(),
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
             annotations: self.annotations.clone(),
-            _meta: meta,
+            _meta: if meta.is_empty() { None } else { Some(meta) },
             execution: None,
         })
     }
@@ -394,17 +395,18 @@ where
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
-        // Build _meta for UI resource if specified
-        let meta = self.ui_resource_uri.as_ref().map(|uri| {
-            crate::types::ui::ToolUIMetadata::build_meta_map(uri)
-        });
+        let mut meta = serde_json::Map::new();
+        if let Some(uri) = &self.ui_resource_uri {
+            let ui_meta = crate::types::ui::ToolUIMetadata::build_meta_map(uri);
+            crate::types::ui::deep_merge(&mut meta, ui_meta);
+        }
 
         Some(ToolInfo {
             name: self.name.clone(),
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
             annotations: self.annotations.clone(),
-            _meta: meta,
+            _meta: if meta.is_empty() { None } else { Some(meta) },
             execution: None,
         })
     }
