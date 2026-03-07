@@ -118,27 +118,6 @@ pub struct ToolAnnotations {
     // =========================================================================
     // PMCP Extensions for Type-Safe Composition
     // =========================================================================
-    /// JSON Schema for the tool's output type (PMCP extension).
-    ///
-    /// When present, code generators can create typed return structs instead of
-    /// falling back to `serde_json::Value`. This enables full type safety in
-    /// MCP server composition workflows.
-    ///
-    /// Example:
-    /// ```json
-    /// {
-    ///   "type": "object",
-    ///   "properties": {
-    ///     "columns": { "type": "array", "items": { "type": "string" } },
-    ///     "rows": { "type": "array" },
-    ///     "row_count": { "type": "integer" }
-    ///   },
-    ///   "required": ["columns", "rows", "row_count"]
-    /// }
-    /// ```
-    #[serde(rename = "pmcp:outputSchema", skip_serializing_if = "Option::is_none")]
-    pub output_schema: Option<Value>,
-
     /// Name of the output type for code generation (PMCP extension).
     ///
     /// Used by code generators to name the generated struct.
@@ -199,35 +178,25 @@ impl ToolAnnotations {
         self
     }
 
-    /// Set output schema (PMCP extension for type-safe composition).
+    /// Set output type name (PMCP extension for code generation).
     ///
-    /// This enables code generators to create typed return structs for
-    /// server-to-server composition. The `type_name` is used as the
-    /// generated struct name (e.g., `"QueryResult"` becomes `struct QueryResult`).
+    /// Used by code generators to name the generated struct for the tool's
+    /// output type (e.g., `"QueryResult"` becomes `struct QueryResult`).
+    ///
+    /// The actual output schema is set on [`ToolInfo::with_output_schema`]
+    /// as a top-level field (MCP spec 2025-06-18).
     ///
     /// # Example
     ///
     /// ```rust
     /// use pmcp::types::ToolAnnotations;
-    /// use serde_json::json;
     ///
     /// let annotations = ToolAnnotations::new()
     ///     .with_read_only(true)
-    ///     .with_output_schema(
-    ///         json!({
-    ///             "type": "object",
-    ///             "properties": {
-    ///                 "count": { "type": "integer" },
-    ///                 "items": { "type": "array" }
-    ///             },
-    ///             "required": ["count", "items"]
-    ///         }),
-    ///         "SearchResult"
-    ///     );
+    ///     .with_output_type_name("SearchResult");
     /// ```
-    pub fn with_output_schema(mut self, schema: Value, type_name: impl Into<String>) -> Self {
-        self.output_schema = Some(schema);
-        self.output_type_name = Some(type_name.into());
+    pub fn with_output_type_name(mut self, name: impl Into<String>) -> Self {
+        self.output_type_name = Some(name.into());
         self
     }
 }
@@ -244,6 +213,13 @@ pub struct ToolInfo {
     pub description: Option<String>,
     /// JSON Schema for tool parameters
     pub input_schema: Value,
+    /// JSON Schema for the tool's output type (MCP spec 2025-06-18).
+    ///
+    /// When present, clients can validate and type-check the tool's structured
+    /// output. Code generators can create typed return structs instead of
+    /// falling back to `serde_json::Value`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<Value>,
     /// Tool annotations (hints and PMCP extensions)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<ToolAnnotations>,
@@ -267,16 +243,17 @@ impl ToolInfo {
             name: name.into(),
             description,
             input_schema,
+            output_schema: None,
             annotations: None,
             _meta: None,
             execution: None,
         }
     }
 
-    /// Create a new `ToolInfo` with annotations (including PMCP output schema).
+    /// Create a new `ToolInfo` with annotations.
     ///
-    /// Use this constructor when your tool has output type information for
-    /// type-safe composition workflows.
+    /// Use this constructor when your tool has annotation hints. For output
+    /// schema, chain [`ToolInfo::with_output_schema`] on the result.
     ///
     /// # Example
     ///
@@ -286,22 +263,14 @@ impl ToolInfo {
     ///
     /// let annotations = ToolAnnotations::new()
     ///     .with_read_only(true)
-    ///     .with_output_schema(
-    ///         json!({
-    ///             "type": "object",
-    ///             "properties": {
-    ///                 "result": { "type": "string" }
-    ///             }
-    ///         }),
-    ///         "MyResult"
-    ///     );
+    ///     .with_output_type_name("MyResult");
     ///
     /// let tool = ToolInfo::with_annotations(
     ///     "my_tool",
     ///     Some("My tool description".to_string()),
     ///     json!({"type": "object"}),
     ///     annotations,
-    /// );
+    /// ).with_output_schema(json!({"type": "object", "properties": {"result": {"type": "string"}}}));
     /// ```
     pub fn with_annotations(
         name: impl Into<String>,
@@ -313,6 +282,7 @@ impl ToolInfo {
             name: name.into(),
             description,
             input_schema,
+            output_schema: None,
             annotations: Some(annotations),
             _meta: None,
             execution: None,
@@ -337,10 +307,33 @@ impl ToolInfo {
             name: name.into(),
             description,
             input_schema,
+            output_schema: None,
             annotations: None,
             _meta: Some(meta),
             execution: None,
         }
+    }
+
+    /// Set the output schema for this tool (MCP spec 2025-06-18).
+    ///
+    /// The output schema declares the JSON Schema that the tool's structured
+    /// output conforms to, enabling clients to validate and type-check results.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use pmcp::types::ToolInfo;
+    /// use serde_json::json;
+    ///
+    /// let tool = ToolInfo::new("my_tool", None, json!({"type": "object"}))
+    ///     .with_output_schema(json!({
+    ///         "type": "object",
+    ///         "properties": { "count": { "type": "integer" } }
+    ///     }));
+    /// ```
+    pub fn with_output_schema(mut self, schema: serde_json::Value) -> Self {
+        self.output_schema = Some(schema);
+        self
     }
 
     /// Add widget metadata, deep-merging into existing `_meta`.
