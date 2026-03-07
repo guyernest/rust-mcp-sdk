@@ -1774,6 +1774,7 @@ impl ServerTester {
                                     uri,
                                     text,
                                     mime_type,
+                                    ..
                                 } => {
                                     println!("      Content type: Resource Reference");
                                     println!("      URI: {}", uri);
@@ -1841,6 +1842,7 @@ impl ServerTester {
                                 uri,
                                 text: _,
                                 mime_type,
+                                ..
                             } => {
                                 if uri.is_empty() {
                                     warnings.push(format!(
