@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Completed 40-02-PLAN.md
-last_updated: "2026-03-07T03:29:21.209Z"
-last_activity: 2026-03-07 -- Completed 40-02 dual-emit CSP, domain, visibility
+stopped_at: Completed 41-02-PLAN.md
+last_updated: "2026-03-07T06:12:28Z"
+last_activity: 2026-03-07 -- Completed 41-02 bridge protocol method names alignment
 progress:
   total_phases: 14
   completed_phases: 7
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** Review ChatGPT Compatibility for Apps -- Phase 40
+**Current focus:** ChatGPT MCP Apps Upgraded Version -- Phase 41
 
 ## Current Position
 
-Phase: 40 (review-chatgpt-compatibility-for-apps)
-Plan: 2 of 2 (complete)
-Status: Phase 40 complete -- dual-emit nested ui.csp/domain/visibility alongside flat openai/* keys
-Last activity: 2026-03-07 -- Completed 40-02 dual-emit CSP, domain, visibility
+Phase: 41 (chatgpt-mcp-apps-upgraded-version)
+Plan: 2 of 3 (in progress)
+Status: Completed 41-02 -- bridge protocol method names aligned with official ChatGPT spec
+Last activity: 2026-03-07 -- Completed 41-02 bridge protocol method names alignment
 
 Progress: [██████████] 100%
 
@@ -74,6 +74,7 @@ v1.6 decisions:
 - [Phase 39-02]: TypedToolWithOutput::with_ui() mirrors TypedTool::with_ui() for API consistency; all four tool types use identical deep_merge pattern
 - [Phase 40-02]: redirect_domains excluded from nested ui.csp (ChatGPT-specific); nested csp uses spec camelCase field names; ModelOnly variant added to ToolVisibility
 - [Phase 40-01]: Added legacy flat "ui/resourceUri" key to build_meta_map() matching official ext-apps dual-emit behavior
+- [Phase 41-02]: AppBridge class in widget-runtime.mjs (not index.html); fall-through switch for backward compat; ui/notifications/initialized via setTimeout(0)
 
 ### Roadmap Evolution
 
@@ -81,6 +82,7 @@ v1.6 decisions:
 - Phase 34 added: Fix MCP Apps ChatGPT compatibility
 - Phases 35-39 added: MCP Apps code quality improvements (meta key constants, MIME type unification, TypedSyncTool UI, ToolInfo caching, ui meta merge)
 - Phase 40 added: Review ChatGPT Compatibility for Apps
+- Phase 41 added: ChatGPT MCP Apps Upgraded Version
 
 ### Pending Todos
 
@@ -92,6 +94,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-07T03:24:04Z
-Stopped at: Completed 40-02-PLAN.md
-Resume: Phase 40 complete -- all plans executed
+Last session: 2026-03-07T06:12:28Z
+Stopped at: Completed 41-02-PLAN.md
+Resume: Phase 41 plan 02 complete -- bridge protocol aligned with ChatGPT spec
