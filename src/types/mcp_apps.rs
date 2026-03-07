@@ -100,6 +100,13 @@ pub struct WidgetCSP {
     /// iframes is essential to your experience.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame_domains: Option<Vec<String>>,
+
+    /// Base URI domains for the widget.
+    ///
+    /// Maps to the spec's `McpUiResourceCsp.baseUriDomains` field.
+    /// Restricts which domains can be used as the base URI for relative URLs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_uri_domains: Option<Vec<String>>,
 }
 
 impl WidgetCSP {
@@ -159,12 +166,23 @@ impl WidgetCSP {
         self
     }
 
+    /// Add a base URI domain.
+    ///
+    /// Maps to the spec's `McpUiResourceCsp.baseUriDomains` field.
+    pub fn base_uri(mut self, domain: impl Into<String>) -> Self {
+        self.base_uri_domains
+            .get_or_insert_with(Vec::new)
+            .push(domain.into());
+        self
+    }
+
     /// Check if the CSP has any domains configured.
     pub fn is_empty(&self) -> bool {
         self.connect_domains.is_empty()
             && self.resource_domains.is_empty()
             && self.redirect_domains.as_ref().is_none_or(Vec::is_empty)
             && self.frame_domains.as_ref().is_none_or(Vec::is_empty)
+            && self.base_uri_domains.as_ref().is_none_or(Vec::is_empty)
     }
 }
 
@@ -309,6 +327,28 @@ pub enum ToolVisibility {
     /// Useful for internal widget operations that shouldn't be
     /// triggered by user prompts.
     Private,
+
+    /// Tool is visible to the model only, not callable from widgets.
+    ///
+    /// The model can call this tool but widgets cannot invoke it via UI actions.
+    ModelOnly,
+}
+
+impl ToolVisibility {
+    /// Convert to a spec-compatible visibility array.
+    ///
+    /// Returns the visibility as an array of audience strings matching
+    /// the ext-apps spec format:
+    /// - `Public` -> `["model", "app"]`
+    /// - `Private` -> `["app"]`
+    /// - `ModelOnly` -> `["model"]`
+    pub fn to_visibility_array(&self) -> Vec<&'static str> {
+        match self {
+            Self::Public => vec!["model", "app"],
+            Self::Private => vec!["app"],
+            Self::ModelOnly => vec!["model"],
+        }
+    }
 }
 
 // =============================================================================
@@ -1245,6 +1285,65 @@ mod tests {
                 err
             );
         }
+    }
+
+    #[test]
+    fn test_widget_csp_base_uri_builder() {
+        let csp = WidgetCSP::new().base_uri("https://example.com");
+        assert_eq!(
+            csp.base_uri_domains,
+            Some(vec!["https://example.com".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_widget_csp_base_uri_serialization() {
+        let csp = WidgetCSP::new()
+            .connect("https://api.example.com")
+            .base_uri("https://base.example.com");
+
+        let json = serde_json::to_value(&csp).unwrap();
+        assert_eq!(json["base_uri_domains"][0], "https://base.example.com");
+    }
+
+    #[test]
+    fn test_widget_csp_is_empty_with_base_uri() {
+        let csp = WidgetCSP::new().base_uri("https://example.com");
+        assert!(!csp.is_empty(), "CSP with base_uri_domains should not be empty");
+    }
+
+    #[test]
+    fn test_tool_visibility_model_only_serialization() {
+        assert_eq!(
+            serde_json::to_value(ToolVisibility::ModelOnly).unwrap(),
+            "modelonly"
+        );
+    }
+
+    #[test]
+    fn test_tool_visibility_has_three_variants() {
+        // Verify all 3 variants exist and serialize correctly
+        let variants = vec![
+            (ToolVisibility::Public, "public"),
+            (ToolVisibility::Private, "private"),
+            (ToolVisibility::ModelOnly, "modelonly"),
+        ];
+        for (variant, expected) in variants {
+            assert_eq!(
+                serde_json::to_value(variant).unwrap(),
+                expected,
+                "ToolVisibility::{:?} should serialize to {:?}",
+                variant,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_tool_visibility_to_visibility_array() {
+        assert_eq!(ToolVisibility::Public.to_visibility_array(), vec!["model", "app"]);
+        assert_eq!(ToolVisibility::Private.to_visibility_array(), vec!["app"]);
+        assert_eq!(ToolVisibility::ModelOnly.to_visibility_array(), vec!["model"]);
     }
 
     #[test]
