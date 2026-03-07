@@ -308,6 +308,18 @@ pub fn deep_merge(
     }
 }
 
+/// Build `_meta` from an optional UI resource URI.
+///
+/// Returns `None` when no URI is provided, avoiding unnecessary allocation.
+/// Used by `TypedTool`, `TypedSyncTool`, `TypedToolWithOutput`, and
+/// `WasmTypedTool` to keep the metadata construction logic in one place.
+pub(crate) fn build_ui_meta(
+    ui_resource_uri: Option<&str>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let uri = ui_resource_uri?;
+    Some(ToolUIMetadata::build_meta_map(uri))
+}
+
 impl ToolUIMetadata {
     /// Create new tool UI metadata
     pub fn new() -> Self {
@@ -481,10 +493,11 @@ mod tests {
             map.get("openai/outputTemplate"),
             Some(&serde_json::Value::String("ui://test".to_string()))
         );
-        // Must NOT emit flat key
-        assert!(
-            map.get("ui/resourceUri").is_none(),
-            "must not have flat ui/resourceUri key"
+        // Must emit legacy flat key for backward compatibility
+        assert_eq!(
+            map.get("ui/resourceUri"),
+            Some(&serde_json::Value::String("ui://test".to_string())),
+            "must have flat ui/resourceUri key for legacy hosts"
         );
     }
 
@@ -580,6 +593,58 @@ mod tests {
         let a = base.get("a").unwrap();
         assert_eq!(a["b"]["c"], 1);
         assert_eq!(a["b"]["d"], 2);
+    }
+
+    #[test]
+    fn test_build_meta_map_emits_all_three_keys() {
+        let map = ToolUIMetadata::build_meta_map("ui://chess/board");
+
+        // 1. Nested ui.resourceUri
+        let ui_obj = map.get("ui").expect("must have nested 'ui' key");
+        assert_eq!(ui_obj["resourceUri"], "ui://chess/board");
+
+        // 2. Legacy flat key
+        assert_eq!(
+            map.get("ui/resourceUri"),
+            Some(&serde_json::Value::String(
+                "ui://chess/board".to_string()
+            ))
+        );
+
+        // 3. OpenAI alias
+        assert_eq!(
+            map.get("openai/outputTemplate"),
+            Some(&serde_json::Value::String(
+                "ui://chess/board".to_string()
+            ))
+        );
+
+        // Exactly 3 top-level keys
+        assert_eq!(map.len(), 3, "build_meta_map must produce exactly 3 keys");
+    }
+
+    #[test]
+    fn test_deep_merge_preserves_flat_key() {
+        let mut map = ToolUIMetadata::build_meta_map("ui://x");
+
+        // Deep merge with additional ui properties
+        let mut overlay = serde_json::Map::new();
+        overlay.insert("ui".into(), json!({"prefersBorder": true}));
+        super::deep_merge(&mut map, overlay);
+
+        // Flat key unaffected by deep merge on "ui" object
+        assert_eq!(
+            map.get("ui/resourceUri"),
+            Some(&serde_json::Value::String("ui://x".to_string())),
+            "flat key must survive deep merge"
+        );
+
+        // Nested ui.resourceUri still present
+        let ui_obj = map.get("ui").unwrap();
+        assert_eq!(ui_obj["resourceUri"], "ui://x");
+
+        // New property merged in
+        assert_eq!(ui_obj["prefersBorder"], true);
     }
 
     #[test]
