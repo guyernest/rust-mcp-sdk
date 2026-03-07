@@ -775,8 +775,9 @@ pub enum ExtendedUIMimeType {
     /// Widgets communicate via postMessage with JSON-RPC protocol.
     HtmlMcp,
 
-    /// ChatGPT Apps Skybridge HTML (`text/html+skybridge`).
+    /// Legacy ChatGPT Apps Skybridge HTML (`text/html+skybridge`).
     ///
+    /// Deprecated: use `HtmlMcpApp` (`text/html;profile=mcp-app`) instead.
     /// ChatGPT injects `window.openai` API for widget communication.
     HtmlSkybridge,
 
@@ -1026,7 +1027,7 @@ impl HostType {
     /// Get the preferred MIME type for this host.
     pub fn preferred_mime_type(&self) -> ExtendedUIMimeType {
         match self {
-            Self::ChatGpt => ExtendedUIMimeType::HtmlSkybridge,
+            Self::ChatGpt => ExtendedUIMimeType::HtmlMcpApp,
             Self::Claude | Self::Generic => ExtendedUIMimeType::HtmlMcp,
             Self::Nanobot | Self::McpJam => ExtendedUIMimeType::HtmlPlain,
         }
@@ -1226,7 +1227,7 @@ mod tests {
     fn test_host_type_mime_type() {
         assert_eq!(
             HostType::ChatGpt.preferred_mime_type(),
-            ExtendedUIMimeType::HtmlSkybridge
+            ExtendedUIMimeType::HtmlMcpApp
         );
         assert_eq!(
             HostType::Claude.preferred_mime_type(),

@@ -60,7 +60,7 @@ pub struct TransformedResource {
 
 /// Adapter for ChatGPT Apps (OpenAI Apps SDK).
 ///
-/// Transforms resources to use `text/html+skybridge` MIME type and
+/// Transforms resources to use `text/html;profile=mcp-app` MIME type and
 /// injects the `window.openai` bridge for widget communication.
 #[derive(Debug, Clone, Default)]
 pub struct ChatGptAdapter {
@@ -89,7 +89,7 @@ impl UIAdapter for ChatGptAdapter {
     }
 
     fn mime_type(&self) -> ExtendedUIMimeType {
-        ExtendedUIMimeType::HtmlSkybridge
+        ExtendedUIMimeType::HtmlMcpApp
     }
 
     fn transform(&self, uri: &str, name: &str, html: &str) -> TransformedResource {
@@ -636,7 +636,7 @@ mod tests {
 
         let transformed = adapter.transform("ui://test/widget.html", "Test Widget", html);
 
-        assert_eq!(transformed.mime_type, ExtendedUIMimeType::HtmlSkybridge);
+        assert_eq!(transformed.mime_type, ExtendedUIMimeType::HtmlMcpApp);
         assert!(transformed.content.contains("window.mcpBridge"));
         assert!(transformed.content.contains("window.openai"));
     }
