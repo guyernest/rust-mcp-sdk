@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Phase 33 context gathered
-last_updated: "2026-03-05T04:20:40.593Z"
-last_activity: 2026-03-04 -- Completed 27-03 validate.rs quiet gap closure, phase 27 fully complete
+stopped_at: Completed 41-03-PLAN.md
+last_updated: "2026-03-07T06:28:05.266Z"
+last_activity: 2026-03-07 -- Completed 41-03 scaffold template HtmlMcpApp, with_ui, and _meta
 progress:
-  total_phases: 7
-  completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
-  percent: 17
+  total_phases: 15
+  completed_phases: 8
+  total_plans: 16
+  completed_plans: 15
+  percent: 100
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** v1.6 CLI DX Overhaul -- Phase 27 (Global Flag Infrastructure)
+**Current focus:** ChatGPT MCP Apps Upgraded Version -- Phase 41
 
 ## Current Position
 
-Phase: 27 of 32 (Global Flag Infrastructure) -- COMPLETE (first of 6 phases in v1.6)
-Plan: 3 of 3 (complete, including gap closure plan 03)
-Status: Phase complete -- ready for Phase 28
-Last activity: 2026-03-04 -- Completed 27-03 validate.rs quiet gap closure, phase 27 fully complete
+Phase: 41 (chatgpt-mcp-apps-upgraded-version)
+Plan: 3 of 3 (complete)
+Status: Completed 41-03 -- scaffold template updated for ChatGPT compatibility
+Last activity: 2026-03-07 -- Completed 41-03 scaffold template HtmlMcpApp, with_ui, and _meta
 
-Progress: [▓▓░░░░░░░░] 17% (v1.6)
+Progress: [██████████] 100%
 
 ## Shipped Milestones
 
@@ -65,10 +65,26 @@ v1.6 decisions:
 - Secret module merges local --quiet with global --quiet via effective_quiet parameter
 - Verbose field kept with allow(dead_code) -- used in precedence logic, not yet by individual commands
 - [Phase 27]: Threaded not_quiet bool through validate.rs private functions rather than re-checking PMCP_QUIET env var in each function
+- [Phase 34]: Axum 0.8 wildcard routes use {*path} syntax; mcp-preview bumped to 0.1.2
+- [Phase 34-01]: Nested _meta.ui.resourceUri format with openai/outputTemplate for ChatGPT; HtmlMcpApp MIME type; dual-emit WidgetMeta prefersBorder
+- [Phase 36]: Used explicit match arms (no wildcards) in From/TryFrom bridge for compile-time exhaustiveness
+- [Phase 37]: Mirrored TypedTool::with_ui() exactly for TypedSyncTool and WasmTypedTool; WasmTypedTool tests wasm32-only gated
+- [Phase 38]: Cache is sole source of truth for metadata; no fallback to handler.metadata() in hot paths; prompt_workflow() caches directly
+- [Phase 39]: deep_merge in ui.rs for recursive JSON object merging; with_meta_entry on ToolInfo for composable _meta; arrays replaced not concatenated
+- [Phase 39-02]: TypedToolWithOutput::with_ui() mirrors TypedTool::with_ui() for API consistency; all four tool types use identical deep_merge pattern
+- [Phase 40-02]: redirect_domains excluded from nested ui.csp (ChatGPT-specific); nested csp uses spec camelCase field names; ModelOnly variant added to ToolVisibility
+- [Phase 40-01]: Added legacy flat "ui/resourceUri" key to build_meta_map() matching official ext-apps dual-emit behavior
+- [Phase 41-02]: AppBridge class in widget-runtime.mjs (not index.html); fall-through switch for backward compat; ui/notifications/initialized via setTimeout(0)
+- [Phase 41]: Used field name meta with serde rename to _meta since leading underscores not idiomatic Rust
+- [Phase 41-03]: Used TypedSyncTool::new().with_ui() in scaffold instead of tool_typed_sync_with_description() to enable tool-to-widget linking
 
 ### Roadmap Evolution
 
 - Phase 33 added: Fix mcp-tester failure with v1.12.0
+- Phase 34 added: Fix MCP Apps ChatGPT compatibility
+- Phases 35-39 added: MCP Apps code quality improvements (meta key constants, MIME type unification, TypedSyncTool UI, ToolInfo caching, ui meta merge)
+- Phase 40 added: Review ChatGPT Compatibility for Apps
+- Phase 41 added: ChatGPT MCP Apps Upgraded Version
 
 ### Pending Todos
 
@@ -80,6 +96,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-05T04:20:40.590Z
-Stopped at: Phase 33 context gathered
-Resume: Begin Phase 28 planning/execution
+Last session: 2026-03-07T06:21:44Z
+Stopped at: Completed 41-03-PLAN.md
+Resume: Phase 41 complete -- all 3 plans done, scaffold template ChatGPT-compatible

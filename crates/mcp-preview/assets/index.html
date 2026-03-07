@@ -1377,7 +1377,7 @@
           this.logNetwork('response', this.selectedTool.name, result, duration, result.success);
 
           if (result.success && result.content) {
-            this.handleToolResponse(result);
+            await this.handleToolResponse(result);
           } else if (result.error) {
             this.logConsole('error', result.error);
           }
@@ -1387,12 +1387,34 @@
         }
       }
 
-      handleToolResponse(result) {
-        this.toolOutput = result.content;
-        this.toolResponseMetadata = result.meta || {};
+      async handleToolResponse(result) {
+        this.toolOutput = result.structuredContent || result.content;
+        const meta = result._meta || result.meta || {};
+        this.toolResponseMetadata = meta;
         this.updateStateView();
 
-        // Find widget HTML in content
+        // Check _meta for widget URI (MCP Apps / ChatGPT Apps pattern)
+        const widgetUri = meta['openai/outputTemplate']
+                       || meta['ui/resourceUri']
+                       || (meta['ui'] && meta['ui']['resourceUri']);
+        if (widgetUri) {
+          // Load widget template from resource URI, then push tool result via AppBridge
+          await this.loadResourceWidget(widgetUri);
+          // Give widget time to initialize its bridge listener
+          setTimeout(() => {
+            if (this.appBridge) {
+              this.appBridge.sendToolInput(this.toolInput);
+              this.appBridge.sendToolResult({
+                structuredContent: result.structuredContent,
+                _meta: meta,
+              });
+            }
+          }, 300);
+          this.logEvent('toolResponse', { tool: this.selectedTool.name, widget: widgetUri });
+          return;
+        }
+
+        // Fallback: look for inline HTML in content (legacy pattern)
         const widgetContent = result.content.find(c =>
           c.type === 'resource' &&
           c.mimeType &&

@@ -119,6 +119,12 @@ pub struct ServerCore {
     /// Registered prompt handlers
     prompts: HashMap<String, Arc<dyn PromptHandler>>,
 
+    /// Cached tool metadata (populated at registration, immutable)
+    tool_infos: HashMap<String, ToolInfo>,
+
+    /// Cached prompt metadata (populated at registration, immutable)
+    prompt_infos: HashMap<String, PromptInfo>,
+
     /// Resource handler (optional)
     resources: Option<Arc<dyn ResourceHandler>>,
 
@@ -177,6 +183,8 @@ impl ServerCore {
         capabilities: ServerCapabilities,
         tools: HashMap<String, Arc<dyn ToolHandler>>,
         prompts: HashMap<String, Arc<dyn PromptHandler>>,
+        tool_infos: HashMap<String, ToolInfo>,
+        prompt_infos: HashMap<String, PromptInfo>,
         resources: Option<Arc<dyn ResourceHandler>>,
         sampling: Option<Arc<dyn SamplingHandler>>,
         auth_provider: Option<Arc<dyn AuthProvider>>,
@@ -191,6 +199,8 @@ impl ServerCore {
             capabilities,
             tools,
             prompts,
+            tool_infos,
+            prompt_infos,
             resources,
             sampling,
             client_capabilities: Arc::new(RwLock::new(None)),
@@ -243,20 +253,7 @@ impl ServerCore {
 
     /// Handle list tools request.
     async fn handle_list_tools(&self, _req: &ListToolsParams) -> Result<ListToolsResult> {
-        let tools = self
-            .tools
-            .iter()
-            .map(|(name, handler)| {
-                // Use tool metadata if provided, otherwise use defaults
-                if let Some(mut info) = handler.metadata() {
-                    // Ensure the name matches the registered name
-                    info.name.clone_from(name);
-                    info
-                } else {
-                    ToolInfo::new(name.clone(), None, serde_json::json!({}))
-                }
-            })
-            .collect();
+        let tools: Vec<ToolInfo> = self.tool_infos.values().cloned().collect();
 
         Ok(ListToolsResult {
             tools,
@@ -350,57 +347,20 @@ impl ServerCore {
 
         // Convert result to CallToolResult
         let value = result?;
-        Ok(CallToolResult {
-            content: vec![Content::Text {
-                text: serde_json::to_string_pretty(&value)?,
-            }],
-            is_error: false,
-            ..Default::default()
-        })
+        let text = serde_json::to_string_pretty(&value)?;
+        let mut call_result = CallToolResult::new(vec![Content::Text { text }]);
+
+        // Enrich with widget metadata so widgets can access data via toolOutput.
+        if let Some(info) = self.tool_infos.get(&req.name) {
+            call_result = call_result.with_widget_enrichment(info, value);
+        }
+
+        Ok(call_result)
     }
 
     /// Handle list prompts request.
     async fn handle_list_prompts(&self, _req: &ListPromptsParams) -> Result<ListPromptsResult> {
-        let prompts: Vec<PromptInfo> = self
-            .prompts
-            .iter()
-            .map(|(name, handler)| {
-                // Use prompt metadata if provided, otherwise use defaults
-                if let Some(mut info) = handler.metadata() {
-                    tracing::debug!(
-                        target: "mcp.prompts",
-                        prompt = %name,
-                        description = ?info.description,
-                        arguments_count = ?info.arguments.as_ref().map(|a| a.len()),
-                        "Prompt metadata retrieved"
-                    );
-
-                    // Ensure the name matches the registered name
-                    info.name.clone_from(name);
-
-                    tracing::debug!(
-                        target: "mcp.prompts",
-                        prompt = %info.name,
-                        has_description = info.description.is_some(),
-                        has_arguments = info.arguments.is_some(),
-                        "Final PromptInfo"
-                    );
-
-                    info
-                } else {
-                    tracing::debug!(
-                        target: "mcp.prompts",
-                        prompt = %name,
-                        "Prompt has no metadata"
-                    );
-                    PromptInfo {
-                        name: name.clone(),
-                        description: None,
-                        arguments: None,
-                    }
-                }
-            })
-            .collect();
+        let prompts: Vec<PromptInfo> = self.prompt_infos.values().cloned().collect();
 
         tracing::debug!(
             target: "mcp.prompts",
@@ -727,13 +687,11 @@ impl ServerCore {
                         if let Some(ref task_router) = self.task_router {
                             // Determine if this tool requires task augmentation
                             let tool_execution = self
-                                .tools
+                                .tool_infos
                                 .get(&req.name)
-                                .and_then(|h| h.metadata())
-                                .and_then(|m| m.execution);
+                                .and_then(|m| m.execution.as_ref());
                             let needs_task = req.task.is_some()
-                                || task_router
-                                    .tool_requires_task(&req.name, tool_execution.as_ref());
+                                || task_router.tool_requires_task(&req.name, tool_execution);
                             if needs_task {
                                 let owner_id = self
                                     .resolve_task_owner(auth_context.as_ref())
@@ -943,6 +901,22 @@ mod tests {
         }
     }
 
+    /// Build `tool_infos` cache from a tools `HashMap` (mirrors builder logic).
+    fn build_tool_infos(
+        tools: &HashMap<String, Arc<dyn ToolHandler>>,
+    ) -> HashMap<String, ToolInfo> {
+        tools
+            .iter()
+            .map(|(name, handler)| {
+                let mut info = handler
+                    .metadata()
+                    .unwrap_or_else(|| ToolInfo::new(name.clone(), None, serde_json::json!({})));
+                info.name.clone_from(name);
+                (name.clone(), info)
+            })
+            .collect()
+    }
+
     #[tokio::test]
     async fn test_server_core_initialization() {
         let mut tools = HashMap::new();
@@ -950,6 +924,7 @@ mod tests {
             "test-tool".to_string(),
             Arc::new(TestTool) as Arc<dyn ToolHandler>,
         );
+        let tool_infos = build_tool_infos(&tools);
 
         let server = ServerCore::new(
             Implementation {
@@ -958,6 +933,8 @@ mod tests {
             },
             ServerCapabilities::tools_only(),
             tools,
+            HashMap::new(),
+            tool_infos,
             HashMap::new(),
             None,
             None,
@@ -999,6 +976,7 @@ mod tests {
             "test-tool".to_string(),
             Arc::new(TestTool) as Arc<dyn ToolHandler>,
         );
+        let tool_infos = build_tool_infos(&tools);
 
         let server = ServerCore::new(
             Implementation {
@@ -1007,6 +985,8 @@ mod tests {
             },
             ServerCapabilities::tools_only(),
             tools,
+            HashMap::new(),
+            tool_infos,
             HashMap::new(),
             None,
             None,
@@ -1057,6 +1037,7 @@ mod tests {
             "test-tool".to_string(),
             Arc::new(TestTool) as Arc<dyn ToolHandler>,
         );
+        let tool_infos = build_tool_infos(&tools);
 
         let server = ServerCore::new(
             Implementation {
@@ -1065,6 +1046,8 @@ mod tests {
             },
             ServerCapabilities::tools_only(),
             tools,
+            HashMap::new(),
+            tool_infos,
             HashMap::new(),
             None,
             None,
@@ -1106,6 +1089,7 @@ mod tests {
             "test-tool".to_string(),
             Arc::new(TestTool) as Arc<dyn ToolHandler>,
         );
+        let tool_infos = build_tool_infos(&tools);
 
         let server = ServerCore::new(
             Implementation {
@@ -1114,6 +1098,8 @@ mod tests {
             },
             ServerCapabilities::tools_only(),
             tools,
+            HashMap::new(),
+            tool_infos,
             HashMap::new(),
             None,
             None,

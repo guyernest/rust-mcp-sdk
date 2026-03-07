@@ -58,9 +58,23 @@ pub struct TransformedResource {
     pub metadata: HashMap<String, Value>,
 }
 
+impl TransformedResource {
+    /// Take platform metadata as the `_meta` map format used by `Content::Resource`.
+    ///
+    /// Returns `None` if metadata is empty, `Some(map)` otherwise.
+    /// Drains the metadata from this resource.
+    pub fn take_meta(&mut self) -> Option<serde_json::Map<String, Value>> {
+        if self.metadata.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut self.metadata).into_iter().collect())
+        }
+    }
+}
+
 /// Adapter for ChatGPT Apps (OpenAI Apps SDK).
 ///
-/// Transforms resources to use `text/html+skybridge` MIME type and
+/// Transforms resources to use `text/html;profile=mcp-app` MIME type and
 /// injects the `window.openai` bridge for widget communication.
 #[derive(Debug, Clone, Default)]
 pub struct ChatGptAdapter {
@@ -89,7 +103,7 @@ impl UIAdapter for ChatGptAdapter {
     }
 
     fn mime_type(&self) -> ExtendedUIMimeType {
-        ExtendedUIMimeType::HtmlSkybridge
+        ExtendedUIMimeType::HtmlMcpApp
     }
 
     fn transform(&self, uri: &str, name: &str, html: &str) -> TransformedResource {
@@ -447,8 +461,8 @@ impl UIAdapter for McpAppsAdapter {
         }
     };
 
-    // Notify host that widget is ready
-    window.mcpBridge.notify('ui/ready', {});
+    // Notify host that widget is initializing
+    window.mcpBridge.notify('ui/initialize', {});
 })();
 </script>
 ";
@@ -636,7 +650,7 @@ mod tests {
 
         let transformed = adapter.transform("ui://test/widget.html", "Test Widget", html);
 
-        assert_eq!(transformed.mime_type, ExtendedUIMimeType::HtmlSkybridge);
+        assert_eq!(transformed.mime_type, ExtendedUIMimeType::HtmlMcpApp);
         assert!(transformed.content.contains("window.mcpBridge"));
         assert!(transformed.content.contains("window.openai"));
     }

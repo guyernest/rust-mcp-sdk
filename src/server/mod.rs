@@ -10,7 +10,7 @@ use crate::types::{
     Implementation, InitializeResult, JSONRPCResponse, ListPromptsRequest, ListPromptsResult,
     ListResourceTemplatesRequest, ListResourceTemplatesResult, ListResourcesRequest,
     ListResourcesResult, ListToolsRequest, ListToolsResult, Notification, ProtocolVersion,
-    ReadResourceRequest, Request, RequestId, ServerCapabilities, ServerNotification,
+    ReadResourceRequest, Request, RequestId, ServerCapabilities, ServerNotification, ToolInfo,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use async_trait::async_trait;
@@ -276,6 +276,7 @@ pub struct Server {
     info: Implementation,
     capabilities: ServerCapabilities,
     tools: HashMap<String, Arc<dyn ToolHandler>>,
+    tool_infos: HashMap<String, ToolInfo>,
     prompts: HashMap<String, Arc<dyn PromptHandler>>,
     resources: Option<Arc<dyn ResourceHandler>>,
     sampling: Option<Arc<dyn SamplingHandler>>,
@@ -964,23 +965,7 @@ impl Server {
     }
 
     fn handle_list_tools(&self, _req: ListToolsRequest) -> Result<Value> {
-        let tools = self
-            .tools
-            .iter()
-            .map(|(name, handler)| {
-                // Try to get metadata from the handler, otherwise use defaults
-                handler.metadata().unwrap_or_else(|| {
-                    crate::types::ToolInfo::new(
-                        name.clone(),
-                        None,
-                        serde_json::json!({
-                            "type": "object",
-                            "properties": {}
-                        }),
-                    )
-                })
-            })
-            .collect::<Vec<_>>();
+        let tools: Vec<ToolInfo> = self.tool_infos.values().cloned().collect();
 
         Ok(serde_json::to_value(ListToolsResult {
             tools,
@@ -1119,13 +1104,15 @@ impl Server {
                 Err(e)
             },
         }?;
-        Ok(serde_json::to_value(CallToolResult {
-            content: vec![crate::types::Content::Text {
-                text: result.to_string(),
-            }],
-            is_error: false,
-            ..Default::default()
-        })?)
+        // Build CallToolResult, adding structured_content for widget tools
+        let text = result.to_string();
+        let mut call_result = CallToolResult::new(vec![crate::types::Content::Text { text }]);
+
+        if let Some(info) = self.tool_infos.get(&req.name) {
+            call_result = call_result.with_widget_enrichment(info, result);
+        }
+
+        Ok(serde_json::to_value(call_result)?)
     }
 
     fn handle_list_prompts(&self, _req: ListPromptsRequest) -> Result<Value> {
@@ -3015,10 +3002,27 @@ impl ServerBuilder {
             Arc::new(RwLock::new(chain))
         };
 
+        // Build tool_infos cache at construction time (mirrors ServerCore pattern)
+        let tool_infos: HashMap<String, ToolInfo> = self
+            .tools
+            .iter()
+            .map(|(name, handler)| {
+                let info = handler.metadata().unwrap_or_else(|| {
+                    ToolInfo::new(
+                        name.clone(),
+                        None,
+                        serde_json::json!({"type": "object", "properties": {}}),
+                    )
+                });
+                (name.clone(), info)
+            })
+            .collect();
+
         Ok(Server {
             info: Implementation { name, version },
             capabilities: self.capabilities,
             tools: self.tools,
+            tool_infos,
             prompts: self.prompts,
             resources: self.resources,
             sampling: self.sampling,

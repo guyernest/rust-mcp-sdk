@@ -214,3 +214,88 @@ Plans:
 
 Plans:
 - [ ] 33-01-PLAN.md — Version bumps and crates.io publish
+
+### Phase 34: Fix MCP Apps ChatGPT compatibility
+
+**Goal:** Fix SDK metadata format, MIME types, and mcp-preview routes to be compatible with ChatGPT's MCP Apps implementation
+**Requirements**: CHATGPT-01, CHATGPT-02, CHATGPT-03, CHATGPT-04, CHATGPT-05, CHATGPT-06
+**Depends on:** Phase 33
+**Plans:** 2/2 plans complete
+
+Plans:
+- [x] 34-01-PLAN.md — Fix tool _meta format (nested ui.resourceUri + openai/outputTemplate), add MIME type variant, dual-emit WidgetMeta
+- [ ] 34-02-PLAN.md — Fix mcp-preview axum 0.8 wildcard route panic
+
+### Phase 35: Add meta key constants module for UI/MCP Apps strings
+
+**Goal:** Align SDK types, bridge protocol, and scaffold template with ChatGPT's official MCP Apps protocol -- add _meta to Content::Resource, fix MIME type, update bridge method names, fix scaffold
+**Requirements**: P41-01, P41-02, P41-03, P41-04, P41-05
+**Depends on:** Phase 34
+**Plans:** 3 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 35 to break down)
+
+### Phase 36: Unify UIMimeType and ExtendedUIMimeType with From bridge
+
+**Goal:** Add From/TryFrom conversion traits between UIMimeType and ExtendedUIMimeType so code can seamlessly convert across the feature-gate boundary
+**Requirements**: MIME-BRIDGE-01
+**Depends on:** Phase 35
+**Plans:** 1/1 plans complete
+
+Plans:
+- [ ] 36-01-PLAN.md — TDD: From<UIMimeType> for ExtendedUIMimeType and TryFrom<ExtendedUIMimeType> for UIMimeType
+
+### Phase 37: Add with_ui support to TypedSyncTool
+
+**Goal:** Add with_ui() builder method to TypedSyncTool and WasmTypedTool for API parity with TypedTool, enabling sync and WASM tool authors to declare UI resource associations
+**Requirements**: P37-01, P37-02, P37-03, P37-04
+**Depends on:** Phase 36
+**Plans:** 1/1 plans complete
+
+Plans:
+- [ ] 37-01-PLAN.md — Add ui_resource_uri field, with_ui() builder, and _meta emission to TypedSyncTool and WasmTypedTool
+
+### Phase 38: Cache ToolInfo at registration to avoid per-request cloning
+
+**Goal:** Cache ToolInfo and PromptInfo at builder registration time so handle_list_tools, handle_call_tool, handle_list_prompts, and task routing use cached metadata instead of calling handler.metadata() per request
+**Requirements**: CACHE-01
+**Depends on:** Phase 37
+**Plans:** 1/1 plans complete
+
+Plans:
+- [ ] 38-01-PLAN.md — Add tool_infos/prompt_infos cache to builders, replace 6 per-request metadata() call sites with cache lookups
+
+### Phase 39: Add deep-merge for ui meta key to prevent collision
+
+**Goal:** Add deep_merge function for serde_json::Map and update all metadata() implementations to merge _meta instead of replacing, preventing data loss when multiple builder methods contribute to _meta. Also add with_ui() to TypedToolWithOutput and with_meta_entry() to ToolInfo.
+**Requirements**: MERGE-01, MERGE-02
+**Depends on:** Phase 38
+**Plans:** 2/2 plans complete
+
+Plans:
+- [x] 39-01-PLAN.md — Add deep_merge function in ui.rs and ToolInfo::with_meta_entry builder method
+- [ ] 39-02-PLAN.md — Update TypedTool, TypedSyncTool, TypedToolWithOutput, WasmTypedTool metadata() to use deep_merge; add with_ui() to TypedToolWithOutput
+
+### Phase 40: Review ChatGPT Compatibility for Apps
+
+**Goal:** Align SDK metadata emission with official ext-apps spec: add legacy flat key ui/resourceUri to build_meta_map, dual-emit nested ui.csp/ui.domain in WidgetMeta, add ui.visibility array format, and add ModelOnly visibility variant
+**Requirements**: COMPAT-01, COMPAT-02, COMPAT-03, COMPAT-04
+**Depends on:** Phase 39
+**Plans:** 2/2 plans complete
+
+Plans:
+- [ ] 40-01-PLAN.md — Add legacy flat key ui/resourceUri to build_meta_map() for ext-apps backward compat
+- [ ] 40-02-PLAN.md — Dual-emit nested ui.csp/ui.domain in WidgetMeta, add ModelOnly to ToolVisibility, emit ui.visibility array in ChatGptToolMeta
+
+### Phase 41: ChatGPT MCP Apps Upgraded Version
+
+**Goal:** Align SDK types, bridge protocol, and scaffold template with ChatGPT's official MCP Apps protocol -- add _meta to Content::Resource, fix MIME type, update bridge method names, fix scaffold
+**Requirements**: P41-01, P41-02, P41-03, P41-04, P41-05
+**Depends on:** Phase 40
+**Plans:** 3/3 plans complete
+
+Plans:
+- [ ] 41-01-PLAN.md — Add _meta to Content::Resource, fix ChatGptAdapter MIME type to HtmlMcpApp
+- [ ] 41-02-PLAN.md — Update bridge protocol method names in widget-runtime.mjs and index.html
+- [ ] 41-03-PLAN.md — Update scaffold template with correct MIME type, with_ui(), and resource _meta
