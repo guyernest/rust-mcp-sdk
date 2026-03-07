@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Completed 41-03-PLAN.md
-last_updated: "2026-03-07T06:28:05.266Z"
+stopped_at: Phase 42 context gathered
+last_updated: "2026-03-07T22:14:29.058Z"
 last_activity: 2026-03-07 -- Completed 41-03 scaffold template HtmlMcpApp, with_ui, and _meta
 progress:
-  total_phases: 15
+  total_phases: 16
   completed_phases: 8
   total_plans: 16
   completed_plans: 15
@@ -85,6 +85,7 @@ v1.6 decisions:
 - Phases 35-39 added: MCP Apps code quality improvements (meta key constants, MIME type unification, TypedSyncTool UI, ToolInfo caching, ui meta merge)
 - Phase 40 added: Review ChatGPT Compatibility for Apps
 - Phase 41 added: ChatGPT MCP Apps Upgraded Version
+- Phase 42 added: Add outputSchema top level support
 
 ### Pending Todos
 
@@ -96,6 +97,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-07T06:21:44Z
-Stopped at: Completed 41-03-PLAN.md
+Last session: 2026-03-07T22:14:29.055Z
+Stopped at: Phase 42 context gathered
 Resume: Phase 41 complete -- all 3 plans done, scaffold template ChatGPT-compatible
