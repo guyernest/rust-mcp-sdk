@@ -378,10 +378,7 @@ mod tests {
 
         let chatgpt = multi.for_host(HostType::ChatGpt);
         assert!(chatgpt.is_some());
-        assert_eq!(
-            chatgpt.unwrap().mime_type,
-            ExtendedUIMimeType::HtmlMcpApp
-        );
+        assert_eq!(chatgpt.unwrap().mime_type, ExtendedUIMimeType::HtmlMcpApp);
 
         let generic = multi.for_host(HostType::Generic);
         assert!(generic.is_some());
