@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 ## Current Position
 
 Phase: 40 (review-chatgpt-compatibility-for-apps)
-Plan: 1 of 2
-Status: 40-01 complete -- legacy flat key added to build_meta_map
-Last activity: 2026-03-07 -- Completed 40-01 add legacy flat key to build_meta_map
+Plan: 2 of 2 (complete)
+Status: Phase 40 complete -- dual-emit nested ui.csp/domain/visibility alongside flat openai/* keys
+Last activity: 2026-03-07 -- Completed 40-02 dual-emit CSP, domain, visibility
 
-Progress: [█████████░] 93%
+Progress: [██████████] 100%
 
 ## Shipped Milestones
 
@@ -72,6 +72,7 @@ v1.6 decisions:
 - [Phase 38]: Cache is sole source of truth for metadata; no fallback to handler.metadata() in hot paths; prompt_workflow() caches directly
 - [Phase 39]: deep_merge in ui.rs for recursive JSON object merging; with_meta_entry on ToolInfo for composable _meta; arrays replaced not concatenated
 - [Phase 39-02]: TypedToolWithOutput::with_ui() mirrors TypedTool::with_ui() for API consistency; all four tool types use identical deep_merge pattern
+- [Phase 40-02]: redirect_domains excluded from nested ui.csp (ChatGPT-specific); nested csp uses spec camelCase field names; ModelOnly variant added to ToolVisibility
 - [Phase 40-01]: Added legacy flat "ui/resourceUri" key to build_meta_map() matching official ext-apps dual-emit behavior
 
 ### Roadmap Evolution
@@ -91,6 +92,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-07T03:20:06Z
-Stopped at: Completed 40-01-PLAN.md
-Resume: Phase 40 plan 1 of 2 complete -- continue with 40-02
+Last session: 2026-03-07T03:24:04Z
+Stopped at: Completed 40-02-PLAN.md
+Resume: Phase 40 complete -- all plans executed
