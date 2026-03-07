@@ -78,7 +78,10 @@ fn test_tool_info_json_serialization_with_output_schema() {
 
     // outputSchema is top-level sibling to inputSchema
     assert!(json["outputSchema"].is_object());
-    assert_eq!(json["outputSchema"]["properties"]["result"]["type"], "string");
+    assert_eq!(
+        json["outputSchema"]["properties"]["result"]["type"],
+        "string"
+    );
 
     // annotations still has pmcp:outputTypeName
     assert_eq!(json["annotations"]["pmcp:outputTypeName"], "MyResult");
@@ -249,6 +252,61 @@ fn test_partial_annotations_deserialization() {
 }
 
 #[test]
+fn test_output_schema_json_format() {
+    // Verify JSON format matches MCP spec 2025-06-18:
+    // outputSchema is a top-level sibling to inputSchema, NOT inside annotations
+    let input_schema = json!({
+        "type": "object",
+        "properties": {
+            "query": { "type": "string" }
+        },
+        "required": ["query"]
+    });
+
+    let output_schema = json!({
+        "type": "object",
+        "properties": {
+            "rows": { "type": "array" },
+            "count": { "type": "integer" }
+        },
+        "required": ["rows", "count"]
+    });
+
+    let tool = ToolInfo::with_annotations(
+        "search",
+        Some("Search items".to_string()),
+        input_schema.clone(),
+        ToolAnnotations::new()
+            .with_read_only(true)
+            .with_output_type_name("SearchResult"),
+    )
+    .with_output_schema(output_schema.clone());
+
+    let json = serde_json::to_value(&tool).unwrap();
+
+    // outputSchema at top level (sibling to inputSchema)
+    assert_eq!(json["inputSchema"], input_schema);
+    assert_eq!(json["outputSchema"], output_schema);
+
+    // pmcp:outputTypeName in annotations
+    assert_eq!(json["annotations"]["pmcp:outputTypeName"], "SearchResult");
+    assert_eq!(json["annotations"]["readOnlyHint"], true);
+
+    // outputSchema must NOT appear inside annotations
+    assert!(json["annotations"].get("outputSchema").is_none());
+    assert!(json["annotations"].get("pmcp:outputSchema").is_none());
+
+    // When output_schema is None, outputSchema key should NOT appear
+    let tool_no_output = ToolInfo::new(
+        "simple",
+        Some("Simple tool".to_string()),
+        json!({"type": "object"}),
+    );
+    let json_no_output = serde_json::to_value(&tool_no_output).unwrap();
+    assert!(json_no_output.get("outputSchema").is_none());
+}
+
+#[test]
 fn test_output_schema_complex_types() {
     // Test with a complex nested schema on ToolInfo
     let schema = json!({
@@ -276,8 +334,7 @@ fn test_output_schema_complex_types() {
         "required": ["users", "total_count", "has_more"]
     });
 
-    let annotations = ToolAnnotations::new()
-        .with_output_type_name("UserListResponse");
+    let annotations = ToolAnnotations::new().with_output_type_name("UserListResponse");
 
     let tool = ToolInfo::with_annotations(
         "list_users",
@@ -293,8 +350,5 @@ fn test_output_schema_complex_types() {
     // Verify the complex schema round-trips correctly
     assert_eq!(restored.output_schema, Some(schema));
     let ann = restored.annotations.as_ref().unwrap();
-    assert_eq!(
-        ann.output_type_name,
-        Some("UserListResponse".to_string())
-    );
+    assert_eq!(ann.output_type_name, Some("UserListResponse".to_string()));
 }
