@@ -253,6 +253,61 @@ pub struct ToolUIMetadata {
     pub additional: HashMap<String, serde_json::Value>,
 }
 
+/// Recursively merge `overlay` into `base` in place.
+///
+/// - If both `base[key]` and the overlay value are JSON objects, they are
+///   merged recursively (deep merge).
+/// - Arrays and all other leaf values are **replaced** entirely by the
+///   overlay (last-in wins). A `tracing::debug!` message is emitted when
+///   an existing non-object key is overwritten.
+/// - New keys from `overlay` are inserted directly.
+///
+/// # Example
+///
+/// ```rust
+/// use serde_json::json;
+///
+/// let mut base = serde_json::Map::new();
+/// base.insert("ui".into(), json!({"resourceUri": "ui://x"}));
+///
+/// let mut overlay = serde_json::Map::new();
+/// overlay.insert("ui".into(), json!({"prefersBorder": true}));
+///
+/// pmcp::types::ui::deep_merge(&mut base, overlay);
+///
+/// assert_eq!(base["ui"]["resourceUri"], "ui://x");
+/// assert_eq!(base["ui"]["prefersBorder"], true);
+/// ```
+pub fn deep_merge(
+    base: &mut serde_json::Map<String, serde_json::Value>,
+    overlay: serde_json::Map<String, serde_json::Value>,
+) {
+    for (key, overlay_value) in overlay {
+        match base.get_mut(&key) {
+            Some(base_value)
+                if base_value.is_object() && overlay_value.is_object() =>
+            {
+                // Both are objects: recurse
+                let base_obj = base_value.as_object_mut().expect("checked is_object");
+                let overlay_obj = overlay_value
+                    .as_object()
+                    .expect("checked is_object")
+                    .clone();
+                deep_merge(base_obj, overlay_obj);
+            }
+            Some(_existing) => {
+                // Leaf collision: last-in wins
+                tracing::debug!(key = %key, "deep_merge: overwriting existing _meta key");
+                base.insert(key, overlay_value);
+            }
+            None => {
+                // New key: just insert
+                base.insert(key, overlay_value);
+            }
+        }
+    }
+}
+
 impl ToolUIMetadata {
     /// Create new tool UI metadata
     pub fn new() -> Self {
@@ -335,6 +390,7 @@ impl ToolUIMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_ui_resource_creation() {
@@ -450,6 +506,80 @@ mod tests {
             meta.additional.get("custom"),
             Some(&serde_json::Value::String("value".to_string()))
         );
+    }
+
+    #[test]
+    fn test_deep_merge_disjoint_keys() {
+        let mut base = serde_json::Map::new();
+        base.insert("a".into(), json!(1));
+        let mut overlay = serde_json::Map::new();
+        overlay.insert("b".into(), json!(2));
+        super::deep_merge(&mut base, overlay);
+        assert_eq!(base.get("a"), Some(&json!(1)));
+        assert_eq!(base.get("b"), Some(&json!(2)));
+    }
+
+    #[test]
+    fn test_deep_merge_nested_objects() {
+        let mut base = serde_json::Map::new();
+        base.insert("ui".into(), json!({"resourceUri": "x"}));
+        let mut overlay = serde_json::Map::new();
+        overlay.insert("ui".into(), json!({"prefersBorder": true}));
+        super::deep_merge(&mut base, overlay);
+        let ui = base.get("ui").unwrap();
+        assert_eq!(ui["resourceUri"], "x");
+        assert_eq!(ui["prefersBorder"], true);
+    }
+
+    #[test]
+    fn test_deep_merge_leaf_collision_last_in_wins() {
+        let mut base = serde_json::Map::new();
+        base.insert("key".into(), json!("old"));
+        let mut overlay = serde_json::Map::new();
+        overlay.insert("key".into(), json!("new"));
+        super::deep_merge(&mut base, overlay);
+        assert_eq!(base.get("key"), Some(&json!("new")));
+    }
+
+    #[test]
+    fn test_deep_merge_array_replaced_not_concatenated() {
+        let mut base = serde_json::Map::new();
+        base.insert("tags".into(), json!(["a", "b"]));
+        let mut overlay = serde_json::Map::new();
+        overlay.insert("tags".into(), json!(["c"]));
+        super::deep_merge(&mut base, overlay);
+        assert_eq!(base.get("tags"), Some(&json!(["c"])));
+    }
+
+    #[test]
+    fn test_deep_merge_empty_overlay() {
+        let mut base = serde_json::Map::new();
+        base.insert("a".into(), json!(1));
+        let overlay = serde_json::Map::new();
+        super::deep_merge(&mut base, overlay);
+        assert_eq!(base.get("a"), Some(&json!(1)));
+        assert_eq!(base.len(), 1);
+    }
+
+    #[test]
+    fn test_deep_merge_empty_base() {
+        let mut base = serde_json::Map::new();
+        let mut overlay = serde_json::Map::new();
+        overlay.insert("b".into(), json!(2));
+        super::deep_merge(&mut base, overlay);
+        assert_eq!(base.get("b"), Some(&json!(2)));
+    }
+
+    #[test]
+    fn test_deep_merge_three_levels_deep() {
+        let mut base = serde_json::Map::new();
+        base.insert("a".into(), json!({"b": {"c": 1}}));
+        let mut overlay = serde_json::Map::new();
+        overlay.insert("a".into(), json!({"b": {"d": 2}}));
+        super::deep_merge(&mut base, overlay);
+        let a = base.get("a").unwrap();
+        assert_eq!(a["b"]["c"], 1);
+        assert_eq!(a["b"]["d"], 2);
     }
 
     #[test]
