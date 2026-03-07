@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Completed 41-02-PLAN.md
-last_updated: "2026-03-07T06:12:28Z"
-last_activity: 2026-03-07 -- Completed 41-02 bridge protocol method names alignment
+stopped_at: Completed 41-01-PLAN.md
+last_updated: "2026-03-07T06:17:02.578Z"
+last_activity: 2026-03-07 -- Completed 41-01 resource _meta and HtmlMcpApp MIME type
 progress:
-  total_phases: 14
+  total_phases: 15
   completed_phases: 7
-  total_plans: 13
-  completed_plans: 12
+  total_plans: 16
+  completed_plans: 14
   percent: 100
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 ## Current Position
 
 Phase: 41 (chatgpt-mcp-apps-upgraded-version)
-Plan: 2 of 3 (in progress)
-Status: Completed 41-02 -- bridge protocol method names aligned with official ChatGPT spec
-Last activity: 2026-03-07 -- Completed 41-02 bridge protocol method names alignment
+Plan: 1 of 3 (in progress)
+Status: Completed 41-01 -- resource _meta field and ChatGPT MIME type fix
+Last activity: 2026-03-07 -- Completed 41-01 resource _meta and HtmlMcpApp MIME type
 
 Progress: [██████████] 100%
 
@@ -75,6 +75,7 @@ v1.6 decisions:
 - [Phase 40-02]: redirect_domains excluded from nested ui.csp (ChatGPT-specific); nested csp uses spec camelCase field names; ModelOnly variant added to ToolVisibility
 - [Phase 40-01]: Added legacy flat "ui/resourceUri" key to build_meta_map() matching official ext-apps dual-emit behavior
 - [Phase 41-02]: AppBridge class in widget-runtime.mjs (not index.html); fall-through switch for backward compat; ui/notifications/initialized via setTimeout(0)
+- [Phase 41]: Used field name meta with serde rename to _meta since leading underscores not idiomatic Rust
 
 ### Roadmap Evolution
 
@@ -94,6 +95,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-07T06:12:28Z
-Stopped at: Completed 41-02-PLAN.md
+Last session: 2026-03-07T06:17:02.575Z
+Stopped at: Completed 41-01-PLAN.md
 Resume: Phase 41 plan 02 complete -- bridge protocol aligned with ChatGPT spec
