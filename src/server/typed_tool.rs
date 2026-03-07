@@ -490,6 +490,7 @@ where
     input_schema: Value,
     output_schema: Option<Value>,
     annotations: Option<ToolAnnotations>,
+    ui_resource_uri: Option<String>,
     handler: F,
     _phantom: PhantomData<(TIn, TOut)>,
 }
@@ -509,6 +510,7 @@ where
             .field("input_schema", &self.input_schema)
             .field("output_schema", &self.output_schema)
             .field("annotations", &self.annotations)
+            .field("ui_resource_uri", &self.ui_resource_uri)
             .finish()
     }
 }
@@ -537,6 +539,7 @@ where
             input_schema,
             output_schema,
             annotations: None,
+            ui_resource_uri: None,
             handler,
             _phantom: PhantomData,
         }
@@ -556,6 +559,7 @@ where
             input_schema,
             output_schema: None,
             annotations: None,
+            ui_resource_uri: None,
             handler,
             _phantom: PhantomData,
         }
@@ -574,6 +578,7 @@ where
             input_schema,
             output_schema,
             annotations: None,
+            ui_resource_uri: None,
             handler,
             _phantom: PhantomData,
         }
@@ -658,6 +663,16 @@ where
     pub fn output_schema(&self) -> Option<&Value> {
         self.output_schema.as_ref()
     }
+
+    /// Associate this tool with a UI resource (MCP Apps Extension).
+    ///
+    /// Sets `_meta.ui.resourceUri` and `openai/outputTemplate` in the tool's
+    /// `ToolInfo` metadata for MCP and ChatGPT host compatibility.
+    /// Deep-merged with any other `_meta` entries to prevent collision.
+    pub fn with_ui(mut self, ui_resource_uri: impl Into<String>) -> Self {
+        self.ui_resource_uri = Some(ui_resource_uri.into());
+        self
+    }
 }
 
 #[async_trait]
@@ -705,6 +720,12 @@ where
             || annotations.open_world_hint.is_some()
             || annotations.output_schema.is_some();
 
+        let mut meta = serde_json::Map::new();
+        if let Some(uri) = &self.ui_resource_uri {
+            let ui_meta = crate::types::ui::ToolUIMetadata::build_meta_map(uri);
+            crate::types::ui::deep_merge(&mut meta, ui_meta);
+        }
+
         Some(ToolInfo {
             name: self.name.clone(),
             description: self.description.clone(),
@@ -714,7 +735,7 @@ where
             } else {
                 None
             },
-            _meta: None,
+            _meta: if meta.is_empty() { None } else { Some(meta) },
             execution: None,
         })
     }
@@ -789,6 +810,85 @@ mod tests {
             "test_sync_tool",
             json!({"type": "object"}),
             |_args: serde_json::Value, _extra| Ok(json!({})),
+        );
+
+        let info = tool.metadata().unwrap();
+        assert!(info._meta.is_none(), "_meta should be None without UI");
+    }
+
+    #[test]
+    fn test_typed_tool_with_output_with_ui_metadata() {
+        let tool = TypedToolWithOutput::new_with_schemas(
+            "ui_output_tool",
+            json!({"type": "object"}),
+            None,
+            |_args: serde_json::Value, _extra: RequestHandlerExtra| {
+                Box::pin(async { Ok(json!({"result": "ok"})) })
+            },
+        )
+        .with_ui("ui://widgets/dashboard.html");
+
+        let info = tool.metadata().unwrap();
+        let meta = info._meta.as_ref().expect("_meta should be present");
+
+        // Must have nested ui.resourceUri
+        let ui_obj = meta.get("ui").expect("must have nested 'ui' key");
+        assert_eq!(ui_obj["resourceUri"], "ui://widgets/dashboard.html");
+
+        // Must have openai/outputTemplate
+        assert_eq!(
+            meta.get("openai/outputTemplate").unwrap(),
+            &serde_json::Value::String("ui://widgets/dashboard.html".to_string())
+        );
+    }
+
+    #[test]
+    fn test_typed_tool_with_output_with_ui_and_output_schema_coexist() {
+        let output_schema = json!({
+            "type": "object",
+            "title": "DashboardResult",
+            "properties": {
+                "data": { "type": "array" }
+            }
+        });
+
+        let tool = TypedToolWithOutput::new_with_schemas(
+            "ui_schema_tool",
+            json!({"type": "object"}),
+            Some(output_schema),
+            |_args: serde_json::Value, _extra: RequestHandlerExtra| {
+                Box::pin(async { Ok(json!({"data": []})) })
+            },
+        )
+        .with_ui("ui://charts/bar.html");
+
+        let info = tool.metadata().unwrap();
+
+        // _meta must have UI metadata
+        let meta = info._meta.as_ref().expect("_meta should be present with UI");
+        assert!(meta.get("ui").is_some(), "ui key must be present");
+        assert!(
+            meta.get("openai/outputTemplate").is_some(),
+            "openai/outputTemplate must be present"
+        );
+
+        // annotations must have output_schema
+        let annotations = info.annotations.as_ref().expect("annotations should be present");
+        assert!(
+            annotations.output_schema.is_some(),
+            "output_schema annotation must be present"
+        );
+    }
+
+    #[test]
+    fn test_typed_tool_with_output_without_ui_has_no_meta() {
+        let tool = TypedToolWithOutput::new_with_schemas(
+            "no_ui_tool",
+            json!({"type": "object"}),
+            None,
+            |_args: serde_json::Value, _extra: RequestHandlerExtra| {
+                Box::pin(async { Ok(json!({})) })
+            },
         );
 
         let info = tool.metadata().unwrap();
