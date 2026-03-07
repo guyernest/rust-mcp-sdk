@@ -228,10 +228,10 @@ Plans:
 
 ### Phase 35: Add meta key constants module for UI/MCP Apps strings
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Align SDK types, bridge protocol, and scaffold template with ChatGPT's official MCP Apps protocol -- add _meta to Content::Resource, fix MIME type, update bridge method names, fix scaffold
+**Requirements**: P41-01, P41-02, P41-03, P41-04, P41-05
 **Depends on:** Phase 34
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 35 to break down)
@@ -287,3 +287,15 @@ Plans:
 Plans:
 - [ ] 40-01-PLAN.md — Add legacy flat key ui/resourceUri to build_meta_map() for ext-apps backward compat
 - [ ] 40-02-PLAN.md — Dual-emit nested ui.csp/ui.domain in WidgetMeta, add ModelOnly to ToolVisibility, emit ui.visibility array in ChatGptToolMeta
+
+### Phase 41: ChatGPT MCP Apps Upgraded Version
+
+**Goal:** Align SDK types, bridge protocol, and scaffold template with ChatGPT's official MCP Apps protocol -- add _meta to Content::Resource, fix MIME type, update bridge method names, fix scaffold
+**Requirements**: P41-01, P41-02, P41-03, P41-04, P41-05
+**Depends on:** Phase 40
+**Plans:** 3 plans
+
+Plans:
+- [ ] 41-01-PLAN.md — Add _meta to Content::Resource, fix ChatGptAdapter MIME type to HtmlMcpApp
+- [ ] 41-02-PLAN.md — Update bridge protocol method names in widget-runtime.mjs and index.html
+- [ ] 41-03-PLAN.md — Update scaffold template with correct MIME type, with_ui(), and resource _meta
