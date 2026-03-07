@@ -227,18 +227,12 @@ where
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
-        let mut meta = serde_json::Map::new();
-        if let Some(uri) = &self.ui_resource_uri {
-            let ui_meta = crate::types::ui::ToolUIMetadata::build_meta_map(uri);
-            crate::types::ui::deep_merge(&mut meta, ui_meta);
-        }
-
         Some(ToolInfo {
             name: self.name.clone(),
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
             annotations: self.annotations.clone(),
-            _meta: if meta.is_empty() { None } else { Some(meta) },
+            _meta: crate::types::ui::build_ui_meta(self.ui_resource_uri.as_deref()),
             execution: None,
         })
     }
@@ -395,18 +389,12 @@ where
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
-        let mut meta = serde_json::Map::new();
-        if let Some(uri) = &self.ui_resource_uri {
-            let ui_meta = crate::types::ui::ToolUIMetadata::build_meta_map(uri);
-            crate::types::ui::deep_merge(&mut meta, ui_meta);
-        }
-
         Some(ToolInfo {
             name: self.name.clone(),
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
             annotations: self.annotations.clone(),
-            _meta: if meta.is_empty() { None } else { Some(meta) },
+            _meta: crate::types::ui::build_ui_meta(self.ui_resource_uri.as_deref()),
             execution: None,
         })
     }
@@ -667,7 +655,7 @@ where
     /// Associate this tool with a UI resource (MCP Apps Extension).
     ///
     /// Sets `_meta.ui.resourceUri` and `openai/outputTemplate` in the tool's
-    /// `ToolInfo` metadata for MCP and ChatGPT host compatibility.
+    /// `ToolInfo` metadata for MCP and `ChatGPT` host compatibility.
     /// Deep-merged with any other `_meta` entries to prevent collision.
     pub fn with_ui(mut self, ui_resource_uri: impl Into<String>) -> Self {
         self.ui_resource_uri = Some(ui_resource_uri.into());
@@ -720,12 +708,6 @@ where
             || annotations.open_world_hint.is_some()
             || annotations.output_schema.is_some();
 
-        let mut meta = serde_json::Map::new();
-        if let Some(uri) = &self.ui_resource_uri {
-            let ui_meta = crate::types::ui::ToolUIMetadata::build_meta_map(uri);
-            crate::types::ui::deep_merge(&mut meta, ui_meta);
-        }
-
         Some(ToolInfo {
             name: self.name.clone(),
             description: self.description.clone(),
@@ -735,13 +717,14 @@ where
             } else {
                 None
             },
-            _meta: if meta.is_empty() { None } else { Some(meta) },
+            _meta: crate::types::ui::build_ui_meta(self.ui_resource_uri.as_deref()),
             execution: None,
         })
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::used_underscore_binding)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -865,7 +848,10 @@ mod tests {
         let info = tool.metadata().unwrap();
 
         // _meta must have UI metadata
-        let meta = info._meta.as_ref().expect("_meta should be present with UI");
+        let meta = info
+            ._meta
+            .as_ref()
+            .expect("_meta should be present with UI");
         assert!(meta.get("ui").is_some(), "ui key must be present");
         assert!(
             meta.get("openai/outputTemplate").is_some(),
@@ -873,7 +859,10 @@ mod tests {
         );
 
         // annotations must have output_schema
-        let annotations = info.annotations.as_ref().expect("annotations should be present");
+        let annotations = info
+            .annotations
+            .as_ref()
+            .expect("annotations should be present");
         assert!(
             annotations.output_schema.is_some(),
             "output_schema annotation must be present"

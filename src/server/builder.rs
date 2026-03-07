@@ -137,9 +137,9 @@ impl ServerCoreBuilder {
         let name = name.into();
         let handler = Arc::new(handler) as Arc<dyn ToolHandler>;
         // Cache metadata at registration time to avoid per-request cloning
-        let mut info = handler.metadata().unwrap_or_else(|| {
-            ToolInfo::new(name.clone(), None, serde_json::json!({}))
-        });
+        let mut info = handler
+            .metadata()
+            .unwrap_or_else(|| ToolInfo::new(name.clone(), None, serde_json::json!({})));
         info.name.clone_from(&name);
         self.tool_infos.insert(name.clone(), info);
         self.tools.insert(name, handler);
@@ -161,9 +161,9 @@ impl ServerCoreBuilder {
     pub fn tool_arc(mut self, name: impl Into<String>, handler: Arc<dyn ToolHandler>) -> Self {
         let name = name.into();
         // Cache metadata at registration time to avoid per-request cloning
-        let mut info = handler.metadata().unwrap_or_else(|| {
-            ToolInfo::new(name.clone(), None, serde_json::json!({}))
-        });
+        let mut info = handler
+            .metadata()
+            .unwrap_or_else(|| ToolInfo::new(name.clone(), None, serde_json::json!({})));
         info.name.clone_from(&name);
         self.tool_infos.insert(name.clone(), info);
         self.tools.insert(name, handler);

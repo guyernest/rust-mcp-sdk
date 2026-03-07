@@ -321,9 +321,9 @@ impl ToolInfo {
 
     /// Create a new `ToolInfo` with UI resource metadata.
     ///
-    /// Produces nested `_meta` format compatible with both MCP standard and ChatGPT:
+    /// Produces nested `_meta` format compatible with both MCP standard and `ChatGPT`:
     /// - `_meta.ui.resourceUri` - MCP standard nested format
-    /// - `_meta["openai/outputTemplate"]` - ChatGPT alias for the same URI
+    /// - `_meta["openai/outputTemplate"]` - `ChatGPT` alias for the same URI
     pub fn with_ui(
         name: impl Into<String>,
         description: Option<String>,
@@ -341,6 +341,32 @@ impl ToolInfo {
             _meta: Some(meta),
             execution: None,
         }
+    }
+
+    /// Add widget metadata, deep-merging into existing `_meta`.
+    ///
+    /// This merges `WidgetMeta::to_meta_map()` into the tool's `_meta`,
+    /// correctly combining nested `ui` objects so that `ui.resourceUri`
+    /// and widget fields like `ui.prefersBorder` coexist.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use pmcp::types::ToolInfo;
+    /// use pmcp::types::mcp_apps::WidgetMeta;
+    /// use serde_json::json;
+    ///
+    /// let tool = ToolInfo::with_ui("my_tool", None, json!({"type": "object"}), "ui://w/app.html")
+    ///     .with_widget_meta(WidgetMeta::new().prefers_border(true));
+    /// // _meta.ui = { "resourceUri": "ui://w/app.html", "prefersBorder": true }
+    /// ```
+    #[cfg(feature = "mcp-apps")]
+    #[allow(clippy::used_underscore_binding, clippy::needless_pass_by_value)]
+    pub fn with_widget_meta(mut self, widget: crate::types::mcp_apps::WidgetMeta) -> Self {
+        let meta = self._meta.get_or_insert_with(serde_json::Map::new);
+        let overlay = widget.to_meta_map();
+        crate::types::ui::deep_merge(meta, overlay);
+        self
     }
 
     /// Add a single key-value pair to `_meta`, merging with existing entries.
@@ -374,14 +400,12 @@ impl ToolInfo {
     ///
     /// Single-pass check: returns `Some` only when `_meta` contains a
     /// recognised widget key, `None` otherwise.
+    #[allow(clippy::used_underscore_binding)]
     pub fn widget_meta(&self) -> Option<&serde_json::Map<String, Value>> {
         self._meta.as_ref().filter(|meta| {
             meta.contains_key("openai/outputTemplate")
                 || meta.contains_key("ui/resourceUri")
-                || meta
-                    .get("ui")
-                    .and_then(|v| v.get("resourceUri"))
-                    .is_some()
+                || meta.get("ui").and_then(|v| v.get("resourceUri")).is_some()
         })
     }
 }
@@ -1924,12 +1948,7 @@ mod tests {
 
     #[test]
     fn test_tool_info_with_ui_nested_format() {
-        let tool = ToolInfo::with_ui(
-            "my_tool",
-            None,
-            json!({"type": "object"}),
-            "ui://w/x.html",
-        );
+        let tool = ToolInfo::with_ui("my_tool", None, json!({"type": "object"}), "ui://w/x.html");
 
         let meta = tool._meta.as_ref().unwrap();
 
@@ -1937,21 +1956,17 @@ mod tests {
         let ui_obj = meta.get("ui").expect("must have nested 'ui' key");
         assert_eq!(ui_obj["resourceUri"], "ui://w/x.html");
 
-        // Must NOT have flat "ui/resourceUri" key
-        assert!(
-            meta.get("ui/resourceUri").is_none(),
-            "must not have flat ui/resourceUri key"
+        // Must also have legacy flat "ui/resourceUri" key for backward compat
+        assert_eq!(
+            meta.get("ui/resourceUri"),
+            Some(&json!("ui://w/x.html")),
+            "must have legacy flat ui/resourceUri key"
         );
     }
 
     #[test]
     fn test_tool_info_with_ui_openai_output_template() {
-        let tool = ToolInfo::with_ui(
-            "my_tool",
-            None,
-            json!({"type": "object"}),
-            "ui://w/x.html",
-        );
+        let tool = ToolInfo::with_ui("my_tool", None, json!({"type": "object"}), "ui://w/x.html");
 
         let meta = tool._meta.as_ref().unwrap();
 
@@ -2011,7 +2026,10 @@ mod tests {
         let mut initial = serde_json::Map::new();
         initial.insert("ui".into(), json!({"resourceUri": "ui://x"}));
         let tool = ToolInfo::new("t", None, json!({"type": "object"}));
-        let tool = ToolInfo { _meta: Some(initial), ..tool };
+        let tool = ToolInfo {
+            _meta: Some(initial),
+            ..tool
+        };
         let tool = tool.with_meta_entry("execution", json!({"mode": "async"}));
         let meta = tool._meta.unwrap();
         assert_eq!(meta["ui"]["resourceUri"], "ui://x");
@@ -2023,7 +2041,10 @@ mod tests {
         let mut initial = serde_json::Map::new();
         initial.insert("ui".into(), json!({"resourceUri": "ui://x"}));
         let tool = ToolInfo::new("t", None, json!({"type": "object"}));
-        let tool = ToolInfo { _meta: Some(initial), ..tool };
+        let tool = ToolInfo {
+            _meta: Some(initial),
+            ..tool
+        };
         let tool = tool.with_meta_entry("ui", json!({"prefersBorder": true}));
         let meta = tool._meta.unwrap();
         assert_eq!(meta["ui"]["resourceUri"], "ui://x");
@@ -2047,5 +2068,48 @@ mod tests {
         let meta = tool._meta.unwrap();
         assert_eq!(meta["ui"]["resourceUri"], "ui://y");
         assert!(meta.contains_key("openai/outputTemplate"));
+    }
+
+    #[test]
+    #[cfg(feature = "mcp-apps")]
+    fn test_with_widget_meta_merges_with_ui() {
+        use crate::types::mcp_apps::WidgetMeta;
+
+        let tool = ToolInfo::with_ui("t", None, json!({"type": "object"}), "ui://w/app.html")
+            .with_widget_meta(WidgetMeta::new().prefers_border(true).domain("x.com"));
+        let meta = tool._meta.unwrap();
+
+        // URI keys preserved from with_ui
+        assert_eq!(meta["ui"]["resourceUri"], "ui://w/app.html");
+        assert_eq!(meta["ui/resourceUri"], "ui://w/app.html");
+        assert_eq!(meta["openai/outputTemplate"], "ui://w/app.html");
+
+        // Widget fields deep-merged into the same ui object
+        assert_eq!(meta["ui"]["prefersBorder"], true);
+        assert_eq!(meta["ui"]["domain"], "x.com");
+
+        // Flat widget keys also present
+        assert_eq!(meta["openai/widgetPrefersBorder"], true);
+        assert_eq!(meta["openai/widgetDomain"], "x.com");
+    }
+
+    #[test]
+    #[cfg(feature = "mcp-apps")]
+    fn test_with_widget_meta_on_empty_meta() {
+        use crate::types::mcp_apps::WidgetMeta;
+
+        let tool = ToolInfo::new("t", None, json!({"type": "object"})).with_widget_meta(
+            WidgetMeta::new()
+                .resource_uri("ui://w/app.html")
+                .prefers_border(true),
+        );
+        let meta = tool._meta.unwrap();
+
+        // All keys produced from WidgetMeta alone
+        assert_eq!(meta["ui"]["resourceUri"], "ui://w/app.html");
+        assert_eq!(meta["ui"]["prefersBorder"], true);
+        assert_eq!(meta["ui/resourceUri"], "ui://w/app.html");
+        assert_eq!(meta["openai/outputTemplate"], "ui://w/app.html");
+        assert_eq!(meta["openai/widgetPrefersBorder"], true);
     }
 }

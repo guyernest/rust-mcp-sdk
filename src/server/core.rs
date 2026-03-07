@@ -352,7 +352,7 @@ impl ServerCore {
 
         // Enrich with widget metadata so widgets can access data via toolOutput.
         if let Some(info) = self.tool_infos.get(&req.name) {
-            call_result = call_result.with_widget_enrichment(info.clone(), value);
+            call_result = call_result.with_widget_enrichment(info, value);
         }
 
         Ok(call_result)
@@ -689,10 +689,9 @@ impl ServerCore {
                             let tool_execution = self
                                 .tool_infos
                                 .get(&req.name)
-                                .and_then(|m| m.execution.clone());
+                                .and_then(|m| m.execution.as_ref());
                             let needs_task = req.task.is_some()
-                                || task_router
-                                    .tool_requires_task(&req.name, tool_execution.as_ref());
+                                || task_router.tool_requires_task(&req.name, tool_execution);
                             if needs_task {
                                 let owner_id = self
                                     .resolve_task_owner(auth_context.as_ref())
@@ -902,14 +901,16 @@ mod tests {
         }
     }
 
-    /// Build tool_infos cache from a tools HashMap (mirrors builder logic).
-    fn build_tool_infos(tools: &HashMap<String, Arc<dyn ToolHandler>>) -> HashMap<String, ToolInfo> {
+    /// Build `tool_infos` cache from a tools `HashMap` (mirrors builder logic).
+    fn build_tool_infos(
+        tools: &HashMap<String, Arc<dyn ToolHandler>>,
+    ) -> HashMap<String, ToolInfo> {
         tools
             .iter()
             .map(|(name, handler)| {
-                let mut info = handler.metadata().unwrap_or_else(|| {
-                    ToolInfo::new(name.clone(), None, serde_json::json!({}))
-                });
+                let mut info = handler
+                    .metadata()
+                    .unwrap_or_else(|| ToolInfo::new(name.clone(), None, serde_json::json!({})));
                 info.name.clone_from(name);
                 (name.clone(), info)
             })

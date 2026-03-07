@@ -105,18 +105,12 @@ where
     }
 
     fn info(&self) -> ToolInfo {
-        let mut meta = serde_json::Map::new();
-        if let Some(uri) = &self.ui_resource_uri {
-            let ui_meta = crate::types::ui::ToolUIMetadata::build_meta_map(uri);
-            crate::types::ui::deep_merge(&mut meta, ui_meta);
-        }
-
         ToolInfo {
             name: self.name.clone(),
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
             annotations: None,
-            _meta: if meta.is_empty() { None } else { Some(meta) },
+            _meta: crate::types::ui::build_ui_meta(self.ui_resource_uri.as_deref()),
             execution: None,
         }
     }

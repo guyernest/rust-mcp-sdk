@@ -284,9 +284,7 @@ pub fn deep_merge(
 ) {
     for (key, overlay_value) in overlay {
         match base.get_mut(&key) {
-            Some(base_value)
-                if base_value.is_object() && overlay_value.is_object() =>
-            {
+            Some(base_value) if base_value.is_object() && overlay_value.is_object() => {
                 // Both are objects: recurse
                 let base_obj = base_value.as_object_mut().expect("checked is_object");
                 let overlay_obj = overlay_value
@@ -294,18 +292,34 @@ pub fn deep_merge(
                     .expect("checked is_object")
                     .clone();
                 deep_merge(base_obj, overlay_obj);
-            }
+            },
             Some(_existing) => {
                 // Leaf collision: last-in wins
                 tracing::debug!(key = %key, "deep_merge: overwriting existing _meta key");
                 base.insert(key, overlay_value);
-            }
+            },
             None => {
                 // New key: just insert
                 base.insert(key, overlay_value);
-            }
+            },
         }
     }
+}
+
+/// Emit the standard triple-key resource URI format into maps.
+///
+/// Inserts `resourceUri` into `ui_obj` (nested) and both `ui/resourceUri`
+/// (legacy flat) and `openai/outputTemplate` (`ChatGPT` alias) into `map`.
+/// Single source of truth for the ext-apps dual-emit pattern.
+pub fn emit_resource_uri_keys(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    ui_obj: &mut serde_json::Map<String, serde_json::Value>,
+    uri: &str,
+) {
+    let uri_val = serde_json::Value::String(uri.to_string());
+    ui_obj.insert("resourceUri".to_string(), uri_val.clone());
+    map.insert("ui/resourceUri".to_string(), uri_val.clone());
+    map.insert("openai/outputTemplate".to_string(), uri_val);
 }
 
 /// Build `_meta` from an optional UI resource URI.
@@ -346,19 +360,8 @@ impl ToolUIMetadata {
     pub fn build_meta_map(uri: &str) -> serde_json::Map<String, serde_json::Value> {
         let mut meta = serde_json::Map::with_capacity(3);
         let mut ui_obj = serde_json::Map::with_capacity(1);
-        ui_obj.insert(
-            "resourceUri".to_string(),
-            serde_json::Value::String(uri.to_string()),
-        );
+        emit_resource_uri_keys(&mut meta, &mut ui_obj, uri);
         meta.insert("ui".to_string(), serde_json::Value::Object(ui_obj));
-        meta.insert(
-            "ui/resourceUri".to_string(),
-            serde_json::Value::String(uri.to_string()),
-        );
-        meta.insert(
-            "openai/outputTemplate".to_string(),
-            serde_json::Value::String(uri.to_string()),
-        );
         meta
     }
 
@@ -383,7 +386,12 @@ impl ToolUIMetadata {
 
         let additional = metadata
             .iter()
-            .filter(|(k, _)| !matches!(k.as_str(), "ui" | "ui/resourceUri" | "openai/outputTemplate"))
+            .filter(|(k, _)| {
+                !matches!(
+                    k.as_str(),
+                    "ui" | "ui/resourceUri" | "openai/outputTemplate"
+                )
+            })
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
@@ -613,17 +621,13 @@ mod tests {
         // 2. Legacy flat key
         assert_eq!(
             map.get("ui/resourceUri"),
-            Some(&serde_json::Value::String(
-                "ui://chess/board".to_string()
-            ))
+            Some(&serde_json::Value::String("ui://chess/board".to_string()))
         );
 
         // 3. OpenAI alias
         assert_eq!(
             map.get("openai/outputTemplate"),
-            Some(&serde_json::Value::String(
-                "ui://chess/board".to_string()
-            ))
+            Some(&serde_json::Value::String("ui://chess/board".to_string()))
         );
 
         // Exactly 3 top-level keys

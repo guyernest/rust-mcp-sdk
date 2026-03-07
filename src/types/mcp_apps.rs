@@ -176,6 +176,37 @@ impl WidgetCSP {
         self
     }
 
+    /// Serialize as a spec-compatible JSON map (ext-apps `McpUiResourceCsp` shape).
+    ///
+    /// Uses camelCase field names per spec. `redirect_domains` is excluded
+    /// because it is ChatGPT-specific and not part of the ext-apps spec.
+    pub fn to_spec_map(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut csp_obj = serde_json::Map::with_capacity(4);
+        if !self.connect_domains.is_empty() {
+            csp_obj.insert(
+                "connectDomains".into(),
+                serde_json::json!(self.connect_domains),
+            );
+        }
+        if !self.resource_domains.is_empty() {
+            csp_obj.insert(
+                "resourceDomains".into(),
+                serde_json::json!(self.resource_domains),
+            );
+        }
+        if let Some(frames) = &self.frame_domains {
+            if !frames.is_empty() {
+                csp_obj.insert("frameDomains".into(), serde_json::json!(frames));
+            }
+        }
+        if let Some(base_uris) = &self.base_uri_domains {
+            if !base_uris.is_empty() {
+                csp_obj.insert("baseUriDomains".into(), serde_json::json!(base_uris));
+            }
+        }
+        csp_obj
+    }
+
     /// Check if the CSP has any domains configured.
     pub fn is_empty(&self) -> bool {
         self.connect_domains.is_empty()
@@ -200,15 +231,29 @@ impl WidgetCSP {
 /// ```rust
 /// use pmcp::types::mcp_apps::{WidgetMeta, WidgetCSP};
 ///
+/// // Complete _meta in one builder — no separate build_meta_map needed
 /// let meta = WidgetMeta::new()
+///     .resource_uri("ui://chess/board.html")
 ///     .prefers_border(true)
 ///     .domain("https://chatgpt.com")
 ///     .description("Interactive chess board")
-///     .csp(WidgetCSP::new().connect("https://api.chess.com"));
+///     .csp(WidgetCSP::new().connect("https://api.chess.com"))
+///     .to_meta_map();
+/// // => { "ui": { "resourceUri": "...", "prefersBorder": true, "domain": "...", "csp": {...} },
+/// //      "ui/resourceUri": "...", "openai/outputTemplate": "...",
+/// //      "openai/widgetPrefersBorder": true, "openai/widgetDomain": "...", ... }
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema-generation", derive(JsonSchema))]
 pub struct WidgetMeta {
+    /// UI resource URI for this widget.
+    ///
+    /// When set, `to_meta_map()` emits the full triple-key format
+    /// (`ui.resourceUri`, `ui/resourceUri`, `openai/outputTemplate`),
+    /// eliminating the need for a separate `build_meta_map` call.
+    #[serde(skip)]
+    pub resource_uri: Option<String>,
+
     /// Whether widget prefers a border around it.
     #[serde(
         rename = "openai/widgetPrefersBorder",
@@ -245,6 +290,20 @@ impl WidgetMeta {
     /// Create empty widget metadata.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set the UI resource URI.
+    ///
+    /// When set, `to_meta_map()` emits the full triple-key format matching
+    /// the official `registerAppTool` behavior:
+    /// - `ui.resourceUri` (nested)
+    /// - `ui/resourceUri` (legacy flat)
+    /// - `openai/outputTemplate` (ChatGPT alias)
+    ///
+    /// This eliminates the need for a separate `build_meta_map` + merge step.
+    pub fn resource_uri(mut self, uri: impl Into<String>) -> Self {
+        self.resource_uri = Some(uri.into());
+        self
     }
 
     /// Set border preference.
@@ -286,6 +345,9 @@ impl WidgetMeta {
         };
         // Dual-emit: add nested ui object for MCP standard fields
         let mut ui_obj = serde_json::Map::new();
+        if let Some(uri) = &self.resource_uri {
+            crate::types::ui::emit_resource_uri_keys(&mut map, &mut ui_obj, uri);
+        }
         if let Some(prefers) = self.prefers_border {
             ui_obj.insert(
                 "prefersBorder".to_string(),
@@ -299,31 +361,7 @@ impl WidgetMeta {
             );
         }
         if let Some(csp) = &self.csp {
-            let mut csp_obj = serde_json::Map::new();
-            if !csp.connect_domains.is_empty() {
-                csp_obj.insert(
-                    "connectDomains".into(),
-                    serde_json::json!(csp.connect_domains),
-                );
-            }
-            if !csp.resource_domains.is_empty() {
-                csp_obj.insert(
-                    "resourceDomains".into(),
-                    serde_json::json!(csp.resource_domains),
-                );
-            }
-            if let Some(frames) = &csp.frame_domains {
-                if !frames.is_empty() {
-                    csp_obj.insert("frameDomains".into(), serde_json::json!(frames));
-                }
-            }
-            if let Some(base_uris) = &csp.base_uri_domains {
-                if !base_uris.is_empty() {
-                    csp_obj.insert("baseUriDomains".into(), serde_json::json!(base_uris));
-                }
-            }
-            // NOTE: redirect_domains is ChatGPT-specific, NOT part of the ext-apps spec.
-            // It stays in the flat openai/widgetCSP only.
+            let csp_obj = csp.to_spec_map();
             if !csp_obj.is_empty() {
                 ui_obj.insert("csp".to_string(), serde_json::Value::Object(csp_obj));
             }
@@ -336,7 +374,8 @@ impl WidgetMeta {
 
     /// Check if the metadata is empty (all fields are None).
     pub fn is_empty(&self) -> bool {
-        self.prefers_border.is_none()
+        self.resource_uri.is_none()
+            && self.prefers_border.is_none()
             && self.domain.is_none()
             && self.csp.is_none()
             && self.description.is_none()
@@ -381,11 +420,11 @@ impl ToolVisibility {
     /// - `Public` -> `["model", "app"]`
     /// - `Private` -> `["app"]`
     /// - `ModelOnly` -> `["model"]`
-    pub fn to_visibility_array(&self) -> Vec<&'static str> {
+    pub fn to_visibility_array(&self) -> &'static [&'static str] {
         match self {
-            Self::Public => vec!["model", "app"],
-            Self::Private => vec!["app"],
-            Self::ModelOnly => vec!["model"],
+            Self::Public => &["model", "app"],
+            Self::Private => &["app"],
+            Self::ModelOnly => &["model"],
         }
     }
 }
@@ -514,18 +553,12 @@ impl ChatGptToolMeta {
             .unwrap_or_default();
         // Dual-emit: nested ui.visibility array for MCP standard
         if let Some(vis) = &self.visibility {
-            let arr = vis.to_visibility_array();
-            let json_arr = serde_json::Value::Array(
-                arr.iter()
-                    .map(|s| serde_json::Value::String((*s).to_string()))
-                    .collect(),
+            let mut ui_obj = serde_json::Map::with_capacity(1);
+            ui_obj.insert(
+                "visibility".to_string(),
+                serde_json::json!(vis.to_visibility_array()),
             );
-            let ui_obj = map
-                .entry("ui".to_string())
-                .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
-            if let Some(obj) = ui_obj.as_object_mut() {
-                obj.insert("visibility".to_string(), json_arr);
-            }
+            map.insert("ui".to_string(), serde_json::Value::Object(ui_obj));
         }
         map
     }
@@ -1002,7 +1035,10 @@ impl HostType {
     /// Check if this host supports the given MIME type.
     pub fn supports_mime_type(&self, mime_type: ExtendedUIMimeType) -> bool {
         match self {
-            Self::ChatGpt => matches!(mime_type, ExtendedUIMimeType::HtmlSkybridge | ExtendedUIMimeType::HtmlMcpApp),
+            Self::ChatGpt => matches!(
+                mime_type,
+                ExtendedUIMimeType::HtmlSkybridge | ExtendedUIMimeType::HtmlMcpApp
+            ),
             Self::Claude | Self::Generic => matches!(mime_type, ExtendedUIMimeType::HtmlMcp),
             Self::Nanobot | Self::McpJam => mime_type.is_mcp_ui(),
         }
@@ -1241,9 +1277,7 @@ mod tests {
 
     #[test]
     fn test_widget_meta_dual_emit_with_domain() {
-        let meta = WidgetMeta::new()
-            .prefers_border(true)
-            .domain("x.com");
+        let meta = WidgetMeta::new().prefers_border(true).domain("x.com");
         let map = meta.to_meta_map();
 
         // prefersBorder in nested ui object
@@ -1458,7 +1492,10 @@ mod tests {
     #[test]
     fn test_widget_csp_is_empty_with_base_uri() {
         let csp = WidgetCSP::new().base_uri("https://example.com");
-        assert!(!csp.is_empty(), "CSP with base_uri_domains should not be empty");
+        assert!(
+            !csp.is_empty(),
+            "CSP with base_uri_domains should not be empty"
+        );
     }
 
     #[test]
@@ -1490,9 +1527,72 @@ mod tests {
 
     #[test]
     fn test_tool_visibility_to_visibility_array() {
-        assert_eq!(ToolVisibility::Public.to_visibility_array(), vec!["model", "app"]);
-        assert_eq!(ToolVisibility::Private.to_visibility_array(), vec!["app"]);
-        assert_eq!(ToolVisibility::ModelOnly.to_visibility_array(), vec!["model"]);
+        assert_eq!(
+            ToolVisibility::Public.to_visibility_array(),
+            &["model", "app"]
+        );
+        assert_eq!(ToolVisibility::Private.to_visibility_array(), &["app"]);
+        assert_eq!(ToolVisibility::ModelOnly.to_visibility_array(), &["model"]);
+    }
+
+    #[test]
+    fn test_widget_meta_resource_uri_emits_triple_keys() {
+        let meta = WidgetMeta::new().resource_uri("ui://chess/board.html");
+        let map = meta.to_meta_map();
+
+        // Nested ui.resourceUri
+        let ui_obj = map.get("ui").expect("must have nested 'ui' key");
+        assert_eq!(ui_obj["resourceUri"], "ui://chess/board.html");
+
+        // Legacy flat key
+        assert_eq!(
+            map.get("ui/resourceUri"),
+            Some(&json!("ui://chess/board.html"))
+        );
+
+        // ChatGPT alias
+        assert_eq!(
+            map.get("openai/outputTemplate"),
+            Some(&json!("ui://chess/board.html"))
+        );
+    }
+
+    #[test]
+    fn test_widget_meta_resource_uri_with_widget_fields() {
+        let meta = WidgetMeta::new()
+            .resource_uri("ui://chess/board.html")
+            .prefers_border(true)
+            .domain("chess.com");
+        let map = meta.to_meta_map();
+
+        let ui_obj = map.get("ui").expect("must have nested 'ui' key");
+        // All fields coexist in the same nested ui object
+        assert_eq!(ui_obj["resourceUri"], "ui://chess/board.html");
+        assert_eq!(ui_obj["prefersBorder"], true);
+        assert_eq!(ui_obj["domain"], "chess.com");
+
+        // Flat keys also present
+        assert!(map.get("ui/resourceUri").is_some());
+        assert!(map.get("openai/outputTemplate").is_some());
+        assert!(map.get("openai/widgetPrefersBorder").is_some());
+        assert!(map.get("openai/widgetDomain").is_some());
+    }
+
+    #[test]
+    fn test_widget_meta_resource_uri_not_in_serde_output() {
+        // resource_uri should not appear as a raw key in the map
+        let meta = WidgetMeta::new().resource_uri("ui://x");
+        let map = meta.to_meta_map();
+        assert!(
+            map.get("resource_uri").is_none(),
+            "resource_uri should be removed from serde output"
+        );
+    }
+
+    #[test]
+    fn test_widget_meta_is_empty_with_resource_uri() {
+        let meta = WidgetMeta::new().resource_uri("ui://x");
+        assert!(!meta.is_empty());
     }
 
     #[test]

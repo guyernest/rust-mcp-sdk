@@ -68,6 +68,8 @@ pub struct ToolInfo {
     pub description: Option<String>,
     #[serde(default, rename = "inputSchema")]
     pub input_schema: Option<Value>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none", default)]
+    pub meta: Option<Value>,
 }
 
 /// Tool call result
@@ -78,6 +80,8 @@ pub struct ToolCallResult {
     pub content: Option<Vec<ContentItem>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(rename = "structuredContent", skip_serializing_if = "Option::is_none")]
+    pub structured_content: Option<Value>,
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<Value>,
 }
@@ -374,11 +378,13 @@ impl McpProxy {
                 .unwrap_or_default();
 
                 let meta = value.get("_meta").cloned();
+                let structured_content = value.get("structuredContent").cloned();
 
                 Ok(ToolCallResult {
                     success: true,
                     content: Some(content),
                     error: None,
+                    structured_content,
                     meta,
                 })
             },
@@ -386,6 +392,7 @@ impl McpProxy {
                 success: false,
                 content: None,
                 error: Some(e.to_string()),
+                structured_content: None,
                 meta: None,
             }),
         }
