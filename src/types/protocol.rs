@@ -199,6 +199,16 @@ impl ToolAnnotations {
         self.output_type_name = Some(name.into());
         self
     }
+
+    /// Returns `true` if all fields are `None` (no meaningful content).
+    pub fn is_empty(&self) -> bool {
+        self.title.is_none()
+            && self.read_only_hint.is_none()
+            && self.destructive_hint.is_none()
+            && self.idempotent_hint.is_none()
+            && self.open_world_hint.is_none()
+            && self.output_type_name.is_none()
+    }
 }
 
 /// Tool information.

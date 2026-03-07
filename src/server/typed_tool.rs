@@ -612,7 +612,7 @@ where
     ///         .with_read_only(true)
     ///         .with_idempotent(true)
     /// );
-    /// // Tool now has both readOnlyHint and auto-generated pmcp:outputSchema
+    /// // Tool now has both readOnlyHint and auto-generated outputSchema
     /// # }
     /// ```
     pub fn with_annotations(mut self, annotations: ToolAnnotations) -> Self {
@@ -691,24 +691,20 @@ where
         // Start with user-provided annotations or empty
         let mut annotations = self.annotations.clone().unwrap_or_default();
 
-        // Add output type name annotation if output schema is available
+        // Add output type name annotation if output schema is available and user hasn't set one
         if let Some(schema) = &self.output_schema {
-            // Extract type name from schema's title field (set by schemars)
-            let type_name = schema
-                .get("title")
-                .and_then(|t| t.as_str())
-                .unwrap_or("Output")
-                .to_string();
+            if annotations.output_type_name.is_none() {
+                let type_name = schema
+                    .get("title")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("Output")
+                    .to_string();
 
-            annotations = annotations.with_output_type_name(type_name);
+                annotations = annotations.with_output_type_name(type_name);
+            }
         }
 
-        // Only include annotations if we have any meaningful content
-        let has_annotations = annotations.read_only_hint.is_some()
-            || annotations.destructive_hint.is_some()
-            || annotations.idempotent_hint.is_some()
-            || annotations.open_world_hint.is_some()
-            || annotations.output_type_name.is_some();
+        let has_annotations = !annotations.is_empty();
 
         Some(ToolInfo {
             name: self.name.clone(),
