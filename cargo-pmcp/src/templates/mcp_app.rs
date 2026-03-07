@@ -177,17 +177,14 @@ impl ResourceHandler for AppResources {{
 
         if let Some(widget_name) = name {{
             let html = self.widget_dir.read_widget(widget_name);
-            let transformed = self.chatgpt_adapter.transform(uri, widget_name, &html);
-
-            let widget_meta = WidgetMeta::new()
-                .prefers_border(true)
-                .description(format!("Interactive {{}} widget", widget_name));
+            let mut transformed = self.chatgpt_adapter.transform(uri, widget_name, &html);
+            let meta = transformed.take_meta();
 
             Ok(ReadResourceResult::new(vec![Content::Resource {{
                     uri: uri.to_string(),
                     text: Some(transformed.content),
                     mime_type: Some(ExtendedUIMimeType::HtmlMcpApp.to_string()),
-                    meta: Some(widget_meta.to_meta_map()),
+                    meta,
                 }}]))
         }} else {{
             Err(pmcp::Error::protocol(
@@ -621,9 +618,8 @@ mod tests {
         // Must use .with_ui() on tool registration
         assert!(main.contains(".with_ui("));
         assert!(main.contains("TypedSyncTool"));
-        // Must emit _meta via widget_meta.to_meta_map() on Content::Resource
-        assert!(main.contains("widget_meta.to_meta_map()"));
-        assert!(main.contains("meta: Some("));
+        // Must forward _meta from adapter via take_meta()
+        assert!(main.contains("transformed.take_meta()"));
     }
 
     #[test]

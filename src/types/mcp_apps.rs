@@ -455,7 +455,7 @@ impl ToolVisibility {
 pub struct ChatGptToolMeta {
     /// UI template URI that ChatGPT loads when this tool is called.
     ///
-    /// Must point to a resource with `text/html+skybridge` MIME type.
+    /// Must point to a resource with `text/html;profile=mcp-app` MIME type.
     #[serde(
         rename = "openai/outputTemplate",
         skip_serializing_if = "Option::is_none"

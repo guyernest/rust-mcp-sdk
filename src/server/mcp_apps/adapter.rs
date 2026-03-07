@@ -58,6 +58,20 @@ pub struct TransformedResource {
     pub metadata: HashMap<String, Value>,
 }
 
+impl TransformedResource {
+    /// Take platform metadata as the `_meta` map format used by `Content::Resource`.
+    ///
+    /// Returns `None` if metadata is empty, `Some(map)` otherwise.
+    /// Drains the metadata from this resource.
+    pub fn take_meta(&mut self) -> Option<serde_json::Map<String, Value>> {
+        if self.metadata.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut self.metadata).into_iter().collect())
+        }
+    }
+}
+
 /// Adapter for ChatGPT Apps (OpenAI Apps SDK).
 ///
 /// Transforms resources to use `text/html;profile=mcp-app` MIME type and
