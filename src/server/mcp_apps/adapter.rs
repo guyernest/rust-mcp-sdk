@@ -447,8 +447,8 @@ impl UIAdapter for McpAppsAdapter {
         }
     };
 
-    // Notify host that widget is ready
-    window.mcpBridge.notify('ui/ready', {});
+    // Notify host that widget is initializing
+    window.mcpBridge.notify('ui/initialize', {});
 })();
 </script>
 ";
