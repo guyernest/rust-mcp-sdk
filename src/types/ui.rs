@@ -200,6 +200,10 @@ pub struct UIResourceContents {
     /// Binary content as base64 (for future WASM support)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blob: Option<String>,
+
+    /// Optional metadata for resource content (e.g., widget description, CSP, domain)
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl UIResourceContents {
@@ -210,6 +214,7 @@ impl UIResourceContents {
             mime_type: UIMimeType::HtmlMcp.as_str().to_string(),
             text: Some(html.into()),
             blob: None,
+            meta: None,
         }
     }
 }

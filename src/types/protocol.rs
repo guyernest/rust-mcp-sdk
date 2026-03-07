@@ -630,6 +630,9 @@ pub enum Content {
         /// MIME type
         #[serde(skip_serializing_if = "Option::is_none")]
         mime_type: Option<String>,
+        /// Optional metadata for resource content (e.g., widget metadata for MCP Apps)
+        #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+        meta: Option<serde_json::Map<String, serde_json::Value>>,
     },
 }
 
@@ -2111,5 +2114,78 @@ mod tests {
         assert_eq!(meta["ui/resourceUri"], "ui://w/app.html");
         assert_eq!(meta["openai/outputTemplate"], "ui://w/app.html");
         assert_eq!(meta["openai/widgetPrefersBorder"], true);
+    }
+
+    #[test]
+    fn test_content_resource_meta_serialization() {
+        let mut meta_map = serde_json::Map::new();
+        meta_map.insert(
+            "widgetDescription".to_string(),
+            serde_json::Value::String("A chess board widget".to_string()),
+        );
+        let content = Content::Resource {
+            uri: "ui://chess/board".to_string(),
+            text: Some("<html>chess</html>".to_string()),
+            mime_type: Some("text/html;profile=mcp-app".to_string()),
+            meta: Some(meta_map),
+        };
+        let json = serde_json::to_value(&content).unwrap();
+        assert_eq!(json["_meta"]["widgetDescription"], "A chess board widget");
+        assert_eq!(json["uri"], "ui://chess/board");
+    }
+
+    #[test]
+    fn test_content_resource_no_meta_serialization() {
+        let content = Content::Resource {
+            uri: "file:///test.txt".to_string(),
+            text: Some("hello".to_string()),
+            mime_type: Some("text/plain".to_string()),
+            meta: None,
+        };
+        let json = serde_json::to_value(&content).unwrap();
+        assert!(json.get("_meta").is_none());
+        assert_eq!(json["uri"], "file:///test.txt");
+    }
+
+    #[test]
+    fn test_content_resource_meta_deserialization() {
+        let json = json!({
+            "type": "resource",
+            "uri": "ui://widget",
+            "text": "<html></html>",
+            "mimeType": "text/html",
+            "_meta": {
+                "widgetDescription": "test widget",
+                "csp": { "connectDomains": ["https://api.example.com"] }
+            }
+        });
+        let content: Content = serde_json::from_value(json).unwrap();
+        match content {
+            Content::Resource { uri, meta, .. } => {
+                assert_eq!(uri, "ui://widget");
+                let meta = meta.unwrap();
+                assert_eq!(meta["widgetDescription"], "test widget");
+                assert!(meta.contains_key("csp"));
+            },
+            _ => panic!("Expected Content::Resource"),
+        }
+    }
+
+    #[test]
+    fn test_content_resource_backward_compat() {
+        let json = json!({
+            "type": "resource",
+            "uri": "file:///old.txt",
+            "text": "old content",
+            "mimeType": "text/plain"
+        });
+        let content: Content = serde_json::from_value(json).unwrap();
+        match content {
+            Content::Resource { uri, meta, .. } => {
+                assert_eq!(uri, "file:///old.txt");
+                assert!(meta.is_none());
+            },
+            _ => panic!("Expected Content::Resource"),
+        }
     }
 }
