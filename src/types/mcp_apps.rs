@@ -274,8 +274,11 @@ impl WidgetMeta {
     /// Convert to a `serde_json::Map` for merging into resource `_meta`.
     ///
     /// Produces both flat `openai/*` keys (via serde) and a nested `"ui"` object
-    /// containing MCP standard equivalents (currently only `prefersBorder`).
-    /// `ChatGPT`-only fields (`domain`, `csp`, `description`) stay flat `openai/*` only.
+    /// containing MCP standard equivalents (`prefersBorder`, `domain`, `csp`).
+    ///
+    /// The nested `ui.csp` uses spec field names (`connectDomains`, `resourceDomains`,
+    /// `frameDomains`, `baseUriDomains`). Note that `redirect_domains` is ChatGPT-specific
+    /// and only appears in the flat `openai/widgetCSP` key, not in nested `ui.csp`.
     pub fn to_meta_map(&self) -> serde_json::Map<String, serde_json::Value> {
         let mut map = match serde_json::to_value(self).ok() {
             Some(serde_json::Value::Object(m)) => m,
@@ -288,6 +291,42 @@ impl WidgetMeta {
                 "prefersBorder".to_string(),
                 serde_json::Value::Bool(prefers),
             );
+        }
+        if let Some(domain) = &self.domain {
+            ui_obj.insert(
+                "domain".to_string(),
+                serde_json::Value::String(domain.clone()),
+            );
+        }
+        if let Some(csp) = &self.csp {
+            let mut csp_obj = serde_json::Map::new();
+            if !csp.connect_domains.is_empty() {
+                csp_obj.insert(
+                    "connectDomains".into(),
+                    serde_json::json!(csp.connect_domains),
+                );
+            }
+            if !csp.resource_domains.is_empty() {
+                csp_obj.insert(
+                    "resourceDomains".into(),
+                    serde_json::json!(csp.resource_domains),
+                );
+            }
+            if let Some(frames) = &csp.frame_domains {
+                if !frames.is_empty() {
+                    csp_obj.insert("frameDomains".into(), serde_json::json!(frames));
+                }
+            }
+            if let Some(base_uris) = &csp.base_uri_domains {
+                if !base_uris.is_empty() {
+                    csp_obj.insert("baseUriDomains".into(), serde_json::json!(base_uris));
+                }
+            }
+            // NOTE: redirect_domains is ChatGPT-specific, NOT part of the ext-apps spec.
+            // It stays in the flat openai/widgetCSP only.
+            if !csp_obj.is_empty() {
+                ui_obj.insert("csp".to_string(), serde_json::Value::Object(csp_obj));
+            }
         }
         if !ui_obj.is_empty() {
             map.insert("ui".to_string(), serde_json::Value::Object(ui_obj));
@@ -464,12 +503,31 @@ impl ChatGptToolMeta {
         self
     }
 
-    /// Convert to a serde_json::Map for merging into tool `_meta`.
+    /// Convert to a `serde_json::Map` for merging into tool `_meta`.
+    ///
+    /// Produces both flat `openai/*` keys (via serde) and a nested `"ui"` object
+    /// containing the spec-compatible `visibility` array (e.g., `["model", "app"]`).
     pub fn to_meta_map(&self) -> serde_json::Map<String, serde_json::Value> {
-        serde_json::to_value(self)
+        let mut map = serde_json::to_value(self)
             .ok()
             .and_then(|v| v.as_object().cloned())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // Dual-emit: nested ui.visibility array for MCP standard
+        if let Some(vis) = &self.visibility {
+            let arr = vis.to_visibility_array();
+            let json_arr = serde_json::Value::Array(
+                arr.iter()
+                    .map(|s| serde_json::Value::String((*s).to_string()))
+                    .collect(),
+            );
+            let ui_obj = map
+                .entry("ui".to_string())
+                .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+            if let Some(obj) = ui_obj.as_object_mut() {
+                obj.insert("visibility".to_string(), json_arr);
+            }
+        }
+        map
     }
 
     /// Check if the metadata is empty (all fields are None).
@@ -1191,11 +1249,8 @@ mod tests {
         // prefersBorder in nested ui object
         let ui_obj = map.get("ui").expect("must have nested 'ui' key");
         assert_eq!(ui_obj["prefersBorder"], true);
-        // domain is ChatGPT-specific, stays flat only
-        assert!(
-            ui_obj.get("domain").is_none(),
-            "domain should not be in nested ui object"
-        );
+        // domain is now dual-emitted: both flat and nested
+        assert_eq!(ui_obj["domain"], "x.com");
         assert_eq!(
             map.get("openai/widgetDomain"),
             Some(&serde_json::Value::String("x.com".to_string()))
@@ -1285,6 +1340,100 @@ mod tests {
                 err
             );
         }
+    }
+
+    #[test]
+    fn test_widget_meta_dual_emit_domain() {
+        let meta = WidgetMeta::new().domain("x.com");
+        let map = meta.to_meta_map();
+
+        // Flat key preserved
+        assert_eq!(
+            map.get("openai/widgetDomain"),
+            Some(&serde_json::Value::String("x.com".to_string()))
+        );
+
+        // Nested ui.domain also emitted
+        let ui_obj = map.get("ui").expect("must have nested 'ui' key");
+        assert_eq!(ui_obj["domain"], "x.com");
+    }
+
+    #[test]
+    fn test_widget_meta_dual_emit_csp() {
+        let csp = WidgetCSP::new()
+            .connect("https://api.example.com")
+            .resources("https://cdn.example.com")
+            .frame("https://embed.example.com")
+            .base_uri("https://base.example.com")
+            .redirect("https://redirect.example.com");
+
+        let meta = WidgetMeta::new().csp(csp);
+        let map = meta.to_meta_map();
+
+        // Flat key preserved
+        assert!(map.get("openai/widgetCSP").is_some());
+
+        // Nested ui.csp with spec field names
+        let ui_obj = map.get("ui").expect("must have nested 'ui' key");
+        let nested_csp = ui_obj.get("csp").expect("must have nested csp");
+        assert_eq!(nested_csp["connectDomains"][0], "https://api.example.com");
+        assert_eq!(nested_csp["resourceDomains"][0], "https://cdn.example.com");
+        assert_eq!(nested_csp["frameDomains"][0], "https://embed.example.com");
+        assert_eq!(nested_csp["baseUriDomains"][0], "https://base.example.com");
+
+        // redirect_domains is ChatGPT-specific, must NOT appear in nested ui.csp
+        assert!(
+            nested_csp.get("redirect_domains").is_none()
+                && nested_csp.get("redirectDomains").is_none(),
+            "redirect_domains should not be in nested ui.csp (ChatGPT-specific)"
+        );
+    }
+
+    #[test]
+    fn test_widget_meta_dual_emit_all_fields() {
+        let meta = WidgetMeta::new()
+            .prefers_border(true)
+            .domain("x.com")
+            .csp(WidgetCSP::new().connect("https://api.example.com"));
+
+        let map = meta.to_meta_map();
+        let ui_obj = map.get("ui").expect("must have nested 'ui' key");
+
+        // All three fields in nested ui
+        assert_eq!(ui_obj["prefersBorder"], true);
+        assert_eq!(ui_obj["domain"], "x.com");
+        assert!(ui_obj.get("csp").is_some());
+    }
+
+    #[test]
+    fn test_chatgpt_tool_meta_dual_emit_visibility_public() {
+        let meta = ChatGptToolMeta::new().visibility(ToolVisibility::Public);
+        let map = meta.to_meta_map();
+
+        // Flat key preserved
+        assert_eq!(map.get("openai/visibility"), Some(&json!("public")));
+
+        // Nested ui.visibility as array
+        let ui_obj = map.get("ui").expect("must have nested 'ui' key");
+        assert_eq!(ui_obj["visibility"], json!(["model", "app"]));
+    }
+
+    #[test]
+    fn test_chatgpt_tool_meta_dual_emit_visibility_private() {
+        let meta = ChatGptToolMeta::new().visibility(ToolVisibility::Private);
+        let map = meta.to_meta_map();
+
+        let ui_obj = map.get("ui").expect("must have nested 'ui' key");
+        assert_eq!(ui_obj["visibility"], json!(["app"]));
+    }
+
+    #[test]
+    fn test_chatgpt_tool_meta_dual_emit_visibility_model_only() {
+        let meta = ChatGptToolMeta::new().visibility(ToolVisibility::ModelOnly);
+        let map = meta.to_meta_map();
+
+        let ui_obj = map.get("ui").expect("must have nested 'ui' key");
+        assert_eq!(ui_obj["visibility"], json!(["model"]));
     }
 
     #[test]
