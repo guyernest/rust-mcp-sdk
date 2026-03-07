@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Phase 40 context gathered
-last_updated: "2026-03-07T02:18:29.621Z"
-last_activity: 2026-03-07 -- Completed 39-02 migrate all tool types to deep_merge
+stopped_at: Completed 40-01-PLAN.md
+last_updated: "2026-03-07T03:20:41.895Z"
+last_activity: 2026-03-07 -- Completed 40-01 add legacy flat key to build_meta_map
 progress:
   total_phases: 14
   completed_phases: 6
-  total_plans: 11
-  completed_plans: 10
+  total_plans: 13
+  completed_plans: 11
   percent: 100
 ---
 
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** MCP Apps code quality improvements -- Phase 39 (deep merge for UI meta key)
+**Current focus:** Review ChatGPT Compatibility for Apps -- Phase 40
 
 ## Current Position
 
-Phase: 39 (add-deep-merge-for-ui-meta-key-to-prevent-collision)
-Plan: 2 of 2 (complete)
-Status: Phase 39 complete -- all tool types migrated to deep_merge
-Last activity: 2026-03-07 -- Completed 39-02 migrate all tool types to deep_merge
+Phase: 40 (review-chatgpt-compatibility-for-apps)
+Plan: 1 of 2
+Status: 40-01 complete -- legacy flat key added to build_meta_map
+Last activity: 2026-03-07 -- Completed 40-01 add legacy flat key to build_meta_map
 
-Progress: [██████████] 100%
+Progress: [█████████░] 93%
 
 ## Shipped Milestones
 
@@ -72,6 +72,7 @@ v1.6 decisions:
 - [Phase 38]: Cache is sole source of truth for metadata; no fallback to handler.metadata() in hot paths; prompt_workflow() caches directly
 - [Phase 39]: deep_merge in ui.rs for recursive JSON object merging; with_meta_entry on ToolInfo for composable _meta; arrays replaced not concatenated
 - [Phase 39-02]: TypedToolWithOutput::with_ui() mirrors TypedTool::with_ui() for API consistency; all four tool types use identical deep_merge pattern
+- [Phase 40-01]: Added legacy flat "ui/resourceUri" key to build_meta_map() matching official ext-apps dual-emit behavior
 
 ### Roadmap Evolution
 
@@ -90,6 +91,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-07T02:18:29.618Z
-Stopped at: Phase 40 context gathered
-Resume: Phase 39 complete -- all plans executed
+Last session: 2026-03-07T03:20:06Z
+Stopped at: Completed 40-01-PLAN.md
+Resume: Phase 40 plan 1 of 2 complete -- continue with 40-02
