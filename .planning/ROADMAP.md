@@ -299,3 +299,14 @@ Plans:
 - [ ] 41-01-PLAN.md — Add _meta to Content::Resource, fix ChatGptAdapter MIME type to HtmlMcpApp
 - [ ] 41-02-PLAN.md — Update bridge protocol method names in widget-runtime.mjs and index.html
 - [ ] 41-03-PLAN.md — Update scaffold template with correct MIME type, with_ui(), and resource _meta
+
+### Phase 42: Add outputSchema top level support
+
+**Goal:** Migrate output_schema from ToolAnnotations to a top-level field on ToolInfo, aligning with MCP spec 2025-06-18. Clean break -- remove from annotations, keep pmcp:outputTypeName as codegen extension.
+**Requirements**: OS-01, OS-02, OS-03, OS-04, OS-05, OS-06
+**Depends on:** Phase 41
+**Plans:** 2 plans
+
+Plans:
+- [ ] 42-01-PLAN.md — Core types migration: ToolAnnotations cleanup, ToolInfo field + builder, TypedToolWithOutput rewire, macro codegen
+- [ ] 42-02-PLAN.md — Consumers: cargo-pmcp schema structs, tests, example, docs update
