@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** MCP Apps code quality improvements -- Phase 38 (ToolInfo/PromptInfo caching)
+**Current focus:** MCP Apps code quality improvements -- Phase 39 (deep merge for UI meta key)
 
 ## Current Position
 
-Phase: 38 (cache-toolinfo-at-registration-to-avoid-per-request-cloning) -- COMPLETE
+Phase: 39 (add-deep-merge-for-ui-meta-key-to-prevent-collision)
 Plan: 1 of 1 (complete)
-Status: Phase complete -- ready for Phase 39
-Last activity: 2026-03-06 -- Completed 38-01 ToolInfo/PromptInfo caching at registration
+Status: Phase 39 Plan 01 complete -- deep_merge and with_meta_entry shipped
+Last activity: 2026-03-07 -- Completed 39-01 deep merge for UI meta key
 
 Progress: [██████████] 97%
 
@@ -70,6 +70,7 @@ v1.6 decisions:
 - [Phase 36]: Used explicit match arms (no wildcards) in From/TryFrom bridge for compile-time exhaustiveness
 - [Phase 37]: Mirrored TypedTool::with_ui() exactly for TypedSyncTool and WasmTypedTool; WasmTypedTool tests wasm32-only gated
 - [Phase 38]: Cache is sole source of truth for metadata; no fallback to handler.metadata() in hot paths; prompt_workflow() caches directly
+- [Phase 39]: deep_merge in ui.rs for recursive JSON object merging; with_meta_entry on ToolInfo for composable _meta; arrays replaced not concatenated
 
 ### Roadmap Evolution
 
@@ -87,6 +88,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-06T23:32:59.428Z
-Stopped at: Phase 39 context gathered
-Resume: Continue with Phase 39 or next planned work
+Last session: 2026-03-07T00:06:00Z
+Stopped at: Completed 39-01-PLAN.md
+Resume: Continue with Phase 39 Plan 02 or next planned work
