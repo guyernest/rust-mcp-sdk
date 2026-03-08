@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Completed 42-02-PLAN.md
-last_updated: "2026-03-07T23:14:43.055Z"
+stopped_at: Phase 43 context gathered
+last_updated: "2026-03-08T15:40:29.698Z"
 last_activity: 2026-03-07 -- Completed 42-02 update consumers for top-level outputSchema
 progress:
-  total_phases: 16
+  total_phases: 17
   completed_phases: 9
   total_plans: 18
   completed_plans: 17
@@ -88,6 +88,7 @@ v1.6 decisions:
 - Phase 40 added: Review ChatGPT Compatibility for Apps
 - Phase 41 added: ChatGPT MCP Apps Upgraded Version
 - Phase 42 added: Add outputSchema top level support
+- Phase 43 added: ChatGPT MCP Apps alignment
 
 ### Pending Todos
 
@@ -99,6 +100,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-07T23:06:32Z
-Stopped at: Completed 42-02-PLAN.md
+Last session: 2026-03-08T15:40:29.695Z
+Stopped at: Phase 43 context gathered
 Resume: Phase 42 complete -- all outputSchema consumers updated for MCP spec 2025-06-18
