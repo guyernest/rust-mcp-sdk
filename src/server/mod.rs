@@ -277,6 +277,8 @@ pub struct Server {
     capabilities: ServerCapabilities,
     tools: HashMap<String, Arc<dyn ToolHandler>>,
     tool_infos: HashMap<String, ToolInfo>,
+    /// Cached URI-to-tool-meta index for widget resource `_meta` propagation.
+    uri_to_tool_meta: HashMap<String, serde_json::Map<String, serde_json::Value>>,
     prompts: HashMap<String, Arc<dyn PromptHandler>>,
     resources: Option<Arc<dyn ResourceHandler>>,
     sampling: Option<Arc<dyn SamplingHandler>>,
@@ -1217,7 +1219,7 @@ impl Server {
                 cancellation_token,
             )
             .with_auth_context(auth_context);
-            let result = match handler.list(req.cursor, extra).await {
+            let mut result = match handler.list(req.cursor, extra).await {
                 Ok(v) => {
                     self.cancellation_manager
                         .remove_token(&request_id_str)
@@ -1231,6 +1233,15 @@ impl Server {
                     Err(e)
                 },
             }?;
+            // Enrich ResourceInfo with tool _meta for widget resources
+            if !self.uri_to_tool_meta.is_empty() {
+                for resource in &mut result.resources {
+                    if let Some(tool_meta) = self.uri_to_tool_meta.get(&resource.uri) {
+                        let meta = resource.meta.get_or_insert_with(serde_json::Map::new);
+                        crate::types::ui::deep_merge(meta, tool_meta.clone());
+                    }
+                }
+            }
             Ok(serde_json::to_value(result)?)
         } else {
             Ok(serde_json::to_value(ListResourcesResult {
@@ -1282,7 +1293,7 @@ impl Server {
         )
         .with_auth_context(auth_context)
         .with_progress_reporter(progress_reporter);
-        let result = match handler.read(&req.uri, extra).await {
+        let mut result = match handler.read(&req.uri, extra).await {
             Ok(v) => {
                 self.cancellation_manager
                     .remove_token(&request_id_str)
@@ -1296,6 +1307,17 @@ impl Server {
                 Err(e)
             },
         }?;
+        // Merge tool descriptor keys into content _meta for widget resources
+        if !self.uri_to_tool_meta.is_empty() {
+            for content in &mut result.contents {
+                if let crate::types::protocol::Content::Resource { uri, meta, .. } = content {
+                    if let Some(tool_meta) = self.uri_to_tool_meta.get(uri.as_str()) {
+                        let content_meta = meta.get_or_insert_with(serde_json::Map::new);
+                        crate::types::ui::deep_merge(content_meta, tool_meta.clone());
+                    }
+                }
+            }
+        }
         Ok(serde_json::to_value(result)?)
     }
 
@@ -3019,11 +3041,15 @@ impl ServerBuilder {
             })
             .collect();
 
+        // Build URI-to-tool-meta index for widget resource _meta propagation
+        let uri_to_tool_meta = core::build_uri_to_tool_meta(&tool_infos);
+
         Ok(Server {
             info: Implementation { name, version },
             capabilities: self.capabilities,
             tools: self.tools,
             tool_infos,
+            uri_to_tool_meta,
             prompts: self.prompts,
             resources: self.resources,
             sampling: self.sampling,

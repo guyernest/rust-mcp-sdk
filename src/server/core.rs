@@ -105,7 +105,7 @@ pub trait ProtocolHandler {
 /// `openai/*` `_meta` keys. Used to auto-propagate widget descriptor keys
 /// onto `ResourceInfo` during `resources/list` and `resources/read`.
 /// When multiple tools share the same URI, first tool registered wins.
-fn build_uri_to_tool_meta(
+pub(crate) fn build_uri_to_tool_meta(
     tool_infos: &HashMap<String, ToolInfo>,
 ) -> HashMap<String, serde_json::Map<String, serde_json::Value>> {
     let mut map = HashMap::new();
