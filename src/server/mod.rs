@@ -2421,6 +2421,7 @@ impl ServerBuilder {
     ///             name: "example.txt".to_string(),
     ///             description: Some("Example file".to_string()),
     ///             mime_type: Some("text/plain".to_string()),
+    ///             meta: None,
     ///         }]))
     ///     }
     /// }

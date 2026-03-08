@@ -486,6 +486,7 @@ impl ResourceHandler for ChessResources {
                 name: entry.filename.clone(),
                 description: Some(format!("Interactive {} widget", entry.filename)),
                 mime_type: Some(ExtendedUIMimeType::HtmlMcpApp.to_string()),
+                meta: None,
             })
             .collect();
 

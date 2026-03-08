@@ -99,6 +99,7 @@ impl FileSystemResourceHandler {
                             name: name.to_string(),
                             description: Some(format!("File resource: {}", name)),
                             mime_type,
+                            meta: None,
                         };
 
                         resources.push(info.clone());

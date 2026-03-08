@@ -89,6 +89,7 @@ impl StaticResource {
             name: self.name.clone(),
             description: self.description.clone(),
             mime_type: self.mime_type.clone(),
+            meta: None,
         }
     }
 
@@ -278,6 +279,7 @@ impl ResourceCollection {
                 name: ui_resource.name.clone(),
                 description: ui_resource.description.clone(),
                 mime_type: Some(ui_resource.mime_type.clone()),
+                meta: None,
             });
         }
 
@@ -288,6 +290,7 @@ impl ResourceCollection {
                 name: template.name,
                 description: template.description,
                 mime_type: template.mime_type,
+                meta: None,
             });
         }
 

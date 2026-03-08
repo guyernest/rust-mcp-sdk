@@ -127,6 +127,7 @@ Best Practices:
                 name: "Logseq Task Formatting Guide".to_string(),
                 description: Some("Guide for formatting tasks in Logseq".to_string()),
                 mime_type: Some("text/plain".to_string()),
+                meta: None,
             }]))
         }
     }

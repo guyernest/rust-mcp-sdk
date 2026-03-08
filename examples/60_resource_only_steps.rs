@@ -130,18 +130,21 @@ Remember: Floyd is your friend!
                 name: "Zork I Walkthrough".to_string(),
                 description: Some("Complete walkthrough for Zork I".to_string()),
                 mime_type: Some("text/markdown".to_string()),
+                meta: None,
             },
             ResourceInfo {
                 uri: "if://walkthrough/planetfall".to_string(),
                 name: "Planetfall Walkthrough".to_string(),
                 description: Some("Complete walkthrough for Planetfall".to_string()),
                 mime_type: Some("text/markdown".to_string()),
+                meta: None,
             },
             ResourceInfo {
                 uri: "if://help/general".to_string(),
                 name: "IF General Help".to_string(),
                 description: Some("General interactive fiction commands and tips".to_string()),
                 mime_type: Some("text/markdown".to_string()),
+                meta: None,
             },
         ]))
     }
