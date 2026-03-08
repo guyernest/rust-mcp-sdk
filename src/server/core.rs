@@ -436,7 +436,7 @@ impl ServerCore {
         req: &ListResourcesParams,
         auth_context: Option<AuthContext>,
     ) -> Result<ListResourcesResult> {
-        match &self.resources {
+        let mut result = match &self.resources {
             Some(handler) => {
                 let request_id = "list_resources".to_string();
                 let extra = RequestHandlerExtra::new(
@@ -446,13 +446,25 @@ impl ServerCore {
                         .await,
                 )
                 .with_auth_context(auth_context);
-                handler.list(req.cursor.clone(), extra).await
+                handler.list(req.cursor.clone(), extra).await?
             },
-            None => Ok(ListResourcesResult {
+            None => ListResourcesResult {
                 resources: vec![],
                 next_cursor: None,
-            }),
+            },
+        };
+
+        // Enrich ResourceInfo items with tool _meta for widget resources.
+        // Only resources with URIs in the uri_to_tool_meta index (built from
+        // tool _meta at construction) receive _meta -- non-widget resources
+        // are unaffected.
+        for resource in &mut result.resources {
+            if let Some(tool_meta) = self.uri_to_tool_meta.get(&resource.uri) {
+                resource.meta = Some(tool_meta.clone());
+            }
         }
+
+        Ok(result)
     }
 
     /// Handle read resource request.
