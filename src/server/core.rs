@@ -114,7 +114,7 @@ pub(crate) fn build_uri_to_tool_meta(
             if let Some(serde_json::Value::String(uri)) = meta.get("openai/outputTemplate") {
                 // First tool registered wins (per user decision)
                 map.entry(uri.clone()).or_insert_with(|| {
-                    crate::types::ui::filter_meta_by_prefix(meta, "openai/")
+                    crate::types::ui::filter_to_descriptor_keys(meta)
                 });
             }
         }

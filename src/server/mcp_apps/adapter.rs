@@ -103,18 +103,24 @@ impl UIAdapter for ChatGptAdapter {
     }
 
     fn mime_type(&self) -> ExtendedUIMimeType {
-        ExtendedUIMimeType::HtmlMcpApp
+        ExtendedUIMimeType::HtmlSkybridge
     }
 
     fn transform(&self, uri: &str, name: &str, html: &str) -> TransformedResource {
         let injected_html = self.inject_bridge(html);
 
-        let mut metadata = HashMap::new();
-        if let Some(ref widget_meta) = self.widget_meta {
-            for (key, value) in widget_meta.to_meta_map() {
-                metadata.insert(key, value);
-            }
-        }
+        // Only emit the 4 descriptor keys ChatGPT expects.
+        // Display keys (widgetCSP, widgetPrefersBorder, widgetDescription) cause
+        // ChatGPT's Templates section to fail, so they are deliberately excluded.
+        let metadata: HashMap<String, Value> = self
+            .widget_meta
+            .as_ref()
+            .map(|wm| {
+                crate::types::ui::filter_to_descriptor_keys(&wm.to_meta_map())
+                    .into_iter()
+                    .collect()
+            })
+            .unwrap_or_default();
 
         TransformedResource {
             uri: uri.to_string(),
@@ -135,13 +141,14 @@ impl UIAdapter for ChatGptAdapter {
     'use strict';
 
     // State management
-    let widgetState = {};
+    var widgetState = {};
+    var _toolOutput = null;
 
     // Initialize bridge when ready
     if (window.openai) {
         initBridge();
     } else {
-        window.addEventListener('load', () => {
+        window.addEventListener('load', function() {
             if (window.openai) initBridge();
         });
     }
@@ -151,15 +158,38 @@ impl UIAdapter for ChatGptAdapter {
         window.openai.onWidgetReady?.();
 
         // Listen for state updates from ChatGPT
-        window.openai.onStateUpdate?.((newState) => {
-            widgetState = { ...widgetState, ...newState };
+        window.openai.onStateUpdate?.(function(newState) {
+            widgetState = Object.assign({}, widgetState, newState);
             window.dispatchEvent(new CustomEvent('widgetStateUpdate', { detail: widgetState }));
-            // Also dispatch OpenAI-style set_globals event
-            window.dispatchEvent(new CustomEvent('openai:set_globals', {
-                detail: { globals: { widgetState } }
-            }));
         });
     }
+
+    // Listen for tool results via postMessage from ChatGPT host
+    window.addEventListener('message', function(event) {
+        if (event.source !== window.parent) return;
+        var msg = event.data;
+        if (!msg || msg.jsonrpc !== '2.0') return;
+        if (msg.method === 'ui/notifications/tool-result') {
+            var data = msg.params && msg.params.structuredContent;
+            if (data) {
+                _toolOutput = data;
+                window.dispatchEvent(new CustomEvent('widgetStateUpdate', {
+                    detail: { toolOutput: data }
+                }));
+            }
+        }
+    }, { passive: true });
+
+    // Listen for openai:set_globals (alternate data delivery)
+    window.addEventListener('openai:set_globals', function(event) {
+        var data = event.detail && event.detail.globals && event.detail.globals.toolOutput;
+        if (data) {
+            _toolOutput = data;
+            window.dispatchEvent(new CustomEvent('widgetStateUpdate', {
+                detail: { toolOutput: data }
+            }));
+        }
+    }, { passive: true });
 
     // Expose bridge API - aligned with window.openai
     window.mcpBridge = {
@@ -199,7 +229,7 @@ impl UIAdapter for ChatGptAdapter {
 
         // The structuredContent returned by the tool
         get toolOutput() {
-            return window.openai?.toolOutput;
+            return _toolOutput ?? window.openai?.toolOutput;
         },
 
         // The _meta payload (widget-only, never sent to model)
@@ -650,7 +680,7 @@ mod tests {
 
         let transformed = adapter.transform("ui://test/widget.html", "Test Widget", html);
 
-        assert_eq!(transformed.mime_type, ExtendedUIMimeType::HtmlMcpApp);
+        assert_eq!(transformed.mime_type, ExtendedUIMimeType::HtmlSkybridge);
         assert!(transformed.content.contains("window.mcpBridge"));
         assert!(transformed.content.contains("window.openai"));
     }
@@ -678,17 +708,41 @@ mod tests {
     }
 
     #[test]
-    fn test_chatgpt_adapter_with_widget_meta() {
-        let meta = WidgetMeta::new()
+    fn test_chatgpt_adapter_with_widget_meta_strips_display_keys() {
+        // Display-only keys (prefers_border, description) should be stripped
+        let display_only = WidgetMeta::new()
             .prefers_border(true)
             .description("A test widget");
 
-        let adapter = ChatGptAdapter::new().with_widget_meta(meta);
+        let adapter = ChatGptAdapter::new().with_widget_meta(display_only);
         let html = "<html><body></body></html>";
-
         let transformed = adapter.transform("ui://test/widget.html", "Test Widget", html);
 
-        assert!(!transformed.metadata.is_empty());
+        assert!(
+            transformed.metadata.is_empty(),
+            "display keys should be stripped from ChatGPT metadata"
+        );
+    }
+
+    #[test]
+    fn test_chatgpt_adapter_with_widget_meta_keeps_descriptor_keys() {
+        // resource_uri produces openai/outputTemplate — a descriptor key
+        let meta = WidgetMeta::new()
+            .resource_uri("ui://test/widget.html")
+            .prefers_border(true);
+
+        let adapter = ChatGptAdapter::new().with_widget_meta(meta);
+        let html = "<html><body></body></html>";
+        let transformed = adapter.transform("ui://test/widget.html", "Test Widget", html);
+
+        assert!(
+            transformed.metadata.contains_key("openai/outputTemplate"),
+            "descriptor keys should be kept"
+        );
+        assert!(
+            !transformed.metadata.contains_key("openai/widgetPrefersBorder"),
+            "display keys should be stripped"
+        );
     }
 
     #[test]
