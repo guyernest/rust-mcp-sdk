@@ -1597,8 +1597,8 @@
 
       async handleToolResponse(result) {
         this.toolOutput = result.structuredContent || result.content;
-        const meta = result._meta || result.meta || {};
-        this.toolResponseMetadata = meta;
+        const responseMeta = result._meta || result.meta || {};
+        this.toolResponseMetadata = responseMeta;
         this.updateStateView();
 
         // Protocol validation for tools/call (warn-only)
@@ -1611,16 +1611,20 @@
           };
           this.validateProtocol(
             `tools/call [${toolName}]`,
-            meta,
+            responseMeta,
             this.invocationKeys,
             extras
           );
         }
 
-        // Check _meta for widget URI (MCP Apps / ChatGPT Apps pattern)
-        const widgetUri = meta['openai/outputTemplate']
-                       || meta['ui/resourceUri']
-                       || (meta['ui'] && meta['ui']['resourceUri']);
+        // Look up widget URI from the TOOL DEFINITION's _meta (tools/list),
+        // not from the tool call response _meta. The SDK filters tool call _meta
+        // to only invocation keys (openai/toolInvocation/*), so outputTemplate
+        // is only available on the tool definition.
+        const toolDefMeta = this.selectedTool?._meta || this.selectedTool?.meta || {};
+        const widgetUri = toolDefMeta['openai/outputTemplate']
+                       || toolDefMeta['ui/resourceUri']
+                       || toolDefMeta['ui']?.['resourceUri'];
         if (widgetUri) {
           const iframe = document.getElementById('widget-frame');
           const widgetAlreadyLoaded = this.activeResourceUri === widgetUri
@@ -1635,7 +1639,7 @@
               this.appBridge.sendToolInput(this.toolInput);
               this.appBridge.sendToolResult({
                 structuredContent: result.structuredContent,
-                _meta: meta,
+                _meta: responseMeta,
               });
             }
 
