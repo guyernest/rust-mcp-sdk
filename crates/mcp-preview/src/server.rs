@@ -17,18 +17,13 @@ use crate::proxy::McpProxy;
 use crate::wasm_builder::{find_workspace_root, WasmBuilder};
 
 /// Preview mode controlling protocol validation strictness
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum PreviewMode {
     /// Standard MCP preview (default)
+    #[default]
     Standard,
     /// ChatGPT strict protocol validation
     ChatGpt,
-}
-
-impl Default for PreviewMode {
-    fn default() -> Self {
-        Self::Standard
-    }
 }
 
 impl std::fmt::Display for PreviewMode {

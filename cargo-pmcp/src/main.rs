@@ -210,6 +210,10 @@ enum Commands {
         /// server restart.
         #[arg(long)]
         widgets_dir: Option<String>,
+
+        /// Preview mode: standard (default) or chatgpt (strict ChatGPT protocol validation)
+        #[arg(long, default_value = "standard")]
+        mode: String,
     },
 }
 
@@ -379,6 +383,7 @@ fn execute_command(command: Commands, global_flags: &GlobalFlags) -> Result<()> 
             theme,
             locale,
             widgets_dir,
+            mode,
         } => {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(commands::preview::execute(
@@ -389,6 +394,7 @@ fn execute_command(command: Commands, global_flags: &GlobalFlags) -> Result<()> 
                 theme,
                 locale,
                 widgets_dir,
+                mode,
                 global_flags,
             ))?;
         },

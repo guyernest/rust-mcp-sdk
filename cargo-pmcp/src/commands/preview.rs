@@ -12,8 +12,15 @@ pub async fn execute(
     theme: String,
     locale: String,
     widgets_dir: Option<String>,
+    mode: String,
     global_flags: &crate::commands::GlobalFlags,
 ) -> Result<()> {
+    let preview_mode = if mode == "chatgpt" {
+        mcp_preview::PreviewMode::ChatGpt
+    } else {
+        mcp_preview::PreviewMode::Standard
+    };
+
     if global_flags.should_output() {
         println!("\n{}", "Starting MCP Apps Preview".bright_cyan().bold());
         println!("{}", "─────────────────────────────────".bright_cyan());
@@ -30,6 +37,11 @@ pub async fn execute(
                 dir.bright_magenta()
             );
         }
+        let mode_display = match preview_mode {
+            mcp_preview::PreviewMode::ChatGpt => "ChatGPT Strict".bright_red().bold(),
+            mcp_preview::PreviewMode::Standard => "Standard".bright_green().bold(),
+        };
+        println!("  {} Mode:        {}", "→".blue(), mode_display);
         println!();
     }
 
@@ -42,6 +54,7 @@ pub async fn execute(
         theme,
         locale,
         widgets_dir: widgets_path,
+        mode: preview_mode,
     };
 
     // Open browser if requested
