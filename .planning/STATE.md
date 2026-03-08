@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Completed 43-01-PLAN.md
-last_updated: "2026-03-08T16:08:24.547Z"
-last_activity: 2026-03-08 -- Completed 43-01 foundation plan
+stopped_at: Completed 43-02-PLAN.md
+last_updated: "2026-03-08T16:21:05.419Z"
+last_activity: 2026-03-08 -- Completed 43-02 resources _meta propagation
 progress:
   total_phases: 17
-  completed_phases: 9
+  completed_phases: 10
   total_plans: 20
-  completed_plans: 18
+  completed_plans: 19
   percent: 94
 ---
 
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 ## Current Position
 
 Phase: 43 (chatgpt-mcp-apps-alignment)
-Plan: 1 of 2 (43-01 complete)
-Status: Completed 43-01 -- ResourceInfo._meta field, URI-to-tool-meta index, filtered with_widget_enrichment
-Last activity: 2026-03-08 -- Completed 43-01 foundation plan
+Plan: 2 of 2 (43-02 complete)
+Status: Completed 43-02 -- resources/list and resources/read _meta propagation via deep_merge
+Last activity: 2026-03-08 -- Completed 43-02 resources _meta propagation
 
-Progress: [█████████░] 94%
+Progress: [██████████] 97%
 
 ## Shipped Milestones
 
@@ -80,6 +80,7 @@ v1.6 decisions:
 - [Phase 42-01]: outputSchema is top-level on ToolInfo (MCP spec 2025-06-18); pmcp:outputTypeName remains in annotations as PMCP codegen extension
 - [Phase 42-02]: cargo-pmcp local ToolSchema mirrors SDK ToolInfo with top-level output_schema; all docs and course content updated
 - [Phase 43-01]: ResourceInfo._meta field with serde rename; URI-to-tool-meta index on ServerCore; with_widget_enrichment filtered to openai/toolInvocation/* only
+- [Phase 43-02]: Post-process resources/list with clone and resources/read with deep_merge for _meta propagation from uri_to_tool_meta index
 
 ### Roadmap Evolution
 
@@ -101,6 +102,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-08T16:08:24.544Z
-Stopped at: Completed 43-01-PLAN.md
-Resume: Execute 43-02 to add resources/list and resources/read _meta propagation
+Last session: 2026-03-08T16:21:00Z
+Stopped at: Completed 43-02-PLAN.md
+Resume: Phase 43 complete -- all protocol entry points have correct _meta behavior
