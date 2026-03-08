@@ -292,11 +292,9 @@ pub fn deep_merge(
             Some(base_value) if base_value.is_object() && overlay_value.is_object() => {
                 // Both are objects: recurse
                 let base_obj = base_value.as_object_mut().expect("checked is_object");
-                let overlay_obj = overlay_value
-                    .as_object()
-                    .expect("checked is_object")
-                    .clone();
-                deep_merge(base_obj, overlay_obj);
+                if let serde_json::Value::Object(overlay_obj) = overlay_value {
+                    deep_merge(base_obj, overlay_obj);
+                }
             },
             Some(_existing) => {
                 // Leaf collision: last-in wins
@@ -309,6 +307,21 @@ pub fn deep_merge(
             },
         }
     }
+}
+
+/// Filter a meta map to keys matching a given prefix.
+///
+/// Used to extract subsets of `_meta` for different protocol contexts:
+/// - `"openai/"` for resource descriptor keys
+/// - `"openai/toolInvocation/"` for tools/call response keys
+pub fn filter_meta_by_prefix(
+    meta: &serde_json::Map<String, serde_json::Value>,
+    prefix: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    meta.iter()
+        .filter(|(k, _)| k.starts_with(prefix))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
 }
 
 /// Emit the standard triple-key resource URI format into maps.

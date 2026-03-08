@@ -114,10 +114,7 @@ fn build_uri_to_tool_meta(
             if let Some(serde_json::Value::String(uri)) = meta.get("openai/outputTemplate") {
                 // First tool registered wins (per user decision)
                 map.entry(uri.clone()).or_insert_with(|| {
-                    meta.iter()
-                        .filter(|(k, _)| k.starts_with("openai/"))
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect()
+                    crate::types::ui::filter_meta_by_prefix(meta, "openai/")
                 });
             }
         }
@@ -458,9 +455,12 @@ impl ServerCore {
         // Only resources with URIs in the uri_to_tool_meta index (built from
         // tool _meta at construction) receive _meta -- non-widget resources
         // are unaffected.
-        for resource in &mut result.resources {
-            if let Some(tool_meta) = self.uri_to_tool_meta.get(&resource.uri) {
-                resource.meta = Some(tool_meta.clone());
+        if !self.uri_to_tool_meta.is_empty() {
+            for resource in &mut result.resources {
+                if let Some(tool_meta) = self.uri_to_tool_meta.get(&resource.uri) {
+                    let meta = resource.meta.get_or_insert_with(serde_json::Map::new);
+                    crate::types::ui::deep_merge(meta, tool_meta.clone());
+                }
             }
         }
 
@@ -492,11 +492,13 @@ impl ServerCore {
         // Display keys (from ChatGptAdapter/WidgetMeta) are already in content
         // meta. Descriptor keys (openai/outputTemplate, openai/widgetAccessible,
         // etc.) come from the linked tool's _meta via the uri_to_tool_meta index.
-        for content in &mut result.contents {
-            if let Content::Resource { uri, meta, .. } = content {
-                if let Some(tool_meta) = self.uri_to_tool_meta.get(uri.as_str()) {
-                    let content_meta = meta.get_or_insert_with(serde_json::Map::new);
-                    crate::types::ui::deep_merge(content_meta, tool_meta.clone());
+        if !self.uri_to_tool_meta.is_empty() {
+            for content in &mut result.contents {
+                if let Content::Resource { uri, meta, .. } = content {
+                    if let Some(tool_meta) = self.uri_to_tool_meta.get(uri.as_str()) {
+                        let content_meta = meta.get_or_insert_with(serde_json::Map::new);
+                        crate::types::ui::deep_merge(content_meta, tool_meta.clone());
+                    }
                 }
             }
         }

@@ -593,11 +593,8 @@ impl CallToolResult {
     /// the tool actually has widget metadata.
     pub fn with_widget_enrichment(self, info: &ToolInfo, structured_value: Value) -> Self {
         if let Some(meta) = info.widget_meta() {
-            let filtered: serde_json::Map<String, Value> = meta
-                .iter()
-                .filter(|(k, _)| k.starts_with("openai/toolInvocation/"))
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
+            let filtered =
+                crate::types::ui::filter_meta_by_prefix(meta, "openai/toolInvocation/");
             self.with_structured_content(structured_value)
                 .with_meta(filtered)
         } else {
