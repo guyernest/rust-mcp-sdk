@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Phase 44 context gathered
-last_updated: "2026-03-08T22:16:42.383Z"
-last_activity: 2026-03-08 -- Completed 43-02 resources _meta propagation
+stopped_at: Completed 44-01-PLAN.md
+last_updated: "2026-03-08T22:35:00.000Z"
+last_activity: 2026-03-08 -- Completed 44-01 PreviewMode enum and CLI flag
 progress:
   total_phases: 18
   completed_phases: 10
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** ChatGPT MCP Apps alignment -- Phase 43
+**Current focus:** Improving mcp-preview to support ChatGPT version -- Phase 44
 
 ## Current Position
 
-Phase: 43 (chatgpt-mcp-apps-alignment)
-Plan: 2 of 2 (43-02 complete)
-Status: Completed 43-02 -- resources/list and resources/read _meta propagation via deep_merge
-Last activity: 2026-03-08 -- Completed 43-02 resources _meta propagation
+Phase: 44 (improving-mcp-preview-to-support-chatgpt-version)
+Plan: 1 of 2 (44-01 complete)
+Status: Completed 44-01 -- PreviewMode enum, --mode CLI flag, ConfigResponse keys, _meta passthrough
+Last activity: 2026-03-08 -- Completed 44-01 PreviewMode and CLI flag
 
 Progress: [██████████] 97%
 
@@ -81,6 +81,7 @@ v1.6 decisions:
 - [Phase 42-02]: cargo-pmcp local ToolSchema mirrors SDK ToolInfo with top-level output_schema; all docs and course content updated
 - [Phase 43-01]: ResourceInfo._meta field with serde rename; URI-to-tool-meta index on ServerCore; with_widget_enrichment filtered to openai/toolInvocation/* only
 - [Phase 43-02]: Post-process resources/list with clone and resources/read with deep_merge for _meta propagation from uri_to_tool_meta index
+- [Phase 44-01]: Hard-coded ChatGPT descriptor/invocation keys in api.rs (mcp-preview doesn't depend on pmcp crate); derive(Default) with #[default] for PreviewMode
 
 ### Roadmap Evolution
 
@@ -103,6 +104,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-08T22:16:42.380Z
-Stopped at: Phase 44 context gathered
-Resume: Phase 43 complete -- all protocol entry points have correct _meta behavior
+Last session: 2026-03-08T22:35:00.000Z
+Stopped at: Completed 44-01-PLAN.md
+Resume: Plan 44-02 (browser-side mode awareness) ready to execute
