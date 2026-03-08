@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Completed 43-02-PLAN.md
-last_updated: "2026-03-08T16:24:09.353Z"
+stopped_at: Phase 44 context gathered
+last_updated: "2026-03-08T22:16:42.383Z"
 last_activity: 2026-03-08 -- Completed 43-02 resources _meta propagation
 progress:
-  total_phases: 17
+  total_phases: 18
   completed_phases: 10
   total_plans: 20
   completed_plans: 19
@@ -91,6 +91,7 @@ v1.6 decisions:
 - Phase 41 added: ChatGPT MCP Apps Upgraded Version
 - Phase 42 added: Add outputSchema top level support
 - Phase 43 added: ChatGPT MCP Apps alignment
+- Phase 44 added: Improving mcp-preview to support ChatGPT version
 
 ### Pending Todos
 
@@ -102,6 +103,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-08T16:21:00Z
-Stopped at: Completed 43-02-PLAN.md
+Last session: 2026-03-08T22:16:42.380Z
+Stopped at: Phase 44 context gathered
 Resume: Phase 43 complete -- all protocol entry points have correct _meta behavior
