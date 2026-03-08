@@ -593,8 +593,13 @@ impl CallToolResult {
     /// the tool actually has widget metadata.
     pub fn with_widget_enrichment(self, info: &ToolInfo, structured_value: Value) -> Self {
         if let Some(meta) = info.widget_meta() {
+            let filtered: serde_json::Map<String, Value> = meta
+                .iter()
+                .filter(|(k, _)| k.starts_with("openai/toolInvocation/"))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
             self.with_structured_content(structured_value)
-                .with_meta(meta.clone())
+                .with_meta(filtered)
         } else {
             self
         }
@@ -906,6 +911,9 @@ pub struct ResourceInfo {
     /// MIME type
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
+    /// Optional metadata (e.g., widget descriptor keys for ChatGPT MCP Apps)
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// List resources response.
@@ -1633,6 +1641,7 @@ mod tests {
             name: "test.txt".to_string(),
             description: Some("Test file".to_string()),
             mime_type: Some("text/plain".to_string()),
+            meta: None,
         };
 
         let json = serde_json::to_value(&resource).unwrap();

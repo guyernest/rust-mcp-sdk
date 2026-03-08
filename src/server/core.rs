@@ -99,6 +99,32 @@ pub trait ProtocolHandler {
     fn info(&self) -> &Implementation;
 }
 
+/// Build a URI-to-tool-meta index from registered tool metadata.
+///
+/// Maps resource URIs (from `openai/outputTemplate`) to the linked tool's
+/// `openai/*` `_meta` keys. Used to auto-propagate widget descriptor keys
+/// onto `ResourceInfo` during `resources/list` and `resources/read`.
+/// When multiple tools share the same URI, first tool registered wins.
+fn build_uri_to_tool_meta(
+    tool_infos: &HashMap<String, ToolInfo>,
+) -> HashMap<String, serde_json::Map<String, serde_json::Value>> {
+    let mut map = HashMap::new();
+    for info in tool_infos.values() {
+        if let Some(meta) = info.widget_meta() {
+            if let Some(serde_json::Value::String(uri)) = meta.get("openai/outputTemplate") {
+                // First tool registered wins (per user decision)
+                map.entry(uri.clone()).or_insert_with(|| {
+                    meta.iter()
+                        .filter(|(k, _)| k.starts_with("openai/"))
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect()
+                });
+            }
+        }
+    }
+    map
+}
+
 /// Core server implementation without transport dependencies.
 ///
 /// This struct contains all the business logic for an MCP server without
@@ -121,6 +147,10 @@ pub struct ServerCore {
 
     /// Cached tool metadata (populated at registration, immutable)
     tool_infos: HashMap<String, ToolInfo>,
+
+    /// Cached URI-to-tool-meta index for widget resource `_meta` propagation.
+    /// Maps resource URIs to their linked tool's `openai/*` `_meta` keys.
+    uri_to_tool_meta: HashMap<String, serde_json::Map<String, serde_json::Value>>,
 
     /// Cached prompt metadata (populated at registration, immutable)
     prompt_infos: HashMap<String, PromptInfo>,
@@ -194,12 +224,14 @@ impl ServerCore {
         #[cfg(not(target_arch = "wasm32"))] task_router: Option<Arc<dyn TaskRouter>>,
         stateless_mode: bool,
     ) -> Self {
+        let uri_to_tool_meta = build_uri_to_tool_meta(&tool_infos);
         Self {
             info,
             capabilities,
             tools,
             prompts,
             tool_infos,
+            uri_to_tool_meta,
             prompt_infos,
             resources,
             sampling,
