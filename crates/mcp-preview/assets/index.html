@@ -1626,12 +1626,30 @@
           await this.loadResourceWidget(widgetUri);
           // Give widget time to initialize its bridge listener
           setTimeout(() => {
+            const iframe = document.getElementById('widget-frame');
+
+            // AppBridge delivery (always active for ui/initialize handshake)
             if (this.appBridge) {
               this.appBridge.sendToolInput(this.toolInput);
               this.appBridge.sendToolResult({
                 structuredContent: result.structuredContent,
                 _meta: meta,
               });
+            }
+
+            // ChatGPT mode: supplemental postMessage delivery with JSON-RPC envelope
+            if (this.mode === 'chatgpt' && iframe && iframe.contentWindow) {
+              iframe.contentWindow.postMessage({
+                jsonrpc: '2.0',
+                method: 'ui/notifications/tool-result',
+                params: { structuredContent: result.structuredContent }
+              }, '*');
+
+              // Also set window.openai properties directly (same-origin srcdoc)
+              try {
+                iframe.contentWindow.openai.toolOutput = result.structuredContent;
+                iframe.contentWindow.openai.toolInput = this.toolInput || null;
+              } catch(e) { /* srcdoc cross-origin guard */ }
             }
           }, 300);
           this.logEvent('toolResponse', { tool: this.selectedTool.name, widget: widgetUri });
@@ -1772,6 +1790,21 @@
        */
       wrapWidgetHtml(html) {
         const sc = '<' + '/script>';
+
+        // In ChatGPT mode, inject window.openai stub BEFORE widget-runtime.mjs
+        // so _detectHost() identifies host as "chatgpt"
+        const openaiStub = this.mode === 'chatgpt' ? `
+  <script>
+    window.openai = {
+      toolOutput: null,
+      toolInput: null,
+      theme: '${this.theme || 'light'}',
+      callTool: async (name, args) => {
+        return window.parent.previewRuntime.handleWidgetToolCall(name, args);
+      }
+    };
+  ${sc}` : '';
+
         return `<!DOCTYPE html>
 <html>
 <head>
@@ -1780,6 +1813,7 @@
   <style>
     body { margin: 0; padding: 16px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
   </style>
+${openaiStub}
   <script type="module">
     // Load bridge from shared library via dynamic import
     const { App, installCompat } = await import('/assets/widget-runtime.mjs');
@@ -2023,6 +2057,31 @@ ${html}
         // Update badge count
         this.networkUnreadCount++;
         this.updateNetworkBadge();
+      }
+
+      // =========================================================================
+      // ChatGPT Mode: widget-to-host tool call bridge
+      // =========================================================================
+
+      async handleWidgetToolCall(name, args) {
+        this.logConsole('log', `[ChatGPT] callTool from widget: ${name}`);
+        this.logEvent('chatgptCallTool', { name, args });
+
+        try {
+          const response = await fetch('/api/tools/call', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, arguments: args || {} })
+          });
+          const result = await response.json();
+          if (result.success) {
+            return result.structuredContent || result.content;
+          }
+          throw new Error(result.error || 'Tool call failed');
+        } catch (e) {
+          this.logConsole('error', `[ChatGPT] callTool failed: ${e.message}`);
+          throw e;
+        }
       }
 
       // =========================================================================
