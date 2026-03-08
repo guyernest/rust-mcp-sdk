@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Phase 43 context gathered
-last_updated: "2026-03-08T15:40:29.698Z"
-last_activity: 2026-03-07 -- Completed 42-02 update consumers for top-level outputSchema
+stopped_at: Completed 43-01-PLAN.md
+last_updated: "2026-03-08T16:08:24.547Z"
+last_activity: 2026-03-08 -- Completed 43-01 foundation plan
 progress:
   total_phases: 17
   completed_phases: 9
-  total_plans: 18
-  completed_plans: 17
-  percent: 100
+  total_plans: 20
+  completed_plans: 18
+  percent: 94
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** Add outputSchema top-level support -- Phase 42
+**Current focus:** ChatGPT MCP Apps alignment -- Phase 43
 
 ## Current Position
 
-Phase: 42 (add-outputschema-top-level-support)
-Plan: 2 of 2 (complete)
-Status: Completed 42-02 -- all consumers updated for top-level outputSchema
-Last activity: 2026-03-07 -- Completed 42-02 update consumers for top-level outputSchema
+Phase: 43 (chatgpt-mcp-apps-alignment)
+Plan: 1 of 2 (43-01 complete)
+Status: Completed 43-01 -- ResourceInfo._meta field, URI-to-tool-meta index, filtered with_widget_enrichment
+Last activity: 2026-03-08 -- Completed 43-01 foundation plan
 
-Progress: [██████████] 100%
+Progress: [█████████░] 94%
 
 ## Shipped Milestones
 
@@ -79,6 +79,7 @@ v1.6 decisions:
 - [Phase 41-03]: Used TypedSyncTool::new().with_ui() in scaffold instead of tool_typed_sync_with_description() to enable tool-to-widget linking
 - [Phase 42-01]: outputSchema is top-level on ToolInfo (MCP spec 2025-06-18); pmcp:outputTypeName remains in annotations as PMCP codegen extension
 - [Phase 42-02]: cargo-pmcp local ToolSchema mirrors SDK ToolInfo with top-level output_schema; all docs and course content updated
+- [Phase 43-01]: ResourceInfo._meta field with serde rename; URI-to-tool-meta index on ServerCore; with_widget_enrichment filtered to openai/toolInvocation/* only
 
 ### Roadmap Evolution
 
@@ -100,6 +101,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-08T15:40:29.695Z
-Stopped at: Phase 43 context gathered
-Resume: Phase 42 complete -- all outputSchema consumers updated for MCP spec 2025-06-18
+Last session: 2026-03-08T16:08:24.544Z
+Stopped at: Completed 43-01-PLAN.md
+Resume: Execute 43-02 to add resources/list and resources/read _meta propagation
