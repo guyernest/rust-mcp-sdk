@@ -16,6 +16,30 @@ use crate::handlers;
 use crate::proxy::McpProxy;
 use crate::wasm_builder::{find_workspace_root, WasmBuilder};
 
+/// Preview mode controlling protocol validation strictness
+#[derive(Debug, Clone, PartialEq)]
+pub enum PreviewMode {
+    /// Standard MCP preview (default)
+    Standard,
+    /// ChatGPT strict protocol validation
+    ChatGpt,
+}
+
+impl Default for PreviewMode {
+    fn default() -> Self {
+        Self::Standard
+    }
+}
+
+impl std::fmt::Display for PreviewMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Standard => write!(f, "standard"),
+            Self::ChatGpt => write!(f, "chatgpt"),
+        }
+    }
+}
+
 /// Configuration for the preview server
 #[derive(Debug, Clone)]
 pub struct PreviewConfig {
@@ -36,6 +60,8 @@ pub struct PreviewConfig {
     /// scanning this directory for `.html` files and mapping each to a
     /// `ui://app/{stem}` resource URI.
     pub widgets_dir: Option<PathBuf>,
+    /// Preview mode (standard or chatgpt)
+    pub mode: PreviewMode,
 }
 
 impl Default for PreviewConfig {
@@ -47,6 +73,7 @@ impl Default for PreviewConfig {
             theme: "light".to_string(),
             locale: "en-US".to_string(),
             widgets_dir: None,
+            mode: PreviewMode::default(),
         }
     }
 }
@@ -135,6 +162,13 @@ impl PreviewServer {
                 widgets_dir.display()
             );
         }
+        println!(
+            "\x1b[1;36m║\x1b[0m  Mode:       {:<30}   \x1b[1;36m║\x1b[0m",
+            match config.mode {
+                PreviewMode::ChatGpt => "\x1b[1;31mChatGPT Strict\x1b[0m",
+                PreviewMode::Standard => "\x1b[1;32mStandard\x1b[0m",
+            }
+        );
         println!("\x1b[1;36m╠══════════════════════════════════════════════════╣\x1b[0m");
         println!(
             "\x1b[1;36m║\x1b[0m  Press Ctrl+C to stop                           \x1b[1;36m║\x1b[0m"

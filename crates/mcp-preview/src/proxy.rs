@@ -111,6 +111,8 @@ pub struct ResourceInfo {
     pub description: Option<String>,
     #[serde(default)]
     pub mime_type: Option<String>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none", default)]
+    pub meta: Option<Value>,
 }
 
 /// Content item within a resource read response
@@ -123,12 +125,16 @@ pub struct ResourceContentItem {
     pub text: Option<String>,
     #[serde(default)]
     pub mime_type: Option<String>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none", default)]
+    pub meta: Option<Value>,
 }
 
 /// Result of reading a resource via `resources/read`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceReadResult {
     pub contents: Vec<ResourceContentItem>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none", default)]
+    pub meta: Option<Value>,
 }
 
 /// MCP HTTP Proxy with session-once initialization
@@ -434,6 +440,8 @@ impl McpProxy {
                 .unwrap_or(Value::Array(vec![])),
         )?;
 
-        Ok(ResourceReadResult { contents })
+        let meta = result.get("_meta").cloned();
+
+        Ok(ResourceReadResult { contents, meta })
     }
 }
