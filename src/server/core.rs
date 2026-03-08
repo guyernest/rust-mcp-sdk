@@ -486,7 +486,22 @@ impl ServerCore {
         )
         .with_auth_context(auth_context);
 
-        handler.read(&req.uri, extra).await
+        let mut result = handler.read(&req.uri, extra).await?;
+
+        // Merge tool descriptor keys into content _meta for widget resources.
+        // Display keys (from ChatGptAdapter/WidgetMeta) are already in content
+        // meta. Descriptor keys (openai/outputTemplate, openai/widgetAccessible,
+        // etc.) come from the linked tool's _meta via the uri_to_tool_meta index.
+        for content in &mut result.contents {
+            if let Content::Resource { uri, meta, .. } = content {
+                if let Some(tool_meta) = self.uri_to_tool_meta.get(uri.as_str()) {
+                    let content_meta = meta.get_or_insert_with(serde_json::Map::new);
+                    crate::types::ui::deep_merge(content_meta, tool_meta.clone());
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     /// Handle list resource templates request.
