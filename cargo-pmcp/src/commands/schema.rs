@@ -121,6 +121,13 @@ pub struct ToolSchema {
         skip_serializing_if = "Option::is_none"
     )]
     pub input_schema: Option<Value>,
+    /// Output schema - top-level per MCP spec 2025-06-18
+    #[serde(
+        default,
+        alias = "outputSchema",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub output_schema: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<ToolAnnotations>,
 }
@@ -132,8 +139,9 @@ pub struct ToolSchema {
 /// - `destructiveHint` -> `destructive`
 /// - `idempotentHint` -> `idempotent`
 /// - `openWorldHint` -> `open_world`
-/// - `pmcp:outputSchema` -> `output_schema` (PMCP extension)
 /// - `pmcp:outputTypeName` -> `output_type_name` (PMCP extension)
+///
+/// Note: `outputSchema` is now a top-level field on `ToolSchema` per MCP spec 2025-06-18.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolAnnotations {
@@ -160,12 +168,6 @@ pub struct ToolAnnotations {
     // -------------------------------------------------------------------------
     // PMCP Extensions for Type-Safe Composition
     // -------------------------------------------------------------------------
-    /// JSON Schema for the tool's output type (PMCP extension).
-    ///
-    /// When present, code generators can create typed return structs.
-    #[serde(rename = "pmcp:outputSchema", skip_serializing_if = "Option::is_none")]
-    pub output_schema: Option<Value>,
-
     /// Name of the output type for code generation (PMCP extension).
     ///
     /// Example: "QueryResult" generates `struct QueryResult { ... }`
