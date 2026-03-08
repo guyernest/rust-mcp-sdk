@@ -1622,12 +1622,14 @@
                        || meta['ui/resourceUri']
                        || (meta['ui'] && meta['ui']['resourceUri']);
         if (widgetUri) {
-          // Load widget template from resource URI, then push tool result via AppBridge
-          await this.loadResourceWidget(widgetUri);
-          // Give widget time to initialize its bridge listener
-          setTimeout(() => {
-            const iframe = document.getElementById('widget-frame');
+          const iframe = document.getElementById('widget-frame');
+          const widgetAlreadyLoaded = this.activeResourceUri === widgetUri
+            && this.appBridge
+            && iframe
+            && iframe.style.display !== 'none';
 
+          // Helper: deliver tool result data to the widget via AppBridge + ChatGPT postMessage
+          const deliverToolResult = () => {
             // AppBridge delivery (always active for ui/initialize handshake)
             if (this.appBridge) {
               this.appBridge.sendToolInput(this.toolInput);
@@ -1638,8 +1640,9 @@
             }
 
             // ChatGPT mode: supplemental postMessage delivery with JSON-RPC envelope
-            if (this.mode === 'chatgpt' && iframe && iframe.contentWindow) {
-              iframe.contentWindow.postMessage({
+            const fr = document.getElementById('widget-frame');
+            if (this.mode === 'chatgpt' && fr && fr.contentWindow) {
+              fr.contentWindow.postMessage({
                 jsonrpc: '2.0',
                 method: 'ui/notifications/tool-result',
                 params: { structuredContent: result.structuredContent }
@@ -1647,11 +1650,23 @@
 
               // Also set window.openai properties directly (same-origin srcdoc)
               try {
-                iframe.contentWindow.openai.toolOutput = result.structuredContent;
-                iframe.contentWindow.openai.toolInput = this.toolInput || null;
+                fr.contentWindow.openai.toolOutput = result.structuredContent;
+                fr.contentWindow.openai.toolInput = this.toolInput || null;
               } catch(e) { /* srcdoc cross-origin guard */ }
             }
-          }, 300);
+          };
+
+          if (widgetAlreadyLoaded) {
+            // Widget is already loaded with the same URI -- send data immediately
+            // without reloading the iframe (which would destroy widget state)
+            deliverToolResult();
+          } else {
+            // First load or different URI -- load widget template then deliver data
+            await this.loadResourceWidget(widgetUri);
+            // Give widget time to initialize its bridge listener
+            setTimeout(deliverToolResult, 300);
+          }
+
           this.logEvent('toolResponse', { tool: this.selectedTool.name, widget: widgetUri });
           return;
         }
