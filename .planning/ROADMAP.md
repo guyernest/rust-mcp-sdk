@@ -310,3 +310,14 @@ Plans:
 Plans:
 - [x] 42-01-PLAN.md — Core types migration: ToolAnnotations cleanup, ToolInfo field + builder, TypedToolWithOutput rewire, macro codegen
 - [ ] 42-02-PLAN.md — Consumers: cargo-pmcp schema structs, tests, example, docs update
+
+### Phase 43: ChatGPT MCP Apps alignment
+
+**Goal:** Fix 4 protocol gaps preventing ChatGPT from rendering MCP Apps widgets -- add _meta to ResourceInfo, filter tools/call _meta to invocation keys only, merge descriptor keys into resources/read _meta, and build URI-to-tool-meta index for auto-propagation
+**Requirements**: None (hotfix-style phase)
+**Depends on:** Phase 42
+**Plans:** 2 plans
+
+Plans:
+- [ ] 43-01-PLAN.md — Add _meta field to ResourceInfo, filter with_widget_enrichment to openai/toolInvocation/*, build URI-to-tool-meta index on ServerCore, update all struct literals
+- [ ] 43-02-PLAN.md — Post-process handle_list_resources and handle_read_resource to propagate tool _meta to resource responses
