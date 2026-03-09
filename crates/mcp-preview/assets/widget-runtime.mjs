@@ -59,24 +59,28 @@ var WidgetRuntime = class {
   }
   _detectCapabilities() {
     const bridge = this._getBridge();
+    const chatgpt = this._getChatGptExtensions();
     return {
       callTool: !!bridge?.callTool,
       readResource: !!bridge?.readResource,
       getPrompt: !!bridge?.getPrompt,
-      state: !!bridge?.getState && !!bridge?.setState,
-      sendMessage: !!bridge?.sendMessage,
+      state: !!chatgpt?.getState && !!chatgpt?.setState,
+      sendMessage: !!chatgpt?.sendMessage,
       openExternal: !!bridge?.openExternal,
       notify: !!bridge?.notify,
       sendIntent: !!bridge?.sendIntent,
-      uploadFile: !!bridge?.uploadFile,
-      downloadFile: !!bridge?.getFileDownloadUrl,
-      displayModes: !!bridge?.requestDisplayMode,
-      intrinsicHeight: !!bridge?.notifyIntrinsicHeight
+      uploadFile: !!chatgpt?.uploadFile,
+      downloadFile: !!chatgpt?.getFileDownloadUrl,
+      displayModes: !!chatgpt?.requestDisplayMode,
+      intrinsicHeight: !!chatgpt?.notifyIntrinsicHeight
     };
   }
   _getBridge() {
     if (typeof window === "undefined") return void 0;
     return window.mcpBridge;
+  }
+  _getChatGptExtensions() {
+    return this._getBridge()?.extensions?.chatgpt;
   }
   _markReady() {
     if (this._ready) return;
@@ -274,9 +278,9 @@ var WidgetRuntime = class {
    * ```
    */
   getState() {
-    const bridge = this._getBridge();
-    if (bridge?.getState) {
-      return bridge.getState();
+    const chatgpt = this._getChatGptExtensions();
+    if (chatgpt?.getState) {
+      return chatgpt.getState();
     }
     return this._state;
   }
@@ -293,11 +297,11 @@ var WidgetRuntime = class {
    * ```
    */
   setState(state) {
-    const bridge = this._getBridge();
+    const chatgpt = this._getChatGptExtensions();
     const newState = { ...this._state, ...state };
     this._state = newState;
-    if (bridge?.setState) {
-      bridge.setState(newState);
+    if (chatgpt?.setState) {
+      chatgpt.setState(newState);
     }
   }
   // ===========================================================================
@@ -316,9 +320,9 @@ var WidgetRuntime = class {
    * ```
    */
   sendMessage(message) {
-    const bridge = this._getBridge();
-    if (bridge?.sendMessage) {
-      bridge.sendMessage(message);
+    const chatgpt = this._getChatGptExtensions();
+    if (chatgpt?.sendMessage) {
+      chatgpt.sendMessage(message);
     } else {
       console.warn("sendMessage not supported on this host");
     }
@@ -410,8 +414,8 @@ var WidgetRuntime = class {
    * ```
    */
   getToolInput() {
-    const bridge = this._getBridge();
-    return bridge?.toolInput ?? window.openai?.toolInput ?? {};
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.toolInput ?? window.openai?.toolInput ?? {};
   }
   /**
    * Get the structured content returned by the tool.
@@ -427,8 +431,8 @@ var WidgetRuntime = class {
    * ```
    */
   getToolOutput() {
-    const bridge = this._getBridge();
-    return bridge?.toolOutput ?? window.openai?.toolOutput;
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.toolOutput ?? window.openai?.toolOutput;
   }
   /**
    * Get the tool response metadata (_meta payload).
@@ -446,8 +450,8 @@ var WidgetRuntime = class {
    * ```
    */
   getToolResponseMetadata() {
-    const bridge = this._getBridge();
-    return bridge?.toolResponseMetadata ?? window.openai?.toolResponseMetadata ?? {};
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.toolResponseMetadata ?? window.openai?.toolResponseMetadata ?? {};
   }
   // ===========================================================================
   // Public API - File Operations (ChatGPT)
@@ -473,10 +477,10 @@ var WidgetRuntime = class {
    * ```
    */
   async uploadFile(file) {
-    const bridge = this._getBridge();
-    if (bridge?.uploadFile) {
+    const chatgpt = this._getChatGptExtensions();
+    if (chatgpt?.uploadFile) {
       try {
-        return await bridge.uploadFile(file);
+        return await chatgpt.uploadFile(file);
       } catch (error) {
         console.error("Failed to upload file:", error);
         return null;
@@ -511,10 +515,10 @@ var WidgetRuntime = class {
    * ```
    */
   async getFileDownloadUrl(fileId) {
-    const bridge = this._getBridge();
-    if (bridge?.getFileDownloadUrl) {
+    const chatgpt = this._getChatGptExtensions();
+    if (chatgpt?.getFileDownloadUrl) {
       try {
-        const result = await bridge.getFileDownloadUrl(fileId);
+        const result = await chatgpt.getFileDownloadUrl(fileId);
         return result.downloadUrl;
       } catch (error) {
         console.error("Failed to get file download URL:", error);
@@ -554,10 +558,10 @@ var WidgetRuntime = class {
    * ```
    */
   async requestDisplayMode(mode) {
-    const bridge = this._getBridge();
-    if (bridge?.requestDisplayMode) {
+    const chatgpt = this._getChatGptExtensions();
+    if (chatgpt?.requestDisplayMode) {
       try {
-        await bridge.requestDisplayMode(mode);
+        await chatgpt.requestDisplayMode(mode);
         return true;
       } catch (error) {
         console.error("Failed to request display mode:", error);
@@ -588,9 +592,9 @@ var WidgetRuntime = class {
    * ```
    */
   requestClose() {
-    const bridge = this._getBridge();
-    if (bridge?.requestClose) {
-      bridge.requestClose();
+    const chatgpt = this._getChatGptExtensions();
+    if (chatgpt?.requestClose) {
+      chatgpt.requestClose();
     } else if (window.openai?.requestClose) {
       window.openai.requestClose();
     } else {
@@ -612,9 +616,9 @@ var WidgetRuntime = class {
    * ```
    */
   notifyIntrinsicHeight(height) {
-    const bridge = this._getBridge();
-    if (bridge?.notifyIntrinsicHeight) {
-      bridge.notifyIntrinsicHeight(height);
+    const chatgpt = this._getChatGptExtensions();
+    if (chatgpt?.notifyIntrinsicHeight) {
+      chatgpt.notifyIntrinsicHeight(height);
     } else if (window.openai?.notifyIntrinsicHeight) {
       window.openai.notifyIntrinsicHeight(height);
     }
@@ -632,9 +636,9 @@ var WidgetRuntime = class {
    * ```
    */
   setOpenInAppUrl(href) {
-    const bridge = this._getBridge();
-    if (bridge?.setOpenInAppUrl) {
-      bridge.setOpenInAppUrl(href);
+    const chatgpt = this._getChatGptExtensions();
+    if (chatgpt?.setOpenInAppUrl) {
+      chatgpt.setOpenInAppUrl(href);
     } else if (window.openai?.setOpenInAppUrl) {
       window.openai.setOpenInAppUrl({ href });
     }
@@ -654,8 +658,8 @@ var WidgetRuntime = class {
    * ```
    */
   get theme() {
-    const bridge = this._getBridge();
-    return bridge?.theme ?? window.openai?.theme ?? "light";
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.theme ?? window.openai?.theme ?? "light";
   }
   /**
    * Get the current locale.
@@ -669,8 +673,8 @@ var WidgetRuntime = class {
    * ```
    */
   get locale() {
-    const bridge = this._getBridge();
-    return bridge?.locale ?? window.openai?.locale ?? "en-US";
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.locale ?? window.openai?.locale ?? "en-US";
   }
   /**
    * Get the current display mode.
@@ -678,8 +682,8 @@ var WidgetRuntime = class {
    * @returns 'inline', 'pip', or 'fullscreen'
    */
   get currentDisplayMode() {
-    const bridge = this._getBridge();
-    return bridge?.displayMode ?? window.openai?.displayMode ?? "inline";
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.displayMode ?? window.openai?.displayMode ?? "inline";
   }
   /**
    * Get the maximum height available for the widget.
@@ -687,8 +691,8 @@ var WidgetRuntime = class {
    * @returns Height in pixels, or undefined if not available
    */
   get maxHeight() {
-    const bridge = this._getBridge();
-    return bridge?.maxHeight ?? window.openai?.maxHeight;
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.maxHeight ?? window.openai?.maxHeight;
   }
   /**
    * Get the safe area insets.
@@ -696,8 +700,8 @@ var WidgetRuntime = class {
    * @returns Safe area insets, or undefined if not available
    */
   get safeArea() {
-    const bridge = this._getBridge();
-    return bridge?.safeArea ?? window.openai?.safeArea;
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.safeArea ?? window.openai?.safeArea;
   }
   /**
    * Get the widget view type.
@@ -705,8 +709,8 @@ var WidgetRuntime = class {
    * @returns 'default' or 'compact'
    */
   get view() {
-    const bridge = this._getBridge();
-    return bridge?.view ?? window.openai?.view ?? "default";
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.view ?? window.openai?.view ?? "default";
   }
   /**
    * Get the user agent string of the host.
@@ -714,8 +718,8 @@ var WidgetRuntime = class {
    * @returns User agent string, or undefined if not available
    */
   get userAgent() {
-    const bridge = this._getBridge();
-    return bridge?.userAgent ?? window.openai?.userAgent;
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.userAgent ?? window.openai?.userAgent;
   }
   // ===========================================================================
   // Public API - Events
@@ -1023,7 +1027,7 @@ var App = class {
       return;
     }
     try {
-      await this._transport.send("ui/message", params);
+      await this._transport.send("ui/sendMessage", params);
     } catch (err) {
       console.warn("[App] sendMessage not supported by host:", err);
     }
@@ -1039,7 +1043,7 @@ var App = class {
       return;
     }
     try {
-      await this._transport.send("ui/open-link", params);
+      await this._transport.send("ui/openLink", params);
     } catch (err) {
       console.warn("[App] openLink not supported by host:", err);
     }
@@ -1113,26 +1117,22 @@ var App = class {
   }
   _handleNotification(method, params) {
     switch (method) {
-      case "ui/notifications/tool-input":
-      case "ui/toolInput":  // backward compat
+      case "ui/toolInput":
         if (this.ontoolinput && params) {
           this.ontoolinput(params);
         }
         break;
-      case "ui/notifications/tool-result":
-      case "ui/toolResult":  // backward compat
+      case "ui/toolResult":
         if (this.ontoolresult && params) {
           this.ontoolresult(params);
         }
         break;
-      case "ui/notifications/tool-cancelled":
-      case "ui/toolCancelled":  // backward compat
+      case "ui/toolCancelled":
         if (this.ontoolcancelled) {
           this.ontoolcancelled();
         }
         break;
-      case "ui/notifications/context-changed":
-      case "ui/hostContextChanged":  // backward compat
+      case "ui/hostContextChanged":
         if (params) {
           this._hostContext = params;
           if (this.onhostcontextchanged) {
@@ -1140,8 +1140,7 @@ var App = class {
           }
         }
         break;
-      case "ui/resource-teardown":
-      case "ui/teardown":  // backward compat
+      case "ui/teardown":
         this.destroy();
         break;
     }
@@ -1192,7 +1191,7 @@ var AppBridge = class {
       console.warn("[AppBridge] Not initialized.");
       return;
     }
-    this._transport.notify("ui/notifications/tool-input", params);
+    this._transport.notify("ui/toolInput", params);
   }
   /**
    * Send a tool result notification to the widget.
@@ -1204,7 +1203,7 @@ var AppBridge = class {
       console.warn("[AppBridge] Not initialized.");
       return;
     }
-    this._transport.notify("ui/notifications/tool-result", result);
+    this._transport.notify("ui/toolResult", result);
   }
   /**
    * Send a host context changed notification to the widget.
@@ -1217,7 +1216,7 @@ var AppBridge = class {
       console.warn("[AppBridge] Not initialized.");
       return;
     }
-    this._transport.notify("ui/notifications/context-changed", ctx);
+    this._transport.notify("ui/hostContextChanged", ctx);
   }
   /**
    * Send a teardown notification to the widget.
@@ -1226,7 +1225,7 @@ var AppBridge = class {
     if (!this._transport) {
       return;
     }
-    this._transport.notify("ui/resource-teardown");
+    this._transport.notify("ui/teardown");
   }
   /**
    * Whether the bridge has been initialized.
@@ -1256,16 +1255,8 @@ var AppBridge = class {
   // ===========================================================================
   async _handleRequest(method, params) {
     switch (method) {
-      case "ui/initialize": {
-        const ctx = this._hostContext;
-        // Send initialized notification after responding
-        setTimeout(() => {
-          if (this._transport) {
-            this._transport.notify("ui/notifications/initialized", {});
-          }
-        }, 0);
-        return ctx;
-      }
+      case "ui/initialize":
+        return this._hostContext;
       case "tools/call": {
         const name = params?.name;
         const args = params?.arguments;
@@ -1274,12 +1265,10 @@ var AppBridge = class {
         }
         return await this._toolCallHandler(name, args);
       }
-      case "ui/message":
-      case "ui/sendMessage":  // backward compat
+      case "ui/sendMessage":
         console.log("[AppBridge] Widget sent message:", params);
         return {};
-      case "ui/open-link":
-      case "ui/openLink": {  // backward compat
+      case "ui/openLink": {
         const url = params?.url;
         if (url) {
           window.open(url, "_blank", "noopener,noreferrer");
@@ -1311,6 +1300,78 @@ function unwrapToolResult(result) {
   }
   return result.content ?? result.structuredContent;
 }
+function buildChatGptExtensions() {
+  if (typeof window === "undefined" || !window.openai) {
+    return void 0;
+  }
+  const openai = window.openai;
+  return {
+    getState: () => openai.widgetState ?? {},
+    setState: (state) => {
+      openai.setWidgetState?.(state);
+    },
+    sendMessage: (message) => {
+      openai.sendFollowUpMessage?.({ prompt: message });
+    },
+    uploadFile: async (file) => {
+      if (!openai.uploadFile) {
+        throw new Error("uploadFile not available");
+      }
+      return openai.uploadFile(file);
+    },
+    getFileDownloadUrl: async (fileId) => {
+      if (!openai.getFileDownloadUrl) {
+        throw new Error("getFileDownloadUrl not available");
+      }
+      return openai.getFileDownloadUrl({ fileId });
+    },
+    requestDisplayMode: async (mode) => {
+      if (!openai.requestDisplayMode) {
+        throw new Error("requestDisplayMode not available");
+      }
+      await openai.requestDisplayMode({ mode });
+    },
+    requestClose: () => {
+      openai.requestClose?.();
+    },
+    notifyIntrinsicHeight: (height) => {
+      openai.notifyIntrinsicHeight?.(height);
+    },
+    setOpenInAppUrl: (href) => {
+      openai.setOpenInAppUrl?.({ href });
+    },
+    get toolInput() {
+      return openai.toolInput;
+    },
+    get toolOutput() {
+      return openai.toolOutput;
+    },
+    get toolResponseMetadata() {
+      return openai.toolResponseMetadata;
+    },
+    get theme() {
+      return openai.theme;
+    },
+    get locale() {
+      return openai.locale;
+    },
+    get displayMode() {
+      return openai.displayMode;
+    },
+    get maxHeight() {
+      return openai.maxHeight;
+    },
+    get safeArea() {
+      return openai.safeArea;
+    },
+    get view() {
+      return openai.view;
+    },
+    get userAgent() {
+      return openai.userAgent;
+    }
+  };
+}
 function installCompat(app) {
   if (typeof window === "undefined") {
     return;
@@ -1324,22 +1385,17 @@ function installCompat(app) {
     }
   };
   const getCtx = () => app.getHostContext() ?? {};
+  const chatgptExt = buildChatGptExtensions();
+  const extensions = {};
+  if (chatgptExt) {
+    extensions.chatgpt = chatgptExt;
+  }
   const mcpBridge = {
+    // Standard MCP methods (root level)
     callTool: async (name, args) => {
       warnDeprecation();
       const result = await app.callServerTool({ name, arguments: args });
       return unwrapToolResult(result);
-    },
-    getState: () => {
-      warnDeprecation();
-      return {};
-    },
-    setState: (_state) => {
-      warnDeprecation();
-    },
-    sendMessage: (message) => {
-      warnDeprecation();
-      app.sendMessage({ message });
     },
     openExternal: (url) => {
       warnDeprecation();
@@ -1349,14 +1405,33 @@ function installCompat(app) {
       warnDeprecation();
       app.openLink({ url });
     },
+    // Host-specific extensions namespace
+    extensions,
+    // Legacy flat methods for backward compat (deprecated)
+    getState: () => {
+      warnDeprecation();
+      return chatgptExt?.getState() ?? {};
+    },
+    setState: (state) => {
+      warnDeprecation();
+      chatgptExt?.setState(state);
+    },
+    sendMessage: (message) => {
+      warnDeprecation();
+      if (chatgptExt) {
+        chatgptExt.sendMessage(message);
+      } else {
+        app.sendMessage({ message });
+      }
+    },
     get theme() {
-      return getCtx().theme;
+      return chatgptExt?.theme ?? getCtx().theme;
     },
     get locale() {
-      return getCtx().locale;
+      return chatgptExt?.locale ?? getCtx().locale;
     },
     get displayMode() {
-      return getCtx().displayMode;
+      return chatgptExt?.displayMode ?? getCtx().displayMode;
     }
   };
   window.mcpBridge = mcpBridge;
