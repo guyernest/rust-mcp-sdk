@@ -1538,24 +1538,24 @@ mod tests {
     }
 
     #[test]
-    fn test_widget_meta_resource_uri_emits_triple_keys() {
+    fn test_widget_meta_resource_uri_emits_standard_key_only() {
         let meta = WidgetMeta::new().resource_uri("ui://chess/board.html");
         let map = meta.to_meta_map();
 
-        // Nested ui.resourceUri
+        // Nested ui.resourceUri (standard key)
         let ui_obj = map.get("ui").expect("must have nested 'ui' key");
         assert_eq!(ui_obj["resourceUri"], "ui://chess/board.html");
 
-        // Legacy flat key
-        assert_eq!(
-            map.get("ui/resourceUri"),
-            Some(&json!("ui://chess/board.html"))
+        // No legacy flat key
+        assert!(
+            map.get("ui/resourceUri").is_none(),
+            "must NOT emit legacy flat ui/resourceUri key"
         );
 
-        // ChatGPT alias
-        assert_eq!(
-            map.get("openai/outputTemplate"),
-            Some(&json!("ui://chess/board.html"))
+        // No ChatGPT alias (standard-only)
+        assert!(
+            map.get("openai/outputTemplate").is_none(),
+            "must NOT emit openai/outputTemplate in standard-only mode"
         );
     }
 
@@ -1568,14 +1568,21 @@ mod tests {
         let map = meta.to_meta_map();
 
         let ui_obj = map.get("ui").expect("must have nested 'ui' key");
-        // All fields coexist in the same nested ui object
+        // All standard fields coexist in the nested ui object
         assert_eq!(ui_obj["resourceUri"], "ui://chess/board.html");
         assert_eq!(ui_obj["prefersBorder"], true);
         assert_eq!(ui_obj["domain"], "chess.com");
 
-        // Flat keys also present
-        assert!(map.get("ui/resourceUri").is_some());
-        assert!(map.get("openai/outputTemplate").is_some());
+        // No flat keys in standard-only output
+        assert!(
+            map.get("ui/resourceUri").is_none(),
+            "must NOT emit legacy flat key"
+        );
+        assert!(
+            map.get("openai/outputTemplate").is_none(),
+            "must NOT emit openai/outputTemplate"
+        );
+        // openai/* display keys still emitted via serde (they are widget display fields)
         assert!(map.get("openai/widgetPrefersBorder").is_some());
         assert!(map.get("openai/widgetDomain").is_some());
     }

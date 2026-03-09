@@ -545,16 +545,15 @@ mod tests {
         // Must emit nested format
         let ui_obj = map.get("ui").expect("must have nested 'ui' key");
         assert_eq!(ui_obj["resourceUri"], "ui://test");
-        // Must emit openai/outputTemplate
-        assert_eq!(
-            map.get("openai/outputTemplate"),
-            Some(&serde_json::Value::String("ui://test".to_string()))
+        // Must NOT emit openai/outputTemplate in standard-only mode
+        assert!(
+            map.get("openai/outputTemplate").is_none(),
+            "must NOT emit openai/outputTemplate in standard-only mode"
         );
-        // Must emit legacy flat key for backward compatibility
-        assert_eq!(
-            map.get("ui/resourceUri"),
-            Some(&serde_json::Value::String("ui://test".to_string())),
-            "must have flat ui/resourceUri key for legacy hosts"
+        // Must NOT emit legacy flat key
+        assert!(
+            map.get("ui/resourceUri").is_none(),
+            "must NOT emit legacy flat ui/resourceUri key"
         );
     }
 
@@ -653,31 +652,31 @@ mod tests {
     }
 
     #[test]
-    fn test_build_meta_map_emits_all_three_keys() {
+    fn test_build_meta_map_emits_standard_key_only() {
         let map = ToolUIMetadata::build_meta_map("ui://chess/board");
 
-        // 1. Nested ui.resourceUri
+        // 1. Nested ui.resourceUri (standard key)
         let ui_obj = map.get("ui").expect("must have nested 'ui' key");
         assert_eq!(ui_obj["resourceUri"], "ui://chess/board");
 
-        // 2. Legacy flat key
-        assert_eq!(
-            map.get("ui/resourceUri"),
-            Some(&serde_json::Value::String("ui://chess/board".to_string()))
+        // 2. No legacy flat key
+        assert!(
+            map.get("ui/resourceUri").is_none(),
+            "must NOT emit legacy flat ui/resourceUri key"
         );
 
-        // 3. OpenAI alias
-        assert_eq!(
-            map.get("openai/outputTemplate"),
-            Some(&serde_json::Value::String("ui://chess/board".to_string()))
+        // 3. No OpenAI alias
+        assert!(
+            map.get("openai/outputTemplate").is_none(),
+            "must NOT emit openai/outputTemplate in standard-only mode"
         );
 
-        // Exactly 3 top-level keys
-        assert_eq!(map.len(), 3, "build_meta_map must produce exactly 3 keys");
+        // Exactly 1 top-level key
+        assert_eq!(map.len(), 1, "build_meta_map must produce exactly 1 key (ui)");
     }
 
     #[test]
-    fn test_deep_merge_preserves_flat_key() {
+    fn test_deep_merge_preserves_standard_key() {
         let mut map = ToolUIMetadata::build_meta_map("ui://x");
 
         // Deep merge with additional ui properties
@@ -685,11 +684,10 @@ mod tests {
         overlay.insert("ui".into(), json!({"prefersBorder": true}));
         super::deep_merge(&mut map, overlay);
 
-        // Flat key unaffected by deep merge on "ui" object
-        assert_eq!(
-            map.get("ui/resourceUri"),
-            Some(&serde_json::Value::String("ui://x".to_string())),
-            "flat key must survive deep merge"
+        // No flat key in standard-only output
+        assert!(
+            map.get("ui/resourceUri").is_none(),
+            "flat key must not exist in standard-only output"
         );
 
         // Nested ui.resourceUri still present
@@ -698,6 +696,47 @@ mod tests {
 
         // New property merged in
         assert_eq!(ui_obj["prefersBorder"], true);
+    }
+
+    #[test]
+    fn test_emit_resource_uri_keys_standard_only() {
+        let mut map = serde_json::Map::new();
+        let mut ui_obj = serde_json::Map::new();
+        emit_resource_uri_keys(&mut map, &mut ui_obj, "ui://test/widget");
+
+        // Only inserts into ui_obj
+        assert_eq!(
+            ui_obj.get("resourceUri"),
+            Some(&serde_json::Value::String("ui://test/widget".to_string()))
+        );
+
+        // Does NOT insert flat keys into map
+        assert!(
+            map.get("ui/resourceUri").is_none(),
+            "must NOT insert ui/resourceUri flat key"
+        );
+        assert!(
+            map.get("openai/outputTemplate").is_none(),
+            "must NOT insert openai/outputTemplate"
+        );
+    }
+
+    #[test]
+    fn test_from_metadata_reads_both_nested_and_legacy() {
+        // Nested format
+        let mut nested = HashMap::new();
+        nested.insert("ui".to_string(), json!({"resourceUri": "ui://a"}));
+        let meta = ToolUIMetadata::from_metadata(&nested);
+        assert_eq!(meta.ui_resource_uri, Some("ui://a".to_string()));
+
+        // Legacy flat format (backward compat for reading)
+        let mut legacy = HashMap::new();
+        legacy.insert(
+            "ui/resourceUri".to_string(),
+            serde_json::Value::String("ui://b".to_string()),
+        );
+        let meta = ToolUIMetadata::from_metadata(&legacy);
+        assert_eq!(meta.ui_resource_uri, Some("ui://b".to_string()));
     }
 
     #[test]
