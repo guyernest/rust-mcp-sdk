@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: in-progress
-stopped_at: Completed 45-02 bridge normalization with extensions namespace
-last_updated: "2026-03-09T19:28:06Z"
-last_activity: 2026-03-09 -- Completed 45-02 bridge normalization
+stopped_at: Completed 45-03 standard mode default and example verification
+last_updated: "2026-03-09T20:00:00Z"
+last_activity: 2026-03-09 -- Completed 45-03 preview standard mode and ChatGPT enrichment fix
 progress:
   total_phases: 19
   completed_phases: 11
-  total_plans: 22
-  completed_plans: 21
+  total_plans: 23
+  completed_plans: 22
   percent: 100
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 ## Current Position
 
 Phase: 45 (extend-mcp-apps-support-to-claude-desktop)
-Plan: 2 of 2 (45-02 complete)
-Status: Completed 45-02 -- Bridge normalization with extensions namespace
-Last activity: 2026-03-09 -- Completed 45-02 bridge normalization
+Plan: 3 of 3 (45-03 complete)
+Status: Completed 45-03 -- Standard mode default and ChatGPT enrichment fix
+Last activity: 2026-03-09 -- Completed 45-03 preview standard mode and ChatGPT enrichment
 
 Progress: [██████████] 100%
 
@@ -85,6 +85,7 @@ v1.6 decisions:
 - [Phase 44-02]: AppBridge remains active in ChatGPT mode (postMessage is supplemental); skip iframe reload when same widget URI already loaded to preserve widget state
 - [Phase 45-01]: Standard-only metadata emission by default; build_meta_map returns only ui.resourceUri nested key; host layer enrichment at build time; build_uri_to_tool_meta indexes by standard key; ChatGptAdapter always emits openai/outputTemplate from URI
 - [Phase 45-02]: McpBridge refactored with extensions namespace; ChatGptExtensions isolates ChatGPT methods under extensions.chatgpt; Window intersection type for backward compat; buildChatGptExtensions() delegates to window.openai; legacy flat methods preserved with deprecation
+- [Phase 45-03]: mcp-preview enriches tool/resource _meta with ChatGPT keys in ChatGPT mode; enrich_meta_for_chatgpt derives openai/* from standard ui.resourceUri; pre-existing widget issues documented not fixed
 
 ### Roadmap Evolution
 
@@ -108,6 +109,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-09T19:28:06Z
-Stopped at: Completed 45-02 bridge normalization with extensions namespace
-Resume: Phase 45 complete -- all plans executed
+Last session: 2026-03-09T20:00:00Z
+Stopped at: Completed 45-03 standard mode default and example verification
+Resume: Phase 45 complete -- all 3 plans executed
