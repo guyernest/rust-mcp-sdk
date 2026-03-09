@@ -309,9 +309,11 @@ pub fn deep_merge(
     }
 }
 
-/// The 4 descriptor keys ChatGPT expects on `_meta` for tools/list, resources/list,
-/// and resources/read. Display keys (widgetCSP, widgetPrefersBorder, widgetDescription)
-/// cause ChatGPT's Templates section to fail and must not be included.
+/// The 4 descriptor keys `ChatGPT` expects on `_meta`.
+///
+/// For tools/list, resources/list, and resources/read. Display keys
+/// (`widgetCSP`, `widgetPrefersBorder`, `widgetDescription`) cause
+/// `ChatGPT`'s Templates section to fail and must not be included.
 pub const CHATGPT_DESCRIPTOR_KEYS: &[&str] = &[
     "openai/outputTemplate",
     "openai/toolInvocation/invoking",
@@ -319,9 +321,9 @@ pub const CHATGPT_DESCRIPTOR_KEYS: &[&str] = &[
     "openai/widgetAccessible",
 ];
 
-/// Filter a meta map to only the ChatGPT descriptor keys.
+/// Filter a meta map to only the `ChatGPT` descriptor keys.
 ///
-/// Returns a new map containing only the 4 keys ChatGPT expects.
+/// Returns a new map containing only the 4 keys `ChatGPT` expects.
 /// Used by both `build_uri_to_tool_meta` and `ChatGptAdapter::transform`.
 pub fn filter_to_descriptor_keys(
     meta: &serde_json::Map<String, serde_json::Value>,
