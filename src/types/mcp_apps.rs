@@ -248,9 +248,10 @@ impl WidgetCSP {
 pub struct WidgetMeta {
     /// UI resource URI for this widget.
     ///
-    /// When set, `to_meta_map()` emits the full triple-key format
-    /// (`ui.resourceUri`, `ui/resourceUri`, `openai/outputTemplate`),
-    /// eliminating the need for a separate `build_meta_map` call.
+    /// When set, `to_meta_map()` emits the standard `ui.resourceUri`
+    /// nested key, eliminating the need for a separate `build_meta_map` call.
+    /// Host-specific keys (e.g., `openai/outputTemplate`) are added by the
+    /// host-layer enrichment pipeline at server build time.
     #[serde(skip)]
     pub resource_uri: Option<String>,
 
@@ -294,13 +295,8 @@ impl WidgetMeta {
 
     /// Set the UI resource URI.
     ///
-    /// When set, `to_meta_map()` emits the full triple-key format matching
-    /// the official `registerAppTool` behavior:
-    /// - `ui.resourceUri` (nested)
-    /// - `ui/resourceUri` (legacy flat)
-    /// - `openai/outputTemplate` (ChatGPT alias)
-    ///
-    /// This eliminates the need for a separate `build_meta_map` + merge step.
+    /// When set, `to_meta_map()` emits the standard `ui.resourceUri` nested key.
+    /// Host-specific keys are added by the enrichment pipeline at build time.
     pub fn resource_uri(mut self, uri: impl Into<String>) -> Self {
         self.resource_uri = Some(uri.into());
         self

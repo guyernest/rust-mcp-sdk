@@ -222,11 +222,10 @@ impl UIResourceContents {
 /// Tool metadata for UI resource association
 ///
 /// This extends the tool's `_meta` field to reference a UI resource.
-/// Uses nested `_meta.ui.resourceUri` format for MCP standard compatibility,
-/// plus `openai/outputTemplate` for `ChatGPT` compatibility.
+/// Uses nested `_meta.ui.resourceUri` format (MCP Apps standard).
 ///
 /// Backward compatible: `from_metadata()` reads both nested `"ui"` object
-/// and legacy flat `"ui/resourceUri"` key.
+/// and legacy flat `"ui/resourceUri"` key for reading old-format metadata.
 ///
 /// # Example
 ///
@@ -348,20 +347,21 @@ pub fn filter_meta_by_prefix(
         .collect()
 }
 
-/// Emit the standard triple-key resource URI format into maps.
+/// Emit the standard MCP Apps resource URI key into the nested `ui` object.
 ///
-/// Inserts `resourceUri` into `ui_obj` (nested) and both `ui/resourceUri`
-/// (legacy flat) and `openai/outputTemplate` (`ChatGPT` alias) into `map`.
-/// Single source of truth for the ext-apps dual-emit pattern.
+/// Inserts `resourceUri` into `ui_obj` only. The `map` parameter is kept for
+/// API stability but no flat keys are inserted (legacy `ui/resourceUri` and
+/// `openai/outputTemplate` are no longer emitted by default).
+///
+/// Host-specific keys (e.g., `openai/outputTemplate` for `ChatGPT`) are added
+/// by the host-layer enrichment pipeline at server build time.
 pub fn emit_resource_uri_keys(
-    map: &mut serde_json::Map<String, serde_json::Value>,
+    _map: &mut serde_json::Map<String, serde_json::Value>,
     ui_obj: &mut serde_json::Map<String, serde_json::Value>,
     uri: &str,
 ) {
     let uri_val = serde_json::Value::String(uri.to_string());
-    ui_obj.insert("resourceUri".to_string(), uri_val.clone());
-    map.insert("ui/resourceUri".to_string(), uri_val.clone());
-    map.insert("openai/outputTemplate".to_string(), uri_val);
+    ui_obj.insert("resourceUri".to_string(), uri_val);
 }
 
 /// Build `_meta` from an optional UI resource URI.
@@ -390,17 +390,17 @@ impl ToolUIMetadata {
 
     /// Build a `serde_json::Map` with the standard UI resource `_meta` keys.
     ///
-    /// Produces three top-level keys matching the official `@modelcontextprotocol/ext-apps`
-    /// `registerAppTool` dual-emit behavior:
+    /// Produces one top-level key matching the MCP Apps specification:
     ///
-    /// - `"ui": { "resourceUri": "<uri>" }` — MCP standard nested format
-    /// - `"ui/resourceUri": "<uri>"` — Legacy flat key for older MCP hosts
-    /// - `"openai/outputTemplate": "<uri>"` — `ChatGPT` alias
+    /// - `"ui": { "resourceUri": "<uri>" }` -- MCP standard nested format
+    ///
+    /// Host-specific keys (e.g., `openai/outputTemplate`) are added by the
+    /// host-layer enrichment pipeline, not by this function.
     ///
     /// Used by `ToolInfo::with_ui()`, `TypedTool::metadata()`, and
     /// `ToolUIMetadata::to_metadata()` to ensure consistent `_meta` format.
     pub fn build_meta_map(uri: &str) -> serde_json::Map<String, serde_json::Value> {
-        let mut meta = serde_json::Map::with_capacity(3);
+        let mut meta = serde_json::Map::with_capacity(1);
         let mut ui_obj = serde_json::Map::with_capacity(1);
         emit_resource_uri_keys(&mut meta, &mut ui_obj, uri);
         meta.insert("ui".to_string(), serde_json::Value::Object(ui_obj));
@@ -445,7 +445,8 @@ impl ToolUIMetadata {
 
     /// Convert to metadata `HashMap`
     ///
-    /// Emits nested `"ui"` format plus `"openai/outputTemplate"` for `ChatGPT`.
+    /// Emits standard nested `"ui"` format only. Host-specific keys are added
+    /// by the host-layer enrichment pipeline.
     pub fn to_metadata(&self) -> HashMap<String, serde_json::Value> {
         let mut map = self.additional.clone();
         if let Some(uri) = &self.ui_resource_uri {
