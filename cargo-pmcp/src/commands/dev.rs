@@ -7,6 +7,107 @@ use std::process::Command;
 
 use crate::utils::config::WorkspaceConfig;
 
+/// Binary targets that are Lambda deployment wrappers and cannot run locally.
+const LAMBDA_BINARIES: &[&str] = &["bootstrap"];
+
+/// Resolve the binary target for a server name.
+///
+/// Tries in order:
+/// 1. `{server}-server` (standard convention from `cargo pmcp new`)
+/// 2. `{server}` (direct name match)
+///
+/// Excludes Lambda-only binaries (e.g. `bootstrap`) that cannot run locally.
+/// Uses `cargo metadata` to discover available binary targets.
+fn resolve_server_binary(server: &str) -> Result<String> {
+    let candidates = [format!("{}-server", server), server.to_string()];
+
+    // Use cargo metadata to find available binary targets
+    let output = Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .output()
+        .context("Failed to run cargo metadata")?;
+
+    if !output.status.success() {
+        // Fallback: just try the conventional name
+        return Ok(format!("{}-server", server));
+    }
+
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("Failed to parse cargo metadata")?;
+
+    // Collect all binary target names across all workspace packages
+    let mut available_bins: Vec<String> = Vec::new();
+    if let Some(packages) = metadata["packages"].as_array() {
+        for package in packages {
+            if let Some(targets) = package["targets"].as_array() {
+                for target in targets {
+                    let kinds = target["kind"].as_array();
+                    let is_bin = kinds
+                        .map(|k| k.iter().any(|v| v.as_str() == Some("bin")))
+                        .unwrap_or(false);
+                    if is_bin {
+                        if let Some(name) = target["name"].as_str() {
+                            available_bins.push(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Try each candidate in priority order
+    for candidate in &candidates {
+        if available_bins.contains(candidate) {
+            return Ok(candidate.clone());
+        }
+    }
+
+    // Filter out Lambda-only binaries for the error message
+    let local_bins: Vec<&String> = available_bins
+        .iter()
+        .filter(|b| !LAMBDA_BINARIES.contains(&b.as_str()))
+        .collect();
+    let lambda_bins: Vec<&String> = available_bins
+        .iter()
+        .filter(|b| LAMBDA_BINARIES.contains(&b.as_str()))
+        .collect();
+
+    let mut msg = format!(
+        "No binary target found for server '{}'\n\
+         Tried: {}",
+        server,
+        candidates.join(", "),
+    );
+
+    if local_bins.is_empty() && !lambda_bins.is_empty() {
+        msg.push_str(&format!(
+            "\n\nThis project only has Lambda binaries ({}), which cannot run locally.\n\
+             To add a standalone server binary, create a '{}-server' crate:\n\
+             \n  cargo pmcp new {} --template standalone\n\
+             \nOr add a [[bin]] target to your Cargo.toml with name = \"{}-server\"",
+            lambda_bins
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            server,
+            server,
+            server,
+        ));
+    } else {
+        msg.push_str(&format!(
+            "\nAvailable binary targets: {}",
+            if available_bins.is_empty() {
+                "(none)".to_string()
+            } else {
+                available_bins.join(", ")
+            }
+        ));
+    }
+
+    anyhow::bail!(msg);
+}
+
 /// Start development server
 pub fn execute(
     server: String,
@@ -41,8 +142,8 @@ pub fn execute(
         }
     }
 
-    // Verify server exists
-    let server_binary = format!("{}-server", server);
+    // Resolve the actual binary target name
+    let server_binary = resolve_server_binary(&server)?;
 
     if global_flags.should_output() {
         println!("\n{}", "Step 1: Building server".bright_white().bold());
