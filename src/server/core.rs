@@ -375,13 +375,21 @@ impl ServerCore {
 
         // Convert result to CallToolResult
         let value = result?;
-        let text = serde_json::to_string_pretty(&value)?;
-        let mut call_result = CallToolResult::new(vec![Content::Text { text }]);
 
-        // Enrich with widget metadata so widgets can access data via toolOutput.
-        if let Some(info) = self.tool_infos.get(&req.name) {
-            call_result = call_result.with_widget_enrichment(info, value);
-        }
+        let call_result = if let Some(info) = self
+            .tool_infos
+            .get(&req.name)
+            .filter(|i| i.widget_meta().is_some())
+        {
+            // Widget tool: structured data goes in structuredContent,
+            // text is a brief summary to avoid duplication in `ChatGPT`
+            let summary = summarize_structured_output(&value);
+            CallToolResult::new(vec![Content::Text { text: summary }])
+                .with_widget_enrichment(info, value)
+        } else {
+            let text = serde_json::to_string_pretty(&value)?;
+            CallToolResult::new(vec![Content::Text { text }])
+        };
 
         Ok(call_result)
     }
@@ -946,6 +954,50 @@ impl ServerCore {
     }
 }
 
+/// Generate a brief text summary of structured output for widget tools.
+///
+/// When a tool has widget metadata, `structuredContent` carries the full data
+/// for the widget. The `content` text should be a concise summary rather than
+/// a JSON dump, since `ChatGPT` displays both and duplication is undesirable.
+fn summarize_structured_output(value: &Value) -> String {
+    match value {
+        Value::Array(arr) => format_record_count(arr.len()),
+        Value::Object(map) => {
+            // Look for common collection patterns inside the object
+            // e.g. { "results": [...], "total": 42 } or { "items": [...] }
+            for key in ["results", "items", "data", "records", "rows", "entries"] {
+                if let Some(Value::Array(arr)) = map.get(key) {
+                    return format_record_count(arr.len());
+                }
+            }
+            let field_count = map.len();
+            match field_count {
+                0 => "Empty result.".to_string(),
+                1 => "Result with 1 field.".to_string(),
+                n => format!("Result with {n} fields."),
+            }
+        },
+        Value::String(s) => {
+            if s.len() <= 200 {
+                s.clone()
+            } else {
+                let truncated: String = s.chars().take(200).collect();
+                format!("{truncated}...")
+            }
+        },
+        Value::Null => "No result.".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn format_record_count(len: usize) -> String {
+    match len {
+        0 => "No records returned.".to_string(),
+        1 => "1 record returned.".to_string(),
+        n => format!("{n} records returned."),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1189,5 +1241,58 @@ mod tests {
                 assert!(e.message.contains("not initialized"));
             },
         }
+    }
+
+    #[test]
+    fn test_summarize_array() {
+        let empty = serde_json::json!([]);
+        assert_eq!(summarize_structured_output(&empty), "No records returned.");
+
+        let single = serde_json::json!([{"id": 1}]);
+        assert_eq!(summarize_structured_output(&single), "1 record returned.");
+
+        let multi = serde_json::json!([1, 2, 3, 4, 5]);
+        assert_eq!(summarize_structured_output(&multi), "5 records returned.");
+    }
+
+    #[test]
+    fn test_summarize_object_with_collection() {
+        let val = serde_json::json!({"results": [1, 2, 3], "total": 3});
+        assert_eq!(summarize_structured_output(&val), "3 records returned.");
+
+        let val = serde_json::json!({"items": [], "page": 1});
+        assert_eq!(summarize_structured_output(&val), "No records returned.");
+
+        let val = serde_json::json!({"data": [{"name": "a"}]});
+        assert_eq!(summarize_structured_output(&val), "1 record returned.");
+    }
+
+    #[test]
+    fn test_summarize_plain_object() {
+        let val = serde_json::json!({"name": "test", "value": 42});
+        assert_eq!(summarize_structured_output(&val), "Result with 2 fields.");
+
+        let val = serde_json::json!({});
+        assert_eq!(summarize_structured_output(&val), "Empty result.");
+    }
+
+    #[test]
+    fn test_summarize_primitives() {
+        assert_eq!(summarize_structured_output(&Value::Null), "No result.");
+        assert_eq!(
+            summarize_structured_output(&serde_json::json!("hello")),
+            "hello"
+        );
+        assert_eq!(summarize_structured_output(&serde_json::json!(42)), "42");
+    }
+
+    #[test]
+    fn test_summarize_string_truncation_multibyte() {
+        // Multi-byte chars: each emoji is 4 bytes, 201 of them = 804 bytes
+        let long_emoji = "\u{1F600}".repeat(201);
+        let result = summarize_structured_output(&Value::String(long_emoji));
+        assert!(result.ends_with("..."));
+        // Should not panic and should truncate at char boundary
+        assert!(result.len() > 3);
     }
 }
