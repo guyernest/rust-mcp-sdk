@@ -729,7 +729,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn test_typed_tool_metadata_with_ui_has_openai_output_template() {
+    fn test_typed_tool_metadata_with_ui_has_standard_key_only() {
         let tool = TypedTool::new_with_schema(
             "test_tool",
             json!({"type": "object"}),
@@ -744,10 +744,10 @@ mod tests {
         let ui_obj = meta.get("ui").expect("must have nested 'ui' key");
         assert_eq!(ui_obj["resourceUri"], "ui://widgets/chart.html");
 
-        // Must have openai/outputTemplate
-        assert_eq!(
-            meta.get("openai/outputTemplate").unwrap(),
-            &serde_json::Value::String("ui://widgets/chart.html".to_string())
+        // Must NOT have openai/outputTemplate in standard-only mode
+        assert!(
+            meta.get("openai/outputTemplate").is_none(),
+            "must NOT have openai/outputTemplate in standard-only mode"
         );
     }
 
@@ -764,7 +764,7 @@ mod tests {
     }
 
     #[test]
-    fn test_typed_sync_tool_metadata_with_ui_has_openai_output_template() {
+    fn test_typed_sync_tool_metadata_with_ui_has_standard_key_only() {
         let tool = TypedSyncTool::new_with_schema(
             "test_sync_tool",
             json!({"type": "object"}),
@@ -779,10 +779,10 @@ mod tests {
         let ui_obj = meta.get("ui").expect("must have nested 'ui' key");
         assert_eq!(ui_obj["resourceUri"], "ui://widgets/chart.html");
 
-        // Must have openai/outputTemplate
-        assert_eq!(
-            meta.get("openai/outputTemplate").unwrap(),
-            &serde_json::Value::String("ui://widgets/chart.html".to_string())
+        // Must NOT have openai/outputTemplate in standard-only mode
+        assert!(
+            meta.get("openai/outputTemplate").is_none(),
+            "must NOT have openai/outputTemplate in standard-only mode"
         );
     }
 
@@ -817,10 +817,10 @@ mod tests {
         let ui_obj = meta.get("ui").expect("must have nested 'ui' key");
         assert_eq!(ui_obj["resourceUri"], "ui://widgets/dashboard.html");
 
-        // Must have openai/outputTemplate
-        assert_eq!(
-            meta.get("openai/outputTemplate").unwrap(),
-            &serde_json::Value::String("ui://widgets/dashboard.html".to_string())
+        // Must NOT have openai/outputTemplate in standard-only mode
+        assert!(
+            meta.get("openai/outputTemplate").is_none(),
+            "must NOT have openai/outputTemplate in standard-only mode"
         );
     }
 
@@ -852,9 +852,10 @@ mod tests {
             .as_ref()
             .expect("_meta should be present with UI");
         assert!(meta.get("ui").is_some(), "ui key must be present");
+        // No openai/outputTemplate in standard-only mode
         assert!(
-            meta.get("openai/outputTemplate").is_some(),
-            "openai/outputTemplate must be present"
+            meta.get("openai/outputTemplate").is_none(),
+            "must NOT have openai/outputTemplate in standard-only mode"
         );
 
         // output_schema must be top-level on ToolInfo

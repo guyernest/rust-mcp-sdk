@@ -1967,25 +1967,27 @@ mod tests {
         let ui_obj = meta.get("ui").expect("must have nested 'ui' key");
         assert_eq!(ui_obj["resourceUri"], "ui://w/x.html");
 
-        // Must also have legacy flat "ui/resourceUri" key for backward compat
-        assert_eq!(
-            meta.get("ui/resourceUri"),
-            Some(&json!("ui://w/x.html")),
-            "must have legacy flat ui/resourceUri key"
+        // Must NOT have legacy flat key (standard-only)
+        assert!(
+            meta.get("ui/resourceUri").is_none(),
+            "must NOT have legacy flat ui/resourceUri key in standard-only mode"
         );
     }
 
     #[test]
-    fn test_tool_info_with_ui_openai_output_template() {
+    fn test_tool_info_with_ui_standard_only() {
         let tool = ToolInfo::with_ui("my_tool", None, json!({"type": "object"}), "ui://w/x.html");
 
         let meta = tool._meta.as_ref().unwrap();
 
-        // Must have openai/outputTemplate as ChatGPT alias
-        assert_eq!(
-            meta.get("openai/outputTemplate").unwrap(),
-            &serde_json::Value::String("ui://w/x.html".to_string())
+        // Must NOT have openai/outputTemplate in standard-only mode
+        assert!(
+            meta.get("openai/outputTemplate").is_none(),
+            "must NOT have openai/outputTemplate in standard-only mode"
         );
+
+        // Only 1 top-level key: "ui"
+        assert_eq!(meta.len(), 1, "standard-only _meta should have exactly 1 key");
     }
 
     #[test]
@@ -2074,11 +2076,12 @@ mod tests {
 
     #[test]
     fn test_existing_with_meta_replace_all_unchanged() {
-        // Ensure the existing with_ui constructor still works (replace-all semantics)
+        // Ensure the existing with_ui constructor still works (standard-only)
         let tool = ToolInfo::with_ui("t", None, json!({"type": "object"}), "ui://y");
         let meta = tool._meta.unwrap();
         assert_eq!(meta["ui"]["resourceUri"], "ui://y");
-        assert!(meta.contains_key("openai/outputTemplate"));
+        // No openai/outputTemplate in standard-only mode
+        assert!(!meta.contains_key("openai/outputTemplate"));
     }
 
     #[test]
@@ -2090,16 +2093,18 @@ mod tests {
             .with_widget_meta(WidgetMeta::new().prefers_border(true).domain("x.com"));
         let meta = tool._meta.unwrap();
 
-        // URI keys preserved from with_ui
+        // Standard URI key preserved from with_ui
         assert_eq!(meta["ui"]["resourceUri"], "ui://w/app.html");
-        assert_eq!(meta["ui/resourceUri"], "ui://w/app.html");
-        assert_eq!(meta["openai/outputTemplate"], "ui://w/app.html");
+
+        // No legacy/openai keys in standard-only mode
+        assert!(!meta.contains_key("ui/resourceUri"));
+        assert!(!meta.contains_key("openai/outputTemplate"));
 
         // Widget fields deep-merged into the same ui object
         assert_eq!(meta["ui"]["prefersBorder"], true);
         assert_eq!(meta["ui"]["domain"], "x.com");
 
-        // Flat widget keys also present
+        // Flat widget keys from serde still present (display fields)
         assert_eq!(meta["openai/widgetPrefersBorder"], true);
         assert_eq!(meta["openai/widgetDomain"], "x.com");
     }
@@ -2116,11 +2121,15 @@ mod tests {
         );
         let meta = tool._meta.unwrap();
 
-        // All keys produced from WidgetMeta alone
+        // Standard keys from WidgetMeta
         assert_eq!(meta["ui"]["resourceUri"], "ui://w/app.html");
         assert_eq!(meta["ui"]["prefersBorder"], true);
-        assert_eq!(meta["ui/resourceUri"], "ui://w/app.html");
-        assert_eq!(meta["openai/outputTemplate"], "ui://w/app.html");
+
+        // No legacy/openai keys in standard-only mode
+        assert!(!meta.contains_key("ui/resourceUri"));
+        assert!(!meta.contains_key("openai/outputTemplate"));
+
+        // Flat display key from serde still present
         assert_eq!(meta["openai/widgetPrefersBorder"], true);
     }
 

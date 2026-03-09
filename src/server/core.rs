@@ -99,11 +99,54 @@ pub trait ProtocolHandler {
     fn info(&self) -> &Implementation;
 }
 
+/// Enrich a tool's `_meta` with host-specific keys.
+///
+/// Reads the standard `ui.resourceUri` and adds host-specific aliases.
+/// For `ChatGpt`, this adds `openai/outputTemplate` and default descriptor keys.
+#[cfg(feature = "mcp-apps")]
+pub(crate) fn enrich_meta_for_host(
+    meta: &mut serde_json::Map<String, serde_json::Value>,
+    host: crate::types::mcp_apps::HostType,
+) {
+    use crate::types::mcp_apps::HostType;
+
+    if host == HostType::ChatGpt {
+        // Extract URI from standard nested key
+        if let Some(uri) = meta
+            .get("ui")
+            .and_then(|v| v.get("resourceUri"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+        {
+            meta.insert(
+                "openai/outputTemplate".to_string(),
+                serde_json::Value::String(uri),
+            );
+            // Add default ChatGPT descriptor keys if not already present
+            meta.entry("openai/widgetAccessible".to_string())
+                .or_insert(serde_json::Value::Bool(true));
+        }
+    }
+    // Claude, McpUi, Generic: no enrichment needed (standard keys only)
+}
+
+/// Keys to propagate from tool `_meta` to resource `_meta` via the URI index.
+///
+/// Includes the standard `ui` nested object and all `openai/*` descriptor keys
+/// (which are only present if a host layer was applied). Display-only keys
+/// (`openai/widgetPrefersBorder`, `openai/widgetDescription`, `openai/widgetCSP`,
+/// `openai/widgetDomain`) are excluded to avoid breaking `ChatGPT`'s Templates.
+const RESOURCE_PROPAGATION_PREFIXES: &[&str] = &[
+    "openai/outputTemplate",
+    "openai/toolInvocation/",
+    "openai/widgetAccessible",
+];
+
 /// Build a URI-to-tool-meta index from registered tool metadata.
 ///
-/// Maps resource URIs (from `openai/outputTemplate`) to the linked tool's
-/// `openai/*` `_meta` keys. Used to auto-propagate widget descriptor keys
-/// onto `ResourceInfo` during `resources/list` and `resources/read`.
+/// Maps resource URIs (from `ui.resourceUri` nested key) to the linked tool's
+/// propagation-eligible `_meta` keys. Used to auto-propagate widget descriptor
+/// keys onto `ResourceInfo` during `resources/list` and `resources/read`.
 /// When multiple tools share the same URI, first tool registered wins.
 pub(crate) fn build_uri_to_tool_meta(
     tool_infos: &HashMap<String, ToolInfo>,
@@ -111,10 +154,24 @@ pub(crate) fn build_uri_to_tool_meta(
     let mut map = HashMap::new();
     for info in tool_infos.values() {
         if let Some(meta) = info.widget_meta() {
-            if let Some(serde_json::Value::String(uri)) = meta.get("openai/outputTemplate") {
+            // Index by standard nested ui.resourceUri key
+            let uri = meta
+                .get("ui")
+                .and_then(|v| v.get("resourceUri"))
+                .and_then(|v| v.as_str());
+            if let Some(uri) = uri {
+                // Collect propagation-eligible keys
+                let propagated: serde_json::Map<String, serde_json::Value> = meta
+                    .iter()
+                    .filter(|(k, _)| {
+                        RESOURCE_PROPAGATION_PREFIXES
+                            .iter()
+                            .any(|prefix| k.as_str() == *prefix || k.starts_with(prefix))
+                    })
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
                 // First tool registered wins (per user decision)
-                map.entry(uri.clone())
-                    .or_insert_with(|| crate::types::ui::filter_to_descriptor_keys(meta));
+                map.entry(uri.to_string()).or_insert(propagated);
             }
         }
     }
@@ -145,7 +202,7 @@ pub struct ServerCore {
     tool_infos: HashMap<String, ToolInfo>,
 
     /// Cached URI-to-tool-meta index for widget resource `_meta` propagation.
-    /// Maps resource URIs to their linked tool's `openai/*` `_meta` keys.
+    /// Maps resource URIs (from `ui.resourceUri`) to propagation-eligible `_meta` keys.
     uri_to_tool_meta: HashMap<String, serde_json::Map<String, serde_json::Value>>,
 
     /// Cached prompt metadata (populated at registration, immutable)

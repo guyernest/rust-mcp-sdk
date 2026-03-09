@@ -109,10 +109,10 @@ impl UIAdapter for ChatGptAdapter {
     fn transform(&self, uri: &str, name: &str, html: &str) -> TransformedResource {
         let injected_html = self.inject_bridge(html);
 
-        // Only emit the 4 descriptor keys ChatGPT expects.
-        // Display keys (widgetCSP, widgetPrefersBorder, widgetDescription) cause
-        // ChatGPT's Templates section to fail, so they are deliberately excluded.
-        let metadata: HashMap<String, Value> = self
+        // Build ChatGPT descriptor metadata.
+        // Start with any descriptor keys from widget_meta (e.g., openai/widgetAccessible),
+        // then ensure openai/outputTemplate is always set from the resource URI.
+        let mut metadata: HashMap<String, Value> = self
             .widget_meta
             .as_ref()
             .map(|wm| {
@@ -121,6 +121,11 @@ impl UIAdapter for ChatGptAdapter {
                     .collect()
             })
             .unwrap_or_default();
+
+        // ChatGptAdapter always emits openai/outputTemplate from the resource URI
+        metadata
+            .entry("openai/outputTemplate".to_string())
+            .or_insert_with(|| Value::String(uri.to_string()));
 
         TransformedResource {
             uri: uri.to_string(),
@@ -718,9 +723,25 @@ mod tests {
         let html = "<html><body></body></html>";
         let transformed = adapter.transform("ui://test/widget.html", "Test Widget", html);
 
+        // Display keys should NOT be in metadata
         assert!(
-            transformed.metadata.is_empty(),
+            !transformed
+                .metadata
+                .contains_key("openai/widgetPrefersBorder"),
             "display keys should be stripped from ChatGPT metadata"
+        );
+        assert!(
+            !transformed
+                .metadata
+                .contains_key("openai/widgetDescription"),
+            "display keys should be stripped from ChatGPT metadata"
+        );
+        // openai/outputTemplate is always present (from URI)
+        assert!(
+            transformed
+                .metadata
+                .contains_key("openai/outputTemplate"),
+            "openai/outputTemplate must always be present in ChatGPT adapter"
         );
     }
 

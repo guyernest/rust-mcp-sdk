@@ -74,6 +74,9 @@ pub struct ServerCoreBuilder {
     task_router: Option<Arc<dyn TaskRouter>>,
     /// Stateless mode for serverless deployments (None = auto-detect)
     stateless_mode: Option<bool>,
+    /// Host-specific metadata layers (e.g., ChatGpt for openai/* keys)
+    #[cfg(feature = "mcp-apps")]
+    host_layers: Vec<crate::types::mcp_apps::HostType>,
 }
 
 impl Default for ServerCoreBuilder {
@@ -103,6 +106,8 @@ impl ServerCoreBuilder {
             #[cfg(not(target_arch = "wasm32"))]
             task_router: None,
             stateless_mode: None, // Auto-detect by default
+            #[cfg(feature = "mcp-apps")]
+            host_layers: Vec::new(),
         }
     }
 
@@ -520,6 +525,35 @@ impl ServerCoreBuilder {
         self
     }
 
+    /// Register a host-specific metadata layer.
+    ///
+    /// By default, only standard MCP Apps keys are emitted in tool `_meta`.
+    /// Call this to add host-specific keys at build time. For example,
+    /// `HostType::ChatGpt` adds `openai/outputTemplate` and
+    /// `openai/widgetAccessible` to tools that have a `ui.resourceUri`.
+    ///
+    /// Duplicate host types are ignored (deduplicated).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use pmcp::types::mcp_apps::HostType;
+    ///
+    /// let server = ServerCoreBuilder::new()
+    ///     .name("my-server")
+    ///     .version("1.0.0")
+    ///     .tool("chess", ChessTool)
+    ///     .with_host_layer(HostType::ChatGpt)
+    ///     .build()?;
+    /// ```
+    #[cfg(feature = "mcp-apps")]
+    pub fn with_host_layer(mut self, host: crate::types::mcp_apps::HostType) -> Self {
+        if !self.host_layers.contains(&host) {
+            self.host_layers.push(host);
+        }
+        self
+    }
+
     /// Enable or disable stateless mode for serverless deployments.
     ///
     /// Stateless mode skips initialization state checking, allowing the server
@@ -751,7 +785,7 @@ impl ServerCoreBuilder {
     /// # Errors
     ///
     /// Returns an error if required fields (name, version) are not set.
-    pub fn build(self) -> Result<ServerCore> {
+    pub fn build(mut self) -> Result<ServerCore> {
         let name = self
             .name
             .ok_or_else(|| Error::validation("Server name is required"))?;
@@ -771,6 +805,18 @@ impl ServerCoreBuilder {
             }
             Arc::new(RwLock::new(tool_middleware_chain))
         };
+
+        // Enrich tool _meta with host-specific keys (e.g., openai/* for ChatGPT)
+        #[cfg(feature = "mcp-apps")]
+        {
+            for host in &self.host_layers {
+                for info in self.tool_infos.values_mut() {
+                    if let Some(meta) = info._meta.as_mut() {
+                        crate::server::core::enrich_meta_for_host(meta, *host);
+                    }
+                }
+            }
+        }
 
         // Determine stateless mode: use explicit setting or auto-detect
         let stateless_mode = self
