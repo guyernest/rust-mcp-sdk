@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Completed 44-02-PLAN.md
-last_updated: "2026-03-08T23:00:10.904Z"
+stopped_at: Phase 45 context gathered
+last_updated: "2026-03-09T18:16:14.832Z"
 last_activity: 2026-03-08 -- Completed 44-02 Protocol tab and ChatGPT emulation
 progress:
-  total_phases: 18
+  total_phases: 19
   completed_phases: 11
   total_plans: 22
   completed_plans: 21
@@ -94,6 +94,7 @@ v1.6 decisions:
 - Phase 42 added: Add outputSchema top level support
 - Phase 43 added: ChatGPT MCP Apps alignment
 - Phase 44 added: Improving mcp-preview to support ChatGPT version
+- Phase 45 added: Extend MCP Apps Support to Claude Desktop
 
 ### Pending Todos
 
@@ -105,6 +106,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-08T23:25:00.000Z
-Stopped at: Completed 44-02-PLAN.md
+Last session: 2026-03-09T18:16:14.825Z
+Stopped at: Phase 45 context gathered
 Resume: Phase 44 complete. Next: Phase 27 (Global Flag Infrastructure) or other planned work
