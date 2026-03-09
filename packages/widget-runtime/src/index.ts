@@ -84,6 +84,8 @@ export type {
   WidgetEvents,
   McpNotification,
   McpBridge,
+  ChatGptExtensions,
+  McpBridgeExtensions,
   // New types for ChatGPT Apps alignment
   DisplayMode,
   DisplayModeOptions,

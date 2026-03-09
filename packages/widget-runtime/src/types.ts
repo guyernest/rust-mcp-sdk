@@ -342,62 +342,40 @@ export interface McpNotification {
 }
 
 // =============================================================================
-// Bridge Interface
+// ChatGPT Extensions
 // =============================================================================
 
 /**
- * The universal MCP bridge API available on window.mcpBridge.
+ * ChatGPT-specific capabilities available under mcpBridge.extensions.chatgpt.
  *
- * This is the low-level bridge injected by the adapters.
- * Use the WidgetRuntime class for a higher-level API.
+ * These methods and properties are only populated when the widget is running
+ * inside ChatGPT (i.e., window.openai is detected).
  */
-export interface McpBridge {
-  /** Call an MCP tool */
-  callTool(name: string, args?: Record<string, unknown>): Promise<unknown>;
-  /** Read an MCP resource */
-  readResource?(uri: string): Promise<unknown>;
-  /** Get an MCP prompt */
-  getPrompt?(name: string, args?: Record<string, unknown>): Promise<unknown>;
-  /** Get current widget state (ChatGPT) */
-  getState?(): WidgetState;
-  /** Set widget state (ChatGPT) */
-  setState?(state: WidgetState): void;
-  /** Send follow-up message (ChatGPT) */
-  sendMessage?(message: string): void;
-  /** Open external URL */
-  openExternal?(url: string): void;
-  /** Send notification (MCP-UI) */
-  notify?(level: NotifyLevel, message: string): void;
-  /** Send intent (MCP-UI) */
-  sendIntent?(action: string, data?: unknown): Promise<unknown>;
-  /** Open link (MCP-UI) */
-  openLink?(url: string): void;
-
-  // ChatGPT Tool Context (NEW)
+export interface ChatGptExtensions {
+  /** Get current widget state */
+  getState(): WidgetState;
+  /** Set widget state */
+  setState(state: WidgetState): void;
+  /** Send follow-up message */
+  sendMessage(message: string): void;
+  /** Upload a file and get a file ID */
+  uploadFile(file: File): Promise<FileUploadResult>;
+  /** Get a temporary download URL for a file */
+  getFileDownloadUrl(fileId: string): Promise<FileDownloadResult>;
+  /** Request a display mode change */
+  requestDisplayMode(mode: DisplayMode): Promise<void>;
+  /** Close the widget */
+  requestClose(): void;
+  /** Report the widget's intrinsic height */
+  notifyIntrinsicHeight(height: number): void;
+  /** Set the URL for the "Open in App" button */
+  setOpenInAppUrl(href: string): void;
   /** Arguments supplied when the tool was invoked */
   readonly toolInput?: Record<string, unknown>;
   /** The structuredContent returned by the tool */
   readonly toolOutput?: unknown;
   /** The _meta payload (widget-only) */
   readonly toolResponseMetadata?: Record<string, unknown>;
-
-  // ChatGPT File Operations (NEW)
-  /** Upload a file and get a file ID */
-  uploadFile?(file: File): Promise<FileUploadResult>;
-  /** Get a temporary download URL for a file */
-  getFileDownloadUrl?(fileId: string): Promise<FileDownloadResult>;
-
-  // ChatGPT Display Modes (NEW)
-  /** Request a display mode change */
-  requestDisplayMode?(mode: DisplayMode): Promise<void>;
-  /** Close the widget */
-  requestClose?(): void;
-  /** Report the widget's intrinsic height */
-  notifyIntrinsicHeight?(height: number): void;
-  /** Set the URL for the "Open in App" button */
-  setOpenInAppUrl?(href: string): void;
-
-  // ChatGPT Environment Context (NEW)
   /** Current theme */
   readonly theme?: Theme;
   /** Current locale */
@@ -408,10 +386,57 @@ export interface McpBridge {
   readonly maxHeight?: number;
   /** Safe area insets */
   readonly safeArea?: SafeArea;
-  /** User agent string */
-  readonly userAgent?: string;
   /** Widget view type */
   readonly view?: WidgetView;
+  /** User agent string */
+  readonly userAgent?: string;
+}
+
+/**
+ * Extensions namespace for host-specific capabilities.
+ *
+ * Each host platform gets its own namespace so that ChatGPT-specific
+ * features don't pollute the standard MCP bridge interface.
+ */
+export interface McpBridgeExtensions {
+  /** ChatGPT-specific capabilities (populated when window.openai detected) */
+  chatgpt?: ChatGptExtensions;
+  /** Reserved for future Claude Desktop extensions */
+  claude?: Record<string, never>;
+}
+
+// =============================================================================
+// Bridge Interface
+// =============================================================================
+
+/**
+ * The universal MCP bridge API available on window.mcpBridge.
+ *
+ * Standard MCP methods live at the root level. Host-specific capabilities
+ * are isolated under the `extensions` namespace.
+ *
+ * Use the WidgetRuntime class for a higher-level API.
+ */
+export interface McpBridge {
+  // Standard MCP methods (root level)
+  /** Call an MCP tool */
+  callTool(name: string, args?: Record<string, unknown>): Promise<unknown>;
+  /** Read an MCP resource */
+  readResource?(uri: string): Promise<unknown>;
+  /** Get an MCP prompt */
+  getPrompt?(name: string, args?: Record<string, unknown>): Promise<unknown>;
+  /** Open external URL */
+  openExternal?(url: string): void;
+  /** Send notification (MCP-UI) */
+  notify?(level: NotifyLevel, message: string): void;
+  /** Send intent (MCP-UI) */
+  sendIntent?(action: string, data?: unknown): Promise<unknown>;
+  /** Open link (MCP-UI) */
+  openLink?(url: string): void;
+
+  // Host-specific extensions namespace
+  /** Host-specific capabilities (ChatGPT, Claude, etc.) */
+  extensions?: McpBridgeExtensions;
 }
 
 /**
@@ -419,7 +444,28 @@ export interface McpBridge {
  */
 declare global {
   interface Window {
-    mcpBridge?: McpBridge;
+    mcpBridge?: McpBridge & {
+      // Legacy flat methods (deprecated -- use extensions.chatgpt instead)
+      getState?(): WidgetState;
+      setState?(state: WidgetState): void;
+      sendMessage?(message: string): void;
+      uploadFile?(file: File): Promise<FileUploadResult>;
+      getFileDownloadUrl?(fileId: string): Promise<FileDownloadResult>;
+      requestDisplayMode?(mode: DisplayMode): Promise<void>;
+      requestClose?(): void;
+      notifyIntrinsicHeight?(height: number): void;
+      setOpenInAppUrl?(href: string): void;
+      readonly toolInput?: Record<string, unknown>;
+      readonly toolOutput?: unknown;
+      readonly toolResponseMetadata?: Record<string, unknown>;
+      readonly theme?: Theme;
+      readonly locale?: string;
+      readonly displayMode?: DisplayMode;
+      readonly maxHeight?: number;
+      readonly safeArea?: SafeArea;
+      readonly userAgent?: string;
+      readonly view?: WidgetView;
+    };
     openai?: {
       // Core operations
       callTool?(name: string, args?: Record<string, unknown>): Promise<unknown>;
