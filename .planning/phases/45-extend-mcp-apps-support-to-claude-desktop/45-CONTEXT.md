@@ -71,6 +71,22 @@ Enable the same MCP server with MCP Apps to serve both ChatGPT and Claude Deskto
 - "Expect more variation in the future as each provider shows their advantage"
 - This is a paradigm shift: ChatGPT-first → standard-first with ChatGPT as an opt-in layer
 
+### Real-World Reference: Open Images MCP Server
+Reference implementation at `/Users/guy/Development/mcp/sdk/pmcp-run/built-in/sql-api/servers/open-images` demonstrates the current ChatGPT-only developer experience. Key patterns to simplify:
+
+**Current pain points (what this phase should improve):**
+1. **Manual ChatGptAdapter + ChatGptToolMeta ceremony** — developer must create ChatGptAdapter, call .transform(), build ChatGptToolMeta with 4 fields, call .to_meta_map(), assign to ResourceConfig.meta — all for each widget resource
+2. **Duplicated invocation messages** — same "Searching images…" / "Images found" strings appear in both widget_resource() calls AND the tool loop match arms
+3. **Manual tool-to-widget matching** — match on tool.name strings to assign _meta, which is fragile and grows linearly
+4. **4-tier bridge fallback in widgets** — every widget HTML has ~40 lines of postMessage + openai:set_globals + window.openai.toolOutput + mcpBridge fallback code written by hand
+5. **No standard-mode path** — everything is ChatGPT-only, so these servers won't work with Claude Desktop without adding standard key emission
+
+**What changes for Open Images after this phase:**
+- The widget HTML bridge fallback simplifies: just use `window.mcpBridge.onToolResult(callback)` — the normalized bridge handles all hosts
+- Resource/tool metadata becomes: standard keys by default + `.with_host_layer(HostType::ChatGpt)` on the server builder for ChatGPT support
+- The ChatGptAdapter is still needed for bridge injection but is no longer the only path
+- ChatGptToolMeta is still used but only emitted when ChatGPT host layer is active
+
 </specifics>
 
 <code_context>
