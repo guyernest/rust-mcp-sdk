@@ -161,7 +161,7 @@ impl PreviewServer {
             "\x1b[1;36m║\x1b[0m  Mode:       {:<30}   \x1b[1;36m║\x1b[0m",
             match config.mode {
                 PreviewMode::ChatGpt => "\x1b[1;31mChatGPT Strict\x1b[0m",
-                PreviewMode::Standard => "\x1b[1;32mStandard\x1b[0m",
+                PreviewMode::Standard => "\x1b[1;32mStandard MCP Apps\x1b[0m",
             }
         );
         println!("\x1b[1;36m╠══════════════════════════════════════════════════╣\x1b[0m");

@@ -21,24 +21,44 @@ pub struct ConfigResponse {
 }
 
 /// Get preview configuration
+///
+/// In standard mode, descriptor and invocation keys are empty (no ChatGPT
+/// extensions active). In chatgpt mode, the full set of ChatGPT-specific
+/// keys is returned so the browser-side AppBridge activates emulation.
 pub async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigResponse> {
+    use crate::server::PreviewMode;
+
+    let is_chatgpt = state.config.mode == PreviewMode::ChatGpt;
+
+    let descriptor_keys = if is_chatgpt {
+        // Mirror of pmcp::types::ui::CHATGPT_DESCRIPTOR_KEYS
+        vec![
+            "openai/outputTemplate".into(),
+            "openai/toolInvocation/invoking".into(),
+            "openai/toolInvocation/invoked".into(),
+            "openai/widgetAccessible".into(),
+        ]
+    } else {
+        vec![]
+    };
+
+    let invocation_keys = if is_chatgpt {
+        vec![
+            "openai/toolInvocation/invoking".into(),
+            "openai/toolInvocation/invoked".into(),
+        ]
+    } else {
+        vec![]
+    };
+
     Json(ConfigResponse {
         mcp_url: state.config.mcp_url.clone(),
         theme: state.config.theme.clone(),
         locale: state.config.locale.clone(),
         initial_tool: state.config.initial_tool.clone(),
         mode: state.config.mode.to_string(),
-        // Mirror of pmcp::types::ui::CHATGPT_DESCRIPTOR_KEYS
-        descriptor_keys: vec![
-            "openai/outputTemplate".into(),
-            "openai/toolInvocation/invoking".into(),
-            "openai/toolInvocation/invoked".into(),
-            "openai/widgetAccessible".into(),
-        ],
-        invocation_keys: vec![
-            "openai/toolInvocation/invoking".into(),
-            "openai/toolInvocation/invoked".into(),
-        ],
+        descriptor_keys,
+        invocation_keys,
     })
 }
 

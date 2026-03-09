@@ -1,7 +1,8 @@
 //! MCP Preview Server
 //!
 //! A browser-based development environment for testing MCP Apps widgets.
-//! Simulates the ChatGPT Apps runtime environment with full bridge support.
+//! Defaults to standard MCP Apps mode with full AppBridge support.
+//! Use `--mode chatgpt` to activate ChatGPT strict protocol emulation.
 //!
 //! # Usage
 //!
