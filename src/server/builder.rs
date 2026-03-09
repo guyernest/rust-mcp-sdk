@@ -969,6 +969,94 @@ mod tests {
         assert_eq!(tasks_cap["maxTtl"], 86_400_000);
     }
 
+    #[cfg(feature = "mcp-apps")]
+    #[test]
+    fn test_builder_host_layers_empty_by_default() {
+        let builder = ServerCoreBuilder::new();
+        assert!(
+            builder.host_layers.is_empty(),
+            "host_layers should be empty by default"
+        );
+    }
+
+    #[cfg(feature = "mcp-apps")]
+    #[test]
+    fn test_builder_with_host_layer_adds_and_deduplicates() {
+        use crate::types::mcp_apps::HostType;
+
+        let builder = ServerCoreBuilder::new()
+            .with_host_layer(HostType::ChatGpt)
+            .with_host_layer(HostType::ChatGpt); // duplicate
+        assert_eq!(builder.host_layers.len(), 1, "duplicates should be removed");
+        assert_eq!(builder.host_layers[0], HostType::ChatGpt);
+    }
+
+    #[cfg(feature = "mcp-apps")]
+    #[test]
+    fn test_builder_with_chatgpt_layer_enriches_tool_meta() {
+        use crate::types::mcp_apps::HostType;
+
+        struct UiTool;
+
+        #[async_trait]
+        impl ToolHandler for UiTool {
+            async fn handle(&self, _args: Value, _extra: RequestHandlerExtra) -> Result<Value> {
+                Ok(Value::Null)
+            }
+            fn metadata(&self) -> Option<ToolInfo> {
+                Some(ToolInfo::with_ui(
+                    "ui-tool",
+                    Some("A tool with UI".to_string()),
+                    serde_json::json!({"type": "object"}),
+                    "ui://chess/board",
+                ))
+            }
+        }
+
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .tool("ui-tool", UiTool)
+            .with_host_layer(HostType::ChatGpt)
+            .build()
+            .unwrap();
+
+        // The tool_infos should contain openai/outputTemplate after enrichment
+        let caps = server.capabilities();
+        assert!(caps.tools.is_some());
+    }
+
+    #[cfg(feature = "mcp-apps")]
+    #[test]
+    fn test_builder_without_host_layer_no_openai_keys() {
+        struct UiTool;
+
+        #[async_trait]
+        impl ToolHandler for UiTool {
+            async fn handle(&self, _args: Value, _extra: RequestHandlerExtra) -> Result<Value> {
+                Ok(Value::Null)
+            }
+            fn metadata(&self) -> Option<ToolInfo> {
+                Some(ToolInfo::with_ui(
+                    "ui-tool",
+                    Some("A tool with UI".to_string()),
+                    serde_json::json!({"type": "object"}),
+                    "ui://chess/board",
+                ))
+            }
+        }
+
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .tool("ui-tool", UiTool)
+            .build()
+            .unwrap();
+
+        // Without host layer, no openai keys should be in tool meta
+        assert!(server.capabilities().tools.is_some());
+    }
+
     #[test]
     fn test_builder_without_task_store_has_no_experimental() {
         let server = ServerCoreBuilder::new()

@@ -1244,6 +1244,98 @@ mod tests {
     }
 
     #[test]
+    fn test_build_uri_to_tool_meta_indexes_by_standard_key() {
+        // Create a tool with standard-only _meta (no openai/* keys)
+        let mut tool_infos = HashMap::new();
+        let mut info = ToolInfo::new(
+            "chess",
+            Some("Chess tool".to_string()),
+            serde_json::json!({"type": "object"}),
+        );
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "ui".to_string(),
+            serde_json::json!({"resourceUri": "ui://chess/board"}),
+        );
+        info._meta = Some(meta);
+        tool_infos.insert("chess".to_string(), info);
+
+        let index = build_uri_to_tool_meta(&tool_infos);
+        // Should index by the standard ui.resourceUri key
+        assert!(
+            index.contains_key("ui://chess/board"),
+            "must index by ui.resourceUri value"
+        );
+    }
+
+    #[cfg(feature = "mcp-apps")]
+    #[test]
+    fn test_build_uri_to_tool_meta_includes_openai_when_present() {
+        // Create a tool with both standard and openai keys (ChatGpt layer was applied)
+        let mut tool_infos = HashMap::new();
+        let mut info = ToolInfo::new(
+            "chess",
+            Some("Chess tool".to_string()),
+            serde_json::json!({"type": "object"}),
+        );
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "ui".to_string(),
+            serde_json::json!({"resourceUri": "ui://chess/board"}),
+        );
+        meta.insert(
+            "openai/outputTemplate".to_string(),
+            serde_json::json!("ui://chess/board"),
+        );
+        meta.insert(
+            "openai/widgetAccessible".to_string(),
+            serde_json::json!(true),
+        );
+        info._meta = Some(meta);
+        tool_infos.insert("chess".to_string(), info);
+
+        let index = build_uri_to_tool_meta(&tool_infos);
+        assert!(index.contains_key("ui://chess/board"));
+        let entry = &index["ui://chess/board"];
+        // Should include the openai keys in the indexed meta
+        assert!(
+            entry.contains_key("openai/outputTemplate"),
+            "must include openai/outputTemplate in index entry"
+        );
+        assert!(
+            entry.contains_key("openai/widgetAccessible"),
+            "must include openai/widgetAccessible in index entry"
+        );
+    }
+
+    #[test]
+    fn test_build_uri_to_tool_meta_standard_only_no_openai() {
+        // Create a tool with standard-only _meta
+        let mut tool_infos = HashMap::new();
+        let mut info = ToolInfo::new(
+            "chess",
+            Some("Chess tool".to_string()),
+            serde_json::json!({"type": "object"}),
+        );
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "ui".to_string(),
+            serde_json::json!({"resourceUri": "ui://chess/board"}),
+        );
+        info._meta = Some(meta);
+        tool_infos.insert("chess".to_string(), info);
+
+        let index = build_uri_to_tool_meta(&tool_infos);
+        assert!(index.contains_key("ui://chess/board"));
+        let entry = &index["ui://chess/board"];
+        // Should NOT have openai keys when not enriched
+        assert!(
+            !entry.contains_key("openai/outputTemplate"),
+            "must NOT have openai/outputTemplate in standard-only index"
+        );
+    }
+
+    #[test]
     fn test_summarize_array() {
         let empty = serde_json::json!([]);
         assert_eq!(summarize_structured_output(&empty), "No records returned.");
