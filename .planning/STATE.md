@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
-status: completed
-stopped_at: Phase 45 context gathered
-last_updated: "2026-03-09T18:16:14.832Z"
-last_activity: 2026-03-08 -- Completed 44-02 Protocol tab and ChatGPT emulation
+status: in-progress
+stopped_at: Completed 45-01 standard-only metadata with host layers
+last_updated: "2026-03-09T19:21:08Z"
+last_activity: 2026-03-09 -- Completed 45-01 standard-only metadata refactor
 progress:
   total_phases: 19
   completed_phases: 11
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** Phase 44 complete -- mcp-preview supports ChatGPT mode
+**Current focus:** Phase 45 -- Extend MCP Apps to Claude Desktop (standard-only metadata)
 
 ## Current Position
 
-Phase: 44 (improving-mcp-preview-to-support-chatgpt-version)
-Plan: 2 of 2 (44-02 complete -- phase done)
-Status: Completed 44-02 -- Protocol tab, ChatGPT postMessage emulation, widget reload fix
-Last activity: 2026-03-08 -- Completed 44-02 Protocol tab and ChatGPT emulation
+Phase: 45 (extend-mcp-apps-support-to-claude-desktop)
+Plan: 1 of 2 (45-01 complete)
+Status: Completed 45-01 -- Standard-only metadata emission with host layer system
+Last activity: 2026-03-09 -- Completed 45-01 standard-only metadata refactor
 
-Progress: [██████████] 100%
+Progress: [█████████░] 50%
 
 ## Shipped Milestones
 
@@ -83,6 +83,7 @@ v1.6 decisions:
 - [Phase 43-02]: Post-process resources/list with clone and resources/read with deep_merge for _meta propagation from uri_to_tool_meta index
 - [Phase 44-01]: Hard-coded ChatGPT descriptor/invocation keys in api.rs (mcp-preview doesn't depend on pmcp crate); derive(Default) with #[default] for PreviewMode
 - [Phase 44-02]: AppBridge remains active in ChatGPT mode (postMessage is supplemental); skip iframe reload when same widget URI already loaded to preserve widget state
+- [Phase 45-01]: Standard-only metadata emission by default; build_meta_map returns only ui.resourceUri nested key; host layer enrichment at build time; build_uri_to_tool_meta indexes by standard key; ChatGptAdapter always emits openai/outputTemplate from URI
 
 ### Roadmap Evolution
 
@@ -106,6 +107,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-09T18:16:14.825Z
-Stopped at: Phase 45 context gathered
-Resume: Phase 44 complete. Next: Phase 27 (Global Flag Infrastructure) or other planned work
+Last session: 2026-03-09T19:21:08Z
+Stopped at: Completed 45-01 standard-only metadata with host layers
+Resume: Phase 45 Plan 02 next: mcp-preview standard mode, widget-runtime bridge, example verification
