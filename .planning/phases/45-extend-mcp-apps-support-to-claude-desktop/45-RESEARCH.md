@@ -481,3 +481,148 @@ Standard spec uses camelCase nested format: `_meta.ui.csp.connectDomains`. ChatG
 
 **Research date:** 2026-03-09
 **Valid until:** 2026-04-09 (stable spec, unlikely to change in 30 days)
+
+---
+
+## Migration Guide: ChatGPT-Only to Cross-Client
+
+**Added:** 2026-03-09 (Phase 45-03 Task 2)
+
+This guide documents the DX simplifications when migrating from a ChatGPT-only MCP Apps server to the standard-first cross-client pattern. Based on analysis of the Open Images MCP server (`pmcp-run/built-in/sql-api/servers/open-images`).
+
+### Server-side (Rust): Before and After
+
+**Before (ChatGPT-only, ~20 lines per widget resource):**
+
+```rust
+use pmcp::server::mcp_apps::{ChatGptAdapter, UIAdapter};
+use pmcp::types::mcp_apps::ChatGptToolMeta;
+
+fn widget_resource(uri: &str, name: &str, html: &str, invoking: &str, invoked: &str)
+    -> ResourceConfig
+{
+    // Step 1: Manual adapter construction
+    let adapter = ChatGptAdapter::new();
+    let transformed = adapter.transform(uri, name, html);
+
+    // Step 2: Manual ChatGptToolMeta construction (4 keys)
+    let meta = ChatGptToolMeta::new()
+        .output_template(uri)        // openai/outputTemplate
+        .invoking(invoking)          // openai/toolInvocation/invoking
+        .invoked(invoked)            // openai/toolInvocation/invoked
+        .widget_accessible(true);    // openai/widgetAccessible
+
+    // Step 3: Manual ResourceConfig assembly
+    ResourceConfig {
+        uri: transformed.uri,
+        name: transformed.name,
+        description: Some(description.to_string()),
+        mime_type: transformed.mime_type.to_string(),
+        content: Some(transformed.content),
+        meta: Some(meta.to_meta_map()),
+    }
+}
+```
+
+**After (standard-first with optional ChatGPT layer):**
+
+```rust
+// Standard metadata is automatic via with_ui() on tool registration.
+// No adapter construction, no manual meta map, no ChatGptToolMeta.
+// The builder emits only _meta.ui.resourceUri by default.
+
+ServerCoreBuilder::new()
+    .name("my-server")
+    .version("1.0.0")
+    .tool("search_images", SearchTool.with_ui())
+    // ChatGPT support is ONE line (opt-in):
+    .with_host_layer(HostType::ChatGpt)
+    .build()?;
+```
+
+**What changes for Open Images specifically:**
+| Before (ChatGPT-only) | After (cross-client) | Lines saved |
+|------------------------|---------------------|-------------|
+| `ChatGptAdapter::new()` + `.transform()` | Automatic via `with_ui()` | ~3 per widget |
+| `ChatGptToolMeta::new().output_template().invoking().invoked().widget_accessible()` | Automatic via host layer enrichment | ~5 per widget |
+| Manual `ResourceConfig` assembly with meta map | Builder handles it | ~8 per widget |
+| 3 widget resources x ~20 lines each = ~60 lines | `.with_host_layer(HostType::ChatGpt)` = 1 line | ~59 lines |
+
+### Widget-side (HTML/JS): Before and After
+
+**Before (4-tier fallback, ~40 lines in image-explorer.html lines 726-773):**
+
+```javascript
+// TIER 1: Listen for tool results via postMessage JSON-RPC
+window.addEventListener('message', function(event) {
+    if (event.source !== window.parent) return;
+    var msg = event.data;
+    if (!msg || msg.jsonrpc !== '2.0') return;
+    if (msg.method === 'ui/notifications/tool-result') {
+        var data = msg.params && msg.params.structuredContent;
+        if (data) handleData(data);
+    }
+}, { passive: true });
+
+// TIER 2: Listen for openai:set_globals (ChatGPT context updates)
+window.addEventListener('openai:set_globals', function(event) {
+    var data = event.detail && event.detail.globals && event.detail.globals.toolOutput;
+    if (data) handleData(data);
+}, { passive: true });
+
+// TIER 3: Check window.openai.toolOutput on load (may already be set)
+function tryOpenAI() {
+    if (window.openai && window.openai.toolOutput) {
+        handleData(window.openai.toolOutput);
+        return true;
+    }
+    return false;
+}
+
+// TIER 4: Legacy mcpBridge support (non-ChatGPT hosts)
+window.addEventListener('mcpBridgeReady', function() {
+    if (window.mcpBridge && window.mcpBridge.toolOutput) {
+        handleData(window.mcpBridge.toolOutput);
+    }
+}, { once: true });
+
+window.addEventListener('widgetStateUpdate', function(e) {
+    var data = e.detail && e.detail.toolOutput;
+    if (data) handleData(data);
+});
+
+// Try immediate sources
+if (!tryOpenAI()) {
+    if (window.mcpBridge && window.mcpBridge.toolOutput) {
+        handleData(window.mcpBridge.toolOutput);
+    }
+}
+```
+
+**After (standard mcpBridge, ~5 lines):**
+
+```javascript
+// The widget-runtime bridge normalizes all delivery mechanisms.
+// One callback handles all hosts (ChatGPT, Claude Desktop, VS Code, etc.)
+window.mcpBridge.onToolResult(function(data) {
+    handleData(data.structuredContent || data);
+});
+```
+
+**DX improvement summary:**
+- Server-side: ~60 lines of boilerplate reduced to 1 line (`.with_host_layer()`)
+- Widget-side: ~40 lines of 4-tier fallback reduced to ~5 lines
+- No more manual ChatGptToolMeta construction
+- No more ChatGptAdapter instantiation per widget
+- No more 4-tier event listener fallback in widget HTML
+- Cross-client by default: works with Claude Desktop, VS Code, Goose without changes
+
+### Example Status: Chess and Map
+
+The chess and map examples (`examples/mcp-apps-chess`, `examples/mcp-apps-map`) currently use `ChatGptAdapter` directly in their server code. This is noted but not blocking for Phase 45-03 -- these examples work correctly in standard preview mode because:
+
+1. `mcp-preview` in standard mode does NOT inject ChatGPT-specific keys, so the bridge operates in standard MCP Apps mode
+2. The `ChatGptAdapter` in the examples handles HTML transformation (bridge injection, MIME type), which works for all hosts
+3. The preview HTML files (`preview.html`) are standalone dev tools, not production widget HTML
+
+**Future cleanup (out of scope for this plan):** Migrate chess/map examples to use `with_ui()` builder pattern instead of manual `ChatGptAdapter` construction, matching the migration guide above.
