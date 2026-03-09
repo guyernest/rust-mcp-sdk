@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: in-progress
-stopped_at: Completed 45-01 standard-only metadata with host layers
-last_updated: "2026-03-09T19:21:08Z"
-last_activity: 2026-03-09 -- Completed 45-01 standard-only metadata refactor
+stopped_at: Completed 45-02 bridge normalization with extensions namespace
+last_updated: "2026-03-09T19:28:06Z"
+last_activity: 2026-03-09 -- Completed 45-02 bridge normalization
 progress:
   total_phases: 19
   completed_phases: 11
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** Phase 45 -- Extend MCP Apps to Claude Desktop (standard-only metadata)
+**Current focus:** Phase 45 -- Extend MCP Apps to Claude Desktop (complete)
 
 ## Current Position
 
 Phase: 45 (extend-mcp-apps-support-to-claude-desktop)
-Plan: 1 of 2 (45-01 complete)
-Status: Completed 45-01 -- Standard-only metadata emission with host layer system
-Last activity: 2026-03-09 -- Completed 45-01 standard-only metadata refactor
+Plan: 2 of 2 (45-02 complete)
+Status: Completed 45-02 -- Bridge normalization with extensions namespace
+Last activity: 2026-03-09 -- Completed 45-02 bridge normalization
 
-Progress: [█████████░] 50%
+Progress: [██████████] 100%
 
 ## Shipped Milestones
 
@@ -84,6 +84,7 @@ v1.6 decisions:
 - [Phase 44-01]: Hard-coded ChatGPT descriptor/invocation keys in api.rs (mcp-preview doesn't depend on pmcp crate); derive(Default) with #[default] for PreviewMode
 - [Phase 44-02]: AppBridge remains active in ChatGPT mode (postMessage is supplemental); skip iframe reload when same widget URI already loaded to preserve widget state
 - [Phase 45-01]: Standard-only metadata emission by default; build_meta_map returns only ui.resourceUri nested key; host layer enrichment at build time; build_uri_to_tool_meta indexes by standard key; ChatGptAdapter always emits openai/outputTemplate from URI
+- [Phase 45-02]: McpBridge refactored with extensions namespace; ChatGptExtensions isolates ChatGPT methods under extensions.chatgpt; Window intersection type for backward compat; buildChatGptExtensions() delegates to window.openai; legacy flat methods preserved with deprecation
 
 ### Roadmap Evolution
 
@@ -107,6 +108,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-09T19:21:08Z
-Stopped at: Completed 45-01 standard-only metadata with host layers
-Resume: Phase 45 Plan 02 next: mcp-preview standard mode, widget-runtime bridge, example verification
+Last session: 2026-03-09T19:28:06Z
+Stopped at: Completed 45-02 bridge normalization with extensions namespace
+Resume: Phase 45 complete -- all plans executed
