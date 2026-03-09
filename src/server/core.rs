@@ -376,22 +376,19 @@ impl ServerCore {
         // Convert result to CallToolResult
         let value = result?;
 
-        let call_result = match self
+        let call_result = if let Some(info) = self
             .tool_infos
             .get(&req.name)
             .filter(|i| i.widget_meta().is_some())
         {
-            Some(info) => {
-                // Widget tool: structured data goes in structuredContent,
-                // text is a brief summary to avoid duplication in ChatGPT
-                let summary = summarize_structured_output(&value);
-                CallToolResult::new(vec![Content::Text { text: summary }])
-                    .with_widget_enrichment(info, value)
-            },
-            None => {
-                let text = serde_json::to_string_pretty(&value)?;
-                CallToolResult::new(vec![Content::Text { text }])
-            },
+            // Widget tool: structured data goes in structuredContent,
+            // text is a brief summary to avoid duplication in `ChatGPT`
+            let summary = summarize_structured_output(&value);
+            CallToolResult::new(vec![Content::Text { text: summary }])
+                .with_widget_enrichment(info, value)
+        } else {
+            let text = serde_json::to_string_pretty(&value)?;
+            CallToolResult::new(vec![Content::Text { text }])
         };
 
         Ok(call_result)
@@ -961,7 +958,7 @@ impl ServerCore {
 ///
 /// When a tool has widget metadata, `structuredContent` carries the full data
 /// for the widget. The `content` text should be a concise summary rather than
-/// a JSON dump, since ChatGPT displays both and duplication is undesirable.
+/// a JSON dump, since `ChatGPT` displays both and duplication is undesirable.
 fn summarize_structured_output(value: &Value) -> String {
     match value {
         Value::Array(arr) => format_record_count(arr.len()),
