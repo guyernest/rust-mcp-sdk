@@ -342,7 +342,7 @@ impl WidgetMeta {
         // Dual-emit: add nested ui object for MCP standard fields
         let mut ui_obj = serde_json::Map::new();
         if let Some(uri) = &self.resource_uri {
-            crate::types::ui::emit_resource_uri_keys(&mut map, &mut ui_obj, uri);
+            crate::types::ui::emit_resource_uri_keys(&mut ui_obj, uri);
         }
         if let Some(prefers) = self.prefers_border {
             ui_obj.insert(

@@ -71,23 +71,11 @@ pub struct ToolsResponse {
 }
 
 /// List available tools from the MCP server.
-///
-/// In ChatGPT mode, enriches each tool's `_meta` with ChatGPT-specific keys
-/// derived from the standard `ui.resourceUri` nested key. This compensates for
-/// the SDK's standard-only metadata emission (Phase 45-01) when mcp-preview
-/// acts as a ChatGPT host emulator.
 pub async fn list_tools(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ToolsResponse>, (StatusCode, String)> {
     match state.proxy.list_tools().await {
-        Ok(mut tools) => {
-            if state.config.mode == crate::server::PreviewMode::ChatGpt {
-                for tool in &mut tools {
-                    enrich_meta_for_chatgpt(&mut tool.meta);
-                }
-            }
-            Ok(Json(ToolsResponse { tools, error: None }))
-        },
+        Ok(tools) => Ok(Json(ToolsResponse { tools, error: None })),
         Err(e) => Ok(Json(ToolsResponse {
             tools: vec![],
             error: Some(e.to_string()),
@@ -104,22 +92,15 @@ pub struct CallToolRequest {
 }
 
 /// Call a tool on the MCP server.
-///
-/// In ChatGPT mode, enriches the response `_meta` with invocation keys
-/// so the protocol tab validates correctly.
 pub async fn call_tool(
     State(state): State<Arc<AppState>>,
     Json(request): Json<CallToolRequest>,
 ) -> Result<Json<ToolCallResult>, (StatusCode, String)> {
-    let mut result = state
+    let result = state
         .proxy
         .call_tool(&request.name, request.arguments)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    if state.config.mode == crate::server::PreviewMode::ChatGpt {
-        enrich_meta_for_chatgpt(&mut result.meta);
-    }
 
     Ok(Json(result))
 }
@@ -209,13 +190,6 @@ pub async fn list_resources(State(state): State<Arc<AppState>>) -> Json<Value> {
                 return json_response(json!({ "resources": [], "error": e.to_string() }));
             }
         },
-    }
-
-    // In ChatGPT mode, enrich each resource's _meta with openai/* keys
-    if state.config.mode == crate::server::PreviewMode::ChatGpt {
-        for resource in &mut all_resources {
-            enrich_value_meta_for_chatgpt(resource);
-        }
     }
 
     json_response(json!({ "resources": all_resources }))
@@ -357,69 +331,6 @@ pub async fn reconnect(State(state): State<Arc<AppState>>) -> Json<Value> {
 pub async fn status(State(state): State<Arc<AppState>>) -> Json<Value> {
     let connected = state.proxy.is_connected().await;
     json_response(json!({ "connected": connected }))
-}
-
-/// Enrich a `_meta` value with ChatGPT-specific keys.
-///
-/// Derives `openai/outputTemplate` from `ui.resourceUri` (nested) or
-/// `ui/resourceUri` (flat legacy key). Also injects default invocation
-/// messages and `widgetAccessible`.
-///
-/// This is the mcp-preview equivalent of the SDK's `enrich_meta_for_host()`
-/// pipeline — required because mcp-preview does not link against the pmcp
-/// crate and the MCP server now emits standard-only metadata by default.
-fn enrich_meta_for_chatgpt(meta: &mut Option<Value>) {
-    let meta_obj = match meta {
-        Some(Value::Object(ref mut map)) => map,
-        _ => return,
-    };
-
-    // Extract resource URI from standard nested key or flat legacy key
-    let resource_uri = meta_obj
-        .get("ui")
-        .and_then(|ui| ui.get("resourceUri"))
-        .and_then(Value::as_str)
-        .or_else(|| {
-            meta_obj
-                .get("ui/resourceUri")
-                .and_then(Value::as_str)
-        })
-        .map(String::from);
-
-    if let Some(uri) = resource_uri {
-        // openai/outputTemplate — the widget URI
-        meta_obj
-            .entry("openai/outputTemplate")
-            .or_insert_with(|| Value::String(uri));
-
-        // openai/widgetAccessible — always true for MCP Apps widgets
-        meta_obj
-            .entry("openai/widgetAccessible")
-            .or_insert_with(|| Value::Bool(true));
-
-        // openai/toolInvocation/invoking — default loading message
-        meta_obj
-            .entry("openai/toolInvocation/invoking")
-            .or_insert_with(|| Value::String("Running...".into()));
-
-        // openai/toolInvocation/invoked — default completed message
-        meta_obj
-            .entry("openai/toolInvocation/invoked")
-            .or_insert_with(|| Value::String("Done".into()));
-    }
-}
-
-/// Enrich a `serde_json::Value` `_meta` field for ChatGPT mode.
-///
-/// Works on loose `Value` objects (e.g., from resource JSON responses).
-fn enrich_value_meta_for_chatgpt(resource: &mut Value) {
-    if let Some(meta_val) = resource.get_mut("_meta") {
-        let mut opt = Some(meta_val.take());
-        enrich_meta_for_chatgpt(&mut opt);
-        if let Some(enriched) = opt {
-            *resource.get_mut("_meta").unwrap() = enriched;
-        }
-    }
 }
 
 /// Wrap a `serde_json::Value` in an Axum `Json` response.

@@ -349,14 +349,12 @@ pub fn filter_meta_by_prefix(
 
 /// Emit the standard MCP Apps resource URI key into the nested `ui` object.
 ///
-/// Inserts `resourceUri` into `ui_obj` only. The `map` parameter is kept for
-/// API stability but no flat keys are inserted (legacy `ui/resourceUri` and
-/// `openai/outputTemplate` are no longer emitted by default).
+/// Inserts `resourceUri` into `ui_obj` only. Legacy flat keys (`ui/resourceUri`,
+/// `openai/outputTemplate`) are no longer emitted by default.
 ///
 /// Host-specific keys (e.g., `openai/outputTemplate` for `ChatGPT`) are added
 /// by the host-layer enrichment pipeline at server build time.
 pub fn emit_resource_uri_keys(
-    _map: &mut serde_json::Map<String, serde_json::Value>,
     ui_obj: &mut serde_json::Map<String, serde_json::Value>,
     uri: &str,
 ) {
@@ -402,7 +400,7 @@ impl ToolUIMetadata {
     pub fn build_meta_map(uri: &str) -> serde_json::Map<String, serde_json::Value> {
         let mut meta = serde_json::Map::with_capacity(1);
         let mut ui_obj = serde_json::Map::with_capacity(1);
-        emit_resource_uri_keys(&mut meta, &mut ui_obj, uri);
+        emit_resource_uri_keys(&mut ui_obj, uri);
         meta.insert("ui".to_string(), serde_json::Value::Object(ui_obj));
         meta
     }
@@ -701,24 +699,13 @@ mod tests {
 
     #[test]
     fn test_emit_resource_uri_keys_standard_only() {
-        let mut map = serde_json::Map::new();
         let mut ui_obj = serde_json::Map::new();
-        emit_resource_uri_keys(&mut map, &mut ui_obj, "ui://test/widget");
+        emit_resource_uri_keys(&mut ui_obj, "ui://test/widget");
 
         // Only inserts into ui_obj
         assert_eq!(
             ui_obj.get("resourceUri"),
             Some(&serde_json::Value::String("ui://test/widget".to_string()))
-        );
-
-        // Does NOT insert flat keys into map
-        assert!(
-            map.get("ui/resourceUri").is_none(),
-            "must NOT insert ui/resourceUri flat key"
-        );
-        assert!(
-            map.get("openai/outputTemplate").is_none(),
-            "must NOT insert openai/outputTemplate"
         );
     }
 

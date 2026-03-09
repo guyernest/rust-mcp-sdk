@@ -166,7 +166,7 @@ pub(crate) fn build_uri_to_tool_meta(
                     .filter(|(k, _)| {
                         RESOURCE_PROPAGATION_PREFIXES
                             .iter()
-                            .any(|prefix| k.as_str() == *prefix || k.starts_with(prefix))
+                            .any(|prefix| k.starts_with(prefix))
                     })
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();

@@ -785,6 +785,7 @@ impl ServerCoreBuilder {
     /// # Errors
     ///
     /// Returns an error if required fields (name, version) are not set.
+    #[allow(unused_mut)]
     pub fn build(mut self) -> Result<ServerCore> {
         let name = self
             .name
