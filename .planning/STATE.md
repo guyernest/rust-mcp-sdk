@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Phase 46 context gathered
-last_updated: "2026-03-10T18:04:20.673Z"
+stopped_at: Completed 46-02-PLAN.md
+last_updated: "2026-03-10T18:37:39.889Z"
 last_activity: 2026-03-09 -- Completed 45-03 preview standard mode and ChatGPT enrichment
 progress:
   total_phases: 20
   completed_phases: 12
-  total_plans: 25
-  completed_plans: 24
+  total_plans: 28
+  completed_plans: 25
   percent: 100
 ---
 
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 
 ## Current Position
 
-Phase: 45 (extend-mcp-apps-support-to-claude-desktop)
-Plan: 3 of 3 (45-03 complete)
-Status: Completed 45-03 -- Standard mode default and ChatGPT enrichment fix
-Last activity: 2026-03-09 -- Completed 45-03 preview standard mode and ChatGPT enrichment
+Phase: 46 (mcp-bridge-review-and-fixes)
+Plan: 2 of 2 (46-02 complete)
+Status: Completed 46-02 -- mcp-preview tool result delivery fix
+Last activity: 2026-03-10 -- Replaced setTimeout with readiness signal, dual method emission
 
-Progress: [██████████] 100%
+Progress: [█████████░] 93%
 
 ## Shipped Milestones
 
@@ -86,6 +86,7 @@ v1.6 decisions:
 - [Phase 45-01]: Standard-only metadata emission by default; build_meta_map returns only ui.resourceUri nested key; host layer enrichment at build time; build_uri_to_tool_meta indexes by standard key; ChatGptAdapter always emits openai/outputTemplate from URI
 - [Phase 45-02]: McpBridge refactored with extensions namespace; ChatGptExtensions isolates ChatGPT methods under extensions.chatgpt; Window intersection type for backward compat; buildChatGptExtensions() delegates to window.openai; legacy flat methods preserved with deprecation
 - [Phase 45-03]: mcp-preview enriches tool/resource _meta with ChatGPT keys in ChatGPT mode; enrich_meta_for_chatgpt derives openai/* from standard ui.resourceUri; pre-existing widget issues documented not fixed
+- [Phase 46-02]: mcp-preview deliverToolResult emits dual ui/toolResult (primary) + ui/notifications/tool-result (fallback); readiness signal replaces 300ms setTimeout with ui/notifications/initialized listener + 3s fallback
 
 ### Roadmap Evolution
 
@@ -110,6 +111,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-10T18:04:20.666Z
-Stopped at: Phase 46 context gathered
-Resume: Phase 45 complete -- all 3 plans executed
+Last session: 2026-03-10T18:36:53Z
+Stopped at: Completed 46-02-PLAN.md
+Resume: Phase 46 plan 02 complete -- readiness signal and dual method emission
