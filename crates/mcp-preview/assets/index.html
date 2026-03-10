@@ -2241,6 +2241,8 @@ ${openaiStub}
       });
 
       // Signal ready -- fires immediately after connect() handshake completes
+      // Send ui/notifications/initialized to host so Bridge diagnostics can track it
+      window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: {} }, '*');
       preview.logEvent('widgetReady', {});
     }
   ${sc}

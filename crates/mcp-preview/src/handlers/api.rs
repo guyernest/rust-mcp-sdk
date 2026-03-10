@@ -188,9 +188,13 @@ pub async fn list_resources(State(state): State<Arc<AppState>>) -> Json<Value> {
     match state.proxy.list_resources().await {
         Ok(resources) => {
             let ui_resources = resources.into_iter().filter(|r| {
-                r.mime_type
+                // Accept resources with HTML MIME types or ui:// URIs (MCP Apps convention)
+                let mime_match = r
+                    .mime_type
                     .as_deref()
-                    .is_some_and(|m| m.to_lowercase().contains("html"))
+                    .is_some_and(|m| m.to_lowercase().contains("html"));
+                let uri_match = r.uri.starts_with("ui://");
+                mime_match || uri_match
             });
             for r in ui_resources {
                 // Avoid duplicates: skip proxy resources whose URI matches a disk widget
