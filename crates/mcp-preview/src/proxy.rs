@@ -166,6 +166,29 @@ async fn check_response(response: reqwest::Response) -> Result<reqwest::Response
     Ok(response)
 }
 
+/// Parse a JSON-RPC response, handling both plain JSON and SSE (text/event-stream).
+///
+/// Streamable HTTP MCP servers may return SSE with `event: message\ndata: {...}`
+/// instead of plain JSON. This function detects the content-type and parses accordingly.
+async fn parse_rpc_response(response: reqwest::Response) -> Result<JsonRpcResponse> {
+    let is_sse = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.contains("text/event-stream"));
+
+    if is_sse {
+        let body = response.text().await?;
+        let json_str = body
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .unwrap_or(&body);
+        Ok(serde_json::from_str(json_str)?)
+    } else {
+        Ok(response.json().await?)
+    }
+}
+
 /// MCP HTTP Proxy with session-once initialization
 ///
 /// The proxy initializes the MCP session exactly once on the first
@@ -262,7 +285,7 @@ impl McpProxy {
 
         let session_id = extract_header(response.headers(), MCP_SESSION_ID);
 
-        let rpc_response: JsonRpcResponse = response.json().await?;
+        let rpc_response: JsonRpcResponse = parse_rpc_response(response).await?;
 
         if let Some(error) = rpc_response.error {
             anyhow::bail!("MCP initialize error: {}", error.message);
@@ -301,7 +324,7 @@ impl McpProxy {
         let req_builder = self.attach_session_id(self.mcp_post().json(&request)).await;
         let response = check_response(req_builder.send().await?).await?;
 
-        let rpc_response: JsonRpcResponse = response.json().await?;
+        let rpc_response: JsonRpcResponse = parse_rpc_response(response).await?;
 
         if let Some(error) = rpc_response.error {
             anyhow::bail!("MCP error: {}", error.message);
