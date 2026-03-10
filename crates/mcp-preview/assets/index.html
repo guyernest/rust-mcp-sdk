@@ -1646,11 +1646,18 @@
               });
             }
 
-            // postMessage delivery: send ui/notifications/tool-result to widget
-            // iframe in all modes so widget addEventListener handlers receive
-            // host-initiated tool results (e.g., tool calls from the tools list).
+            // postMessage delivery: send tool result to widget iframe in all
+            // modes so widget addEventListener handlers receive host-initiated
+            // tool results (e.g., tool calls from the tools list).
             const fr = document.getElementById('widget-frame');
             if (fr && fr.contentWindow) {
+              // Short form (primary -- matches ext-apps SDK App class)
+              fr.contentWindow.postMessage({
+                jsonrpc: '2.0',
+                method: 'ui/toolResult',
+                params: { structuredContent: result.structuredContent, content: result.content, _meta: responseMeta }
+              }, '*');
+              // Long form (fallback -- for older injected bridge scripts)
               fr.contentWindow.postMessage({
                 jsonrpc: '2.0',
                 method: 'ui/notifications/tool-result',
@@ -1673,9 +1680,25 @@
             deliverToolResult();
           } else {
             // First load or different URI -- load widget template then deliver data
+            // Wait for widget readiness signal instead of fragile setTimeout
+            const readyPromise = new Promise((resolve) => {
+              const handler = (event) => {
+                const msg = event.data;
+                if (msg && msg.jsonrpc === '2.0' && msg.method === 'ui/notifications/initialized') {
+                  window.removeEventListener('message', handler);
+                  resolve();
+                }
+              };
+              window.addEventListener('message', handler);
+              // Fallback timeout: some widgets may not send initialized (legacy)
+              setTimeout(() => {
+                window.removeEventListener('message', handler);
+                resolve();
+              }, 3000);
+            });
             await this.loadResourceWidget(widgetUri);
-            // Give widget time to initialize its bridge listener
-            setTimeout(deliverToolResult, 300);
+            await readyPromise;
+            deliverToolResult();
           }
 
           this.logEvent('toolResponse', { tool: this.selectedTool.name, widget: widgetUri });
@@ -1871,8 +1894,8 @@ ${openaiStub}
         }
       });
 
-      // Signal ready
-      setTimeout(() => { preview.logEvent('widgetReady', {}); }, 100);
+      // Signal ready -- fires immediately after connect() handshake completes
+      preview.logEvent('widgetReady', {});
     }
   ${sc}
 </head>
