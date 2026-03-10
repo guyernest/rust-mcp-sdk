@@ -36,8 +36,13 @@ pub trait UIAdapter: Send + Sync {
     /// Inject platform-specific communication bridge into HTML content.
     ///
     /// For ChatGPT Apps, this wraps the HTML with `window.openai` bridge code.
-    /// For MCP Apps, this adds postMessage bridge code.
-    fn inject_bridge(&self, html: &str) -> String;
+    /// For MCP-UI, this adds postMessage bridge code.
+    /// For MCP Apps, returns HTML unchanged — widgets use the ext-apps SDK.
+    ///
+    /// Prefer calling `transform()` instead of this method directly.
+    fn inject_bridge(&self, html: &str) -> String {
+        html.to_string()
+    }
 
     /// Get CSP headers required by this platform.
     fn required_csp(&self) -> Option<WidgetCSP>;
@@ -52,7 +57,8 @@ pub struct TransformedResource {
     pub name: String,
     /// MIME type for this platform.
     pub mime_type: ExtendedUIMimeType,
-    /// Transformed HTML content with platform bridge injected.
+    /// Transformed HTML content (may include platform bridge, or raw HTML
+    /// for SDK-based platforms like MCP Apps).
     pub content: String,
     /// Platform-specific metadata.
     pub metadata: HashMap<String, Value>,
@@ -411,191 +417,19 @@ impl UIAdapter for McpAppsAdapter {
     }
 
     fn transform(&self, uri: &str, name: &str, html: &str) -> TransformedResource {
-        let injected_html = self.inject_bridge(html);
-
+        // Serve the widget HTML as-is. Widget developers use the
+        // @modelcontextprotocol/ext-apps SDK (App class) for host communication.
+        // See GUIDE.md in this directory for recommended patterns.
         TransformedResource {
             uri: uri.to_string(),
             name: name.to_string(),
             mime_type: self.mime_type(),
-            content: injected_html,
+            content: html.to_string(),
             metadata: HashMap::new(),
         }
     }
 
-    fn inject_bridge(&self, html: &str) -> String {
-        // MCP Apps bridge script using postMessage (MCP Apps spec 2025-06-18)
-        let bridge_script = r"
-<script>
-// MCP Apps Bridge - postMessage JSON-RPC (spec 2025-06-18)
-(function() {
-    'use strict';
-
-    var requestId = 0;
-    var pendingRequests = new Map();
-    var hostContext = null;
-    var initialized = false;
-
-    // Method name normalization: long-form spec names → short-form App class names.
-    // IMPORTANT: Keep in sync with packages/widget-runtime/src/app.ts _METHOD_ALIASES
-    var ALIASES = {
-        'ui/notifications/tool-result': 'ui/toolResult',
-        'ui/notifications/tool-input': 'ui/toolInput',
-        'ui/notifications/tool-cancelled': 'ui/toolCancelled',
-        'ui/notifications/host-context-changed': 'ui/hostContextChanged'
-    };
-
-    // Listen for messages from host
-    window.addEventListener('message', function(event) {
-        var msg = event.data;
-
-        if (!msg || msg.jsonrpc !== '2.0') return;
-
-        // Handle responses to our requests
-        if (msg.id !== undefined && pendingRequests.has(msg.id)) {
-            var pending = pendingRequests.get(msg.id);
-            pendingRequests.delete(msg.id);
-            clearTimeout(pending.timer);
-
-            if (msg.error) {
-                pending.reject(new Error(msg.error.message || 'Unknown error'));
-            } else {
-                pending.resolve(msg.result);
-            }
-        }
-
-        // Handle notifications from host
-        if (msg.method && msg.id === undefined) {
-            var method = msg.method;
-            var normalized = ALIASES[method] || method;
-
-            // Dispatch typed callbacks on mcpBridge
-            if (normalized === 'ui/toolResult' && window.mcpBridge && window.mcpBridge._onToolResult) {
-                window.mcpBridge._onToolResult(msg.params);
-            } else if (normalized === 'ui/toolInput' && window.mcpBridge && window.mcpBridge._onToolInput) {
-                window.mcpBridge._onToolInput(msg.params);
-            } else if (normalized === 'ui/toolCancelled' && window.mcpBridge && window.mcpBridge._onToolCancelled) {
-                window.mcpBridge._onToolCancelled();
-            }
-
-            // Always dispatch the raw event for backward compatibility
-            window.dispatchEvent(new CustomEvent('mcpNotification', { detail: msg }));
-        }
-    });
-
-    // Send JSON-RPC request (expects response)
-    function sendRequest(method, params) {
-        return new Promise(function(resolve, reject) {
-            var id = ++requestId;
-            var timer = setTimeout(function() {
-                if (pendingRequests.has(id)) {
-                    pendingRequests.delete(id);
-                    reject(new Error('Request timeout'));
-                }
-            }, 30000);
-
-            pendingRequests.set(id, { resolve: resolve, reject: reject, timer: timer });
-
-            window.parent.postMessage({
-                jsonrpc: '2.0',
-                id: id,
-                method: method,
-                params: params
-            }, '*');
-        });
-    }
-
-    // Send JSON-RPC notification (no response expected)
-    function sendNotification(method, params) {
-        window.parent.postMessage({
-            jsonrpc: '2.0',
-            method: method,
-            params: params
-        }, '*');
-    }
-
-    // Expose bridge API
-    window.mcpBridge = {
-        // Call an MCP tool
-        callTool: function(name, args) {
-            return sendRequest('tools/call', { name: name, arguments: args });
-        },
-
-        // Read a resource
-        readResource: function(uri) {
-            return sendRequest('resources/read', { uri: uri });
-        },
-
-        // Get a prompt
-        getPrompt: function(name, args) {
-            return sendRequest('prompts/get', { name: name, arguments: args });
-        },
-
-        // Send notification
-        notify: function(method, params) {
-            sendNotification(method, params);
-        },
-
-        // Open external link via host
-        openLink: function(url) {
-            return sendRequest('ui/open-link', { url: url });
-        },
-
-        // Send message to host chat
-        sendMessage: function(text) {
-            return sendRequest('ui/message', {
-                role: 'user',
-                content: { type: 'text', text: text }
-            });
-        },
-
-        // Get host context (theme, locale, etc.)
-        getHostContext: function() { return hostContext; },
-
-        // Check if initialization completed
-        isInitialized: function() { return initialized; },
-
-        // Typed notification callback setters
-        // Usage: mcpBridge.onToolResult = function(result) { ... }
-        _onToolResult: null,
-        _onToolInput: null,
-        _onToolCancelled: null,
-
-        set onToolResult(cb) { this._onToolResult = cb; },
-        get onToolResult() { return this._onToolResult; },
-        set onToolInput(cb) { this._onToolInput = cb; },
-        get onToolInput() { return this._onToolInput; },
-        set onToolCancelled(cb) { this._onToolCancelled = cb; },
-        get onToolCancelled() { return this._onToolCancelled; }
-    };
-
-    // Shared finalization after init handshake (success or fallback)
-    function finalizeInit(result) {
-        initialized = true;
-        hostContext = (result && result.hostContext) || null;
-        sendNotification('ui/notifications/initialized', {});
-        window.dispatchEvent(new Event('mcpBridgeReady'));
-    }
-
-    // MCP Apps initialization handshake (spec 2025-06-18):
-    // 1. Widget sends ui/initialize REQUEST (with id) including appInfo
-    // 2. Host responds with hostCapabilities, hostContext
-    // 3. Widget sends ui/notifications/initialized NOTIFICATION
-    sendRequest('ui/initialize', {
-        appInfo: { name: 'pmcp-widget', version: '1.0.0' },
-        protocolVersion: '2025-06-18',
-        appCapabilities: {
-            tools: { listChanged: true }
-        }
-    }).then(finalizeInit).catch(function() {
-        // Fallback: host may not support the full handshake (e.g. mcp-preview)
-        finalizeInit(null);
-    });
-})();
-</script>
-";
-
-        inject_script_into_head(html, bridge_script)
-    }
+    // inject_bridge: uses default (no-op) — widgets use ext-apps SDK.
 
     fn required_csp(&self) -> Option<WidgetCSP> {
         self.csp.clone()
@@ -886,48 +720,26 @@ mod tests {
     }
 
     #[test]
-    fn test_mcp_apps_bridge_has_ontoolresult_callback() {
+    fn test_mcp_apps_no_bridge_injection() {
         let adapter = McpAppsAdapter::new();
-        let html = "<html><head></head><body></body></html>";
+        let html = "<html><head></head><body>My Widget</body></html>";
         let result = adapter.inject_bridge(html);
 
-        // Must expose onToolResult setter on mcpBridge
-        assert!(
-            result.contains("onToolResult"),
-            "McpApps bridge must expose onToolResult callback property"
-        );
-        // Must expose onToolInput setter
-        assert!(
-            result.contains("onToolInput"),
-            "McpApps bridge must expose onToolInput callback property"
-        );
-        // Must expose onToolCancelled setter
-        assert!(
-            result.contains("onToolCancelled"),
-            "McpApps bridge must expose onToolCancelled callback property"
-        );
+        // McpAppsAdapter no longer injects a bridge — widget developers use
+        // the @modelcontextprotocol/ext-apps SDK directly.
+        assert_eq!(result, html, "McpAppsAdapter must return HTML unchanged");
     }
 
     #[test]
-    fn test_mcp_apps_bridge_handles_both_method_forms() {
+    fn test_mcp_apps_transform_preserves_html() {
         let adapter = McpAppsAdapter::new();
-        let html = "<html><head></head><body></body></html>";
-        let result = adapter.inject_bridge(html);
+        let html = "<html><head></head><body>My Widget</body></html>";
+        let transformed = adapter.transform("ui://test/widget.html", "Test", html);
 
-        // Must handle short-form
-        assert!(
-            result.contains("ui/toolResult"),
-            "McpApps bridge must handle short-form ui/toolResult"
+        assert_eq!(
+            transformed.content, html,
+            "McpAppsAdapter.transform must serve HTML as-is"
         );
-        // Must handle long-form via ALIASES normalization map
-        assert!(
-            result.contains("ui/notifications/tool-result"),
-            "McpApps bridge must handle long-form ui/notifications/tool-result"
-        );
-        // Must still dispatch mcpNotification events for backward compat
-        assert!(
-            result.contains("mcpNotification"),
-            "McpApps bridge must still dispatch mcpNotification events"
-        );
+        assert_eq!(transformed.mime_type, ExtendedUIMimeType::HtmlMcpApp);
     }
 }

@@ -1987,7 +1987,11 @@ mod tests {
         );
 
         // Only 1 top-level key: "ui"
-        assert_eq!(meta.len(), 1, "standard-only _meta should have exactly 1 key");
+        assert_eq!(
+            meta.len(),
+            1,
+            "standard-only _meta should have exactly 1 key"
+        );
     }
 
     #[test]

@@ -5,8 +5,8 @@
 //!
 //! This module provides adapters that transform core UI types for specific MCP host platforms:
 //!
+//! - **MCP Apps (ext-apps)** - Standard MCP extension (`text/html;profile=mcp-app`)
 //! - **ChatGPT Apps** - OpenAI Apps SDK with `window.openai` API
-//! - **MCP Apps (SEP-1865)** - Standard MCP extension using postMessage
 //! - **MCP-UI** - Community standard supporting multiple UI formats
 //!
 //! # Architecture
@@ -18,15 +18,18 @@
 //! │                       UIResource (Core)                          │
 //! │                                                                  │
 //! │   ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐ │
-//! │   │ ChatGptAdapter│    │ McpAppsAdapter│    │   McpUiAdapter   │ │
+//! │   │McpAppsAdapter│    │ ChatGptAdapter│    │   McpUiAdapter   │ │
 //! │   └──────────────┘    └──────────────┘    └──────────────────┘ │
 //! │           │                   │                    │            │
 //! │           ▼                   ▼                    ▼            │
-//! │   text/html;profile=   text/html+mcp        text/html           │
-//! │     mcp-app                                                    │
-//! │   window.openai         postMessage          postMessage        │
+//! │   text/html;profile=   text/html;profile=   text/html           │
+//! │     mcp-app              mcp-app                               │
+//! │   ext-apps SDK         window.openai         postMessage        │
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
+//!
+//! **Widget development:** Widget HTML should use the `@modelcontextprotocol/ext-apps`
+//! SDK (`App` class) for host communication. See `GUIDE.md` in this directory.
 //!
 //! # Example
 //!

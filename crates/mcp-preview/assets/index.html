@@ -436,32 +436,6 @@
       display: block;
     }
 
-    .state-viewer {
-      font-family: 'Monaco', 'Menlo', monospace;
-      font-size: 11px;
-      white-space: pre-wrap;
-      word-break: break-all;
-    }
-
-    .state-label {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--text-secondary);
-      margin-bottom: 4px;
-      margin-top: 12px;
-    }
-
-    .state-label:first-child {
-      margin-top: 0;
-    }
-
-    .state-value {
-      background: var(--bg-tertiary);
-      padding: 8px;
-      border-radius: 4px;
-      overflow-x: auto;
-    }
-
     /* Console */
     .console-log {
       font-family: 'Monaco', 'Menlo', monospace;
@@ -766,10 +740,16 @@
       position: relative;
     }
 
-    .clear-btn {
+    .devtools-btn-group {
       position: absolute;
       top: 0;
       right: 0;
+      display: flex;
+      gap: 4px;
+      z-index: 1;
+    }
+
+    .clear-btn, .copy-btn {
       padding: 2px 8px;
       border: 1px solid var(--border-color);
       border-radius: 3px;
@@ -777,12 +757,16 @@
       color: var(--text-secondary);
       cursor: pointer;
       font-size: 11px;
-      z-index: 1;
     }
 
-    .clear-btn:hover {
+    .clear-btn:hover, .copy-btn:hover {
       background: var(--bg-tertiary);
       color: var(--text-primary);
+    }
+
+    .copy-btn.copied {
+      color: var(--success-color);
+      border-color: var(--success-color);
     }
 
     /* Mode Badge */
@@ -1139,52 +1123,54 @@
     <!-- DevTools Panel -->
     <aside class="devtools-panel">
       <div class="devtools-tabs">
-        <button class="devtools-tab active" data-tab="state">State</button>
-        <button class="devtools-tab" data-tab="console">Console</button>
+        <button class="devtools-tab active" data-tab="console">Console</button>
         <button class="devtools-tab" data-tab="network">Network</button>
         <button class="devtools-tab" data-tab="events">Events</button>
         <button class="devtools-tab" data-tab="protocol">Protocol</button>
         <button class="devtools-tab" data-tab="bridge">Bridge</button>
       </div>
       <div class="devtools-content">
-        <div class="devtools-section active" id="tab-state">
-          <div class="state-viewer">
-            <div class="state-label">Widget State</div>
-            <div class="state-value" id="state-widget">{}</div>
-            <div class="state-label">Tool Input</div>
-            <div class="state-value" id="state-input">{}</div>
-            <div class="state-label">Tool Output</div>
-            <div class="state-value" id="state-output">null</div>
-            <div class="state-label">Response Metadata</div>
-            <div class="state-value" id="state-meta">{}</div>
+        <div class="devtools-section active" id="tab-console">
+          <div class="devtools-btn-group">
+            <button class="copy-btn" data-copy="console">Copy</button>
+            <button class="clear-btn" data-clear="console">Clear</button>
           </div>
-        </div>
-        <div class="devtools-section" id="tab-console">
-          <button class="clear-btn" data-clear="console">Clear</button>
           <div class="console-log" id="console-log">
             <div class="empty-state">Console output will appear here</div>
           </div>
         </div>
         <div class="devtools-section" id="tab-network">
-          <button class="clear-btn" data-clear="network">Clear</button>
+          <div class="devtools-btn-group">
+            <button class="copy-btn" data-copy="network">Copy</button>
+            <button class="clear-btn" data-clear="network">Clear</button>
+          </div>
           <div id="network-log">
             <div class="empty-state">Network requests will appear here</div>
           </div>
         </div>
         <div class="devtools-section" id="tab-events">
-          <button class="clear-btn" data-clear="events">Clear</button>
+          <div class="devtools-btn-group">
+            <button class="copy-btn" data-copy="events">Copy</button>
+            <button class="clear-btn" data-clear="events">Clear</button>
+          </div>
           <div id="events-log">
             <div class="empty-state">Events will appear here</div>
           </div>
         </div>
         <div class="devtools-section" id="tab-protocol">
-          <button class="clear-btn" data-clear="protocol">Clear</button>
+          <div class="devtools-btn-group">
+            <button class="copy-btn" data-copy="protocol">Copy</button>
+            <button class="clear-btn" data-clear="protocol">Clear</button>
+          </div>
           <div id="protocol-checks" class="protocol-checks">
             <div class="protocol-empty">Run a tool call to see protocol validation results</div>
           </div>
         </div>
         <div class="devtools-section" id="tab-bridge">
-          <button class="clear-btn" data-clear="bridge">Clear</button>
+          <div class="devtools-btn-group">
+            <button class="copy-btn" data-copy="bridge">Copy</button>
+            <button class="clear-btn" data-clear="bridge">Clear</button>
+          </div>
           <div id="bridge-content">
             <div class="bridge-mode-indicator">
               Mode: <span id="bridge-mode-badge" class="mode-badge standard">Standard</span>
@@ -1392,10 +1378,10 @@
       constructor() {
         this.tools = [];
         this.selectedTool = null;
-        this.widgetState = {};
         this.toolInput = {};
         this.toolOutput = null;
         this.toolResponseMetadata = {};
+        this.pendingToolContext = null;
 
         // Resources
         this.uiResources = [];
@@ -1849,6 +1835,122 @@
             }
           });
         });
+
+        // Setup copy buttons
+        document.querySelectorAll('.copy-btn').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const target = btn.dataset.copy;
+            const text = this.collectTabContent(target);
+            if (!text) return;
+            await this.copyToClipboard(text);
+            this.showCopyFeedback(btn);
+          });
+        });
+      }
+
+      async copyToClipboard(text) {
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch {
+          // Fallback for non-secure contexts (deprecated but functional)
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        }
+      }
+
+      showCopyFeedback(btn) {
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 1500);
+      }
+
+      // Send a notification to the widget iframe using both short and long method forms
+      sendWidgetNotification(shortMethod, longMethod, params) {
+        const fr = document.getElementById('widget-frame');
+        if (!fr || !fr.contentWindow) return;
+        fr.contentWindow.postMessage({ jsonrpc: '2.0', method: shortMethod, params }, '*');
+        this.bridgeDiagnostics.logOutgoing(shortMethod, params);
+        fr.contentWindow.postMessage({ jsonrpc: '2.0', method: longMethod, params }, '*');
+        this.bridgeDiagnostics.logOutgoing(longMethod, params);
+      }
+
+      collectTabContent(tab) {
+        if (tab === 'bridge') {
+          // Use structured log from BridgeDiagnostics
+          const diag = this.bridgeDiagnostics;
+          if (!diag || diag.log.length === 0) return '';
+          const lines = diag.log.map(e => {
+            const dir = e.direction === 'outgoing' ? '->' : '<-';
+            const payload = JSON.stringify(e.raw || e.params, null, 2);
+            return `[${e.timestamp}] ${dir} ${e.method}\n${payload}`;
+          });
+          // Prepend handshake state
+          const hs = Object.entries(diag.handshakeState)
+            .map(([k, v]) => `  ${v ? '\u2713' : '-'} ${k}`)
+            .join('\n');
+          return `Handshake:\n${hs}\n\nTraffic (${diag.log.length} messages):\n${'='.repeat(60)}\n${lines.join('\n' + '-'.repeat(60) + '\n')}`;
+        }
+
+        if (tab === 'network') {
+          // Extract from DOM: each .network-entry has header + body
+          const entries = document.querySelectorAll('#network-log .network-entry');
+          if (entries.length === 0) return '';
+          const lines = Array.from(entries).map(el => {
+            // Try details-based entries first (bridge calls)
+            const details = el.querySelector('details');
+            if (details) {
+              const summary = details.querySelector('summary')?.textContent?.trim() || '';
+              const pres = details.querySelectorAll('pre');
+              const args = pres[0]?.textContent || '';
+              const response = pres[1]?.textContent || '';
+              return `${summary}\nArguments: ${args}\nResponse: ${response}`;
+            }
+            // Simple entries (request/response pairs)
+            const header = el.querySelector('.network-header')?.textContent?.trim() || '';
+            const body = el.querySelector('.network-body')?.textContent?.trim() || '';
+            return `${header}\n${body}`;
+          });
+          return `Network Log (${entries.length} entries):\n${'='.repeat(60)}\n${lines.join('\n' + '-'.repeat(60) + '\n')}`;
+        }
+
+        if (tab === 'console') return this.collectDomLog('#console-log', 'console-entry', 'Console Log');
+        if (tab === 'events') return this.collectDomLog('#events-log', 'event-entry', 'Events Log');
+
+        if (tab === 'protocol') {
+          if (!this.protocolResults || this.protocolResults.length === 0) return '';
+          const lines = this.protocolResults.map(r => {
+            let detail = `${r.pass ? 'PASS' : 'FAIL'} ${r.checkName}`;
+            if (r.expected.length) detail += `\n  Expected keys: ${r.expected.join(', ')}`;
+            if (r.actual.length) detail += `\n  Actual keys: ${r.actual.join(', ')}`;
+            if (r.missing.length) detail += `\n  Missing: ${r.missing.join(', ')}`;
+            if (r.extra.length) detail += `\n  Extra: ${r.extra.join(', ')}`;
+            if (r.extras) {
+              for (const [label, v] of Object.entries(r.extras)) {
+                detail += `\n  ${v.pass ? '\u2713' : '\u2717'} ${label}: ${v.detail}`;
+              }
+            }
+            return detail;
+          });
+          return `Protocol Checks (${this.protocolResults.length} results):\n${'='.repeat(60)}\n${lines.join('\n' + '-'.repeat(60) + '\n')}`;
+        }
+
+        return '';
+      }
+
+      collectDomLog(containerSel, entryClass, label) {
+        const entries = document.querySelectorAll(`${containerSel} .${entryClass}`);
+        if (entries.length === 0) return '';
+        const lines = Array.from(entries).map(el => el.textContent?.trim() || '');
+        return `${label} (${entries.length} entries):\n${lines.join('\n')}`;
       }
 
       setupEnvironmentControls() {
@@ -1900,7 +2002,6 @@
         }
 
         this.toolInput = args;
-        this.updateStateView();
 
         const startTime = Date.now();
         this.logNetwork('request', this.selectedTool.name, args);
@@ -1935,7 +2036,6 @@
         this.toolOutput = result.structuredContent || result.content;
         const responseMeta = result._meta || result.meta || {};
         this.toolResponseMetadata = responseMeta;
-        this.updateStateView();
 
         // Protocol validation for tools/call (warn-only).
         // In ChatGPT mode, checks invocation keys; in standard mode,
@@ -1964,83 +2064,50 @@
                        || toolDefMeta['ui/resourceUri']
                        || toolDefMeta['ui']?.['resourceUri'];
         if (widgetUri) {
-          const iframe = document.getElementById('widget-frame');
-          const widgetAlreadyLoaded = this.activeResourceUri === widgetUri
-            && this.appBridge
-            && iframe
-            && iframe.style.display !== 'none';
-
-          // Helper: deliver tool result data to the widget via AppBridge + ChatGPT postMessage
-          const deliverToolResult = () => {
-            // AppBridge delivery: only in ChatGPT mode where bridge is the
-            // primary channel. Standard-mode widgets use addEventListener.
-            if (this.appBridge && this.mode === 'chatgpt') {
-              this.appBridge.sendToolInput(this.toolInput);
-              this.bridgeDiagnostics.logOutgoing('AppBridge.sendToolInput', this.toolInput);
-              this.appBridge.sendToolResult({
-                structuredContent: result.structuredContent,
-                _meta: responseMeta,
-              });
-              this.bridgeDiagnostics.logOutgoing('AppBridge.sendToolResult', { structuredContent: result.structuredContent, _meta: responseMeta });
-            }
-
-            // postMessage delivery: send tool result to widget iframe in all
-            // modes so widget addEventListener handlers receive host-initiated
-            // tool results (e.g., tool calls from the tools list).
-            const fr = document.getElementById('widget-frame');
-            if (fr && fr.contentWindow) {
-              // Shared params for both method forms
-              const toolResultParams = { structuredContent: result.structuredContent, content: result.content, _meta: responseMeta };
-              // Short form (primary -- matches ext-apps SDK App class)
-              fr.contentWindow.postMessage({
-                jsonrpc: '2.0',
-                method: 'ui/toolResult',
-                params: toolResultParams
-              }, '*');
-              this.bridgeDiagnostics.logOutgoing('ui/toolResult', toolResultParams);
-              // Long form (fallback -- for older injected bridge scripts)
-              fr.contentWindow.postMessage({
-                jsonrpc: '2.0',
-                method: 'ui/notifications/tool-result',
-                params: toolResultParams
-              }, '*');
-              this.bridgeDiagnostics.logOutgoing('ui/notifications/tool-result', toolResultParams);
-
-              // ChatGPT mode: also set window.openai properties directly (same-origin srcdoc)
-              if (this.mode === 'chatgpt') {
-                try {
-                  fr.contentWindow.openai.toolOutput = result.structuredContent;
-                  fr.contentWindow.openai.toolInput = this.toolInput || null;
-                } catch(e) { /* srcdoc cross-origin guard */ }
-              }
-            }
+          // Store pending tool context so the AppBridge includes it in
+          // hostContext when the widget sends ui/initialize.
+          this.pendingToolContext = {
+            toolInput: this.toolInput || {},
+            toolOutput: result.structuredContent || null,
+            toolResponseMetadata: responseMeta,
           };
 
-          if (widgetAlreadyLoaded) {
-            // Widget is already loaded with the same URI -- send data immediately
-            // without reloading the iframe (which would destroy widget state)
-            deliverToolResult();
-          } else {
-            // First load or different URI -- load widget template then deliver data
-            // Wait for widget readiness signal instead of fragile setTimeout
-            const readyPromise = new Promise((resolve) => {
-              const handler = (event) => {
-                const msg = event.data;
-                if (msg && msg.jsonrpc === '2.0' && msg.method === 'ui/notifications/initialized') {
-                  window.removeEventListener('message', handler);
-                  resolve();
-                }
-              };
-              window.addEventListener('message', handler);
-              // Fallback timeout: some widgets may not send initialized (legacy)
-              setTimeout(() => {
+          // Always (re)load the widget so the ext-apps SDK receives tool
+          // context during the ui/initialize handshake. Some ext-apps
+          // widgets only read tool data from hostContext at init time and
+          // do not handle post-init notifications.
+          const readyPromise = new Promise((resolve) => {
+            const handler = (event) => {
+              const msg = event.data;
+              if (msg && msg.jsonrpc === '2.0' && msg.method === 'ui/notifications/initialized') {
                 window.removeEventListener('message', handler);
                 resolve();
-              }, 3000);
-            });
-            await this.loadResourceWidget(widgetUri);
-            await readyPromise;
-            deliverToolResult();
+              }
+            };
+            window.addEventListener('message', handler);
+            setTimeout(() => {
+              window.removeEventListener('message', handler);
+              resolve();
+            }, 3000);
+          });
+          await this.loadResourceWidget(widgetUri);
+          await readyPromise;
+
+          // Also send post-init notifications for widgets that listen for them
+          const toolInputParams = this.toolInput || {};
+          this.sendWidgetNotification('ui/toolInput', 'ui/notifications/tool-input', toolInputParams);
+
+          const toolResultParams = { structuredContent: result.structuredContent, content: result.content, _meta: responseMeta };
+          this.sendWidgetNotification('ui/toolResult', 'ui/notifications/tool-result', toolResultParams);
+
+          if (this.mode === 'chatgpt') {
+            try {
+              const fr = document.getElementById('widget-frame');
+              if (fr?.contentWindow?.openai) {
+                fr.contentWindow.openai.toolOutput = result.structuredContent;
+                fr.contentWindow.openai.toolInput = this.toolInput || null;
+              }
+            } catch(e) { /* srcdoc cross-origin guard */ }
           }
 
           this.logEvent('toolResponse', { tool: this.selectedTool.name, widget: widgetUri });
@@ -2155,15 +2222,25 @@
         // Set up AppBridge BEFORE setting srcdoc so it's already listening
         // when the widget's bridge script sends ui/initialize and tool calls.
         // iframe.contentWindow persists across srcdoc navigations.
+        //
+        // If a tool was just called (pendingToolContext), include the tool
+        // data in hostContext so ext-apps widgets receive it at init time.
+        const hostCtx = {
+          theme: this.theme,
+          locale: this.locale,
+          displayMode: this.displayMode,
+        };
+        if (this.pendingToolContext) {
+          hostCtx.toolInput = this.pendingToolContext.toolInput;
+          hostCtx.toolOutput = this.pendingToolContext.toolOutput;
+          hostCtx.toolResponseMetadata = this.pendingToolContext.toolResponseMetadata;
+          this.pendingToolContext = null;
+        }
         this.appBridge = new AppBridge({
           iframe: frame,
           toolCallHandler: this.createToolCallHandler(),
           origin: '*',  // srcdoc iframes have origin "null" — use wildcard
-          hostContext: {
-            theme: this.theme,
-            locale: this.locale,
-            displayMode: this.displayMode,
-          },
+          hostContext: hostCtx,
         });
         this.appBridge.initialize();
 
@@ -2370,13 +2447,6 @@ ${html}
             displayMode: this.displayMode,
           });
         }
-      }
-
-      updateStateView() {
-        document.getElementById('state-widget').textContent = JSON.stringify(this.widgetState, null, 2);
-        document.getElementById('state-input').textContent = JSON.stringify(this.toolInput, null, 2);
-        document.getElementById('state-output').textContent = JSON.stringify(this.toolOutput, null, 2);
-        document.getElementById('state-meta').textContent = JSON.stringify(this.toolResponseMetadata, null, 2);
       }
 
       logConsole(level, message) {

@@ -101,7 +101,11 @@ export class App {
       ]);
 
       if (result && typeof result === 'object') {
-        this._hostContext = result as HostContext;
+        // The MCP Apps protocol wraps hostContext inside an envelope:
+        // { protocolVersion, hostInfo, hostCapabilities, hostContext }
+        // Unwrap if present; fall back to treating the whole result as context.
+        const r = result as Record<string, unknown>;
+        this._hostContext = (r.hostContext ?? result) as HostContext;
       } else {
         console.warn(
           '[App] Host did not respond to ui/initialize within 2s. ' +

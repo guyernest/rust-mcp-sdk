@@ -1025,7 +1025,8 @@ impl HostType {
     pub fn preferred_mime_type(&self) -> ExtendedUIMimeType {
         match self {
             Self::ChatGpt => ExtendedUIMimeType::HtmlSkybridge,
-            Self::Claude | Self::Generic => ExtendedUIMimeType::HtmlMcp,
+            // Official MCP Apps MIME: text/html;profile=mcp-app
+            Self::Claude | Self::Generic => ExtendedUIMimeType::HtmlMcpApp,
             Self::Nanobot | Self::McpJam => ExtendedUIMimeType::HtmlPlain,
         }
     }
@@ -1037,7 +1038,11 @@ impl HostType {
                 mime_type,
                 ExtendedUIMimeType::HtmlSkybridge | ExtendedUIMimeType::HtmlMcpApp
             ),
-            Self::Claude | Self::Generic => matches!(mime_type, ExtendedUIMimeType::HtmlMcp),
+            // Accept both legacy text/html+mcp and official text/html;profile=mcp-app
+            Self::Claude | Self::Generic => matches!(
+                mime_type,
+                ExtendedUIMimeType::HtmlMcp | ExtendedUIMimeType::HtmlMcpApp
+            ),
             Self::Nanobot | Self::McpJam => mime_type.is_mcp_ui(),
         }
     }
@@ -1228,7 +1233,7 @@ mod tests {
         );
         assert_eq!(
             HostType::Claude.preferred_mime_type(),
-            ExtendedUIMimeType::HtmlMcp
+            ExtendedUIMimeType::HtmlMcpApp
         );
         assert_eq!(
             HostType::Nanobot.preferred_mime_type(),

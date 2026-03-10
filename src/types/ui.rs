@@ -354,10 +354,7 @@ pub fn filter_meta_by_prefix(
 ///
 /// Host-specific keys (e.g., `openai/outputTemplate` for `ChatGPT`) are added
 /// by the host-layer enrichment pipeline at server build time.
-pub fn emit_resource_uri_keys(
-    ui_obj: &mut serde_json::Map<String, serde_json::Value>,
-    uri: &str,
-) {
+pub fn emit_resource_uri_keys(ui_obj: &mut serde_json::Map<String, serde_json::Value>, uri: &str) {
     let uri_val = serde_json::Value::String(uri.to_string());
     ui_obj.insert("resourceUri".to_string(), uri_val);
 }
@@ -671,7 +668,11 @@ mod tests {
         );
 
         // Exactly 1 top-level key
-        assert_eq!(map.len(), 1, "build_meta_map must produce exactly 1 key (ui)");
+        assert_eq!(
+            map.len(),
+            1,
+            "build_meta_map must produce exactly 1 key (ui)"
+        );
     }
 
     #[test]

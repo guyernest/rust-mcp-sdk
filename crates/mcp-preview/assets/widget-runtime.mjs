@@ -983,7 +983,8 @@ var _App = class _App {
         new Promise((resolve) => setTimeout(() => resolve(null), 2e3))
       ]);
       if (result && typeof result === "object") {
-        this._hostContext = result;
+        const r = result;
+        this._hostContext = r.hostContext ?? result;
       } else {
         console.warn(
           "[App] Host did not respond to ui/initialize within 2s. Running in standalone mode (no host bridge)."
@@ -1277,7 +1278,19 @@ var AppBridge = class {
   async _handleRequest(method, params) {
     switch (method) {
       case "ui/initialize":
-        return this._hostContext;
+        return {
+          protocolVersion: "2025-03-26",
+          hostInfo: {
+            name: "mcp-preview",
+            version: "0.1.0"
+          },
+          hostCapabilities: {
+            callTool: true,
+            sendMessage: false,
+            openLink: true
+          },
+          hostContext: this._hostContext
+        };
       case "tools/call": {
         const name = params?.name;
         const args = params?.arguments;

@@ -165,7 +165,21 @@ export class AppBridge {
   private async _handleRequest(method: string, params?: Record<string, unknown>): Promise<unknown> {
     switch (method) {
       case 'ui/initialize':
-        return this._hostContext;
+        // Return full MCP Apps protocol init response.
+        // The ext-apps SDK validates: protocolVersion, hostInfo, hostCapabilities, hostContext.
+        return {
+          protocolVersion: '2025-03-26',
+          hostInfo: {
+            name: 'mcp-preview',
+            version: '0.1.0',
+          },
+          hostCapabilities: {
+            callTool: true,
+            sendMessage: false,
+            openLink: true,
+          },
+          hostContext: this._hostContext,
+        };
 
       case 'tools/call': {
         const name = params?.name as string | undefined;
