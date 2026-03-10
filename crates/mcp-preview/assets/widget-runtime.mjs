@@ -936,7 +936,7 @@ var PostMessageTransport = class {
 };
 
 // src/app.ts
-var App = class {
+var _App = class _App {
   constructor(options) {
     this._transport = null;
     this._hostContext = void 0;
@@ -1099,9 +1099,9 @@ var App = class {
     this._connected = false;
     this._hostContext = void 0;
   }
-  // ===========================================================================
-  // Private
-  // ===========================================================================
+  _normalizeMethod(method) {
+    return _App._METHOD_ALIASES[method] ?? method;
+  }
   _resolveTargetOrigin() {
     if (window.origin === "null" || window.location.origin === "null") {
       return "*";
@@ -1116,7 +1116,8 @@ var App = class {
     return window.location.origin;
   }
   _handleNotification(method, params) {
-    switch (method) {
+    const normalized = this._normalizeMethod(method);
+    switch (normalized) {
       case "ui/toolInput":
         if (this.ontoolinput && params) {
           this.ontoolinput(params);
@@ -1146,6 +1147,24 @@ var App = class {
     }
   }
 };
+// ===========================================================================
+// Private
+// ===========================================================================
+/**
+ * Normalize long-form MCP spec notification method names to the short
+ * form used internally by the App class switch statement.
+ *
+ * Long form: `ui/notifications/tool-result`
+ * Short form: `ui/toolResult`
+ */
+_App._METHOD_ALIASES = {
+  "ui/notifications/tool-result": "ui/toolResult",
+  "ui/notifications/tool-input": "ui/toolInput",
+  "ui/notifications/tool-input-partial": "ui/toolInputPartial",
+  "ui/notifications/tool-cancelled": "ui/toolCancelled",
+  "ui/notifications/host-context-changed": "ui/hostContextChanged"
+};
+var App = _App;
 
 // src/app-bridge.ts
 var AppBridge = class {

@@ -876,4 +876,73 @@ mod tests {
 
         assert!(result.contains("window.mcpBridge"));
     }
+
+    #[test]
+    fn test_chatgpt_bridge_listens_for_both_method_forms() {
+        let adapter = ChatGptAdapter::new();
+        let html = "<html><head></head><body></body></html>";
+        let result = adapter.inject_bridge(html);
+
+        // Must handle short-form (from AppBridge/ext-apps SDK)
+        assert!(
+            result.contains("ui/toolResult"),
+            "ChatGPT bridge must listen for short-form ui/toolResult"
+        );
+        // Must also handle long-form (from spec-compliant hosts)
+        assert!(
+            result.contains("ui/notifications/tool-result"),
+            "ChatGPT bridge must listen for long-form ui/notifications/tool-result"
+        );
+        // window.openai path must be preserved
+        assert!(
+            result.contains("window.openai"),
+            "ChatGPT bridge must preserve window.openai path"
+        );
+    }
+
+    #[test]
+    fn test_mcp_apps_bridge_has_ontoolresult_callback() {
+        let adapter = McpAppsAdapter::new();
+        let html = "<html><head></head><body></body></html>";
+        let result = adapter.inject_bridge(html);
+
+        // Must expose onToolResult setter on mcpBridge
+        assert!(
+            result.contains("onToolResult"),
+            "McpApps bridge must expose onToolResult callback property"
+        );
+        // Must expose onToolInput setter
+        assert!(
+            result.contains("onToolInput"),
+            "McpApps bridge must expose onToolInput callback property"
+        );
+        // Must expose onToolCancelled setter
+        assert!(
+            result.contains("onToolCancelled"),
+            "McpApps bridge must expose onToolCancelled callback property"
+        );
+    }
+
+    #[test]
+    fn test_mcp_apps_bridge_handles_both_method_forms() {
+        let adapter = McpAppsAdapter::new();
+        let html = "<html><head></head><body></body></html>";
+        let result = adapter.inject_bridge(html);
+
+        // Must handle short-form
+        assert!(
+            result.contains("ui/toolResult"),
+            "McpApps bridge must handle short-form ui/toolResult"
+        );
+        // Must handle long-form via ALIASES normalization map
+        assert!(
+            result.contains("ui/notifications/tool-result"),
+            "McpApps bridge must handle long-form ui/notifications/tool-result"
+        );
+        // Must still dispatch mcpNotification events for backward compat
+        assert!(
+            result.contains("mcpNotification"),
+            "McpApps bridge must still dispatch mcpNotification events"
+        );
+    }
 }
