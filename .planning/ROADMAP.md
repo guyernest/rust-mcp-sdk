@@ -344,3 +344,20 @@ Plans:
 - [ ] 45-01-PLAN.md — Refactor metadata emission to standard-only default + host layer enrichment pipeline on ServerCoreBuilder
 - [ ] 45-02-PLAN.md — Normalize widget-runtime bridge with extensions namespace for ChatGPT-specific APIs
 - [ ] 45-03-PLAN.md — Update mcp-preview standard mode default + verify examples render in both modes
+
+### Phase 46: MCP Bridge Review and Fixes
+
+**Goal:** Fix the mcpBridge data delivery pipeline so widgets receive structuredContent from tool responses across all MCP hosts, add method name normalization for cross-host compatibility, replace fragile setTimeout delivery with readiness signals, and add Bridge diagnostics tab to mcp-preview
+**Requirements**: BRIDGE-01, BRIDGE-02, BRIDGE-03, BRIDGE-04, BRIDGE-05, BRIDGE-06, BRIDGE-07, BRIDGE-08
+**Depends on:** Phase 45
+**Success Criteria** (what must be TRUE):
+  1. Widgets receive tool result data regardless of whether the host sends short-form (ui/toolResult) or long-form (ui/notifications/tool-result) method names
+  2. McpApps adapter bridge provides onToolResult callback API on mcpBridge
+  3. mcp-preview waits for widget readiness signal before delivering tool results (no setTimeout)
+  4. Bridge diagnostics tab in mcp-preview shows PostMessage traffic log, handshake trace, and current mode
+**Plans:** 3 plans
+
+Plans:
+- [ ] 46-01-PLAN.md — Fix bridge protocol method name mismatch in adapter.rs and App class normalization
+- [ ] 46-02-PLAN.md — Fix mcp-preview tool result delivery with readiness signal and dual method emission
+- [ ] 46-03-PLAN.md — Add Bridge diagnostics tab to mcp-preview and verify complete fix with real widget
