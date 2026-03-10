@@ -174,7 +174,7 @@ impl UIAdapter for ChatGptAdapter {
         if (event.source !== window.parent) return;
         var msg = event.data;
         if (!msg || msg.jsonrpc !== '2.0') return;
-        if (msg.method === 'ui/notifications/tool-result') {
+        if (msg.method === 'ui/toolResult' || msg.method === 'ui/notifications/tool-result') {
             var data = msg.params && msg.params.structuredContent;
             if (data) {
                 _toolOutput = data;
@@ -402,7 +402,9 @@ impl UIAdapter for McpAppsAdapter {
     }
 
     fn mime_type(&self) -> ExtendedUIMimeType {
-        ExtendedUIMimeType::HtmlMcp
+        // Use the official MCP Apps MIME type: text/html;profile=mcp-app
+        // (matches @modelcontextprotocol/ext-apps RESOURCE_MIME_TYPE)
+        ExtendedUIMimeType::HtmlMcpApp
     }
 
     fn transform(&self, uri: &str, name: &str, html: &str) -> TransformedResource {
@@ -418,86 +420,176 @@ impl UIAdapter for McpAppsAdapter {
     }
 
     fn inject_bridge(&self, html: &str) -> String {
-        // MCP Apps bridge script using postMessage
+        // MCP Apps bridge script using postMessage (MCP Apps spec 2025-06-18)
         let bridge_script = r"
 <script>
-// MCP Apps Bridge - postMessage JSON-RPC
+// MCP Apps Bridge - postMessage JSON-RPC (spec 2025-06-18)
 (function() {
     'use strict';
 
-    let requestId = 0;
-    const pendingRequests = new Map();
+    var requestId = 0;
+    var pendingRequests = new Map();
+    var hostContext = null;
+    var initialized = false;
 
     // Listen for messages from host
-    window.addEventListener('message', (event) => {
-        const msg = event.data;
+    window.addEventListener('message', function(event) {
+        var msg = event.data;
 
-        if (msg.jsonrpc !== '2.0') return;
+        if (!msg || msg.jsonrpc !== '2.0') return;
 
-        // Handle responses
+        // Handle responses to our requests
         if (msg.id !== undefined && pendingRequests.has(msg.id)) {
-            const { resolve, reject } = pendingRequests.get(msg.id);
+            var pending = pendingRequests.get(msg.id);
             pendingRequests.delete(msg.id);
+            clearTimeout(pending.timer);
 
             if (msg.error) {
-                reject(new Error(msg.error.message || 'Unknown error'));
+                pending.reject(new Error(msg.error.message || 'Unknown error'));
             } else {
-                resolve(msg.result);
+                pending.resolve(msg.result);
             }
         }
 
-        // Handle notifications
-        if (msg.method && !msg.id) {
+        // Handle notifications from host
+        if (msg.method && msg.id === undefined) {
+            // Normalize long-form spec method names to short form
+            var method = msg.method;
+            var ALIASES = {
+                'ui/notifications/tool-result': 'ui/toolResult',
+                'ui/notifications/tool-input': 'ui/toolInput',
+                'ui/notifications/tool-cancelled': 'ui/toolCancelled',
+                'ui/notifications/host-context-changed': 'ui/hostContextChanged'
+            };
+            var normalized = ALIASES[method] || method;
+
+            // Dispatch typed callbacks on mcpBridge
+            if (normalized === 'ui/toolResult' && window.mcpBridge && window.mcpBridge._onToolResult) {
+                window.mcpBridge._onToolResult(msg.params);
+            } else if (normalized === 'ui/toolInput' && window.mcpBridge && window.mcpBridge._onToolInput) {
+                window.mcpBridge._onToolInput(msg.params);
+            } else if (normalized === 'ui/toolCancelled' && window.mcpBridge && window.mcpBridge._onToolCancelled) {
+                window.mcpBridge._onToolCancelled();
+            }
+
+            // Always dispatch the raw event for backward compatibility
             window.dispatchEvent(new CustomEvent('mcpNotification', { detail: msg }));
         }
     });
 
-    // Send JSON-RPC request
+    // Send JSON-RPC request (expects response)
     function sendRequest(method, params) {
-        return new Promise((resolve, reject) => {
-            const id = ++requestId;
-            pendingRequests.set(id, { resolve, reject });
-
-            window.parent.postMessage({
-                jsonrpc: '2.0',
-                id,
-                method,
-                params
-            }, '*');
-
-            // Timeout after 30 seconds
-            setTimeout(() => {
+        return new Promise(function(resolve, reject) {
+            var id = ++requestId;
+            var timer = setTimeout(function() {
                 if (pendingRequests.has(id)) {
                     pendingRequests.delete(id);
                     reject(new Error('Request timeout'));
                 }
             }, 30000);
+
+            pendingRequests.set(id, { resolve: resolve, reject: reject, timer: timer });
+
+            window.parent.postMessage({
+                jsonrpc: '2.0',
+                id: id,
+                method: method,
+                params: params
+            }, '*');
         });
     }
+
+    // Send JSON-RPC notification (no response expected)
+    function sendNotification(method, params) {
+        window.parent.postMessage({
+            jsonrpc: '2.0',
+            method: method,
+            params: params
+        }, '*');
+    }
+
+    // Callback storage for typed notification handlers
+    var _onToolResult = null;
+    var _onToolInput = null;
+    var _onToolCancelled = null;
 
     // Expose bridge API
     window.mcpBridge = {
         // Call an MCP tool
-        callTool: (name, args) => sendRequest('tools/call', { name, arguments: args }),
+        callTool: function(name, args) {
+            return sendRequest('tools/call', { name: name, arguments: args });
+        },
 
         // Read a resource
-        readResource: (uri) => sendRequest('resources/read', { uri }),
+        readResource: function(uri) {
+            return sendRequest('resources/read', { uri: uri });
+        },
 
         // Get a prompt
-        getPrompt: (name, args) => sendRequest('prompts/get', { name, arguments: args }),
+        getPrompt: function(name, args) {
+            return sendRequest('prompts/get', { name: name, arguments: args });
+        },
 
         // Send notification
-        notify: (method, params) => {
-            window.parent.postMessage({
-                jsonrpc: '2.0',
-                method,
-                params
-            }, '*');
-        }
+        notify: function(method, params) {
+            sendNotification(method, params);
+        },
+
+        // Open external link via host
+        openLink: function(url) {
+            return sendRequest('ui/open-link', { url: url });
+        },
+
+        // Send message to host chat
+        sendMessage: function(text) {
+            return sendRequest('ui/message', {
+                role: 'user',
+                content: { type: 'text', text: text }
+            });
+        },
+
+        // Get host context (theme, locale, etc.)
+        getHostContext: function() { return hostContext; },
+
+        // Check if initialization completed
+        isInitialized: function() { return initialized; },
+
+        // Typed notification callback setters
+        // Usage: mcpBridge.onToolResult = function(result) { ... }
+        _onToolResult: null,
+        _onToolInput: null,
+        _onToolCancelled: null,
+
+        set onToolResult(cb) { this._onToolResult = cb; },
+        get onToolResult() { return this._onToolResult; },
+        set onToolInput(cb) { this._onToolInput = cb; },
+        get onToolInput() { return this._onToolInput; },
+        set onToolCancelled(cb) { this._onToolCancelled = cb; },
+        get onToolCancelled() { return this._onToolCancelled; }
     };
 
-    // Notify host that widget is initializing
-    window.mcpBridge.notify('ui/initialize', {});
+    // Shared finalization after init handshake (success or fallback)
+    function finalizeInit(result) {
+        initialized = true;
+        hostContext = (result && result.hostContext) || null;
+        sendNotification('ui/notifications/initialized', {});
+        window.dispatchEvent(new Event('mcpBridgeReady'));
+    }
+
+    // MCP Apps initialization handshake (spec 2025-06-18):
+    // 1. Widget sends ui/initialize REQUEST (with id) including appInfo
+    // 2. Host responds with hostCapabilities, hostContext
+    // 3. Widget sends ui/notifications/initialized NOTIFICATION
+    sendRequest('ui/initialize', {
+        appInfo: { name: 'pmcp-widget', version: '1.0.0' },
+        protocolVersion: '2025-06-18',
+        appCapabilities: {
+            tools: { listChanged: true }
+        }
+    }).then(finalizeInit).catch(function() {
+        // Fallback: host may not support the full handshake (e.g. mcp-preview)
+        finalizeInit(null);
+    });
 })();
 </script>
 ";
@@ -697,7 +789,7 @@ mod tests {
 
         let transformed = adapter.transform("ui://test/widget.html", "Test Widget", html);
 
-        assert_eq!(transformed.mime_type, ExtendedUIMimeType::HtmlMcp);
+        assert_eq!(transformed.mime_type, ExtendedUIMimeType::HtmlMcpApp);
         assert!(transformed.content.contains("window.mcpBridge"));
         assert!(transformed.content.contains("postMessage"));
     }
@@ -738,9 +830,7 @@ mod tests {
         );
         // openai/outputTemplate is always present (from URI)
         assert!(
-            transformed
-                .metadata
-                .contains_key("openai/outputTemplate"),
+            transformed.metadata.contains_key("openai/outputTemplate"),
             "openai/outputTemplate must always be present in ChatGPT adapter"
         );
     }

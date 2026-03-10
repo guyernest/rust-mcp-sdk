@@ -238,6 +238,25 @@ export class App {
   // Private
   // ===========================================================================
 
+  /**
+   * Normalize long-form MCP spec notification method names to the short
+   * form used internally by the App class switch statement.
+   *
+   * Long form: `ui/notifications/tool-result`
+   * Short form: `ui/toolResult`
+   */
+  private static readonly _METHOD_ALIASES: Record<string, string> = {
+    'ui/notifications/tool-result': 'ui/toolResult',
+    'ui/notifications/tool-input': 'ui/toolInput',
+    'ui/notifications/tool-input-partial': 'ui/toolInputPartial',
+    'ui/notifications/tool-cancelled': 'ui/toolCancelled',
+    'ui/notifications/host-context-changed': 'ui/hostContextChanged',
+  };
+
+  private _normalizeMethod(method: string): string {
+    return App._METHOD_ALIASES[method] ?? method;
+  }
+
   private _resolveTargetOrigin(): string {
     // srcdoc iframes have origin "null" and cannot target a specific origin.
     // Detect this case and use "*" to allow communication with the host.
@@ -260,7 +279,8 @@ export class App {
   }
 
   private _handleNotification(method: string, params?: Record<string, unknown>): void {
-    switch (method) {
+    const normalized = this._normalizeMethod(method);
+    switch (normalized) {
       case 'ui/toolInput':
         if (this.ontoolinput && params) {
           this.ontoolinput(params);
