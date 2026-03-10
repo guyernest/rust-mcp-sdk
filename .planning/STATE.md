@@ -10,7 +10,7 @@ progress:
   total_phases: 20
   completed_phases: 12
   total_plans: 28
-  completed_plans: 25
+  completed_plans: 26
   percent: 100
 ---
 
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 
 Phase: 46 (mcp-bridge-review-and-fixes)
 Plan: 2 of 2 (46-02 complete)
-Status: Completed 46-02 -- mcp-preview tool result delivery fix
-Last activity: 2026-03-10 -- Replaced setTimeout with readiness signal, dual method emission
+Status: Completed 46-01 and 46-02 -- bridge method name fixes and mcp-preview tool result delivery
+Last activity: 2026-03-10 -- Fixed bridge protocol method name mismatch and dual method emission
 
 Progress: [█████████░] 93%
 
@@ -86,6 +86,7 @@ v1.6 decisions:
 - [Phase 45-01]: Standard-only metadata emission by default; build_meta_map returns only ui.resourceUri nested key; host layer enrichment at build time; build_uri_to_tool_meta indexes by standard key; ChatGptAdapter always emits openai/outputTemplate from URI
 - [Phase 45-02]: McpBridge refactored with extensions namespace; ChatGptExtensions isolates ChatGPT methods under extensions.chatgpt; Window intersection type for backward compat; buildChatGptExtensions() delegates to window.openai; legacy flat methods preserved with deprecation
 - [Phase 45-03]: mcp-preview enriches tool/resource _meta with ChatGPT keys in ChatGPT mode; enrich_meta_for_chatgpt derives openai/* from standard ui.resourceUri; pre-existing widget issues documented not fixed
+- [Phase 46-01]: Static lookup map for method name normalization in App class; McpApps bridge _onToolResult properties with getter/setter pairs; normalization in both widget-runtime and injected bridge scripts
 - [Phase 46-02]: mcp-preview deliverToolResult emits dual ui/toolResult (primary) + ui/notifications/tool-result (fallback); readiness signal replaces 300ms setTimeout with ui/notifications/initialized listener + 3s fallback
 
 ### Roadmap Evolution
@@ -111,6 +112,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-10T18:36:53Z
-Stopped at: Completed 46-02-PLAN.md
-Resume: Phase 46 plan 02 complete -- readiness signal and dual method emission
+Last session: 2026-03-10T18:39:46Z
+Stopped at: Completed 46-01-PLAN.md
+Resume: Phase 46 plans 01 and 02 complete -- bridge fixes

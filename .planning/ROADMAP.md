@@ -355,7 +355,7 @@ Plans:
   2. McpApps adapter bridge provides onToolResult callback API on mcpBridge
   3. mcp-preview waits for widget readiness signal before delivering tool results (no setTimeout)
   4. Bridge diagnostics tab in mcp-preview shows PostMessage traffic log, handshake trace, and current mode
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 - [ ] 46-01-PLAN.md — Fix bridge protocol method name mismatch in adapter.rs and App class normalization
