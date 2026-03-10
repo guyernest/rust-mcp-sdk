@@ -1156,6 +1156,8 @@ var _App = class _App {
  *
  * Long form: `ui/notifications/tool-result`
  * Short form: `ui/toolResult`
+ *
+ * IMPORTANT: Keep in sync with src/server/mcp_apps/adapter.rs (ALIASES in McpApps bridge)
  */
 _App._METHOD_ALIASES = {
   "ui/notifications/tool-result": "ui/toolResult",

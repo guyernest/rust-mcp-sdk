@@ -72,6 +72,23 @@ impl TransformedResource {
     }
 }
 
+/// Inject a script block into HTML, preferring before `</head>`.
+///
+/// Tries three strategies in order:
+/// 1. Insert before `</head>` if present
+/// 2. Wrap in `<head>` and insert before `<body` if present
+/// 3. Prepend to the HTML
+fn inject_script_into_head(html: &str, script: &str) -> String {
+    if html.contains("</head>") {
+        html.replace("</head>", &format!("{script}</head>"))
+    } else if html.contains("<body") {
+        let pos = html.find("<body").unwrap_or(0);
+        format!("{}<head>{}</head>{}", &html[..pos], script, &html[pos..])
+    } else {
+        format!("{script}{html}")
+    }
+}
+
 /// Adapter for ChatGPT Apps (OpenAI Apps SDK).
 ///
 /// Transforms resources to use `text/html;profile=mcp-app` MIME type and
@@ -348,21 +365,7 @@ impl UIAdapter for ChatGptAdapter {
 </script>
 "#;
 
-        // Inject bridge script before </head> or at the beginning
-        if html.contains("</head>") {
-            html.replace("</head>", &format!("{bridge_script}</head>"))
-        } else if html.contains("<body") {
-            // Find <body> tag and inject before it
-            let pos = html.find("<body").unwrap_or(0);
-            format!(
-                "{}<head>{}</head>{}",
-                &html[..pos],
-                bridge_script,
-                &html[pos..]
-            )
-        } else {
-            format!("{bridge_script}{html}")
-        }
+        inject_script_into_head(html, bridge_script)
     }
 
     fn required_csp(&self) -> Option<WidgetCSP> {
@@ -432,6 +435,15 @@ impl UIAdapter for McpAppsAdapter {
     var hostContext = null;
     var initialized = false;
 
+    // Method name normalization: long-form spec names → short-form App class names.
+    // IMPORTANT: Keep in sync with packages/widget-runtime/src/app.ts _METHOD_ALIASES
+    var ALIASES = {
+        'ui/notifications/tool-result': 'ui/toolResult',
+        'ui/notifications/tool-input': 'ui/toolInput',
+        'ui/notifications/tool-cancelled': 'ui/toolCancelled',
+        'ui/notifications/host-context-changed': 'ui/hostContextChanged'
+    };
+
     // Listen for messages from host
     window.addEventListener('message', function(event) {
         var msg = event.data;
@@ -453,14 +465,7 @@ impl UIAdapter for McpAppsAdapter {
 
         // Handle notifications from host
         if (msg.method && msg.id === undefined) {
-            // Normalize long-form spec method names to short form
             var method = msg.method;
-            var ALIASES = {
-                'ui/notifications/tool-result': 'ui/toolResult',
-                'ui/notifications/tool-input': 'ui/toolInput',
-                'ui/notifications/tool-cancelled': 'ui/toolCancelled',
-                'ui/notifications/host-context-changed': 'ui/hostContextChanged'
-            };
             var normalized = ALIASES[method] || method;
 
             // Dispatch typed callbacks on mcpBridge
@@ -507,11 +512,6 @@ impl UIAdapter for McpAppsAdapter {
             params: params
         }, '*');
     }
-
-    // Callback storage for typed notification handlers
-    var _onToolResult = null;
-    var _onToolInput = null;
-    var _onToolCancelled = null;
 
     // Expose bridge API
     window.mcpBridge = {
@@ -594,19 +594,7 @@ impl UIAdapter for McpAppsAdapter {
 </script>
 ";
 
-        if html.contains("</head>") {
-            html.replace("</head>", &format!("{bridge_script}</head>"))
-        } else if html.contains("<body") {
-            let pos = html.find("<body").unwrap_or(0);
-            format!(
-                "{}<head>{}</head>{}",
-                &html[..pos],
-                bridge_script,
-                &html[pos..]
-            )
-        } else {
-            format!("{bridge_script}{html}")
-        }
+        inject_script_into_head(html, bridge_script)
     }
 
     fn required_csp(&self) -> Option<WidgetCSP> {
@@ -700,10 +688,11 @@ impl UIAdapter for McpUiAdapter {
         if (msg.jsonrpc !== '2.0') return;
 
         if (msg.id !== undefined && pendingRequests.has(msg.id)) {
-            const { resolve, reject } = pendingRequests.get(msg.id);
+            const pending = pendingRequests.get(msg.id);
             pendingRequests.delete(msg.id);
-            if (msg.error) reject(new Error(msg.error.message));
-            else resolve(msg.result);
+            clearTimeout(pending.timer);
+            if (msg.error) pending.reject(new Error(msg.error.message));
+            else pending.resolve(msg.result);
         }
 
         if (msg.method && !msg.id) {
@@ -714,14 +703,14 @@ impl UIAdapter for McpUiAdapter {
     function sendRequest(method, params) {
         return new Promise((resolve, reject) => {
             const id = ++requestId;
-            pendingRequests.set(id, { resolve, reject });
-            window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
-            setTimeout(() => {
+            const timer = setTimeout(() => {
                 if (pendingRequests.has(id)) {
                     pendingRequests.delete(id);
                     reject(new Error('Request timeout'));
                 }
             }, 30000);
+            pendingRequests.set(id, { resolve, reject, timer });
+            window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
         });
     }
 
@@ -754,11 +743,7 @@ impl UIAdapter for McpUiAdapter {
 </script>
 ";
 
-        if html.contains("</head>") {
-            html.replace("</head>", &format!("{bridge_script}</head>"))
-        } else {
-            format!("{bridge_script}{html}")
-        }
+        inject_script_into_head(html, bridge_script)
     }
 
     fn required_csp(&self) -> Option<WidgetCSP> {

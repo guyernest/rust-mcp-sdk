@@ -1285,10 +1285,20 @@
       }
 
       addEntry(direction, method, params, raw) {
+        const MAX_LOG_ENTRIES = 500;
         const now = new Date();
         const timestamp = now.toTimeString().split(' ')[0] + '.' +
           String(now.getMilliseconds()).padStart(3, '0');
         this.log.push({ timestamp, direction, method, params, raw });
+        // Prune oldest entries to prevent unbounded growth
+        if (this.log.length > MAX_LOG_ENTRIES) {
+          this.log.shift();
+          const container = document.getElementById('bridge-traffic-log');
+          if (container && container.children.length >= 2) {
+            container.removeChild(container.children[0]); // entryDiv
+            container.removeChild(container.children[0]); // expandDiv
+          }
+        }
         this.render();
       }
 
@@ -1343,7 +1353,6 @@
         const dirArrow = entry.direction === 'outgoing' ? '\u2192' : '\u2190';
         const preview = JSON.stringify(entry.params || {});
         const truncated = preview.length > 120 ? preview.substring(0, 120) + '...' : preview;
-        const fullJson = JSON.stringify(entry.raw || entry.params, null, 2);
 
         const entryDiv = document.createElement('div');
         entryDiv.className = 'bridge-traffic-entry';
@@ -1356,21 +1365,25 @@
 
         const expandDiv = document.createElement('div');
         expandDiv.className = 'bridge-traffic-expanded';
-        expandDiv.textContent = fullJson;
 
         entryDiv.addEventListener('click', () => {
+          // Lazy: compute full JSON only on first expand
+          if (!expandDiv.textContent) {
+            expandDiv.textContent = JSON.stringify(entry.raw || entry.params, null, 2);
+          }
           entryDiv.classList.toggle('expanded');
         });
 
         container.appendChild(entryDiv);
         container.appendChild(expandDiv);
-        container.scrollTop = container.scrollHeight;
+        // Only force scroll if Bridge tab is visible
+        if (container.offsetParent !== null) {
+          container.scrollTop = container.scrollHeight;
+        }
       }
 
       escapeHtml(str) {
-        const div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
+        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
       }
     }
 
@@ -1976,22 +1989,22 @@
             // tool results (e.g., tool calls from the tools list).
             const fr = document.getElementById('widget-frame');
             if (fr && fr.contentWindow) {
+              // Shared params for both method forms
+              const toolResultParams = { structuredContent: result.structuredContent, content: result.content, _meta: responseMeta };
               // Short form (primary -- matches ext-apps SDK App class)
-              const shortParams = { structuredContent: result.structuredContent, content: result.content, _meta: responseMeta };
               fr.contentWindow.postMessage({
                 jsonrpc: '2.0',
                 method: 'ui/toolResult',
-                params: shortParams
+                params: toolResultParams
               }, '*');
-              this.bridgeDiagnostics.logOutgoing('ui/toolResult', shortParams);
+              this.bridgeDiagnostics.logOutgoing('ui/toolResult', toolResultParams);
               // Long form (fallback -- for older injected bridge scripts)
-              const longParams = { structuredContent: result.structuredContent };
               fr.contentWindow.postMessage({
                 jsonrpc: '2.0',
                 method: 'ui/notifications/tool-result',
-                params: longParams
+                params: toolResultParams
               }, '*');
-              this.bridgeDiagnostics.logOutgoing('ui/notifications/tool-result', longParams);
+              this.bridgeDiagnostics.logOutgoing('ui/notifications/tool-result', toolResultParams);
 
               // ChatGPT mode: also set window.openai properties directly (same-origin srcdoc)
               if (this.mode === 'chatgpt') {

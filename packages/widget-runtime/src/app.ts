@@ -244,6 +244,8 @@ export class App {
    *
    * Long form: `ui/notifications/tool-result`
    * Short form: `ui/toolResult`
+   *
+   * IMPORTANT: Keep in sync with src/server/mcp_apps/adapter.rs (ALIASES in McpApps bridge)
    */
   private static readonly _METHOD_ALIASES: Record<string, string> = {
     'ui/notifications/tool-result': 'ui/toolResult',
