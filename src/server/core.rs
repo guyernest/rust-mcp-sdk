@@ -102,7 +102,9 @@ pub trait ProtocolHandler {
 /// Enrich a tool's `_meta` with host-specific keys.
 ///
 /// Reads the standard `ui.resourceUri` and adds host-specific aliases.
-/// For `ChatGpt`, this adds `openai/outputTemplate` and default descriptor keys.
+/// For `ChatGpt`, this adds `openai/outputTemplate`, `openai/widgetAccessible`,
+/// and default `openai/toolInvocation/*` messages. Uses `entry().or_insert` so
+/// server-provided values are never overwritten.
 #[cfg(feature = "mcp-apps")]
 pub(crate) fn enrich_meta_for_host(
     meta: &mut serde_json::Map<String, serde_json::Value>,
@@ -118,13 +120,14 @@ pub(crate) fn enrich_meta_for_host(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
         {
-            meta.insert(
-                "openai/outputTemplate".to_string(),
-                serde_json::Value::String(uri),
-            );
-            // Add default ChatGPT descriptor keys if not already present
+            meta.entry("openai/outputTemplate".to_string())
+                .or_insert_with(|| serde_json::Value::String(uri));
             meta.entry("openai/widgetAccessible".to_string())
                 .or_insert(serde_json::Value::Bool(true));
+            meta.entry("openai/toolInvocation/invoking".to_string())
+                .or_insert_with(|| serde_json::Value::String("Running...".into()));
+            meta.entry("openai/toolInvocation/invoked".to_string())
+                .or_insert_with(|| serde_json::Value::String("Done".into()));
         }
     }
     // Claude, McpUi, Generic: no enrichment needed (standard keys only)

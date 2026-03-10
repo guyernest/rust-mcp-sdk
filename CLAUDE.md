@@ -191,6 +191,57 @@ make test-integration   # Integration tests
 ✅ **Comprehensive documentation required**
 ✅ **ALWAYS requirements: fuzz, property, unit, cargo run --example**
 
+## Release & Publish Workflow
+
+### Workspace Crates (publish order)
+1. `pmcp-widget-utils` (leaf, no internal deps)
+2. `pmcp` (core SDK, depends on widget-utils)
+3. `mcp-tester` (depends on pmcp)
+4. `mcp-preview` (depends on widget-utils)
+5. `cargo-pmcp` (depends on pmcp, mcp-tester, mcp-preview)
+
+### Version Bump
+- Bump version in the relevant `Cargo.toml` files
+- Only bump crates that have changed; downstream crates that depend on a bumped
+  crate must also be bumped if they pin an exact version
+- Run `cargo fmt` after version changes
+
+### Release Steps
+```bash
+# 1. Create a release branch
+git checkout -b release/pmcp-vX.Y.Z
+
+# 2. Bump version(s) in Cargo.toml
+# 3. Run quality gates
+cargo fmt
+cargo clippy -- -D warnings
+cargo build
+cargo test --lib --tests -- --test-threads=1
+
+# 4. Commit, push, create PR to upstream (paiml/rust-mcp-sdk)
+git add <changed files>
+git commit -m "chore: bump pmcp vX.Y.Z"
+git push -u origin release/pmcp-vX.Y.Z
+gh pr create --repo paiml/rust-mcp-sdk --head <your-fork>:release/pmcp-vX.Y.Z --base main
+
+# 5. After PR is merged, pull upstream and tag
+git checkout main && git pull upstream main
+git tag -a vX.Y.Z -m "pmcp vX.Y.Z - <summary>"
+git push upstream vX.Y.Z
+```
+
+### What Happens Automatically (CI)
+Pushing a `v*` tag to upstream triggers `.github/workflows/release.yml`:
+1. **Create Release** — GitHub Release from CHANGELOG.md
+2. **Publish to crates.io** — publishes in dependency order with 30s waits between
+3. **Publish to MCP Registry** — OIDC-authenticated `mcp-publisher`
+4. **Release Tester Binary** — cross-platform mcp-tester binaries attached to release
+
+### Tag Convention
+- Tags use `v` prefix: `v1.16.1`, `v0.4.0`
+- One tag per release — the Release workflow publishes ALL crates that have new versions
+- If a crate version already exists on crates.io, the publish step skips it gracefully
+
 ## Emergency Override (USE WITH EXTREME CAUTION)
 ```bash
 # Only for critical hotfixes - requires justification
@@ -198,4 +249,4 @@ git commit --no-verify -m "HOTFIX: critical issue - bypassing quality gates"
 ```
 
 **Note**: Emergency overrides require immediate follow-up commits to restore quality standards.
-- Before pushing a new commit or a PR you need to run `make tests` and `make quality-gates`.
+- Before pushing a new commit or a PR you need to run `make test` and `make quality-gate`.

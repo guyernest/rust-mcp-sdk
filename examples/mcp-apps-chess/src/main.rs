@@ -22,10 +22,11 @@
 //! Then connect with `cargo pmcp connect` or via HTTP at http://localhost:3000
 
 use async_trait::async_trait;
-use pmcp::server::mcp_apps::{ChatGptAdapter, UIAdapter, WidgetDir};
+use pmcp::server::mcp_apps::{McpAppsAdapter, UIAdapter, WidgetDir};
 use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
+use pmcp::server::typed_tool::TypedSyncTool;
 use pmcp::server::ServerBuilder;
-use pmcp::types::mcp_apps::{ExtendedUIMimeType, WidgetMeta};
+use pmcp::types::mcp_apps::{ExtendedUIMimeType, HostType};
 use pmcp::types::protocol::Content;
 use pmcp::types::{ListResourcesResult, ReadResourceResult, ResourceInfo};
 use pmcp::{RequestHandlerExtra, ResourceHandler, Result};
@@ -422,25 +423,22 @@ fn valid_moves_handler(input: ValidMovesInput, _extra: RequestHandlerExtra) -> R
 /// Uses `WidgetDir` for file-based widget discovery and hot-reload: widget HTML
 /// is read from disk on every request, so a browser refresh shows the latest
 /// content without server restart.
+///
+/// Uses the standard `McpAppsAdapter` which injects a postMessage JSON-RPC bridge.
+/// ChatGPT-specific metadata enrichment is handled by `mcp-preview --mode chatgpt`
+/// or by adding `.with_host_layer(HostType::ChatGpt)` on the server builder.
 struct ChessResources {
-    /// ChatGPT adapter for injecting the skybridge bridge
-    chatgpt_adapter: ChatGptAdapter,
+    /// Standard MCP Apps adapter for injecting the postMessage bridge
+    adapter: McpAppsAdapter,
     /// Widget directory scanner for file-based hot-reload
     widget_dir: WidgetDir,
 }
 
 impl ChessResources {
     fn new(widgets_path: PathBuf) -> Self {
-        let widget_meta = WidgetMeta::new()
-            .prefers_border(true)
-            .description("Interactive chess board - click pieces to see valid moves, click destination to move");
-
-        let chatgpt_adapter = ChatGptAdapter::new().with_widget_meta(widget_meta);
-        let widget_dir = WidgetDir::new(widgets_path);
-
         Self {
-            chatgpt_adapter,
-            widget_dir,
+            adapter: McpAppsAdapter::new(),
+            widget_dir: WidgetDir::new(widgets_path),
         }
     }
 }
@@ -456,14 +454,13 @@ impl ResourceHandler for ChessResources {
 
         if let Some(widget_name) = name {
             let html = self.widget_dir.read_widget(widget_name);
-            let mut transformed = self.chatgpt_adapter.transform(uri, widget_name, &html);
-            let meta = transformed.take_meta();
+            let transformed = self.adapter.transform(uri, widget_name, &html);
 
             Ok(ReadResourceResult::new(vec![Content::Resource {
                     uri: uri.to_string(),
                     text: Some(transformed.content),
                     mime_type: Some(ExtendedUIMimeType::HtmlMcpApp.to_string()),
-                    meta,
+                    meta: None,
                 }]))
         } else {
             Err(pmcp::Error::protocol(
@@ -503,26 +500,35 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Resolve widgets directory relative to the binary's source location
     let widgets_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("widgets");
 
-    // Build server
+    // Build server with standard MCP Apps metadata.
+    // Tools declare their UI association via with_ui(), which emits standard
+    // { "ui": { "resourceUri": "..." } } metadata. ChatGPT-specific keys are
+    // added by mcp-preview in --mode chatgpt, or by .with_host_layer(HostType::ChatGpt).
     let server = ServerBuilder::new()
         .name("chess-server")
         .version("1.0.0")
-        .tool_typed_sync_with_description(
+        .tool(
             "chess_new_game",
-            "Start a new chess game. Returns the initial game state.",
-            new_game_handler,
+            TypedSyncTool::new("chess_new_game", new_game_handler)
+                .with_description("Start a new chess game. Returns the initial game state.")
+                .with_ui("ui://app/board"),
         )
-        .tool_typed_sync_with_description(
+        .tool(
             "chess_move",
-            "Make a chess move. Requires current game state and move in algebraic notation (e.g., 'e2e4').",
-            move_handler,
+            TypedSyncTool::new("chess_move", move_handler)
+                .with_description("Make a chess move. Requires current game state and move in algebraic notation (e.g., 'e2e4').")
+                .with_ui("ui://app/board"),
         )
-        .tool_typed_sync_with_description(
+        .tool(
             "chess_valid_moves",
-            "Get all valid moves for a piece at the given position.",
-            valid_moves_handler,
+            TypedSyncTool::new("chess_valid_moves", valid_moves_handler)
+                .with_description("Get all valid moves for a piece at the given position.")
+                .with_ui("ui://app/board"),
         )
         .resources(ChessResources::new(widgets_path))
+        // Opt-in ChatGPT compatibility: enriches tool _meta with openai/* keys at build time.
+        // Remove this line if targeting standard MCP Apps hosts only (e.g., Claude Desktop).
+        .with_host_layer(HostType::ChatGpt)
         .build()
         .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 

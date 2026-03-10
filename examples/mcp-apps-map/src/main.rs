@@ -20,10 +20,11 @@
 //! Then connect with `cargo pmcp connect` or via HTTP at http://localhost:3001
 
 use async_trait::async_trait;
-use pmcp::server::mcp_apps::{ChatGptAdapter, UIAdapter, WidgetDir};
+use pmcp::server::mcp_apps::{McpAppsAdapter, UIAdapter, WidgetDir};
 use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
+use pmcp::server::typed_tool::TypedSyncTool;
 use pmcp::server::ServerBuilder;
-use pmcp::types::mcp_apps::{ExtendedUIMimeType, WidgetMeta};
+use pmcp::types::mcp_apps::{ExtendedUIMimeType, HostType};
 use pmcp::types::protocol::Content;
 use pmcp::types::{ListResourcesResult, ReadResourceResult, ResourceInfo};
 use pmcp::{RequestHandlerExtra, ResourceHandler, Result};
@@ -328,25 +329,22 @@ fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 /// Uses `WidgetDir` for file-based widget discovery and hot-reload: widget HTML
 /// is read from disk on every request, so a browser refresh shows the latest
 /// content without server restart.
+///
+/// Uses the standard `McpAppsAdapter` which injects a postMessage JSON-RPC bridge.
+/// ChatGPT-specific metadata enrichment is handled by `mcp-preview --mode chatgpt`
+/// or by adding `.with_host_layer(HostType::ChatGpt)` on the server builder.
 struct MapResources {
-    /// ChatGPT adapter for injecting the skybridge bridge
-    chatgpt_adapter: ChatGptAdapter,
+    /// Standard MCP Apps adapter for injecting the postMessage bridge
+    adapter: McpAppsAdapter,
     /// Widget directory scanner for file-based hot-reload
     widget_dir: WidgetDir,
 }
 
 impl MapResources {
     fn new(widgets_path: PathBuf) -> Self {
-        let widget_meta = WidgetMeta::new()
-            .prefers_border(true)
-            .description("Interactive world map - search cities, filter by category, explore nearby locations");
-
-        let chatgpt_adapter = ChatGptAdapter::new().with_widget_meta(widget_meta);
-        let widget_dir = WidgetDir::new(widgets_path);
-
         Self {
-            chatgpt_adapter,
-            widget_dir,
+            adapter: McpAppsAdapter::new(),
+            widget_dir: WidgetDir::new(widgets_path),
         }
     }
 }
@@ -362,14 +360,13 @@ impl ResourceHandler for MapResources {
 
         if let Some(widget_name) = name {
             let html = self.widget_dir.read_widget(widget_name);
-            let mut transformed = self.chatgpt_adapter.transform(uri, widget_name, &html);
-            let meta = transformed.take_meta();
+            let transformed = self.adapter.transform(uri, widget_name, &html);
 
             Ok(ReadResourceResult::new(vec![Content::Resource {
                     uri: uri.to_string(),
                     text: Some(transformed.content),
                     mime_type: Some(ExtendedUIMimeType::HtmlMcpApp.to_string()),
-                    meta,
+                    meta: None,
                 }]))
         } else {
             Err(pmcp::Error::protocol(
@@ -409,26 +406,35 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Resolve widgets directory relative to the binary's source location
     let widgets_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("widgets");
 
-    // Build server
+    // Build server with standard MCP Apps metadata.
+    // Tools declare their UI association via with_ui(), which emits standard
+    // { "ui": { "resourceUri": "..." } } metadata. ChatGPT-specific keys are
+    // added by mcp-preview in --mode chatgpt, or by .with_host_layer(HostType::ChatGpt).
     let server = ServerBuilder::new()
         .name("city-explorer-server")
         .version("1.0.0")
-        .tool_typed_sync_with_description(
+        .tool(
             "search_cities",
-            "Search for cities by name, country, or category. Returns a list of matching cities with their coordinates.",
-            search_cities_handler,
+            TypedSyncTool::new("search_cities", search_cities_handler)
+                .with_description("Search for cities by name, country, or category. Returns a list of matching cities with their coordinates.")
+                .with_ui("ui://app/map"),
         )
-        .tool_typed_sync_with_description(
+        .tool(
             "get_city_details",
-            "Get detailed information about a specific city by its ID.",
-            get_city_details_handler,
+            TypedSyncTool::new("get_city_details", get_city_details_handler)
+                .with_description("Get detailed information about a specific city by its ID.")
+                .with_ui("ui://app/map"),
         )
-        .tool_typed_sync_with_description(
+        .tool(
             "get_nearby_cities",
-            "Find cities within a given radius of a point.",
-            get_nearby_handler,
+            TypedSyncTool::new("get_nearby_cities", get_nearby_handler)
+                .with_description("Find cities within a given radius of a point.")
+                .with_ui("ui://app/map"),
         )
         .resources(MapResources::new(widgets_path))
+        // Opt-in ChatGPT compatibility: enriches tool _meta with openai/* keys at build time.
+        // Remove this line if targeting standard MCP Apps hosts only (e.g., Claude Desktop).
+        .with_host_layer(HostType::ChatGpt)
         .build()
         .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 
