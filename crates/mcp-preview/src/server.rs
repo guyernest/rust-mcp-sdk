@@ -121,6 +121,8 @@ impl PreviewServer {
             // API endpoints - session management
             .route("/api/reconnect", post(handlers::api::reconnect))
             .route("/api/status", get(handlers::api::status))
+            // API endpoints - MCP proxy (same-origin forward for WASM client)
+            .route("/api/mcp", post(handlers::api::forward_mcp))
             // API endpoints - WASM bridge
             .route("/api/wasm/build", post(handlers::wasm::trigger_build))
             .route("/api/wasm/status", get(handlers::wasm::build_status))

@@ -5,10 +5,12 @@
 //!
 //! # Architecture
 //!
-//! The widget follows a stateless architecture where:
-//! 1. The widget holds all map state (center, zoom, markers) in memory
-//! 2. Each tool call includes the current view state
-//! 3. The server returns city data based on the query
+//! - Each tool defines both **input** and **output** schemas via `TypedToolWithOutput`.
+//! - The SDK automatically populates `structuredContent` in the tool result so the
+//!   host (ChatGPT, Claude Desktop, etc.) can push data to the widget.
+//! - The widget receives data through **two channels**:
+//!   1. Host-pushed `ui/notifications/tool-result` with `structuredContent` (LLM-initiated)
+//!   2. Widget-initiated `mcpBridge.callTool()` (user clicks in the UI)
 //!
 //! # Running
 //!
@@ -22,7 +24,7 @@
 use async_trait::async_trait;
 use pmcp::server::mcp_apps::{McpAppsAdapter, UIAdapter, WidgetDir};
 use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
-use pmcp::server::typed_tool::TypedSyncTool;
+use pmcp::server::typed_tool::TypedToolWithOutput;
 use pmcp::server::ServerBuilder;
 use pmcp::types::mcp_apps::{ExtendedUIMimeType, HostType};
 use pmcp::types::protocol::Content;
@@ -30,7 +32,6 @@ use pmcp::types::{ListResourcesResult, ReadResourceResult, ResourceInfo};
 use pmcp::{RequestHandlerExtra, ResourceHandler, Result};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -195,12 +196,10 @@ fn get_city_database() -> Vec<City> {
 
 #[derive(Deserialize, JsonSchema)]
 struct SearchCitiesInput {
-    /// Optional search query to filter cities by name or country
-    query: Option<String>,
+    /// Search query to filter cities by name or country
+    query: String,
     /// Optional category filter
     filter: Option<CityCategory>,
-    /// Current map state for context
-    map_state: Option<MapState>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -218,90 +217,149 @@ struct GetNearbyInput {
 }
 
 // =============================================================================
+// Tool Output Types
+// =============================================================================
+
+/// Search results containing matching cities.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct SearchCitiesResult {
+    /// Number of matching cities.
+    pub count: usize,
+    /// List of matching cities.
+    pub cities: Vec<City>,
+}
+
+/// Detailed information about a single city.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct CityDetailsResult {
+    /// Whether the city was found.
+    pub found: bool,
+    /// City details (present when found is true).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub city: Option<City>,
+    /// Suggested map view position.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested_view: Option<SuggestedView>,
+    /// Error message when city not found.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Suggested map view for focusing on a city.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct SuggestedView {
+    pub center: Coordinates,
+    pub zoom: u8,
+}
+
+/// A city with its distance from the search center.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct NearbyCity {
+    /// The city.
+    pub city: City,
+    /// Distance from the search center in kilometers.
+    pub distance_km: f64,
+}
+
+/// Results of a nearby city search.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct NearbyCitiesResult {
+    /// Search center coordinates.
+    pub center: Coordinates,
+    /// Search radius in kilometers.
+    pub radius_km: f64,
+    /// Number of cities found.
+    pub count: usize,
+    /// Cities within the radius, with distances.
+    pub cities: Vec<NearbyCity>,
+}
+
+// =============================================================================
 // Tool Handlers
 // =============================================================================
 
-fn search_cities_handler(input: SearchCitiesInput, _extra: RequestHandlerExtra) -> Result<Value> {
-    let cities = get_city_database();
+fn search_cities_handler(input: SearchCitiesInput, _extra: RequestHandlerExtra) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SearchCitiesResult>> + Send>> {
+    Box::pin(async move {
+        let cities = get_city_database();
+        let query_lower = input.query.to_lowercase();
 
-    let filtered: Vec<&City> = cities.iter()
-        .filter(|city| {
-            // Apply category filter
-            if let Some(ref cat) = input.filter {
-                if city.category != *cat {
-                    return false;
+        let filtered: Vec<City> = cities.into_iter()
+            .filter(|city| {
+                if let Some(ref cat) = input.filter {
+                    if city.category != *cat {
+                        return false;
+                    }
                 }
-            }
 
-            // Apply query filter
-            if let Some(ref query) = input.query {
-                let query_lower = query.to_lowercase();
-                if !city.name.to_lowercase().contains(&query_lower)
-                    && !city.country.to_lowercase().contains(&query_lower)
-                {
-                    return false;
+                if query_lower.is_empty() {
+                    return true;
                 }
-            }
+                city.name.to_lowercase().contains(&query_lower)
+                    || city.country.to_lowercase().contains(&query_lower)
+            })
+            .collect();
 
-            true
+        let count = filtered.len();
+        Ok(SearchCitiesResult {
+            count,
+            cities: filtered,
         })
-        .collect();
-
-    Ok(json!({
-        "count": filtered.len(),
-        "cities": filtered,
-        "map_state": input.map_state.unwrap_or_default()
-    }))
+    })
 }
 
-fn get_city_details_handler(input: GetCityDetailsInput, _extra: RequestHandlerExtra) -> Result<Value> {
-    let cities = get_city_database();
+fn get_city_details_handler(input: GetCityDetailsInput, _extra: RequestHandlerExtra) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<CityDetailsResult>> + Send>> {
+    Box::pin(async move {
+        let cities = get_city_database();
 
-    match cities.iter().find(|c| c.id == input.city_id) {
-        Some(city) => Ok(json!({
-            "found": true,
-            "city": city,
-            "recommended_zoom": 12,
-            "suggested_view": {
-                "center": city.coordinates,
-                "zoom": 12
-            }
-        })),
-        None => Ok(json!({
-            "found": false,
-            "error": format!("City not found: {}", input.city_id)
-        })),
-    }
+        match cities.into_iter().find(|c| c.id == input.city_id) {
+            Some(city) => Ok(CityDetailsResult {
+                found: true,
+                suggested_view: Some(SuggestedView {
+                    center: city.coordinates,
+                    zoom: 12,
+                }),
+                city: Some(city),
+                error: None,
+            }),
+            None => Ok(CityDetailsResult {
+                found: false,
+                city: None,
+                suggested_view: None,
+                error: Some(format!("City not found: {}", input.city_id)),
+            }),
+        }
+    })
 }
 
-fn get_nearby_handler(input: GetNearbyInput, _extra: RequestHandlerExtra) -> Result<Value> {
-    let cities = get_city_database();
+fn get_nearby_handler(input: GetNearbyInput, _extra: RequestHandlerExtra) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<NearbyCitiesResult>> + Send>> {
+    Box::pin(async move {
+        let cities = get_city_database();
 
-    // Simple distance calculation (Haversine approximation)
-    let nearby: Vec<(&City, f64)> = cities.iter()
-        .map(|city| {
-            let dist = haversine_distance(
-                input.center.lat, input.center.lon,
-                city.coordinates.lat, city.coordinates.lon
-            );
-            (city, dist)
+        let nearby: Vec<NearbyCity> = cities.into_iter()
+            .filter_map(|city| {
+                let dist = haversine_distance(
+                    input.center.lat, input.center.lon,
+                    city.coordinates.lat, city.coordinates.lon
+                );
+                if dist <= input.radius_km {
+                    Some(NearbyCity {
+                        city,
+                        distance_km: (dist * 10.0).round() / 10.0,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let count = nearby.len();
+        Ok(NearbyCitiesResult {
+            center: input.center,
+            radius_km: input.radius_km,
+            count,
+            cities: nearby,
         })
-        .filter(|(_, dist)| *dist <= input.radius_km)
-        .collect();
-
-    let results: Vec<_> = nearby.iter()
-        .map(|(city, dist)| json!({
-            "city": city,
-            "distance_km": (*dist * 10.0).round() / 10.0
-        }))
-        .collect();
-
-    Ok(json!({
-        "center": input.center,
-        "radius_km": input.radius_km,
-        "count": results.len(),
-        "cities": results
-    }))
+    })
 }
 
 /// Calculate distance between two points using Haversine formula.
@@ -324,19 +382,8 @@ fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 // Resource Handler
 // =============================================================================
 
-/// Map widget resource handler that serves widgets from the `widgets/` directory.
-///
-/// Uses `WidgetDir` for file-based widget discovery and hot-reload: widget HTML
-/// is read from disk on every request, so a browser refresh shows the latest
-/// content without server restart.
-///
-/// Uses the standard `McpAppsAdapter` which injects a postMessage JSON-RPC bridge.
-/// ChatGPT-specific metadata enrichment is handled by `mcp-preview --mode chatgpt`
-/// or by adding `.with_host_layer(HostType::ChatGpt)` on the server builder.
 struct MapResources {
-    /// Standard MCP Apps adapter for injecting the postMessage bridge
     adapter: McpAppsAdapter,
-    /// Widget directory scanner for file-based hot-reload
     widget_dir: WidgetDir,
 }
 
@@ -352,7 +399,6 @@ impl MapResources {
 #[async_trait]
 impl ResourceHandler for MapResources {
     async fn read(&self, uri: &str, _extra: RequestHandlerExtra) -> Result<ReadResourceResult> {
-        // Extract widget name from URI (e.g., "ui://app/map" -> "map")
         let name = uri
             .strip_prefix("ui://app/")
             .or_else(|| uri.strip_prefix("ui://map/"))
@@ -403,52 +449,42 @@ impl ResourceHandler for MapResources {
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    // Resolve widgets directory relative to the binary's source location
     let widgets_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("widgets");
 
-    // Build server with standard MCP Apps metadata.
-    // Tools declare their UI association via with_ui(), which emits standard
-    // { "ui": { "resourceUri": "..." } } metadata. ChatGPT-specific keys are
-    // added by mcp-preview in --mode chatgpt, or by .with_host_layer(HostType::ChatGpt).
     let server = ServerBuilder::new()
         .name("city-explorer-server")
         .version("1.0.0")
         .tool(
             "search_cities",
-            TypedSyncTool::new("search_cities", search_cities_handler)
-                .with_description("Search for cities by name, country, or category. Returns a list of matching cities with their coordinates.")
+            TypedToolWithOutput::new("search_cities", search_cities_handler)
+                .with_description("Search for cities by name or country. Returns matching cities with coordinates for the map widget.")
                 .with_ui("ui://app/map"),
         )
         .tool(
             "get_city_details",
-            TypedSyncTool::new("get_city_details", get_city_details_handler)
+            TypedToolWithOutput::new("get_city_details", get_city_details_handler)
                 .with_description("Get detailed information about a specific city by its ID.")
                 .with_ui("ui://app/map"),
         )
         .tool(
             "get_nearby_cities",
-            TypedSyncTool::new("get_nearby_cities", get_nearby_handler)
+            TypedToolWithOutput::new("get_nearby_cities", get_nearby_handler)
                 .with_description("Find cities within a given radius of a point.")
                 .with_ui("ui://app/map"),
         )
         .resources(MapResources::new(widgets_path))
-        // Opt-in ChatGPT compatibility: enriches tool _meta with openai/* keys at build time.
-        // Remove this line if targeting standard MCP Apps hosts only (e.g., Claude Desktop).
         .with_host_layer(HostType::ChatGpt)
         .build()
         .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 
-    // Wrap server in Arc<Mutex<>> for sharing
     let server = Arc::new(Mutex::new(server));
 
-    // Configure HTTP server address
     let port = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(3001u16);
     let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port);
 
-    // Create stateless HTTP server configuration
     let config = StreamableHttpServerConfig {
         session_id_generator: None,
         enable_json_response: true,
@@ -458,7 +494,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         http_middleware: None,
     };
 
-    // Create and start the HTTP server
     let http_server = StreamableHttpServer::with_config(addr, server, config);
     let (bound_addr, server_handle) = http_server
         .start()
@@ -468,7 +503,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     println!("City Explorer MCP server listening on http://{}", bound_addr);
     println!("Press Ctrl+C to stop the server");
 
-    // Wait for the server to complete
     server_handle
         .await
         .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;

@@ -5,12 +5,17 @@
 //!
 //! # Architecture
 //!
+//! - Each tool defines both **input** and **output** schemas via `TypedToolWithOutput`.
+//! - The SDK automatically populates `structuredContent` in the tool result so the
+//!   host (ChatGPT, Claude Desktop, etc.) can push data to the widget.
+//! - The widget receives data through **two channels**:
+//!   1. Host-pushed `ui/notifications/tool-result` with `structuredContent` (LLM-initiated)
+//!   2. Widget-initiated `mcpBridge.callTool()` (user clicks in the UI)
+//!
 //! The widget follows a stateless architecture where:
 //! 1. The widget holds all game state in memory
 //! 2. Each tool call includes the full game state
 //! 3. The server validates and processes moves without storing state
-//!
-//! This enables widgets to work in any context without server-side sessions.
 //!
 //! # Running
 //!
@@ -24,7 +29,7 @@
 use async_trait::async_trait;
 use pmcp::server::mcp_apps::{McpAppsAdapter, UIAdapter, WidgetDir};
 use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
-use pmcp::server::typed_tool::TypedSyncTool;
+use pmcp::server::typed_tool::TypedToolWithOutput;
 use pmcp::server::ServerBuilder;
 use pmcp::types::mcp_apps::{ExtendedUIMimeType, HostType};
 use pmcp::types::protocol::Content;
@@ -32,7 +37,6 @@ use pmcp::types::{ListResourcesResult, ReadResourceResult, ResourceInfo};
 use pmcp::{RequestHandlerExtra, ResourceHandler, Result};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -131,10 +135,14 @@ pub enum GameStatus {
     Draw,
 }
 
-/// Chess game state - sent with each request.
+/// Chess game state - sent with each request and returned in responses.
+///
+/// The `board` is an 8x8 array indexed as `board[rank][file]` where:
+/// - rank 0 = row 1 (white's back rank), rank 7 = row 8 (black's back rank)
+/// - file 0 = column a, file 7 = column h
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GameState {
-    /// Board as 8x8 array of optional pieces.
+    /// 8x8 board: `board[rank][file]`. Rank 0 = white's back rank.
     pub board: [[Option<Piece>; 8]; 8],
     /// Current turn.
     pub turn: Color,
@@ -159,7 +167,7 @@ impl GameState {
     pub fn new() -> Self {
         let mut board = [[None; 8]; 8];
 
-        // Set up white pieces
+        // Rank 0 (row 1): white major pieces — Rook, Knight, Bishop, Queen, King, Bishop, Knight, Rook
         board[0][0] = Some(Piece { piece_type: PieceType::Rook, color: Color::White });
         board[0][1] = Some(Piece { piece_type: PieceType::Knight, color: Color::White });
         board[0][2] = Some(Piece { piece_type: PieceType::Bishop, color: Color::White });
@@ -168,11 +176,18 @@ impl GameState {
         board[0][5] = Some(Piece { piece_type: PieceType::Bishop, color: Color::White });
         board[0][6] = Some(Piece { piece_type: PieceType::Knight, color: Color::White });
         board[0][7] = Some(Piece { piece_type: PieceType::Rook, color: Color::White });
+
+        // Rank 1 (row 2): white pawns
         for square in &mut board[1] {
             *square = Some(Piece { piece_type: PieceType::Pawn, color: Color::White });
         }
 
-        // Set up black pieces
+        // Rank 6 (row 7): black pawns
+        for square in &mut board[6] {
+            *square = Some(Piece { piece_type: PieceType::Pawn, color: Color::Black });
+        }
+
+        // Rank 7 (row 8): black major pieces
         board[7][0] = Some(Piece { piece_type: PieceType::Rook, color: Color::Black });
         board[7][1] = Some(Piece { piece_type: PieceType::Knight, color: Color::Black });
         board[7][2] = Some(Piece { piece_type: PieceType::Bishop, color: Color::Black });
@@ -181,9 +196,6 @@ impl GameState {
         board[7][5] = Some(Piece { piece_type: PieceType::Bishop, color: Color::Black });
         board[7][6] = Some(Piece { piece_type: PieceType::Knight, color: Color::Black });
         board[7][7] = Some(Piece { piece_type: PieceType::Rook, color: Color::Black });
-        for square in &mut board[6] {
-            *square = Some(Piece { piece_type: PieceType::Pawn, color: Color::Black });
-        }
 
         Self {
             board,
@@ -339,79 +351,122 @@ struct ValidMovesInput {
 }
 
 // =============================================================================
+// Tool Output Types
+// =============================================================================
+
+/// Result of making a chess move.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct MoveResult {
+    /// Whether the move was applied successfully.
+    pub success: bool,
+    /// Updated game state (present when success is true).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<GameState>,
+    /// The move that was applied.
+    #[serde(rename = "move", skip_serializing_if = "Option::is_none")]
+    pub chess_move: Option<String>,
+    /// Human-readable message.
+    pub message: String,
+}
+
+/// Valid moves for a piece at a given position.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ValidMovesResult {
+    /// The queried position in algebraic notation.
+    pub position: String,
+    /// List of valid destination squares in algebraic notation.
+    pub moves: Vec<String>,
+}
+
+// =============================================================================
 // Tool Handlers
 // =============================================================================
 
-fn new_game_handler(_input: NewGameInput, _extra: RequestHandlerExtra) -> Result<Value> {
-    Ok(serde_json::to_value(GameState::new()).unwrap())
+fn new_game_handler(_input: NewGameInput, _extra: RequestHandlerExtra) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<GameState>> + Send>> {
+    Box::pin(async move {
+        Ok(GameState::new())
+    })
 }
 
-fn move_handler(input: MoveInput, _extra: RequestHandlerExtra) -> Result<Value> {
-    // Parse move
-    let move_str = input.chess_move.replace(['-', ' '], "");
-    if move_str.len() != 4 {
-        return Ok(json!({
-            "success": false,
-            "error": format!("Invalid move format: '{}'. Use format like 'e2e4'.", input.chess_move)
-        }));
-    }
+fn move_handler(input: MoveInput, _extra: RequestHandlerExtra) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<MoveResult>> + Send>> {
+    Box::pin(async move {
+        // Parse move
+        let move_str = input.chess_move.replace(['-', ' '], "");
+        if move_str.len() != 4 {
+            return Ok(MoveResult {
+                success: false,
+                state: None,
+                chess_move: None,
+                message: format!("Invalid move format: '{}'. Use format like 'e2e4'.", input.chess_move),
+            });
+        }
 
-    let from = match Position::from_algebraic(&move_str[0..2]) {
-        Some(p) => p,
-        None => return Ok(json!({
-            "success": false,
-            "error": format!("Invalid from position: '{}'", &move_str[0..2])
-        })),
-    };
+        let from = match Position::from_algebraic(&move_str[0..2]) {
+            Some(p) => p,
+            None => return Ok(MoveResult {
+                success: false,
+                state: None,
+                chess_move: None,
+                message: format!("Invalid from position: '{}'", &move_str[0..2]),
+            }),
+        };
 
-    let to = match Position::from_algebraic(&move_str[2..4]) {
-        Some(p) => p,
-        None => return Ok(json!({
-            "success": false,
-            "error": format!("Invalid to position: '{}'", &move_str[2..4])
-        })),
-    };
+        let to = match Position::from_algebraic(&move_str[2..4]) {
+            Some(p) => p,
+            None => return Ok(MoveResult {
+                success: false,
+                state: None,
+                chess_move: None,
+                message: format!("Invalid to position: '{}'", &move_str[2..4]),
+            }),
+        };
 
-    // Apply move
-    match input.state.apply_move(from, to) {
-        Some(new_state) => Ok(json!({
-            "success": true,
-            "state": new_state,
-            "move": move_str,
-            "message": format!("Move {} applied. It's now {}'s turn.", move_str, if new_state.turn == Color::White { "white" } else { "black" })
-        })),
-        None => Ok(json!({
-            "success": false,
-            "error": format!("Invalid move: {}", move_str)
-        })),
-    }
+        // Apply move
+        match input.state.apply_move(from, to) {
+            Some(new_state) => {
+                let turn_name = if new_state.turn == Color::White { "white" } else { "black" };
+                Ok(MoveResult {
+                    success: true,
+                    state: Some(new_state),
+                    chess_move: Some(move_str),
+                    message: format!("Move applied. It's now {}'s turn.", turn_name),
+                })
+            }
+            None => Ok(MoveResult {
+                success: false,
+                state: None,
+                chess_move: None,
+                message: format!("Invalid move: {}", move_str),
+            }),
+        }
+    })
 }
 
-fn valid_moves_handler(input: ValidMovesInput, _extra: RequestHandlerExtra) -> Result<Value> {
-    let from = match Position::from_algebraic(&input.position) {
-        Some(p) => p,
-        None => return Ok(json!({
-            "error": format!("Invalid position: {}", input.position),
-            "moves": []
-        })),
-    };
+fn valid_moves_handler(input: ValidMovesInput, _extra: RequestHandlerExtra) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ValidMovesResult>> + Send>> {
+    Box::pin(async move {
+        let from = match Position::from_algebraic(&input.position) {
+            Some(p) => p,
+            None => return Ok(ValidMovesResult {
+                position: input.position,
+                moves: vec![],
+            }),
+        };
 
-    let mut valid_moves = Vec::new();
-
-    // Check all possible destination squares
-    for rank in 0..8 {
-        for file in 0..8 {
-            let to = Position { file, rank };
-            if input.state.is_valid_move(from, to) {
-                valid_moves.push(to.to_algebraic());
+        let mut valid_moves = Vec::new();
+        for rank in 0..8 {
+            for file in 0..8 {
+                let to = Position { file, rank };
+                if input.state.is_valid_move(from, to) {
+                    valid_moves.push(to.to_algebraic());
+                }
             }
         }
-    }
 
-    Ok(json!({
-        "position": input.position,
-        "moves": valid_moves
-    }))
+        Ok(ValidMovesResult {
+            position: input.position,
+            moves: valid_moves,
+        })
+    })
 }
 
 // =============================================================================
@@ -419,18 +474,8 @@ fn valid_moves_handler(input: ValidMovesInput, _extra: RequestHandlerExtra) -> R
 // =============================================================================
 
 /// Chess board resource handler that serves widgets from the `widgets/` directory.
-///
-/// Uses `WidgetDir` for file-based widget discovery and hot-reload: widget HTML
-/// is read from disk on every request, so a browser refresh shows the latest
-/// content without server restart.
-///
-/// Uses the standard `McpAppsAdapter` which injects a postMessage JSON-RPC bridge.
-/// ChatGPT-specific metadata enrichment is handled by `mcp-preview --mode chatgpt`
-/// or by adding `.with_host_layer(HostType::ChatGpt)` on the server builder.
 struct ChessResources {
-    /// Standard MCP Apps adapter for injecting the postMessage bridge
     adapter: McpAppsAdapter,
-    /// Widget directory scanner for file-based hot-reload
     widget_dir: WidgetDir,
 }
 
@@ -446,7 +491,6 @@ impl ChessResources {
 #[async_trait]
 impl ResourceHandler for ChessResources {
     async fn read(&self, uri: &str, _extra: RequestHandlerExtra) -> Result<ReadResourceResult> {
-        // Extract widget name from URI (e.g., "ui://app/board" -> "board")
         let name = uri
             .strip_prefix("ui://app/")
             .or_else(|| uri.strip_prefix("ui://chess/"))
@@ -497,52 +541,45 @@ impl ResourceHandler for ChessResources {
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    // Resolve widgets directory relative to the binary's source location
     let widgets_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("widgets");
 
-    // Build server with standard MCP Apps metadata.
-    // Tools declare their UI association via with_ui(), which emits standard
-    // { "ui": { "resourceUri": "..." } } metadata. ChatGPT-specific keys are
-    // added by mcp-preview in --mode chatgpt, or by .with_host_layer(HostType::ChatGpt).
+    // TypedToolWithOutput generates both inputSchema and outputSchema.
+    // The SDK uses outputSchema to populate structuredContent in tool results,
+    // which the host sends to the widget via ui/notifications/tool-result.
     let server = ServerBuilder::new()
         .name("chess-server")
         .version("1.0.0")
         .tool(
             "chess_new_game",
-            TypedSyncTool::new("chess_new_game", new_game_handler)
-                .with_description("Start a new chess game. Returns the initial game state.")
+            TypedToolWithOutput::new("chess_new_game", new_game_handler)
+                .with_description("Start a new chess game. Returns the initial board state as an 8x8 array.")
                 .with_ui("ui://app/board"),
         )
         .tool(
             "chess_move",
-            TypedSyncTool::new("chess_move", move_handler)
+            TypedToolWithOutput::new("chess_move", move_handler)
                 .with_description("Make a chess move. Requires current game state and move in algebraic notation (e.g., 'e2e4').")
                 .with_ui("ui://app/board"),
         )
         .tool(
             "chess_valid_moves",
-            TypedSyncTool::new("chess_valid_moves", valid_moves_handler)
+            TypedToolWithOutput::new("chess_valid_moves", valid_moves_handler)
                 .with_description("Get all valid moves for a piece at the given position.")
                 .with_ui("ui://app/board"),
         )
         .resources(ChessResources::new(widgets_path))
-        // Opt-in ChatGPT compatibility: enriches tool _meta with openai/* keys at build time.
-        // Remove this line if targeting standard MCP Apps hosts only (e.g., Claude Desktop).
         .with_host_layer(HostType::ChatGpt)
         .build()
         .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 
-    // Wrap server in Arc<Mutex<>> for sharing
     let server = Arc::new(Mutex::new(server));
 
-    // Configure HTTP server address
     let port = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(3000u16);
     let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port);
 
-    // Create stateless HTTP server configuration
     let config = StreamableHttpServerConfig {
         session_id_generator: None,
         enable_json_response: true,
@@ -552,7 +589,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         http_middleware: None,
     };
 
-    // Create and start the HTTP server
     let http_server = StreamableHttpServer::with_config(addr, server, config);
     let (bound_addr, server_handle) = http_server
         .start()
@@ -570,7 +606,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("Press Ctrl+C to stop");
 
-    // Keep the server running
     server_handle.await.map_err(|e| {
         Box::new(pmcp::Error::Internal(e.to_string())) as Box<dyn std::error::Error>
     })?;

@@ -1601,19 +1601,21 @@
         this.toolResponseMetadata = responseMeta;
         this.updateStateView();
 
-        // Protocol validation for tools/call (warn-only)
-        if (this.invocationKeys.length > 0) {
+        // Protocol validation for tools/call (warn-only).
+        // In ChatGPT mode, checks invocation keys; in standard mode,
+        // still validates structuredContent presence.
+        {
           const toolName = this.selectedTool ? this.selectedTool.name : 'unknown';
-          const extras = {};
-          extras['structuredContent'] = {
-            pass: !!result.structuredContent,
-            detail: result.structuredContent ? 'present' : 'MISSING'
-          };
           this.validateProtocol(
             `tools/call [${toolName}]`,
             responseMeta,
             this.invocationKeys,
-            extras
+            {
+              structuredContent: {
+                pass: !!result.structuredContent,
+                detail: result.structuredContent ? 'present' : 'MISSING'
+              }
+            }
           );
         }
 
@@ -1634,8 +1636,9 @@
 
           // Helper: deliver tool result data to the widget via AppBridge + ChatGPT postMessage
           const deliverToolResult = () => {
-            // AppBridge delivery (always active for ui/initialize handshake)
-            if (this.appBridge) {
+            // AppBridge delivery: only in ChatGPT mode where bridge is the
+            // primary channel. Standard-mode widgets use addEventListener.
+            if (this.appBridge && this.mode === 'chatgpt') {
               this.appBridge.sendToolInput(this.toolInput);
               this.appBridge.sendToolResult({
                 structuredContent: result.structuredContent,
@@ -1643,20 +1646,24 @@
               });
             }
 
-            // ChatGPT mode: supplemental postMessage delivery with JSON-RPC envelope
+            // postMessage delivery: send ui/notifications/tool-result to widget
+            // iframe in all modes so widget addEventListener handlers receive
+            // host-initiated tool results (e.g., tool calls from the tools list).
             const fr = document.getElementById('widget-frame');
-            if (this.mode === 'chatgpt' && fr && fr.contentWindow) {
+            if (fr && fr.contentWindow) {
               fr.contentWindow.postMessage({
                 jsonrpc: '2.0',
                 method: 'ui/notifications/tool-result',
                 params: { structuredContent: result.structuredContent }
               }, '*');
 
-              // Also set window.openai properties directly (same-origin srcdoc)
-              try {
-                fr.contentWindow.openai.toolOutput = result.structuredContent;
-                fr.contentWindow.openai.toolInput = this.toolInput || null;
-              } catch(e) { /* srcdoc cross-origin guard */ }
+              // ChatGPT mode: also set window.openai properties directly (same-origin srcdoc)
+              if (this.mode === 'chatgpt') {
+                try {
+                  fr.contentWindow.openai.toolOutput = result.structuredContent;
+                  fr.contentWindow.openai.toolInput = this.toolInput || null;
+                } catch(e) { /* srcdoc cross-origin guard */ }
+              }
             }
           };
 
@@ -1918,7 +1925,11 @@ ${html}
               const { default: init, WasmClient } = await import('/wasm/mcp_wasm_client.js');
               await init('/wasm/mcp_wasm_client_bg.wasm');
               this._wasmClient = new WasmClient();
-              await this._wasmClient.connect(this.mcpUrl);
+              // Connect through same-origin proxy to avoid CORS issues.
+              // The browser cannot fetch the MCP server directly (different
+              // origin), so we route through /api/mcp which proxies to it.
+              const proxyUrl = `${window.location.origin}/api/mcp`;
+              await this._wasmClient.connect(proxyUrl);
               this.logEvent('wasmClientReady', {});
             } catch (e) {
               this.showBuildError('WASM client init failed: ' + e.message);

@@ -1,6 +1,10 @@
 //! API handlers for tool and resource operations
 
-use axum::{extract::State, http::StatusCode, response::Json};
+use axum::{
+    extract::State,
+    http::{header, HeaderMap, HeaderValue, StatusCode},
+    response::{IntoResponse, Json},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -39,7 +43,8 @@ pub async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigRespon
             "openai/widgetAccessible".into(),
         ]
     } else {
-        vec![]
+        // Standard MCP Apps: nested _meta.ui.resourceUri — top-level key is "ui"
+        vec!["ui".into()]
     };
 
     let invocation_keys = if is_chatgpt {
@@ -357,6 +362,51 @@ pub async fn reconnect(State(state): State<Arc<AppState>>) -> Json<Value> {
 pub async fn status(State(state): State<Arc<AppState>>) -> Json<Value> {
     let connected = state.proxy.is_connected().await;
     json_response(json!({ "connected": connected }))
+}
+
+/// Forward a raw JSON-RPC request to the MCP server.
+///
+/// Used by the WASM bridge client to avoid CORS issues: the browser
+/// fetches same-origin `/api/mcp` and this handler proxies to the
+/// actual MCP server. Forwards MCP session headers so the WASM client
+/// can maintain its own session.
+pub async fn forward_mcp(
+    State(state): State<Arc<AppState>>,
+    req_headers: HeaderMap,
+    body: String,
+) -> impl IntoResponse {
+    use crate::proxy::{MCP_PROTOCOL_VERSION, MCP_SESSION_ID};
+
+    // Extract MCP headers from the WASM client's request to forward upstream
+    let session_id = req_headers
+        .get(MCP_SESSION_ID)
+        .and_then(|v| v.to_str().ok());
+    let protocol_version = req_headers
+        .get(MCP_PROTOCOL_VERSION)
+        .and_then(|v| v.to_str().ok());
+
+    match state
+        .proxy
+        .forward_raw(body, session_id, protocol_version)
+        .await
+    {
+        Ok(result) => {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            if let Some(ref sid) = result.session_id {
+                if let Ok(val) = HeaderValue::from_str(sid) {
+                    headers.insert(MCP_SESSION_ID, val);
+                }
+            }
+            if let Some(ref ver) = result.protocol_version {
+                if let Ok(val) = HeaderValue::from_str(ver) {
+                    headers.insert(MCP_PROTOCOL_VERSION, val);
+                }
+            }
+            (StatusCode::OK, headers, result.body).into_response()
+        },
+        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+    }
 }
 
 /// Enrich a `_meta` value with ChatGPT-specific keys.

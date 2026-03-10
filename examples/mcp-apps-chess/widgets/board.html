@@ -493,6 +493,47 @@
             });
         }
 
+        // Listen for host-pushed tool results (LLM-initiated tool calls).
+        // When the LLM calls a chess tool, the host sends the structuredContent
+        // to the widget via postMessage. This is the primary data channel for
+        // non-widget-initiated tool calls (e.g., Claude Desktop, ChatGPT).
+        window.addEventListener('message', function(event) {
+            if (event.source !== window.parent) return;
+            var msg = event.data;
+            if (!msg || msg.jsonrpc !== '2.0') return;
+            if (msg.method === 'ui/notifications/tool-result') {
+                var data = msg.params && msg.params.structuredContent;
+                if (data) handleToolResult(data);
+            }
+        });
+
+        // Handle structured tool result pushed from host
+        function handleToolResult(data) {
+            // chess_new_game returns a GameState directly
+            if (data.board && data.turn) {
+                gameState = data;
+                selectedSquare = null;
+                validMoves = [];
+                render();
+                saveState();
+                return;
+            }
+            // chess_move returns { success, state, ... }
+            if (data.success && data.state) {
+                gameState = data.state;
+                selectedSquare = null;
+                validMoves = [];
+                render();
+                saveState();
+                return;
+            }
+            // chess_valid_moves returns { position, moves }
+            if (data.moves && data.position) {
+                validMoves = data.moves;
+                render();
+            }
+        }
+
         // Start when DOM is ready
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', init);

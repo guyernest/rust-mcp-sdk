@@ -6,13 +6,12 @@
 //!
 //! # Architecture
 //!
-//! The server opens a local Chinook SQLite database and exposes three tools:
-//! - `execute_query`: Run arbitrary SQL and get structured JSON results
-//! - `list_tables`: Enumerate all tables in the database
-//! - `describe_table`: Get column metadata for a specific table
-//!
-//! The widget uses Chart.js (loaded from CDN) for visualization and vanilla
-//! JavaScript for a sortable data table.
+//! - Each tool defines both **input** and **output** schemas via `TypedToolWithOutput`.
+//! - The SDK automatically populates `structuredContent` in the tool result so the
+//!   host (ChatGPT, Claude Desktop, etc.) can push data to the widget.
+//! - The widget receives data through **two channels**:
+//!   1. Host-pushed `ui/notifications/tool-result` with `structuredContent` (LLM-initiated)
+//!   2. Widget-initiated `mcpBridge.callTool()` (user clicks in the UI)
 //!
 //! # Prerequisites
 //!
@@ -34,7 +33,7 @@
 use async_trait::async_trait;
 use pmcp::server::mcp_apps::{McpAppsAdapter, UIAdapter, WidgetDir};
 use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
-use pmcp::server::typed_tool::TypedSyncTool;
+use pmcp::server::typed_tool::TypedToolWithOutput;
 use pmcp::server::ServerBuilder;
 use pmcp::types::mcp_apps::{ExtendedUIMimeType, HostType};
 use pmcp::types::protocol::Content;
@@ -42,7 +41,7 @@ use pmcp::types::{ListResourcesResult, ReadResourceResult, ResourceInfo};
 use pmcp::{RequestHandlerExtra, ResourceHandler, Result};
 use rusqlite::{types::Value as SqlValue, Connection};
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -72,13 +71,54 @@ struct DescribeTableInput {
 }
 
 // =============================================================================
+// Tool Output Types
+// =============================================================================
+
+/// Result of executing a SQL query.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct QueryResult {
+    /// Column names from the result set.
+    pub columns: Vec<String>,
+    /// Rows as arrays of values (each row matches the columns order).
+    pub rows: Vec<Vec<Value>>,
+    /// Number of rows returned.
+    pub row_count: usize,
+}
+
+/// List of tables in the database.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct TableListResult {
+    /// Table names in the database.
+    pub tables: Vec<String>,
+}
+
+/// Column metadata for a single column.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ColumnInfo {
+    /// Column name.
+    pub name: String,
+    /// SQL data type.
+    #[serde(rename = "type")]
+    pub col_type: String,
+    /// Whether the column allows NULL values.
+    pub nullable: bool,
+    /// Whether this column is a primary key.
+    pub primary_key: bool,
+}
+
+/// Schema description for a database table.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct TableDescription {
+    /// Name of the table.
+    pub table_name: String,
+    /// Column metadata.
+    pub columns: Vec<ColumnInfo>,
+}
+
+// =============================================================================
 // Database Helpers
 // =============================================================================
 
-/// Open the Chinook SQLite database from the example directory.
-///
-/// Returns a helpful error message if the database file is not found,
-/// directing the user to download it.
 fn open_db() -> std::result::Result<Connection, String> {
     let db_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Chinook.db");
     if !db_path.exists() {
@@ -92,7 +132,6 @@ fn open_db() -> std::result::Result<Connection, String> {
     Connection::open(&db_path).map_err(|e| format!("Failed to open database: {}", e))
 }
 
-/// Convert a rusqlite Value to a serde_json Value.
 fn sql_value_to_json(val: SqlValue) -> Value {
     match val {
         SqlValue::Null => Value::Null,
@@ -107,137 +146,92 @@ fn sql_value_to_json(val: SqlValue) -> Value {
 // Tool Handlers
 // =============================================================================
 
-/// Execute an arbitrary SQL query and return structured results.
-fn execute_query_handler(input: ExecuteQueryInput, _extra: RequestHandlerExtra) -> Result<Value> {
-    let db = match open_db() {
-        Ok(db) => db,
-        Err(msg) => return Ok(json!({ "error": msg })),
-    };
+fn execute_query_handler(input: ExecuteQueryInput, _extra: RequestHandlerExtra) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<QueryResult>> + Send>> {
+    Box::pin(async move {
+        let db = open_db().map_err(pmcp::Error::Internal)?;
 
-    let mut stmt = match db.prepare(&input.sql) {
-        Ok(s) => s,
-        Err(e) => return Ok(json!({ "error": format!("SQL error: {}", e) })),
-    };
+        let mut stmt = db.prepare(&input.sql)
+            .map_err(|e| pmcp::Error::Internal(format!("SQL error: {}", e)))?;
 
-    let columns: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+        let columns: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
 
-    let rows_result: std::result::Result<Vec<Vec<Value>>, _> = stmt
-        .query_map([], |row| {
-            let mut row_values = Vec::with_capacity(columns.len());
-            for i in 0..columns.len() {
-                let val: SqlValue = row.get_unwrap(i);
-                row_values.push(sql_value_to_json(val));
+        let rows_result: std::result::Result<Vec<Vec<Value>>, _> = stmt
+            .query_map([], |row| {
+                let mut row_values = Vec::with_capacity(columns.len());
+                for i in 0..columns.len() {
+                    let val: SqlValue = row.get_unwrap(i);
+                    row_values.push(sql_value_to_json(val));
+                }
+                Ok(row_values)
+            })
+            .and_then(|mapped| mapped.collect());
+
+        match rows_result {
+            Ok(rows) => {
+                let row_count = rows.len();
+                Ok(QueryResult { columns, rows, row_count })
             }
-            Ok(row_values)
-        })
-        .and_then(|mapped| mapped.collect());
-
-    match rows_result {
-        Ok(rows) => {
-            let row_count = rows.len();
-            Ok(json!({
-                "columns": columns,
-                "rows": rows,
-                "row_count": row_count
-            }))
+            Err(e) => Err(pmcp::Error::Internal(format!("Query execution error: {}", e))),
         }
-        Err(e) => Ok(json!({ "error": format!("Query execution error: {}", e) })),
-    }
+    })
 }
 
-/// List all tables in the Chinook database.
-fn list_tables_handler(_input: ListTablesInput, _extra: RequestHandlerExtra) -> Result<Value> {
-    let db = match open_db() {
-        Ok(db) => db,
-        Err(msg) => return Ok(json!({ "error": msg })),
-    };
+fn list_tables_handler(_input: ListTablesInput, _extra: RequestHandlerExtra) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<TableListResult>> + Send>> {
+    Box::pin(async move {
+        let db = open_db().map_err(pmcp::Error::Internal)?;
 
-    let mut stmt = match db.prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
-    ) {
-        Ok(s) => s,
-        Err(e) => return Ok(json!({ "error": format!("SQL error: {}", e) })),
-    };
+        let mut stmt = db.prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+        ).map_err(|e| pmcp::Error::Internal(format!("SQL error: {}", e)))?;
 
-    let tables_result: std::result::Result<Vec<String>, _> = stmt
-        .query_map([], |row| row.get(0))
-        .and_then(|mapped| mapped.collect());
+        let tables_result: std::result::Result<Vec<String>, _> = stmt
+            .query_map([], |row| row.get(0))
+            .and_then(|mapped| mapped.collect());
 
-    match tables_result {
-        Ok(tables) => Ok(json!({ "tables": tables })),
-        Err(e) => Ok(json!({ "error": format!("Query error: {}", e) })),
-    }
+        match tables_result {
+            Ok(tables) => Ok(TableListResult { tables }),
+            Err(e) => Err(pmcp::Error::Internal(format!("Query error: {}", e))),
+        }
+    })
 }
 
-/// Describe the columns of a specific table.
-fn describe_table_handler(
-    input: DescribeTableInput,
-    _extra: RequestHandlerExtra,
-) -> Result<Value> {
-    // Validate table name: only allow alphanumeric characters and underscores
-    // to prevent SQL injection via PRAGMA.
-    if !input
-        .table_name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '_')
-    {
-        return Ok(
-            json!({ "error": "Invalid table name: only alphanumeric characters and underscores are allowed" }),
-        );
-    }
+fn describe_table_handler(input: DescribeTableInput, _extra: RequestHandlerExtra) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<TableDescription>> + Send>> {
+    Box::pin(async move {
+        if !input.table_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return Err(pmcp::Error::Validation(
+                "Invalid table name: only alphanumeric characters and underscores are allowed".to_string()
+            ));
+        }
 
-    let db = match open_db() {
-        Ok(db) => db,
-        Err(msg) => return Ok(json!({ "error": msg })),
-    };
+        let db = open_db().map_err(pmcp::Error::Internal)?;
 
-    let pragma_sql = format!("PRAGMA table_info({})", input.table_name);
-    let mut stmt = match db.prepare(&pragma_sql) {
-        Ok(s) => s,
-        Err(e) => return Ok(json!({ "error": format!("SQL error: {}", e) })),
-    };
+        let pragma_sql = format!("PRAGMA table_info({})", input.table_name);
+        let mut stmt = db.prepare(&pragma_sql)
+            .map_err(|e| pmcp::Error::Internal(format!("SQL error: {}", e)))?;
 
-    let columns_result: std::result::Result<Vec<Value>, _> = stmt
-        .query_map([], |row| {
-            let name: String = row.get(1)?;
-            let col_type: String = row.get(2)?;
-            let notnull: bool = row.get(3)?;
-            let pk: bool = row.get(5)?;
-            Ok(json!({
-                "name": name,
-                "type": col_type,
-                "nullable": !notnull,
-                "primary_key": pk
-            }))
-        })
-        .and_then(|mapped| mapped.collect());
+        let columns_result: std::result::Result<Vec<ColumnInfo>, _> = stmt
+            .query_map([], |row| {
+                let name: String = row.get(1)?;
+                let col_type: String = row.get(2)?;
+                let notnull: bool = row.get(3)?;
+                let pk: bool = row.get(5)?;
+                Ok(ColumnInfo { name, col_type, nullable: !notnull, primary_key: pk })
+            })
+            .and_then(|mapped| mapped.collect());
 
-    match columns_result {
-        Ok(columns) => Ok(json!({
-            "table_name": input.table_name,
-            "columns": columns
-        })),
-        Err(e) => Ok(json!({ "error": format!("Query error: {}", e) })),
-    }
+        match columns_result {
+            Ok(columns) => Ok(TableDescription { table_name: input.table_name, columns }),
+            Err(e) => Err(pmcp::Error::Internal(format!("Query error: {}", e))),
+        }
+    })
 }
 
 // =============================================================================
 // Resource Handler
 // =============================================================================
 
-/// Data visualization resource handler that serves widgets from the `widgets/` directory.
-///
-/// Uses `WidgetDir` for file-based widget discovery and hot-reload: widget HTML
-/// is read from disk on every request, so a browser refresh shows the latest
-/// content without server restart.
-///
-/// Uses the standard `McpAppsAdapter` which injects a postMessage JSON-RPC bridge.
-/// ChatGPT-specific metadata enrichment is handled by `mcp-preview --mode chatgpt`
-/// or by adding `.with_host_layer(HostType::ChatGpt)` on the server builder.
 struct DataVizResources {
-    /// Standard MCP Apps adapter for injecting the postMessage bridge.
     adapter: McpAppsAdapter,
-    /// Widget directory scanner for file-based hot-reload.
     widget_dir: WidgetDir,
 }
 
@@ -253,7 +247,6 @@ impl DataVizResources {
 #[async_trait]
 impl ResourceHandler for DataVizResources {
     async fn read(&self, uri: &str, _extra: RequestHandlerExtra) -> Result<ReadResourceResult> {
-        // Extract widget name from URI (e.g., "ui://app/dashboard" -> "dashboard")
         let name = uri
             .strip_prefix("ui://app/")
             .or_else(|| uri.strip_prefix("ui://dataviz/"))
@@ -304,52 +297,42 @@ impl ResourceHandler for DataVizResources {
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    // Resolve widgets directory relative to the binary's source location
     let widgets_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("widgets");
 
-    // Build server with standard MCP Apps metadata.
-    // Tools declare their UI association via with_ui(), which emits standard
-    // { "ui": { "resourceUri": "..." } } metadata. ChatGPT-specific keys are
-    // added by mcp-preview in --mode chatgpt, or by .with_host_layer(HostType::ChatGpt).
     let server = ServerBuilder::new()
         .name("dataviz-server")
         .version("1.0.0")
         .tool(
             "execute_query",
-            TypedSyncTool::new("execute_query", execute_query_handler)
+            TypedToolWithOutput::new("execute_query", execute_query_handler)
                 .with_description("Execute a SQL query against the Chinook database. Returns columns, rows, and row count as structured JSON.")
                 .with_ui("ui://app/dashboard"),
         )
         .tool(
             "list_tables",
-            TypedSyncTool::new("list_tables", list_tables_handler)
+            TypedToolWithOutput::new("list_tables", list_tables_handler)
                 .with_description("List all tables in the Chinook database.")
                 .with_ui("ui://app/dashboard"),
         )
         .tool(
             "describe_table",
-            TypedSyncTool::new("describe_table", describe_table_handler)
+            TypedToolWithOutput::new("describe_table", describe_table_handler)
                 .with_description("Get column metadata (name, type, nullable, primary key) for a specific table.")
                 .with_ui("ui://app/dashboard"),
         )
         .resources(DataVizResources::new(widgets_path))
-        // Opt-in ChatGPT compatibility: enriches tool _meta with openai/* keys at build time.
-        // Remove this line if targeting standard MCP Apps hosts only (e.g., Claude Desktop).
         .with_host_layer(HostType::ChatGpt)
         .build()
         .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
 
-    // Wrap server in Arc<Mutex<>> for sharing
     let server = Arc::new(Mutex::new(server));
 
-    // Configure HTTP server address
     let port = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(3002u16);
     let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port);
 
-    // Create stateless HTTP server configuration
     let config = StreamableHttpServerConfig {
         session_id_generator: None,
         enable_json_response: true,
@@ -359,7 +342,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         http_middleware: None,
     };
 
-    // Create and start the HTTP server
     let http_server = StreamableHttpServer::with_config(addr, server, config);
     let (bound_addr, server_handle) = http_server
         .start()
@@ -380,7 +362,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("Press Ctrl+C to stop");
 
-    // Keep the server running
     server_handle.await.map_err(|e| {
         Box::new(pmcp::Error::Internal(e.to_string())) as Box<dyn std::error::Error>
     })?;
