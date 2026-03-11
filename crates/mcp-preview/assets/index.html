@@ -1618,11 +1618,16 @@
           );
 
           // Protocol validation for resources/read (warn-only)
+          // Valid MIME types for MCP Apps widgets:
+          //   - text/html;profile=mcp-app  (standard, works in Claude Desktop + ChatGPT)
+          //   - text/html+skybridge        (ChatGPT-only legacy)
+          // Invalid: text/html+mcp (not recognized by Claude Desktop)
+          const VALID_WIDGET_MIMES = ['text/html;profile=mcp-app', 'text/html+skybridge'];
           if (this.descriptorKeys.length > 0) {
             for (const item of contents) {
               const extras = {};
               extras['mimeType'] = {
-                pass: item.mimeType === 'text/html+skybridge',
+                pass: VALID_WIDGET_MIMES.includes(item.mimeType),
                 detail: item.mimeType ? `"${item.mimeType}"` : 'MISSING'
               };
               this.validateProtocol(
@@ -2277,22 +2282,55 @@
     };
   ${sc}` : '';
 
-        return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>
-    body { margin: 0; padding: 16px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-  </style>
-${openaiStub}
+        // Redirect CDN ext-apps imports to our local widget-runtime.mjs.
+        // This avoids Zod version conflicts from esm.sh and ensures widgets
+        // use the same App class our AppBridge already communicates with.
+        // Scan widget HTML for CDN import URLs (esm.sh, jsdelivr, unpkg, skypack)
+        // and map each exact URL to our local bundle.
+        // NOTE: keep CDN list in sync with CDN_MARKERS in src/server/mcp_apps/adapter.rs
+        const cdnPattern = /https?:\/\/(?:esm\.sh|cdn\.jsdelivr\.net\/npm|unpkg\.com|cdn\.skypack\.dev)\/@modelcontextprotocol\/ext-apps[^"'\s]*/g;
+        const cdnUrls = [...new Set(html.match(cdnPattern) || [])];
+        const imports = { '@modelcontextprotocol/ext-apps': '/assets/widget-runtime.mjs' };
+        for (const url of cdnUrls) {
+          imports[url] = '/assets/widget-runtime.mjs';
+        }
+        const importMap = `<script type="importmap">${JSON.stringify({ imports })}${sc}`;
+
+        // Detect if widget HTML already bundles its own ext-apps SDK App instance.
+        // Injecting a second App would create two Protocol instances on the same
+        // postMessage channel with colliding message IDs.
+        //
+        // Detection (two signals, either is sufficient):
+        //   1. CDN imports found — widget loads ext-apps from a CDN (structural)
+        //   2. _requestHandlers — Protocol class internals present in Vite bundles
+        //      (survives minification, won't false-positive on comments/text)
+        const widgetHasOwnApp = cdnUrls.length > 0
+          || html.includes('_requestHandlers');
+
+        // If widget manages its own protocol, only inject importMap + console capture.
+        // Otherwise inject a wrapper App that performs the handshake on behalf of
+        // simple widgets that have no SDK code.
+        const bridgeScript = widgetHasOwnApp ? '' : `
   <script type="module">
     // Load bridge from shared library via dynamic import
     const { App, installCompat } = await import('/assets/widget-runtime.mjs');
     const app = new App({ name: 'PreviewWidget', version: '1.0.0' });
     installCompat(app);
     await app.connect();
+  ${sc}`;
 
+        return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  ${importMap}
+  <style>
+    body { margin: 0; padding: 16px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+  </style>
+${openaiStub}
+${bridgeScript}
+  <script type="module">
     // Console capture for DevTools
     const preview = window.parent.previewRuntime;
     if (preview) {
@@ -2316,12 +2354,12 @@ ${openaiStub}
           }));
         }
       });
-
-      // Signal ready -- fires immediately after connect() handshake completes
-      // Send ui/notifications/initialized to host so Bridge diagnostics can track it
-      window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: {} }, '*');
-      preview.logEvent('widgetReady', {});
     }
+
+    // Signal ready — always sent so the host resolves readyPromise
+    // regardless of whether the wrapper or the widget handled the handshake.
+    window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: {} }, '*');
+    if (window.parent.previewRuntime) window.parent.previewRuntime.logEvent('widgetReady', {});
   ${sc}
 </head>
 <body>

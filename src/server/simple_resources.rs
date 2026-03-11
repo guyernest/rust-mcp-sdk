@@ -206,6 +206,20 @@ impl ResourceCollection {
     /// # }
     /// ```
     pub fn add_ui_resource(mut self, resource: UIResource, contents: UIResourceContents) -> Self {
+        // Apply ext-apps CDN shim so widgets work in hosts that block external
+        // script loading (e.g. Claude Desktop's Electron iframe CSP).
+        #[cfg(feature = "mcp-apps")]
+        let contents = {
+            if let Some(text) = contents.text {
+                let shimmed = crate::server::mcp_apps::inline_ext_apps_shim(&text);
+                UIResourceContents {
+                    text: Some(shimmed.into_owned()),
+                    ..contents
+                }
+            } else {
+                contents
+            }
+        };
         self.ui_resources
             .insert(resource.uri.clone(), (resource, contents));
         self
@@ -272,14 +286,14 @@ impl ResourceCollection {
             .map(|resource| resource.info())
             .collect();
 
-        // Add UI resources
+        // Add UI resources with `_meta.ui` descriptor (same format as tools/list)
         for (ui_resource, _contents) in self.ui_resources.values() {
             infos.push(ResourceInfo {
                 uri: ui_resource.uri.clone(),
                 name: ui_resource.name.clone(),
                 description: ui_resource.description.clone(),
                 mime_type: Some(ui_resource.mime_type.clone()),
-                meta: None,
+                meta: crate::types::ui::build_ui_meta(Some(&ui_resource.uri)),
             });
         }
 
@@ -309,13 +323,31 @@ impl ResourceHandler for ResourceCollection {
         }
 
         // Try UI resources (ui:// scheme)
-        if let Some((_resource, contents)) = self.ui_resources.get(uri) {
+        if let Some((resource, contents)) = self.ui_resources.get(uri) {
+            // Merge contents._meta with the UI descriptor metadata so the
+            // resources/read response includes `_meta.ui` — required by
+            // Claude Desktop to recognise this as a renderable MCP App.
+            let meta = contents
+                .meta
+                .clone()
+                .or_else(|| Some(serde_json::Map::new()))
+                .map(|mut m| {
+                    // Ensure _meta.ui.resourceUri is present (same as resources/list)
+                    let ui_meta =
+                        crate::types::ui::build_ui_meta(Some(&resource.uri));
+                    if let Some(ui_map) = ui_meta {
+                        for (k, v) in ui_map {
+                            m.entry(k).or_insert(v);
+                        }
+                    }
+                    m
+                });
             return Ok(ReadResourceResult {
                 contents: vec![Content::Resource {
                     uri: contents.uri.clone(),
                     text: contents.text.clone(),
                     mime_type: Some(contents.mime_type.clone()),
-                    meta: contents.meta.clone(),
+                    meta,
                 }],
             });
         }

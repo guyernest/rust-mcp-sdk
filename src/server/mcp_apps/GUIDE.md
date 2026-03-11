@@ -89,22 +89,31 @@ let result = CallToolResult::new(vec![
 
 ### 3. Register the widget HTML as a resource
 
-Use `McpAppsAdapter` to register with the correct MIME type:
+Use `UIResource` and `UIResourceContents` to register with the correct MIME type:
 
 ```rust
-use pmcp::server::mcp_apps::McpAppsAdapter;
+use pmcp::types::ui::{UIResource, UIResourceContents};
 
-let adapter = McpAppsAdapter::new();
-let transformed = adapter.transform(
+// Create the resource declaration (for resources/list)
+let resource = UIResource::html_mcp_app(
     "ui://my-app/explorer.html",
     "Image Explorer",
+);
+
+// Create the resource content (for resources/read)
+let contents = UIResourceContents::html(
+    "ui://my-app/explorer.html",
     &html_content,  // your widget HTML string
 );
-// transformed.mime_type = "text/html;profile=mcp-app"
-// transformed.content = html_content (served as-is)
+// contents.mime_type = "text/html;profile=mcp-app"
+
+// Register with ResourceCollection
+resources.add_ui_resource(resource, contents);
 ```
 
-The adapter sets `mimeType: "text/html;profile=mcp-app"` which is the standard MIME type recognized by Claude Desktop, ChatGPT, and other MCP hosts.
+Both `UIResource::html_mcp_app()` and `UIResourceContents::html()` produce `mimeType: "text/html;profile=mcp-app"` — the standard MIME type recognized by Claude Desktop, ChatGPT, and other MCP hosts.
+
+> **Important:** Do not use the legacy `UIResource::html_mcp()` constructor — it produces `text/html+mcp` which is not recognized by Claude Desktop.
 
 ### 4. Add outputSchema (optional but recommended)
 
@@ -263,7 +272,7 @@ For PMCP servers, widgets are typically served as self-contained HTML files via 
 **Option A: CDN import (simplest)**
 ```html
 <script type="module">
-  import { App } from "https://esm.sh/@modelcontextprotocol/ext-apps@1.2.1";
+  import { App } from "https://esm.sh/@modelcontextprotocol/ext-apps@1.2.2";
   // ...
 </script>
 ```
@@ -291,16 +300,107 @@ For very simple widgets that only need to receive data (no tool calls back), you
 </script>
 ```
 
-## Protocol checklist
+### 5. Enable ChatGPT compatibility (required for ChatGPT)
 
-Run these checks with the mcp-preview protocol tab or mcp-inspector:
+Register the ChatGPT host layer so the server enriches `_meta` with `openai/*` descriptor keys:
+
+```rust
+use pmcp::types::mcp_apps::HostType;
+
+Server::builder()
+    .name("my-server")
+    .version("1.0.0")
+    .with_host_layer(HostType::ChatGpt)  // adds openai/* keys to _meta
+    // ... tools, resources, etc.
+    .build()
+```
+
+Without this, `tools/list` and `resources/read` will be missing `openai/outputTemplate`, `openai/widgetAccessible`, and `openai/toolInvocation/*` keys that ChatGPT requires.
+
+## Widget bundling strategies
+
+### Option A: Vite + vite-plugin-singlefile (recommended)
+
+Bundle the ext-apps SDK into a single self-contained HTML file. This is the most reliable approach — works in Claude Desktop (which blocks external script loading), ChatGPT, and all other hosts.
+
+```bash
+# widgets/package.json
+npm install @modelcontextprotocol/ext-apps
+npm install -D vite vite-plugin-singlefile typescript
+
+# widgets/vite.config.ts
+import { defineConfig } from "vite";
+import { viteSingleFile } from "vite-plugin-singlefile";
+export default defineConfig({
+  plugins: [viteSingleFile()],
+  build: { target: "esnext", rollupOptions: { input: "mcp-app.html" } },
+});
+
+# Build → widgets/dist/mcp-app.html (single file, ~120KB)
+npm run build
+```
+
+Then embed in Rust:
+```rust
+const WIDGET_HTML: &str = include_str!("../../../widgets/dist/mcp-app.html");
+```
+
+> **Important:** Set `target: "esnext"` in the Vite config — the ext-apps SDK uses top-level `await` which requires ESNext target.
+
+### Option B: CDN import (simple but limited)
+
+```html
+<script type="module">
+  import { App } from "https://esm.sh/@modelcontextprotocol/ext-apps@1.2.2";
+</script>
+```
+
+Works in ChatGPT and mcp-preview, but **fails in Claude Desktop** due to iframe CSP blocking external scripts.
+
+### Option C: Minimal hand-rolled postMessage (NOT recommended)
+
+A hand-rolled JSON-RPC postMessage implementation seems simpler but is fragile:
+- Missing protocol handlers (`ui/teardown`, `ui/toolInput`, etc.) cause the host to tear down the MCP connection entirely
+- Different hosts expect different handshake parameters
+- No automatic theme/context handling
+
+**Always use the ext-apps SDK** — it handles host differences, protocol evolution, and edge cases.
+
+## Debugging with mcp-preview
+
+### Protocol tab
+
+Run `cargo pmcp preview` and check the Protocol tab. All checks should show PASS:
 
 | Check | Expected | Source |
 |-------|----------|--------|
 | `tools/list` has `_meta.ui` | `{ "ui": { "resourceUri": "ui://..." } }` | `ToolInfo::with_ui()` |
-| `tools/call` returns `structuredContent` | JSON data object | `CallToolResult::with_structured_content()` |
-| `resources/read` mimeType | `"text/html;profile=mcp-app"` | `McpAppsAdapter` |
-| Widget HTML uses ext-apps SDK | `import { App } from "..."` | Widget code |
+| `tools/list` has openai keys | `openai/outputTemplate`, `openai/widgetAccessible`, etc. | `.with_host_layer(HostType::ChatGpt)` |
+| `tools/call` returns `structuredContent` | JSON data object | `TypedToolWithOutput` or `CallToolResult::with_structured_content()` |
+| `tools/call` has `_meta` | `openai/toolInvocation/*` keys | `with_widget_enrichment()` |
+| `resources/read` mimeType | `"text/html;profile=mcp-app"` | `UIResourceContents::html()` |
+| `resources/read` has `_meta` | `ui/resourceUri` + openai keys | `ResourceCollection` + `uri_to_tool_meta` |
+
+### Common failures
+
+**Widget shows briefly then connection drops (Claude Desktop/Claude.ai):**
+- The widget is missing protocol handlers. Use the full ext-apps SDK, not hand-rolled postMessage.
+- After receiving a tool result, if the widget doesn't respond to `ui/teardown` properly, the host kills the entire MCP connection.
+
+**"Received a response for an unknown message ID" (mcp-preview):**
+- Two App instances on the same postMessage channel. This happens when:
+  - mcp-preview's wrapper injects its own App, AND the widget bundles its own App
+  - mcp-preview detects bundled SDKs automatically and skips its wrapper App
+  - If your Vite-bundled widget still triggers this, check that the build output is being used (not the source HTML)
+
+**resources/read missing openai/* keys (ChatGPT mode):**
+- Server needs `.with_host_layer(HostType::ChatGpt)` in the builder
+- Without this, the `uri_to_tool_meta` propagation index has no openai keys to propagate
+
+**Widget not rendered at all (Claude Desktop):**
+- Check `resources/read` returns `_meta.ui.resourceUri` — required by Claude Desktop
+- Check MIME type is `text/html;profile=mcp-app` (not `text/html+mcp`)
+- Check CORS header `access-control-allow-origin: *` is present
 
 ## Reference implementations
 
