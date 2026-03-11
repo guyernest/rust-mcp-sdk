@@ -949,6 +949,7 @@ var _App = class _App {
     this.onteardown = null;
     this._name = options.name;
     this._version = options.version;
+    this._capabilities = options.capabilities ?? {};
   }
   /**
    * Connect to the host by creating a PostMessageTransport to window.parent
@@ -977,8 +978,9 @@ var _App = class _App {
     try {
       const result = await Promise.race([
         this._transport.send("ui/initialize", {
-          name: this._name,
-          version: this._version
+          appInfo: { name: this._name, version: this._version },
+          appCapabilities: this._capabilities,
+          protocolVersion: _App.PROTOCOL_VERSION
         }),
         new Promise((resolve) => setTimeout(() => resolve(null), 2e3))
       ]);
@@ -1148,6 +1150,10 @@ var _App = class _App {
     }
   }
 };
+/**
+ * MCP Apps protocol version aligned with @modelcontextprotocol/ext-apps@1.2.2.
+ */
+_App.PROTOCOL_VERSION = "2026-01-26";
 // ===========================================================================
 // Private
 // ===========================================================================
@@ -1279,7 +1285,7 @@ var AppBridge = class {
     switch (method) {
       case "ui/initialize":
         return {
-          protocolVersion: "2025-03-26",
+          protocolVersion: "2026-01-26",
           hostInfo: {
             name: "mcp-preview",
             version: "0.1.0"

@@ -29,7 +29,24 @@ Building an MCP App involves two parts:
 
 ## Server Side (Rust)
 
-### 1. Register tools with UI metadata
+### 1. Enable ChatGPT host layer
+
+Register the ChatGPT host layer so the server enriches `_meta` with `openai/*` descriptor keys. This is required for ChatGPT and harmless for other hosts:
+
+```rust
+use pmcp::types::mcp_apps::HostType;
+
+Server::builder()
+    .name("my-server")
+    .version("1.0.0")
+    .with_host_layer(HostType::ChatGpt)  // adds openai/* keys to _meta
+    // ... tools, resources, etc.
+    .build()
+```
+
+Without this, `tools/list` and `resources/read` will be missing `openai/outputTemplate`, `openai/widgetAccessible`, and `openai/toolInvocation/*` keys that ChatGPT requires.
+
+### 2. Register tools with UI metadata
 
 Associate a tool with its widget using `ToolInfo::with_ui()`:
 
@@ -62,7 +79,7 @@ let tool = ToolInfo::with_ui("my_tool", None, schema, "ui://my-app/widget.html")
     .with_widget_meta(WidgetMeta::new().prefers_border(true));
 ```
 
-### 2. Return structuredContent from tool calls
+### 3. Return structuredContent from tool calls
 
 Return data alongside text content so the widget can render it:
 
@@ -87,7 +104,7 @@ let result = CallToolResult::new(vec![
 - `content` — text for the AI model to understand
 - `structuredContent` — data for the widget to render (also visible to the model)
 
-### 3. Register the widget HTML as a resource
+### 4. Register the widget HTML as a resource
 
 Use `UIResource` and `UIResourceContents` to register with the correct MIME type:
 
@@ -115,7 +132,28 @@ Both `UIResource::html_mcp_app()` and `UIResourceContents::html()` produce `mime
 
 > **Important:** Do not use the legacy `UIResource::html_mcp()` constructor — it produces `text/html+mcp` which is not recognized by Claude Desktop.
 
-### 4. Add outputSchema (optional but recommended)
+### 5. Declare CSP for external domains
+
+If your widget loads external resources (images, API calls, fonts), you **must** declare them in `_meta.ui.csp` on the resource contents. Without this, hosts like Claude.ai block all external domains via Content-Security-Policy.
+
+```rust
+use pmcp::types::mcp_apps::{WidgetCSP, WidgetMeta};
+
+let csp = WidgetCSP::new()
+    .resources("https://*.staticflickr.com")  // img-src: images, scripts, fonts
+    .connect("https://*.staticflickr.com");   // connect-src: fetch/XHR
+
+let meta = WidgetMeta::new()
+    .resource_uri("ui://my-app/explorer.html")
+    .prefers_border(true)
+    .csp(csp);
+```
+
+This produces `_meta.ui.csp` with `connectDomains` and `resourceDomains` arrays on the `resources/read` response, which the host merges into its iframe CSP.
+
+> **Important:** CSP metadata goes on the **resource contents** (returned by `resources/read`), not just the resource listing. See the [ext-apps CSP spec](https://apps.extensions.modelcontextprotocol.io/api/documents/csp-and-cors.html) for details.
+
+### 6. Add outputSchema (optional but recommended)
 
 `outputSchema` tells the host the shape of `structuredContent`, enabling validation:
 
@@ -132,17 +170,43 @@ let tool = ToolInfo::with_ui("search_images", None, input_schema, "ui://my-app/e
 
 ## Widget Side (JavaScript/TypeScript)
 
-### Recommended SDK: `@modelcontextprotocol/ext-apps`
+Widgets use the `@modelcontextprotocol/ext-apps` SDK and **must be bundled into self-contained HTML** using Vite + vite-plugin-singlefile. This is required because Claude Desktop's iframe CSP blocks external script loading — CDN imports will fail silently.
 
-This is the official MCP Apps SDK that works across all major hosts:
-- Claude Desktop
-- ChatGPT
-- VS Code
-- Goose, Postman, MCPJam, and more
+### Widget lifecycle
 
-Install: `npm install @modelcontextprotocol/ext-apps`
+1. **Create `App`** — no capabilities needed (do not pass `tools`)
+2. **Register ALL protocol handlers before `connect()`** — missing handlers cause connection teardown
+3. **Call `app.connect()`** — performs the `ui/initialize` handshake with the host
+4. **Read `app.getHostContext()`** — some hosts deliver data only at init time
+5. **Use `app.callServerTool()`** — for interactive widgets that call back to the server
 
-### Minimal vanilla JS widget
+### Required protocol handlers
+
+> **Critical:** You MUST register `onteardown`, `ontoolinput`, `ontoolcancelled`, and `onerror` handlers before calling `connect()`. Without these, hosts like Claude Desktop and Claude.ai will **tear down the entire MCP connection** after the first tool result — the widget briefly appears then everything dies.
+
+```js
+// ALL of these are required — not just ontoolresult
+app.onteardown = async () => { return {}; };
+app.ontoolinput = (params) => { console.debug("Tool input:", params); };
+app.ontoolcancelled = (params) => { console.debug("Tool cancelled:", params.reason); };
+app.onerror = (err) => { console.error("App error:", err); };
+app.ontoolresult = (result) => { /* your data handler */ };
+```
+
+### Capabilities declaration
+
+Do **not** pass `tools` capability to `new App()`. ChatGPT's adapter rejects it with a Zod validation error (`-32603: expected "object"`). Widgets still receive tool results via `hostContext.toolOutput` and `ontoolresult` notifications without this capability. The `callServerTool()` API also works without it on hosts that support it (mcp-preview, Claude Desktop) — add a `.catch()` fallback for hosts that don't.
+
+```js
+// Standard widget — receives tool results, can call server tools
+const app = new App({ name: "my-widget", version: "1.0.0" });
+```
+
+> **Warning:** Do NOT pass `{ tools: true }` or `{ tools: {} }` as capabilities. ChatGPT's adapter validates `appCapabilities` with a strict Zod schema that rejects the `tools` key entirely, causing the widget to fail to initialize.
+
+### Minimal widget example
+
+Create your source HTML with a bare import (Vite resolves it from `node_modules`):
 
 ```html
 <!DOCTYPE html>
@@ -158,34 +222,27 @@ Install: `npm install @modelcontextprotocol/ext-apps`
   <script type="module">
     import { App } from "@modelcontextprotocol/ext-apps";
 
-    const app = new App(
-      { name: "my-widget", version: "1.0.0" },
-      { tools: true }  // declare capabilities
-    );
+    const app = new App({ name: "my-widget", version: "1.0.0" });
 
-    // 1. Register handlers BEFORE connecting (to avoid missing early notifications)
+    // 1. Register ALL handlers BEFORE connecting (required by protocol)
+    app.onteardown = async () => { return {}; };
+    app.ontoolinput = (params) => { console.debug("Tool input:", params); };
+    app.ontoolcancelled = (params) => { console.debug("Cancelled:", params.reason); };
+    app.onerror = (err) => { console.error("App error:", err); };
+
     app.ontoolresult = (result) => {
-      // Called when a new tool result arrives after initial load
       if (result.structuredContent) {
         renderData(result.structuredContent);
       }
     };
 
-    app.onhostcontextchanged = (ctx) => {
-      // React to theme changes, etc.
-      if (ctx.theme) applyTheme(ctx.theme);
-    };
-
     // 2. Connect to host
     await app.connect();
 
-    // 3. Read initial data from hostContext (delivered at init time)
+    // 3. Read initial data from hostContext
     const ctx = app.getHostContext();
     if (ctx?.toolOutput) {
       renderData(ctx.toolOutput);
-    }
-    if (ctx?.theme) {
-      applyTheme(ctx.theme);
     }
 
     // 4. Optionally call server tools from the widget
@@ -202,10 +259,6 @@ Install: `npm install @modelcontextprotocol/ext-apps`
     function renderData(data) {
       document.getElementById("output").textContent = JSON.stringify(data);
     }
-
-    function applyTheme(theme) {
-      document.documentElement.setAttribute("data-theme", theme);
-    }
   </script>
 </body>
 </html>
@@ -219,7 +272,7 @@ import { useApp, useHostStyles } from "@modelcontextprotocol/ext-apps/react";
 export default function MyWidget() {
   const { app, isConnected } = useApp({
     appInfo: { name: "my-widget", version: "1.0.0" },
-    capabilities: { tools: true },
+    // Do not pass capabilities.tools — ChatGPT rejects it
     onAppCreated: (app) => {
       app.ontoolresult = (result) => {
         // handle new tool results
@@ -244,127 +297,113 @@ export default function MyWidget() {
 }
 ```
 
-### Key patterns
+### Loading external images
 
-**Data delivery varies by host.** The `App` class abstracts this:
-- **Claude Desktop** delivers `toolOutput` inside `hostContext` at init time
-- **ChatGPT** delivers via `window.openai.toolOutput` and globals events
-- The `App` class normalizes both into `app.getHostContext()` and `app.ontoolresult`
+Hosts enforce strict CSP on widget iframes. To load external images reliably across all hosts:
 
-**Always read `hostContext` after `connect()`.** Some hosts only provide data at initialization, not through post-init notifications:
+1. **Server side:** Declare the image CDN in `WidgetCSP` (see section 5 above)
+2. **Widget side:** Use fetch→blob as defense-in-depth for hosts that don't support `_meta.ui.csp`:
+
 ```js
-await app.connect();
-const ctx = app.getHostContext();
-// ctx.toolInput, ctx.toolOutput, ctx.theme, ctx.locale, etc.
+function loadImage(img, url) {
+    fetch(url, { mode: 'cors' }).then(function(r) {
+        if (!r.ok) throw new Error(r.status);
+        return r.blob();
+    }).then(function(blob) {
+        img.src = URL.createObjectURL(blob);
+        // Revoke blob URL after render to prevent memory leaks
+        img.onload = function() { URL.revokeObjectURL(img.src); img.onload = null; };
+    }).catch(function() {
+        // Fallback to direct URL — works on permissive hosts (ChatGPT, mcp-preview).
+        // On strict hosts, onerror fires and shows a placeholder.
+        img.src = url;
+    });
+}
 ```
 
-**Register handlers before `connect()`.** Ensures you don't miss early notifications:
-```js
-app.ontoolresult = (result) => { /* ... */ };
-app.onhostcontextchanged = (ctx) => { /* ... */ };
-await app.connect();  // now handlers are ready
-```
+> **Why both?** The `_meta.ui.csp` declaration tells the host to relax its CSP for the declared domains. The fetch→blob approach works even if the host ignores `_meta.ui.csp` — `blob:` URLs are typically allowed in `img-src`. Together they maximize cross-host compatibility.
 
-### Building self-contained widgets
+> **Memory:** Always call `URL.revokeObjectURL()` after the image loads. Without this, each fetched image leaks a blob URL that persists for the page lifetime.
 
-For PMCP servers, widgets are typically served as self-contained HTML files via `resources/read`. Bundle the ext-apps SDK into your widget HTML:
+## Bundling widgets with Vite
 
-**Option A: CDN import (simplest)**
-```html
-<script type="module">
-  import { App } from "https://esm.sh/@modelcontextprotocol/ext-apps@1.2.2";
-  // ...
-</script>
-```
+Widgets must be self-contained HTML files with all JavaScript inlined. Use **Vite + vite-plugin-singlefile** to bundle the ext-apps SDK into each widget.
 
-**Option B: Build tool (Vite, esbuild, etc.)**
-```bash
-npm install @modelcontextprotocol/ext-apps
-npx vite build  # or esbuild --bundle
-```
-Then embed the built output in your Rust binary as a string constant.
-
-**Option C: Inline without SDK (simple widgets)**
-
-For very simple widgets that only need to receive data (no tool calls back), you can use raw postMessage. However, this is NOT recommended for production — the ext-apps SDK handles host differences, protocol evolution, and edge cases:
-
-```html
-<!-- NOT RECOMMENDED — use ext-apps SDK instead -->
-<script>
-  // Fallback pattern (fragile, host-specific)
-  window.addEventListener('message', (e) => {
-    if (e.data?.method === 'ui/toolResult') {
-      renderData(e.data.params?.structuredContent);
-    }
-  });
-</script>
-```
-
-### 5. Enable ChatGPT compatibility (required for ChatGPT)
-
-Register the ChatGPT host layer so the server enriches `_meta` with `openai/*` descriptor keys:
-
-```rust
-use pmcp::types::mcp_apps::HostType;
-
-Server::builder()
-    .name("my-server")
-    .version("1.0.0")
-    .with_host_layer(HostType::ChatGpt)  // adds openai/* keys to _meta
-    // ... tools, resources, etc.
-    .build()
-```
-
-Without this, `tools/list` and `resources/read` will be missing `openai/outputTemplate`, `openai/widgetAccessible`, and `openai/toolInvocation/*` keys that ChatGPT requires.
-
-## Widget bundling strategies
-
-### Option A: Vite + vite-plugin-singlefile (recommended)
-
-Bundle the ext-apps SDK into a single self-contained HTML file. This is the most reliable approach — works in Claude Desktop (which blocks external script loading), ChatGPT, and all other hosts.
+### Setup
 
 ```bash
-# widgets/package.json
+cd widget/  # or widgets/
+npm init -y
 npm install @modelcontextprotocol/ext-apps
-npm install -D vite vite-plugin-singlefile typescript
+npm install -D vite vite-plugin-singlefile
+```
 
-# widgets/vite.config.ts
+### vite.config.ts
+
+`vite-plugin-singlefile` uses `inlineDynamicImports` which only supports a single input per build. Use the `WIDGET` env var to select which widget to build:
+
+```ts
 import { defineConfig } from "vite";
 import { viteSingleFile } from "vite-plugin-singlefile";
+
+const widget = process.env.WIDGET || "mcp-app";
+
 export default defineConfig({
   plugins: [viteSingleFile()],
-  build: { target: "esnext", rollupOptions: { input: "mcp-app.html" } },
+  build: {
+    target: "esnext",  // required — ext-apps SDK uses top-level await
+    rollupOptions: {
+      input: `${widget}.html`,
+    },
+    outDir: "dist",
+    emptyOutDir: false,  // preserve other widgets' output
+  },
 });
+```
 
-# Build → widgets/dist/mcp-app.html (single file, ~120KB)
+### package.json scripts
+
+For a single widget:
+```json
+{
+  "scripts": {
+    "build": "vite build"
+  }
+}
+```
+
+For multiple widgets:
+```json
+{
+  "scripts": {
+    "build": "rm -rf dist && WIDGET=image-explorer vite build && WIDGET=relationship-viewer vite build && WIDGET=tree-browser vite build"
+  }
+}
+```
+
+### Build and embed
+
+```bash
 npm run build
+# → dist/image-explorer.html (~130KB, self-contained)
+# → dist/relationship-viewer.html
+# → dist/tree-browser.html
 ```
 
-Then embed in Rust:
+Embed the built output in your Rust binary:
+
 ```rust
-const WIDGET_HTML: &str = include_str!("../../../widgets/dist/mcp-app.html");
+const WIDGET_HTML: &str = include_str!("../../widget/dist/image-explorer.html");
 ```
 
-> **Important:** Set `target: "esnext"` in the Vite config — the ext-apps SDK uses top-level `await` which requires ESNext target.
+### Build order
 
-### Option B: CDN import (simple but limited)
+Widget HTML must exist before `cargo build` (since `include_str!` runs at compile time):
 
-```html
-<script type="module">
-  import { App } from "https://esm.sh/@modelcontextprotocol/ext-apps@1.2.2";
-</script>
+```bash
+cd widget && npm ci && npm run build && cd ..
+cargo lambda build --release --arm64 -p my-server-lambda
 ```
-
-Works in ChatGPT and mcp-preview, but **fails in Claude Desktop** due to iframe CSP blocking external scripts.
-
-### Option C: Minimal hand-rolled postMessage (NOT recommended)
-
-A hand-rolled JSON-RPC postMessage implementation seems simpler but is fragile:
-- Missing protocol handlers (`ui/teardown`, `ui/toolInput`, etc.) cause the host to tear down the MCP connection entirely
-- Different hosts expect different handshake parameters
-- No automatic theme/context handling
-
-**Always use the ext-apps SDK** — it handles host differences, protocol evolution, and edge cases.
 
 ## Debugging with mcp-preview
 
@@ -380,37 +419,45 @@ Run `cargo pmcp preview` and check the Protocol tab. All checks should show PASS
 | `tools/call` has `_meta` | `openai/toolInvocation/*` keys | `with_widget_enrichment()` |
 | `resources/read` mimeType | `"text/html;profile=mcp-app"` | `UIResourceContents::html()` |
 | `resources/read` has `_meta` | `ui/resourceUri` + openai keys | `ResourceCollection` + `uri_to_tool_meta` |
+| `resources/read` has CSP (if external resources) | `_meta.ui.csp.resourceDomains` / `connectDomains` | `WidgetMeta::csp()` |
 
 ### Common failures
 
 **Widget shows briefly then connection drops (Claude Desktop/Claude.ai):**
-- The widget is missing protocol handlers. Use the full ext-apps SDK, not hand-rolled postMessage.
+- The widget is missing protocol handlers (`onteardown`, `ontoolinput`, `ontoolcancelled`). ALL handlers must be registered before `connect()`, even if they only log a debug message.
 - After receiving a tool result, if the widget doesn't respond to `ui/teardown` properly, the host kills the entire MCP connection.
+- This is the #1 issue when porting widgets from mcp-preview (which is more forgiving) to real hosts.
 
-**"Received a response for an unknown message ID" (mcp-preview):**
+**Widget loads but never shows tool results:**
+- Do NOT pass `tools` capability to `new App()`. ChatGPT rejects it. Tool results are delivered via `hostContext.toolOutput` and `ontoolresult` without it.
+- Check `ontoolresult` is registered BEFORE `connect()`, not after.
+
+**"Received a response for an unknown message ID" (mcp-preview) / dual-App conflict:**
 - Two App instances on the same postMessage channel. This happens when:
-  - mcp-preview's wrapper injects its own App, AND the widget bundles its own App
-  - mcp-preview detects bundled SDKs automatically and skips its wrapper App
+  - `McpAppsAdapter::transform()` is applied to a widget that already bundles the ext-apps SDK via Vite — do NOT use `McpAppsAdapter` on pre-bundled widgets
+  - mcp-preview's wrapper injects its own App, AND the widget bundles its own App (mcp-preview auto-detects this and skips, but `McpAppsAdapter` does not)
   - If your Vite-bundled widget still triggers this, check that the build output is being used (not the source HTML)
+- **Fix:** For Vite-bundled widgets, use `UIResource::html_mcp_app()` + `UIResourceContents::html()` directly, or set `mime_type: "text/html;profile=mcp-app"` and serve the HTML as-is.
 
 **resources/read missing openai/* keys (ChatGPT mode):**
 - Server needs `.with_host_layer(HostType::ChatGpt)` in the builder
 - Without this, the `uri_to_tool_meta` propagation index has no openai keys to propagate
 
+**Images/external resources blocked (Claude.ai):**
+- Claude.ai enforces strict CSP on widget iframes: `img-src 'self' data: blob:` — external image URLs are blocked
+- **Fix:** Declare external domains in `WidgetCSP` on the resource metadata (see section 5). Also use `fetch→blob→createObjectURL` in the widget as a fallback (see "Loading external images")
+- Always use HTTPS — `http://` URLs are blocked by mixed-content policy even with CSP declarations
+
 **Widget not rendered at all (Claude Desktop):**
 - Check `resources/read` returns `_meta.ui.resourceUri` — required by Claude Desktop
 - Check MIME type is `text/html;profile=mcp-app` (not `text/html+mcp`)
-- Check CORS header `access-control-allow-origin: *` is present
+- Check widget is self-contained (no external script imports — CSP blocks them)
 
 ## Reference implementations
 
+- **Open Images** (`built-in/sql-api/servers/open-images/`) — multi-widget server with image grid, relationship viewer, tree browser
+- **Calculator** (`examples/mcp-apps-calculator/`) — single-widget TypeScript example
 - **ext-apps examples:** https://github.com/modelcontextprotocol/ext-apps/tree/main/examples
-  - `customer-segmentation-server` — Chart.js data visualization
-  - `three-js-server` — Three.js 3D rendering
-  - `maps-server` — Cesium.js globe
-  - Starter templates for React, Vue, Svelte, Solid, Vanilla JS
-
-- **PMCP examples:** `examples/mcp-apps-chess/` — chess game widget
 
 ## SDK links
 

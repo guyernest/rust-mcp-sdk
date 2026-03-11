@@ -173,8 +173,11 @@ pub(crate) fn build_uri_to_tool_meta(
                     })
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
-                // First tool registered wins (per user decision)
-                map.entry(uri.to_string()).or_insert(propagated);
+                // First tool registered wins (per user decision).
+                // Skip empty propagation maps to avoid `_meta: {}` on resources/list.
+                if !propagated.is_empty() {
+                    map.entry(uri.to_string()).or_insert(propagated);
+                }
             }
         }
     }
@@ -323,13 +326,8 @@ impl ServerCore {
         *self.client_capabilities.write().await = Some(init_req.capabilities.clone());
         *self.initialized.write().await = true;
 
-        // Negotiate protocol version
         let negotiated_version =
-            if crate::SUPPORTED_PROTOCOL_VERSIONS.contains(&init_req.protocol_version.as_str()) {
-                init_req.protocol_version.clone()
-            } else {
-                crate::DEFAULT_PROTOCOL_VERSION.to_string()
-            };
+            crate::negotiate_protocol_version(&init_req.protocol_version);
 
         Ok(InitializeResult {
             protocol_version: ProtocolVersion(negotiated_version),
@@ -1305,7 +1303,7 @@ mod tests {
 
     #[test]
     fn test_build_uri_to_tool_meta_indexes_by_standard_key() {
-        // Create a tool with standard-only _meta (no openai/* keys)
+        // Create a tool with openai/* keys (propagation-eligible)
         let mut tool_infos = HashMap::new();
         let mut info = ToolInfo::new(
             "chess",
@@ -1316,6 +1314,10 @@ mod tests {
         meta.insert(
             "ui".to_string(),
             serde_json::json!({"resourceUri": "ui://chess/board"}),
+        );
+        meta.insert(
+            "openai/outputTemplate".to_string(),
+            serde_json::json!("ui://chess/board"),
         );
         info._meta = Some(meta);
         tool_infos.insert("chess".to_string(), info);
@@ -1369,8 +1371,8 @@ mod tests {
     }
 
     #[test]
-    fn test_build_uri_to_tool_meta_standard_only_no_openai() {
-        // Create a tool with standard-only _meta
+    fn test_build_uri_to_tool_meta_skips_empty_propagation() {
+        // Create a tool with standard-only _meta (no openai/* keys to propagate)
         let mut tool_infos = HashMap::new();
         let mut info = ToolInfo::new(
             "chess",
@@ -1386,12 +1388,11 @@ mod tests {
         tool_infos.insert("chess".to_string(), info);
 
         let index = build_uri_to_tool_meta(&tool_infos);
-        assert!(index.contains_key("ui://chess/board"));
-        let entry = &index["ui://chess/board"];
-        // Should NOT have openai keys when not enriched
+        // Should NOT index when there are no propagation-eligible keys,
+        // to avoid producing _meta: {} on resources/list
         assert!(
-            !entry.contains_key("openai/outputTemplate"),
-            "must NOT have openai/outputTemplate in standard-only index"
+            !index.contains_key("ui://chess/board"),
+            "must not index tools with no propagation-eligible keys"
         );
     }
 

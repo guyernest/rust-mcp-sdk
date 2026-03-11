@@ -7,7 +7,7 @@
 //! multiple MCP host platforms:
 //!
 //! - **ChatGPT Apps** (OpenAI Apps SDK) - Uses `text/html+skybridge` and `window.openai`
-//! - **MCP Apps (SEP-1865)** - Standard MCP extension using `text/html+mcp`
+//! - **MCP Apps (SEP-1865)** - Standard MCP extension using `text/html;profile=mcp-app`
 //! - **MCP-UI** - Community standard supporting HTML, URLs, and Remote DOM
 //!
 //! # Architecture
@@ -364,6 +364,10 @@ impl WidgetMeta {
         }
         if !ui_obj.is_empty() {
             map.insert("ui".to_string(), serde_json::Value::Object(ui_obj));
+        }
+        // Legacy flat key for hosts that read "ui/resourceUri" directly
+        if let Some(uri) = &self.resource_uri {
+            crate::types::ui::insert_legacy_resource_uri_key(&mut map, uri);
         }
         map
     }
@@ -821,7 +825,7 @@ impl ExtendedUIMimeType {
 
     /// Check if this MIME type is for standard MCP Apps.
     pub fn is_mcp_apps(&self) -> bool {
-        matches!(self, Self::HtmlMcp)
+        matches!(self, Self::HtmlMcp | Self::HtmlMcpApp)
     }
 
     /// Check if this MIME type is for MCP-UI.
@@ -1198,8 +1202,8 @@ mod tests {
         assert!(ExtendedUIMimeType::HtmlSkybridge.is_chatgpt());
         assert!(ExtendedUIMimeType::HtmlMcpApp.is_chatgpt());
         assert!(ExtendedUIMimeType::HtmlMcp.is_mcp_apps());
+        assert!(ExtendedUIMimeType::HtmlMcpApp.is_mcp_apps());
         assert!(ExtendedUIMimeType::HtmlPlain.is_mcp_ui());
-        assert!(!ExtendedUIMimeType::HtmlMcpApp.is_mcp_apps());
     }
 
     #[test]
@@ -1547,10 +1551,13 @@ mod tests {
         let ui_obj = map.get("ui").expect("must have nested 'ui' key");
         assert_eq!(ui_obj["resourceUri"], "ui://chess/board.html");
 
-        // No legacy flat key
-        assert!(
-            map.get("ui/resourceUri").is_none(),
-            "must NOT emit legacy flat ui/resourceUri key"
+        // Legacy flat key for host compatibility
+        assert_eq!(
+            map.get("ui/resourceUri"),
+            Some(&serde_json::Value::String(
+                "ui://chess/board.html".to_string()
+            )),
+            "must emit legacy flat ui/resourceUri key for Claude Desktop/ChatGPT"
         );
 
         // No ChatGPT alias (standard-only)
@@ -1574,10 +1581,11 @@ mod tests {
         assert_eq!(ui_obj["prefersBorder"], true);
         assert_eq!(ui_obj["domain"], "chess.com");
 
-        // No flat keys in standard-only output
-        assert!(
-            map.get("ui/resourceUri").is_none(),
-            "must NOT emit legacy flat key"
+        // Legacy flat key emitted for Claude Desktop compatibility
+        assert_eq!(
+            map.get("ui/resourceUri").and_then(|v| v.as_str()),
+            Some("ui://chess/board.html"),
+            "must emit legacy flat key for Claude Desktop"
         );
         assert!(
             map.get("openai/outputTemplate").is_none(),

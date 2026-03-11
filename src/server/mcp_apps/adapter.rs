@@ -78,6 +78,145 @@ impl TransformedResource {
     }
 }
 
+/// Inline a lightweight `App` shim to replace CDN ext-apps SDK imports.
+///
+/// Hosts like Claude Desktop run widgets in Electron iframes that block
+/// external script loading from CDNs (esm.sh, jsdelivr, etc.). This replaces
+/// `import { App } from "https://esm.sh/@modelcontextprotocol/ext-apps..."` with
+/// a self-contained inline implementation of the `App` class (~1.5KB).
+///
+/// The shim implements the core ext-apps API surface used by widgets:
+/// - `new App(info, caps)` / `app.connect()` / `app.getHostContext()`
+/// - `app.ontoolresult` / `app.onhostcontextchanged` callbacks
+/// - `app.callServerTool({ name, arguments })`
+///
+/// For mcp-preview, a separate import-map redirect in `index.html` covers
+/// all CDN providers by redirecting to a local bundle with full SDK features.
+pub(crate) fn inline_ext_apps_shim(html: &str) -> std::borrow::Cow<'_, str> {
+    // Match CDN import patterns for @modelcontextprotocol/ext-apps.
+    // NOTE: keep in sync with cdnPattern regex in crates/mcp-preview/assets/index.html
+    const CDN_MARKERS: &[&str] = &[
+        "esm.sh/@modelcontextprotocol/ext-apps",
+        "cdn.jsdelivr.net/npm/@modelcontextprotocol/ext-apps",
+        "unpkg.com/@modelcontextprotocol/ext-apps",
+        "cdn.skypack.dev/@modelcontextprotocol/ext-apps",
+    ];
+
+    // Find the import statement: `import ... from "https://<CDN>/@modelcontextprotocol/ext-apps...";`
+    // We need to find the full line from `import` to the closing `;`
+    let Some((import_start, import_end)) = find_cdn_import(html, CDN_MARKERS) else {
+        return std::borrow::Cow::Borrowed(html);
+    };
+
+    let mut result = String::with_capacity(html.len() + EXT_APPS_SHIM.len());
+    result.push_str(&html[..import_start]);
+    result.push_str(EXT_APPS_SHIM);
+    result.push_str(&html[import_end..]);
+    std::borrow::Cow::Owned(result)
+}
+
+/// Find the byte range of a CDN import statement in HTML.
+///
+/// Looks for `import ... from "https://<CDN_MARKER>..."` and returns
+/// the (start, end) byte offsets spanning from `import` to the trailing `;`
+/// or end of line.
+fn find_cdn_import(html: &str, markers: &[&str]) -> Option<(usize, usize)> {
+    for marker in markers {
+        if let Some(marker_pos) = html.find(marker) {
+            // Walk backward to find the opening quote, then `from`, then `import`
+            let before = &html[..marker_pos];
+            // Find the quote that opens this URL (scanning backward)
+            let quote_pos = before.rfind(['"', '\'']);
+            if let Some(qp) = quote_pos {
+                // Bound backward search to the current line to avoid matching
+                // an unrelated `import` keyword from an earlier statement.
+                let line_start = html[..qp].rfind('\n').map(|i| i + 1).unwrap_or(0);
+                let on_line = &html[line_start..qp];
+                if let Some(rel_offset) = on_line.rfind("import") {
+                    let import_kw = line_start + rel_offset;
+                    // Find end: closing quote + optional semicolon
+                    let after_marker = &html[marker_pos + marker.len()..];
+                    let close_quote = after_marker
+                        .find(['"', '\''])
+                        .map(|i| marker_pos + marker.len() + i + 1)
+                        .unwrap_or(html.len());
+                    // Skip trailing semicolon and whitespace
+                    let mut end = close_quote;
+                    while end < html.len()
+                        && matches!(html.as_bytes()[end], b';' | b' ' | b'\t')
+                    {
+                        end += 1;
+                    }
+                    return Some((import_kw, end));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Minimal inline implementation of the `@modelcontextprotocol/ext-apps` `App` class.
+///
+/// Implements the JSON-RPC 2.0 postMessage protocol used by MCP hosts:
+/// - `ui/initialize` handshake with `hostContext` delivery
+/// - `ui/toolResult` and `ui/hostContextChanged` notifications
+/// - `tools/call` proxy for widget-initiated tool calls
+const EXT_APPS_SHIM: &str = r#"
+// Inline ext-apps App shim (replaces CDN import for hosts that block external scripts)
+const _extPending = new Map();
+let _extNextId = 1;
+let _extApp = null;
+
+function _extSend(method, params) {
+  return new Promise((resolve, reject) => {
+    const id = _extNextId++;
+    const timer = setTimeout(() => { _extPending.delete(id); reject(new Error('Timeout')); }, 30000);
+    _extPending.set(id, { resolve, reject, timer });
+    window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
+  });
+}
+
+window.addEventListener('message', (e) => {
+  const d = e.data;
+  if (!d || d.jsonrpc !== '2.0') return;
+  if (typeof d.id === 'number' && !d.method) {
+    const p = _extPending.get(d.id);
+    if (p) { _extPending.delete(d.id); clearTimeout(p.timer); d.error ? p.reject(new Error(d.error.message)) : p.resolve(d.result); }
+    return;
+  }
+  if (!_extApp) return;
+  if (d.method === 'ui/toolResult' || d.method === 'ui/notifications/tool-result') {
+    if (_extApp.ontoolresult) _extApp.ontoolresult(d.params);
+  } else if (d.method === 'ui/hostContextChanged' || d.method === 'ui/notifications/host-context-changed') {
+    if (d.params) _extApp._hc = Object.assign(_extApp._hc || {}, d.params);
+    if (_extApp.onhostcontextchanged) _extApp.onhostcontextchanged(_extApp._hc);
+  }
+});
+
+class App {
+  constructor(info, caps) {
+    this._info = info || {};
+    this._caps = caps || {};
+    this._hc = undefined;
+    this.ontoolresult = null;
+    this.onhostcontextchanged = null;
+    this.onerror = null;
+    _extApp = this;
+  }
+  async connect() {
+    try {
+      const r = await Promise.race([
+        _extSend('ui/initialize', { appInfo: { name: this._info.name || 'widget', version: this._info.version || '1.0.0' }, appCapabilities: this._caps || {}, protocolVersion: '2026-01-26' }),
+        new Promise(resolve => setTimeout(() => resolve(null), 2000))
+      ]);
+      if (r && r.hostContext) this._hc = r.hostContext;
+    } catch (_) { /* host may not support ui/initialize */ }
+  }
+  getHostContext() { return this._hc; }
+  async callServerTool(params) { return _extSend('tools/call', params); }
+}
+"#;
+
 /// Inject a script block into HTML, preferring before `</head>`.
 ///
 /// Tries three strategies in order:
@@ -382,8 +521,8 @@ impl UIAdapter for ChatGptAdapter {
 
 /// Adapter for MCP Apps (SEP-1865 standard).
 ///
-/// Transforms resources to use `text/html+mcp` MIME type and
-/// injects postMessage bridge for MCP JSON-RPC communication.
+/// Transforms resources to use `text/html;profile=mcp-app` MIME type.
+/// Widgets use the `@modelcontextprotocol/ext-apps` SDK for host communication.
 #[derive(Debug, Clone, Default)]
 pub struct McpAppsAdapter {
     /// Optional Content Security Policy.
@@ -417,14 +556,14 @@ impl UIAdapter for McpAppsAdapter {
     }
 
     fn transform(&self, uri: &str, name: &str, html: &str) -> TransformedResource {
-        // Serve the widget HTML as-is. Widget developers use the
-        // @modelcontextprotocol/ext-apps SDK (App class) for host communication.
-        // See GUIDE.md in this directory for recommended patterns.
+        // Inline the ext-apps SDK if the widget imports from a CDN, making it
+        // self-contained for hosts that block external script loading (Claude Desktop).
+        // See GUIDE.md for recommended patterns.
         TransformedResource {
             uri: uri.to_string(),
             name: name.to_string(),
             mime_type: self.mime_type(),
-            content: html.to_string(),
+            content: inline_ext_apps_shim(html).into_owned(),
             metadata: HashMap::new(),
         }
     }
@@ -609,8 +748,6 @@ mod tests {
         let transformed = adapter.transform("ui://test/widget.html", "Test Widget", html);
 
         assert_eq!(transformed.mime_type, ExtendedUIMimeType::HtmlMcpApp);
-        assert!(transformed.content.contains("window.mcpBridge"));
-        assert!(transformed.content.contains("postMessage"));
     }
 
     #[test]
@@ -731,15 +868,98 @@ mod tests {
     }
 
     #[test]
-    fn test_mcp_apps_transform_preserves_html() {
+    fn test_mcp_apps_transform_preserves_html_without_cdn() {
         let adapter = McpAppsAdapter::new();
         let html = "<html><head></head><body>My Widget</body></html>";
         let transformed = adapter.transform("ui://test/widget.html", "Test", html);
 
         assert_eq!(
             transformed.content, html,
-            "McpAppsAdapter.transform must serve HTML as-is"
+            "McpAppsAdapter.transform must serve HTML as-is when no CDN imports"
         );
         assert_eq!(transformed.mime_type, ExtendedUIMimeType::HtmlMcpApp);
+    }
+
+    #[test]
+    fn test_inline_shim_replaces_esm_import() {
+        let html = r#"<script type="module">
+import { App } from "https://esm.sh/@modelcontextprotocol/ext-apps@1.2.2";
+const app = new App({ name: "test" });
+</script>"#;
+        let fixed = inline_ext_apps_shim(html);
+        assert!(
+            !fixed.contains("esm.sh"),
+            "CDN import should be removed: {fixed}"
+        );
+        assert!(
+            fixed.contains("class App"),
+            "inline shim should define App class"
+        );
+        assert!(
+            fixed.contains("ui/initialize"),
+            "inline shim should implement ui/initialize protocol"
+        );
+        assert!(
+            fixed.contains("const app = new App"),
+            "widget code after import should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_inline_shim_replaces_jsdelivr_import() {
+        let html = r#"import { App } from "https://cdn.jsdelivr.net/npm/@modelcontextprotocol/ext-apps@1.2.2/+esm";
+const app = new App({ name: "test" });"#;
+        let fixed = inline_ext_apps_shim(html);
+        assert!(
+            !fixed.contains("jsdelivr"),
+            "jsdelivr import should be removed"
+        );
+        assert!(fixed.contains("class App"), "should inline the shim");
+    }
+
+    #[test]
+    fn test_inline_shim_no_match() {
+        let html = "<html><body>No imports here</body></html>";
+        let fixed = inline_ext_apps_shim(html);
+        assert_eq!(&*fixed, html, "should not modify HTML without CDN imports");
+    }
+
+    #[test]
+    fn test_inline_shim_preserves_non_ext_apps_imports() {
+        let html = r#"<script type="module">
+import { Chart } from "https://esm.sh/chart.js@4.4.0";
+import { App } from "https://esm.sh/@modelcontextprotocol/ext-apps@1.2.2";
+const app = new App({ name: "test" });
+</script>"#;
+        let fixed = inline_ext_apps_shim(html);
+        assert!(
+            fixed.contains("chart.js"),
+            "non-ext-apps imports should be preserved"
+        );
+        assert!(
+            !fixed.contains("esm.sh/@modelcontextprotocol"),
+            "ext-apps import should be replaced"
+        );
+    }
+
+    #[test]
+    fn test_mcp_apps_transform_inlines_shim() {
+        let adapter = McpAppsAdapter::new();
+        let html = r#"<html><head></head><body>
+<script type="module">
+import { App } from "https://esm.sh/@modelcontextprotocol/ext-apps@1.2.2";
+const app = new App({ name: "test" });
+await app.connect();
+</script>
+</body></html>"#;
+        let transformed = adapter.transform("ui://test/widget.html", "Test", html);
+        assert!(
+            transformed.content.contains("class App"),
+            "McpAppsAdapter.transform should inline the App shim"
+        );
+        assert!(
+            transformed.content.contains("await app.connect()"),
+            "widget code should be preserved"
+        );
     }
 }

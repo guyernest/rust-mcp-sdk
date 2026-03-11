@@ -574,6 +574,16 @@ export interface HostContext {
 }
 
 /**
+ * App capabilities declared during initialization.
+ * Tells the host what features the widget supports.
+ */
+export interface AppCapabilities {
+  /** Widget can call server-side tools */
+  tools?: boolean;
+  [key: string]: unknown;
+}
+
+/**
  * Options for creating an App instance (widget-side).
  */
 export interface AppOptions {
@@ -581,6 +591,8 @@ export interface AppOptions {
   name: string;
   /** The widget/app version */
   version: string;
+  /** Optional capabilities to declare during initialization */
+  capabilities?: AppCapabilities;
 }
 
 /**

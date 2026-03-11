@@ -6,7 +6,7 @@
  */
 
 import { PostMessageTransport } from './transport';
-import type { CallToolParams, CallToolResult, HostContext, AppOptions } from './types';
+import type { CallToolParams, CallToolResult, HostContext, AppOptions, AppCapabilities } from './types';
 
 // =============================================================================
 // Lifecycle callback types
@@ -44,9 +44,15 @@ type TeardownCallback = () => void;
 export class App {
   private _name: string;
   private _version: string;
+  private _capabilities: AppCapabilities;
   private _transport: PostMessageTransport | null = null;
   private _hostContext: HostContext | undefined = undefined;
   private _connected = false;
+
+  /**
+   * MCP Apps protocol version aligned with @modelcontextprotocol/ext-apps@1.2.2.
+   */
+  static readonly PROTOCOL_VERSION = '2026-01-26';
 
   // Lifecycle callbacks (setter-based, matching MCP Apps spec)
   ontoolinput: ToolInputCallback | null = null;
@@ -58,6 +64,7 @@ export class App {
   constructor(options: AppOptions) {
     this._name = options.name;
     this._version = options.version;
+    this._capabilities = options.capabilities ?? {};
   }
 
   /**
@@ -90,12 +97,14 @@ export class App {
       this._handleNotification(method, params);
     });
 
-    // Attempt initialization handshake with a 2s timeout
+    // Attempt initialization handshake with a 2s timeout.
+    // Params aligned with @modelcontextprotocol/ext-apps@1.2.2 protocol.
     try {
       const result = await Promise.race([
         this._transport.send('ui/initialize', {
-          name: this._name,
-          version: this._version,
+          appInfo: { name: this._name, version: this._version },
+          appCapabilities: this._capabilities,
+          protocolVersion: App.PROTOCOL_VERSION,
         }),
         new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
       ]);

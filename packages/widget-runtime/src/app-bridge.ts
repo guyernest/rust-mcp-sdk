@@ -166,9 +166,9 @@ export class AppBridge {
     switch (method) {
       case 'ui/initialize':
         // Return full MCP Apps protocol init response.
-        // The ext-apps SDK validates: protocolVersion, hostInfo, hostCapabilities, hostContext.
+        // Aligned with @modelcontextprotocol/ext-apps@1.2.2 protocol (2026-01-26).
         return {
-          protocolVersion: '2025-03-26',
+          protocolVersion: '2026-01-26',
           hostInfo: {
             name: 'mcp-preview',
             version: '0.1.0',
