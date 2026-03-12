@@ -1,49 +1,19 @@
 # MCP Apps: Interactive Widgets
 
-```
-+-----------------------------------------------------------------------+
-|                    EXPERIMENTAL FEATURE                                |
-+-----------------------------------------------------------------------+
-|                                                                       |
-|  MCP Apps and UI Resources are EXPERIMENTAL and subject to change.    |
-|                                                                       |
-|  What This Means for You:                                             |
-|  ========================                                             |
-|                                                                       |
-|  1. APIs MAY CHANGE                                                   |
-|     The types, methods, and patterns shown here may evolve            |
-|     significantly as the specification matures.                       |
-|                                                                       |
-|  2. LIMITED CLIENT SUPPORT                                            |
-|     Most MCP clients (Claude Desktop, IDE plugins, etc.) do NOT      |
-|     yet support UI resources. Your UIs may not render in all hosts.   |
-|                                                                       |
-|  3. PMCP SDK WILL EVOLVE                                              |
-|     As the MCP specification changes, PMCP SDK and cargo-pmcp        |
-|     will update their APIs accordingly.                               |
-|                                                                       |
-|  Recommendations:                                                     |
-|  ================                                                     |
-|  - Learn these patterns to understand where MCP is heading            |
-|  - Experiment in development environments                             |
-|  - Check client compatibility before production deployment            |
-|  - Design servers to gracefully degrade when UI is not supported      |
-|  - Follow MCP specification updates for changes                       |
-|                                                                       |
-+-----------------------------------------------------------------------+
-```
-
 In this chapter, you'll learn to build rich, interactive widgets -- charts, maps, games, dashboards -- that run alongside your MCP tools. Instead of returning plain JSON that an AI describes in words, your server will serve full HTML interfaces that users can see and interact with directly.
+
+MCP Apps is the standard extension for interactive widget UIs. Your widgets work across multiple hosts -- Claude Desktop, ChatGPT, VS Code, and any standard MCP client -- without writing host-specific code. The SDK handles the differences for you through the **host layer** system.
 
 ## Learning Objectives
 
 By the end of this chapter, you will be able to:
 
 - Scaffold an MCP Apps project with `cargo pmcp app new` and preview it in your browser
-- Author widgets as HTML files using the `WidgetDir` file-based convention
-- Communicate between widgets and your server using the `window.mcpBridge` bridge API
-- Use adapters to deploy the same widget to ChatGPT, MCP Apps, and MCP-UI hosts
-- Follow the chess, map, and dataviz example walkthroughs hands-on
+- Register tools with UI metadata using `ToolInfo::with_ui()` and serve widgets as resources
+- Build widgets with the `@modelcontextprotocol/ext-apps` SDK (`App` class) and Vite bundling
+- Enable multi-host support with `with_host_layer(HostType::ChatGpt)`
+- Return `structuredContent` from tools for widget rendering
+- Validate App metadata with `mcp-tester apps` and `cargo pmcp test apps`
 
 ## Why Widgets?
 
@@ -71,22 +41,42 @@ When your tool returns coordinates for ten conference venues, an interactive map
 
 ## Architecture at a Glance
 
-The MCP Apps stack has four layers:
+Building an MCP App involves two parts:
+
+1. **Server side (Rust, PMCP SDK)** -- registers tools with UI metadata, serves widget HTML as resources, returns `structuredContent` from tool calls
+2. **Widget side (JS/TS, ext-apps SDK)** -- the interactive UI that runs in the host's iframe, communicates with the host via the `App` class from `@modelcontextprotocol/ext-apps`
 
 ```
-Widget (HTML)  --->  Bridge (mcpBridge)  --->  Host (ChatGPT/MCP/MCP-UI)  --->  Server (tools)
++-----------------------------------------------------+
+|  Host (Claude Desktop, ChatGPT, VS Code, etc.)      |
+|                                                      |
+|  tools/list --- _meta.ui.resourceUri ---> knows      |
+|                                          which tool  |
+|                                          has UI      |
+|  tools/call --- structuredContent ------> data for   |
+|                                          the widget  |
+|  resources/read -- HTML ----------------> widget     |
+|                                          code        |
+|                                                      |
+|  +------------------------------------------------+  |
+|  |  Widget iframe                                  |  |
+|  |  @modelcontextprotocol/ext-apps (App class)     |  |
+|  |  <-- hostContext (theme, toolInput, toolOutput)  |  |
+|  |  --> app.callServerTool() --> tools/call          |  |
+|  +------------------------------------------------+  |
++-----------------------------------------------------+
 ```
 
 Here is how each layer works:
 
 | Layer    | What It Is                                  | What It Does                                         |
 |----------|---------------------------------------------|------------------------------------------------------|
-| Widget   | A plain `.html` file in your `widgets/` dir | Renders the UI the user sees and interacts with      |
-| Bridge   | `window.mcpBridge` JavaScript API           | Translates widget calls into the host's native protocol |
-| Host     | ChatGPT, MCP Apps runtime, or MCP-UI        | Embeds the widget in a sandboxed iframe              |
-| Server   | Your Rust MCP server                        | Processes tool calls and returns results             |
+| Widget   | An HTML file bundled with Vite              | Renders the UI the user sees and interacts with      |
+| ext-apps | `@modelcontextprotocol/ext-apps` `App` class | Handles postMessage communication with the host     |
+| Host     | Claude Desktop, ChatGPT, VS Code, etc.      | Embeds the widget in a sandboxed iframe              |
+| Server   | Your Rust MCP server                        | Processes tool calls, serves widget HTML, returns structuredContent |
 
-Widgets are plain HTML files. The bridge script handles communication. The host renders the widget. The server processes tool calls. You write the widget and the server -- the bridge and hosting are handled for you.
+Widgets are HTML files bundled with Vite. The ext-apps SDK handles communication. The host renders the widget in an iframe. The server processes tool calls and serves widget resources. You write the widget and the server -- the ext-apps SDK and hosting are handled for you.
 
 ## Quick Start: Your First Widget
 
@@ -105,31 +95,39 @@ This creates a ready-to-run project:
 my-widget-app/
   src/
     main.rs          # MCP server with tool handlers
-  widgets/
-    hello.html       # Starter widget (add more .html files here)
-  mock-data/
-    hello.json       # Mock data for landing page generation
+  widget/
+    mcp-app.html     # Starter widget using ext-apps App class
+    package.json     # npm dependencies (ext-apps SDK, Vite)
+    vite.config.ts   # Vite bundling config
   Cargo.toml
   README.md
 ```
 
-### Step 2: Run the Server
+### Step 2: Build the Widget
+
+The widget must be bundled into self-contained HTML before the Rust server can embed it. This is required because Claude Desktop's iframe CSP blocks external script loading -- CDN imports fail silently.
 
 ```bash
-cargo run &
+cd widget
+npm install
+npm run build
+cd ..
 ```
 
-The generated `src/main.rs` uses `WidgetDir` to discover widgets and `ChatGptAdapter` to inject the bridge script. You don't need to modify anything yet -- it works out of the box.
+### Step 3: Build and Run the Server
 
-### Step 3: Preview in Your Browser
+```bash
+cargo build
+cargo run
+```
+
+Then preview your widget:
 
 ```bash
 cargo pmcp preview --url http://localhost:3000 --open
 ```
 
-The preview opens in your browser. Type a name in the input field, click the button, and the widget calls the `hello` tool on your MCP server, displaying the greeting it returns.
-
-**Try this:** Edit `widgets/hello.html` -- change a color, update the heading text, anything. Refresh your browser. Your changes appear instantly. No server restart needed. This is the hot-reload development workflow.
+The preview opens in your browser. Interact with the widget -- it communicates with your MCP server through the ext-apps protocol.
 
 ## Feature Flag
 
@@ -137,20 +135,27 @@ MCP Apps requires the `mcp-apps` feature flag in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-pmcp = { version = "1.10", features = ["mcp-apps"] }
+pmcp = { version = "1.17", features = ["mcp-apps"] }
 ```
 
 The `full` feature also includes `mcp-apps`. If you scaffolded with `cargo pmcp app new`, this is already configured.
+
+## Developer Tooling
+
+Two tools help you develop and validate MCP Apps:
+
+- **mcp-preview** -- Browser-based testing environment with live MCP bridge. Run `cargo pmcp preview --url http://localhost:3000 --open` to preview widgets, test themes, and inspect protocol messages.
+- **mcp-tester** -- CLI-based App metadata validator. Run `mcp-tester apps http://localhost:3000` or `cargo pmcp test apps --url http://localhost:3000` to check metadata compliance without a browser.
 
 ## Chapter Contents
 
 This chapter is split into three hands-on sections:
 
-1. **[Widget Authoring and Developer Workflow](./ch20-01-ui-resources.md)** -- Learn the `WidgetDir` file-based convention, scaffold projects with `cargo pmcp app new`, implement the `ResourceHandler` pattern, and use hot-reload development with `cargo pmcp preview` and `cargo pmcp app build`
+1. **[UI Resources and Widget Registration](./ch20-01-ui-resources.md)** -- Register widget HTML as resources with `UIResource::html_mcp_app()`, declare CSP for external domains with `WidgetCSP`, and implement the standard resource handler pattern
 
-2. **[Bridge Communication and Adapters](./ch20-02-tool-ui-association.md)** -- Master the `window.mcpBridge` API for calling tools from widgets, understand the communication flow, and use adapters (`ChatGptAdapter`, `McpAppsAdapter`, `McpUiAdapter`) for multi-platform support
+2. **[Tool-UI Association and Data Flow](./ch20-02-tool-ui-association.md)** -- Associate tools with widgets using `ToolInfo::with_ui()`, return `structuredContent` for widget rendering, enable multi-host support with `with_host_layer()`, and add `outputSchema`
 
-3. **[Example Walkthroughs](./ch20-03-postmessage.md)** -- Walk through the chess, map, and dataviz examples hands-on to see these patterns in real-world applications
+3. **[Widget Communication with ext-apps](./ch20-03-postmessage.md)** -- Build widgets using the ext-apps `App` class, implement required protocol handlers, bundle with Vite, and follow cross-host best practices
 
 > **Reference:** For complete API documentation covering every method, type, and edge case, see [Chapter 12.5: MCP Apps Extension](../../pmcp-book/src/ch12-5-mcp-apps.md) in the PMCP book.
 
@@ -160,4 +165,4 @@ This chapter is split into three hands-on sections:
 
 ---
 
-*Continue to [Widget Authoring and Developer Workflow](./ch20-01-ui-resources.md) ->*
+*Continue to [UI Resources and Widget Registration](./ch20-01-ui-resources.md) ->*

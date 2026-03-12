@@ -1,575 +1,384 @@
-# Example Walkthroughs
+# Widget Communication with ext-apps
 
-Now let's see the WidgetDir + mcpBridge + adapter pattern in action. The SDK ships three examples that demonstrate different widget patterns. You'll run each one, explore the code, and understand how the pieces fit together.
-
-By the end of this sub-chapter, you'll have run all three examples locally and identified the common architecture that makes them tick.
+In this section, you'll learn how to build widgets using the `@modelcontextprotocol/ext-apps` SDK, implement the required protocol handlers, bundle with Vite, and follow cross-host best practices.
 
 ## Learning Objectives
 
-After completing these walkthroughs, you will be able to:
+After completing this section, you will be able to:
 
-- Run the chess, map, and dataviz examples locally
-- Identify the stateless game state pattern (chess)
-- Identify the geographic data explorer pattern with context-aware queries (map)
-- Identify the SQL dashboard pattern with Chart.js visualization (dataviz)
-- Recognize the common 4-step architecture pattern across all examples
-- Apply the pattern to build your own widget-based MCP server
+- Create an `App` instance and connect to the host
+- Register all required protocol handlers (`onteardown`, `ontoolinput`, `ontoolcancelled`, `onerror`) before calling `connect()`
+- Read initial data from `hostContext` and handle ongoing tool results via `ontoolresult`
+- Call server tools from the widget using `app.callServerTool()`
+- Bundle widgets with Vite + `vite-plugin-singlefile` into self-contained HTML
+- Build a React widget using `useApp` and `useHostStyles` hooks
+- Load external images safely across all hosts using the fetch-blob pattern
 
----
+## The ext-apps SDK
 
-## Chess: Stateless Game Widget
+Widgets use the `@modelcontextprotocol/ext-apps` SDK to communicate with MCP hosts. The SDK provides the `App` class -- a single entry point that handles the postMessage protocol for you.
 
-The chess example demonstrates the simplest and most recommended pattern: **stateless tools**. The widget owns ALL state. The server just validates and processes.
+### Widget Lifecycle
 
-### Architecture
+The lifecycle follows five steps:
 
-```text
-+---------------------+                        +------------------+
-|   Widget            |                        |   Server         |
-|   (board.html)      |                        |                  |
-|                     |  mcpBridge.callTool(   |                  |
-|  User clicks piece  |   "chess_move",        |  Validates move  |
-|  or destination     | ----{ state, move }---->  against state   |
-|                     |                        |                  |
-|  Re-renders board   | <--- new GameState --- |  Returns updated |
-|  from new state     |      or error          |  GameState       |
-+---------------------+                        +------------------+
+1. **Create `App`** -- no capabilities needed (do not pass `tools`)
+2. **Register ALL protocol handlers before `connect()`** -- missing handlers cause connection teardown
+3. **Call `app.connect()`** -- performs the `ui/initialize` handshake with the host
+4. **Read `app.getHostContext()`** -- some hosts deliver data only at init time
+5. **Use `app.callServerTool()`** -- for interactive widgets that call back to the server
+
+### Required Protocol Handlers
+
+```
++-----------------------------------------------------------------------+
+|                    CRITICAL: Handler Registration                      |
++-----------------------------------------------------------------------+
+|                                                                       |
+|  You MUST register onteardown, ontoolinput, ontoolcancelled, and      |
+|  onerror handlers BEFORE calling connect().                           |
+|                                                                       |
+|  Without these, hosts like Claude Desktop and Claude.ai will TEAR     |
+|  DOWN THE ENTIRE MCP CONNECTION after the first tool result.          |
+|                                                                       |
+|  The widget briefly appears, then everything dies. This is the #1     |
+|  issue when porting widgets from mcp-preview to real hosts.           |
+|                                                                       |
++-----------------------------------------------------------------------+
 ```
 
-Why stateless? No sessions, no state cleanup, no scaling problems. The widget is the source of truth. If the user refreshes the page, the game resets -- and that's fine.
+Register all handlers before connecting:
 
-### Run It
-
-Open a terminal and start the chess server:
-
-```bash
-cd examples/mcp-apps-chess
-cargo run
-# Server starts on http://localhost:3000
+```js
+// ALL of these are required -- not just ontoolresult
+app.onteardown = async () => { return {}; };
+app.ontoolinput = (params) => { console.debug("Tool input:", params); };
+app.ontoolcancelled = (params) => { console.debug("Cancelled:", params.reason); };
+app.onerror = (err) => { console.error("App error:", err); };
+app.ontoolresult = (result) => { /* your data handler */ };
 ```
 
-In another terminal, launch the preview:
+The handlers can be minimal stubs -- they just need to be registered. The host sends protocol messages to each handler, and if the handler is missing, the host considers the connection broken.
 
-```bash
-cargo pmcp preview --url http://localhost:3000 --open
+| Handler | When It Fires | Required? |
+|---------|--------------|-----------|
+| `onteardown` | Host is shutting down the connection | Yes -- must return `{}` |
+| `ontoolinput` | Host is about to call a tool | Yes |
+| `ontoolcancelled` | Tool call was cancelled | Yes |
+| `onerror` | Protocol error occurred | Yes |
+| `ontoolresult` | Tool call completed with result | Recommended -- this is where you get data |
+
+### Capabilities Declaration
+
+Do **not** pass `tools` capability to `new App()`. ChatGPT's adapter rejects it with a Zod validation error (`-32603: expected "object"`):
+
+```js
+// Correct -- receives tool results, can call server tools
+const app = new App({ name: "my-widget", version: "1.0.0" });
+
+// WRONG -- ChatGPT rejects the tools capability
+// const app = new App({ name: "my-widget", version: "1.0.0", capabilities: { tools: true } });
 ```
 
-Click a piece to see valid moves highlighted. Click a destination to make the move. The board updates instantly.
+Tool results are delivered via `hostContext.toolOutput` and the `ontoolresult` callback without needing the `tools` capability. The `callServerTool()` API also works without it.
 
-### Explore the Tools
+## Hands-On: Minimal Widget
 
-The chess server exposes three tools:
+Create your source HTML with a bare import (Vite resolves it from `node_modules`):
 
-| Tool | Input | Output |
-|------|-------|--------|
-| `chess_new_game` | (none) | Initial `GameState` with all pieces placed |
-| `chess_move` | `GameState` + move (e.g., `"e2e4"`) | New `GameState` or error message |
-| `chess_valid_moves` | `GameState` + position (e.g., `"e2"`) | List of valid destination squares |
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Widget</title>
+</head>
+<body>
+  <div id="output">Waiting for data...</div>
 
-The `GameState` struct carries the full board state with every request:
+  <script type="module">
+    import { App } from "@modelcontextprotocol/ext-apps";
 
-```rust
-pub struct GameState {
-    pub board: [[Option<Piece>; 8]; 8],  // 8x8 board
-    pub turn: Color,                      // Whose turn
-    pub history: Vec<String>,             // Move history (algebraic)
-    pub castling: CastlingRights,         // Castling availability
-    pub en_passant: Option<Position>,     // En passant target
-    pub status: GameStatus,               // InProgress, Check, etc.
-}
-```
+    const app = new App({ name: "my-widget", version: "1.0.0" });
 
-This entire struct travels with every request. The server never stores it -- it arrives, gets validated, and a new version goes back.
+    // 1. Register ALL handlers BEFORE connecting (required by protocol)
+    app.onteardown = async () => { return {}; };
+    app.ontoolinput = (params) => { console.debug("Tool input:", params); };
+    app.ontoolcancelled = (params) => { console.debug("Cancelled:", params.reason); };
+    app.onerror = (err) => { console.error("App error:", err); };
 
-Here's the `chess_move` handler in simplified form:
+    app.ontoolresult = (result) => {
+      if (result.structuredContent) {
+        renderData(result.structuredContent);
+      }
+    };
 
-```rust
-fn move_handler(input: MoveInput, _extra: RequestHandlerExtra) -> Result<Value> {
-    // Parse the move string (e.g., "e2e4")
-    let from = parse_position(&input.chess_move[0..2])?;
-    let to = parse_position(&input.chess_move[2..4])?;
+    // 2. Connect to host
+    await app.connect();
 
-    // Validate against the current game state
-    if !is_valid_move(&input.state, &from, &to) {
-        return Ok(json!({ "success": false, "error": "Invalid move" }));
+    // 3. Read initial data from hostContext
+    const ctx = app.getHostContext();
+    if (ctx?.toolOutput) {
+      renderData(ctx.toolOutput);
     }
 
-    // Apply the move and return new state
-    let new_state = apply_move(&input.state, &from, &to);
-    Ok(json!({
-        "success": true,
-        "state": new_state,
-        "message": format!("Move applied. {}'s turn.", new_state.turn)
-    }))
-}
+    // 4. Optionally call server tools from the widget
+    async function refresh() {
+      const result = await app.callServerTool({
+        name: "search_images",
+        arguments: { class_name: "Dog" },
+      });
+      if (result.structuredContent) {
+        renderData(result.structuredContent);
+      }
+    }
+
+    function renderData(data) {
+      document.getElementById("output").textContent = JSON.stringify(data);
+    }
+  </script>
+</body>
+</html>
 ```
 
-Notice: the handler is a pure function. No database, no sessions, no side effects.
+Walk through the four steps:
 
-### Explore the Widget
+1. **Create `App`** with just name and version -- no capabilities
+2. **Register all five handlers** before `connect()` -- even `onteardown` which just returns `{}`
+3. **Call `connect()`** -- the SDK performs the `ui/initialize` handshake
+4. **Read `hostContext`** -- some hosts (like ChatGPT) deliver tool data only at initialization
 
-The `widgets/board.html` file renders an interactive chess board. Here's how it uses the bridge:
+**Try this:** Remove the `onteardown` handler and test in `cargo pmcp preview`. Then imagine deploying to Claude Desktop -- the widget would appear briefly, then the entire MCP connection would die.
 
-```javascript
-// When the page loads, start a new game
-window.addEventListener('mcpBridgeReady', async () => {
-    const state = await mcpBridge.callTool('chess_new_game', {});
-    renderBoard(state);
+## Calling Server Tools from Widgets
+
+Interactive widgets can call tools on the MCP server using `app.callServerTool()`:
+
+```js
+const result = await app.callServerTool({
+  name: "search_images",
+  arguments: { class_name: "Dog" },
 });
 
-// When a piece is clicked, show valid moves
-async function onPieceClick(position) {
-    const result = await mcpBridge.callTool('chess_valid_moves', {
-        state: currentState,
-        position: position    // e.g., "e2"
-    });
-    highlightSquares(result.moves);
-}
-
-// When a destination is clicked, make the move
-async function onSquareClick(destination) {
-    const result = await mcpBridge.callTool('chess_move', {
-        state: currentState,
-        move: selectedPiece + destination  // e.g., "e2e4"
-    });
-    if (result.success) {
-        currentState = result.state;
-        renderBoard(currentState);
-    }
+if (result.structuredContent) {
+  // Render the structured data
+  renderData(result.structuredContent);
 }
 ```
 
-Every interaction is a `mcpBridge.callTool()` call. The widget sends the full state, the server validates, and the widget updates.
+This works on hosts that support it (mcp-preview, Claude Desktop). Add a `.catch()` fallback for hosts that don't:
 
-**Try this:** Start a game, make a few moves, then open your browser's developer console. You'll see the GameState object growing as the history array accumulates moves.
-
-### Explore the Server
-
-The server setup uses `ServerBuilder` with typed synchronous tools:
-
-```rust
-let server = ServerBuilder::new()
-    .name("chess-server")
-    .version("1.0.0")
-    .tool_typed_sync_with_description(
-        "chess_new_game",
-        "Start a new chess game. Returns the initial game state.",
-        new_game_handler,
-    )
-    .tool_typed_sync_with_description(
-        "chess_move",
-        "Make a chess move. Requires current game state and move in algebraic notation.",
-        move_handler,
-    )
-    .tool_typed_sync_with_description(
-        "chess_valid_moves",
-        "Get all valid moves for a piece at the given position.",
-        valid_moves_handler,
-    )
-    .resources(ChessResources::new(widgets_path))
-    .build()?;
+```js
+try {
+  const result = await app.callServerTool({
+    name: "search_images",
+    arguments: { class_name: "Dog" },
+  });
+  renderData(result.structuredContent);
+} catch (err) {
+  console.warn("callServerTool not supported on this host:", err);
+  // Fallback: display cached data or show a message
+}
 ```
 
-The `ChessResources` struct implements `ResourceHandler` using `ChatGptAdapter` + `WidgetDir` -- the same pattern you saw in the previous sub-chapter.
+## React Widget
 
-The server configuration is minimal:
+For React-based widgets, the ext-apps SDK provides hooks:
 
-```rust
-let config = StreamableHttpServerConfig {
-    session_id_generator: None,   // No sessions -- stateless!
-    enable_json_response: true,
-    event_store: None,
-    ..Default::default()
-};
+```tsx
+import { useApp, useHostStyles } from "@modelcontextprotocol/ext-apps/react";
+
+export default function MyWidget() {
+  const { app, isConnected } = useApp({
+    appInfo: { name: "my-widget", version: "1.0.0" },
+    // Do not pass capabilities.tools -- ChatGPT rejects it
+    onAppCreated: (app) => {
+      app.ontoolresult = (result) => {
+        // handle new tool results
+      };
+    },
+  });
+
+  // Apply host theme, CSS variables, and fonts
+  useHostStyles(app, app?.getHostContext());
+
+  if (!isConnected) return <div>Connecting...</div>;
+
+  const handleSearch = async () => {
+    const result = await app.callServerTool({
+      name: "search_images",
+      arguments: { class_name: "Dog" },
+    });
+    // use result.structuredContent
+  };
+
+  return <button onClick={handleSearch}>Search</button>;
+}
 ```
 
-`session_id_generator: None` -- because it's stateless, no sessions needed.
+The `useApp` hook handles the full lifecycle: creating the App instance, registering required handlers, and calling `connect()`. The `useHostStyles` hook applies the host's theme CSS variables and fonts to your component.
 
-### Key Takeaway
+> **Note:** The `onAppCreated` callback is where you register `ontoolresult` and other data handlers. Required protocol handlers (`onteardown`, `ontoolinput`, `ontoolcancelled`, `onerror`) are registered automatically by the hook.
 
-The stateless pattern is the recommended default. Let the widget own state unless you have a specific reason to persist it on the server. No sessions means no state cleanup, no scaling problems, and no confusion about who owns the data.
+## Loading External Images
 
----
+Hosts enforce strict CSP on widget iframes. To load external images reliably across all hosts:
 
-## Map: Geographic Data Explorer
+1. **Server side:** Declare the image CDN in `WidgetCSP` (see ch20-01)
+2. **Widget side:** Use fetch-to-blob as defense-in-depth:
 
-The map example adds a new dimension: **context-aware queries**. The widget tells the server what the user is looking at, and the server returns relevant data.
-
-### Architecture
-
-```text
-+----------------------------+                  +---------------------+
-|   Widget (map.html)        |                  |   Server            |
-|   Leaflet.js map           |                  |                     |
-|                            |  callTool(       |                     |
-|  User searches or          |  "search_cities",|  Filters cities by  |
-|  applies category filter   | --{ query,     --|> query and category |
-|                            |    map_state }) | |                     |
-|  Renders markers on map    | <-- matching  ---| Returns matches     |
-|  with popups               |    cities with  | with coordinates     |
-|                            |    coordinates   |                     |
-+----------------------------+                  +---------------------+
+```js
+function loadImage(img, url) {
+    fetch(url, { mode: 'cors' }).then(function(r) {
+        if (!r.ok) throw new Error(r.status);
+        return r.blob();
+    }).then(function(blob) {
+        img.src = URL.createObjectURL(blob);
+        // Revoke blob URL after render to prevent memory leaks
+        img.onload = function() { URL.revokeObjectURL(img.src); img.onload = null; };
+    }).catch(function() {
+        // Fallback to direct URL -- works on permissive hosts (ChatGPT, mcp-preview).
+        // On strict hosts, onerror fires and shows a placeholder.
+        img.src = url;
+    });
+}
 ```
 
-The `MapState` parameter is the key insight -- it lets the server know what the user is currently viewing.
+**Why both server-side CSP and client-side fetch-blob?** The `_meta.ui.csp` declaration tells the host to relax its CSP for the declared domains. The fetch-blob approach works even if the host ignores `_meta.ui.csp` -- `blob:` URLs are typically allowed in `img-src`. Together they maximize cross-host compatibility.
 
-### Run It
+> **Memory:** Always call `URL.revokeObjectURL()` after the image loads. Without this, each fetched image leaks a blob URL that persists for the page lifetime.
 
-Start the map server:
+## Bundling Widgets with Vite
+
+Widgets must be self-contained HTML files with all JavaScript inlined. Use **Vite + vite-plugin-singlefile** to bundle the ext-apps SDK into each widget.
+
+### Why Bundling Is Required
+
+Claude Desktop's iframe CSP blocks external script loading. If you use a CDN import like `<script src="https://cdn.example.com/ext-apps.js">`, it will **fail silently** -- no error, no widget, just a blank iframe. Vite bundles the ext-apps SDK directly into the HTML file, bypassing this restriction.
+
+### Setup
 
 ```bash
-cd examples/mcp-apps-map
-cargo run
-# Server starts on http://localhost:3001
+cd widget/
+npm init -y
+npm install @modelcontextprotocol/ext-apps
+npm install -D vite vite-plugin-singlefile
 ```
 
-Launch the preview:
+### vite.config.ts
 
-```bash
-cargo pmcp preview --url http://localhost:3001 --open
-```
+`vite-plugin-singlefile` uses `inlineDynamicImports` which only supports a single input per build. Use the `WIDGET` env var to select which widget to build:
 
-Search for cities, filter by category, click markers for details. The map responds to each interaction with data from the server.
+```ts
+import { defineConfig } from "vite";
+import { viteSingleFile } from "vite-plugin-singlefile";
 
-### Explore the Tools
+const widget = process.env.WIDGET || "mcp-app";
 
-The map server exposes three tools:
-
-| Tool | Input | Output |
-|------|-------|--------|
-| `search_cities` | Optional query, optional category filter, optional `MapState` | Matching cities with coordinates |
-| `get_city_details` | City ID (e.g., `"tokyo"`) | Full city details + suggested zoom level |
-| `get_nearby_cities` | Center coordinates + radius in km | Cities within radius, sorted by distance |
-
-The `MapState` struct carries the user's current view context:
-
-```rust
-pub struct MapState {
-    pub center: Coordinates,          // Where the map is centered
-    pub zoom: u8,                      // Current zoom level
-    pub selected_city: Option<String>, // Currently selected city ID
-    pub filter: Option<CityCategory>,  // Active category filter
-}
-```
-
-Cities are tagged with a `CityCategory` enum:
-
-```rust
-pub enum CityCategory {
-    Capital,     // London, Beijing
-    Tech,        // Tokyo, San Francisco
-    Cultural,    // Paris, Sydney
-    Financial,   // New York, Singapore
-    Historical,  // Rome, Cairo
-}
-```
-
-The `get_nearby_cities` tool uses the Haversine formula for great-circle distances:
-
-```rust
-fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
-    const EARTH_RADIUS_KM: f64 = 6371.0;
-    let delta_lat = (lat2 - lat1).to_radians();
-    let delta_lon = (lon2 - lon1).to_radians();
-    let a = (delta_lat / 2.0).sin().powi(2)
-        + lat1.to_radians().cos()
-        * lat2.to_radians().cos()
-        * (delta_lon / 2.0).sin().powi(2);
-    EARTH_RADIUS_KM * 2.0 * a.sqrt().asin()
-}
-```
-
-### Context-Aware Queries
-
-When you search, the widget sends the current map viewport along with the query. The server can use this to prioritize cities visible in your current view:
-
-```javascript
-// Widget sends current map state with every search
-const results = await mcpBridge.callTool('search_cities', {
-    query: searchInput.value,
-    filter: activeCategory,
-    map_state: {
-        center: map.getCenter(),
-        zoom: map.getZoom(),
-        selected_city: selectedCityId,
-        filter: activeCategory
-    }
+export default defineConfig({
+  plugins: [viteSingleFile()],
+  build: {
+    target: "esnext",  // required -- ext-apps SDK uses top-level await
+    rollupOptions: {
+      input: `${widget}.html`,
+    },
+    outDir: "dist",
+    emptyOutDir: false,  // preserve other widgets' output
+  },
 });
 ```
 
-The server receives the `MapState` and can use the viewport bounds to rank results. Cities within the current view appear first.
+### Building Multiple Widgets
 
-**Try this:** Zoom the map to Europe, then search for "capital". Notice that London appears prominently in the results because it's visible in your current viewport.
-
-### Key Takeaway
-
-When your data has spatial or contextual dimensions, send the user's current context with each request. The server returns more relevant results without needing to store session state -- the context travels with the request, just like the chess GameState.
-
----
-
-## Dataviz: SQL Dashboard
-
-The dataviz example goes further: it connects to a real SQLite database and renders query results as interactive charts. This is the most complex example, but the underlying pattern is identical.
-
-### Architecture
-
-```text
-+----------------------------+                  +---------------------+
-|   Widget                   |                  |   Server            |
-|   (dashboard.html)         |                  |                     |
-|   Chart.js + data table    |  callTool(       |                     |
-|                            |  "execute_query",|  Runs SQL on        |
-|  User types SQL query      | --{ sql })     --|> Chinook.db         |
-|  and clicks "Run"          |                  |                     |
-|                            | <-- columns,  ---| Returns structured  |
-|  Renders chart + table     |    rows, count  | JSON results         |
-|  from results              |                  |                     |
-+----------------------------+                  +---------------------+
-```
-
-### Prerequisites
-
-The dataviz example uses the Chinook sample database -- a standard music store dataset with artists, albums, tracks, and invoices. Download it first:
-
-```bash
-cd examples/mcp-apps-dataviz
-curl -L -o Chinook.db \
-  https://github.com/lerocha/chinook-database/releases/download/v1.4.5/Chinook_Sqlite.sqlite
-```
-
-### Run It
-
-Start the dataviz server:
-
-```bash
-cd examples/mcp-apps-dataviz
-cargo run
-# Server starts on http://localhost:3002
-```
-
-Launch the preview:
-
-```bash
-cargo pmcp preview --url http://localhost:3002 --open
-```
-
-Type a SQL query, click Run, and see the results as both a chart and a data table.
-
-**Try this:** Run this query to see the top 10 genres by track count:
-
-```sql
-SELECT Genre.Name, COUNT(*) as TrackCount
-FROM Track
-JOIN Genre ON Track.GenreId = Genre.GenreId
-GROUP BY Genre.Name
-ORDER BY TrackCount DESC
-LIMIT 10
-```
-
-The dashboard renders a bar chart of genre popularity alongside the raw data table. Try switching to a pie chart to see the distribution differently.
-
-### Explore the Tools
-
-The dataviz server exposes three tools:
-
-| Tool | Input | Output |
-|------|-------|--------|
-| `execute_query` | SQL string | Columns, rows (as JSON arrays), row count |
-| `list_tables` | (none) | List of all table names in the database |
-| `describe_table` | Table name | Column metadata (name, type, nullable, primary key) |
-
-The `execute_query` handler runs the SQL and returns structured results -- columns and rows as JSON arrays. The widget decides how to visualize them.
-
-**SQL injection prevention:** The `describe_table` handler validates table names before using them in queries:
-
-```rust
-if !input.table_name.chars()
-    .all(|c| c.is_alphanumeric() || c == '_')
+```json
 {
-    return Ok(json!({
-        "error": "Invalid table name: only alphanumeric characters \
-                  and underscores are allowed"
-    }));
+  "scripts": {
+    "build": "rm -rf dist && WIDGET=image-explorer vite build && WIDGET=relationship-viewer vite build"
+  }
 }
 ```
 
-This is a simple but effective safeguard. The `execute_query` tool accepts arbitrary SQL for exploration purposes -- in production, you would add authorization checks and query whitelisting.
+### Build and Embed
 
-### Error Handling
+```bash
+npm run build
+# -> dist/image-explorer.html (~130KB, self-contained)
+```
 
-The server handles missing database files gracefully -- returning helpful error messages with download instructions instead of panicking:
+Embed the built output in your Rust binary:
 
 ```rust
-fn open_db() -> Result<Connection, String> {
-    let db_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("Chinook.db");
-    if !db_path.exists() {
-        return Err(format!(
-            "Chinook.db not found. Please download it:\n\
-             cd examples/mcp-apps-dataviz\n\
-             curl -L -o Chinook.db https://github.com/lerocha/\
-             chinook-database/releases/download/v1.4.5/\
-             Chinook_Sqlite.sqlite"
-        ));
-    }
-    Connection::open(&db_path)
-        .map_err(|e| format!("Failed to open database: {}", e))
-}
+const WIDGET_HTML: &str = include_str!("../../widget/dist/image-explorer.html");
 ```
 
-All handlers return JSON error objects, not panics. This is a best practice for any MCP server -- the widget can display a meaningful error message to the user.
+### Build Order
 
-**Try this:** Run `list_tables` first (the widget may have a "Browse Tables" button) to see all available tables, then `describe_table` on the `Track` table to understand its schema before writing queries.
+Widget HTML must exist before `cargo build` (since `include_str!` runs at compile time):
 
-### Key Takeaway
-
-The dataviz example shows that MCP Apps can connect to real data sources. The same widget pattern works for SQLite, PostgreSQL, REST APIs -- any data your tool can access. The widget handles visualization; the server handles data.
-
----
-
-## The Common Pattern
-
-All three examples share the same architecture. Here it is, distilled into four steps.
-
-### Step 1: Define Tool Input Types
-
-```rust
-#[derive(Deserialize, JsonSchema)]
-struct MyToolInput {
-    query: String,
-    filter: Option<String>,
-}
+```bash
+cd widget && npm ci && npm run build && cd ..
+cargo build --release
 ```
 
-Derive `Deserialize` for JSON parsing. Derive `JsonSchema` for automatic schema generation. The server advertises the schema to clients so they know what arguments each tool accepts.
+## Common Failures
 
-### Step 2: Write Tool Handlers
+**Widget shows briefly then connection drops (Claude Desktop/Claude.ai):**
 
-```rust
-fn my_handler(input: MyToolInput, _extra: RequestHandlerExtra) -> Result<Value> {
-    // Process input, return JSON result
-    Ok(json!({ "result": "data" }))
-}
-```
+The widget is missing protocol handlers (`onteardown`, `ontoolinput`, `ontoolcancelled`). ALL handlers must be registered before `connect()`, even if they only log a debug message. This is the #1 issue when porting widgets from mcp-preview (which is more forgiving) to real hosts.
 
-Pure functions: input in, JSON out. No `async` needed for most tools. The handler receives strongly-typed input (already deserialized and validated) and returns a `serde_json::Value`.
+**Widget loads but never shows tool results:**
 
-### Step 3: Create ResourceHandler with Adapter + WidgetDir
+Do NOT pass `tools` capability to `new App()`. ChatGPT rejects it. Check that `ontoolresult` is registered BEFORE `connect()`, not after.
 
-```rust
-struct AppResources {
-    chatgpt_adapter: ChatGptAdapter,
-    widget_dir: WidgetDir,
-}
+**"Received a response for an unknown message ID" (mcp-preview):**
 
-impl ResourceHandler for AppResources {
-    fn read_resource(&self, uri: &str) -> Result<ResourceContent> {
-        // 1. Extract widget name from URI
-        let name = extract_widget_name(uri)?;
-        // 2. Read HTML from disk (hot-reload!)
-        let html = self.widget_dir.read(&name)?;
-        // 3. Transform with adapter
-        Ok(self.chatgpt_adapter.transform(html))
-    }
-}
-```
+Two App instances on the same postMessage channel. This happens when mcp-preview's wrapper injects its own App and the widget bundles its own App via Vite. For Vite-bundled widgets, use `UIResource::html_mcp_app()` + `UIResourceContents::html()` directly.
 
-The three-step read pattern: extract name from URI, read from disk, transform with adapter. `WidgetDir` re-reads from disk on every request, so you get hot-reload during development.
+**Images/external resources blocked (Claude.ai):**
 
-### Step 4: Build and Run
+Claude.ai enforces strict CSP: `img-src 'self' data: blob:` -- external image URLs are blocked. Declare external domains in `WidgetCSP` on the resource metadata, and use fetch-blob in the widget as a fallback. Always use HTTPS.
 
-```rust
-let server = ServerBuilder::new()
-    .name("my-server")
-    .version("1.0.0")
-    .tool_typed_sync_with_description("my_tool", "Description", my_handler)
-    .resources(AppResources::new(widgets_path))
-    .build()?;
+**Widget not rendered at all (Claude Desktop):**
 
-let http_server = StreamableHttpServer::with_config(addr, server, config);
-let (bound_addr, handle) = http_server.start().await?;
-```
-
-That's it. Four steps. Every widget-based MCP server follows this pattern.
-
----
-
-## Comparison Table
-
-Here's how the three examples differ while following the same architecture:
-
-| Aspect | Chess | Map | Dataviz |
-|--------|-------|-----|---------|
-| Widget pattern | Stateless game | Context-aware queries | SQL dashboard |
-| Data source | In-memory rules | Mock city database | SQLite (Chinook) |
-| Visualization | Custom board rendering | Leaflet.js map | Chart.js charts + table |
-| Tools | 3 (new_game, move, valid_moves) | 3 (search, details, nearby) | 3 (query, list, describe) |
-| State ownership | Widget only | Widget + MapState context | Stateless (each query independent) |
-| External CDN | None | Leaflet.js | Chart.js |
-| Port | 3000 | 3001 | 3002 |
-| Key technique | Full state in every request | Viewport context with queries | Table validation for SQL safety |
-
----
-
-## Best Practices
-
-These practices apply to all widget-based MCP servers:
-
-- **Keep widgets as single self-contained HTML files.** External CDN libraries (Leaflet.js, Chart.js) are fine -- they load at runtime. Avoid multi-file bundles; the WidgetDir convention is one `.html` file per widget.
-
-- **Use `window.mcpBridge.callTool()` as the universal bridge API.** Never call `window.openai` or `window.parent.postMessage` directly -- the bridge handles platform differences for you.
-
-- **Design stateless tools when possible.** Let the widget own state and send it with each request. This eliminates session management and simplifies scaling.
-
-- **Use hot-reload during development.** Start the server with `cargo run`, then edit widget HTML and refresh the browser. WidgetDir re-reads files from disk on every request -- no server restart needed.
-
-- **Test with `cargo pmcp preview` before deploying.** The preview environment simulates the ChatGPT Apps runtime with theme switching and locale testing.
-
-- **Handle errors gracefully in both server and widget.** Server handlers return JSON error objects, not panics. Widget code wraps `mcpBridge` calls in try/catch and shows user-friendly messages.
-
-- **Validate inputs on the server side.** Even though the widget sends structured data, treat all input as untrusted. The dataviz example shows table name validation -- apply similar patterns to your domain.
-
----
+Check `resources/read` returns `_meta.ui.resourceUri` (required by Claude Desktop). Check MIME type is `text/html;profile=mcp-app` (not `text/html+mcp`). Check widget is self-contained (no external script imports).
 
 ## Chapter Summary
 
-Here's what you've learned across all three sub-chapters of Chapter 20:
+Here's what you've learned across all three sections of Chapter 20:
 
 | Concept | What You Learned |
 |---------|-----------------|
-| **WidgetDir** | File-based widget authoring with hot-reload -- edit HTML, refresh browser |
-| **mcpBridge** | Universal bridge API for widget-server communication |
-| **Adapters** | Write once, deploy to ChatGPT / MCP Apps / MCP-UI |
-| **Four-step pattern** | Types, handlers, ResourceHandler, ServerBuilder |
-| **Chess example** | Stateless tools -- widget owns all state |
-| **Map example** | Context-aware queries -- send viewport with requests |
-| **Dataviz example** | SQL dashboard -- connect to real data sources |
+| **UIResource::html_mcp_app()** | Register widgets with the correct MIME type for all hosts |
+| **WidgetCSP** | Declare external domains for images, APIs, and fonts |
+| **ToolInfo::with_ui()** | Associate tools with widgets via `_meta.ui.resourceUri` |
+| **structuredContent** | Return data for widget rendering alongside text for the model |
+| **with_host_layer()** | Enable multi-host support (ChatGPT, Claude Desktop, VS Code) |
+| **ext-apps App class** | Cross-host widget communication with required protocol handlers |
+| **Vite bundling** | Self-contained HTML required by Claude Desktop CSP |
 
-The four-step pattern is the foundation:
+The standard development workflow:
 
-1. **Define types** with `Deserialize` + `JsonSchema`
-2. **Write handlers** as pure functions
-3. **Create ResourceHandler** with adapter + WidgetDir
-4. **Build and run** with ServerBuilder + StreamableHttpServer
-
-For the complete reference documentation including adapter internals, multi-platform deployment, and server configuration details, see [Chapter 12.5 of the PMCP Book](../../pmcp-book/src/ch12-5-mcp-apps.md).
-
----
+1. **Server side:** `ToolInfo::with_ui()` + `UIResource::html_mcp_app()` + `with_host_layer()` + `with_structured_content()`
+2. **Widget side:** Create `App`, register ALL handlers, `connect()`, read `hostContext`, render data
+3. **Bundling:** Vite + vite-plugin-singlefile into self-contained HTML
+4. **Preview:** `cargo pmcp preview --url http://localhost:3000 --open`
+5. **Validate:** `mcp-tester apps http://localhost:3000` or `cargo pmcp test apps`
 
 ## Practice Ideas
 
 Ready to experiment? Here are some exercises to deepen your understanding:
 
-1. **Add a new tool to the chess server.** Implement `chess_undo` that reverses the last move by popping from the history array and reconstructing the previous board state. How does the stateless pattern make this easier?
+1. **Build a minimal widget from scratch.** Follow the lifecycle: create App, register handlers, connect, read hostContext. Return `structuredContent` from a tool and render it in the widget. Use `mcp-tester apps` to validate your metadata.
 
-2. **Add a distance calculator to the map widget.** Let the user click two cities and display the great-circle distance between them using the `get_nearby_cities` tool or a new `calculate_distance` tool.
+2. **Add external image loading.** Create a widget that loads images from an external CDN. Declare the CDN in `WidgetCSP` on the server side, and use the fetch-blob pattern in the widget. Test in `cargo pmcp preview` to verify images load.
 
-3. **Add a scatter plot to the dataviz dashboard.** Modify the widget to detect when a query returns two numeric columns and offer a scatter plot option. Try it with: `SELECT Milliseconds, Bytes FROM Track LIMIT 100`.
+3. **Build a React widget.** Use the `useApp` and `useHostStyles` hooks from `@modelcontextprotocol/ext-apps/react`. Add a button that calls `app.callServerTool()` and renders the result.
 
-4. **Build your own widget-based MCP server from scratch.** Pick a domain (weather, recipes, todo list) and follow the 4-step pattern. Start with one tool and one widget, then expand.
+4. **Test with different modes.** Run `cargo pmcp preview --mode chatgpt` and verify your widget works in ChatGPT emulation mode. Then run `mcp-tester apps --mode chatgpt` to check ChatGPT-specific metadata.
 
-5. **Switch adapters.** Change the chess server from `ChatGptAdapter` to `McpAppsAdapter` and run it with `cargo pmcp preview`. What changes in the bridge behavior? What stays the same?
+5. **Validate your MCP App server.** Run `mcp-tester apps http://localhost:3000 --strict` and fix any warnings. Try `--mode claude-desktop` to check Claude Desktop compatibility.
 
 ---
 
-*← Back to [Chapter Index](./ch20-mcp-apps.md)*
+*<- Back to [Chapter Index](./ch20-mcp-apps.md)*
