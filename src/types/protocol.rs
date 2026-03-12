@@ -407,7 +407,7 @@ impl ToolInfo {
     pub fn widget_meta(&self) -> Option<&serde_json::Map<String, Value>> {
         self._meta.as_ref().filter(|meta| {
             meta.contains_key("openai/outputTemplate")
-                || meta.contains_key("ui/resourceUri")
+                || meta.contains_key(crate::types::ui::META_KEY_UI_RESOURCE_URI)
                 || meta.get("ui").and_then(|v| v.get("resourceUri")).is_some()
         })
     }
@@ -593,9 +593,19 @@ impl CallToolResult {
     /// the tool actually has widget metadata.
     pub fn with_widget_enrichment(self, info: &ToolInfo, structured_value: Value) -> Self {
         if let Some(meta) = info.widget_meta() {
-            let filtered = crate::types::ui::filter_meta_by_prefix(meta, "openai/toolInvocation/");
-            self.with_structured_content(structured_value)
-                .with_meta(filtered)
+            let enriched = self.with_structured_content(structured_value);
+            // Copy all openai/* descriptor keys from the tool's _meta to the
+            // CallToolResult._meta so ChatGPT can match the result to its widget.
+            let filtered: serde_json::Map<String, Value> = meta
+                .iter()
+                .filter(|(k, _)| k.starts_with("openai/toolInvocation/"))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            if !filtered.is_empty() {
+                enriched.with_meta(filtered)
+            } else {
+                enriched
+            }
         } else {
             self
         }
@@ -1144,7 +1154,15 @@ pub enum LoggingLevel {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadResourceResult {
-    /// Resource contents
+    /// Resource contents.
+    ///
+    /// Per the MCP spec, these are `ResourceContents` objects (`uri` + `text`/`blob` +
+    /// optional `mimeType`). The custom serializer strips the `type` discriminator tag
+    /// that [`Content`]'s tagged-enum representation would otherwise emit.
+    #[serde(
+        serialize_with = "resource_contents_serde::serialize",
+        deserialize_with = "resource_contents_serde::deserialize"
+    )]
     pub contents: Vec<Content>,
 }
 
@@ -1152,6 +1170,101 @@ impl ReadResourceResult {
     /// Create a new read resource result.
     pub fn new(contents: Vec<Content>) -> Self {
         Self { contents }
+    }
+}
+
+/// Custom serde for `ReadResourceResult.contents`.
+///
+/// MCP spec defines `ReadResourceResult.contents` as `ResourceContents[]` —
+/// plain objects with `uri`, `mimeType`, and `text`/`blob` fields but NO `type`
+/// discriminator. The SDK reuses [`Content`] (a tagged enum) for convenience,
+/// so this module strips the `type` tag on serialization and tolerates its
+/// absence on deserialization.
+mod resource_contents_serde {
+    use super::Content;
+    use serde::ser::SerializeSeq;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub(super) fn serialize<S>(contents: &[Content], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(contents.len()))?;
+        for content in contents {
+            match content {
+                Content::Resource {
+                    uri,
+                    text,
+                    mime_type,
+                    meta,
+                } => {
+                    #[derive(Serialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Rc<'a> {
+                        uri: &'a str,
+                        #[serde(skip_serializing_if = "Option::is_none")]
+                        mime_type: &'a Option<String>,
+                        #[serde(skip_serializing_if = "Option::is_none")]
+                        text: &'a Option<String>,
+                        #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+                        meta: &'a Option<serde_json::Map<String, serde_json::Value>>,
+                    }
+                    seq.serialize_element(&Rc {
+                        uri,
+                        mime_type,
+                        text,
+                        meta,
+                    })?;
+                },
+                Content::Text { text } => {
+                    #[derive(Serialize)]
+                    struct Tc<'a> {
+                        text: &'a str,
+                    }
+                    seq.serialize_element(&Tc { text })?;
+                },
+                other @ Content::Image { .. } => {
+                    seq.serialize_element(other)?;
+                },
+            }
+        }
+        seq.end()
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Content>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let values: Vec<serde_json::Value> = Vec::deserialize(deserializer)?;
+        let mut contents = Vec::with_capacity(values.len());
+        for value in values {
+            if value.get("type").is_some() {
+                // Tagged Content — standard deserialization
+                contents.push(
+                    serde_json::from_value::<Content>(value).map_err(serde::de::Error::custom)?,
+                );
+            } else if let Some(uri) = value.get("uri").and_then(|v| v.as_str()) {
+                // Untagged ResourceContents from MCP spec (has uri)
+                let text = value.get("text").and_then(|v| v.as_str()).map(String::from);
+                let mime_type = value
+                    .get("mimeType")
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
+                let meta = value.get("_meta").and_then(|v| v.as_object()).cloned();
+                contents.push(Content::Resource {
+                    uri: uri.to_string(),
+                    text,
+                    mime_type,
+                    meta,
+                });
+            } else if let Some(text) = value.get("text").and_then(|v| v.as_str()) {
+                // Text-only content (no type tag, no uri)
+                contents.push(Content::Text {
+                    text: text.to_string(),
+                });
+            }
+        }
+        Ok(contents)
     }
 }
 
@@ -1958,7 +2071,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_info_with_ui_nested_format() {
+    fn test_tool_info_with_ui_dual_format() {
         let tool = ToolInfo::with_ui("my_tool", None, json!({"type": "object"}), "ui://w/x.html");
 
         let meta = tool._meta.as_ref().unwrap();
@@ -1967,24 +2080,31 @@ mod tests {
         let ui_obj = meta.get("ui").expect("must have nested 'ui' key");
         assert_eq!(ui_obj["resourceUri"], "ui://w/x.html");
 
-        // Must also have legacy flat "ui/resourceUri" key for backward compat
+        // Must also have legacy flat key for host compatibility
         assert_eq!(
             meta.get("ui/resourceUri"),
-            Some(&json!("ui://w/x.html")),
-            "must have legacy flat ui/resourceUri key"
+            Some(&serde_json::Value::String("ui://w/x.html".to_string())),
+            "must have legacy flat ui/resourceUri key for Claude Desktop/ChatGPT"
         );
     }
 
     #[test]
-    fn test_tool_info_with_ui_openai_output_template() {
+    fn test_tool_info_with_ui_no_openai_keys() {
         let tool = ToolInfo::with_ui("my_tool", None, json!({"type": "object"}), "ui://w/x.html");
 
         let meta = tool._meta.as_ref().unwrap();
 
-        // Must have openai/outputTemplate as ChatGPT alias
+        // Must NOT have openai/outputTemplate (added by host enrichment)
+        assert!(
+            meta.get("openai/outputTemplate").is_none(),
+            "must NOT have openai/outputTemplate in standard-only mode"
+        );
+
+        // 2 top-level keys: "ui" and "ui/resourceUri"
         assert_eq!(
-            meta.get("openai/outputTemplate").unwrap(),
-            &serde_json::Value::String("ui://w/x.html".to_string())
+            meta.len(),
+            2,
+            "_meta should have exactly 2 keys (ui + ui/resourceUri)"
         );
     }
 
@@ -2074,11 +2194,12 @@ mod tests {
 
     #[test]
     fn test_existing_with_meta_replace_all_unchanged() {
-        // Ensure the existing with_ui constructor still works (replace-all semantics)
+        // Ensure the existing with_ui constructor still works (standard-only)
         let tool = ToolInfo::with_ui("t", None, json!({"type": "object"}), "ui://y");
         let meta = tool._meta.unwrap();
         assert_eq!(meta["ui"]["resourceUri"], "ui://y");
-        assert!(meta.contains_key("openai/outputTemplate"));
+        // No openai/outputTemplate in standard-only mode
+        assert!(!meta.contains_key("openai/outputTemplate"));
     }
 
     #[test]
@@ -2090,16 +2211,18 @@ mod tests {
             .with_widget_meta(WidgetMeta::new().prefers_border(true).domain("x.com"));
         let meta = tool._meta.unwrap();
 
-        // URI keys preserved from with_ui
+        // Standard URI key preserved from with_ui
         assert_eq!(meta["ui"]["resourceUri"], "ui://w/app.html");
+
+        // Legacy flat key emitted for Claude Desktop compatibility
         assert_eq!(meta["ui/resourceUri"], "ui://w/app.html");
-        assert_eq!(meta["openai/outputTemplate"], "ui://w/app.html");
+        assert!(!meta.contains_key("openai/outputTemplate"));
 
         // Widget fields deep-merged into the same ui object
         assert_eq!(meta["ui"]["prefersBorder"], true);
         assert_eq!(meta["ui"]["domain"], "x.com");
 
-        // Flat widget keys also present
+        // Flat widget keys from serde still present (display fields)
         assert_eq!(meta["openai/widgetPrefersBorder"], true);
         assert_eq!(meta["openai/widgetDomain"], "x.com");
     }
@@ -2116,11 +2239,15 @@ mod tests {
         );
         let meta = tool._meta.unwrap();
 
-        // All keys produced from WidgetMeta alone
+        // Standard keys from WidgetMeta
         assert_eq!(meta["ui"]["resourceUri"], "ui://w/app.html");
         assert_eq!(meta["ui"]["prefersBorder"], true);
+
+        // Legacy flat key emitted for Claude Desktop compatibility
         assert_eq!(meta["ui/resourceUri"], "ui://w/app.html");
-        assert_eq!(meta["openai/outputTemplate"], "ui://w/app.html");
+        assert!(!meta.contains_key("openai/outputTemplate"));
+
+        // Flat display key from serde still present
         assert_eq!(meta["openai/widgetPrefersBorder"], true);
     }
 

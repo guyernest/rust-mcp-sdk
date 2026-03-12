@@ -436,32 +436,6 @@
       display: block;
     }
 
-    .state-viewer {
-      font-family: 'Monaco', 'Menlo', monospace;
-      font-size: 11px;
-      white-space: pre-wrap;
-      word-break: break-all;
-    }
-
-    .state-label {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--text-secondary);
-      margin-bottom: 4px;
-      margin-top: 12px;
-    }
-
-    .state-label:first-child {
-      margin-top: 0;
-    }
-
-    .state-value {
-      background: var(--bg-tertiary);
-      padding: 8px;
-      border-radius: 4px;
-      overflow-x: auto;
-    }
-
     /* Console */
     .console-log {
       font-family: 'Monaco', 'Menlo', monospace;
@@ -766,10 +740,16 @@
       position: relative;
     }
 
-    .clear-btn {
+    .devtools-btn-group {
       position: absolute;
       top: 0;
       right: 0;
+      display: flex;
+      gap: 4px;
+      z-index: 1;
+    }
+
+    .clear-btn, .copy-btn {
       padding: 2px 8px;
       border: 1px solid var(--border-color);
       border-radius: 3px;
@@ -777,12 +757,16 @@
       color: var(--text-secondary);
       cursor: pointer;
       font-size: 11px;
-      z-index: 1;
     }
 
-    .clear-btn:hover {
+    .clear-btn:hover, .copy-btn:hover {
       background: var(--bg-tertiary);
       color: var(--text-primary);
+    }
+
+    .copy-btn.copied {
+      color: var(--success-color);
+      border-color: var(--success-color);
     }
 
     /* Mode Badge */
@@ -804,6 +788,137 @@
     .mode-badge.chatgpt {
       background: var(--error-color);
       color: white;
+    }
+
+    /* Bridge Diagnostics Tab */
+    .bridge-mode-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .bridge-mode-indicator .mode-badge {
+      font-size: 10px;
+      padding: 2px 8px;
+    }
+
+    .bridge-handshake {
+      margin-bottom: 12px;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 10px;
+    }
+
+    .bridge-handshake-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+
+    .bridge-handshake-step {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 0;
+      font-size: 12px;
+      font-family: 'Monaco', 'Menlo', monospace;
+    }
+
+    .bridge-handshake-icon {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      flex-shrink: 0;
+    }
+
+    .bridge-handshake-icon.complete {
+      background: #4ade80;
+      color: #000;
+    }
+
+    .bridge-handshake-icon.pending {
+      background: #6b7280;
+      color: #fff;
+    }
+
+    .bridge-traffic-log {
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 11px;
+    }
+
+    .bridge-traffic-entry {
+      display: flex;
+      gap: 8px;
+      padding: 3px 0;
+      border-bottom: 1px solid var(--border-color);
+      align-items: flex-start;
+      cursor: pointer;
+    }
+
+    .bridge-traffic-entry:hover {
+      background: var(--bg-tertiary);
+    }
+
+    .bridge-traffic-time {
+      color: var(--text-secondary);
+      flex-shrink: 0;
+      font-size: 10px;
+      min-width: 85px;
+    }
+
+    .bridge-traffic-dir {
+      flex-shrink: 0;
+      font-weight: 600;
+      min-width: 16px;
+      text-align: center;
+    }
+
+    .bridge-traffic-dir.outgoing {
+      color: #4ade80;
+    }
+
+    .bridge-traffic-dir.incoming {
+      color: #60a5fa;
+    }
+
+    .bridge-traffic-method {
+      font-weight: 600;
+      flex-shrink: 0;
+      min-width: 180px;
+    }
+
+    .bridge-traffic-preview {
+      color: var(--text-secondary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+
+    .bridge-traffic-expanded {
+      display: none;
+      padding: 6px;
+      margin: 2px 0 4px 0;
+      background: var(--bg-secondary);
+      border-radius: 3px;
+      font-size: 10px;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .bridge-traffic-entry.expanded + .bridge-traffic-expanded {
+      display: block;
     }
 
     /* Protocol Tab */
@@ -1008,47 +1123,82 @@
     <!-- DevTools Panel -->
     <aside class="devtools-panel">
       <div class="devtools-tabs">
-        <button class="devtools-tab active" data-tab="state">State</button>
-        <button class="devtools-tab" data-tab="console">Console</button>
+        <button class="devtools-tab active" data-tab="console">Console</button>
         <button class="devtools-tab" data-tab="network">Network</button>
         <button class="devtools-tab" data-tab="events">Events</button>
         <button class="devtools-tab" data-tab="protocol">Protocol</button>
+        <button class="devtools-tab" data-tab="bridge">Bridge</button>
       </div>
       <div class="devtools-content">
-        <div class="devtools-section active" id="tab-state">
-          <div class="state-viewer">
-            <div class="state-label">Widget State</div>
-            <div class="state-value" id="state-widget">{}</div>
-            <div class="state-label">Tool Input</div>
-            <div class="state-value" id="state-input">{}</div>
-            <div class="state-label">Tool Output</div>
-            <div class="state-value" id="state-output">null</div>
-            <div class="state-label">Response Metadata</div>
-            <div class="state-value" id="state-meta">{}</div>
+        <div class="devtools-section active" id="tab-console">
+          <div class="devtools-btn-group">
+            <button class="copy-btn" data-copy="console">Copy</button>
+            <button class="clear-btn" data-clear="console">Clear</button>
           </div>
-        </div>
-        <div class="devtools-section" id="tab-console">
-          <button class="clear-btn" data-clear="console">Clear</button>
           <div class="console-log" id="console-log">
             <div class="empty-state">Console output will appear here</div>
           </div>
         </div>
         <div class="devtools-section" id="tab-network">
-          <button class="clear-btn" data-clear="network">Clear</button>
+          <div class="devtools-btn-group">
+            <button class="copy-btn" data-copy="network">Copy</button>
+            <button class="clear-btn" data-clear="network">Clear</button>
+          </div>
           <div id="network-log">
             <div class="empty-state">Network requests will appear here</div>
           </div>
         </div>
         <div class="devtools-section" id="tab-events">
-          <button class="clear-btn" data-clear="events">Clear</button>
+          <div class="devtools-btn-group">
+            <button class="copy-btn" data-copy="events">Copy</button>
+            <button class="clear-btn" data-clear="events">Clear</button>
+          </div>
           <div id="events-log">
             <div class="empty-state">Events will appear here</div>
           </div>
         </div>
         <div class="devtools-section" id="tab-protocol">
-          <button class="clear-btn" data-clear="protocol">Clear</button>
+          <div class="devtools-btn-group">
+            <button class="copy-btn" data-copy="protocol">Copy</button>
+            <button class="clear-btn" data-clear="protocol">Clear</button>
+          </div>
           <div id="protocol-checks" class="protocol-checks">
             <div class="protocol-empty">Run a tool call to see protocol validation results</div>
+          </div>
+        </div>
+        <div class="devtools-section" id="tab-bridge">
+          <div class="devtools-btn-group">
+            <button class="copy-btn" data-copy="bridge">Copy</button>
+            <button class="clear-btn" data-clear="bridge">Clear</button>
+          </div>
+          <div id="bridge-content">
+            <div class="bridge-mode-indicator">
+              Mode: <span id="bridge-mode-badge" class="mode-badge standard">Standard</span>
+            </div>
+            <div class="bridge-handshake">
+              <div class="bridge-handshake-title">Handshake Trace</div>
+              <div id="bridge-handshake-steps">
+                <div class="bridge-handshake-step" data-step="widgetLoaded">
+                  <span class="bridge-handshake-icon pending">-</span>
+                  <span>Widget iframe loaded</span>
+                </div>
+                <div class="bridge-handshake-step" data-step="initRequest">
+                  <span class="bridge-handshake-icon pending">-</span>
+                  <span>Widget sends ui/initialize</span>
+                </div>
+                <div class="bridge-handshake-step" data-step="hostResponse">
+                  <span class="bridge-handshake-icon pending">-</span>
+                  <span>Host responds with hostContext</span>
+                </div>
+                <div class="bridge-handshake-step" data-step="initialized">
+                  <span class="bridge-handshake-icon pending">-</span>
+                  <span>Widget sends ui/notifications/initialized</span>
+                </div>
+              </div>
+            </div>
+            <div class="bridge-traffic-log" id="bridge-traffic-log">
+              <div class="empty-state">PostMessage traffic will appear here</div>
+            </div>
           </div>
         </div>
       </div>
@@ -1059,15 +1209,179 @@
     // Import AppBridge from the shared widget-runtime library
     import { AppBridge } from '/assets/widget-runtime.mjs';
 
+    // Bridge Diagnostics: captures postMessage traffic between host and widget
+    class BridgeDiagnostics {
+      constructor(runtime) {
+        this.runtime = runtime;
+        this.log = [];
+        this.handshakeState = {
+          widgetLoaded: false,
+          initRequest: false,
+          hostResponse: false,
+          initialized: false,
+        };
+        this.startCapture();
+      }
+
+      startCapture() {
+        // Capture ALL incoming messages from widget iframe
+        window.addEventListener('message', (event) => {
+          const msg = event.data;
+          if (!msg || typeof msg !== 'object') return;
+          // Filter out non-jsonrpc messages (e.g., globals updates) unless they
+          // have a recognizable type field
+          const method = msg.method || msg.type || null;
+          if (!method) return;
+          // Skip globals updates from host (these are outgoing, not incoming)
+          if (msg.type === 'openai/setGlobals') return;
+
+          this.logIncoming(method, msg.params || msg, msg);
+
+          // Track handshake steps from incoming messages
+          if (method === 'ui/initialize') {
+            this.markStep('initRequest');
+            // AppBridge auto-responds with hostContext; mark after short delay
+            // to reflect the response ordering in the trace
+            setTimeout(() => this.markStep('hostResponse'), 0);
+          } else if (method === 'ui/notifications/initialized') {
+            this.markStep('initialized');
+          }
+        });
+      }
+
+      updateMode(mode) {
+        const badge = document.getElementById('bridge-mode-badge');
+        if (badge) {
+          if (mode === 'chatgpt') {
+            badge.textContent = 'ChatGPT';
+            badge.className = 'mode-badge chatgpt';
+          } else {
+            badge.textContent = 'Standard';
+            badge.className = 'mode-badge standard';
+          }
+        }
+      }
+
+      logIncoming(method, params, raw) {
+        this.addEntry('incoming', method, params, raw);
+      }
+
+      logOutgoing(method, params) {
+        this.addEntry('outgoing', method, params, { jsonrpc: '2.0', method, params });
+      }
+
+      addEntry(direction, method, params, raw) {
+        const MAX_LOG_ENTRIES = 500;
+        const now = new Date();
+        const timestamp = now.toTimeString().split(' ')[0] + '.' +
+          String(now.getMilliseconds()).padStart(3, '0');
+        this.log.push({ timestamp, direction, method, params, raw });
+        // Prune oldest entries to prevent unbounded growth
+        if (this.log.length > MAX_LOG_ENTRIES) {
+          this.log.shift();
+          const container = document.getElementById('bridge-traffic-log');
+          if (container && container.children.length >= 2) {
+            container.removeChild(container.children[0]); // entryDiv
+            container.removeChild(container.children[0]); // expandDiv
+          }
+        }
+        this.render();
+      }
+
+      markStep(step) {
+        if (this.handshakeState[step]) return;
+        this.handshakeState[step] = true;
+        this.renderHandshake();
+      }
+
+      resetHandshake() {
+        this.handshakeState = {
+          widgetLoaded: false,
+          initRequest: false,
+          hostResponse: false,
+          initialized: false,
+        };
+        this.renderHandshake();
+      }
+
+      clear() {
+        this.log = [];
+        this.resetHandshake();
+        document.getElementById('bridge-traffic-log').innerHTML =
+          '<div class="empty-state">PostMessage traffic will appear here</div>';
+      }
+
+      renderHandshake() {
+        const steps = document.getElementById('bridge-handshake-steps');
+        if (!steps) return;
+        for (const [step, complete] of Object.entries(this.handshakeState)) {
+          const el = steps.querySelector(`[data-step="${step}"] .bridge-handshake-icon`);
+          if (el) {
+            el.className = `bridge-handshake-icon ${complete ? 'complete' : 'pending'}`;
+            el.textContent = complete ? '\u2713' : '-';
+          }
+        }
+      }
+
+      render() {
+        const container = document.getElementById('bridge-traffic-log');
+        if (!container) return;
+
+        // Only render the latest entry (append) for performance
+        if (container.querySelector('.empty-state')) {
+          container.innerHTML = '';
+        }
+
+        const entry = this.log[this.log.length - 1];
+        if (!entry) return;
+
+        const dirClass = entry.direction === 'outgoing' ? 'outgoing' : 'incoming';
+        const dirArrow = entry.direction === 'outgoing' ? '\u2192' : '\u2190';
+        const preview = JSON.stringify(entry.params || {});
+        const truncated = preview.length > 120 ? preview.substring(0, 120) + '...' : preview;
+
+        const entryDiv = document.createElement('div');
+        entryDiv.className = 'bridge-traffic-entry';
+        entryDiv.innerHTML = `
+          <span class="bridge-traffic-time">${entry.timestamp}</span>
+          <span class="bridge-traffic-dir ${dirClass}">${dirArrow}</span>
+          <span class="bridge-traffic-method">${entry.method}</span>
+          <span class="bridge-traffic-preview">${this.escapeHtml(truncated)}</span>
+        `;
+
+        const expandDiv = document.createElement('div');
+        expandDiv.className = 'bridge-traffic-expanded';
+
+        entryDiv.addEventListener('click', () => {
+          // Lazy: compute full JSON only on first expand
+          if (!expandDiv.textContent) {
+            expandDiv.textContent = JSON.stringify(entry.raw || entry.params, null, 2);
+          }
+          entryDiv.classList.toggle('expanded');
+        });
+
+        container.appendChild(entryDiv);
+        container.appendChild(expandDiv);
+        // Only force scroll if Bridge tab is visible
+        if (container.offsetParent !== null) {
+          container.scrollTop = container.scrollHeight;
+        }
+      }
+
+      escapeHtml(str) {
+        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      }
+    }
+
     // Preview Runtime
     class PreviewRuntime {
       constructor() {
         this.tools = [];
         this.selectedTool = null;
-        this.widgetState = {};
         this.toolInput = {};
         this.toolOutput = null;
         this.toolResponseMetadata = {};
+        this.pendingToolContext = null;
 
         // Resources
         this.uiResources = [];
@@ -1089,6 +1403,9 @@
         this.descriptorKeys = [];
         this.invocationKeys = [];
         this.protocolResults = [];
+
+        // Bridge diagnostics
+        this.bridgeDiagnostics = new BridgeDiagnostics(this);
 
         // Environment
         this.theme = 'light';
@@ -1144,9 +1461,12 @@
             badge.textContent = 'ChatGPT Strict';
             badge.className = 'mode-badge chatgpt';
           } else {
-            badge.textContent = 'Standard';
+            badge.textContent = 'Standard MCP Apps';
             badge.className = 'mode-badge standard';
           }
+
+          // Update Bridge diagnostics mode badge
+          this.bridgeDiagnostics.updateMode(this.mode);
         } catch (e) {
           console.error('Failed to load config:', e);
         }
@@ -1298,11 +1618,16 @@
           );
 
           // Protocol validation for resources/read (warn-only)
+          // Valid MIME types for MCP Apps widgets:
+          //   - text/html;profile=mcp-app  (standard, works in Claude Desktop + ChatGPT)
+          //   - text/html+skybridge        (ChatGPT-only legacy)
+          // Invalid: text/html+mcp (not recognized by Claude Desktop)
+          const VALID_WIDGET_MIMES = ['text/html;profile=mcp-app', 'text/html+skybridge'];
           if (this.descriptorKeys.length > 0) {
             for (const item of contents) {
               const extras = {};
               extras['mimeType'] = {
-                pass: item.mimeType === 'text/html+skybridge',
+                pass: VALID_WIDGET_MIMES.includes(item.mimeType),
                 detail: item.mimeType ? `"${item.mimeType}"` : 'MISSING'
               };
               this.validateProtocol(
@@ -1510,9 +1835,127 @@
               this.protocolResults = [];
               document.getElementById('protocol-checks').innerHTML =
                 '<div class="protocol-empty">Run a tool call to see protocol validation results</div>';
+            } else if (target === 'bridge') {
+              this.bridgeDiagnostics.clear();
             }
           });
         });
+
+        // Setup copy buttons
+        document.querySelectorAll('.copy-btn').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const target = btn.dataset.copy;
+            const text = this.collectTabContent(target);
+            if (!text) return;
+            await this.copyToClipboard(text);
+            this.showCopyFeedback(btn);
+          });
+        });
+      }
+
+      async copyToClipboard(text) {
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch {
+          // Fallback for non-secure contexts (deprecated but functional)
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        }
+      }
+
+      showCopyFeedback(btn) {
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 1500);
+      }
+
+      // Send a notification to the widget iframe using both short and long method forms
+      sendWidgetNotification(shortMethod, longMethod, params) {
+        const fr = document.getElementById('widget-frame');
+        if (!fr || !fr.contentWindow) return;
+        fr.contentWindow.postMessage({ jsonrpc: '2.0', method: shortMethod, params }, '*');
+        this.bridgeDiagnostics.logOutgoing(shortMethod, params);
+        fr.contentWindow.postMessage({ jsonrpc: '2.0', method: longMethod, params }, '*');
+        this.bridgeDiagnostics.logOutgoing(longMethod, params);
+      }
+
+      collectTabContent(tab) {
+        if (tab === 'bridge') {
+          // Use structured log from BridgeDiagnostics
+          const diag = this.bridgeDiagnostics;
+          if (!diag || diag.log.length === 0) return '';
+          const lines = diag.log.map(e => {
+            const dir = e.direction === 'outgoing' ? '->' : '<-';
+            const payload = JSON.stringify(e.raw || e.params, null, 2);
+            return `[${e.timestamp}] ${dir} ${e.method}\n${payload}`;
+          });
+          // Prepend handshake state
+          const hs = Object.entries(diag.handshakeState)
+            .map(([k, v]) => `  ${v ? '\u2713' : '-'} ${k}`)
+            .join('\n');
+          return `Handshake:\n${hs}\n\nTraffic (${diag.log.length} messages):\n${'='.repeat(60)}\n${lines.join('\n' + '-'.repeat(60) + '\n')}`;
+        }
+
+        if (tab === 'network') {
+          // Extract from DOM: each .network-entry has header + body
+          const entries = document.querySelectorAll('#network-log .network-entry');
+          if (entries.length === 0) return '';
+          const lines = Array.from(entries).map(el => {
+            // Try details-based entries first (bridge calls)
+            const details = el.querySelector('details');
+            if (details) {
+              const summary = details.querySelector('summary')?.textContent?.trim() || '';
+              const pres = details.querySelectorAll('pre');
+              const args = pres[0]?.textContent || '';
+              const response = pres[1]?.textContent || '';
+              return `${summary}\nArguments: ${args}\nResponse: ${response}`;
+            }
+            // Simple entries (request/response pairs)
+            const header = el.querySelector('.network-header')?.textContent?.trim() || '';
+            const body = el.querySelector('.network-body')?.textContent?.trim() || '';
+            return `${header}\n${body}`;
+          });
+          return `Network Log (${entries.length} entries):\n${'='.repeat(60)}\n${lines.join('\n' + '-'.repeat(60) + '\n')}`;
+        }
+
+        if (tab === 'console') return this.collectDomLog('#console-log', 'console-entry', 'Console Log');
+        if (tab === 'events') return this.collectDomLog('#events-log', 'event-entry', 'Events Log');
+
+        if (tab === 'protocol') {
+          if (!this.protocolResults || this.protocolResults.length === 0) return '';
+          const lines = this.protocolResults.map(r => {
+            let detail = `${r.pass ? 'PASS' : 'FAIL'} ${r.checkName}`;
+            if (r.expected.length) detail += `\n  Expected keys: ${r.expected.join(', ')}`;
+            if (r.actual.length) detail += `\n  Actual keys: ${r.actual.join(', ')}`;
+            if (r.missing.length) detail += `\n  Missing: ${r.missing.join(', ')}`;
+            if (r.extra.length) detail += `\n  Extra: ${r.extra.join(', ')}`;
+            if (r.extras) {
+              for (const [label, v] of Object.entries(r.extras)) {
+                detail += `\n  ${v.pass ? '\u2713' : '\u2717'} ${label}: ${v.detail}`;
+              }
+            }
+            return detail;
+          });
+          return `Protocol Checks (${this.protocolResults.length} results):\n${'='.repeat(60)}\n${lines.join('\n' + '-'.repeat(60) + '\n')}`;
+        }
+
+        return '';
+      }
+
+      collectDomLog(containerSel, entryClass, label) {
+        const entries = document.querySelectorAll(`${containerSel} .${entryClass}`);
+        if (entries.length === 0) return '';
+        const lines = Array.from(entries).map(el => el.textContent?.trim() || '');
+        return `${label} (${entries.length} entries):\n${lines.join('\n')}`;
       }
 
       setupEnvironmentControls() {
@@ -1564,7 +2007,6 @@
         }
 
         this.toolInput = args;
-        this.updateStateView();
 
         const startTime = Date.now();
         this.logNetwork('request', this.selectedTool.name, args);
@@ -1599,21 +2041,22 @@
         this.toolOutput = result.structuredContent || result.content;
         const responseMeta = result._meta || result.meta || {};
         this.toolResponseMetadata = responseMeta;
-        this.updateStateView();
 
-        // Protocol validation for tools/call (warn-only)
-        if (this.invocationKeys.length > 0) {
+        // Protocol validation for tools/call (warn-only).
+        // In ChatGPT mode, checks invocation keys; in standard mode,
+        // still validates structuredContent presence.
+        {
           const toolName = this.selectedTool ? this.selectedTool.name : 'unknown';
-          const extras = {};
-          extras['structuredContent'] = {
-            pass: !!result.structuredContent,
-            detail: result.structuredContent ? 'present' : 'MISSING'
-          };
           this.validateProtocol(
             `tools/call [${toolName}]`,
             responseMeta,
             this.invocationKeys,
-            extras
+            {
+              structuredContent: {
+                pass: !!result.structuredContent,
+                detail: result.structuredContent ? 'present' : 'MISSING'
+              }
+            }
           );
         }
 
@@ -1626,49 +2069,50 @@
                        || toolDefMeta['ui/resourceUri']
                        || toolDefMeta['ui']?.['resourceUri'];
         if (widgetUri) {
-          const iframe = document.getElementById('widget-frame');
-          const widgetAlreadyLoaded = this.activeResourceUri === widgetUri
-            && this.appBridge
-            && iframe
-            && iframe.style.display !== 'none';
-
-          // Helper: deliver tool result data to the widget via AppBridge + ChatGPT postMessage
-          const deliverToolResult = () => {
-            // AppBridge delivery (always active for ui/initialize handshake)
-            if (this.appBridge) {
-              this.appBridge.sendToolInput(this.toolInput);
-              this.appBridge.sendToolResult({
-                structuredContent: result.structuredContent,
-                _meta: responseMeta,
-              });
-            }
-
-            // ChatGPT mode: supplemental postMessage delivery with JSON-RPC envelope
-            const fr = document.getElementById('widget-frame');
-            if (this.mode === 'chatgpt' && fr && fr.contentWindow) {
-              fr.contentWindow.postMessage({
-                jsonrpc: '2.0',
-                method: 'ui/notifications/tool-result',
-                params: { structuredContent: result.structuredContent }
-              }, '*');
-
-              // Also set window.openai properties directly (same-origin srcdoc)
-              try {
-                fr.contentWindow.openai.toolOutput = result.structuredContent;
-                fr.contentWindow.openai.toolInput = this.toolInput || null;
-              } catch(e) { /* srcdoc cross-origin guard */ }
-            }
+          // Store pending tool context so the AppBridge includes it in
+          // hostContext when the widget sends ui/initialize.
+          this.pendingToolContext = {
+            toolInput: this.toolInput || {},
+            toolOutput: result.structuredContent || null,
+            toolResponseMetadata: responseMeta,
           };
 
-          if (widgetAlreadyLoaded) {
-            // Widget is already loaded with the same URI -- send data immediately
-            // without reloading the iframe (which would destroy widget state)
-            deliverToolResult();
-          } else {
-            // First load or different URI -- load widget template then deliver data
-            await this.loadResourceWidget(widgetUri);
-            // Give widget time to initialize its bridge listener
-            setTimeout(deliverToolResult, 300);
+          // Always (re)load the widget so the ext-apps SDK receives tool
+          // context during the ui/initialize handshake. Some ext-apps
+          // widgets only read tool data from hostContext at init time and
+          // do not handle post-init notifications.
+          const readyPromise = new Promise((resolve) => {
+            const handler = (event) => {
+              const msg = event.data;
+              if (msg && msg.jsonrpc === '2.0' && msg.method === 'ui/notifications/initialized') {
+                window.removeEventListener('message', handler);
+                resolve();
+              }
+            };
+            window.addEventListener('message', handler);
+            setTimeout(() => {
+              window.removeEventListener('message', handler);
+              resolve();
+            }, 3000);
+          });
+          await this.loadResourceWidget(widgetUri);
+          await readyPromise;
+
+          // Also send post-init notifications for widgets that listen for them
+          const toolInputParams = this.toolInput || {};
+          this.sendWidgetNotification('ui/toolInput', 'ui/notifications/tool-input', toolInputParams);
+
+          const toolResultParams = { structuredContent: result.structuredContent, content: result.content, _meta: responseMeta };
+          this.sendWidgetNotification('ui/toolResult', 'ui/notifications/tool-result', toolResultParams);
+
+          if (this.mode === 'chatgpt') {
+            try {
+              const fr = document.getElementById('widget-frame');
+              if (fr?.contentWindow?.openai) {
+                fr.contentWindow.openai.toolOutput = result.structuredContent;
+                fr.contentWindow.openai.toolInput = this.toolInput || null;
+              }
+            } catch(e) { /* srcdoc cross-origin guard */ }
           }
 
           this.logEvent('toolResponse', { tool: this.selectedTool.name, widget: widgetUri });
@@ -1783,21 +2227,35 @@
         // Set up AppBridge BEFORE setting srcdoc so it's already listening
         // when the widget's bridge script sends ui/initialize and tool calls.
         // iframe.contentWindow persists across srcdoc navigations.
+        //
+        // If a tool was just called (pendingToolContext), include the tool
+        // data in hostContext so ext-apps widgets receive it at init time.
+        const hostCtx = {
+          theme: this.theme,
+          locale: this.locale,
+          displayMode: this.displayMode,
+        };
+        if (this.pendingToolContext) {
+          hostCtx.toolInput = this.pendingToolContext.toolInput;
+          hostCtx.toolOutput = this.pendingToolContext.toolOutput;
+          hostCtx.toolResponseMetadata = this.pendingToolContext.toolResponseMetadata;
+          this.pendingToolContext = null;
+        }
         this.appBridge = new AppBridge({
           iframe: frame,
           toolCallHandler: this.createToolCallHandler(),
           origin: '*',  // srcdoc iframes have origin "null" — use wildcard
-          hostContext: {
-            theme: this.theme,
-            locale: this.locale,
-            displayMode: this.displayMode,
-          },
+          hostContext: hostCtx,
         });
         this.appBridge.initialize();
 
         // Create wrapped HTML with shared library bridge loader
         const wrappedHtml = this.wrapWidgetHtml(html);
         frame.srcdoc = wrappedHtml;
+
+        // Bridge diagnostics: reset handshake and mark widget loaded
+        this.bridgeDiagnostics.resetHandshake();
+        this.bridgeDiagnostics.markStep('widgetLoaded');
 
         this.logEvent('widgetLoaded', {});
       }
@@ -1824,22 +2282,55 @@
     };
   ${sc}` : '';
 
-        return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>
-    body { margin: 0; padding: 16px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-  </style>
-${openaiStub}
+        // Redirect CDN ext-apps imports to our local widget-runtime.mjs.
+        // This avoids Zod version conflicts from esm.sh and ensures widgets
+        // use the same App class our AppBridge already communicates with.
+        // Scan widget HTML for CDN import URLs (esm.sh, jsdelivr, unpkg, skypack)
+        // and map each exact URL to our local bundle.
+        // NOTE: keep CDN list in sync with CDN_MARKERS in src/server/mcp_apps/adapter.rs
+        const cdnPattern = /https?:\/\/(?:esm\.sh|cdn\.jsdelivr\.net\/npm|unpkg\.com|cdn\.skypack\.dev)\/@modelcontextprotocol\/ext-apps[^"'\s]*/g;
+        const cdnUrls = [...new Set(html.match(cdnPattern) || [])];
+        const imports = { '@modelcontextprotocol/ext-apps': '/assets/widget-runtime.mjs' };
+        for (const url of cdnUrls) {
+          imports[url] = '/assets/widget-runtime.mjs';
+        }
+        const importMap = `<script type="importmap">${JSON.stringify({ imports })}${sc}`;
+
+        // Detect if widget HTML already bundles its own ext-apps SDK App instance.
+        // Injecting a second App would create two Protocol instances on the same
+        // postMessage channel with colliding message IDs.
+        //
+        // Detection (two signals, either is sufficient):
+        //   1. CDN imports found — widget loads ext-apps from a CDN (structural)
+        //   2. _requestHandlers — Protocol class internals present in Vite bundles
+        //      (survives minification, won't false-positive on comments/text)
+        const widgetHasOwnApp = cdnUrls.length > 0
+          || html.includes('_requestHandlers');
+
+        // If widget manages its own protocol, only inject importMap + console capture.
+        // Otherwise inject a wrapper App that performs the handshake on behalf of
+        // simple widgets that have no SDK code.
+        const bridgeScript = widgetHasOwnApp ? '' : `
   <script type="module">
     // Load bridge from shared library via dynamic import
     const { App, installCompat } = await import('/assets/widget-runtime.mjs');
     const app = new App({ name: 'PreviewWidget', version: '1.0.0' });
     installCompat(app);
     await app.connect();
+  ${sc}`;
 
+        return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  ${importMap}
+  <style>
+    body { margin: 0; padding: 16px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+  </style>
+${openaiStub}
+${bridgeScript}
+  <script type="module">
     // Console capture for DevTools
     const preview = window.parent.previewRuntime;
     if (preview) {
@@ -1863,10 +2354,12 @@ ${openaiStub}
           }));
         }
       });
-
-      // Signal ready
-      setTimeout(() => { preview.logEvent('widgetReady', {}); }, 100);
     }
+
+    // Signal ready — always sent so the host resolves readyPromise
+    // regardless of whether the wrapper or the widget handled the handshake.
+    window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/initialized', params: {} }, '*');
+    if (window.parent.previewRuntime) window.parent.previewRuntime.logEvent('widgetReady', {});
   ${sc}
 </head>
 <body>
@@ -1918,7 +2411,11 @@ ${html}
               const { default: init, WasmClient } = await import('/wasm/mcp_wasm_client.js');
               await init('/wasm/mcp_wasm_client_bg.wasm');
               this._wasmClient = new WasmClient();
-              await this._wasmClient.connect(this.mcpUrl);
+              // Connect through same-origin proxy to avoid CORS issues.
+              // The browser cannot fetch the MCP server directly (different
+              // origin), so we route through /api/mcp which proxies to it.
+              const proxyUrl = `${window.location.origin}/api/mcp`;
+              await this._wasmClient.connect(proxyUrl);
               this.logEvent('wasmClientReady', {});
             } catch (e) {
               this.showBuildError('WASM client init failed: ' + e.message);
@@ -1965,17 +2462,19 @@ ${html}
       emitGlobalsUpdate() {
         const frame = document.getElementById('widget-frame');
         if (frame.contentWindow) {
+          const globals = {
+            theme: this.theme,
+            locale: this.locale,
+            displayMode: this.displayMode,
+            maxHeight: this.maxHeight,
+            safeArea: this.safeArea,
+            view: this.view
+          };
           frame.contentWindow.postMessage({
             type: 'openai/setGlobals',
-            globals: {
-              theme: this.theme,
-              locale: this.locale,
-              displayMode: this.displayMode,
-              maxHeight: this.maxHeight,
-              safeArea: this.safeArea,
-              view: this.view
-            }
+            globals
           }, '*');
+          this.bridgeDiagnostics.logOutgoing('openai/setGlobals', globals);
         }
 
         // Also update AppBridge host context if active
@@ -1986,13 +2485,6 @@ ${html}
             displayMode: this.displayMode,
           });
         }
-      }
-
-      updateStateView() {
-        document.getElementById('state-widget').textContent = JSON.stringify(this.widgetState, null, 2);
-        document.getElementById('state-input').textContent = JSON.stringify(this.toolInput, null, 2);
-        document.getElementById('state-output').textContent = JSON.stringify(this.toolOutput, null, 2);
-        document.getElementById('state-meta').textContent = JSON.stringify(this.toolResponseMetadata, null, 2);
       }
 
       logConsole(level, message) {

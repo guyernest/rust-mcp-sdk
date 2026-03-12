@@ -23,7 +23,7 @@ use std::collections::HashMap;
 ///     uri: "ui://settings/form".to_string(),
 ///     name: "Settings Form".to_string(),
 ///     description: Some("Configure application settings".to_string()),
-///     mime_type: "text/html+mcp".to_string(),
+///     mime_type: "text/html;profile=mcp-app".to_string(),
 /// };
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,8 +45,8 @@ pub struct UIResource {
 
     /// MIME type of the UI resource
     ///
-    /// Currently supported: "text/html+mcp"
-    /// Future: "application/wasm+mcp", "application/x-remote-dom+mcp"
+    /// Standard: `"text/html;profile=mcp-app"` (recommended for all hosts)
+    /// Legacy: `"text/html+mcp"` (still accepted by some hosts)
     pub mime_type: String,
 }
 
@@ -61,18 +61,46 @@ impl UIResource {
         }
     }
 
-    /// Create a new HTML UI resource with MCP mime type.
+    /// Create a new HTML UI resource with the standard MCP Apps MIME type
+    /// (`text/html;profile=mcp-app`).
+    ///
+    /// This is the recommended constructor for widget resources that work
+    /// across Claude Desktop, `ChatGPT`, and other MCP hosts.
     ///
     /// # Example
     ///
     /// ```rust
     /// use pmcp::types::ui::UIResource;
     ///
-    /// let resource = UIResource::html_mcp(
+    /// let resource = UIResource::html_mcp_app(
+    ///     "ui://settings/form",
+    ///     "Settings Form",
+    /// );
+    /// assert_eq!(resource.mime_type, "text/html;profile=mcp-app");
+    /// ```
+    pub fn html_mcp_app(uri: impl Into<String>, name: impl Into<String>) -> Self {
+        Self::new(uri, name, UIMimeType::HtmlMcpApp)
+    }
+
+    /// Create a new HTML UI resource with legacy MCP mime type (`text/html+mcp`).
+    ///
+    /// **Deprecated:** Prefer [`html_mcp_app()`](Self::html_mcp_app) which uses
+    /// `text/html;profile=mcp-app` — the standard MIME type recognized by
+    /// Claude Desktop and other MCP hosts.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// #[allow(deprecated)]
+    /// let resource = pmcp::types::ui::UIResource::html_mcp(
     ///     "ui://settings/form",
     ///     "Settings Form",
     /// );
     /// ```
+    #[deprecated(
+        since = "1.16.1",
+        note = "Use html_mcp_app() which produces text/html;profile=mcp-app recognized by Claude Desktop"
+    )]
     pub fn html_mcp(uri: impl Into<String>, name: impl Into<String>) -> Self {
         Self::new(uri, name, UIMimeType::HtmlMcp)
     }
@@ -128,8 +156,8 @@ pub enum UIMimeType {
 
     /// HTML with MCP App profile (`text/html;profile=mcp-app`)
     ///
-    /// The profile-based MIME type used by `ChatGPT` for MCP Apps.
-    /// This is the format `ChatGPT` advertises in its developer documentation.
+    /// The standard MIME type for MCP Apps widgets, recognized by
+    /// Claude Desktop, `ChatGPT`, and other MCP hosts.
     HtmlMcpApp,
     // Future MIME types (commented out for Phase 1):
     // /// WebAssembly with MCP support (`application/wasm+mcp`)
@@ -156,7 +184,7 @@ impl UIMimeType {
 
     /// Check if this is a standard MCP Apps MIME type
     pub fn is_mcp_apps(&self) -> bool {
-        matches!(self, Self::HtmlMcp)
+        matches!(self, Self::HtmlMcp | Self::HtmlMcpApp)
     }
 }
 
@@ -207,11 +235,15 @@ pub struct UIResourceContents {
 }
 
 impl UIResourceContents {
-    /// Create new HTML contents
+    /// Create new HTML contents with the standard MCP Apps MIME type
+    /// (`text/html;profile=mcp-app`).
+    ///
+    /// This is the correct MIME type for widgets rendered by Claude Desktop,
+    /// `ChatGPT`, and other MCP hosts that support the ext-apps protocol.
     pub fn html(uri: impl Into<String>, html: impl Into<String>) -> Self {
         Self {
             uri: uri.into(),
-            mime_type: UIMimeType::HtmlMcp.as_str().to_string(),
+            mime_type: UIMimeType::HtmlMcpApp.as_str().to_string(),
             text: Some(html.into()),
             blob: None,
             meta: None,
@@ -222,11 +254,10 @@ impl UIResourceContents {
 /// Tool metadata for UI resource association
 ///
 /// This extends the tool's `_meta` field to reference a UI resource.
-/// Uses nested `_meta.ui.resourceUri` format for MCP standard compatibility,
-/// plus `openai/outputTemplate` for `ChatGPT` compatibility.
+/// Uses nested `_meta.ui.resourceUri` format (MCP Apps standard).
 ///
 /// Backward compatible: `from_metadata()` reads both nested `"ui"` object
-/// and legacy flat `"ui/resourceUri"` key.
+/// and legacy flat `"ui/resourceUri"` key for reading old-format metadata.
 ///
 /// # Example
 ///
@@ -348,20 +379,38 @@ pub fn filter_meta_by_prefix(
         .collect()
 }
 
-/// Emit the standard triple-key resource URI format into maps.
+/// Emit the standard MCP Apps resource URI key into the nested `ui` object.
 ///
-/// Inserts `resourceUri` into `ui_obj` (nested) and both `ui/resourceUri`
-/// (legacy flat) and `openai/outputTemplate` (`ChatGPT` alias) into `map`.
-/// Single source of truth for the ext-apps dual-emit pattern.
-pub fn emit_resource_uri_keys(
-    map: &mut serde_json::Map<String, serde_json::Value>,
-    ui_obj: &mut serde_json::Map<String, serde_json::Value>,
+/// Inserts `resourceUri` into `ui_obj` only. The companion flat key
+/// (`ui/resourceUri`) is emitted by [`insert_legacy_resource_uri_key`], which
+/// callers should invoke on the top-level `_meta` map immediately after.
+///
+/// Host-specific keys (e.g., `openai/outputTemplate` for `ChatGPT`) are added
+/// by the host-layer enrichment pipeline at server build time.
+pub fn emit_resource_uri_keys(ui_obj: &mut serde_json::Map<String, serde_json::Value>, uri: &str) {
+    let uri_val = serde_json::Value::String(uri.to_string());
+    ui_obj.insert("resourceUri".to_string(), uri_val);
+}
+
+/// Legacy flat `_meta` key for the UI resource URI.
+///
+/// Hosts like Claude Desktop read `_meta["ui/resourceUri"]` in addition to the
+/// nested `_meta.ui.resourceUri` path. Both formats should be emitted.
+pub(crate) const META_KEY_UI_RESOURCE_URI: &str = "ui/resourceUri";
+
+/// Insert legacy flat `ui/resourceUri` key into a top-level `_meta` map.
+///
+/// Hosts like Claude Desktop and `ChatGPT` read this flat key to identify
+/// MCP App tools. Called by both `ToolUIMetadata::build_meta_map` and
+/// `WidgetMeta::to_meta_map` to keep the logic in one place.
+pub(crate) fn insert_legacy_resource_uri_key(
+    meta: &mut serde_json::Map<String, serde_json::Value>,
     uri: &str,
 ) {
-    let uri_val = serde_json::Value::String(uri.to_string());
-    ui_obj.insert("resourceUri".to_string(), uri_val.clone());
-    map.insert("ui/resourceUri".to_string(), uri_val.clone());
-    map.insert("openai/outputTemplate".to_string(), uri_val);
+    meta.insert(
+        META_KEY_UI_RESOURCE_URI.to_string(),
+        serde_json::Value::String(uri.to_string()),
+    );
 }
 
 /// Build `_meta` from an optional UI resource URI.
@@ -390,20 +439,21 @@ impl ToolUIMetadata {
 
     /// Build a `serde_json::Map` with the standard UI resource `_meta` keys.
     ///
-    /// Produces three top-level keys matching the official `@modelcontextprotocol/ext-apps`
-    /// `registerAppTool` dual-emit behavior:
+    /// Produces two top-level keys for host compatibility:
     ///
-    /// - `"ui": { "resourceUri": "<uri>" }` — MCP standard nested format
-    /// - `"ui/resourceUri": "<uri>"` — Legacy flat key for older MCP hosts
-    /// - `"openai/outputTemplate": "<uri>"` — `ChatGPT` alias
+    /// - `"ui": { "resourceUri": "<uri>" }` -- MCP standard nested format
+    ///
+    /// Host-specific keys (e.g., `openai/outputTemplate`) are added by the
+    /// host-layer enrichment pipeline, not by this function.
     ///
     /// Used by `ToolInfo::with_ui()`, `TypedTool::metadata()`, and
     /// `ToolUIMetadata::to_metadata()` to ensure consistent `_meta` format.
     pub fn build_meta_map(uri: &str) -> serde_json::Map<String, serde_json::Value> {
-        let mut meta = serde_json::Map::with_capacity(3);
+        let mut meta = serde_json::Map::with_capacity(2);
         let mut ui_obj = serde_json::Map::with_capacity(1);
-        emit_resource_uri_keys(&mut meta, &mut ui_obj, uri);
+        emit_resource_uri_keys(&mut ui_obj, uri);
         meta.insert("ui".to_string(), serde_json::Value::Object(ui_obj));
+        insert_legacy_resource_uri_key(&mut meta, uri);
         meta
     }
 
@@ -421,7 +471,7 @@ impl ToolUIMetadata {
             // Fall back to legacy flat format: {"ui/resourceUri": "..."}
             .or_else(|| {
                 metadata
-                    .get("ui/resourceUri")
+                    .get(META_KEY_UI_RESOURCE_URI)
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
             });
@@ -431,7 +481,7 @@ impl ToolUIMetadata {
             .filter(|(k, _)| {
                 !matches!(
                     k.as_str(),
-                    "ui" | "ui/resourceUri" | "openai/outputTemplate"
+                    "ui" | META_KEY_UI_RESOURCE_URI | "openai/outputTemplate"
                 )
             })
             .map(|(k, v)| (k.clone(), v.clone()))
@@ -445,7 +495,8 @@ impl ToolUIMetadata {
 
     /// Convert to metadata `HashMap`
     ///
-    /// Emits nested `"ui"` format plus `"openai/outputTemplate"` for `ChatGPT`.
+    /// Emits standard nested `"ui"` format only. Host-specific keys are added
+    /// by the host-layer enrichment pipeline.
     pub fn to_metadata(&self) -> HashMap<String, serde_json::Value> {
         let mut map = self.additional.clone();
         if let Some(uri) = &self.ui_resource_uri {
@@ -522,7 +573,7 @@ mod tests {
         assert!(UIMimeType::HtmlMcp.is_mcp_apps());
         assert!(!UIMimeType::HtmlMcp.is_chatgpt());
         assert!(UIMimeType::HtmlMcpApp.is_chatgpt());
-        assert!(!UIMimeType::HtmlMcpApp.is_mcp_apps());
+        assert!(UIMimeType::HtmlMcpApp.is_mcp_apps());
     }
 
     #[test]
@@ -530,7 +581,7 @@ mod tests {
         let contents = UIResourceContents::html("ui://test", "<html>test</html>");
 
         assert_eq!(contents.uri, "ui://test");
-        assert_eq!(contents.mime_type, "text/html+mcp");
+        assert_eq!(contents.mime_type, "text/html;profile=mcp-app");
         assert_eq!(contents.text, Some("<html>test</html>".to_string()));
         assert_eq!(contents.blob, None);
     }
@@ -545,16 +596,16 @@ mod tests {
         // Must emit nested format
         let ui_obj = map.get("ui").expect("must have nested 'ui' key");
         assert_eq!(ui_obj["resourceUri"], "ui://test");
-        // Must emit openai/outputTemplate
-        assert_eq!(
-            map.get("openai/outputTemplate"),
-            Some(&serde_json::Value::String("ui://test".to_string()))
+        // Must NOT emit openai/outputTemplate in standard-only mode
+        assert!(
+            !map.contains_key("openai/outputTemplate"),
+            "must NOT emit openai/outputTemplate in standard-only mode"
         );
-        // Must emit legacy flat key for backward compatibility
+        // Must emit legacy flat key for host compatibility
         assert_eq!(
             map.get("ui/resourceUri"),
             Some(&serde_json::Value::String("ui://test".to_string())),
-            "must have flat ui/resourceUri key for legacy hosts"
+            "must emit legacy flat ui/resourceUri key for Claude Desktop/ChatGPT"
         );
     }
 
@@ -653,31 +704,36 @@ mod tests {
     }
 
     #[test]
-    fn test_build_meta_map_emits_all_three_keys() {
+    fn test_build_meta_map_emits_dual_keys() {
         let map = ToolUIMetadata::build_meta_map("ui://chess/board");
 
-        // 1. Nested ui.resourceUri
+        // 1. Nested ui.resourceUri (standard key)
         let ui_obj = map.get("ui").expect("must have nested 'ui' key");
         assert_eq!(ui_obj["resourceUri"], "ui://chess/board");
 
-        // 2. Legacy flat key
+        // 2. Legacy flat key (required by Claude Desktop and ChatGPT)
         assert_eq!(
             map.get("ui/resourceUri"),
-            Some(&serde_json::Value::String("ui://chess/board".to_string()))
+            Some(&serde_json::Value::String("ui://chess/board".to_string())),
+            "must emit legacy flat ui/resourceUri key for host compatibility"
         );
 
-        // 3. OpenAI alias
+        // 3. No OpenAI alias (added by host enrichment, not here)
+        assert!(
+            !map.contains_key("openai/outputTemplate"),
+            "must NOT emit openai/outputTemplate in standard-only mode"
+        );
+
+        // Exactly 2 top-level keys: "ui" and "ui/resourceUri"
         assert_eq!(
-            map.get("openai/outputTemplate"),
-            Some(&serde_json::Value::String("ui://chess/board".to_string()))
+            map.len(),
+            2,
+            "build_meta_map must produce exactly 2 keys (ui + ui/resourceUri)"
         );
-
-        // Exactly 3 top-level keys
-        assert_eq!(map.len(), 3, "build_meta_map must produce exactly 3 keys");
     }
 
     #[test]
-    fn test_deep_merge_preserves_flat_key() {
+    fn test_deep_merge_preserves_standard_key() {
         let mut map = ToolUIMetadata::build_meta_map("ui://x");
 
         // Deep merge with additional ui properties
@@ -685,11 +741,11 @@ mod tests {
         overlay.insert("ui".into(), json!({"prefersBorder": true}));
         super::deep_merge(&mut map, overlay);
 
-        // Flat key unaffected by deep merge on "ui" object
+        // Legacy flat key preserved after deep merge
         assert_eq!(
             map.get("ui/resourceUri"),
             Some(&serde_json::Value::String("ui://x".to_string())),
-            "flat key must survive deep merge"
+            "legacy flat key must survive deep merge"
         );
 
         // Nested ui.resourceUri still present
@@ -698,6 +754,36 @@ mod tests {
 
         // New property merged in
         assert_eq!(ui_obj["prefersBorder"], true);
+    }
+
+    #[test]
+    fn test_emit_resource_uri_keys_standard_only() {
+        let mut ui_obj = serde_json::Map::new();
+        emit_resource_uri_keys(&mut ui_obj, "ui://test/widget");
+
+        // Only inserts into ui_obj
+        assert_eq!(
+            ui_obj.get("resourceUri"),
+            Some(&serde_json::Value::String("ui://test/widget".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_from_metadata_reads_both_nested_and_legacy() {
+        // Nested format
+        let mut nested = HashMap::new();
+        nested.insert("ui".to_string(), json!({"resourceUri": "ui://a"}));
+        let meta = ToolUIMetadata::from_metadata(&nested);
+        assert_eq!(meta.ui_resource_uri, Some("ui://a".to_string()));
+
+        // Legacy flat format (backward compat for reading)
+        let mut legacy = HashMap::new();
+        legacy.insert(
+            "ui/resourceUri".to_string(),
+            serde_json::Value::String("ui://b".to_string()),
+        );
+        let meta = ToolUIMetadata::from_metadata(&legacy);
+        assert_eq!(meta.ui_resource_uri, Some("ui://b".to_string()));
     }
 
     #[test]

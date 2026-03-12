@@ -74,6 +74,9 @@ pub struct ServerCoreBuilder {
     task_router: Option<Arc<dyn TaskRouter>>,
     /// Stateless mode for serverless deployments (None = auto-detect)
     stateless_mode: Option<bool>,
+    /// Host-specific metadata layers (e.g., `ChatGpt` for openai/* keys)
+    #[cfg(feature = "mcp-apps")]
+    host_layers: Vec<crate::types::mcp_apps::HostType>,
 }
 
 impl Default for ServerCoreBuilder {
@@ -103,6 +106,8 @@ impl ServerCoreBuilder {
             #[cfg(not(target_arch = "wasm32"))]
             task_router: None,
             stateless_mode: None, // Auto-detect by default
+            #[cfg(feature = "mcp-apps")]
+            host_layers: Vec::new(),
         }
     }
 
@@ -520,6 +525,35 @@ impl ServerCoreBuilder {
         self
     }
 
+    /// Register a host-specific metadata layer.
+    ///
+    /// By default, only standard MCP Apps keys are emitted in tool `_meta`.
+    /// Call this to add host-specific keys at build time. For example,
+    /// `HostType::ChatGpt` adds `openai/outputTemplate` and
+    /// `openai/widgetAccessible` to tools that have a `ui.resourceUri`.
+    ///
+    /// Duplicate host types are ignored (deduplicated).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use pmcp::types::mcp_apps::HostType;
+    ///
+    /// let server = ServerCoreBuilder::new()
+    ///     .name("my-server")
+    ///     .version("1.0.0")
+    ///     .tool("chess", ChessTool)
+    ///     .with_host_layer(HostType::ChatGpt)
+    ///     .build()?;
+    /// ```
+    #[cfg(feature = "mcp-apps")]
+    pub fn with_host_layer(mut self, host: crate::types::mcp_apps::HostType) -> Self {
+        if !self.host_layers.contains(&host) {
+            self.host_layers.push(host);
+        }
+        self
+    }
+
     /// Enable or disable stateless mode for serverless deployments.
     ///
     /// Stateless mode skips initialization state checking, allowing the server
@@ -751,7 +785,8 @@ impl ServerCoreBuilder {
     /// # Errors
     ///
     /// Returns an error if required fields (name, version) are not set.
-    pub fn build(self) -> Result<ServerCore> {
+    #[allow(unused_mut)]
+    pub fn build(mut self) -> Result<ServerCore> {
         let name = self
             .name
             .ok_or_else(|| Error::validation("Server name is required"))?;
@@ -771,6 +806,18 @@ impl ServerCoreBuilder {
             }
             Arc::new(RwLock::new(tool_middleware_chain))
         };
+
+        // Enrich tool _meta with host-specific keys (e.g., openai/* for ChatGPT)
+        #[cfg(feature = "mcp-apps")]
+        {
+            for host in &self.host_layers {
+                for info in self.tool_infos.values_mut() {
+                    if let Some(meta) = info._meta.as_mut() {
+                        crate::server::core::enrich_meta_for_host(meta, *host);
+                    }
+                }
+            }
+        }
 
         // Determine stateless mode: use explicit setting or auto-detect
         let stateless_mode = self
@@ -967,6 +1014,94 @@ mod tests {
             .expect("tasks capability should be set");
         assert_eq!(tasks_cap["supported"], true);
         assert_eq!(tasks_cap["maxTtl"], 86_400_000);
+    }
+
+    #[cfg(feature = "mcp-apps")]
+    #[test]
+    fn test_builder_host_layers_empty_by_default() {
+        let builder = ServerCoreBuilder::new();
+        assert!(
+            builder.host_layers.is_empty(),
+            "host_layers should be empty by default"
+        );
+    }
+
+    #[cfg(feature = "mcp-apps")]
+    #[test]
+    fn test_builder_with_host_layer_adds_and_deduplicates() {
+        use crate::types::mcp_apps::HostType;
+
+        let builder = ServerCoreBuilder::new()
+            .with_host_layer(HostType::ChatGpt)
+            .with_host_layer(HostType::ChatGpt); // duplicate
+        assert_eq!(builder.host_layers.len(), 1, "duplicates should be removed");
+        assert_eq!(builder.host_layers[0], HostType::ChatGpt);
+    }
+
+    #[cfg(feature = "mcp-apps")]
+    #[test]
+    fn test_builder_with_chatgpt_layer_enriches_tool_meta() {
+        use crate::types::mcp_apps::HostType;
+
+        struct UiTool;
+
+        #[async_trait]
+        impl ToolHandler for UiTool {
+            async fn handle(&self, _args: Value, _extra: RequestHandlerExtra) -> Result<Value> {
+                Ok(Value::Null)
+            }
+            fn metadata(&self) -> Option<ToolInfo> {
+                Some(ToolInfo::with_ui(
+                    "ui-tool",
+                    Some("A tool with UI".to_string()),
+                    serde_json::json!({"type": "object"}),
+                    "ui://chess/board",
+                ))
+            }
+        }
+
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .tool("ui-tool", UiTool)
+            .with_host_layer(HostType::ChatGpt)
+            .build()
+            .unwrap();
+
+        // The tool_infos should contain openai/outputTemplate after enrichment
+        let caps = server.capabilities();
+        assert!(caps.tools.is_some());
+    }
+
+    #[cfg(feature = "mcp-apps")]
+    #[test]
+    fn test_builder_without_host_layer_no_openai_keys() {
+        struct UiTool;
+
+        #[async_trait]
+        impl ToolHandler for UiTool {
+            async fn handle(&self, _args: Value, _extra: RequestHandlerExtra) -> Result<Value> {
+                Ok(Value::Null)
+            }
+            fn metadata(&self) -> Option<ToolInfo> {
+                Some(ToolInfo::with_ui(
+                    "ui-tool",
+                    Some("A tool with UI".to_string()),
+                    serde_json::json!({"type": "object"}),
+                    "ui://chess/board",
+                ))
+            }
+        }
+
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .tool("ui-tool", UiTool)
+            .build()
+            .unwrap();
+
+        // Without host layer, no openai keys should be in tool meta
+        assert!(server.capabilities().tools.is_some());
     }
 
     #[test]

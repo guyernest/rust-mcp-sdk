@@ -137,6 +137,61 @@ pub struct ResourceReadResult {
     pub meta: Option<Value>,
 }
 
+/// Result of forwarding a raw JSON-RPC request, including MCP session headers.
+pub struct RawForwardResult {
+    pub body: String,
+    pub session_id: Option<String>,
+    pub protocol_version: Option<String>,
+}
+
+/// MCP session header name for session ID.
+pub(crate) const MCP_SESSION_ID: &str = "mcp-session-id";
+
+/// MCP session header name for protocol version.
+pub(crate) const MCP_PROTOCOL_VERSION: &str = "mcp-protocol-version";
+
+/// Extract a header value as an owned `String`, if present and valid UTF-8.
+fn extract_header(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .map(String::from)
+}
+
+/// Check that an HTTP response has a success status code.
+/// Returns the response on success, or an error with the response body.
+async fn check_response(response: reqwest::Response) -> Result<reqwest::Response> {
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        anyhow::bail!("MCP server returned {}: {}", status, text);
+    }
+    Ok(response)
+}
+
+/// Parse a JSON-RPC response, handling both plain JSON and SSE (text/event-stream).
+///
+/// Streamable HTTP MCP servers may return SSE with `event: message\ndata: {...}`
+/// instead of plain JSON. This function detects the content-type and parses accordingly.
+async fn parse_rpc_response(response: reqwest::Response) -> Result<JsonRpcResponse> {
+    let is_sse = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.contains("text/event-stream"));
+
+    if is_sse {
+        let body = response.text().await?;
+        let json_str = body
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .unwrap_or(&body);
+        Ok(serde_json::from_str(json_str)?)
+    } else {
+        Ok(response.json().await?)
+    }
+}
+
 /// MCP HTTP Proxy with session-once initialization
 ///
 /// The proxy initializes the MCP session exactly once on the first
@@ -163,6 +218,28 @@ impl McpProxy {
     /// Get the next request ID
     fn next_id(&self) -> u64 {
         self.request_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Build a base POST request with standard MCP headers.
+    fn mcp_post(&self) -> reqwest::RequestBuilder {
+        self.client
+            .post(&self.base_url)
+            .header("Accept", "application/json, text/event-stream")
+            .header("Content-Type", "application/json")
+    }
+
+    /// Attach the stored session ID header to a request builder, if available.
+    async fn attach_session_id(
+        &self,
+        mut builder: reqwest::RequestBuilder,
+    ) -> reqwest::RequestBuilder {
+        let guard = self.session.read().await;
+        if let Some(ref session) = *guard {
+            if let Some(ref sid) = session.session_id {
+                builder = builder.header(MCP_SESSION_ID, sid);
+            }
+        }
+        builder
     }
 
     /// Ensure the MCP session is initialized (double-checked locking).
@@ -204,30 +281,11 @@ impl McpProxy {
             id: self.next_id(),
         };
 
-        let url = self.base_url.clone();
-        let response = self
-            .client
-            .post(&url)
-            .header("Accept", "application/json, text/event-stream")
-            .header("Content-Type", "application/json")
-            .json(&request_body)
-            .send()
-            .await?;
+        let response = check_response(self.mcp_post().json(&request_body).send().await?).await?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
-            anyhow::bail!("MCP server returned {}: {}", status, text);
-        }
+        let session_id = extract_header(response.headers(), MCP_SESSION_ID);
 
-        // Capture Mcp-Session-Id header if present
-        let session_id = response
-            .headers()
-            .get("mcp-session-id")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-
-        let rpc_response: JsonRpcResponse = response.json().await?;
+        let rpc_response: JsonRpcResponse = parse_rpc_response(response).await?;
 
         if let Some(error) = rpc_response.error {
             anyhow::bail!("MCP initialize error: {}", error.message);
@@ -263,34 +321,10 @@ impl McpProxy {
             id: self.next_id(),
         };
 
-        let url = self.base_url.clone();
+        let req_builder = self.attach_session_id(self.mcp_post().json(&request)).await;
+        let response = check_response(req_builder.send().await?).await?;
 
-        let mut req_builder = self
-            .client
-            .post(&url)
-            .header("Accept", "application/json, text/event-stream")
-            .header("Content-Type", "application/json")
-            .json(&request);
-
-        // Forward session ID header if we have one
-        {
-            let guard = self.session.read().await;
-            if let Some(ref session) = *guard {
-                if let Some(ref sid) = session.session_id {
-                    req_builder = req_builder.header("Mcp-Session-Id", sid);
-                }
-            }
-        }
-
-        let response = req_builder.send().await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
-            anyhow::bail!("MCP server returned {}: {}", status, text);
-        }
-
-        let rpc_response: JsonRpcResponse = response.json().await?;
+        let rpc_response: JsonRpcResponse = parse_rpc_response(response).await?;
 
         if let Some(error) = rpc_response.error {
             anyhow::bail!("MCP error: {}", error.message);
@@ -308,25 +342,9 @@ impl McpProxy {
             method: method.to_string(),
         };
 
-        let url = self.base_url.clone();
-
-        let mut req_builder = self
-            .client
-            .post(&url)
-            .header("Accept", "application/json, text/event-stream")
-            .header("Content-Type", "application/json")
-            .json(&notification);
-
-        // Forward session ID header if we have one
-        {
-            let guard = self.session.read().await;
-            if let Some(ref session) = *guard {
-                if let Some(ref sid) = session.session_id {
-                    req_builder = req_builder.header("Mcp-Session-Id", sid);
-                }
-            }
-        }
-
+        let req_builder = self
+            .attach_session_id(self.mcp_post().json(&notification))
+            .await;
         let _ = req_builder.send().await;
         Ok(())
     }
@@ -443,5 +461,43 @@ impl McpProxy {
         let meta = result.get("_meta").cloned();
 
         Ok(ResourceReadResult { contents, meta })
+    }
+
+    /// Forward a raw JSON-RPC request body to the MCP server and return the
+    /// raw response body plus MCP session headers. Used by the WASM bridge
+    /// to avoid CORS issues — the browser fetches same-origin `/api/mcp`
+    /// which this method proxies.
+    ///
+    /// Unlike other proxy methods, this does NOT call `ensure_initialized()`
+    /// because the WASM client manages its own MCP session lifecycle
+    /// (initialize, notifications/initialized, etc.).
+    pub async fn forward_raw(
+        &self,
+        body: String,
+        session_id: Option<&str>,
+        protocol_version: Option<&str>,
+    ) -> Result<RawForwardResult> {
+        let mut req_builder = self.mcp_post().body(body);
+
+        // Forward MCP session headers from the WASM client
+        if let Some(sid) = session_id {
+            req_builder = req_builder.header(MCP_SESSION_ID, sid);
+        }
+        if let Some(ver) = protocol_version {
+            req_builder = req_builder.header(MCP_PROTOCOL_VERSION, ver);
+        }
+
+        let response = check_response(req_builder.send().await?).await?;
+
+        // Capture MCP session headers to forward back to the WASM client
+        let session_id = extract_header(response.headers(), MCP_SESSION_ID);
+        let protocol_version = extract_header(response.headers(), MCP_PROTOCOL_VERSION);
+
+        let body = response.text().await?;
+        Ok(RawForwardResult {
+            body,
+            session_id,
+            protocol_version,
+        })
     }
 }

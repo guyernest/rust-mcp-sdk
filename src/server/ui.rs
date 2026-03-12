@@ -62,7 +62,7 @@ impl UIResourceBuilder {
             uri: uri.into(),
             name: name.into(),
             description: None,
-            mime_type: UIMimeType::HtmlMcp,
+            mime_type: UIMimeType::HtmlMcpApp,
             content: None,
         }
     }
@@ -252,7 +252,7 @@ mod tests {
 
         assert_eq!(resource.uri, "ui://test");
         assert_eq!(resource.name, "Test Resource");
-        assert_eq!(resource.mime_type, "text/html+mcp");
+        assert_eq!(resource.mime_type, "text/html;profile=mcp-app");
         assert_eq!(resource.description, None);
     }
 
@@ -276,7 +276,7 @@ mod tests {
 
         assert_eq!(resource.uri, "ui://test");
         assert_eq!(contents.uri, "ui://test");
-        assert_eq!(contents.mime_type, "text/html+mcp");
+        assert_eq!(contents.mime_type, "text/html;profile=mcp-app");
         assert_eq!(
             contents.text,
             Some("<html><body>Hello</body></html>".to_string())
@@ -334,6 +334,7 @@ mod tests {
 
     #[test]
     fn test_mime_type_setting() {
+        #[allow(deprecated)]
         let resource = UIResourceBuilder::new("ui://test", "Test")
             .mime_type(UIMimeType::HtmlMcp)
             .html_template("<html></html>")

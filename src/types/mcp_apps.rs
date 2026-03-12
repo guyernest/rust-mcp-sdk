@@ -7,7 +7,7 @@
 //! multiple MCP host platforms:
 //!
 //! - **ChatGPT Apps** (OpenAI Apps SDK) - Uses `text/html+skybridge` and `window.openai`
-//! - **MCP Apps (SEP-1865)** - Standard MCP extension using `text/html+mcp`
+//! - **MCP Apps (SEP-1865)** - Standard MCP extension using `text/html;profile=mcp-app`
 //! - **MCP-UI** - Community standard supporting HTML, URLs, and Remote DOM
 //!
 //! # Architecture
@@ -248,9 +248,10 @@ impl WidgetCSP {
 pub struct WidgetMeta {
     /// UI resource URI for this widget.
     ///
-    /// When set, `to_meta_map()` emits the full triple-key format
-    /// (`ui.resourceUri`, `ui/resourceUri`, `openai/outputTemplate`),
-    /// eliminating the need for a separate `build_meta_map` call.
+    /// When set, `to_meta_map()` emits the standard `ui.resourceUri`
+    /// nested key, eliminating the need for a separate `build_meta_map` call.
+    /// Host-specific keys (e.g., `openai/outputTemplate`) are added by the
+    /// host-layer enrichment pipeline at server build time.
     #[serde(skip)]
     pub resource_uri: Option<String>,
 
@@ -294,13 +295,8 @@ impl WidgetMeta {
 
     /// Set the UI resource URI.
     ///
-    /// When set, `to_meta_map()` emits the full triple-key format matching
-    /// the official `registerAppTool` behavior:
-    /// - `ui.resourceUri` (nested)
-    /// - `ui/resourceUri` (legacy flat)
-    /// - `openai/outputTemplate` (ChatGPT alias)
-    ///
-    /// This eliminates the need for a separate `build_meta_map` + merge step.
+    /// When set, `to_meta_map()` emits the standard `ui.resourceUri` nested key.
+    /// Host-specific keys are added by the enrichment pipeline at build time.
     pub fn resource_uri(mut self, uri: impl Into<String>) -> Self {
         self.resource_uri = Some(uri.into());
         self
@@ -346,7 +342,7 @@ impl WidgetMeta {
         // Dual-emit: add nested ui object for MCP standard fields
         let mut ui_obj = serde_json::Map::new();
         if let Some(uri) = &self.resource_uri {
-            crate::types::ui::emit_resource_uri_keys(&mut map, &mut ui_obj, uri);
+            crate::types::ui::emit_resource_uri_keys(&mut ui_obj, uri);
         }
         if let Some(prefers) = self.prefers_border {
             ui_obj.insert(
@@ -368,6 +364,10 @@ impl WidgetMeta {
         }
         if !ui_obj.is_empty() {
             map.insert("ui".to_string(), serde_json::Value::Object(ui_obj));
+        }
+        // Legacy flat key for hosts that read "ui/resourceUri" directly
+        if let Some(uri) = &self.resource_uri {
+            crate::types::ui::insert_legacy_resource_uri_key(&mut map, uri);
         }
         map
     }
@@ -825,7 +825,7 @@ impl ExtendedUIMimeType {
 
     /// Check if this MIME type is for standard MCP Apps.
     pub fn is_mcp_apps(&self) -> bool {
-        matches!(self, Self::HtmlMcp)
+        matches!(self, Self::HtmlMcp | Self::HtmlMcpApp)
     }
 
     /// Check if this MIME type is for MCP-UI.
@@ -1029,7 +1029,8 @@ impl HostType {
     pub fn preferred_mime_type(&self) -> ExtendedUIMimeType {
         match self {
             Self::ChatGpt => ExtendedUIMimeType::HtmlSkybridge,
-            Self::Claude | Self::Generic => ExtendedUIMimeType::HtmlMcp,
+            // Official MCP Apps MIME: text/html;profile=mcp-app
+            Self::Claude | Self::Generic => ExtendedUIMimeType::HtmlMcpApp,
             Self::Nanobot | Self::McpJam => ExtendedUIMimeType::HtmlPlain,
         }
     }
@@ -1041,7 +1042,11 @@ impl HostType {
                 mime_type,
                 ExtendedUIMimeType::HtmlSkybridge | ExtendedUIMimeType::HtmlMcpApp
             ),
-            Self::Claude | Self::Generic => matches!(mime_type, ExtendedUIMimeType::HtmlMcp),
+            // Accept both legacy text/html+mcp and official text/html;profile=mcp-app
+            Self::Claude | Self::Generic => matches!(
+                mime_type,
+                ExtendedUIMimeType::HtmlMcp | ExtendedUIMimeType::HtmlMcpApp
+            ),
             Self::Nanobot | Self::McpJam => mime_type.is_mcp_ui(),
         }
     }
@@ -1197,8 +1202,8 @@ mod tests {
         assert!(ExtendedUIMimeType::HtmlSkybridge.is_chatgpt());
         assert!(ExtendedUIMimeType::HtmlMcpApp.is_chatgpt());
         assert!(ExtendedUIMimeType::HtmlMcp.is_mcp_apps());
+        assert!(ExtendedUIMimeType::HtmlMcpApp.is_mcp_apps());
         assert!(ExtendedUIMimeType::HtmlPlain.is_mcp_ui());
-        assert!(!ExtendedUIMimeType::HtmlMcpApp.is_mcp_apps());
     }
 
     #[test]
@@ -1232,7 +1237,7 @@ mod tests {
         );
         assert_eq!(
             HostType::Claude.preferred_mime_type(),
-            ExtendedUIMimeType::HtmlMcp
+            ExtendedUIMimeType::HtmlMcpApp
         );
         assert_eq!(
             HostType::Nanobot.preferred_mime_type(),
@@ -1538,24 +1543,27 @@ mod tests {
     }
 
     #[test]
-    fn test_widget_meta_resource_uri_emits_triple_keys() {
+    fn test_widget_meta_resource_uri_emits_standard_key_only() {
         let meta = WidgetMeta::new().resource_uri("ui://chess/board.html");
         let map = meta.to_meta_map();
 
-        // Nested ui.resourceUri
+        // Nested ui.resourceUri (standard key)
         let ui_obj = map.get("ui").expect("must have nested 'ui' key");
         assert_eq!(ui_obj["resourceUri"], "ui://chess/board.html");
 
-        // Legacy flat key
+        // Legacy flat key for host compatibility
         assert_eq!(
             map.get("ui/resourceUri"),
-            Some(&json!("ui://chess/board.html"))
+            Some(&serde_json::Value::String(
+                "ui://chess/board.html".to_string()
+            )),
+            "must emit legacy flat ui/resourceUri key for Claude Desktop/ChatGPT"
         );
 
-        // ChatGPT alias
-        assert_eq!(
-            map.get("openai/outputTemplate"),
-            Some(&json!("ui://chess/board.html"))
+        // No ChatGPT alias (standard-only)
+        assert!(
+            map.get("openai/outputTemplate").is_none(),
+            "must NOT emit openai/outputTemplate in standard-only mode"
         );
     }
 
@@ -1568,14 +1576,22 @@ mod tests {
         let map = meta.to_meta_map();
 
         let ui_obj = map.get("ui").expect("must have nested 'ui' key");
-        // All fields coexist in the same nested ui object
+        // All standard fields coexist in the nested ui object
         assert_eq!(ui_obj["resourceUri"], "ui://chess/board.html");
         assert_eq!(ui_obj["prefersBorder"], true);
         assert_eq!(ui_obj["domain"], "chess.com");
 
-        // Flat keys also present
-        assert!(map.get("ui/resourceUri").is_some());
-        assert!(map.get("openai/outputTemplate").is_some());
+        // Legacy flat key emitted for Claude Desktop compatibility
+        assert_eq!(
+            map.get("ui/resourceUri").and_then(|v| v.as_str()),
+            Some("ui://chess/board.html"),
+            "must emit legacy flat key for Claude Desktop"
+        );
+        assert!(
+            map.get("openai/outputTemplate").is_none(),
+            "must NOT emit openai/outputTemplate"
+        );
+        // openai/* display keys still emitted via serde (they are widget display fields)
         assert!(map.get("openai/widgetPrefersBorder").is_some());
         assert!(map.get("openai/widgetDomain").is_some());
     }

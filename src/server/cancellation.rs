@@ -106,7 +106,7 @@ impl std::fmt::Debug for CancellationManager {
         f.debug_struct("CancellationManager")
             .field(
                 "active_tokens",
-                &self.tokens.try_read().map(|t| t.len()).unwrap_or(0),
+                &self.tokens.try_read().map_or(0, |t| t.len()),
             )
             .finish()
     }

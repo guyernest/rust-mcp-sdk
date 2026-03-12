@@ -1,6 +1,10 @@
 //! API handlers for tool and resource operations
 
-use axum::{extract::State, http::StatusCode, response::Json};
+use axum::{
+    extract::State,
+    http::{header, HeaderMap, HeaderValue, StatusCode},
+    response::{IntoResponse, Json},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -21,24 +25,45 @@ pub struct ConfigResponse {
 }
 
 /// Get preview configuration
+///
+/// In standard mode, descriptor and invocation keys are empty (no ChatGPT
+/// extensions active). In chatgpt mode, the full set of ChatGPT-specific
+/// keys is returned so the browser-side AppBridge activates emulation.
 pub async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigResponse> {
+    use crate::server::PreviewMode;
+
+    let is_chatgpt = state.config.mode == PreviewMode::ChatGpt;
+
+    let descriptor_keys = if is_chatgpt {
+        // Mirror of pmcp::types::ui::CHATGPT_DESCRIPTOR_KEYS
+        vec![
+            "openai/outputTemplate".into(),
+            "openai/toolInvocation/invoking".into(),
+            "openai/toolInvocation/invoked".into(),
+            "openai/widgetAccessible".into(),
+        ]
+    } else {
+        // Standard MCP Apps: nested _meta.ui.resourceUri — top-level key is "ui"
+        vec!["ui".into()]
+    };
+
+    let invocation_keys = if is_chatgpt {
+        vec![
+            "openai/toolInvocation/invoking".into(),
+            "openai/toolInvocation/invoked".into(),
+        ]
+    } else {
+        vec![]
+    };
+
     Json(ConfigResponse {
         mcp_url: state.config.mcp_url.clone(),
         theme: state.config.theme.clone(),
         locale: state.config.locale.clone(),
         initial_tool: state.config.initial_tool.clone(),
         mode: state.config.mode.to_string(),
-        // Mirror of pmcp::types::ui::CHATGPT_DESCRIPTOR_KEYS
-        descriptor_keys: vec![
-            "openai/outputTemplate".into(),
-            "openai/toolInvocation/invoking".into(),
-            "openai/toolInvocation/invoked".into(),
-            "openai/widgetAccessible".into(),
-        ],
-        invocation_keys: vec![
-            "openai/toolInvocation/invoking".into(),
-            "openai/toolInvocation/invoked".into(),
-        ],
+        descriptor_keys,
+        invocation_keys,
     })
 }
 
@@ -50,12 +75,24 @@ pub struct ToolsResponse {
     pub error: Option<String>,
 }
 
-/// List available tools from the MCP server
+/// List available tools from the MCP server.
+///
+/// In ChatGPT mode, enriches each tool's `_meta` with ChatGPT-specific keys
+/// derived from the standard `ui.resourceUri` nested key. This ensures
+/// mcp-preview validates the full ChatGPT protocol even when the server
+/// emits standard-only metadata.
 pub async fn list_tools(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ToolsResponse>, (StatusCode, String)> {
     match state.proxy.list_tools().await {
-        Ok(tools) => Ok(Json(ToolsResponse { tools, error: None })),
+        Ok(mut tools) => {
+            if state.config.mode == crate::server::PreviewMode::ChatGpt {
+                for tool in &mut tools {
+                    enrich_meta_for_chatgpt(&mut tool.meta);
+                }
+            }
+            Ok(Json(ToolsResponse { tools, error: None }))
+        },
         Err(e) => Ok(Json(ToolsResponse {
             tools: vec![],
             error: Some(e.to_string()),
@@ -71,16 +108,23 @@ pub struct CallToolRequest {
     pub arguments: Value,
 }
 
-/// Call a tool on the MCP server
+/// Call a tool on the MCP server.
+///
+/// In ChatGPT mode, enriches the response `_meta` with invocation keys
+/// so the protocol tab validates correctly.
 pub async fn call_tool(
     State(state): State<Arc<AppState>>,
     Json(request): Json<CallToolRequest>,
 ) -> Result<Json<ToolCallResult>, (StatusCode, String)> {
-    let result = state
+    let mut result = state
         .proxy
         .call_tool(&request.name, request.arguments)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if state.config.mode == crate::server::PreviewMode::ChatGpt {
+        enrich_meta_for_chatgpt(&mut result.meta);
+    }
 
     Ok(Json(result))
 }
@@ -144,9 +188,13 @@ pub async fn list_resources(State(state): State<Arc<AppState>>) -> Json<Value> {
     match state.proxy.list_resources().await {
         Ok(resources) => {
             let ui_resources = resources.into_iter().filter(|r| {
-                r.mime_type
+                // Accept resources with HTML MIME types or ui:// URIs (MCP Apps convention)
+                let mime_match = r
+                    .mime_type
                     .as_deref()
-                    .is_some_and(|m| m.to_lowercase().contains("html"))
+                    .is_some_and(|m| m.to_lowercase().contains("html"));
+                let uri_match = r.uri.starts_with("ui://");
+                mime_match || uri_match
             });
             for r in ui_resources {
                 // Avoid duplicates: skip proxy resources whose URI matches a disk widget
@@ -170,6 +218,13 @@ pub async fn list_resources(State(state): State<Arc<AppState>>) -> Json<Value> {
                 return json_response(json!({ "resources": [], "error": e.to_string() }));
             }
         },
+    }
+
+    // In ChatGPT mode, enrich each resource's _meta with openai/* keys
+    if state.config.mode == crate::server::PreviewMode::ChatGpt {
+        for resource in &mut all_resources {
+            enrich_value_meta_for_chatgpt(resource);
+        }
     }
 
     json_response(json!({ "resources": all_resources }))
@@ -311,6 +366,119 @@ pub async fn reconnect(State(state): State<Arc<AppState>>) -> Json<Value> {
 pub async fn status(State(state): State<Arc<AppState>>) -> Json<Value> {
     let connected = state.proxy.is_connected().await;
     json_response(json!({ "connected": connected }))
+}
+
+/// Forward a raw JSON-RPC request to the MCP server.
+///
+/// Used by the WASM bridge client to avoid CORS issues: the browser
+/// fetches same-origin `/api/mcp` and this handler proxies to the
+/// actual MCP server. Forwards MCP session headers so the WASM client
+/// can maintain its own session.
+pub async fn forward_mcp(
+    State(state): State<Arc<AppState>>,
+    req_headers: HeaderMap,
+    body: String,
+) -> impl IntoResponse {
+    use crate::proxy::{MCP_PROTOCOL_VERSION, MCP_SESSION_ID};
+
+    // Extract MCP headers from the WASM client's request to forward upstream
+    let session_id = req_headers
+        .get(MCP_SESSION_ID)
+        .and_then(|v| v.to_str().ok());
+    let protocol_version = req_headers
+        .get(MCP_PROTOCOL_VERSION)
+        .and_then(|v| v.to_str().ok());
+
+    match state
+        .proxy
+        .forward_raw(body, session_id, protocol_version)
+        .await
+    {
+        Ok(result) => {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            if let Some(ref sid) = result.session_id {
+                if let Ok(val) = HeaderValue::from_str(sid) {
+                    headers.insert(MCP_SESSION_ID, val);
+                }
+            }
+            if let Some(ref ver) = result.protocol_version {
+                if let Ok(val) = HeaderValue::from_str(ver) {
+                    headers.insert(MCP_PROTOCOL_VERSION, val);
+                }
+            }
+            (StatusCode::OK, headers, result.body).into_response()
+        },
+        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+    }
+}
+
+/// Enrich a `_meta` value with ChatGPT-specific keys.
+///
+/// Derives `openai/outputTemplate` from `ui.resourceUri` (nested) or
+/// `ui/resourceUri` (flat legacy key). Also injects default invocation
+/// messages and `widgetAccessible`. Uses `entry().or_insert` so server-provided
+/// keys are never overwritten.
+fn enrich_meta_for_chatgpt(meta: &mut Option<Value>) {
+    let meta_obj = match meta {
+        Some(Value::Object(ref mut map)) => map,
+        _ => return,
+    };
+
+    // Extract resource URI from standard nested key or flat legacy key
+    let resource_uri = meta_obj
+        .get("ui")
+        .and_then(|ui| ui.get("resourceUri"))
+        .and_then(Value::as_str)
+        .or_else(|| meta_obj.get("ui/resourceUri").and_then(Value::as_str))
+        .map(String::from);
+
+    if let Some(uri) = resource_uri {
+        meta_obj
+            .entry("openai/outputTemplate")
+            .or_insert_with(|| Value::String(uri));
+
+        meta_obj
+            .entry("openai/widgetAccessible")
+            .or_insert_with(|| Value::Bool(true));
+
+        meta_obj
+            .entry("openai/toolInvocation/invoking")
+            .or_insert_with(|| Value::String("Running...".into()));
+
+        meta_obj
+            .entry("openai/toolInvocation/invoked")
+            .or_insert_with(|| Value::String("Done".into()));
+    }
+}
+
+/// Enrich a `serde_json::Value` `_meta` field for ChatGPT mode.
+///
+/// Works on loose `Value` objects (e.g., from resource JSON responses).
+/// Operates directly on the `_meta` map to avoid take/put-back overhead.
+fn enrich_value_meta_for_chatgpt(resource: &mut Value) {
+    if let Some(Value::Object(map)) = resource.get_mut("_meta") {
+        let resource_uri = map
+            .get("ui")
+            .and_then(|ui| ui.get("resourceUri"))
+            .and_then(Value::as_str)
+            .or_else(|| map.get("ui/resourceUri").and_then(Value::as_str))
+            .map(String::from);
+
+        if let Some(uri) = resource_uri {
+            map.entry("openai/outputTemplate")
+                .or_insert_with(|| Value::String(uri));
+            map.entry("openai/widgetAccessible")
+                .or_insert_with(|| Value::Bool(true));
+            map.entry("openai/toolInvocation/invoking")
+                .or_insert_with(|| Value::String("Running...".into()));
+            map.entry("openai/toolInvocation/invoked")
+                .or_insert_with(|| Value::String("Done".into()));
+        }
+    }
 }
 
 /// Wrap a `serde_json::Value` in an Axum `Json` response.

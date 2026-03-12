@@ -35,6 +35,8 @@ export type {
   WidgetEvents,
   McpNotification,
   McpBridge,
+  ChatGptExtensions,
+  McpBridgeExtensions,
   DisplayMode,
   DisplayModeOptions,
   FileUploadResult,

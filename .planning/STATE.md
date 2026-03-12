@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Completed 44-02-PLAN.md
-last_updated: "2026-03-08T23:00:10.904Z"
-last_activity: 2026-03-08 -- Completed 44-02 Protocol tab and ChatGPT emulation
+stopped_at: Completed 47-02-PLAN.md
+last_updated: "2026-03-12T00:39:23.931Z"
+last_activity: 2026-03-12 -- Added cargo pmcp test apps subcommand and App-capable hint in check
 progress:
-  total_phases: 18
-  completed_phases: 11
-  total_plans: 22
-  completed_plans: 21
+  total_phases: 21
+  completed_phases: 13
+  total_plans: 30
+  completed_plans: 28
   percent: 100
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** Phase 44 complete -- mcp-preview supports ChatGPT mode
+**Current focus:** Phase 47 -- Add MCP App support to mcp-tester
 
 ## Current Position
 
-Phase: 44 (improving-mcp-preview-to-support-chatgpt-version)
-Plan: 2 of 2 (44-02 complete -- phase done)
-Status: Completed 44-02 -- Protocol tab, ChatGPT postMessage emulation, widget reload fix
-Last activity: 2026-03-08 -- Completed 44-02 Protocol tab and ChatGPT emulation
+Phase: 47 (add-mcp-app-support-to-mcp-tester)
+Plan: 2 of 2 (47-02 complete)
+Status: Completed 47-02 -- cargo pmcp test apps subcommand and check hint
+Last activity: 2026-03-12 -- Added cargo pmcp test apps subcommand and App-capable hint in check
 
 Progress: [██████████] 100%
 
@@ -83,6 +83,13 @@ v1.6 decisions:
 - [Phase 43-02]: Post-process resources/list with clone and resources/read with deep_merge for _meta propagation from uri_to_tool_meta index
 - [Phase 44-01]: Hard-coded ChatGPT descriptor/invocation keys in api.rs (mcp-preview doesn't depend on pmcp crate); derive(Default) with #[default] for PreviewMode
 - [Phase 44-02]: AppBridge remains active in ChatGPT mode (postMessage is supplemental); skip iframe reload when same widget URI already loaded to preserve widget state
+- [Phase 45-01]: Standard-only metadata emission by default; build_meta_map returns only ui.resourceUri nested key; host layer enrichment at build time; build_uri_to_tool_meta indexes by standard key; ChatGptAdapter always emits openai/outputTemplate from URI
+- [Phase 45-02]: McpBridge refactored with extensions namespace; ChatGptExtensions isolates ChatGPT methods under extensions.chatgpt; Window intersection type for backward compat; buildChatGptExtensions() delegates to window.openai; legacy flat methods preserved with deprecation
+- [Phase 45-03]: mcp-preview enriches tool/resource _meta with ChatGPT keys in ChatGPT mode; enrich_meta_for_chatgpt derives openai/* from standard ui.resourceUri; pre-existing widget issues documented not fixed
+- [Phase 46-01]: Static lookup map for method name normalization in App class; McpApps bridge _onToolResult properties with getter/setter pairs; normalization in both widget-runtime and injected bridge scripts
+- [Phase 46-02]: mcp-preview deliverToolResult emits dual ui/toolResult (primary) + ui/notifications/tool-result (fallback); readiness signal replaces 300ms setTimeout with ui/notifications/initialized listener + 3s fallback
+- [Phase 47-01]: Resource URI cross-reference mismatch produces Warning not Failure; ChatGPT key absence is Warning; AppValidator applies strict mode internally
+- [Phase 47-02]: Apps subcommand follows check.rs pattern for UX consistency; resources listing failure non-fatal (empty vec) since cross-reference is advisory
 
 ### Roadmap Evolution
 
@@ -94,6 +101,9 @@ v1.6 decisions:
 - Phase 42 added: Add outputSchema top level support
 - Phase 43 added: ChatGPT MCP Apps alignment
 - Phase 44 added: Improving mcp-preview to support ChatGPT version
+- Phase 45 added: Extend MCP Apps Support to Claude Desktop
+- Phase 46 added: MCP Bridge Review and Fixes
+- Phase 47 added: Add MCP App support to mcp-tester
 
 ### Pending Todos
 
@@ -105,6 +115,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-08T23:25:00.000Z
-Stopped at: Completed 44-02-PLAN.md
-Resume: Phase 44 complete. Next: Phase 27 (Global Flag Infrastructure) or other planned work
+Last session: 2026-03-12T00:36:30.000Z
+Stopped at: Completed 47-02-PLAN.md
+Resume: Phase 47 complete -- all plans shipped

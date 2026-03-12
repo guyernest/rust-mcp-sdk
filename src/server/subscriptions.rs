@@ -30,7 +30,7 @@ impl std::fmt::Debug for SubscriptionManager {
         f.debug_struct("SubscriptionManager")
             .field(
                 "subscriptions",
-                &self.subscriptions.try_read().map(|s| s.len()).unwrap_or(0),
+                &self.subscriptions.try_read().map_or(0, |s| s.len()),
             )
             .finish()
     }

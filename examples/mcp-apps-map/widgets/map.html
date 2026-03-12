@@ -515,6 +515,45 @@
             }
         }
 
+        // Listen for host-pushed tool results (LLM-initiated tool calls).
+        // When the LLM calls a map tool, the host sends the structuredContent
+        // to the widget via postMessage. This is the primary data channel for
+        // non-widget-initiated tool calls (e.g., Claude Desktop, ChatGPT).
+        window.addEventListener('message', function(event) {
+            if (event.source !== window.parent) return;
+            var msg = event.data;
+            if (!msg || msg.jsonrpc !== '2.0') return;
+            if (msg.method === 'ui/notifications/tool-result') {
+                var data = msg.params && msg.params.structuredContent;
+                if (data) handleToolResult(data);
+            }
+        });
+
+        // Handle structured tool result pushed from host
+        function handleToolResult(data) {
+            // search_cities returns { count, cities, map_state }
+            if (data.cities && Array.isArray(data.cities)) {
+                // Normalize: nearby results have { city, distance_km } wrapper
+                cities = data.cities.map(function(item) {
+                    return item.city ? item.city : item;
+                });
+                renderCityList();
+                renderMarkers();
+                saveState();
+                return;
+            }
+            // get_city_details returns { found, city, suggested_view }
+            if (data.found && data.city) {
+                showCityDetail(data.city);
+                if (data.suggested_view) {
+                    map.setView(
+                        [data.suggested_view.center.lat, data.suggested_view.center.lon],
+                        data.suggested_view.zoom
+                    );
+                }
+            }
+        }
+
         init();
     </script>
 </body>

@@ -458,6 +458,64 @@
         });
 
         // =====================================================================
+        // Host-Pushed Tool Results
+        // =====================================================================
+        // Listen for host-pushed tool results (LLM-initiated tool calls).
+        // When the LLM calls a dataviz tool, the host sends the structuredContent
+        // to the widget via postMessage. This is the primary data channel for
+        // non-widget-initiated tool calls (e.g., Claude Desktop, ChatGPT).
+        window.addEventListener('message', function(event) {
+            if (event.source !== window.parent) return;
+            var msg = event.data;
+            if (!msg || msg.jsonrpc !== '2.0') return;
+            if (msg.method === 'ui/notifications/tool-result') {
+                var data = msg.params && msg.params.structuredContent;
+                if (data) handleToolResult(data);
+            }
+        });
+
+        function handleToolResult(data) {
+            // execute_query returns { columns, rows, row_count }
+            if (data.columns && data.rows) {
+                currentColumns = data.columns;
+                currentRows = data.rows;
+                sortColumn = -1;
+                sortAscending = true;
+                var chartType = document.getElementById('chartType').value;
+                renderChart(currentColumns, currentRows, chartType);
+                renderTable(currentColumns, currentRows);
+                document.getElementById('statusBar').textContent =
+                    (data.row_count || data.rows.length) + ' row(s) returned';
+                saveState();
+                return;
+            }
+            // list_tables returns { tables }
+            if (data.tables && Array.isArray(data.tables)) {
+                var container = document.getElementById('tableList');
+                container.innerHTML = data.tables.map(function(t) {
+                    return '<span class="table-tag" onclick="describeTable(\'' + escapeHtml(t) + '\')">' +
+                        escapeHtml(t) + '</span>';
+                }).join('');
+                return;
+            }
+            // describe_table returns { table_name, columns }
+            if (data.table_name && data.columns) {
+                var cols = ['name', 'type', 'nullable', 'primary_key'];
+                var rows = data.columns.map(function(c) {
+                    return [c.name, c.col_type || c.type, c.nullable, c.primary_key];
+                });
+                currentColumns = cols;
+                currentRows = rows;
+                sortColumn = -1;
+                sortAscending = true;
+                renderTable(cols, rows);
+                document.getElementById('statusBar').textContent =
+                    'Table ' + data.table_name + ': ' + data.columns.length + ' column(s)';
+                saveState();
+            }
+        }
+
+        // =====================================================================
         // Initialization
         // =====================================================================
         (async function init() {

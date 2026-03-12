@@ -99,11 +99,57 @@ pub trait ProtocolHandler {
     fn info(&self) -> &Implementation;
 }
 
+/// Enrich a tool's `_meta` with host-specific keys.
+///
+/// Reads the standard `ui.resourceUri` and adds host-specific aliases.
+/// For `ChatGpt`, this adds `openai/outputTemplate`, `openai/widgetAccessible`,
+/// and default `openai/toolInvocation/*` messages. Uses `entry().or_insert` so
+/// server-provided values are never overwritten.
+#[cfg(feature = "mcp-apps")]
+pub(crate) fn enrich_meta_for_host(
+    meta: &mut serde_json::Map<String, serde_json::Value>,
+    host: crate::types::mcp_apps::HostType,
+) {
+    use crate::types::mcp_apps::HostType;
+
+    if host == HostType::ChatGpt {
+        // Extract URI from standard nested key
+        if let Some(uri) = meta
+            .get("ui")
+            .and_then(|v| v.get("resourceUri"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+        {
+            meta.entry("openai/outputTemplate".to_string())
+                .or_insert_with(|| serde_json::Value::String(uri));
+            meta.entry("openai/widgetAccessible".to_string())
+                .or_insert(serde_json::Value::Bool(true));
+            meta.entry("openai/toolInvocation/invoking".to_string())
+                .or_insert_with(|| serde_json::Value::String("Running...".into()));
+            meta.entry("openai/toolInvocation/invoked".to_string())
+                .or_insert_with(|| serde_json::Value::String("Done".into()));
+        }
+    }
+    // Claude, McpUi, Generic: no enrichment needed (standard keys only)
+}
+
+/// Keys to propagate from tool `_meta` to resource `_meta` via the URI index.
+///
+/// Includes the standard `ui` nested object and all `openai/*` descriptor keys
+/// (which are only present if a host layer was applied). Display-only keys
+/// (`openai/widgetPrefersBorder`, `openai/widgetDescription`, `openai/widgetCSP`,
+/// `openai/widgetDomain`) are excluded to avoid breaking `ChatGPT`'s Templates.
+const RESOURCE_PROPAGATION_PREFIXES: &[&str] = &[
+    "openai/outputTemplate",
+    "openai/toolInvocation/",
+    "openai/widgetAccessible",
+];
+
 /// Build a URI-to-tool-meta index from registered tool metadata.
 ///
-/// Maps resource URIs (from `openai/outputTemplate`) to the linked tool's
-/// `openai/*` `_meta` keys. Used to auto-propagate widget descriptor keys
-/// onto `ResourceInfo` during `resources/list` and `resources/read`.
+/// Maps resource URIs (from `ui.resourceUri` nested key) to the linked tool's
+/// propagation-eligible `_meta` keys. Used to auto-propagate widget descriptor
+/// keys onto `ResourceInfo` during `resources/list` and `resources/read`.
 /// When multiple tools share the same URI, first tool registered wins.
 pub(crate) fn build_uri_to_tool_meta(
     tool_infos: &HashMap<String, ToolInfo>,
@@ -111,10 +157,27 @@ pub(crate) fn build_uri_to_tool_meta(
     let mut map = HashMap::new();
     for info in tool_infos.values() {
         if let Some(meta) = info.widget_meta() {
-            if let Some(serde_json::Value::String(uri)) = meta.get("openai/outputTemplate") {
-                // First tool registered wins (per user decision)
-                map.entry(uri.clone())
-                    .or_insert_with(|| crate::types::ui::filter_to_descriptor_keys(meta));
+            // Index by standard nested ui.resourceUri key
+            let uri = meta
+                .get("ui")
+                .and_then(|v| v.get("resourceUri"))
+                .and_then(|v| v.as_str());
+            if let Some(uri) = uri {
+                // Collect propagation-eligible keys
+                let propagated: serde_json::Map<String, serde_json::Value> = meta
+                    .iter()
+                    .filter(|(k, _)| {
+                        RESOURCE_PROPAGATION_PREFIXES
+                            .iter()
+                            .any(|prefix| k.starts_with(prefix))
+                    })
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                // First tool registered wins (per user decision).
+                // Skip empty propagation maps to avoid `_meta: {}` on resources/list.
+                if !propagated.is_empty() {
+                    map.entry(uri.to_string()).or_insert(propagated);
+                }
             }
         }
     }
@@ -145,7 +208,7 @@ pub struct ServerCore {
     tool_infos: HashMap<String, ToolInfo>,
 
     /// Cached URI-to-tool-meta index for widget resource `_meta` propagation.
-    /// Maps resource URIs to their linked tool's `openai/*` `_meta` keys.
+    /// Maps resource URIs (from `ui.resourceUri`) to propagation-eligible `_meta` keys.
     uri_to_tool_meta: HashMap<String, serde_json::Map<String, serde_json::Value>>,
 
     /// Cached prompt metadata (populated at registration, immutable)
@@ -263,13 +326,7 @@ impl ServerCore {
         *self.client_capabilities.write().await = Some(init_req.capabilities.clone());
         *self.initialized.write().await = true;
 
-        // Negotiate protocol version
-        let negotiated_version =
-            if crate::SUPPORTED_PROTOCOL_VERSIONS.contains(&init_req.protocol_version.as_str()) {
-                init_req.protocol_version.clone()
-            } else {
-                crate::DEFAULT_PROTOCOL_VERSION.to_string()
-            };
+        let negotiated_version = crate::negotiate_protocol_version(&init_req.protocol_version);
 
         Ok(InitializeResult {
             protocol_version: ProtocolVersion(negotiated_version),
@@ -1241,6 +1298,101 @@ mod tests {
                 assert!(e.message.contains("not initialized"));
             },
         }
+    }
+
+    #[test]
+    fn test_build_uri_to_tool_meta_indexes_by_standard_key() {
+        // Create a tool with openai/* keys (propagation-eligible)
+        let mut tool_infos = HashMap::new();
+        let mut info = ToolInfo::new(
+            "chess",
+            Some("Chess tool".to_string()),
+            serde_json::json!({"type": "object"}),
+        );
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "ui".to_string(),
+            serde_json::json!({"resourceUri": "ui://chess/board"}),
+        );
+        meta.insert(
+            "openai/outputTemplate".to_string(),
+            serde_json::json!("ui://chess/board"),
+        );
+        info._meta = Some(meta);
+        tool_infos.insert("chess".to_string(), info);
+
+        let index = build_uri_to_tool_meta(&tool_infos);
+        // Should index by the standard ui.resourceUri key
+        assert!(
+            index.contains_key("ui://chess/board"),
+            "must index by ui.resourceUri value"
+        );
+    }
+
+    #[cfg(feature = "mcp-apps")]
+    #[test]
+    fn test_build_uri_to_tool_meta_includes_openai_when_present() {
+        // Create a tool with both standard and openai keys (ChatGpt layer was applied)
+        let mut tool_infos = HashMap::new();
+        let mut info = ToolInfo::new(
+            "chess",
+            Some("Chess tool".to_string()),
+            serde_json::json!({"type": "object"}),
+        );
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "ui".to_string(),
+            serde_json::json!({"resourceUri": "ui://chess/board"}),
+        );
+        meta.insert(
+            "openai/outputTemplate".to_string(),
+            serde_json::json!("ui://chess/board"),
+        );
+        meta.insert(
+            "openai/widgetAccessible".to_string(),
+            serde_json::json!(true),
+        );
+        info._meta = Some(meta);
+        tool_infos.insert("chess".to_string(), info);
+
+        let index = build_uri_to_tool_meta(&tool_infos);
+        assert!(index.contains_key("ui://chess/board"));
+        let entry = &index["ui://chess/board"];
+        // Should include the openai keys in the indexed meta
+        assert!(
+            entry.contains_key("openai/outputTemplate"),
+            "must include openai/outputTemplate in index entry"
+        );
+        assert!(
+            entry.contains_key("openai/widgetAccessible"),
+            "must include openai/widgetAccessible in index entry"
+        );
+    }
+
+    #[test]
+    fn test_build_uri_to_tool_meta_skips_empty_propagation() {
+        // Create a tool with standard-only _meta (no openai/* keys to propagate)
+        let mut tool_infos = HashMap::new();
+        let mut info = ToolInfo::new(
+            "chess",
+            Some("Chess tool".to_string()),
+            serde_json::json!({"type": "object"}),
+        );
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "ui".to_string(),
+            serde_json::json!({"resourceUri": "ui://chess/board"}),
+        );
+        info._meta = Some(meta);
+        tool_infos.insert("chess".to_string(), info);
+
+        let index = build_uri_to_tool_meta(&tool_infos);
+        // Should NOT index when there are no propagation-eligible keys,
+        // to avoid producing _meta: {} on resources/list
+        assert!(
+            !index.contains_key("ui://chess/board"),
+            "must not index tools with no propagation-eligible keys"
+        );
     }
 
     #[test]

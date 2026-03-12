@@ -332,3 +332,48 @@ Plans:
 Plans:
 - [x] 44-01-PLAN.md — Rust-side mode plumbing: PreviewMode enum, CLI --mode flag, ConfigResponse with keys, ResourceInfo _meta, banner
 - [x] 44-02-PLAN.md — Browser-side Protocol tab, ChatGPT postMessage emulation, window.openai stub, mode badge
+
+### Phase 45: Extend MCP Apps Support to Claude Desktop
+
+**Goal:** Refactor SDK metadata emission to standard-only default with opt-in host layers, normalize widget-runtime bridge with extensions namespace, and update mcp-preview standard mode -- enabling Claude Desktop and all standard MCP Apps hosts to work without ChatGPT-specific keys
+**Requirements**: P45-STANDARD-DEFAULT, P45-HOST-LAYER, P45-URI-INDEX, P45-BRIDGE-NORMALIZE, P45-EXTENSIONS-NS, P45-PREVIEW-STANDARD, P45-EXAMPLES-VERIFY
+**Depends on:** Phase 44
+**Plans:** 3/3 plans complete
+
+Plans:
+- [ ] 45-01-PLAN.md — Refactor metadata emission to standard-only default + host layer enrichment pipeline on ServerCoreBuilder
+- [ ] 45-02-PLAN.md — Normalize widget-runtime bridge with extensions namespace for ChatGPT-specific APIs
+- [ ] 45-03-PLAN.md — Update mcp-preview standard mode default + verify examples render in both modes
+
+### Phase 46: MCP Bridge Review and Fixes
+
+**Goal:** Fix the mcpBridge data delivery pipeline so widgets receive structuredContent from tool responses across all MCP hosts, add method name normalization for cross-host compatibility, replace fragile setTimeout delivery with readiness signals, and add Bridge diagnostics tab to mcp-preview
+**Requirements**: BRIDGE-01, BRIDGE-02, BRIDGE-03, BRIDGE-04, BRIDGE-05, BRIDGE-06, BRIDGE-07, BRIDGE-08
+**Depends on:** Phase 45
+**Success Criteria** (what must be TRUE):
+  1. Widgets receive tool result data regardless of whether the host sends short-form (ui/toolResult) or long-form (ui/notifications/tool-result) method names
+  2. McpApps adapter bridge provides onToolResult callback API on mcpBridge
+  3. mcp-preview waits for widget readiness signal before delivering tool results (no setTimeout)
+  4. Bridge diagnostics tab in mcp-preview shows PostMessage traffic log, handshake trace, and current mode
+**Plans:** 2/3 plans executed
+
+Plans:
+- [ ] 46-01-PLAN.md — Fix bridge protocol method name mismatch in adapter.rs and App class normalization
+- [ ] 46-02-PLAN.md — Fix mcp-preview tool result delivery with readiness signal and dual method emission
+- [ ] 46-03-PLAN.md — Add Bridge diagnostics tab to mcp-preview and verify complete fix with real widget
+
+### Phase 47: Add MCP App support to mcp-tester
+
+**Goal:** Add MCP App protocol metadata validation to mcp-tester and cargo pmcp test, enabling CLI-based App compliance checks (metadata-only, no browser) with standard and host-specific modes
+**Requirements**: APP-VAL-01, APP-VAL-02, APP-VAL-03, APP-VAL-04, APP-VAL-05
+**Depends on:** Phase 46
+**Success Criteria** (what must be TRUE):
+  1. User can run `mcp-tester apps <url>` or `cargo pmcp test apps --url <url>` to validate App metadata on any MCP server
+  2. Validation checks ui.resourceUri, MIME types, resource cross-references, and optionally ChatGPT-specific keys
+  3. `cargo pmcp test check` shows hint when App-capable tools are detected
+  4. --strict promotes warnings to failures, --tool filters to single tool, --mode selects host-specific checks
+**Plans:** 2/2 plans complete
+
+Plans:
+- [ ] 47-01-PLAN.md -- AppValidator module, TestCategory::Apps, mcp-tester apps subcommand
+- [ ] 47-02-PLAN.md -- cargo pmcp test apps subcommand, check command App hint

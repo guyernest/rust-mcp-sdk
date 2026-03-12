@@ -72,6 +72,8 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::return_self_not_must_use)]
 #![allow(clippy::multiple_crate_versions)]
+// _meta is a protocol field name mandated by the MCP spec; suppress underscore lint
+#![allow(clippy::used_underscore_binding)]
 #![allow(clippy::result_large_err)]
 
 pub mod assets;
@@ -307,6 +309,18 @@ pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
     "2024-11-05",
     "2024-10-07",
 ];
+
+/// Negotiate the protocol version for the MCP session.
+///
+/// If the client's requested version is in [`SUPPORTED_PROTOCOL_VERSIONS`],
+/// echo it back. Otherwise fall back to [`DEFAULT_PROTOCOL_VERSION`].
+pub fn negotiate_protocol_version(client_version: &str) -> String {
+    if SUPPORTED_PROTOCOL_VERSIONS.contains(&client_version) {
+        client_version.to_string()
+    } else {
+        DEFAULT_PROTOCOL_VERSION.to_string()
+    }
+}
 
 /// Default request timeout in milliseconds
 ///

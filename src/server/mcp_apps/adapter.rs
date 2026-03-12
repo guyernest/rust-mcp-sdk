@@ -36,8 +36,13 @@ pub trait UIAdapter: Send + Sync {
     /// Inject platform-specific communication bridge into HTML content.
     ///
     /// For ChatGPT Apps, this wraps the HTML with `window.openai` bridge code.
-    /// For MCP Apps, this adds postMessage bridge code.
-    fn inject_bridge(&self, html: &str) -> String;
+    /// For MCP-UI, this adds postMessage bridge code.
+    /// For MCP Apps, returns HTML unchanged — widgets use the ext-apps SDK.
+    ///
+    /// Prefer calling `transform()` instead of this method directly.
+    fn inject_bridge(&self, html: &str) -> String {
+        html.to_string()
+    }
 
     /// Get CSP headers required by this platform.
     fn required_csp(&self) -> Option<WidgetCSP>;
@@ -52,7 +57,8 @@ pub struct TransformedResource {
     pub name: String,
     /// MIME type for this platform.
     pub mime_type: ExtendedUIMimeType,
-    /// Transformed HTML content with platform bridge injected.
+    /// Transformed HTML content (may include platform bridge, or raw HTML
+    /// for SDK-based platforms like MCP Apps).
     pub content: String,
     /// Platform-specific metadata.
     pub metadata: HashMap<String, Value>,
@@ -69,6 +75,159 @@ impl TransformedResource {
         } else {
             Some(std::mem::take(&mut self.metadata).into_iter().collect())
         }
+    }
+}
+
+/// Inline a lightweight `App` shim to replace CDN ext-apps SDK imports.
+///
+/// Hosts like Claude Desktop run widgets in Electron iframes that block
+/// external script loading from CDNs (esm.sh, jsdelivr, etc.). This replaces
+/// `import { App } from "https://esm.sh/@modelcontextprotocol/ext-apps..."` with
+/// a self-contained inline implementation of the `App` class (~1.5KB).
+///
+/// The shim implements the core ext-apps API surface used by widgets:
+/// - `new App(info, caps)` / `app.connect()` / `app.getHostContext()`
+/// - `app.ontoolresult` / `app.onhostcontextchanged` callbacks
+/// - `app.callServerTool({ name, arguments })`
+///
+/// For mcp-preview, a separate import-map redirect in `index.html` covers
+/// all CDN providers by redirecting to a local bundle with full SDK features.
+pub fn inline_ext_apps_shim(html: &str) -> std::borrow::Cow<'_, str> {
+    // Match CDN import patterns for @modelcontextprotocol/ext-apps.
+    // NOTE: keep in sync with cdnPattern regex in crates/mcp-preview/assets/index.html
+    const CDN_MARKERS: &[&str] = &[
+        "esm.sh/@modelcontextprotocol/ext-apps",
+        "cdn.jsdelivr.net/npm/@modelcontextprotocol/ext-apps",
+        "unpkg.com/@modelcontextprotocol/ext-apps",
+        "cdn.skypack.dev/@modelcontextprotocol/ext-apps",
+    ];
+
+    // Find the import statement: `import ... from "https://<CDN>/@modelcontextprotocol/ext-apps...";`
+    // We need to find the full line from `import` to the closing `;`
+    let Some((import_start, import_end)) = find_cdn_import(html, CDN_MARKERS) else {
+        return std::borrow::Cow::Borrowed(html);
+    };
+
+    let mut result = String::with_capacity(html.len() + EXT_APPS_SHIM.len());
+    result.push_str(&html[..import_start]);
+    result.push_str(EXT_APPS_SHIM);
+    result.push_str(&html[import_end..]);
+    std::borrow::Cow::Owned(result)
+}
+
+/// Find the byte range of a CDN import statement in HTML.
+///
+/// Looks for `import ... from "https://<CDN_MARKER>..."` and returns
+/// the (start, end) byte offsets spanning from `import` to the trailing `;`
+/// or end of line.
+fn find_cdn_import(html: &str, markers: &[&str]) -> Option<(usize, usize)> {
+    for marker in markers {
+        if let Some(marker_pos) = html.find(marker) {
+            // Walk backward to find the opening quote, then `from`, then `import`
+            let before = &html[..marker_pos];
+            // Find the quote that opens this URL (scanning backward)
+            let quote_pos = before.rfind(['"', '\'']);
+            if let Some(qp) = quote_pos {
+                // Bound backward search to the current line to avoid matching
+                // an unrelated `import` keyword from an earlier statement.
+                let line_start = html[..qp].rfind('\n').map_or(0, |i| i + 1);
+                let on_line = &html[line_start..qp];
+                if let Some(rel_offset) = on_line.rfind("import") {
+                    let import_kw = line_start + rel_offset;
+                    // Find end: closing quote + optional semicolon
+                    let after_marker = &html[marker_pos + marker.len()..];
+                    let close_quote = after_marker
+                        .find(['"', '\''])
+                        .map_or(html.len(), |i| marker_pos + marker.len() + i + 1);
+                    // Skip trailing semicolon and whitespace
+                    let mut end = close_quote;
+                    while end < html.len() && matches!(html.as_bytes()[end], b';' | b' ' | b'\t') {
+                        end += 1;
+                    }
+                    return Some((import_kw, end));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Minimal inline implementation of the `@modelcontextprotocol/ext-apps` `App` class.
+///
+/// Implements the JSON-RPC 2.0 postMessage protocol used by MCP hosts:
+/// - `ui/initialize` handshake with `hostContext` delivery
+/// - `ui/toolResult` and `ui/hostContextChanged` notifications
+/// - `tools/call` proxy for widget-initiated tool calls
+const EXT_APPS_SHIM: &str = r"
+// Inline ext-apps App shim (replaces CDN import for hosts that block external scripts)
+const _extPending = new Map();
+let _extNextId = 1;
+let _extApp = null;
+
+function _extSend(method, params) {
+  return new Promise((resolve, reject) => {
+    const id = _extNextId++;
+    const timer = setTimeout(() => { _extPending.delete(id); reject(new Error('Timeout')); }, 30000);
+    _extPending.set(id, { resolve, reject, timer });
+    window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
+  });
+}
+
+window.addEventListener('message', (e) => {
+  const d = e.data;
+  if (!d || d.jsonrpc !== '2.0') return;
+  if (typeof d.id === 'number' && !d.method) {
+    const p = _extPending.get(d.id);
+    if (p) { _extPending.delete(d.id); clearTimeout(p.timer); d.error ? p.reject(new Error(d.error.message)) : p.resolve(d.result); }
+    return;
+  }
+  if (!_extApp) return;
+  if (d.method === 'ui/toolResult' || d.method === 'ui/notifications/tool-result') {
+    if (_extApp.ontoolresult) _extApp.ontoolresult(d.params);
+  } else if (d.method === 'ui/hostContextChanged' || d.method === 'ui/notifications/host-context-changed') {
+    if (d.params) _extApp._hc = Object.assign(_extApp._hc || {}, d.params);
+    if (_extApp.onhostcontextchanged) _extApp.onhostcontextchanged(_extApp._hc);
+  }
+});
+
+class App {
+  constructor(info, caps) {
+    this._info = info || {};
+    this._caps = caps || {};
+    this._hc = undefined;
+    this.ontoolresult = null;
+    this.onhostcontextchanged = null;
+    this.onerror = null;
+    _extApp = this;
+  }
+  async connect() {
+    try {
+      const r = await Promise.race([
+        _extSend('ui/initialize', { appInfo: { name: this._info.name || 'widget', version: this._info.version || '1.0.0' }, appCapabilities: this._caps || {}, protocolVersion: '2026-01-26' }),
+        new Promise(resolve => setTimeout(() => resolve(null), 2000))
+      ]);
+      if (r && r.hostContext) this._hc = r.hostContext;
+    } catch (_) { /* host may not support ui/initialize */ }
+  }
+  getHostContext() { return this._hc; }
+  async callServerTool(params) { return _extSend('tools/call', params); }
+}
+";
+
+/// Inject a script block into HTML, preferring before `</head>`.
+///
+/// Tries three strategies in order:
+/// 1. Insert before `</head>` if present
+/// 2. Wrap in `<head>` and insert before `<body` if present
+/// 3. Prepend to the HTML
+fn inject_script_into_head(html: &str, script: &str) -> String {
+    if html.contains("</head>") {
+        html.replace("</head>", &format!("{script}</head>"))
+    } else if html.contains("<body") {
+        let pos = html.find("<body").unwrap_or(0);
+        format!("{}<head>{}</head>{}", &html[..pos], script, &html[pos..])
+    } else {
+        format!("{script}{html}")
     }
 }
 
@@ -109,10 +268,10 @@ impl UIAdapter for ChatGptAdapter {
     fn transform(&self, uri: &str, name: &str, html: &str) -> TransformedResource {
         let injected_html = self.inject_bridge(html);
 
-        // Only emit the 4 descriptor keys ChatGPT expects.
-        // Display keys (widgetCSP, widgetPrefersBorder, widgetDescription) cause
-        // ChatGPT's Templates section to fail, so they are deliberately excluded.
-        let metadata: HashMap<String, Value> = self
+        // Build ChatGPT descriptor metadata.
+        // Start with any descriptor keys from widget_meta (e.g., openai/widgetAccessible),
+        // then ensure openai/outputTemplate is always set from the resource URI.
+        let mut metadata: HashMap<String, Value> = self
             .widget_meta
             .as_ref()
             .map(|wm| {
@@ -121,6 +280,11 @@ impl UIAdapter for ChatGptAdapter {
                     .collect()
             })
             .unwrap_or_default();
+
+        // ChatGptAdapter always emits openai/outputTemplate from the resource URI
+        metadata
+            .entry("openai/outputTemplate".to_string())
+            .or_insert_with(|| Value::String(uri.to_string()));
 
         TransformedResource {
             uri: uri.to_string(),
@@ -169,7 +333,7 @@ impl UIAdapter for ChatGptAdapter {
         if (event.source !== window.parent) return;
         var msg = event.data;
         if (!msg || msg.jsonrpc !== '2.0') return;
-        if (msg.method === 'ui/notifications/tool-result') {
+        if (msg.method === 'ui/toolResult' || msg.method === 'ui/notifications/tool-result') {
             var data = msg.params && msg.params.structuredContent;
             if (data) {
                 _toolOutput = data;
@@ -343,21 +507,7 @@ impl UIAdapter for ChatGptAdapter {
 </script>
 "#;
 
-        // Inject bridge script before </head> or at the beginning
-        if html.contains("</head>") {
-            html.replace("</head>", &format!("{bridge_script}</head>"))
-        } else if html.contains("<body") {
-            // Find <body> tag and inject before it
-            let pos = html.find("<body").unwrap_or(0);
-            format!(
-                "{}<head>{}</head>{}",
-                &html[..pos],
-                bridge_script,
-                &html[pos..]
-            )
-        } else {
-            format!("{bridge_script}{html}")
-        }
+        inject_script_into_head(html, bridge_script)
     }
 
     fn required_csp(&self) -> Option<WidgetCSP> {
@@ -368,8 +518,8 @@ impl UIAdapter for ChatGptAdapter {
 
 /// Adapter for MCP Apps (SEP-1865 standard).
 ///
-/// Transforms resources to use `text/html+mcp` MIME type and
-/// injects postMessage bridge for MCP JSON-RPC communication.
+/// Transforms resources to use `text/html;profile=mcp-app` MIME type.
+/// Widgets use the `@modelcontextprotocol/ext-apps` SDK for host communication.
 #[derive(Debug, Clone, Default)]
 pub struct McpAppsAdapter {
     /// Optional Content Security Policy.
@@ -397,120 +547,25 @@ impl UIAdapter for McpAppsAdapter {
     }
 
     fn mime_type(&self) -> ExtendedUIMimeType {
-        ExtendedUIMimeType::HtmlMcp
+        // Use the official MCP Apps MIME type: text/html;profile=mcp-app
+        // (matches @modelcontextprotocol/ext-apps RESOURCE_MIME_TYPE)
+        ExtendedUIMimeType::HtmlMcpApp
     }
 
     fn transform(&self, uri: &str, name: &str, html: &str) -> TransformedResource {
-        let injected_html = self.inject_bridge(html);
-
+        // Inline the ext-apps SDK if the widget imports from a CDN, making it
+        // self-contained for hosts that block external script loading (Claude Desktop).
+        // See GUIDE.md for recommended patterns.
         TransformedResource {
             uri: uri.to_string(),
             name: name.to_string(),
             mime_type: self.mime_type(),
-            content: injected_html,
+            content: inline_ext_apps_shim(html).into_owned(),
             metadata: HashMap::new(),
         }
     }
 
-    fn inject_bridge(&self, html: &str) -> String {
-        // MCP Apps bridge script using postMessage
-        let bridge_script = r"
-<script>
-// MCP Apps Bridge - postMessage JSON-RPC
-(function() {
-    'use strict';
-
-    let requestId = 0;
-    const pendingRequests = new Map();
-
-    // Listen for messages from host
-    window.addEventListener('message', (event) => {
-        const msg = event.data;
-
-        if (msg.jsonrpc !== '2.0') return;
-
-        // Handle responses
-        if (msg.id !== undefined && pendingRequests.has(msg.id)) {
-            const { resolve, reject } = pendingRequests.get(msg.id);
-            pendingRequests.delete(msg.id);
-
-            if (msg.error) {
-                reject(new Error(msg.error.message || 'Unknown error'));
-            } else {
-                resolve(msg.result);
-            }
-        }
-
-        // Handle notifications
-        if (msg.method && !msg.id) {
-            window.dispatchEvent(new CustomEvent('mcpNotification', { detail: msg }));
-        }
-    });
-
-    // Send JSON-RPC request
-    function sendRequest(method, params) {
-        return new Promise((resolve, reject) => {
-            const id = ++requestId;
-            pendingRequests.set(id, { resolve, reject });
-
-            window.parent.postMessage({
-                jsonrpc: '2.0',
-                id,
-                method,
-                params
-            }, '*');
-
-            // Timeout after 30 seconds
-            setTimeout(() => {
-                if (pendingRequests.has(id)) {
-                    pendingRequests.delete(id);
-                    reject(new Error('Request timeout'));
-                }
-            }, 30000);
-        });
-    }
-
-    // Expose bridge API
-    window.mcpBridge = {
-        // Call an MCP tool
-        callTool: (name, args) => sendRequest('tools/call', { name, arguments: args }),
-
-        // Read a resource
-        readResource: (uri) => sendRequest('resources/read', { uri }),
-
-        // Get a prompt
-        getPrompt: (name, args) => sendRequest('prompts/get', { name, arguments: args }),
-
-        // Send notification
-        notify: (method, params) => {
-            window.parent.postMessage({
-                jsonrpc: '2.0',
-                method,
-                params
-            }, '*');
-        }
-    };
-
-    // Notify host that widget is initializing
-    window.mcpBridge.notify('ui/initialize', {});
-})();
-</script>
-";
-
-        if html.contains("</head>") {
-            html.replace("</head>", &format!("{bridge_script}</head>"))
-        } else if html.contains("<body") {
-            let pos = html.find("<body").unwrap_or(0);
-            format!(
-                "{}<head>{}</head>{}",
-                &html[..pos],
-                bridge_script,
-                &html[pos..]
-            )
-        } else {
-            format!("{bridge_script}{html}")
-        }
-    }
+    // inject_bridge: uses default (no-op) — widgets use ext-apps SDK.
 
     fn required_csp(&self) -> Option<WidgetCSP> {
         self.csp.clone()
@@ -603,10 +658,11 @@ impl UIAdapter for McpUiAdapter {
         if (msg.jsonrpc !== '2.0') return;
 
         if (msg.id !== undefined && pendingRequests.has(msg.id)) {
-            const { resolve, reject } = pendingRequests.get(msg.id);
+            const pending = pendingRequests.get(msg.id);
             pendingRequests.delete(msg.id);
-            if (msg.error) reject(new Error(msg.error.message));
-            else resolve(msg.result);
+            clearTimeout(pending.timer);
+            if (msg.error) pending.reject(new Error(msg.error.message));
+            else pending.resolve(msg.result);
         }
 
         if (msg.method && !msg.id) {
@@ -617,14 +673,14 @@ impl UIAdapter for McpUiAdapter {
     function sendRequest(method, params) {
         return new Promise((resolve, reject) => {
             const id = ++requestId;
-            pendingRequests.set(id, { resolve, reject });
-            window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
-            setTimeout(() => {
+            const timer = setTimeout(() => {
                 if (pendingRequests.has(id)) {
                     pendingRequests.delete(id);
                     reject(new Error('Request timeout'));
                 }
             }, 30000);
+            pendingRequests.set(id, { resolve, reject, timer });
+            window.parent.postMessage({ jsonrpc: '2.0', id, method, params }, '*');
         });
     }
 
@@ -657,11 +713,7 @@ impl UIAdapter for McpUiAdapter {
 </script>
 ";
 
-        if html.contains("</head>") {
-            html.replace("</head>", &format!("{bridge_script}</head>"))
-        } else {
-            format!("{bridge_script}{html}")
-        }
+        inject_script_into_head(html, bridge_script)
     }
 
     fn required_csp(&self) -> Option<WidgetCSP> {
@@ -692,9 +744,7 @@ mod tests {
 
         let transformed = adapter.transform("ui://test/widget.html", "Test Widget", html);
 
-        assert_eq!(transformed.mime_type, ExtendedUIMimeType::HtmlMcp);
-        assert!(transformed.content.contains("window.mcpBridge"));
-        assert!(transformed.content.contains("postMessage"));
+        assert_eq!(transformed.mime_type, ExtendedUIMimeType::HtmlMcpApp);
     }
 
     #[test]
@@ -718,9 +768,23 @@ mod tests {
         let html = "<html><body></body></html>";
         let transformed = adapter.transform("ui://test/widget.html", "Test Widget", html);
 
+        // Display keys should NOT be in metadata
         assert!(
-            transformed.metadata.is_empty(),
+            !transformed
+                .metadata
+                .contains_key("openai/widgetPrefersBorder"),
             "display keys should be stripped from ChatGPT metadata"
+        );
+        assert!(
+            !transformed
+                .metadata
+                .contains_key("openai/widgetDescription"),
+            "display keys should be stripped from ChatGPT metadata"
+        );
+        // openai/outputTemplate is always present (from URI)
+        assert!(
+            transformed.metadata.contains_key("openai/outputTemplate"),
+            "openai/outputTemplate must always be present in ChatGPT adapter"
         );
     }
 
@@ -764,5 +828,135 @@ mod tests {
         let result = adapter.inject_bridge(html);
 
         assert!(result.contains("window.mcpBridge"));
+    }
+
+    #[test]
+    fn test_chatgpt_bridge_listens_for_both_method_forms() {
+        let adapter = ChatGptAdapter::new();
+        let html = "<html><head></head><body></body></html>";
+        let result = adapter.inject_bridge(html);
+
+        // Must handle short-form (from AppBridge/ext-apps SDK)
+        assert!(
+            result.contains("ui/toolResult"),
+            "ChatGPT bridge must listen for short-form ui/toolResult"
+        );
+        // Must also handle long-form (from spec-compliant hosts)
+        assert!(
+            result.contains("ui/notifications/tool-result"),
+            "ChatGPT bridge must listen for long-form ui/notifications/tool-result"
+        );
+        // window.openai path must be preserved
+        assert!(
+            result.contains("window.openai"),
+            "ChatGPT bridge must preserve window.openai path"
+        );
+    }
+
+    #[test]
+    fn test_mcp_apps_no_bridge_injection() {
+        let adapter = McpAppsAdapter::new();
+        let html = "<html><head></head><body>My Widget</body></html>";
+        let result = adapter.inject_bridge(html);
+
+        // McpAppsAdapter no longer injects a bridge — widget developers use
+        // the @modelcontextprotocol/ext-apps SDK directly.
+        assert_eq!(result, html, "McpAppsAdapter must return HTML unchanged");
+    }
+
+    #[test]
+    fn test_mcp_apps_transform_preserves_html_without_cdn() {
+        let adapter = McpAppsAdapter::new();
+        let html = "<html><head></head><body>My Widget</body></html>";
+        let transformed = adapter.transform("ui://test/widget.html", "Test", html);
+
+        assert_eq!(
+            transformed.content, html,
+            "McpAppsAdapter.transform must serve HTML as-is when no CDN imports"
+        );
+        assert_eq!(transformed.mime_type, ExtendedUIMimeType::HtmlMcpApp);
+    }
+
+    #[test]
+    fn test_inline_shim_replaces_esm_import() {
+        let html = r#"<script type="module">
+import { App } from "https://esm.sh/@modelcontextprotocol/ext-apps@1.2.2";
+const app = new App({ name: "test" });
+</script>"#;
+        let fixed = inline_ext_apps_shim(html);
+        assert!(
+            !fixed.contains("esm.sh"),
+            "CDN import should be removed: {fixed}"
+        );
+        assert!(
+            fixed.contains("class App"),
+            "inline shim should define App class"
+        );
+        assert!(
+            fixed.contains("ui/initialize"),
+            "inline shim should implement ui/initialize protocol"
+        );
+        assert!(
+            fixed.contains("const app = new App"),
+            "widget code after import should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_inline_shim_replaces_jsdelivr_import() {
+        let html = r#"import { App } from "https://cdn.jsdelivr.net/npm/@modelcontextprotocol/ext-apps@1.2.2/+esm";
+const app = new App({ name: "test" });"#;
+        let fixed = inline_ext_apps_shim(html);
+        assert!(
+            !fixed.contains("jsdelivr"),
+            "jsdelivr import should be removed"
+        );
+        assert!(fixed.contains("class App"), "should inline the shim");
+    }
+
+    #[test]
+    fn test_inline_shim_no_match() {
+        let html = "<html><body>No imports here</body></html>";
+        let fixed = inline_ext_apps_shim(html);
+        assert_eq!(&*fixed, html, "should not modify HTML without CDN imports");
+    }
+
+    #[test]
+    fn test_inline_shim_preserves_non_ext_apps_imports() {
+        let html = r#"<script type="module">
+import { Chart } from "https://esm.sh/chart.js@4.4.0";
+import { App } from "https://esm.sh/@modelcontextprotocol/ext-apps@1.2.2";
+const app = new App({ name: "test" });
+</script>"#;
+        let fixed = inline_ext_apps_shim(html);
+        assert!(
+            fixed.contains("chart.js"),
+            "non-ext-apps imports should be preserved"
+        );
+        assert!(
+            !fixed.contains("esm.sh/@modelcontextprotocol"),
+            "ext-apps import should be replaced"
+        );
+    }
+
+    #[test]
+    fn test_mcp_apps_transform_inlines_shim() {
+        let adapter = McpAppsAdapter::new();
+        let html = r#"<html><head></head><body>
+<script type="module">
+import { App } from "https://esm.sh/@modelcontextprotocol/ext-apps@1.2.2";
+const app = new App({ name: "test" });
+await app.connect();
+</script>
+</body></html>"#;
+        let transformed = adapter.transform("ui://test/widget.html", "Test", html);
+        assert!(
+            transformed.content.contains("class App"),
+            "McpAppsAdapter.transform should inline the App shim"
+        );
+        assert!(
+            transformed.content.contains("await app.connect()"),
+            "widget code should be preserved"
+        );
     }
 }

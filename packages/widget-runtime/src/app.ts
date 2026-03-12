@@ -6,7 +6,7 @@
  */
 
 import { PostMessageTransport } from './transport';
-import type { CallToolParams, CallToolResult, HostContext, AppOptions } from './types';
+import type { CallToolParams, CallToolResult, HostContext, AppOptions, AppCapabilities } from './types';
 
 // =============================================================================
 // Lifecycle callback types
@@ -44,9 +44,15 @@ type TeardownCallback = () => void;
 export class App {
   private _name: string;
   private _version: string;
+  private _capabilities: AppCapabilities;
   private _transport: PostMessageTransport | null = null;
   private _hostContext: HostContext | undefined = undefined;
   private _connected = false;
+
+  /**
+   * MCP Apps protocol version aligned with @modelcontextprotocol/ext-apps@1.2.2.
+   */
+  static readonly PROTOCOL_VERSION = '2026-01-26';
 
   // Lifecycle callbacks (setter-based, matching MCP Apps spec)
   ontoolinput: ToolInputCallback | null = null;
@@ -58,6 +64,7 @@ export class App {
   constructor(options: AppOptions) {
     this._name = options.name;
     this._version = options.version;
+    this._capabilities = options.capabilities ?? {};
   }
 
   /**
@@ -90,18 +97,24 @@ export class App {
       this._handleNotification(method, params);
     });
 
-    // Attempt initialization handshake with a 2s timeout
+    // Attempt initialization handshake with a 2s timeout.
+    // Params aligned with @modelcontextprotocol/ext-apps@1.2.2 protocol.
     try {
       const result = await Promise.race([
         this._transport.send('ui/initialize', {
-          name: this._name,
-          version: this._version,
+          appInfo: { name: this._name, version: this._version },
+          appCapabilities: this._capabilities,
+          protocolVersion: App.PROTOCOL_VERSION,
         }),
         new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
       ]);
 
       if (result && typeof result === 'object') {
-        this._hostContext = result as HostContext;
+        // The MCP Apps protocol wraps hostContext inside an envelope:
+        // { protocolVersion, hostInfo, hostCapabilities, hostContext }
+        // Unwrap if present; fall back to treating the whole result as context.
+        const r = result as Record<string, unknown>;
+        this._hostContext = (r.hostContext ?? result) as HostContext;
       } else {
         console.warn(
           '[App] Host did not respond to ui/initialize within 2s. ' +
@@ -238,6 +251,27 @@ export class App {
   // Private
   // ===========================================================================
 
+  /**
+   * Normalize long-form MCP spec notification method names to the short
+   * form used internally by the App class switch statement.
+   *
+   * Long form: `ui/notifications/tool-result`
+   * Short form: `ui/toolResult`
+   *
+   * IMPORTANT: Keep in sync with src/server/mcp_apps/adapter.rs (ALIASES in McpApps bridge)
+   */
+  private static readonly _METHOD_ALIASES: Record<string, string> = {
+    'ui/notifications/tool-result': 'ui/toolResult',
+    'ui/notifications/tool-input': 'ui/toolInput',
+    'ui/notifications/tool-input-partial': 'ui/toolInputPartial',
+    'ui/notifications/tool-cancelled': 'ui/toolCancelled',
+    'ui/notifications/host-context-changed': 'ui/hostContextChanged',
+  };
+
+  private _normalizeMethod(method: string): string {
+    return App._METHOD_ALIASES[method] ?? method;
+  }
+
   private _resolveTargetOrigin(): string {
     // srcdoc iframes have origin "null" and cannot target a specific origin.
     // Detect this case and use "*" to allow communication with the host.
@@ -260,7 +294,8 @@ export class App {
   }
 
   private _handleNotification(method: string, params?: Record<string, unknown>): void {
-    switch (method) {
+    const normalized = this._normalizeMethod(method);
+    switch (normalized) {
       case 'ui/toolInput':
         if (this.ontoolinput && params) {
           this.ontoolinput(params);

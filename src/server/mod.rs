@@ -845,8 +845,11 @@ impl Server {
                 *self.client_capabilities.write().await = Some(init_req.capabilities.clone());
                 *self.initialized.write().await = true;
 
+                let negotiated_version =
+                    crate::negotiate_protocol_version(&init_req.protocol_version);
+
                 let result = InitializeResult {
-                    protocol_version: ProtocolVersion("2024-11-05".to_string()),
+                    protocol_version: ProtocolVersion(negotiated_version),
                     capabilities: self.capabilities.clone(),
                     server_info: self.info.clone(),
                     instructions: None,
@@ -1630,6 +1633,9 @@ pub struct ServerBuilder {
     /// HTTP middleware chain for `StreamableHttpServer`
     #[cfg(feature = "streamable-http")]
     http_middleware: Option<Arc<http_middleware::ServerHttpMiddlewareChain>>,
+    /// Host layers for MCP Apps metadata enrichment (e.g., `ChatGPT`)
+    #[cfg(feature = "mcp-apps")]
+    host_layers: Vec<crate::types::mcp_apps::HostType>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1687,6 +1693,8 @@ impl ServerBuilder {
             tool_middlewares: Vec::new(),
             #[cfg(feature = "streamable-http")]
             http_middleware: None,
+            #[cfg(feature = "mcp-apps")]
+            host_layers: Vec::new(),
         }
     }
 
@@ -2976,6 +2984,22 @@ impl ServerBuilder {
         self
     }
 
+    /// Add a host layer for MCP Apps metadata enrichment.
+    ///
+    /// Host layers enrich tool `_meta` at build time with host-specific keys.
+    /// For example, `HostType::ChatGpt` adds `openai/outputTemplate` and
+    /// `openai/widgetAccessible` derived from the standard `ui.resourceUri`.
+    ///
+    /// This is opt-in — standard MCP Apps hosts (Claude Desktop, etc.) work
+    /// without any host layer. Duplicates are ignored.
+    #[cfg(feature = "mcp-apps")]
+    pub fn with_host_layer(mut self, host: crate::types::mcp_apps::HostType) -> Self {
+        if !self.host_layers.contains(&host) {
+            self.host_layers.push(host);
+        }
+        self
+    }
+
     /// Build the server.
     ///
     /// Constructs the final Server instance from the configured builder.
@@ -3040,6 +3064,20 @@ impl ServerBuilder {
                 (name.clone(), info)
             })
             .collect();
+
+        // Apply host layer enrichment to tool _meta (e.g., ChatGPT openai/* keys)
+        #[cfg(feature = "mcp-apps")]
+        let tool_infos = {
+            let mut infos = tool_infos;
+            for host in &self.host_layers {
+                for info in infos.values_mut() {
+                    if let Some(meta) = info._meta.as_mut() {
+                        core::enrich_meta_for_host(meta, *host);
+                    }
+                }
+            }
+            infos
+        };
 
         // Build URI-to-tool-meta index for widget resource _meta propagation
         let uri_to_tool_meta = core::build_uri_to_tool_meta(&tool_infos);

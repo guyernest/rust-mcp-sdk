@@ -17,6 +17,7 @@ import type {
   NotifyLevel,
   WidgetEvents,
   McpBridge,
+  ChatGptExtensions,
   DisplayMode,
   FileUploadResult,
   SafeArea,
@@ -130,25 +131,30 @@ export class WidgetRuntime {
 
   private _detectCapabilities(): HostCapabilities {
     const bridge = this._getBridge();
+    const chatgpt = this._getChatGptExtensions();
     return {
       callTool: !!bridge?.callTool,
       readResource: !!bridge?.readResource,
       getPrompt: !!bridge?.getPrompt,
-      state: !!bridge?.getState && !!bridge?.setState,
-      sendMessage: !!bridge?.sendMessage,
+      state: !!chatgpt?.getState && !!chatgpt?.setState,
+      sendMessage: !!chatgpt?.sendMessage,
       openExternal: !!bridge?.openExternal,
       notify: !!bridge?.notify,
       sendIntent: !!bridge?.sendIntent,
-      uploadFile: !!bridge?.uploadFile,
-      downloadFile: !!bridge?.getFileDownloadUrl,
-      displayModes: !!bridge?.requestDisplayMode,
-      intrinsicHeight: !!bridge?.notifyIntrinsicHeight,
+      uploadFile: !!chatgpt?.uploadFile,
+      downloadFile: !!chatgpt?.getFileDownloadUrl,
+      displayModes: !!chatgpt?.requestDisplayMode,
+      intrinsicHeight: !!chatgpt?.notifyIntrinsicHeight,
     };
   }
 
   private _getBridge(): McpBridge | undefined {
     if (typeof window === 'undefined') return undefined;
     return window.mcpBridge;
+  }
+
+  private _getChatGptExtensions(): ChatGptExtensions | undefined {
+    return this._getBridge()?.extensions?.chatgpt;
   }
 
   private _markReady(): void {
@@ -380,9 +386,9 @@ export class WidgetRuntime {
    * ```
    */
   getState(): WidgetState {
-    const bridge = this._getBridge();
-    if (bridge?.getState) {
-      return bridge.getState();
+    const chatgpt = this._getChatGptExtensions();
+    if (chatgpt?.getState) {
+      return chatgpt.getState();
     }
     return this._state;
   }
@@ -400,12 +406,12 @@ export class WidgetRuntime {
    * ```
    */
   setState(state: Partial<WidgetState>): void {
-    const bridge = this._getBridge();
+    const chatgpt = this._getChatGptExtensions();
     const newState = { ...this._state, ...state };
     this._state = newState;
 
-    if (bridge?.setState) {
-      bridge.setState(newState);
+    if (chatgpt?.setState) {
+      chatgpt.setState(newState);
     }
   }
 
@@ -426,9 +432,9 @@ export class WidgetRuntime {
    * ```
    */
   sendMessage(message: string): void {
-    const bridge = this._getBridge();
-    if (bridge?.sendMessage) {
-      bridge.sendMessage(message);
+    const chatgpt = this._getChatGptExtensions();
+    if (chatgpt?.sendMessage) {
+      chatgpt.sendMessage(message);
     } else {
       console.warn('sendMessage not supported on this host');
     }
@@ -528,8 +534,8 @@ export class WidgetRuntime {
    * ```
    */
   getToolInput(): Record<string, unknown> {
-    const bridge = this._getBridge();
-    return bridge?.toolInput ?? window.openai?.toolInput ?? {};
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.toolInput ?? window.openai?.toolInput ?? {};
   }
 
   /**
@@ -546,8 +552,8 @@ export class WidgetRuntime {
    * ```
    */
   getToolOutput(): unknown {
-    const bridge = this._getBridge();
-    return bridge?.toolOutput ?? window.openai?.toolOutput;
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.toolOutput ?? window.openai?.toolOutput;
   }
 
   /**
@@ -566,8 +572,8 @@ export class WidgetRuntime {
    * ```
    */
   getToolResponseMetadata(): Record<string, unknown> {
-    const bridge = this._getBridge();
-    return bridge?.toolResponseMetadata ?? window.openai?.toolResponseMetadata ?? {};
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.toolResponseMetadata ?? window.openai?.toolResponseMetadata ?? {};
   }
 
   // ===========================================================================
@@ -595,10 +601,10 @@ export class WidgetRuntime {
    * ```
    */
   async uploadFile(file: File): Promise<FileUploadResult | null> {
-    const bridge = this._getBridge();
-    if (bridge?.uploadFile) {
+    const chatgpt = this._getChatGptExtensions();
+    if (chatgpt?.uploadFile) {
       try {
-        return await bridge.uploadFile(file);
+        return await chatgpt.uploadFile(file);
       } catch (error) {
         console.error('Failed to upload file:', error);
         return null;
@@ -634,10 +640,10 @@ export class WidgetRuntime {
    * ```
    */
   async getFileDownloadUrl(fileId: string): Promise<string | null> {
-    const bridge = this._getBridge();
-    if (bridge?.getFileDownloadUrl) {
+    const chatgpt = this._getChatGptExtensions();
+    if (chatgpt?.getFileDownloadUrl) {
       try {
-        const result = await bridge.getFileDownloadUrl(fileId);
+        const result = await chatgpt.getFileDownloadUrl(fileId);
         return result.downloadUrl;
       } catch (error) {
         console.error('Failed to get file download URL:', error);
@@ -679,10 +685,10 @@ export class WidgetRuntime {
    * ```
    */
   async requestDisplayMode(mode: DisplayMode): Promise<boolean> {
-    const bridge = this._getBridge();
-    if (bridge?.requestDisplayMode) {
+    const chatgpt = this._getChatGptExtensions();
+    if (chatgpt?.requestDisplayMode) {
       try {
-        await bridge.requestDisplayMode(mode);
+        await chatgpt.requestDisplayMode(mode);
         return true;
       } catch (error) {
         console.error('Failed to request display mode:', error);
@@ -714,9 +720,9 @@ export class WidgetRuntime {
    * ```
    */
   requestClose(): void {
-    const bridge = this._getBridge();
-    if (bridge?.requestClose) {
-      bridge.requestClose();
+    const chatgpt = this._getChatGptExtensions();
+    if (chatgpt?.requestClose) {
+      chatgpt.requestClose();
     } else if (window.openai?.requestClose) {
       window.openai.requestClose();
     } else {
@@ -739,9 +745,9 @@ export class WidgetRuntime {
    * ```
    */
   notifyIntrinsicHeight(height: number): void {
-    const bridge = this._getBridge();
-    if (bridge?.notifyIntrinsicHeight) {
-      bridge.notifyIntrinsicHeight(height);
+    const chatgpt = this._getChatGptExtensions();
+    if (chatgpt?.notifyIntrinsicHeight) {
+      chatgpt.notifyIntrinsicHeight(height);
     } else if (window.openai?.notifyIntrinsicHeight) {
       window.openai.notifyIntrinsicHeight(height);
     }
@@ -761,9 +767,9 @@ export class WidgetRuntime {
    * ```
    */
   setOpenInAppUrl(href: string): void {
-    const bridge = this._getBridge();
-    if (bridge?.setOpenInAppUrl) {
-      bridge.setOpenInAppUrl(href);
+    const chatgpt = this._getChatGptExtensions();
+    if (chatgpt?.setOpenInAppUrl) {
+      chatgpt.setOpenInAppUrl(href);
     } else if (window.openai?.setOpenInAppUrl) {
       window.openai.setOpenInAppUrl({ href });
     }
@@ -786,8 +792,8 @@ export class WidgetRuntime {
    * ```
    */
   get theme(): Theme {
-    const bridge = this._getBridge();
-    return bridge?.theme ?? window.openai?.theme ?? 'light';
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.theme ?? window.openai?.theme ?? 'light';
   }
 
   /**
@@ -802,8 +808,8 @@ export class WidgetRuntime {
    * ```
    */
   get locale(): string {
-    const bridge = this._getBridge();
-    return bridge?.locale ?? window.openai?.locale ?? 'en-US';
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.locale ?? window.openai?.locale ?? 'en-US';
   }
 
   /**
@@ -812,8 +818,8 @@ export class WidgetRuntime {
    * @returns 'inline', 'pip', or 'fullscreen'
    */
   get currentDisplayMode(): DisplayMode {
-    const bridge = this._getBridge();
-    return bridge?.displayMode ?? window.openai?.displayMode ?? 'inline';
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.displayMode ?? window.openai?.displayMode ?? 'inline';
   }
 
   /**
@@ -822,8 +828,8 @@ export class WidgetRuntime {
    * @returns Height in pixels, or undefined if not available
    */
   get maxHeight(): number | undefined {
-    const bridge = this._getBridge();
-    return bridge?.maxHeight ?? window.openai?.maxHeight;
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.maxHeight ?? window.openai?.maxHeight;
   }
 
   /**
@@ -832,8 +838,8 @@ export class WidgetRuntime {
    * @returns Safe area insets, or undefined if not available
    */
   get safeArea(): SafeArea | undefined {
-    const bridge = this._getBridge();
-    return bridge?.safeArea ?? window.openai?.safeArea;
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.safeArea ?? window.openai?.safeArea;
   }
 
   /**
@@ -842,8 +848,8 @@ export class WidgetRuntime {
    * @returns 'default' or 'compact'
    */
   get view(): WidgetView {
-    const bridge = this._getBridge();
-    return bridge?.view ?? window.openai?.view ?? 'default';
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.view ?? window.openai?.view ?? 'default';
   }
 
   /**
@@ -852,8 +858,8 @@ export class WidgetRuntime {
    * @returns User agent string, or undefined if not available
    */
   get userAgent(): string | undefined {
-    const bridge = this._getBridge();
-    return bridge?.userAgent ?? window.openai?.userAgent;
+    const chatgpt = this._getChatGptExtensions();
+    return chatgpt?.userAgent ?? window.openai?.userAgent;
   }
 
   // ===========================================================================

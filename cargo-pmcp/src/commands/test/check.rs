@@ -9,7 +9,7 @@
 
 use anyhow::{Context, Result};
 use colored::Colorize;
-use mcp_tester::{ServerTester, TestStatus};
+use mcp_tester::{AppValidator, ServerTester, TestStatus};
 use std::time::Duration;
 
 use crate::commands::GlobalFlags;
@@ -205,6 +205,24 @@ pub async fn execute(
                 }
             } else {
                 println!("   {} No tools advertised", "○".yellow());
+            }
+
+            // Detect App-capable tools and show hint
+            if global_flags.should_output() {
+                let app_count = tools_result
+                    .tools
+                    .iter()
+                    .filter(|t| AppValidator::is_app_capable(t))
+                    .count();
+                if app_count > 0 {
+                    println!(
+                        "   {} {} App-capable tool{} detected. Run `cargo pmcp test apps --url {}` for full validation.",
+                        "i".bright_cyan(),
+                        app_count,
+                        if app_count == 1 { "" } else { "s" },
+                        url
+                    );
+                }
             }
         },
         Err(e) => {

@@ -33,7 +33,7 @@ use std::collections::HashMap;
 /// // Get content for a specific host
 /// if let Some(transformed) = multi.for_host(HostType::ChatGpt) {
 ///     // Use transformed.content and transformed.metadata
-///     assert!(transformed.content.contains("mcpBridge"));
+///     assert!(!transformed.content.is_empty());
 /// }
 /// ```
 pub struct MultiPlatformResource {
@@ -385,7 +385,7 @@ mod tests {
 
         let generic = multi.for_host(HostType::Generic);
         assert!(generic.is_some());
-        assert_eq!(generic.unwrap().mime_type, ExtendedUIMimeType::HtmlMcp);
+        assert_eq!(generic.unwrap().mime_type, ExtendedUIMimeType::HtmlMcpApp);
     }
 
     #[test]

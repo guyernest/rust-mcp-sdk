@@ -8,6 +8,7 @@
 //! - `download`: Download scenarios from pmcp.run
 //! - `list`: List scenarios on pmcp.run
 
+mod apps;
 mod check;
 mod download;
 mod generate;
@@ -23,6 +24,40 @@ use super::GlobalFlags;
 
 #[derive(Debug, Subcommand)]
 pub enum TestCommand {
+    /// Validate MCP App metadata compliance
+    ///
+    /// Checks tools for App-capable metadata (ui.resourceUri), validates MIME types,
+    /// cross-references with resources, and optionally validates host-specific keys.
+    Apps {
+        /// URL of the MCP server to validate
+        #[arg(long, required = true)]
+        url: String,
+
+        /// Validation mode: standard, chatgpt, or claude-desktop
+        #[arg(long)]
+        mode: Option<String>,
+
+        /// Test specific tool only
+        #[arg(long)]
+        tool: Option<String>,
+
+        /// Strict mode (promote warnings to failures)
+        #[arg(long)]
+        strict: bool,
+
+        /// Transport type: http, jsonrpc, or stdio
+        #[arg(long)]
+        transport: Option<String>,
+
+        /// Show verbose output
+        #[arg(long, short)]
+        verbose: bool,
+
+        /// Connection timeout in seconds
+        #[arg(long, default_value = "30")]
+        timeout: u64,
+    },
+
     /// Quick sanity check of an MCP server
     ///
     /// Verifies that an MCP server is reachable, responds correctly to the
@@ -175,6 +210,28 @@ pub enum TestCommand {
 impl TestCommand {
     pub fn execute(self, global_flags: &GlobalFlags) -> Result<()> {
         match self {
+            TestCommand::Apps {
+                url,
+                mode,
+                tool,
+                strict,
+                transport,
+                verbose,
+                timeout,
+            } => {
+                let runtime = tokio::runtime::Runtime::new()?;
+                runtime.block_on(apps::execute(
+                    url,
+                    mode,
+                    tool,
+                    strict,
+                    transport,
+                    verbose,
+                    timeout,
+                    global_flags,
+                ))
+            },
+
             TestCommand::Check {
                 url,
                 transport,

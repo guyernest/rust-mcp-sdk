@@ -3,10 +3,14 @@
  *
  * Maps the legacy `window.mcpBridge` and `window.openai` APIs to the new
  * App class so existing widgets continue working without code changes.
+ *
+ * When running inside ChatGPT (window.openai detected), ChatGPT-specific
+ * methods are populated under mcpBridge.extensions.chatgpt.
+ * When running in standard MCP Apps hosts, extensions.chatgpt is undefined.
  */
 
 import { App } from './app';
-import type { CallToolResult, HostContext } from './types';
+import type { CallToolResult, ChatGptExtensions, HostContext, McpBridgeExtensions } from './types';
 
 // Track whether the deprecation warning has been logged
 let deprecationWarned = false;
@@ -34,7 +38,7 @@ function unwrapToolResult(result: CallToolResult): unknown {
     try {
       return JSON.parse(textItem.text as string);
     } catch {
-      // Not JSON — return raw text
+      // Not JSON -- return raw text
       return textItem.text;
     }
   }
@@ -44,11 +48,73 @@ function unwrapToolResult(result: CallToolResult): unknown {
 }
 
 /**
+ * Build the ChatGPT extensions object when window.openai is available.
+ *
+ * Delegates all ChatGPT-specific operations to the native window.openai API.
+ * Returns undefined when not running inside ChatGPT.
+ */
+function buildChatGptExtensions(): ChatGptExtensions | undefined {
+  if (typeof window === 'undefined' || !window.openai) {
+    return undefined;
+  }
+
+  const openai = window.openai;
+
+  return {
+    getState: (): Record<string, unknown> => openai.widgetState ?? {},
+    setState: (state: Record<string, unknown>): void => {
+      openai.setWidgetState?.(state);
+    },
+    sendMessage: (message: string): void => {
+      openai.sendFollowUpMessage?.({ prompt: message });
+    },
+    uploadFile: async (file: File) => {
+      if (!openai.uploadFile) {
+        throw new Error('uploadFile not available');
+      }
+      return openai.uploadFile(file);
+    },
+    getFileDownloadUrl: async (fileId: string) => {
+      if (!openai.getFileDownloadUrl) {
+        throw new Error('getFileDownloadUrl not available');
+      }
+      return openai.getFileDownloadUrl({ fileId });
+    },
+    requestDisplayMode: async (mode) => {
+      if (!openai.requestDisplayMode) {
+        throw new Error('requestDisplayMode not available');
+      }
+      await openai.requestDisplayMode({ mode });
+    },
+    requestClose: (): void => {
+      openai.requestClose?.();
+    },
+    notifyIntrinsicHeight: (height: number): void => {
+      openai.notifyIntrinsicHeight?.(height);
+    },
+    setOpenInAppUrl: (href: string): void => {
+      openai.setOpenInAppUrl?.({ href });
+    },
+    get toolInput() { return openai.toolInput; },
+    get toolOutput() { return openai.toolOutput; },
+    get toolResponseMetadata() { return openai.toolResponseMetadata; },
+    get theme() { return openai.theme; },
+    get locale() { return openai.locale; },
+    get displayMode() { return openai.displayMode; },
+    get maxHeight() { return openai.maxHeight; },
+    get safeArea() { return openai.safeArea; },
+    get view() { return openai.view; },
+    get userAgent() { return openai.userAgent; },
+  };
+}
+
+/**
  * Install the backward-compatibility shim that maps `window.mcpBridge` and
  * `window.openai` to the provided App instance.
  *
- * Existing widgets using `window.mcpBridge.callTool(name, args)` will
- * continue working, with calls routed through the App's postMessage transport.
+ * Standard MCP methods (callTool, readResource, etc.) are on the root bridge.
+ * ChatGPT-specific methods are under mcpBridge.extensions.chatgpt (only
+ * populated when window.openai is detected).
  *
  * @param app - A connected App instance
  *
@@ -60,8 +126,13 @@ function unwrapToolResult(result: CallToolResult): unknown {
  * await app.connect();
  * installCompat(app);
  *
- * // Legacy code still works:
+ * // Standard MCP call works on any host:
  * const result = await window.mcpBridge.callTool('my_tool', { key: 'value' });
+ *
+ * // ChatGPT-specific (only when running in ChatGPT):
+ * if (window.mcpBridge.extensions?.chatgpt) {
+ *   window.mcpBridge.extensions.chatgpt.sendMessage('hello');
+ * }
  * ```
  */
 export function installCompat(app: App): void {
@@ -82,28 +153,22 @@ export function installCompat(app: App): void {
   // Resolve host context for environment properties
   const getCtx = (): HostContext => app.getHostContext() ?? {};
 
-  // Build the mcpBridge facade
+  // Build ChatGPT extensions (undefined when not in ChatGPT)
+  const chatgptExt = buildChatGptExtensions();
+
+  // Build extensions namespace
+  const extensions: McpBridgeExtensions = {};
+  if (chatgptExt) {
+    extensions.chatgpt = chatgptExt;
+  }
+
+  // Build the mcpBridge facade with standard methods at root
   const mcpBridge = {
+    // Standard MCP methods (root level)
     callTool: async (name: string, args?: Record<string, unknown>): Promise<unknown> => {
       warnDeprecation();
       const result = await app.callServerTool({ name, arguments: args });
       return unwrapToolResult(result);
-    },
-
-    getState: (): Record<string, unknown> => {
-      warnDeprecation();
-      return {};
-    },
-
-    setState: (_state: Record<string, unknown>): void => {
-      warnDeprecation();
-      // State management is not implemented in the new App class;
-      // this is a no-op shim for forward compatibility
-    },
-
-    sendMessage: (message: string): void => {
-      warnDeprecation();
-      app.sendMessage({ message });
     },
 
     openExternal: (url: string): void => {
@@ -116,16 +181,39 @@ export function installCompat(app: App): void {
       app.openLink({ url });
     },
 
+    // Host-specific extensions namespace
+    extensions,
+
+    // Legacy flat methods for backward compat (deprecated)
+    getState: (): Record<string, unknown> => {
+      warnDeprecation();
+      return chatgptExt?.getState() ?? {};
+    },
+
+    setState: (state: Record<string, unknown>): void => {
+      warnDeprecation();
+      chatgptExt?.setState(state);
+    },
+
+    sendMessage: (message: string): void => {
+      warnDeprecation();
+      if (chatgptExt) {
+        chatgptExt.sendMessage(message);
+      } else {
+        app.sendMessage({ message });
+      }
+    },
+
     get theme(): string | undefined {
-      return getCtx().theme;
+      return chatgptExt?.theme ?? getCtx().theme;
     },
 
     get locale(): string | undefined {
-      return getCtx().locale;
+      return chatgptExt?.locale ?? getCtx().locale;
     },
 
     get displayMode(): string | undefined {
-      return getCtx().displayMode;
+      return chatgptExt?.displayMode ?? getCtx().displayMode;
     },
   };
 
