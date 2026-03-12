@@ -10,10 +10,10 @@ Requirements for CLI DX Overhaul. Each maps to roadmap phases.
 ### Flag Consistency
 
 - [x] **FLAG-01**: All commands taking a server URL accept it as a positional argument (replace `--url`, `--endpoint`)
-- [ ] **FLAG-02**: All pmcp.run server references use `--server` flag consistently (replace `--server-id`)
+- [x] **FLAG-02**: All pmcp.run server references use `--server` flag consistently (replace `--server-id`)
 - [ ] **FLAG-03**: All verbose output flags use `--verbose` / `-v` (replace `--detailed`)
-- [ ] **FLAG-04**: All confirmation-skip flags use `--yes` (replace `--force`)
-- [ ] **FLAG-05**: All `--output` flags have `-o` short alias
+- [x] **FLAG-04**: All confirmation-skip flags use `--yes` (replace `--force`)
+- [x] **FLAG-05**: All `--output` flags have `-o` short alias
 - [x] **FLAG-06**: Human-readable format values normalized to `text`/`json` across all `--format` flags
 - [x] **FLAG-07**: All clap derive attributes use `#[arg()]` style (replace `#[clap()]` in deploy)
 - [x] **FLAG-08**: `--no-color` available as global flag on all commands
@@ -105,10 +105,10 @@ Deferred to future release. Tracked but not in current roadmap.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | FLAG-01 | Phase 28 | Complete |
-| FLAG-02 | Phase 28 | Pending |
+| FLAG-02 | Phase 28 | Complete |
 | FLAG-03 | Phase 28 | Pending |
-| FLAG-04 | Phase 28 | Pending |
-| FLAG-05 | Phase 28 | Pending |
+| FLAG-04 | Phase 28 | Complete |
+| FLAG-05 | Phase 28 | Complete |
 | FLAG-06 | Phase 28 | Complete |
 | FLAG-07 | Phase 28 | Complete |
 | FLAG-08 | Phase 27 | Complete |

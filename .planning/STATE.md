@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
-status: completed
-stopped_at: Completed 28-01-PLAN.md
-last_updated: "2026-03-12T22:51:23.759Z"
-last_activity: 2026-03-12 -- Created flags.rs with FormatValue/OutputFlags/FormatFlags/ServerFlags, converted deploy clap attributes
+status: in-progress
+stopped_at: Completed 28-03-PLAN.md
+last_updated: "2026-03-12T22:58:33Z"
+last_activity: 2026-03-12 -- Normalized flags on app/secret/loadtest/landing commands (positional URL, --yes, --server, -o alias)
 progress:
   total_phases: 22
   completed_phases: 14
   total_plans: 36
-  completed_plans: 32
-  percent: 92
+  completed_plans: 33
+  percent: 94
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 ## Current Position
 
 Phase: 28 (flag-normalization)
-Plan: 1 of 3 (28-01 complete)
-Status: Completed 28-01 -- Shared flag infrastructure and clap-to-arg conversion
-Last activity: 2026-03-12 -- Created flags.rs with FormatValue/OutputFlags/FormatFlags/ServerFlags, converted deploy clap attributes
+Plan: 3 of 3 (28-03 complete, 28-02 incomplete)
+Status: Completed 28-03 -- App/secret/loadtest/landing flag normalization
+Last activity: 2026-03-12 -- Normalized flags on app/secret/loadtest/landing commands (positional URL, --yes, --server, -o alias)
 
-Progress: [█████████░] 92%
+Progress: [█████████░] 94%
 
 ## Shipped Milestones
 
@@ -96,6 +96,7 @@ v1.6 decisions:
 - [Phase 48]: Eliminated ChatGptAdapter, WidgetDir, window.mcpBridge from course -- standard SDK APIs (ToolInfo::with_ui, ext-apps App class) are primary
 - [Phase 28-01]: Retained #[allow(dead_code)] on GlobalFlags.verbose until Plans 02/03 add readers; ServerFlags makes both url and server optional for flexible flatten usage
 - [Phase 28]: Retained #[allow(dead_code)] on GlobalFlags.verbose until Plans 02/03 add readers
+- [Phase 28-03]: Landing deploy handler parameter server_id kept as internal API name; CLI field renamed to server
 
 ### Roadmap Evolution
 
@@ -122,6 +123,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-12T22:51:23.756Z
-Stopped at: Completed 28-01-PLAN.md
-Resume: Phase 28 plan 01 complete -- shared flag infrastructure created, proceed to 28-02
+Last session: 2026-03-12T22:58:33Z
+Stopped at: Completed 28-03-PLAN.md
+Resume: Phase 28 plan 03 complete -- app/secret/loadtest/landing flags normalized; 28-02 still incomplete (test/preview/connect/schema/deploy changes)
