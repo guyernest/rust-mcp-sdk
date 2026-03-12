@@ -4,7 +4,7 @@ milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: in-progress
 stopped_at: Completed 28-03-PLAN.md
-last_updated: "2026-03-12T22:58:33Z"
+last_updated: "2026-03-12T22:59:30Z"
 last_activity: 2026-03-12 -- Normalized flags on app/secret/loadtest/landing commands (positional URL, --yes, --server, -o alias)
 progress:
   total_phases: 22
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 ## Current Position
 
 Phase: 28 (flag-normalization)
-Plan: 3 of 3 (28-03 complete, 28-02 incomplete)
-Status: Completed 28-03 -- App/secret/loadtest/landing flag normalization
-Last activity: 2026-03-12 -- Normalized flags on app/secret/loadtest/landing commands (positional URL, --yes, --server, -o alias)
+Plan: 2 of 3 (28-02 complete)
+Status: Completed 28-02 -- Test/schema/preview/connect/validate/deploy flag normalization
+Last activity: 2026-03-12 -- Positional URLs on 8 commands, global verbose on 5 commands, FormatValue on download
 
 Progress: [█████████░] 94%
 
@@ -96,6 +96,7 @@ v1.6 decisions:
 - [Phase 48]: Eliminated ChatGptAdapter, WidgetDir, window.mcpBridge from course -- standard SDK APIs (ToolInfo::with_ui, ext-apps App class) are primary
 - [Phase 28-01]: Retained #[allow(dead_code)] on GlobalFlags.verbose until Plans 02/03 add readers; ServerFlags makes both url and server optional for flexible flatten usage
 - [Phase 28]: Retained #[allow(dead_code)] on GlobalFlags.verbose until Plans 02/03 add readers
+- [Phase 28-02]: Removed #[allow(dead_code)] from GlobalFlags.verbose (now read by check, apps, run, validate, deploy); download format yaml->json default; schema diff url positional at index 2
 - [Phase 28-03]: Landing deploy handler parameter server_id kept as internal API name; CLI field renamed to server
 
 ### Roadmap Evolution
@@ -123,6 +124,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-12T22:58:33Z
-Stopped at: Completed 28-03-PLAN.md
-Resume: Phase 28 plan 03 complete -- app/secret/loadtest/landing flags normalized; 28-02 still incomplete (test/preview/connect/schema/deploy changes)
+Last session: 2026-03-12T22:59:30Z
+Stopped at: Completed 28-02-PLAN.md
+Resume: Phase 28 plans 01, 02 complete -- proceed to 28-03 (app/secret/loadtest/landing normalization)

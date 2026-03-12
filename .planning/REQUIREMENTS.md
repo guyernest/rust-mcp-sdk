@@ -11,7 +11,7 @@ Requirements for CLI DX Overhaul. Each maps to roadmap phases.
 
 - [x] **FLAG-01**: All commands taking a server URL accept it as a positional argument (replace `--url`, `--endpoint`)
 - [x] **FLAG-02**: All pmcp.run server references use `--server` flag consistently (replace `--server-id`)
-- [ ] **FLAG-03**: All verbose output flags use `--verbose` / `-v` (replace `--detailed`)
+- [x] **FLAG-03**: All verbose output flags use `--verbose` / `-v` (replace `--detailed`)
 - [x] **FLAG-04**: All confirmation-skip flags use `--yes` (replace `--force`)
 - [x] **FLAG-05**: All `--output` flags have `-o` short alias
 - [x] **FLAG-06**: Human-readable format values normalized to `text`/`json` across all `--format` flags
@@ -106,7 +106,7 @@ Deferred to future release. Tracked but not in current roadmap.
 |-------------|-------|--------|
 | FLAG-01 | Phase 28 | Complete |
 | FLAG-02 | Phase 28 | Complete |
-| FLAG-03 | Phase 28 | Pending |
+| FLAG-03 | Phase 28 | Complete |
 | FLAG-04 | Phase 28 | Complete |
 | FLAG-05 | Phase 28 | Complete |
 | FLAG-06 | Phase 28 | Complete |
