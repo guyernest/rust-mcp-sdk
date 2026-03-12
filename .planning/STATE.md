@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: in-progress
-stopped_at: Completed 47-01-PLAN.md
-last_updated: "2026-03-12T00:30:00.000Z"
-last_activity: 2026-03-12 -- Added AppValidator module and apps subcommand to mcp-tester
+stopped_at: Completed 47-02-PLAN.md
+last_updated: "2026-03-12T00:36:30.000Z"
+last_activity: 2026-03-12 -- Added cargo pmcp test apps subcommand and App-capable hint in check
 progress:
   total_phases: 21
   completed_phases: 12
   total_plans: 28
-  completed_plans: 27
-  percent: 96
+  completed_plans: 28
+  percent: 100
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 ## Current Position
 
 Phase: 47 (add-mcp-app-support-to-mcp-tester)
-Plan: 1 of 2 (47-01 complete)
-Status: Completed 47-01 -- AppValidator module and apps subcommand
-Last activity: 2026-03-12 -- Added AppValidator module and apps subcommand to mcp-tester
+Plan: 2 of 2 (47-02 complete)
+Status: Completed 47-02 -- cargo pmcp test apps subcommand and check hint
+Last activity: 2026-03-12 -- Added cargo pmcp test apps subcommand and App-capable hint in check
 
-Progress: [█████████░] 96%
+Progress: [██████████] 100%
 
 ## Shipped Milestones
 
@@ -89,6 +89,7 @@ v1.6 decisions:
 - [Phase 46-01]: Static lookup map for method name normalization in App class; McpApps bridge _onToolResult properties with getter/setter pairs; normalization in both widget-runtime and injected bridge scripts
 - [Phase 46-02]: mcp-preview deliverToolResult emits dual ui/toolResult (primary) + ui/notifications/tool-result (fallback); readiness signal replaces 300ms setTimeout with ui/notifications/initialized listener + 3s fallback
 - [Phase 47-01]: Resource URI cross-reference mismatch produces Warning not Failure; ChatGPT key absence is Warning; AppValidator applies strict mode internally
+- [Phase 47-02]: Apps subcommand follows check.rs pattern for UX consistency; resources listing failure non-fatal (empty vec) since cross-reference is advisory
 
 ### Roadmap Evolution
 
@@ -114,6 +115,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-12T00:30:00.000Z
-Stopped at: Completed 47-01-PLAN.md
-Resume: Phase 47 plan 01 complete -- AppValidator and apps subcommand; proceed to 47-02
+Last session: 2026-03-12T00:36:30.000Z
+Stopped at: Completed 47-02-PLAN.md
+Resume: Phase 47 complete -- all plans shipped

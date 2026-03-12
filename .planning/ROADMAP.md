@@ -372,7 +372,7 @@ Plans:
   2. Validation checks ui.resourceUri, MIME types, resource cross-references, and optionally ChatGPT-specific keys
   3. `cargo pmcp test check` shows hint when App-capable tools are detected
   4. --strict promotes warnings to failures, --tool filters to single tool, --mode selects host-specific checks
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 47-01-PLAN.md -- AppValidator module, TestCategory::Apps, mcp-tester apps subcommand
