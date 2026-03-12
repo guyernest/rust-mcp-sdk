@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Phase 28 context gathered
-last_updated: "2026-03-12T22:14:30.698Z"
-last_activity: 2026-03-12 -- Added THEME_PALETTES with McpUiStyleVariableKey CSS variables to mcp-preview
+stopped_at: Completed 28-01-PLAN.md
+last_updated: "2026-03-12T22:51:23.759Z"
+last_activity: 2026-03-12 -- Created flags.rs with FormatValue/OutputFlags/FormatFlags/ServerFlags, converted deploy clap attributes
 progress:
   total_phases: 22
   completed_phases: 14
-  total_plans: 33
-  completed_plans: 31
+  total_plans: 36
+  completed_plans: 32
   percent: 92
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** Phase 48 -- MCP Apps Documentation and Education Refresh
+**Current focus:** Phase 28 -- Flag Normalization
 
 ## Current Position
 
-Phase: 48 (mcp-apps-documentation-and-education-refresh)
-Plan: 3 of 3 (48-03 complete)
-Status: Completed 48-03 -- Theme CSS variable palettes for mcp-preview host context
-Last activity: 2026-03-12 -- Added THEME_PALETTES with McpUiStyleVariableKey CSS variables to mcp-preview
+Phase: 28 (flag-normalization)
+Plan: 1 of 3 (28-01 complete)
+Status: Completed 28-01 -- Shared flag infrastructure and clap-to-arg conversion
+Last activity: 2026-03-12 -- Created flags.rs with FormatValue/OutputFlags/FormatFlags/ServerFlags, converted deploy clap attributes
 
 Progress: [█████████░] 92%
 
@@ -94,6 +94,8 @@ v1.6 decisions:
 - [Phase 48]: THEME_PALETTES placed as module-level constant before PreviewRuntime class; safe palette lookup with || {}
 - [Phase 48-01]: Used GUIDE.md as authoritative source for ch12-5 rewrite; eliminated ChatGptAdapter -- standard SDK APIs are primary documented pattern
 - [Phase 48]: Eliminated ChatGptAdapter, WidgetDir, window.mcpBridge from course -- standard SDK APIs (ToolInfo::with_ui, ext-apps App class) are primary
+- [Phase 28-01]: Retained #[allow(dead_code)] on GlobalFlags.verbose until Plans 02/03 add readers; ServerFlags makes both url and server optional for flexible flatten usage
+- [Phase 28]: Retained #[allow(dead_code)] on GlobalFlags.verbose until Plans 02/03 add readers
 
 ### Roadmap Evolution
 
@@ -120,6 +122,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-12T22:14:30.694Z
-Stopped at: Phase 28 context gathered
-Resume: Phase 48 plan 03 complete -- theme CSS variable palettes added to mcp-preview
+Last session: 2026-03-12T22:51:23.756Z
+Stopped at: Completed 28-01-PLAN.md
+Resume: Phase 28 plan 01 complete -- shared flag infrastructure created, proceed to 28-02
