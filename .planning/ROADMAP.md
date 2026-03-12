@@ -389,7 +389,7 @@ Plans:
   3. pmcp-book MCP Apps chapters are updated with current tooling, host layer system, and developer guide content
   4. pmcp-course materials are aligned with book updates
   5. mcp-preview sends `styles.variables` CSS custom properties in host context so widgets respond to theme changes
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [ ] 48-01-PLAN.md — Update mcp-tester/mcp-preview READMEs and rewrite book ch12-5 MCP Apps chapter with GUIDE.md content

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Completed 48-01-PLAN.md
-last_updated: "2026-03-12T19:54:08.296Z"
+stopped_at: Completed 48-02-PLAN.md
+last_updated: "2026-03-12T20:03:14.085Z"
 last_activity: 2026-03-12 -- Added THEME_PALETTES with McpUiStyleVariableKey CSS variables to mcp-preview
 progress:
   total_phases: 22
-  completed_phases: 13
+  completed_phases: 14
   total_plans: 33
-  completed_plans: 30
+  completed_plans: 31
   percent: 92
 ---
 
@@ -93,6 +93,7 @@ v1.6 decisions:
 - [Phase 48-03]: THEME_PALETTES placed as module-level constant before PreviewRuntime class; THEME_PALETTES[this.theme] || {} for safe palette lookup
 - [Phase 48]: THEME_PALETTES placed as module-level constant before PreviewRuntime class; safe palette lookup with || {}
 - [Phase 48-01]: Used GUIDE.md as authoritative source for ch12-5 rewrite; eliminated ChatGptAdapter -- standard SDK APIs are primary documented pattern
+- [Phase 48]: Eliminated ChatGptAdapter, WidgetDir, window.mcpBridge from course -- standard SDK APIs (ToolInfo::with_ui, ext-apps App class) are primary
 
 ### Roadmap Evolution
 
@@ -119,6 +120,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-12T19:54:03.575Z
-Stopped at: Completed 48-01-PLAN.md
+Last session: 2026-03-12T20:03:14.082Z
+Stopped at: Completed 48-02-PLAN.md
 Resume: Phase 48 plan 03 complete -- theme CSS variable palettes added to mcp-preview
