@@ -11,17 +11,16 @@ use std::time::Duration;
 use crate::commands::GlobalFlags;
 
 /// Execute the `cargo pmcp test apps` command.
-#[allow(clippy::too_many_arguments)]
 pub async fn execute(
     url: String,
     mode: Option<String>,
     tool: Option<String>,
     strict: bool,
     transport: Option<String>,
-    verbose: bool,
     timeout: u64,
     global_flags: &GlobalFlags,
 ) -> Result<()> {
+    let verbose = global_flags.verbose;
     // Parse validation mode
     let validation_mode: AppValidationMode = mode
         .as_deref()

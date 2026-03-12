@@ -30,7 +30,7 @@ pub fn execute(
     } else if server.is_some() {
         format!("http://0.0.0.0:{}", port)
     } else {
-        anyhow::bail!("Either --url or --server must be specified");
+        anyhow::bail!("Either a URL or --server must be specified");
     };
 
     // Determine output path

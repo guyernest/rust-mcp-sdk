@@ -18,10 +18,10 @@ use crate::commands::GlobalFlags;
 pub async fn execute(
     url: String,
     transport: Option<String>,
-    verbose: bool,
     timeout: u64,
     global_flags: &GlobalFlags,
 ) -> Result<()> {
+    let verbose = global_flags.verbose;
     if global_flags.should_output() {
         println!();
         println!("{}", "MCP Server Check".bright_cyan().bold());
@@ -139,14 +139,14 @@ pub async fn execute(
                 println!();
                 println!("   {} Try using JSON-RPC transport:", "→".bright_cyan());
                 println!(
-                    "     cargo pmcp test check --url {} {}",
+                    "     cargo pmcp test check {} {}",
                     url,
                     "--transport jsonrpc".bright_green()
                 );
                 println!();
                 println!("   {} Or try SSE streaming transport:", "→".bright_cyan());
                 println!(
-                    "     cargo pmcp test check --url {} {}",
+                    "     cargo pmcp test check {} {}",
                     url,
                     "--transport http".bright_green()
                 );
@@ -216,7 +216,7 @@ pub async fn execute(
                     .count();
                 if app_count > 0 {
                     println!(
-                        "   {} {} App-capable tool{} detected. Run `cargo pmcp test apps --url {}` for full validation.",
+                        "   {} {} App-capable tool{} detected. Run `cargo pmcp test apps {}` for full validation.",
                         "i".bright_cyan(),
                         app_count,
                         if app_count == 1 { "" } else { "s" },
@@ -302,11 +302,11 @@ pub async fn execute(
         // Next steps
         println!("{}", "Next steps:".bright_white().bold());
         println!(
-            "  • Generate test scenarios: cargo pmcp test generate --url {}",
+            "  • Generate test scenarios: cargo pmcp test generate {}",
             url
         );
         println!(
-            "  • Run full test suite:    cargo pmcp test run --url {} --scenarios <path>",
+            "  • Run full test suite:    cargo pmcp test run {} --scenarios <path>",
             url
         );
         println!();

@@ -20,6 +20,7 @@ use anyhow::Result;
 use clap::Subcommand;
 use std::path::PathBuf;
 
+use super::flags::{FormatValue, ServerFlags};
 use super::GlobalFlags;
 
 #[derive(Debug, Subcommand)]
@@ -30,7 +31,6 @@ pub enum TestCommand {
     /// cross-references with resources, and optionally validates host-specific keys.
     Apps {
         /// URL of the MCP server to validate
-        #[arg(long, required = true)]
         url: String,
 
         /// Validation mode: standard, chatgpt, or claude-desktop
@@ -49,10 +49,6 @@ pub enum TestCommand {
         #[arg(long)]
         transport: Option<String>,
 
-        /// Show verbose output
-        #[arg(long, short)]
-        verbose: bool,
-
         /// Connection timeout in seconds
         #[arg(long, default_value = "30")]
         timeout: u64,
@@ -67,17 +63,12 @@ pub enum TestCommand {
     /// Use --verbose to see raw JSON-RPC messages for debugging non-compliant servers.
     Check {
         /// URL of the MCP server to check
-        #[arg(long, required = true)]
         url: String,
 
         /// Transport type: http (SSE streaming), jsonrpc (simple POST), or stdio
         /// Auto-detected by default based on URL patterns
         #[arg(long)]
         transport: Option<String>,
-
-        /// Show verbose output including raw JSON-RPC messages
-        #[arg(long, short)]
-        verbose: bool,
 
         /// Connection timeout in seconds
         #[arg(long, default_value = "30")]
@@ -89,13 +80,9 @@ pub enum TestCommand {
     /// Run tests against a local development server or a deployed remote server.
     /// Scenarios are loaded from the local filesystem.
     Run {
-        /// Name of the local server to test (uses localhost)
-        #[arg(long)]
-        server: Option<String>,
-
-        /// URL of the MCP server to test (for remote testing)
-        #[arg(long)]
-        url: Option<String>,
+        /// MCP server URL or --server for local testing
+        #[command(flatten)]
+        server_flags: ServerFlags,
 
         /// Port to connect to (default: 3000)
         #[arg(long, default_value = "3000")]
@@ -109,10 +96,6 @@ pub enum TestCommand {
         /// Auto-detected by default based on URL patterns
         #[arg(long)]
         transport: Option<String>,
-
-        /// Show detailed test output
-        #[arg(long)]
-        detailed: bool,
     },
 
     /// Generate test scenarios from server capabilities
@@ -120,20 +103,16 @@ pub enum TestCommand {
     /// Connects to a running MCP server and generates test scenarios
     /// based on its declared tools, resources, and prompts.
     Generate {
-        /// Name of the local server (uses localhost)
-        #[arg(long)]
-        server: Option<String>,
-
-        /// URL of the MCP server
-        #[arg(long)]
-        url: Option<String>,
+        /// MCP server URL or --server for local testing
+        #[command(flatten)]
+        server_flags: ServerFlags,
 
         /// Port to connect to (default: 3000)
         #[arg(long, default_value = "3000")]
         port: u16,
 
         /// Output file path
-        #[arg(long)]
+        #[arg(long, short)]
         output: Option<PathBuf>,
 
         /// Transport type: http (SSE streaming), jsonrpc (simple POST), or stdio
@@ -188,9 +167,9 @@ pub enum TestCommand {
         #[arg(long, short)]
         output: Option<PathBuf>,
 
-        /// Output format (yaml or json)
-        #[arg(long, default_value = "yaml")]
-        format: Option<String>,
+        /// Output format (text or json)
+        #[arg(long, value_enum, default_value = "json")]
+        format: FormatValue,
     },
 
     /// List test scenarios on pmcp.run
@@ -216,7 +195,6 @@ impl TestCommand {
                 tool,
                 strict,
                 transport,
-                verbose,
                 timeout,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
@@ -226,7 +204,6 @@ impl TestCommand {
                     tool,
                     strict,
                     transport,
-                    verbose,
                     timeout,
                     global_flags,
                 ))
@@ -235,39 +212,28 @@ impl TestCommand {
             TestCommand::Check {
                 url,
                 transport,
-                verbose,
                 timeout,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
-                runtime.block_on(check::execute(
-                    url,
-                    transport,
-                    verbose,
-                    timeout,
-                    global_flags,
-                ))
+                runtime.block_on(check::execute(url, transport, timeout, global_flags))
             },
 
             TestCommand::Run {
-                server,
-                url,
+                server_flags,
                 port,
                 scenarios,
                 transport,
-                detailed,
             } => run::execute(
-                server,
-                url,
+                server_flags.server,
+                server_flags.url,
                 port,
                 scenarios,
                 transport,
-                detailed,
                 global_flags,
             ),
 
             TestCommand::Generate {
-                server,
-                url,
+                server_flags,
                 port,
                 output,
                 transport,
@@ -275,8 +241,8 @@ impl TestCommand {
                 with_resources,
                 with_prompts,
             } => generate::execute(
-                server,
-                url,
+                server_flags.server,
+                server_flags.url,
                 port,
                 output,
                 transport,
@@ -308,7 +274,12 @@ impl TestCommand {
                 format,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
-                runtime.block_on(download::execute(scenario_id, output, format, global_flags))
+                runtime.block_on(download::execute(
+                    scenario_id,
+                    output,
+                    format.to_string(),
+                    global_flags,
+                ))
             },
 
             TestCommand::List { server, all } => {

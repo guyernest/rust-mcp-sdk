@@ -28,8 +28,6 @@ pub struct GlobalFlags {
     ///
     /// Used to resolve quiet precedence (verbose wins over quiet) and by
     /// individual commands for detailed diagnostic output.
-    /// The allow(dead_code) is removed when Plans 02/03 add readers.
-    #[allow(dead_code)]
     pub verbose: bool,
     /// Suppress colored output (resolved: flag, env, or non-TTY).
     pub no_color: bool,

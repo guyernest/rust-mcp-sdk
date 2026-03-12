@@ -14,9 +14,9 @@ pub fn execute(
     port: u16,
     scenarios: Option<PathBuf>,
     transport: Option<String>,
-    detailed: bool,
     global_flags: &GlobalFlags,
 ) -> Result<()> {
+    let detailed = global_flags.verbose;
     if global_flags.should_output() {
         println!("\n{}", "Running MCP server tests".bright_cyan().bold());
         println!("{}", "─────────────────────────────────────".bright_cyan());
@@ -28,7 +28,7 @@ pub fn execute(
     } else if server.is_some() {
         format!("http://0.0.0.0:{}", port)
     } else {
-        anyhow::bail!("Either --url or --server must be specified");
+        anyhow::bail!("Either a URL or --server must be specified");
     };
 
     // Determine scenarios directory
@@ -156,7 +156,7 @@ pub fn execute(
                 println!("\n{}", "Troubleshooting:".bright_white().bold());
                 println!("  - Review scenario files in {}", scenarios_dir.display());
                 println!("  - Check server logs for errors");
-                println!("  - Run with --detailed for more output");
+                println!("  - Run with --verbose for more output");
             }
             anyhow::bail!("Tests failed");
         },
