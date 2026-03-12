@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
-status: completed
-stopped_at: Phase 47 context gathered
-last_updated: "2026-03-12T00:09:27.388Z"
-last_activity: 2026-03-10 -- Fixed bridge protocol method name mismatch and dual method emission
+status: in-progress
+stopped_at: Completed 47-01-PLAN.md
+last_updated: "2026-03-12T00:30:00.000Z"
+last_activity: 2026-03-12 -- Added AppValidator module and apps subcommand to mcp-tester
 progress:
   total_phases: 21
   completed_phases: 12
   total_plans: 28
-  completed_plans: 26
-  percent: 93
+  completed_plans: 27
+  percent: 96
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** Phase 45 -- Extend MCP Apps to Claude Desktop (complete)
+**Current focus:** Phase 47 -- Add MCP App support to mcp-tester
 
 ## Current Position
 
-Phase: 46 (mcp-bridge-review-and-fixes)
-Plan: 2 of 2 (46-02 complete)
-Status: Completed 46-01 and 46-02 -- bridge method name fixes and mcp-preview tool result delivery
-Last activity: 2026-03-10 -- Fixed bridge protocol method name mismatch and dual method emission
+Phase: 47 (add-mcp-app-support-to-mcp-tester)
+Plan: 1 of 2 (47-01 complete)
+Status: Completed 47-01 -- AppValidator module and apps subcommand
+Last activity: 2026-03-12 -- Added AppValidator module and apps subcommand to mcp-tester
 
-Progress: [█████████░] 93%
+Progress: [█████████░] 96%
 
 ## Shipped Milestones
 
@@ -88,6 +88,7 @@ v1.6 decisions:
 - [Phase 45-03]: mcp-preview enriches tool/resource _meta with ChatGPT keys in ChatGPT mode; enrich_meta_for_chatgpt derives openai/* from standard ui.resourceUri; pre-existing widget issues documented not fixed
 - [Phase 46-01]: Static lookup map for method name normalization in App class; McpApps bridge _onToolResult properties with getter/setter pairs; normalization in both widget-runtime and injected bridge scripts
 - [Phase 46-02]: mcp-preview deliverToolResult emits dual ui/toolResult (primary) + ui/notifications/tool-result (fallback); readiness signal replaces 300ms setTimeout with ui/notifications/initialized listener + 3s fallback
+- [Phase 47-01]: Resource URI cross-reference mismatch produces Warning not Failure; ChatGPT key absence is Warning; AppValidator applies strict mode internally
 
 ### Roadmap Evolution
 
@@ -113,6 +114,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-12T00:09:27.385Z
-Stopped at: Phase 47 context gathered
-Resume: Phase 46 plans 01 and 02 complete -- bridge fixes
+Last session: 2026-03-12T00:30:00.000Z
+Stopped at: Completed 47-01-PLAN.md
+Resume: Phase 47 plan 01 complete -- AppValidator and apps subcommand; proceed to 47-02
