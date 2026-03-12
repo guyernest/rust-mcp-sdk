@@ -59,10 +59,7 @@ pub async fn execute(
     .context("Failed to create server tester")?;
 
     if global_flags.should_output() {
-        println!(
-            "{}",
-            "1. Testing connectivity...".bright_white()
-        );
+        println!("{}", "1. Testing connectivity...".bright_white());
     }
 
     let init_report = tester
@@ -89,10 +86,7 @@ pub async fn execute(
     if global_flags.should_output() {
         println!("   {} Connected", "✓".green());
         println!();
-        println!(
-            "{}",
-            "2. Discovering tools and resources...".bright_white()
-        );
+        println!("{}", "2. Discovering tools and resources...".bright_white());
     }
 
     // List tools and resources
@@ -103,7 +97,7 @@ pub async fn execute(
                 eprintln!("   {} Tools listing failed: {}", "✗".red(), e);
             }
             anyhow::bail!("Failed to list tools: {e}");
-        }
+        },
     };
 
     let resources = match tester.list_resources().await {
@@ -117,7 +111,7 @@ pub async fn execute(
                 );
             }
             Vec::new()
-        }
+        },
     };
 
     if global_flags.should_output() {
@@ -130,7 +124,10 @@ pub async fn execute(
     }
 
     // Check for App-capable tools
-    let app_count = tools.iter().filter(|t| AppValidator::is_app_capable(t)).count();
+    let app_count = tools
+        .iter()
+        .filter(|t| AppValidator::is_app_capable(t))
+        .count();
 
     if app_count == 0 && tool.is_none() {
         if global_flags.should_output() {

@@ -333,8 +333,7 @@ impl ResourceHandler for ResourceCollection {
                 .or_else(|| Some(serde_json::Map::new()))
                 .map(|mut m| {
                     // Ensure _meta.ui.resourceUri is present (same as resources/list)
-                    let ui_meta =
-                        crate::types::ui::build_ui_meta(Some(&resource.uri));
+                    let ui_meta = crate::types::ui::build_ui_meta(Some(&resource.uri));
                     if let Some(ui_map) = ui_meta {
                         for (k, v) in ui_map {
                             m.entry(k).or_insert(v);

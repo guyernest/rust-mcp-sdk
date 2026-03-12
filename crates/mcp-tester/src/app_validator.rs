@@ -62,10 +62,7 @@ pub struct AppValidator {
 impl AppValidator {
     /// Create a new `AppValidator`.
     pub fn new(mode: AppValidationMode, tool_filter: Option<String>) -> Self {
-        Self {
-            mode,
-            tool_filter,
-        }
+        Self { mode, tool_filter }
     }
 
     /// Main entry point: validate all (or filtered) App-capable tools.
@@ -187,7 +184,7 @@ impl AppValidator {
                         details: Some(format!("URI: {uri}")),
                     });
                 }
-            }
+            },
             None => {
                 results.push(TestResult {
                     name: format!("[{tool_name}] ui.resourceUri present"),
@@ -199,7 +196,7 @@ impl AppValidator {
                     ),
                     details: None,
                 });
-            }
+            },
         }
 
         results
@@ -228,7 +225,7 @@ impl AppValidator {
                         "No resource found with URI '{resource_uri}' in resources/list"
                     )),
                 });
-            }
+            },
             Some(resource) => {
                 results.push(TestResult {
                     name: format!("[{tool_name}] resource cross-reference"),
@@ -250,11 +247,9 @@ impl AppValidator {
                             error: None,
                             details: Some("Resource has no MIME type set".to_string()),
                         });
-                    }
+                    },
                     Some(mime) => {
-                        let is_valid = APP_MIME_TYPES
-                            .iter()
-                            .any(|v| mime.eq_ignore_ascii_case(v));
+                        let is_valid = APP_MIME_TYPES.iter().any(|v| mime.eq_ignore_ascii_case(v));
 
                         if is_valid {
                             results.push(TestResult {
@@ -278,9 +273,9 @@ impl AppValidator {
                                 )),
                             });
                         }
-                    }
+                    },
                 }
-            }
+            },
         }
 
         results
@@ -432,8 +427,14 @@ mod tests {
         let validator = AppValidator::new(AppValidationMode::Standard, None);
         let results = validator.validate_tools(&[tool], &[resource]);
 
-        let passed = results.iter().filter(|r| r.status == TestStatus::Passed).count();
-        assert!(passed >= 3, "Expected at least 3 passed results, got {passed}");
+        let passed = results
+            .iter()
+            .filter(|r| r.status == TestStatus::Passed)
+            .count();
+        assert!(
+            passed >= 3,
+            "Expected at least 3 passed results, got {passed}"
+        );
     }
 
     #[test]
@@ -472,7 +473,10 @@ mod tests {
                 r.status = TestStatus::Failed;
             }
         }
-        let warnings = results.iter().filter(|r| r.status == TestStatus::Warning).count();
+        let warnings = results
+            .iter()
+            .filter(|r| r.status == TestStatus::Warning)
+            .count();
         assert_eq!(warnings, 0, "Strict mode should have zero warnings");
     }
 
@@ -485,8 +489,7 @@ mod tests {
         let tool1 = make_tool("chess", Some(meta));
         let tool2 = make_tool("other", None);
 
-        let validator =
-            AppValidator::new(AppValidationMode::Standard, Some("other".to_string()));
+        let validator = AppValidator::new(AppValidationMode::Standard, Some("other".to_string()));
         let results = validator.validate_tools(&[tool1, tool2], &[]);
 
         // "other" has no _meta, so validation should report failure for it

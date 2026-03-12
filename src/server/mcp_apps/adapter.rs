@@ -142,9 +142,7 @@ fn find_cdn_import(html: &str, markers: &[&str]) -> Option<(usize, usize)> {
                         .unwrap_or(html.len());
                     // Skip trailing semicolon and whitespace
                     let mut end = close_quote;
-                    while end < html.len()
-                        && matches!(html.as_bytes()[end], b';' | b' ' | b'\t')
-                    {
+                    while end < html.len() && matches!(html.as_bytes()[end], b';' | b' ' | b'\t') {
                         end += 1;
                     }
                     return Some((import_kw, end));

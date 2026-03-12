@@ -1215,17 +1215,17 @@ mod resource_contents_serde {
                         text,
                         meta,
                     })?;
-                }
+                },
                 Content::Text { text } => {
                     #[derive(Serialize)]
                     struct Tc<'a> {
                         text: &'a str,
                     }
                     seq.serialize_element(&Tc { text })?;
-                }
+                },
                 other => {
                     seq.serialize_element(other)?;
-                }
+                },
             }
         }
         seq.end()

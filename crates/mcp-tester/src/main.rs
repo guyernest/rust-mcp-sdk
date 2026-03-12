@@ -901,9 +901,8 @@ async fn run_apps_validation(
 ) -> Result<TestReport> {
     use app_validator::{AppValidationMode, AppValidator};
 
-    let validation_mode: AppValidationMode = mode
-        .parse()
-        .map_err(|e: String| anyhow::anyhow!(e))?;
+    let validation_mode: AppValidationMode =
+        mode.parse().map_err(|e: String| anyhow::anyhow!(e))?;
 
     let mut tester = ServerTester::new(
         url,

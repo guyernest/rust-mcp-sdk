@@ -152,7 +152,10 @@ pub(crate) const MCP_PROTOCOL_VERSION: &str = "mcp-protocol-version";
 
 /// Extract a header value as an owned `String`, if present and valid UTF-8.
 fn extract_header(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
-    headers.get(name).and_then(|v| v.to_str().ok()).map(String::from)
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .map(String::from)
 }
 
 /// Check that an HTTP response has a success status code.
@@ -278,10 +281,7 @@ impl McpProxy {
             id: self.next_id(),
         };
 
-        let response = check_response(
-            self.mcp_post().json(&request_body).send().await?,
-        )
-        .await?;
+        let response = check_response(self.mcp_post().json(&request_body).send().await?).await?;
 
         let session_id = extract_header(response.headers(), MCP_SESSION_ID);
 

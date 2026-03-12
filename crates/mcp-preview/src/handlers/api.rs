@@ -92,7 +92,7 @@ pub async fn list_tools(
                 }
             }
             Ok(Json(ToolsResponse { tools, error: None }))
-        }
+        },
         Err(e) => Ok(Json(ToolsResponse {
             tools: vec![],
             error: Some(e.to_string()),
@@ -396,7 +396,10 @@ pub async fn forward_mcp(
     {
         Ok(result) => {
             let mut headers = HeaderMap::new();
-            headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
             if let Some(ref sid) = result.session_id {
                 if let Ok(val) = HeaderValue::from_str(sid) {
                     headers.insert(MCP_SESSION_ID, val);
