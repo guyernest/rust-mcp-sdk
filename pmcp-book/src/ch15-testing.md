@@ -1425,6 +1425,44 @@ input_schema:
   required: ["param1"]
 ```
 
+## App Metadata Testing
+
+MCP Apps servers need metadata validation beyond standard protocol compliance. The `_meta` structure, resource cross-references, MIME types, and host-specific keys (like ChatGPT's `openai/*` descriptors) must all be correct for widgets to render properly across different hosts.
+
+The `mcp-tester` provides a dedicated `apps` subcommand for this validation:
+
+```bash
+# Standard validation -- checks all App-capable tools
+mcp-tester apps http://localhost:3000
+
+# ChatGPT-specific validation -- also checks openai/* keys
+mcp-tester apps http://localhost:3000 --mode chatgpt
+
+# Claude Desktop validation
+mcp-tester apps http://localhost:3000 --mode claude-desktop
+
+# Strict mode (warnings become failures -- good for CI)
+mcp-tester apps http://localhost:3000 --strict
+```
+
+You can also use the `cargo pmcp` wrapper:
+
+```bash
+cargo pmcp test apps --url http://localhost:3000
+cargo pmcp test apps --url http://localhost:3000 --mode chatgpt --strict
+```
+
+**What gets validated per App-capable tool:**
+
+- `_meta` field is present
+- `ui.resourceUri` is present and well-formed
+- Resource cross-reference (tool's URI matches an entry in `resources/list`)
+- Resource MIME type is valid (`text/html;profile=mcp-app`, etc.)
+- **[ChatGPT mode]** `openai/*` descriptor keys and flat `ui/resourceUri` legacy key
+- **[If present]** `outputSchema` structure
+
+For the full MCP Apps development guide including server-side APIs, widget authoring, and common failure patterns, see [Chapter 12.5: MCP Apps Extension](ch12-5-mcp-apps.md).
+
 ## Summary
 
 Effective MCP server testing requires a layered approach:
