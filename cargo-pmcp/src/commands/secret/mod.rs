@@ -59,7 +59,7 @@ pub enum SecretAction {
         name: String,
 
         /// Write to file instead of stdout
-        #[arg(long)]
+        #[arg(long, short)]
         output: Option<PathBuf>,
 
         /// Omit trailing newline (for piping)
@@ -119,8 +119,8 @@ pub enum SecretAction {
         name: String,
 
         /// Skip confirmation
-        #[arg(long)]
-        force: bool,
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 
     /// Show provider status
@@ -322,11 +322,11 @@ impl SecretCommand {
                 }
             },
 
-            SecretAction::Delete { name, force } => {
+            SecretAction::Delete { name, yes } => {
                 let secret_name = self.resolve_secret_name(name)?;
 
                 // Confirm deletion
-                if !force {
+                if !yes {
                     print!(
                         "Are you sure you want to delete '{}'? Type the secret name to confirm: ",
                         secret_name
@@ -342,7 +342,7 @@ impl SecretCommand {
                     }
                 }
 
-                provider.delete(&secret_name, *force).await?;
+                provider.delete(&secret_name, *yes).await?;
 
                 if !quiet {
                     println!("✅ Secret '{}' deleted.", secret_name);

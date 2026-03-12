@@ -14,17 +14,17 @@ use crate::commands::GlobalFlags;
 /// the scenario with real names.
 pub async fn execute_init(
     url: Option<String>,
-    force: bool,
+    yes: bool,
     global_flags: &GlobalFlags,
 ) -> Result<()> {
     let config_dir = std::env::current_dir()?.join(".pmcp");
     let config_path = config_dir.join("loadtest.toml");
 
     // Check for existing file
-    if config_path.exists() && !force {
+    if config_path.exists() && !yes {
         anyhow::bail!(
             "Config file already exists: {}\n\
-             Use `--force` to overwrite.",
+             Use `--yes` to overwrite.",
             config_path.display()
         );
     }

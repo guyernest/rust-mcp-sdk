@@ -79,9 +79,9 @@ pub enum LoadtestCommand {
         /// Optional server URL for schema discovery
         url: Option<String>,
 
-        /// Overwrite existing config file
-        #[arg(long)]
-        force: bool,
+        /// Skip confirmation / overwrite existing config file
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 
     /// Upload a loadtest config to pmcp.run
@@ -142,9 +142,9 @@ impl LoadtestCommand {
                     oauth_redirect_port,
                 ))
             },
-            LoadtestCommand::Init { url, force } => {
+            LoadtestCommand::Init { url, yes } => {
                 let runtime = tokio::runtime::Runtime::new()?;
-                runtime.block_on(init::execute_init(url, force, global_flags))
+                runtime.block_on(init::execute_init(url, yes, global_flags))
             },
             LoadtestCommand::Upload {
                 server,
