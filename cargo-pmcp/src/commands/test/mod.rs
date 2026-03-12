@@ -319,32 +319,3 @@ impl TestCommand {
     }
 }
 
-// Legacy function for backwards compatibility with old CLI structure
-#[allow(dead_code)]
-pub fn execute(
-    server: String,
-    port: u16,
-    do_generate_scenarios: bool,
-    detailed: bool,
-) -> Result<()> {
-    let gf = GlobalFlags {
-        verbose: false,
-        no_color: false,
-        quiet: false,
-    };
-    if do_generate_scenarios {
-        generate::execute(
-            Some(server.clone()),
-            None,
-            port,
-            None,
-            None, // transport
-            true,
-            true,
-            true,
-            &gf,
-        )?;
-    }
-
-    run::execute(Some(server), None, port, None, None, detailed, &gf) // transport = None
-}
