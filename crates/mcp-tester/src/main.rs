@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use colored::*;
 use std::time::Duration;
 
+mod app_validator;
 mod diagnostics;
 mod report;
 mod scenario;
@@ -184,6 +185,24 @@ enum Commands {
         /// Show detailed output for scenario execution
         #[arg(long, alias = "verbose")]
         detailed: bool,
+    },
+
+    /// Validate MCP App metadata compliance
+    Apps {
+        /// Server URL
+        url: String,
+
+        /// Validation mode: standard, chatgpt, claude-desktop
+        #[arg(long, default_value = "standard")]
+        mode: String,
+
+        /// Test specific tool only
+        #[arg(long)]
+        tool: Option<String>,
+
+        /// Strict mode (promote warnings to failures)
+        #[arg(long)]
+        strict: bool,
     },
 
     /// Generate a scenario file from server's tools
@@ -411,6 +430,27 @@ async fn main() -> Result<()> {
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
                 oauth_middleware.clone(),
+            )
+            .await
+        },
+
+        Commands::Apps {
+            url,
+            mode,
+            tool,
+            strict,
+        } => {
+            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
+            run_apps_validation(
+                &url,
+                &mode,
+                tool,
+                strict,
+                cli.timeout,
+                cli.insecure,
+                cli.api_key.as_deref(),
+                cli.transport.as_deref(),
+                oauth_middleware,
             )
             .await
         },
@@ -843,6 +883,84 @@ async fn generate_scenario(
         error: None,
         details: Some(format!("Scenario generated successfully: {}", output)),
     });
+
+    Ok(report)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_apps_validation(
+    url: &str,
+    mode: &str,
+    tool_filter: Option<String>,
+    strict: bool,
+    timeout: u64,
+    insecure: bool,
+    api_key: Option<&str>,
+    transport: Option<&str>,
+    oauth_middleware: Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>,
+) -> Result<TestReport> {
+    use app_validator::{AppValidationMode, AppValidator};
+
+    let validation_mode = match mode {
+        "standard" => AppValidationMode::Standard,
+        "chatgpt" => AppValidationMode::ChatGpt,
+        "claude-desktop" => AppValidationMode::ClaudeDesktop,
+        other => anyhow::bail!("Unknown validation mode: '{other}'. Use: standard, chatgpt, claude-desktop"),
+    };
+
+    let mut tester = ServerTester::new(
+        url,
+        Duration::from_secs(timeout),
+        insecure,
+        api_key,
+        transport,
+        oauth_middleware,
+    )?;
+
+    // Initialize connection
+    let init_report = tester.run_quick_test().await?;
+    if init_report.has_failures() {
+        return Ok(init_report);
+    }
+
+    // Discover tools and resources
+    let tools_result = tester.list_tools().await?;
+    let resources_result = tester.list_resources().await?;
+
+    let tools = tools_result.tools;
+    let resources = resources_result.resources;
+
+    // Check if any App-capable tools exist
+    let has_app_tools = tools.iter().any(AppValidator::is_app_capable);
+
+    if !has_app_tools && tool_filter.is_none() {
+        let mut report = TestReport::new();
+        report.add_test(report::TestResult {
+            name: "App-capable tools discovery".to_string(),
+            category: report::TestCategory::Apps,
+            status: report::TestStatus::Passed,
+            duration: Duration::from_secs(0),
+            error: None,
+            details: Some(format!(
+                "No App-capable tools found on server ({} tools total)",
+                tools.len()
+            )),
+        });
+        return Ok(report);
+    }
+
+    // Run validation
+    let validator = AppValidator::new(validation_mode, strict, tool_filter);
+    let results = validator.validate_tools(&tools, &resources);
+
+    let mut report = TestReport::new();
+    for result in results {
+        report.add_test(result);
+    }
+
+    if strict {
+        report.apply_strict_mode();
+    }
 
     Ok(report)
 }
