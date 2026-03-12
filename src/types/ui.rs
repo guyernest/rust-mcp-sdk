@@ -598,7 +598,7 @@ mod tests {
         assert_eq!(ui_obj["resourceUri"], "ui://test");
         // Must NOT emit openai/outputTemplate in standard-only mode
         assert!(
-            map.get("openai/outputTemplate").is_none(),
+            !map.contains_key("openai/outputTemplate"),
             "must NOT emit openai/outputTemplate in standard-only mode"
         );
         // Must emit legacy flat key for host compatibility
@@ -720,7 +720,7 @@ mod tests {
 
         // 3. No OpenAI alias (added by host enrichment, not here)
         assert!(
-            map.get("openai/outputTemplate").is_none(),
+            !map.contains_key("openai/outputTemplate"),
             "must NOT emit openai/outputTemplate in standard-only mode"
         );
 
