@@ -122,7 +122,12 @@ Plans:
   3. User can use `--verbose` / `-v` for detailed output on any command (no more `--detailed`)
   4. User can use `--yes` to skip confirmations and `-o` as shorthand for `--output` on any command that supports them
   5. All `--format` flags accept `text` and `json` as values (no other human-readable format names)
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 28-01-PLAN.md — Create shared flag structs (FormatValue, OutputFlags, FormatFlags), convert deploy #[clap()] to #[arg()], clean up dead code
+- [ ] 28-02-PLAN.md — Normalize test/schema/preview/connect/validate/deploy flags: URL positional, verbose removal, format normalization
+- [ ] 28-03-PLAN.md — Normalize app/secret/loadtest/landing flags: URL positional, --force to --yes, -o alias, --server-id to --server
 
 ### Phase 29: Auth Flag Propagation
 **Goal**: Every command that connects to an MCP server accepts OAuth and API-key authentication flags
@@ -199,7 +204,7 @@ Plans:
 | 25. Loadtest Upload | v1.5 | 2/2 | Complete | 2026-02-28 |
 | 26. OAuth Load Testing | v1.5 | 4/4 | Complete | 2026-03-01 |
 | 27. Global Flag Infrastructure | 3/3 | Complete   | 2026-03-04 | - |
-| 28. Flag Normalization | v1.6 | 0/? | Not started | - |
+| 28. Flag Normalization | v1.6 | 0/3 | Not started | - |
 | 29. Auth Flag Propagation | v1.6 | 0/? | Not started | - |
 | 30. Tester CLI Integration | v1.6 | 0/? | Not started | - |
 | 31. New Commands | v1.6 | 0/? | Not started | - |
