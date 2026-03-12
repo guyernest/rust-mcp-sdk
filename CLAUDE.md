@@ -9,7 +9,7 @@ We have ZERO tolerance for defects. Your "clippy warnings won't..." is a P0 prob
 ### Pre-Commit Quality Gates (MANDATORY)
 **ALL commits are blocked until quality gates pass:**
 - Pre-commit hook automatically runs Toyota Way quality checks
-- Format checking: `cargo fmt --check`  
+- Format checking: `cargo fmt --all -- --check`  
 - Clippy analysis: Zero warnings allowed
 - Build verification: Must compile successfully
 - Doctest validation: All doctests must pass
@@ -212,8 +212,11 @@ make test-integration   # Integration tests
 git checkout -b release/pmcp-vX.Y.Z
 
 # 2. Bump version(s) in Cargo.toml
-# 3. Run quality gates
-cargo fmt
+# 3. Run quality gates — IMPORTANT: fmt must cover the ENTIRE workspace
+#    CI runs `cargo fmt --all -- --check` which checks ALL crates, not just
+#    files you changed. Always run `cargo fmt --all` before the release commit
+#    to catch formatting issues introduced by earlier feature commits.
+cargo fmt --all
 cargo clippy -- -D warnings
 cargo build
 cargo test --lib --tests -- --test-threads=1
