@@ -117,7 +117,7 @@ enum Commands {
         client: String,
 
         /// Server URL
-        #[arg(long, default_value = "http://localhost:3000")]
+        #[arg(default_value = "http://localhost:3000")]
         url: String,
     },
 
@@ -180,7 +180,6 @@ enum Commands {
     /// that return widget UI. Simulates the ChatGPT Apps runtime.
     Preview {
         /// URL of the running MCP server
-        #[arg(long)]
         url: String,
 
         /// Port for the preview server

@@ -15,13 +15,9 @@ use std::path::Path;
 pub enum SchemaCommand {
     /// Export schema from an MCP server endpoint
     Export {
-        /// MCP server endpoint URL (e.g., https://db-demo.us-east.true-mcp.com/mcp)
-        #[arg(short, long)]
-        endpoint: Option<String>,
-
-        /// Server ID on pmcp.run (alternative to --endpoint)
-        #[arg(short, long)]
-        server: Option<String>,
+        /// MCP server URL or --server for pmcp.run
+        #[command(flatten)]
+        server_flags: super::flags::ServerFlags,
 
         /// Output file path (default: schemas/<server_id>.json)
         #[arg(short, long)]
@@ -39,9 +35,9 @@ pub enum SchemaCommand {
         /// Local schema file
         schema: String,
 
-        /// MCP server endpoint to compare against
-        #[arg(short, long)]
-        endpoint: String,
+        /// MCP server URL to compare against
+        #[arg(index = 2)]
+        url: String,
     },
 }
 
@@ -52,12 +48,11 @@ impl SchemaCommand {
         runtime.block_on(async {
             match self {
                 SchemaCommand::Export {
-                    endpoint,
-                    server,
+                    server_flags,
                     output,
-                } => export(endpoint, server, output, quiet).await,
+                } => export(server_flags.url, server_flags.server, output, quiet).await,
                 SchemaCommand::Validate { schema } => validate(&schema, quiet).await,
-                SchemaCommand::Diff { schema, endpoint } => diff(&schema, &endpoint, quiet).await,
+                SchemaCommand::Diff { schema, url } => diff(&schema, &url, quiet).await,
             }
         })
     }
@@ -253,9 +248,9 @@ async fn export(
         },
         (None, None) => {
             return Err(anyhow!(
-                "Either --endpoint or --server must be specified\n\n\
+                "Either a URL or --server must be specified\n\n\
                  Examples:\n  \
-                 cargo pmcp schema export --endpoint https://mcp.example.com\n  \
+                 cargo pmcp schema export https://mcp.example.com\n  \
                  cargo pmcp schema export --server db-demo"
             ));
         },
@@ -585,7 +580,7 @@ async fn diff(schema_path: &str, endpoint: &str, quiet: bool) -> Result<()> {
             println!(
                 "Run {} to update local schema",
                 style(format!(
-                    "cargo pmcp schema export --endpoint {} --output {}",
+                    "cargo pmcp schema export {} --output {}",
                     endpoint, schema_path
                 ))
                 .yellow()

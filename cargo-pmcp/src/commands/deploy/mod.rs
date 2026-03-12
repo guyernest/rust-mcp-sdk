@@ -147,11 +147,7 @@ pub enum DeployAction {
     },
 
     /// Test the deployment
-    Test {
-        /// Verbose output
-        #[arg(long)]
-        verbose: bool,
-    },
+    Test {},
 
     /// Rollback to previous version
     Rollback {
@@ -439,9 +435,9 @@ impl DeployCommand {
                         println!("Metrics for {}: {}", target.name(), metrics.period);
                         Ok(())
                     },
-                    DeployAction::Test { verbose } => {
+                    DeployAction::Test {} => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
-                        let results = target.test(&config, *verbose).await?;
+                        let results = target.test(&config, global_flags.verbose).await?;
                         // Test results are requested output
                         if results.success {
                             println!(

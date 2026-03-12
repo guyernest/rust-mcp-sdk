@@ -21,10 +21,6 @@ pub enum ValidateCommand {
         #[arg(long)]
         generate: bool,
 
-        /// Run in verbose mode (show all test output)
-        #[arg(short, long)]
-        verbose: bool,
-
         /// Server directory to validate (defaults to current directory)
         #[arg(long)]
         server: Option<String>,
@@ -33,14 +29,10 @@ pub enum ValidateCommand {
 
 impl ValidateCommand {
     pub fn execute(self, global_flags: &crate::commands::GlobalFlags) -> Result<()> {
-        // quiet mode conveyed via PMCP_QUIET env var for downstream functions
-        let _ = global_flags;
         match self {
-            ValidateCommand::Workflows {
-                generate,
-                verbose,
-                server,
-            } => validate_workflows(generate, verbose, server),
+            ValidateCommand::Workflows { generate, server } => {
+                validate_workflows(generate, global_flags.verbose, server)
+            },
         }
     }
 }
