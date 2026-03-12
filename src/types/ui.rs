@@ -65,7 +65,7 @@ impl UIResource {
     /// (`text/html;profile=mcp-app`).
     ///
     /// This is the recommended constructor for widget resources that work
-    /// across Claude Desktop, ChatGPT, and other MCP hosts.
+    /// across Claude Desktop, `ChatGPT`, and other MCP hosts.
     ///
     /// # Example
     ///

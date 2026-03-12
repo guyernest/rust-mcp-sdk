@@ -1223,7 +1223,7 @@ mod resource_contents_serde {
                     }
                     seq.serialize_element(&Tc { text })?;
                 },
-                other => {
+                other @ Content::Image { .. } => {
                     seq.serialize_element(other)?;
                 },
             }

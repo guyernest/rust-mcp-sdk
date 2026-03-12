@@ -158,7 +158,7 @@ fn find_cdn_import(html: &str, markers: &[&str]) -> Option<(usize, usize)> {
 /// - `ui/initialize` handshake with `hostContext` delivery
 /// - `ui/toolResult` and `ui/hostContextChanged` notifications
 /// - `tools/call` proxy for widget-initiated tool calls
-const EXT_APPS_SHIM: &str = r#"
+const EXT_APPS_SHIM: &str = r"
 // Inline ext-apps App shim (replaces CDN import for hosts that block external scripts)
 const _extPending = new Map();
 let _extNextId = 1;
@@ -212,7 +212,7 @@ class App {
   getHostContext() { return this._hc; }
   async callServerTool(params) { return _extSend('tools/call', params); }
 }
-"#;
+";
 
 /// Inject a script block into HTML, preferring before `</head>`.
 ///
