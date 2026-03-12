@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
-status: in-progress
+status: completed
 stopped_at: Completed 47-02-PLAN.md
-last_updated: "2026-03-12T00:36:30.000Z"
+last_updated: "2026-03-12T00:39:23.931Z"
 last_activity: 2026-03-12 -- Added cargo pmcp test apps subcommand and App-capable hint in check
 progress:
   total_phases: 21
-  completed_phases: 12
-  total_plans: 28
+  completed_phases: 13
+  total_plans: 30
   completed_plans: 28
   percent: 100
 ---
