@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Completed 47-02-PLAN.md
-last_updated: "2026-03-12T00:39:23.931Z"
-last_activity: 2026-03-12 -- Added cargo pmcp test apps subcommand and App-capable hint in check
+stopped_at: Completed 48-03-PLAN.md
+last_updated: "2026-03-12T19:50:11.418Z"
+last_activity: 2026-03-12 -- Added THEME_PALETTES with McpUiStyleVariableKey CSS variables to mcp-preview
 progress:
-  total_phases: 21
+  total_phases: 22
   completed_phases: 13
-  total_plans: 30
-  completed_plans: 28
-  percent: 100
+  total_plans: 33
+  completed_plans: 29
+  percent: 92
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** Phase 47 -- Add MCP App support to mcp-tester
+**Current focus:** Phase 48 -- MCP Apps Documentation and Education Refresh
 
 ## Current Position
 
-Phase: 47 (add-mcp-app-support-to-mcp-tester)
-Plan: 2 of 2 (47-02 complete)
-Status: Completed 47-02 -- cargo pmcp test apps subcommand and check hint
-Last activity: 2026-03-12 -- Added cargo pmcp test apps subcommand and App-capable hint in check
+Phase: 48 (mcp-apps-documentation-and-education-refresh)
+Plan: 3 of 3 (48-03 complete)
+Status: Completed 48-03 -- Theme CSS variable palettes for mcp-preview host context
+Last activity: 2026-03-12 -- Added THEME_PALETTES with McpUiStyleVariableKey CSS variables to mcp-preview
 
-Progress: [██████████] 100%
+Progress: [█████████░] 92%
 
 ## Shipped Milestones
 
@@ -90,6 +90,8 @@ v1.6 decisions:
 - [Phase 46-02]: mcp-preview deliverToolResult emits dual ui/toolResult (primary) + ui/notifications/tool-result (fallback); readiness signal replaces 300ms setTimeout with ui/notifications/initialized listener + 3s fallback
 - [Phase 47-01]: Resource URI cross-reference mismatch produces Warning not Failure; ChatGPT key absence is Warning; AppValidator applies strict mode internally
 - [Phase 47-02]: Apps subcommand follows check.rs pattern for UX consistency; resources listing failure non-fatal (empty vec) since cross-reference is advisory
+- [Phase 48-03]: THEME_PALETTES placed as module-level constant before PreviewRuntime class; THEME_PALETTES[this.theme] || {} for safe palette lookup
+- [Phase 48]: THEME_PALETTES placed as module-level constant before PreviewRuntime class; safe palette lookup with || {}
 
 ### Roadmap Evolution
 
@@ -104,6 +106,7 @@ v1.6 decisions:
 - Phase 45 added: Extend MCP Apps Support to Claude Desktop
 - Phase 46 added: MCP Bridge Review and Fixes
 - Phase 47 added: Add MCP App support to mcp-tester
+- Phase 48 added: MCP Apps Documentation and Education Refresh
 
 ### Pending Todos
 
@@ -115,6 +118,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-12T00:36:30.000Z
-Stopped at: Completed 47-02-PLAN.md
-Resume: Phase 47 complete -- all plans shipped
+Last session: 2026-03-12T19:50:06.425Z
+Stopped at: Completed 48-03-PLAN.md
+Resume: Phase 48 plan 03 complete -- theme CSS variable palettes added to mcp-preview

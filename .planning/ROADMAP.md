@@ -380,16 +380,18 @@ Plans:
 
 ### Phase 48: MCP Apps Documentation and Education Refresh
 
-**Goal:** Update all documentation, tooling READMEs, book chapters, and course materials to reflect the current MCP Apps capabilities including multi-host support (ChatGPT, Claude Desktop), mcp-tester apps validation, mcp-preview improvements, and the developer guide
-**Requirements**: DOCS-01, DOCS-02, DOCS-03, DOCS-04
+**Goal:** Update all documentation, tooling READMEs, book chapters, and course materials to reflect the current MCP Apps capabilities including multi-host support (ChatGPT, Claude Desktop), mcp-tester apps validation, mcp-preview improvements, and the developer guide. Also fix mcp-preview theme support by sending CSS variable palettes in host context.
+**Requirements**: DOCS-01, DOCS-02, DOCS-03, DOCS-04, PREVIEW-01
 **Depends on:** Phase 47
 **Success Criteria** (what must be TRUE):
   1. mcp-tester README documents the `apps` subcommand with usage examples and validation modes
   2. mcp-preview README describes current capabilities including multi-host preview, widget runtime, and DevTools
   3. pmcp-book MCP Apps chapters are updated with current tooling, host layer system, and developer guide content
   4. pmcp-course materials are aligned with book updates
-**Plans:** 2 plans
+  5. mcp-preview sends `styles.variables` CSS custom properties in host context so widgets respond to theme changes
+**Plans:** 1/3 plans executed
 
 Plans:
 - [ ] 48-01-PLAN.md — Update mcp-tester/mcp-preview READMEs and rewrite book ch12-5 MCP Apps chapter with GUIDE.md content
 - [ ] 48-02-PLAN.md — Update pmcp-course ch20 MCP Apps chapters and ch11-02 mcp-tester lesson to align with book
+- [ ] 48-03-PLAN.md — Add theme CSS variable palettes to mcp-preview host context for ext-apps widget theming
