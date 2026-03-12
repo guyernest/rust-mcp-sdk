@@ -200,47 +200,68 @@ make test-integration   # Integration tests
 4. `mcp-preview` (depends on widget-utils)
 5. `cargo-pmcp` (depends on pmcp, mcp-tester, mcp-preview)
 
-### Version Bump
-- Bump version in the relevant `Cargo.toml` files
-- Only bump crates that have changed; downstream crates that depend on a bumped
-  crate must also be bumped if they pin an exact version
-- Run `cargo fmt` after version changes
+### Pre-Flight Checklist
+Before starting a release, verify:
+1. **Update local Rust toolchain** — CI uses `dtolnay/rust-toolchain@stable` (latest stable).
+   Local/CI version mismatch is the #1 cause of CI failures (new clippy lints each release).
+   ```bash
+   rustup update stable
+   rustc --version  # Must match or exceed CI's version
+   ```
+2. **Check crates.io versions** — know what's already published vs what needs bumping:
+   ```bash
+   cargo search pmcp --limit 5
+   cargo search mcp-tester --limit 1
+   cargo search mcp-preview --limit 1
+   ```
+3. **Identify changed crates** — compare against the last release tag:
+   ```bash
+   git diff --stat vLAST..HEAD -- src/ crates/ cargo-pmcp/
+   ```
+
+### Version Bump Rules
+- Only bump crates that have changed since their last publish
+- Downstream crates that pin a bumped dependency must also be bumped
+  (e.g., if `pmcp` bumps, update the `pmcp = { version = "..." }` line in
+  `mcp-tester/Cargo.toml` and `cargo-pmcp/Cargo.toml`, and bump their versions)
+- Semver: new features = minor bump, breaking changes = major bump, fixes = patch
 
 ### Release Steps
 ```bash
-# 1. Create a release branch
+# 1. Update toolchain first
+rustup update stable
+
+# 2. Create a release branch
 git checkout -b release/pmcp-vX.Y.Z
 
-# 2. Bump version(s) in Cargo.toml
-# 3. Run quality gates — IMPORTANT: fmt must cover the ENTIRE workspace
-#    CI runs `cargo fmt --all -- --check` which checks ALL crates, not just
-#    files you changed. Always run `cargo fmt --all` before the release commit
-#    to catch formatting issues introduced by earlier feature commits.
-cargo fmt --all
-cargo clippy -- -D warnings
-cargo build
-cargo test --lib --tests -- --test-threads=1
-# NOTE: CI runs a newer Rust toolchain (e.g. 1.94) than you may have locally.
-# New clippy lints appear each release. Common ones to watch for:
-#   - doc_markdown: backtick product names like `ChatGPT` in doc comments
-#   - used_underscore_binding: using fields named `_meta` (allowed crate-wide)
-#   - map_unwrap_or: use `.map_or(default, f)` instead of `.map(f).unwrap_or(default)`
-#   - redundant_pub_crate: `pub(crate)` inside a private module should be `pub`
-#   - needless_raw_string_hashes: use r"..." instead of r#"..."# when no " inside
-#   - match_wildcard_for_single_variants: name the variant instead of using `_`/`other`
-# If CI clippy fails but local passes, check `rustc --version` vs CI.
+# 3. Bump version(s) in Cargo.toml files
+#    - Root Cargo.toml (pmcp version)
+#    - crates/mcp-tester/Cargo.toml (version + pmcp dep version)
+#    - crates/mcp-preview/Cargo.toml (version)
+#    - cargo-pmcp/Cargo.toml (version + pmcp, mcp-tester, mcp-preview dep versions)
 
-# 4. Commit, push, create PR to upstream (paiml/rust-mcp-sdk)
-git add <changed files>
+# 4. Run the SAME quality gate CI uses — this is the critical step
+#    Do NOT run individual cargo commands; `make quality-gate` matches CI exactly
+#    (fmt --all, clippy with pedantic+nursery lints, build, test, audit, etc.)
+make quality-gate
+
+# 5. Commit, push, create PR to upstream
+git add <changed Cargo.toml files>
 git commit -m "chore: bump pmcp vX.Y.Z"
 git push -u origin release/pmcp-vX.Y.Z
 gh pr create --repo paiml/rust-mcp-sdk --head <your-fork>:release/pmcp-vX.Y.Z --base main
 
-# 5. After PR is merged, pull upstream and tag
+# 6. After PR merges and CI is green, tag and push
 git checkout main && git pull upstream main
 git tag -a vX.Y.Z -m "pmcp vX.Y.Z - <summary>"
 git push upstream vX.Y.Z
 ```
+
+### Why `make quality-gate` (not individual cargo commands)
+CI runs `make quality-gate` which invokes `make lint` with `--features "full"`,
+pedantic + nursery clippy lint groups, and workspace-wide `cargo fmt --all`.
+Running bare `cargo clippy -- -D warnings` locally is **weaker** than CI and will
+miss lints. Always use `make quality-gate` to match CI exactly.
 
 ### What Happens Automatically (CI)
 Pushing a `v*` tag to upstream triggers `.github/workflows/release.yml`:
@@ -250,7 +271,7 @@ Pushing a `v*` tag to upstream triggers `.github/workflows/release.yml`:
 4. **Release Tester Binary** — cross-platform mcp-tester binaries attached to release
 
 ### Tag Convention
-- Tags use `v` prefix: `v1.16.1`, `v0.4.0`
+- Tags use `v` prefix: `v1.17.0`, `v0.4.1`
 - One tag per release — the Release workflow publishes ALL crates that have new versions
 - If a crate version already exists on crates.io, the publish step skips it gracefully
 
@@ -261,4 +282,4 @@ git commit --no-verify -m "HOTFIX: critical issue - bypassing quality gates"
 ```
 
 **Note**: Emergency overrides require immediate follow-up commits to restore quality standards.
-- Before pushing a new commit or a PR you need to run `make test` and `make quality-gate`.
+- Before pushing a new commit or a PR you need to run `make quality-gate`.
