@@ -23,22 +23,11 @@ pub async fn execute(
     global_flags: &GlobalFlags,
 ) -> Result<()> {
     // Parse validation mode
-    let validation_mode = match mode.as_deref() {
-        None | Some("standard") => AppValidationMode::Standard,
-        Some("chatgpt") => AppValidationMode::ChatGpt,
-        Some("claude-desktop") => AppValidationMode::ClaudeDesktop,
-        Some(other) => {
-            anyhow::bail!(
-                "Unknown validation mode: '{other}'. Valid modes: standard, chatgpt, claude-desktop"
-            );
-        }
-    };
-
-    let mode_label = match validation_mode {
-        AppValidationMode::Standard => "standard",
-        AppValidationMode::ChatGpt => "chatgpt",
-        AppValidationMode::ClaudeDesktop => "claude-desktop",
-    };
+    let validation_mode: AppValidationMode = mode
+        .as_deref()
+        .unwrap_or("standard")
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!(e))?;
 
     if global_flags.should_output() {
         println!();
@@ -48,7 +37,7 @@ pub async fn execute(
             "────────────────────────────────────────".bright_cyan()
         );
         println!("  URL:  {}", url.bright_white());
-        println!("  Mode: {}", mode_label.bright_white());
+        println!("  Mode: {}", validation_mode.to_string().bright_white());
         if strict {
             println!("  Strict: {}", "yes".bright_yellow());
         }
@@ -168,7 +157,7 @@ pub async fn execute(
     }
 
     // Run validation
-    let validator = AppValidator::new(validation_mode, strict, tool);
+    let validator = AppValidator::new(validation_mode, tool);
     let results = validator.validate_tools(&tools, &resources);
 
     if results.is_empty() {

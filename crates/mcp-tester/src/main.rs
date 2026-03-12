@@ -901,12 +901,9 @@ async fn run_apps_validation(
 ) -> Result<TestReport> {
     use app_validator::{AppValidationMode, AppValidator};
 
-    let validation_mode = match mode {
-        "standard" => AppValidationMode::Standard,
-        "chatgpt" => AppValidationMode::ChatGpt,
-        "claude-desktop" => AppValidationMode::ClaudeDesktop,
-        other => anyhow::bail!("Unknown validation mode: '{other}'. Use: standard, chatgpt, claude-desktop"),
-    };
+    let validation_mode: AppValidationMode = mode
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!(e))?;
 
     let mut tester = ServerTester::new(
         url,
@@ -925,10 +922,11 @@ async fn run_apps_validation(
 
     // Discover tools and resources
     let tools_result = tester.list_tools().await?;
-    let resources_result = tester.list_resources().await?;
-
     let tools = tools_result.tools;
-    let resources = resources_result.resources;
+    let resources = match tester.list_resources().await {
+        Ok(result) => result.resources,
+        Err(_) => Vec::new(),
+    };
 
     // Check if any App-capable tools exist
     let has_app_tools = tools.iter().any(AppValidator::is_app_capable);
@@ -950,7 +948,7 @@ async fn run_apps_validation(
     }
 
     // Run validation
-    let validator = AppValidator::new(validation_mode, strict, tool_filter);
+    let validator = AppValidator::new(validation_mode, tool_filter);
     let results = validator.validate_tools(&tools, &resources);
 
     let mut report = TestReport::new();
