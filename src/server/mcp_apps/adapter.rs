@@ -92,7 +92,7 @@ impl TransformedResource {
 ///
 /// For mcp-preview, a separate import-map redirect in `index.html` covers
 /// all CDN providers by redirecting to a local bundle with full SDK features.
-pub(crate) fn inline_ext_apps_shim(html: &str) -> std::borrow::Cow<'_, str> {
+pub fn inline_ext_apps_shim(html: &str) -> std::borrow::Cow<'_, str> {
     // Match CDN import patterns for @modelcontextprotocol/ext-apps.
     // NOTE: keep in sync with cdnPattern regex in crates/mcp-preview/assets/index.html
     const CDN_MARKERS: &[&str] = &[
@@ -130,7 +130,7 @@ fn find_cdn_import(html: &str, markers: &[&str]) -> Option<(usize, usize)> {
             if let Some(qp) = quote_pos {
                 // Bound backward search to the current line to avoid matching
                 // an unrelated `import` keyword from an earlier statement.
-                let line_start = html[..qp].rfind('\n').map(|i| i + 1).unwrap_or(0);
+                let line_start = html[..qp].rfind('\n').map_or(0, |i| i + 1);
                 let on_line = &html[line_start..qp];
                 if let Some(rel_offset) = on_line.rfind("import") {
                     let import_kw = line_start + rel_offset;
@@ -138,8 +138,7 @@ fn find_cdn_import(html: &str, markers: &[&str]) -> Option<(usize, usize)> {
                     let after_marker = &html[marker_pos + marker.len()..];
                     let close_quote = after_marker
                         .find(['"', '\''])
-                        .map(|i| marker_pos + marker.len() + i + 1)
-                        .unwrap_or(html.len());
+                        .map_or(html.len(), |i| marker_pos + marker.len() + i + 1);
                     // Skip trailing semicolon and whitespace
                     let mut end = close_quote;
                     while end < html.len() && matches!(html.as_bytes()[end], b';' | b' ' | b'\t') {

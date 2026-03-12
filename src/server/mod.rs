@@ -1633,7 +1633,7 @@ pub struct ServerBuilder {
     /// HTTP middleware chain for `StreamableHttpServer`
     #[cfg(feature = "streamable-http")]
     http_middleware: Option<Arc<http_middleware::ServerHttpMiddlewareChain>>,
-    /// Host layers for MCP Apps metadata enrichment (e.g., ChatGPT)
+    /// Host layers for MCP Apps metadata enrichment (e.g., `ChatGPT`)
     #[cfg(feature = "mcp-apps")]
     host_layers: Vec<crate::types::mcp_apps::HostType>,
 }

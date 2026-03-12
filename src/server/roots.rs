@@ -50,10 +50,7 @@ impl Default for RootsManager {
 impl std::fmt::Debug for RootsManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RootsManager")
-            .field(
-                "roots",
-                &self.roots.try_read().map(|r| r.len()).unwrap_or(0),
-            )
+            .field("roots", &self.roots.try_read().map_or(0, |r| r.len()))
             .finish()
     }
 }

@@ -239,7 +239,7 @@ impl UIResourceContents {
     /// (`text/html;profile=mcp-app`).
     ///
     /// This is the correct MIME type for widgets rendered by Claude Desktop,
-    /// ChatGPT, and other MCP hosts that support the ext-apps protocol.
+    /// `ChatGPT`, and other MCP hosts that support the ext-apps protocol.
     pub fn html(uri: impl Into<String>, html: impl Into<String>) -> Self {
         Self {
             uri: uri.into(),
@@ -385,7 +385,7 @@ pub fn filter_meta_by_prefix(
 /// (`ui/resourceUri`) is emitted by [`insert_legacy_resource_uri_key`], which
 /// callers should invoke on the top-level `_meta` map immediately after.
 ///
-/// Host-specific keys (e.g., `openai/outputTemplate` for ChatGPT) are added
+/// Host-specific keys (e.g., `openai/outputTemplate` for `ChatGPT`) are added
 /// by the host-layer enrichment pipeline at server build time.
 pub fn emit_resource_uri_keys(ui_obj: &mut serde_json::Map<String, serde_json::Value>, uri: &str) {
     let uri_val = serde_json::Value::String(uri.to_string());
@@ -400,7 +400,7 @@ pub(crate) const META_KEY_UI_RESOURCE_URI: &str = "ui/resourceUri";
 
 /// Insert legacy flat `ui/resourceUri` key into a top-level `_meta` map.
 ///
-/// Hosts like Claude Desktop and ChatGPT read this flat key to identify
+/// Hosts like Claude Desktop and `ChatGPT` read this flat key to identify
 /// MCP App tools. Called by both `ToolUIMetadata::build_meta_map` and
 /// `WidgetMeta::to_meta_map` to keep the logic in one place.
 pub(crate) fn insert_legacy_resource_uri_key(

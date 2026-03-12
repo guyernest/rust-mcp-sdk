@@ -72,6 +72,8 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::return_self_not_must_use)]
 #![allow(clippy::multiple_crate_versions)]
+// _meta is a protocol field name mandated by the MCP spec; suppress underscore lint
+#![allow(clippy::used_underscore_binding)]
 #![allow(clippy::result_large_err)]
 
 pub mod assets;

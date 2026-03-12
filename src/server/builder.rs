@@ -74,7 +74,7 @@ pub struct ServerCoreBuilder {
     task_router: Option<Arc<dyn TaskRouter>>,
     /// Stateless mode for serverless deployments (None = auto-detect)
     stateless_mode: Option<bool>,
-    /// Host-specific metadata layers (e.g., ChatGpt for openai/* keys)
+    /// Host-specific metadata layers (e.g., `ChatGpt` for openai/* keys)
     #[cfg(feature = "mcp-apps")]
     host_layers: Vec<crate::types::mcp_apps::HostType>,
 }

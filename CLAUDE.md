@@ -220,6 +220,13 @@ cargo fmt --all
 cargo clippy -- -D warnings
 cargo build
 cargo test --lib --tests -- --test-threads=1
+# NOTE: CI runs a newer Rust toolchain (e.g. 1.94) than you may have locally.
+# New clippy lints appear each release. Common ones to watch for:
+#   - doc_markdown: backtick product names like `ChatGPT` in doc comments
+#   - used_underscore_binding: using fields named `_meta` (allowed crate-wide)
+#   - map_unwrap_or: use `.map_or(default, f)` instead of `.map(f).unwrap_or(default)`
+#   - redundant_pub_crate: `pub(crate)` inside a private module should be `pub`
+# If CI clippy fails but local passes, check `rustc --version` vs CI.
 
 # 4. Commit, push, create PR to upstream (paiml/rust-mcp-sdk)
 git add <changed files>
