@@ -1,9 +1,9 @@
 //! MCP Apps project management commands.
 //!
 //! Provides `cargo pmcp app new <name>` for scaffolding,
-//! `cargo pmcp app manifest --url <URL>` for generating ChatGPT-compatible
+//! `cargo pmcp app manifest <URL>` for generating ChatGPT-compatible
 //! manifest JSON, `cargo pmcp app landing` for generating a standalone demo
-//! page, and `cargo pmcp app build --url <URL>` for producing both artifacts.
+//! page, and `cargo pmcp app build <URL>` for producing both artifacts.
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
@@ -28,13 +28,12 @@ pub enum AppCommand {
     /// Generate ChatGPT-compatible manifest JSON
     Manifest {
         /// Server URL (required)
-        #[arg(long)]
         url: String,
         /// Logo URL (overrides [package.metadata.pmcp].logo)
         #[arg(long)]
         logo: Option<String>,
         /// Output directory
-        #[arg(long, default_value = "dist")]
+        #[arg(long, short, default_value = "dist")]
         output: String,
     },
     /// Generate standalone landing page HTML
@@ -43,13 +42,12 @@ pub enum AppCommand {
         #[arg(long)]
         widget: Option<String>,
         /// Output directory
-        #[arg(long, default_value = "dist")]
+        #[arg(long, short, default_value = "dist")]
         output: String,
     },
     /// Generate both manifest and landing page
     Build {
         /// Server URL (required for manifest)
-        #[arg(long)]
         url: String,
         /// Logo URL
         #[arg(long)]
@@ -58,7 +56,7 @@ pub enum AppCommand {
         #[arg(long)]
         widget: Option<String>,
         /// Output directory
-        #[arg(long, default_value = "dist")]
+        #[arg(long, short, default_value = "dist")]
         output: String,
     },
 }
@@ -243,7 +241,7 @@ fn print_next_steps(name: &str) {
     println!("    {}", "cargo run &".bright_yellow());
     println!(
         "    {}",
-        "cargo pmcp preview --url http://localhost:3000 --open".bright_yellow()
+        "cargo pmcp preview http://localhost:3000 --open".bright_yellow()
     );
     println!();
     println!(
