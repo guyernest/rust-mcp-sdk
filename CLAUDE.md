@@ -226,6 +226,8 @@ cargo test --lib --tests -- --test-threads=1
 #   - used_underscore_binding: using fields named `_meta` (allowed crate-wide)
 #   - map_unwrap_or: use `.map_or(default, f)` instead of `.map(f).unwrap_or(default)`
 #   - redundant_pub_crate: `pub(crate)` inside a private module should be `pub`
+#   - needless_raw_string_hashes: use r"..." instead of r#"..."# when no " inside
+#   - match_wildcard_for_single_variants: name the variant instead of using `_`/`other`
 # If CI clippy fails but local passes, check `rustc --version` vs CI.
 
 # 4. Commit, push, create PR to upstream (paiml/rust-mcp-sdk)
