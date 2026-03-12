@@ -361,3 +361,19 @@ Plans:
 - [ ] 46-01-PLAN.md — Fix bridge protocol method name mismatch in adapter.rs and App class normalization
 - [ ] 46-02-PLAN.md — Fix mcp-preview tool result delivery with readiness signal and dual method emission
 - [ ] 46-03-PLAN.md — Add Bridge diagnostics tab to mcp-preview and verify complete fix with real widget
+
+### Phase 47: Add MCP App support to mcp-tester
+
+**Goal:** Add MCP App protocol metadata validation to mcp-tester and cargo pmcp test, enabling CLI-based App compliance checks (metadata-only, no browser) with standard and host-specific modes
+**Requirements**: APP-VAL-01, APP-VAL-02, APP-VAL-03, APP-VAL-04, APP-VAL-05
+**Depends on:** Phase 46
+**Success Criteria** (what must be TRUE):
+  1. User can run `mcp-tester apps <url>` or `cargo pmcp test apps --url <url>` to validate App metadata on any MCP server
+  2. Validation checks ui.resourceUri, MIME types, resource cross-references, and optionally ChatGPT-specific keys
+  3. `cargo pmcp test check` shows hint when App-capable tools are detected
+  4. --strict promotes warnings to failures, --tool filters to single tool, --mode selects host-specific checks
+**Plans:** 2 plans
+
+Plans:
+- [ ] 47-01-PLAN.md -- AppValidator module, TestCategory::Apps, mcp-tester apps subcommand
+- [ ] 47-02-PLAN.md -- cargo pmcp test apps subcommand, check command App hint
