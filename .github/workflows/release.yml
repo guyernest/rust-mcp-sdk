@@ -12,6 +12,8 @@ jobs:
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.VERSION }}
     steps:
     - uses: actions/checkout@v6
 
@@ -188,3 +190,19 @@ jobs:
 
     - name: Publish to MCP Registry
       run: ./mcp-publisher publish
+
+  build-tester:
+    name: Build Tester Binaries
+    needs: create-release
+    uses: ./.github/workflows/release-tester.yml
+    with:
+      tag_name: ${{ needs.create-release.outputs.version }}
+    secrets: inherit
+
+  build-preview:
+    name: Build Preview Binaries
+    needs: create-release
+    uses: ./.github/workflows/release-preview.yml
+    with:
+      tag_name: ${{ needs.create-release.outputs.version }}
+    secrets: inherit
