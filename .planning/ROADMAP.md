@@ -138,7 +138,12 @@ Plans:
   2. User can pass OAuth flags (--oauth-issuer, --oauth-client-id, --oauth-scopes, --oauth-no-cache, --oauth-redirect-port) to any of those same commands
   3. Auth flags are defined in a shared struct (AuthFlags or similar) flattened into each command, not duplicated per command
   4. Commands that already had auth support (e.g., loadtest) continue to work unchanged
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 29-01-PLAN.md — Define AuthFlags struct, AuthMethod enum, resolve() method in flags.rs; create shared auth.rs with resolve_auth_middleware()
+- [ ] 29-02-PLAN.md — Flatten AuthFlags into test check/run/generate/apps, wire handlers; migrate loadtest inline auth to shared AuthFlags
+- [ ] 29-03-PLAN.md — Add AuthFlags to preview/schema export/connect; extend McpProxy with auth_header; wire connect config generation
 
 ### Phase 30: Tester CLI Integration
 **Goal**: Users can run all mcp-tester capabilities through cargo pmcp test subcommands with consistent flag conventions
@@ -205,7 +210,7 @@ Plans:
 | 26. OAuth Load Testing | v1.5 | 4/4 | Complete | 2026-03-01 |
 | 27. Global Flag Infrastructure | 3/3 | Complete   | 2026-03-04 | - |
 | 28. Flag Normalization | 3/3 | Complete   | 2026-03-12 | - |
-| 29. Auth Flag Propagation | v1.6 | 0/? | Not started | - |
+| 29. Auth Flag Propagation | v1.6 | 0/3 | Not started | - |
 | 30. Tester CLI Integration | v1.6 | 0/? | Not started | - |
 | 31. New Commands | v1.6 | 0/? | Not started | - |
 | 32. Help Text Polish | v1.6 | 0/? | Not started | - |
