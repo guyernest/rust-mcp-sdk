@@ -11,7 +11,7 @@ documentation = "https://docs.rs/pmcp"
 readme = "README.md"
 keywords = ["mcp", "model-context", "sdk", "ai", "llm"]
 categories = ["api-bindings", "asynchronous", "network-programming"]
-rust-version = "1.82.0"
+rust-version = "1.83.0"
 exclude = [
     "docs/",
     "packages/",
@@ -90,7 +90,7 @@ notify = { version = "8.2", optional = true }
 glob-match = { version = "0.2", optional = true }
 
 # Validation (optional, feature-gated)
-jsonschema = { version = "0.38", optional = true }
+jsonschema = { version = "0.45", optional = true }
 garde = { version = "0.22", optional = true }
 
 # SIMD support (optional)
@@ -101,7 +101,7 @@ rayon = { version = "1.10", optional = true }
 tokio = { version = "1.46", features = ["full"] }
 tokio-stream = { version = "0.1.15" }
 tokio-util = { version = "0.7", features = ["rt"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "form"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

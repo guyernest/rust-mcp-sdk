@@ -43,7 +43,7 @@ cargo_metadata = "0.23"
 
 # For pmcp-run target and landing pages
 oauth2 = "5.0"                          # OAuth 2.0 authentication
-reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls"], default-features = false }  # HTTP client with multipart support
+reqwest = { version = "0.13", features = ["json", "multipart", "rustls", "form"], default-features = false }  # HTTP client with multipart support
 tiny_http = "0.12"                      # OAuth callback server
 open = "5.0"                            # Browser launch
 chrono = "0.4"                          # Token expiry handling
