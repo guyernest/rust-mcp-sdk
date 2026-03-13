@@ -291,3 +291,20 @@ jobs:
     
     - name: Check MSRV
       run: cargo check --all-features
+
+  # Unified gate — single required check for branch protection / org rulesets.
+  # Update org ruleset to require "CI / gate" instead of "unified / gate".
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    needs: [test, quality-gate]
+    if: always()
+    steps:
+      - name: Evaluate required checks
+        run: |
+          if [[ "${{ needs.test.result }}" != "success" ]] || \
+             [[ "${{ needs.quality-gate.result }}" != "success" ]]; then
+            echo "Required checks failed: test=${{ needs.test.result }}, quality-gate=${{ needs.quality-gate.result }}"
+            exit 1
+          fi
+          echo "All required checks passed."
