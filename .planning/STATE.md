@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Phase 29 context gathered
-last_updated: "2026-03-13T00:21:09.198Z"
-last_activity: 2026-03-12 -- Positional URLs on 8 commands, global verbose on 5 commands, FormatValue on download
+stopped_at: Completed 29-01-PLAN.md
+last_updated: "2026-03-13T01:05:40.000Z"
+last_activity: 2026-03-13 -- AuthFlags struct, AuthMethod enum, resolve_auth_middleware() shared module
 progress:
   total_phases: 22
   completed_phases: 15
   total_plans: 36
-  completed_plans: 34
-  percent: 94
+  completed_plans: 35
+  percent: 97
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** Phase 28 -- Flag Normalization
+**Current focus:** Phase 29 -- Auth Flag Propagation
 
 ## Current Position
 
-Phase: 28 (flag-normalization)
-Plan: 2 of 3 (28-02 complete)
-Status: Completed 28-02 -- Test/schema/preview/connect/validate/deploy flag normalization
-Last activity: 2026-03-12 -- Positional URLs on 8 commands, global verbose on 5 commands, FormatValue on download
+Phase: 29 (auth-flag-propagation)
+Plan: 1 of 3 (29-01 complete)
+Status: Completed 29-01 -- Auth flag infrastructure (AuthFlags, AuthMethod, resolve_auth_middleware)
+Last activity: 2026-03-13 -- AuthFlags struct, AuthMethod enum, resolve_auth_middleware() shared module
 
-Progress: [█████████░] 94%
+Progress: [█████████░] 97%
 
 ## Shipped Milestones
 
@@ -46,7 +46,7 @@ Progress: [█████████░] 94%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 56 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6)
+- Total plans completed: 57 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 1)
 - Total phases completed: 26
 
 ## Accumulated Context
@@ -98,6 +98,7 @@ v1.6 decisions:
 - [Phase 28]: Retained #[allow(dead_code)] on GlobalFlags.verbose until Plans 02/03 add readers
 - [Phase 28-02]: Removed #[allow(dead_code)] from GlobalFlags.verbose (now read by check, apps, run, validate, deploy); download format yaml->json default; schema diff url positional at index 2
 - [Phase 28-03]: Landing deploy handler parameter server_id kept as internal API name; CLI field renamed to server
+- [Phase 29-01]: allow(dead_code) on AuthMethod/resolve()/resolve_auth_middleware()/resolve_api_key() until Plans 02/03 add consumers; AuthMethod derives PartialEq for test assertions
 
 ### Roadmap Evolution
 
@@ -124,6 +125,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T00:21:09.194Z
-Stopped at: Phase 29 context gathered
-Resume: Phase 28 plans 01, 02 complete -- proceed to 28-03 (app/secret/loadtest/landing normalization)
+Last session: 2026-03-13T01:05:40Z
+Stopped at: Completed 29-01-PLAN.md
+Resume: Phase 29 plan 01 complete -- proceed to 29-02 (wire AuthFlags into test/preview/schema/connect commands)
