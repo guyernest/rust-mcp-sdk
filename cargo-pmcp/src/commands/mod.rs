@@ -1,5 +1,6 @@
 pub mod add;
 pub mod app;
+pub mod auth;
 pub mod connect;
 pub mod deploy;
 pub mod dev;
