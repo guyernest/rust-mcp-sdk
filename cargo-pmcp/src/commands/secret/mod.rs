@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
 
+use crate::commands::flags::FormatValue;
 use crate::secrets::{
     config::{detect_target, SecretTarget, SecretsConfig},
     ListOptions, ProviderRegistry, SecretCharset, SecretValue, SetOptions,
@@ -29,8 +30,8 @@ pub struct SecretCommand {
     server: Option<String>,
 
     /// Output format (text, json)
-    #[arg(long, default_value = "text", global = true)]
-    format: String,
+    #[arg(long, value_enum, default_value = "text", global = true)]
+    format: FormatValue,
 
     /// Suppress non-essential output
     #[arg(long, global = true)]
@@ -185,7 +186,7 @@ impl SecretCommand {
 
                 let result = provider.list(options).await?;
 
-                if self.format == "json" {
+                if matches!(self.format, FormatValue::Json) {
                     println!("{}", serde_json::to_string_pretty(&result.secrets)?);
                 } else {
                     if result.secrets.is_empty() {
