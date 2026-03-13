@@ -1,0 +1,127 @@
+# Reusable workflow: build a single binary package for all platforms.
+# Called from release.yml for mcp-tester and mcp-preview.
+name: Release Binary
+
+on:
+  workflow_call:
+    inputs:
+      tag_name:
+        required: true
+        type: string
+      package_name:
+        required: true
+        type: string
+        description: 'Cargo package name (mcp-tester or mcp-preview)'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag (leave empty for latest)'
+        required: false
+        type: string
+      package_name:
+        description: 'Package to build'
+        required: true
+        type: choice
+        options:
+          - mcp-tester
+          - mcp-preview
+
+jobs:
+  build-release:
+    name: Build ${{ inputs.package_name }} (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-release-${{ inputs.package_name }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-release-${{ inputs.package_name }}-
+
+      - name: Build binary
+        shell: bash
+        env:
+          PACKAGE: ${{ inputs.package_name }}
+          TARGET: ${{ matrix.target }}
+        run: cargo build --release --package "$PACKAGE" --target "$TARGET"
+
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.tag_name }}
+        run: |
+          TAG="$INPUT_TAG"
+          if [ -z "$TAG" ]; then
+            TAG=$(gh release list --limit 1 --json tagName -q '.[0].tagName')
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::No tag provided and no existing releases found"
+            exit 1
+          fi
+          echo "TAG_NAME=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Prepare artifact and checksum
+        shell: bash
+        env:
+          PACKAGE: ${{ inputs.package_name }}
+          TARGET: ${{ matrix.target }}
+          RUNNER_OS_NAME: ${{ matrix.os }}
+        run: |
+          cd "target/${TARGET}/release"
+          if [ "$RUNNER_OS_NAME" = "windows-latest" ]; then
+            ASSET="${PACKAGE}-${TARGET}.exe"
+            mv "${PACKAGE}.exe" "$ASSET"
+          else
+            ASSET="${PACKAGE}-${TARGET}"
+            mv "$PACKAGE" "$ASSET"
+          fi
+          # Generate SHA256 checksum
+          if command -v sha256sum &>/dev/null; then
+            sha256sum "$ASSET" > "${ASSET}.sha256"
+          else
+            shasum -a 256 "$ASSET" > "${ASSET}.sha256"
+          fi
+          echo "ASSET_NAME=$ASSET" >> $GITHUB_ENV
+
+      - name: Upload binary and checksum
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.tag.outputs.TAG_NAME }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          gh release upload "$TAG_NAME" \
+            "target/${TARGET}/release/${ASSET_NAME}" \
+            "target/${TARGET}/release/${ASSET_NAME}.sha256" \
+            --clobber

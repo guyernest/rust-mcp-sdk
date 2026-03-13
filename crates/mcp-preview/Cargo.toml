@@ -1,6 +1,6 @@
 [package]
 name = "mcp-preview"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 description = "MCP Apps Preview Server - Browser-based UI testing for MCP widgets"
 license = "MIT OR Apache-2.0"
@@ -36,3 +36,7 @@ futures = "0.3"
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+[package.metadata.binstall]
+pkg-url = "https://github.com/paiml/rust-mcp-sdk/releases/download/v{ version }/{ name }-{ target }{ binary-ext }"
+pkg-fmt = "bin"

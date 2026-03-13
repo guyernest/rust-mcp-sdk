@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Completed 49-01-PLAN.md (Phase 49 complete)
-last_updated: "2026-03-13T03:03:41.848Z"
-last_activity: 2026-03-13 -- Bump reqwest 0.13 and jsonschema 0.45
+stopped_at: Completed 50-02-PLAN.md
+last_updated: "2026-03-13T17:14:56.546Z"
+last_activity: 2026-03-13 -- Installer scripts and cargo-binstall metadata for binary distribution
 progress:
-  total_phases: 23
-  completed_phases: 17
-  total_plans: 40
-  completed_plans: 38
+  total_phases: 24
+  completed_phases: 18
+  total_plans: 42
+  completed_plans: 40
   percent: 97
 ---
 
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** Phase 49 -- Bump Dependencies (reqwest 0.13, jsonschema 0.45)
+**Current focus:** Phase 50 -- Improve Binary Release
 
 ## Current Position
 
-Phase: 49 (bump-dependencies-reqwest-0-13-jsonschema-0-45)
-Plan: 1 of 1 (49-01 complete)
-Status: Phase 49 complete -- reqwest 0.13 and jsonschema 0.45 across workspace
-Last activity: 2026-03-13 -- Bump reqwest 0.13 and jsonschema 0.45
+Phase: 50 (improve-binary-release) -- COMPLETE
+Plan: 2 of 2 (50-02 complete)
+Status: Phase 50 complete -- installer scripts and cargo-binstall metadata for binary distribution
+Last activity: 2026-03-13 -- Installer scripts and cargo-binstall metadata for binary distribution
 
-Progress: [█████████░] 97%
+Progress: [██████████] 97%
 
 ## Shipped Milestones
 
@@ -46,8 +46,8 @@ Progress: [█████████░] 97%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 60 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 3, misc: 1)
-- Total phases completed: 27
+- Total plans completed: 61 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 4, misc: 1)
+- Total phases completed: 28
 
 ## Accumulated Context
 
@@ -102,6 +102,10 @@ v1.6 decisions:
 - [Phase 29-02]: Middleware-only auth for ServerTester (None for api_key, middleware for chain) to avoid double headers; warning approach for run/generate library functions without auth passthrough
 - [Phase 29-03]: McpProxy uses auth_header string (not middleware chain) since it uses raw reqwest; OAuth acquires token once at startup via get_access_token(); connect_inspector ignores auth; schema diff auth deferred
 - [Phase 49-01]: Use oauth2::reqwest::Client for oauth2 token exchange (oauth2 5.0 re-exports reqwest 0.12); MSRV bumped 1.82->1.83 for jsonschema 0.45; accept dual reqwest in lockfile
+- [Phase 50-01]: Rust target triples for asset naming; per-binary .sha256 files; macos-15-intel for x86_64, macos-14 for aarch64; ubuntu-24.04-arm for ARM Linux; fail-fast: false
+- [Phase 50]: Rust target triples for asset naming; per-binary .sha256 files; macos-15-intel for x86_64, macos-14 for aarch64; ubuntu-24.04-arm for ARM Linux
+- [Phase 50-02]: POSIX /bin/sh for install.sh; explicit repo URL in binstall pkg-url; pkg-fmt = bin for bare binaries; v{ version } prefix for tag convention
+- [Phase 50]: POSIX /bin/sh for install.sh; explicit repo URL in binstall pkg-url; pkg-fmt = bin for bare binaries; v{ version } prefix for tag convention
 
 ### Roadmap Evolution
 
@@ -118,6 +122,7 @@ v1.6 decisions:
 - Phase 47 added: Add MCP App support to mcp-tester
 - Phase 48 added: MCP Apps Documentation and Education Refresh
 - Phase 49 added: Bump dependencies (reqwest 0.13, jsonschema 0.45)
+- Phase 50 added: Improve Binary Release
 
 ### Pending Todos
 
@@ -129,6 +134,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T02:58:57Z
-Stopped at: Completed 49-01-PLAN.md (Phase 49 complete)
-Resume: Phase 49 complete -- reqwest 0.13 and jsonschema 0.45 bumped across workspace.
+Last session: 2026-03-13T17:14:52.484Z
+Stopped at: Completed 50-02-PLAN.md
+Resume: Phase 50 complete -- binary release pipeline with installer scripts and binstall metadata.
