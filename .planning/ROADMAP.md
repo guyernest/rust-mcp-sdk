@@ -420,3 +420,20 @@ Plans:
 
 Plans:
 - [ ] 49-01-PLAN.md — Update all Cargo.toml files, MSRV, deprecated methods, and template strings for reqwest 0.13 + jsonschema 0.45
+
+### Phase 50: Improve Binary Release
+
+**Goal:** Fix the broken binary release auto-trigger, add Apple Silicon and Linux ARM64 targets, create installer scripts, add cargo-binstall metadata, and generate SHA256 checksums for mcp-tester and mcp-preview
+**Requirements**: TRIGGER, ARM-MAC, ARM-LIN, CHECKSUMS, INSTALL-SH, INSTALL-PS1, BINSTALL
+**Depends on:** Phase 49
+**Success Criteria** (what must be TRUE):
+  1. Pushing a v* tag triggers binary builds for both mcp-tester and mcp-preview automatically
+  2. Release includes binaries for 5 targets: x86_64-linux, aarch64-linux, x86_64-macos, aarch64-macos, x86_64-windows
+  3. Each binary has a corresponding SHA256 checksum file on the release
+  4. Users can install binaries via curl|sh (Linux/macOS) or PowerShell (Windows)
+  5. cargo binstall metadata is present in both crate Cargo.toml files
+**Plans:** 2 plans
+
+Plans:
+- [ ] 50-01-PLAN.md — Convert binary workflows to reusable workflow_call, fix runner labels, add ARM64 targets, add SHA256 checksums
+- [ ] 50-02-PLAN.md — Create install.sh and install.ps1 installer scripts, add cargo-binstall metadata to Cargo.toml files
