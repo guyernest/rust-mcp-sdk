@@ -5,7 +5,7 @@ use colored::Colorize;
 use mcp_tester::{generate_scenarios_with_transport, GenerateOptions};
 use std::path::PathBuf;
 
-use crate::commands::flags::{AuthFlags, ServerFlags};
+use crate::commands::flags::{AuthFlags, AuthMethod, ServerFlags};
 use crate::commands::GlobalFlags;
 
 /// Generate test scenarios from server capabilities
@@ -20,7 +20,16 @@ pub fn execute(
     auth_flags: &AuthFlags,
     global_flags: &GlobalFlags,
 ) -> Result<()> {
-    let _ = auth_flags; // Auth wiring deferred to Plan 29-02
+    // Warn if auth is configured: generate_scenarios_with_transport() does not yet support auth passthrough
+    let auth_method = auth_flags.resolve();
+    if !matches!(auth_method, AuthMethod::None) {
+        eprintln!(
+            "Warning: Auth flags are accepted but generate_scenarios_with_transport does not yet \
+             support auth passthrough. For authenticated servers, use `cargo pmcp test check` \
+             to verify connectivity."
+        );
+    }
+
     let (target_url, server) = server_flags.resolve_url(port)?;
 
     if global_flags.should_output() {

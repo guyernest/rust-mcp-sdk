@@ -1,15 +1,15 @@
 //! `cargo pmcp loadtest run` command implementation.
 
 use anyhow::Result;
-use pmcp::client::http_middleware::HttpMiddlewareChain;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use cargo_pmcp::loadtest::config::LoadTestConfig;
 use cargo_pmcp::loadtest::engine::LoadTestEngine;
 use cargo_pmcp::loadtest::report::{write_report, LoadTestReport};
 use cargo_pmcp::loadtest::summary::render_summary;
 
+use crate::commands::auth;
+use crate::commands::flags::{AuthFlags, AuthMethod};
 use crate::commands::GlobalFlags;
 
 /// Execute the `loadtest run` command.
@@ -24,12 +24,7 @@ pub async fn execute_run(
     iterations: Option<u64>,
     no_report: bool,
     global_flags: &GlobalFlags,
-    api_key: Option<String>,
-    oauth_client_id: Option<String>,
-    oauth_issuer: Option<String>,
-    oauth_scopes: Option<Vec<String>>,
-    oauth_no_cache: bool,
-    oauth_redirect_port: u16,
+    auth_flags: &AuthFlags,
 ) -> Result<()> {
     let no_color = global_flags.no_color;
     // Step 1: Load config
@@ -66,17 +61,9 @@ pub async fn execute_run(
     apply_overrides(&mut config, vus, duration, global_flags);
 
     // Step 2.5: Set up authentication middleware (acquire token ONCE before spawning VUs)
-    let is_oauth = oauth_client_id.is_some();
-    let http_middleware_chain = resolve_auth_middleware(
-        &url,
-        api_key,
-        oauth_client_id,
-        oauth_issuer,
-        oauth_scopes,
-        oauth_no_cache,
-        oauth_redirect_port,
-    )
-    .await?;
+    let auth_method = auth_flags.resolve();
+    let is_oauth = matches!(&auth_method, AuthMethod::OAuth { .. });
+    let http_middleware_chain = auth::resolve_auth_middleware(&url, &auth_method).await?;
 
     if global_flags.should_output() {
         match &http_middleware_chain {
@@ -171,73 +158,6 @@ fn discover_config() -> Option<PathBuf> {
             return None;
         }
     }
-}
-
-/// Resolve authentication middleware from CLI flags.
-///
-/// Checks for API key (simpler, takes precedence) or OAuth client ID
-/// (triggers full OAuth flow). Returns `None` when no auth is configured.
-/// OAuth token acquisition happens once at startup (fail-fast on bad config).
-async fn resolve_auth_middleware(
-    mcp_server_url: &str,
-    api_key: Option<String>,
-    oauth_client_id: Option<String>,
-    oauth_issuer: Option<String>,
-    oauth_scopes: Option<Vec<String>>,
-    oauth_no_cache: bool,
-    oauth_redirect_port: u16,
-) -> Result<Option<Arc<HttpMiddlewareChain>>> {
-    // API key takes precedence (simpler, no flow needed)
-    if let Some(key) = api_key {
-        use pmcp::client::oauth_middleware::{BearerToken, OAuthClientMiddleware};
-
-        if std::env::var("PMCP_QUIET").is_err() {
-            eprintln!("Using API key authentication");
-        }
-        let bearer_token = BearerToken::new(key);
-        let middleware = OAuthClientMiddleware::new(bearer_token);
-        let mut chain = HttpMiddlewareChain::new();
-        chain.add(Arc::new(middleware));
-        return Ok(Some(Arc::new(chain)));
-    }
-
-    // OAuth flow if client_id is provided
-    if let Some(client_id) = oauth_client_id {
-        use pmcp::client::oauth::{default_cache_path, OAuthConfig, OAuthHelper};
-
-        let scopes = oauth_scopes.unwrap_or_else(|| vec!["openid".to_string()]);
-        let cache_file = if oauth_no_cache {
-            None
-        } else {
-            Some(default_cache_path())
-        };
-
-        let config = OAuthConfig {
-            issuer: oauth_issuer.clone(),
-            mcp_server_url: Some(mcp_server_url.to_string()),
-            client_id,
-            scopes,
-            cache_file,
-            redirect_port: oauth_redirect_port,
-        };
-
-        let helper =
-            OAuthHelper::new(config).map_err(|e| anyhow::anyhow!("OAuth setup failed: {e}"))?;
-        let chain = helper
-            .create_middleware_chain()
-            .await
-            .map_err(|e| anyhow::anyhow!("OAuth authentication failed: {e}"))?;
-        return Ok(Some(chain));
-    }
-
-    // Warn if issuer provided without client_id
-    if oauth_issuer.is_some() && std::env::var("PMCP_QUIET").is_err() {
-        eprintln!(
-            "Warning: --oauth-issuer provided but --oauth-client-id missing. OAuth disabled."
-        );
-    }
-
-    Ok(None)
 }
 
 #[cfg(test)]
