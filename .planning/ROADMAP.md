@@ -405,3 +405,18 @@ Plans:
 - [ ] 48-01-PLAN.md — Update mcp-tester/mcp-preview READMEs and rewrite book ch12-5 MCP Apps chapter with GUIDE.md content
 - [ ] 48-02-PLAN.md — Update pmcp-course ch20 MCP Apps chapters and ch11-02 mcp-tester lesson to align with book
 - [ ] 48-03-PLAN.md — Add theme CSS variable palettes to mcp-preview host context for ext-apps widget theming
+
+### Phase 49: Bump dependencies (reqwest 0.13, jsonschema 0.45)
+
+**Goal:** Upgrade reqwest from 0.12 to 0.13 and jsonschema from 0.38 to 0.45 across the workspace, updating feature flags, MSRV, deprecated methods, and template strings
+**Requirements**: DEP-01
+**Depends on:** Phase 48
+**Success Criteria** (what must be TRUE):
+  1. All four workspace Cargo.toml files reference reqwest 0.13 with correct feature names (rustls, form)
+  2. jsonschema bumped to 0.45 with MSRV raised to 1.83.0
+  3. Template strings in deploy/scaffold generate correct reqwest 0.13 lines for new projects
+  4. `make quality-gate` passes with zero warnings
+**Plans:** 1 plan
+
+Plans:
+- [ ] 49-01-PLAN.md — Update all Cargo.toml files, MSRV, deprecated methods, and template strings for reqwest 0.13 + jsonschema 0.45
