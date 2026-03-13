@@ -432,7 +432,7 @@ Plans:
   3. Each binary has a corresponding SHA256 checksum file on the release
   4. Users can install binaries via curl|sh (Linux/macOS) or PowerShell (Windows)
   5. cargo binstall metadata is present in both crate Cargo.toml files
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 50-01-PLAN.md — Convert binary workflows to reusable workflow_call, fix runner labels, add ARM64 targets, add SHA256 checksums
