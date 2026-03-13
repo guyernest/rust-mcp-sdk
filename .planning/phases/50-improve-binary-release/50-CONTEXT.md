@@ -24,7 +24,7 @@ Binaries produced: `mcp-tester` and `mcp-preview`.
 ### Build Targets
 - Add aarch64-apple-darwin using macos-14 runner (Apple Silicon M1, native build)
 - Add aarch64-unknown-linux-gnu using ubuntu-24.04-arm runner (or cross-compile)
-- Move x86_64-apple-darwin to macos-13 (explicit Intel runner)
+- Move x86_64-apple-darwin to macos-15-intel (explicit Intel runner — macos-13 removed Dec 2025)
 - Keep x86_64-unknown-linux-gnu on ubuntu-latest
 - Keep x86_64-pc-windows-msvc on windows-latest
 - Create universal macOS binary with lipo (combines x86_64 + aarch64) — deferred to later
@@ -32,7 +32,7 @@ Binaries produced: `mcp-tester` and `mcp-preview`.
 ### Installer Scripts
 - Create install.sh for Linux + macOS (detects OS/arch, downloads from GitHub releases)
 - Create install.ps1 for Windows (PowerShell equivalent)
-- Scripts hosted in repo root, stable URL via raw.githubusercontent.com
+- Scripts hosted in install/ subdirectory, stable URL via raw.githubusercontent.com
 - Default install location: ~/.local/bin (Linux/macOS), user's PATH on Windows
 
 ### cargo binstall Support
@@ -41,9 +41,9 @@ Binaries produced: `mcp-tester` and `mcp-preview`.
 - pkg-fmt = "bin" (bare binary, not archived)
 
 ### Security: Checksums
-- Generate SHA256SUMS file during release build
+- Generate per-binary .sha256 checksum files during release build
 - Upload alongside binaries to the GitHub release
-- install.sh verifies checksum after download
+- install.sh verifies checksum after download using the per-binary .sha256 file
 
 ### Claude's Discretion
 - Exact naming convention for binary assets (e.g., mcp-tester-{target} vs mcp-tester-{os}-{arch})
