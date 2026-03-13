@@ -3,7 +3,7 @@
 use anyhow::Result;
 use colored::Colorize;
 
-use crate::commands::flags::{AuthFlags, AuthMethod};
+use crate::commands::flags::AuthFlags;
 
 /// Start the MCP Apps preview server
 pub async fn execute(
@@ -50,40 +50,7 @@ pub async fn execute(
 
     // Resolve authentication
     let auth_method = auth_flags.resolve();
-    let auth_header = match &auth_method {
-        AuthMethod::None => None,
-        AuthMethod::ApiKey(key) => Some(format!("Bearer {}", key)),
-        AuthMethod::OAuth {
-            client_id,
-            issuer,
-            scopes,
-            no_cache,
-            redirect_port,
-        } => {
-            use pmcp::client::oauth::{default_cache_path, OAuthConfig, OAuthHelper};
-
-            let cache_file = if *no_cache {
-                None
-            } else {
-                Some(default_cache_path())
-            };
-            let config = OAuthConfig {
-                issuer: issuer.clone(),
-                mcp_server_url: Some(url.clone()),
-                client_id: client_id.clone(),
-                scopes: scopes.clone(),
-                cache_file,
-                redirect_port: *redirect_port,
-            };
-            let helper = OAuthHelper::new(config)
-                .map_err(|e| anyhow::anyhow!("OAuth setup failed: {e}"))?;
-            let token = helper
-                .get_access_token()
-                .await
-                .map_err(|e| anyhow::anyhow!("OAuth token acquisition failed: {e}"))?;
-            Some(format!("Bearer {}", token))
-        },
-    };
+    let auth_header = super::auth::resolve_auth_header(&url, &auth_method).await?;
 
     let widgets_path = widgets_dir.map(std::path::PathBuf::from);
 

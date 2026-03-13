@@ -418,7 +418,8 @@ async fn refresh_credentials(refresh_token: &str) -> Result<Credentials> {
 
     let config = get_pmcp_config().await?;
     let client = create_oauth_client_from_config(&config)?;
-    // Use oauth2's re-exported reqwest (0.12) for token exchange compatibility
+    // Use oauth2's re-exported reqwest client for token exchange compatibility.
+    // The oauth2 crate requires its own reqwest type for request_async().
     let http_client = oauth2::reqwest::Client::new();
 
     let token_result = client
@@ -621,7 +622,8 @@ pub async fn login() -> Result<()> {
     let redirect_url = RedirectUrl::new(format!("http://localhost:{}", CALLBACK_PORT))
         .context("Invalid redirect URL")?;
 
-    // Use oauth2's re-exported reqwest (0.12) for token exchange compatibility
+    // Use oauth2's re-exported reqwest client for token exchange compatibility.
+    // The oauth2 crate requires its own reqwest type for request_async().
     let http_client = oauth2::reqwest::Client::new();
     let token_result = client
         .exchange_code(AuthorizationCode::new(code))

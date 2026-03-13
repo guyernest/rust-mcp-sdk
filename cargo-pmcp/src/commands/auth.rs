@@ -9,8 +9,37 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use pmcp::client::http_middleware::HttpMiddlewareChain;
+use pmcp::client::oauth::{default_cache_path, OAuthConfig, OAuthHelper};
 
 use super::flags::AuthMethod;
+
+/// Build an [`OAuthHelper`] from the fields of an [`AuthMethod::OAuth`] variant.
+///
+/// Centralizes `OAuthConfig` construction so that `resolve_auth_middleware`
+/// and `resolve_auth_header` share a single code path.
+fn build_oauth_helper(
+    mcp_server_url: &str,
+    client_id: &str,
+    issuer: &Option<String>,
+    scopes: &[String],
+    no_cache: bool,
+    redirect_port: u16,
+) -> Result<OAuthHelper> {
+    let cache_file = if no_cache {
+        None
+    } else {
+        Some(default_cache_path())
+    };
+    let config = OAuthConfig {
+        issuer: issuer.clone(),
+        mcp_server_url: Some(mcp_server_url.to_string()),
+        client_id: client_id.to_string(),
+        scopes: scopes.to_vec(),
+        cache_file,
+        redirect_port,
+    };
+    OAuthHelper::new(config).map_err(|e| anyhow::anyhow!("OAuth setup failed: {e}"))
+}
 
 /// Convert an [`AuthMethod`] into an optional HTTP middleware chain.
 ///
@@ -44,25 +73,14 @@ pub async fn resolve_auth_middleware(
             no_cache,
             redirect_port,
         } => {
-            use pmcp::client::oauth::{default_cache_path, OAuthConfig, OAuthHelper};
-
-            let cache_file = if *no_cache {
-                None
-            } else {
-                Some(default_cache_path())
-            };
-
-            let config = OAuthConfig {
-                issuer: issuer.clone(),
-                mcp_server_url: Some(mcp_server_url.to_string()),
-                client_id: client_id.clone(),
-                scopes: scopes.clone(),
-                cache_file,
-                redirect_port: *redirect_port,
-            };
-
-            let helper = OAuthHelper::new(config)
-                .map_err(|e| anyhow::anyhow!("OAuth setup failed: {e}"))?;
+            let helper = build_oauth_helper(
+                mcp_server_url,
+                client_id,
+                issuer,
+                scopes,
+                *no_cache,
+                *redirect_port,
+            )?;
             let chain = helper
                 .create_middleware_chain()
                 .await
@@ -72,15 +90,41 @@ pub async fn resolve_auth_middleware(
     }
 }
 
-/// Extract the API key string from an [`AuthMethod`], if present.
+/// Resolve auth into an `Authorization` header value (e.g. `"Bearer sk-..."`).
 ///
-/// Returns `Some(key)` for the `ApiKey` variant, `None` otherwise.
-/// Useful for consumers like `ServerTester::new()` that accept an
-/// `api_key: Option<&str>` parameter alongside the middleware chain.
-#[allow(dead_code)] // Used by Plan 03 when preview/schema/connect wire up auth
-pub fn resolve_api_key(auth_method: &AuthMethod) -> Option<&str> {
+/// For API key auth, returns the key as a bearer token. For OAuth, runs the
+/// full PKCE flow (or loads a cached token) and returns the access token.
+/// Returns `Ok(None)` when no auth is configured.
+///
+/// Use this for consumers that need a plain header string (preview, schema)
+/// rather than an [`HttpMiddlewareChain`] (test check, loadtest).
+pub async fn resolve_auth_header(
+    mcp_server_url: &str,
+    auth_method: &AuthMethod,
+) -> Result<Option<String>> {
     match auth_method {
-        AuthMethod::ApiKey(key) => Some(key.as_str()),
-        _ => None,
+        AuthMethod::None => Ok(None),
+        AuthMethod::ApiKey(key) => Ok(Some(format!("Bearer {}", key))),
+        AuthMethod::OAuth {
+            client_id,
+            issuer,
+            scopes,
+            no_cache,
+            redirect_port,
+        } => {
+            let helper = build_oauth_helper(
+                mcp_server_url,
+                client_id,
+                issuer,
+                scopes,
+                *no_cache,
+                *redirect_port,
+            )?;
+            let token = helper
+                .get_access_token()
+                .await
+                .map_err(|e| anyhow::anyhow!("OAuth token acquisition failed: {e}"))?;
+            Ok(Some(format!("Bearer {}", token)))
+        },
     }
 }

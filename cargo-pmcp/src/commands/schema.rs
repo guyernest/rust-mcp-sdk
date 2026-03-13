@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::Path;
 
-use super::flags::{AuthFlags, AuthMethod};
+use super::flags::AuthFlags;
 
 #[derive(Subcommand)]
 pub enum SchemaCommand {
@@ -275,40 +275,7 @@ async fn export(
 
     // Resolve authentication
     let auth_method = auth_flags.resolve();
-    let auth_header_value = match &auth_method {
-        AuthMethod::ApiKey(key) => Some(format!("Bearer {}", key)),
-        AuthMethod::OAuth {
-            client_id,
-            issuer,
-            scopes,
-            no_cache,
-            redirect_port,
-        } => {
-            use pmcp::client::oauth::{default_cache_path, OAuthConfig, OAuthHelper};
-
-            let cache_file = if *no_cache {
-                None
-            } else {
-                Some(default_cache_path())
-            };
-            let config = OAuthConfig {
-                issuer: issuer.clone(),
-                mcp_server_url: Some(endpoint_url.clone()),
-                client_id: client_id.clone(),
-                scopes: scopes.clone(),
-                cache_file,
-                redirect_port: *redirect_port,
-            };
-            let helper = OAuthHelper::new(config)
-                .map_err(|e| anyhow::anyhow!("OAuth setup failed: {e}"))?;
-            let token = helper
-                .get_access_token()
-                .await
-                .map_err(|e| anyhow::anyhow!("OAuth token acquisition failed: {e}"))?;
-            Some(format!("Bearer {}", token))
-        },
-        AuthMethod::None => None,
-    };
+    let auth_header_value = super::auth::resolve_auth_header(&endpoint_url, &auth_method).await?;
 
     if !quiet {
         println!(
@@ -625,8 +592,7 @@ async fn diff(schema_path: &str, endpoint: &str, quiet: bool) -> Result<()> {
     )
     .await?;
 
-    let tools_response =
-        send_mcp_request(&client, endpoint, "tools/list", None, None).await?;
+    let tools_response = send_mcp_request(&client, endpoint, "tools/list", None, None).await?;
     let remote_tools: Vec<ToolSchema> = tools_response
         .get("tools")
         .and_then(|t| serde_json::from_value(t.clone()).ok())
