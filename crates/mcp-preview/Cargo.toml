@@ -36,3 +36,7 @@ futures = "0.3"
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+[package.metadata.binstall]
+pkg-url = "https://github.com/paiml/rust-mcp-sdk/releases/download/v{ version }/{ name }-{ target }{ binary-ext }"
+pkg-fmt = "bin"
