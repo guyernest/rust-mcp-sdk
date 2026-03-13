@@ -416,7 +416,7 @@ Plans:
   2. jsonschema bumped to 0.45 with MSRV raised to 1.83.0
   3. Template strings in deploy/scaffold generate correct reqwest 0.13 lines for new projects
   4. `make quality-gate` passes with zero warnings
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
 - [ ] 49-01-PLAN.md — Update all Cargo.toml files, MSRV, deprecated methods, and template strings for reqwest 0.13 + jsonschema 0.45
