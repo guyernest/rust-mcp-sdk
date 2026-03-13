@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Completed 29-02-PLAN.md
-last_updated: "2026-03-13T01:05:40.000Z"
-last_activity: 2026-03-13 -- AuthFlags flattened into test/loadtest commands
+stopped_at: Completed 29-03-PLAN.md (Phase 29 complete)
+last_updated: "2026-03-13T01:17:21.000Z"
+last_activity: 2026-03-13 -- Auth propagation to preview (McpProxy), schema export (reqwest), connect (config generation)
 progress:
   total_phases: 22
   completed_phases: 15
@@ -46,7 +46,7 @@ Progress: [█████████░] 97%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 58 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 2)
+- Total plans completed: 59 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 3)
 - Total phases completed: 26
 
 ## Accumulated Context
@@ -100,6 +100,7 @@ v1.6 decisions:
 - [Phase 28-03]: Landing deploy handler parameter server_id kept as internal API name; CLI field renamed to server
 - [Phase 29-01]: allow(dead_code) on AuthMethod/resolve()/resolve_auth_middleware()/resolve_api_key() until Plans 02/03 add consumers; AuthMethod derives PartialEq for test assertions
 - [Phase 29-02]: Middleware-only auth for ServerTester (None for api_key, middleware for chain) to avoid double headers; warning approach for run/generate library functions without auth passthrough
+- [Phase 29-03]: McpProxy uses auth_header string (not middleware chain) since it uses raw reqwest; OAuth acquires token once at startup via get_access_token(); connect_inspector ignores auth; schema diff auth deferred
 
 ### Roadmap Evolution
 
@@ -126,6 +127,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T01:16:00Z
-Stopped at: Completed 29-02-PLAN.md
-Resume: Phase 29 plan 02 complete -- proceed to 29-03 (wire AuthFlags into preview/schema/connect commands)
+Last session: 2026-03-13T01:17:21Z
+Stopped at: Completed 29-03-PLAN.md (Phase 29 complete)
+Resume: Phase 29 complete -- all 3 plans executed. Proceed to next phase.
