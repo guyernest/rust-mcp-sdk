@@ -297,12 +297,7 @@ impl TestCommand {
                 format,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
-                runtime.block_on(download::execute(
-                    scenario_id,
-                    output,
-                    format,
-                    global_flags,
-                ))
+                runtime.block_on(download::execute(scenario_id, output, format, global_flags))
             },
 
             TestCommand::List { server, all } => {
@@ -312,4 +307,3 @@ impl TestCommand {
         }
     }
 }
-

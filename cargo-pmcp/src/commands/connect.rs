@@ -17,9 +17,7 @@ pub fn execute(
     let _ = global_flags; // quiet handled via PMCP_QUIET in sub-functions
     let auth_method = auth_flags.resolve();
     match client.to_lowercase().as_str() {
-        "claude-code" | "claudecode" | "claude" => {
-            connect_claude_code(&server, &url, &auth_method)
-        },
+        "claude-code" | "claudecode" | "claude" => connect_claude_code(&server, &url, &auth_method),
         "cursor" => connect_cursor(&server, &url, &auth_method),
         "inspector" => connect_inspector(&url, auth_flags),
         _ => {
@@ -145,10 +143,7 @@ fn connect_cursor(server: &str, url: &str, auth_method: &AuthMethod) -> Result<(
                 "\"url\"".bright_cyan(),
                 format!("\"{}\"", url).bright_green()
             );
-            println!(
-                "        {}: {{",
-                "\"headers\"".bright_cyan()
-            );
+            println!("        {}: {{", "\"headers\"".bright_cyan());
             println!(
                 "          {}: {}",
                 "\"Authorization\"".bright_cyan(),
