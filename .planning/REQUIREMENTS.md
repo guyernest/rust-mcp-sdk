@@ -21,9 +21,9 @@ Requirements for CLI DX Overhaul. Each maps to roadmap phases.
 
 ### Auth Propagation
 
-- [ ] **AUTH-01**: `cargo pmcp test check` accepts `--api-key` and OAuth flags (issuer, client-id, scopes, no-cache, redirect-port)
-- [ ] **AUTH-02**: `cargo pmcp test run` accepts `--api-key` and OAuth flags
-- [ ] **AUTH-03**: `cargo pmcp test generate` accepts `--api-key` and OAuth flags
+- [x] **AUTH-01**: `cargo pmcp test check` accepts `--api-key` and OAuth flags (issuer, client-id, scopes, no-cache, redirect-port)
+- [x] **AUTH-02**: `cargo pmcp test run` accepts `--api-key` and OAuth flags
+- [x] **AUTH-03**: `cargo pmcp test generate` accepts `--api-key` and OAuth flags
 - [ ] **AUTH-04**: `cargo pmcp preview` accepts `--api-key` and OAuth flags
 - [ ] **AUTH-05**: `cargo pmcp schema export` accepts `--api-key` and OAuth flags
 - [ ] **AUTH-06**: `cargo pmcp connect` accepts `--api-key` and OAuth flags
@@ -113,9 +113,9 @@ Deferred to future release. Tracked but not in current roadmap.
 | FLAG-07 | Phase 28 | Complete |
 | FLAG-08 | Phase 27 | Complete |
 | FLAG-09 | Phase 27 | Complete |
-| AUTH-01 | Phase 29 | Pending |
-| AUTH-02 | Phase 29 | Pending |
-| AUTH-03 | Phase 29 | Pending |
+| AUTH-01 | Phase 29 | Complete |
+| AUTH-02 | Phase 29 | Complete |
+| AUTH-03 | Phase 29 | Complete |
 | AUTH-04 | Phase 29 | Pending |
 | AUTH-05 | Phase 29 | Pending |
 | AUTH-06 | Phase 29 | Pending |

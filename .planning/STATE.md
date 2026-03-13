@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Completed 29-01-PLAN.md
+stopped_at: Completed 29-02-PLAN.md
 last_updated: "2026-03-13T01:05:40.000Z"
-last_activity: 2026-03-13 -- AuthFlags struct, AuthMethod enum, resolve_auth_middleware() shared module
+last_activity: 2026-03-13 -- AuthFlags flattened into test/loadtest commands
 progress:
   total_phases: 22
   completed_phases: 15
   total_plans: 36
-  completed_plans: 35
+  completed_plans: 36
   percent: 97
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 ## Current Position
 
 Phase: 29 (auth-flag-propagation)
-Plan: 1 of 3 (29-01 complete)
-Status: Completed 29-01 -- Auth flag infrastructure (AuthFlags, AuthMethod, resolve_auth_middleware)
-Last activity: 2026-03-13 -- AuthFlags struct, AuthMethod enum, resolve_auth_middleware() shared module
+Plan: 3 of 3 (29-03 complete)
+Status: Phase 29 complete -- All server-connecting commands accept auth flags
+Last activity: 2026-03-13 -- Auth propagation to preview/schema/connect commands
 
 Progress: [█████████░] 97%
 
@@ -46,7 +46,7 @@ Progress: [█████████░] 97%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 57 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 1)
+- Total plans completed: 58 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 2)
 - Total phases completed: 26
 
 ## Accumulated Context
@@ -99,6 +99,7 @@ v1.6 decisions:
 - [Phase 28-02]: Removed #[allow(dead_code)] from GlobalFlags.verbose (now read by check, apps, run, validate, deploy); download format yaml->json default; schema diff url positional at index 2
 - [Phase 28-03]: Landing deploy handler parameter server_id kept as internal API name; CLI field renamed to server
 - [Phase 29-01]: allow(dead_code) on AuthMethod/resolve()/resolve_auth_middleware()/resolve_api_key() until Plans 02/03 add consumers; AuthMethod derives PartialEq for test assertions
+- [Phase 29-02]: Middleware-only auth for ServerTester (None for api_key, middleware for chain) to avoid double headers; warning approach for run/generate library functions without auth passthrough
 
 ### Roadmap Evolution
 
@@ -125,6 +126,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T01:05:40Z
-Stopped at: Completed 29-01-PLAN.md
-Resume: Phase 29 plan 01 complete -- proceed to 29-02 (wire AuthFlags into test/preview/schema/connect commands)
+Last session: 2026-03-13T01:16:00Z
+Stopped at: Completed 29-02-PLAN.md
+Resume: Phase 29 plan 02 complete -- proceed to 29-03 (wire AuthFlags into preview/schema/connect commands)
