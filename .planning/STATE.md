@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Completed 50-01-PLAN.md
-last_updated: "2026-03-13T17:10:10.634Z"
-last_activity: 2026-03-13 -- Fix binary release pipeline (workflow_call + 5-target matrix)
+stopped_at: Completed 50-02-PLAN.md
+last_updated: "2026-03-13T17:14:56.546Z"
+last_activity: 2026-03-13 -- Installer scripts and cargo-binstall metadata for binary distribution
 progress:
   total_phases: 24
-  completed_phases: 17
+  completed_phases: 18
   total_plans: 42
-  completed_plans: 39
-  percent: 95
+  completed_plans: 40
+  percent: 97
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 
 ## Current Position
 
-Phase: 50 (improve-binary-release)
-Plan: 1 of 2 (50-01 complete)
-Status: Plan 01 complete -- workflow_call reusable workflows with 5-target matrix and SHA256 checksums
-Last activity: 2026-03-13 -- Fix binary release pipeline (workflow_call + 5-target matrix)
+Phase: 50 (improve-binary-release) -- COMPLETE
+Plan: 2 of 2 (50-02 complete)
+Status: Phase 50 complete -- installer scripts and cargo-binstall metadata for binary distribution
+Last activity: 2026-03-13 -- Installer scripts and cargo-binstall metadata for binary distribution
 
-Progress: [██████████] 95%
+Progress: [██████████] 97%
 
 ## Shipped Milestones
 
@@ -46,8 +46,8 @@ Progress: [██████████] 95%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 60 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 3, misc: 1)
-- Total phases completed: 27
+- Total plans completed: 61 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 4, misc: 1)
+- Total phases completed: 28
 
 ## Accumulated Context
 
@@ -104,6 +104,8 @@ v1.6 decisions:
 - [Phase 49-01]: Use oauth2::reqwest::Client for oauth2 token exchange (oauth2 5.0 re-exports reqwest 0.12); MSRV bumped 1.82->1.83 for jsonschema 0.45; accept dual reqwest in lockfile
 - [Phase 50-01]: Rust target triples for asset naming; per-binary .sha256 files; macos-15-intel for x86_64, macos-14 for aarch64; ubuntu-24.04-arm for ARM Linux; fail-fast: false
 - [Phase 50]: Rust target triples for asset naming; per-binary .sha256 files; macos-15-intel for x86_64, macos-14 for aarch64; ubuntu-24.04-arm for ARM Linux
+- [Phase 50-02]: POSIX /bin/sh for install.sh; explicit repo URL in binstall pkg-url; pkg-fmt = bin for bare binaries; v{ version } prefix for tag convention
+- [Phase 50]: POSIX /bin/sh for install.sh; explicit repo URL in binstall pkg-url; pkg-fmt = bin for bare binaries; v{ version } prefix for tag convention
 
 ### Roadmap Evolution
 
@@ -132,6 +134,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T17:10:10.631Z
-Stopped at: Completed 50-01-PLAN.md
-Resume: Plan 01 complete -- binary release pipeline fixed. Plan 02 (installer scripts, cargo-binstall metadata) ready.
+Last session: 2026-03-13T17:14:52.484Z
+Stopped at: Completed 50-02-PLAN.md
+Resume: Phase 50 complete -- binary release pipeline with installer scripts and binstall metadata.
