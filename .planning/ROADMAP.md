@@ -210,7 +210,7 @@ Plans:
 | 26. OAuth Load Testing | v1.5 | 4/4 | Complete | 2026-03-01 |
 | 27. Global Flag Infrastructure | 3/3 | Complete   | 2026-03-04 | - |
 | 28. Flag Normalization | 3/3 | Complete   | 2026-03-12 | - |
-| 29. Auth Flag Propagation | 3/3 | Complete   | 2026-03-13 | - |
+| 29. Auth Flag Propagation | 3/3 | Complete    | 2026-03-13 | - |
 | 30. Tester CLI Integration | v1.6 | 0/? | Not started | - |
 | 31. New Commands | v1.6 | 0/? | Not started | - |
 | 32. Help Text Polish | v1.6 | 0/? | Not started | - |

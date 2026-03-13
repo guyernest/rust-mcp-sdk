@@ -4,13 +4,13 @@ milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
 stopped_at: Completed 29-03-PLAN.md (Phase 29 complete)
-last_updated: "2026-03-13T01:17:21.000Z"
-last_activity: 2026-03-13 -- Auth propagation to preview (McpProxy), schema export (reqwest), connect (config generation)
+last_updated: "2026-03-13T01:23:52.915Z"
+last_activity: 2026-03-13 -- Auth propagation to preview/schema/connect commands
 progress:
   total_phases: 22
-  completed_phases: 15
-  total_plans: 36
-  completed_plans: 36
+  completed_phases: 16
+  total_plans: 39
+  completed_plans: 37
   percent: 97
 ---
 
