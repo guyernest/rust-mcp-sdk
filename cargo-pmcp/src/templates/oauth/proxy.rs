@@ -471,7 +471,7 @@ url = "2.5"
 urlencoding = "2.1"
 aws-config = "1.5"
 aws-sdk-dynamodb = "1.56"
-reqwest = {{ version = "0.12", default-features = false, features = ["json", "rustls-tls"] }}
+reqwest = {{ version = "0.13", default-features = false, features = ["json", "rustls", "form"] }}
 tracing = "0.1"
 tracing-subscriber = {{ version = "0.3", features = ["fmt", "json"] }}
 "#,
