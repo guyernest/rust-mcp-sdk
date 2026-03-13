@@ -12,6 +12,8 @@ use colored::Colorize;
 use mcp_tester::{AppValidator, ServerTester, TestStatus};
 use std::time::Duration;
 
+use crate::commands::auth;
+use crate::commands::flags::AuthFlags;
 use crate::commands::GlobalFlags;
 
 /// Execute the check command
@@ -19,6 +21,7 @@ pub async fn execute(
     url: String,
     transport: Option<String>,
     timeout: u64,
+    auth_flags: &AuthFlags,
     global_flags: &GlobalFlags,
 ) -> Result<()> {
     let verbose = global_flags.verbose;
@@ -39,14 +42,18 @@ pub async fn execute(
         println!();
     }
 
+    // Resolve authentication middleware
+    let auth_method = auth_flags.resolve();
+    let middleware = auth::resolve_auth_middleware(&url, &auth_method).await?;
+
     // Create the server tester
     let mut tester = ServerTester::new(
         &url,
         Duration::from_secs(timeout),
         false, // insecure
-        None,  // api_key
+        None,  // api_key -- auth handled via middleware for consistency
         transport.as_deref(),
-        None, // http_middleware_chain
+        middleware,
     )
     .context("Failed to create server tester")?;
 

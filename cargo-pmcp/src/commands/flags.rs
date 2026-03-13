@@ -69,7 +69,6 @@ impl ServerFlags {
 /// enum instead of inspecting raw flag fields, ensuring consistent auth logic
 /// across all server-connecting commands.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)] // Used by Plans 02/03 when commands wire up auth
 pub enum AuthMethod {
     /// No authentication configured.
     None,
@@ -131,7 +130,6 @@ impl AuthFlags {
     /// Priority: `--api-key` wins over OAuth flags (though clap's
     /// `conflicts_with` prevents both from being specified simultaneously).
     /// If no auth flags are provided, returns [`AuthMethod::None`].
-    #[allow(dead_code)] // Used by Plans 02/03 when commands wire up auth
     pub fn resolve(&self) -> AuthMethod {
         if let Some(ref key) = self.api_key {
             return AuthMethod::ApiKey(key.clone());

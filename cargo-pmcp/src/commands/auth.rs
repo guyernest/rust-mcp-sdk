@@ -20,7 +20,6 @@ use super::flags::AuthMethod;
 ///
 /// Call this once at command startup -- the returned chain is `Arc`-wrapped
 /// and safe to share across concurrent requests.
-#[allow(dead_code)] // Used by Plans 02/03 when commands wire up auth
 pub async fn resolve_auth_middleware(
     mcp_server_url: &str,
     auth_method: &AuthMethod,
@@ -78,7 +77,7 @@ pub async fn resolve_auth_middleware(
 /// Returns `Some(key)` for the `ApiKey` variant, `None` otherwise.
 /// Useful for consumers like `ServerTester::new()` that accept an
 /// `api_key: Option<&str>` parameter alongside the middleware chain.
-#[allow(dead_code)] // Used by Plans 02/03 when commands wire up auth
+#[allow(dead_code)] // Used by Plan 03 when preview/schema/connect wire up auth
 pub fn resolve_api_key(auth_method: &AuthMethod) -> Option<&str> {
     match auth_method {
         AuthMethod::ApiKey(key) => Some(key.as_str()),

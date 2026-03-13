@@ -20,7 +20,7 @@ use anyhow::Result;
 use clap::Subcommand;
 use std::path::PathBuf;
 
-use super::flags::{FormatValue, ServerFlags};
+use super::flags::{AuthFlags, FormatValue, ServerFlags};
 use super::GlobalFlags;
 
 #[derive(Debug, Subcommand)]
@@ -52,6 +52,9 @@ pub enum TestCommand {
         /// Connection timeout in seconds
         #[arg(long, default_value = "30")]
         timeout: u64,
+
+        #[command(flatten)]
+        auth_flags: AuthFlags,
     },
 
     /// Quick sanity check of an MCP server
@@ -73,6 +76,9 @@ pub enum TestCommand {
         /// Connection timeout in seconds
         #[arg(long, default_value = "30")]
         timeout: u64,
+
+        #[command(flatten)]
+        auth_flags: AuthFlags,
     },
 
     /// Run test scenarios against an MCP server
@@ -96,6 +102,9 @@ pub enum TestCommand {
         /// Auto-detected by default based on URL patterns
         #[arg(long)]
         transport: Option<String>,
+
+        #[command(flatten)]
+        auth_flags: AuthFlags,
     },
 
     /// Generate test scenarios from server capabilities
@@ -131,6 +140,9 @@ pub enum TestCommand {
         /// Include prompt operations
         #[arg(long, default_value = "true")]
         with_prompts: bool,
+
+        #[command(flatten)]
+        auth_flags: AuthFlags,
     },
 
     /// Upload test scenarios to pmcp.run
@@ -196,6 +208,7 @@ impl TestCommand {
                 strict,
                 transport,
                 timeout,
+                auth_flags,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
                 runtime.block_on(apps::execute(
@@ -205,6 +218,7 @@ impl TestCommand {
                     strict,
                     transport,
                     timeout,
+                    &auth_flags,
                     global_flags,
                 ))
             },
@@ -213,9 +227,16 @@ impl TestCommand {
                 url,
                 transport,
                 timeout,
+                auth_flags,
             } => {
                 let runtime = tokio::runtime::Runtime::new()?;
-                runtime.block_on(check::execute(url, transport, timeout, global_flags))
+                runtime.block_on(check::execute(
+                    url,
+                    transport,
+                    timeout,
+                    &auth_flags,
+                    global_flags,
+                ))
             },
 
             TestCommand::Run {
@@ -223,12 +244,13 @@ impl TestCommand {
                 port,
                 scenarios,
                 transport,
+                auth_flags,
             } => run::execute(
-                server_flags.server,
-                server_flags.url,
+                server_flags,
                 port,
                 scenarios,
                 transport,
+                &auth_flags,
                 global_flags,
             ),
 
@@ -240,15 +262,16 @@ impl TestCommand {
                 all_tools,
                 with_resources,
                 with_prompts,
+                auth_flags,
             } => generate::execute(
-                server_flags.server,
-                server_flags.url,
+                server_flags,
                 port,
                 output,
                 transport,
                 all_tools,
                 with_resources,
                 with_prompts,
+                &auth_flags,
                 global_flags,
             ),
 
@@ -277,7 +300,7 @@ impl TestCommand {
                 runtime.block_on(download::execute(
                     scenario_id,
                     output,
-                    format.to_string(),
+                    format,
                     global_flags,
                 ))
             },

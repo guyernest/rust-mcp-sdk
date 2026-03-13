@@ -174,7 +174,22 @@ pub fn execute(
                 "Step 3: Connecting to MCP client".bright_white().bold()
             );
         }
-        super::connect::execute(server.clone(), client, url.clone(), global_flags)?;
+        // Dev connect doesn't use auth -- pass default empty flags
+        let default_auth = super::flags::AuthFlags {
+            api_key: None,
+            oauth_client_id: None,
+            oauth_issuer: None,
+            oauth_scopes: None,
+            oauth_no_cache: false,
+            oauth_redirect_port: 8080,
+        };
+        super::connect::execute(
+            server.clone(),
+            client,
+            url.clone(),
+            &default_auth,
+            global_flags,
+        )?;
         if global_flags.should_output() {
             println!();
         }
