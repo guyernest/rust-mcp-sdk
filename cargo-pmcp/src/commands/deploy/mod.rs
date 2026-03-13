@@ -2,6 +2,8 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use std::path::{Path, PathBuf};
 
+use crate::commands::flags::FormatValue;
+
 /// Detect server name from Cargo.toml in the project root or core workspace
 fn detect_server_name(project_root: &Path) -> Result<String> {
     // Try to read the main Cargo.toml
@@ -183,8 +185,8 @@ pub enum DeployAction {
     /// Show deployment outputs
     Outputs {
         /// Output format (text, json)
-        #[arg(long, default_value = "text")]
-        format: String,
+        #[arg(long, value_enum, default_value = "text")]
+        format: FormatValue,
     },
 
     /// Login to deployment target (pmcp-run, cloudflare, etc.)
@@ -521,14 +523,13 @@ impl DeployCommand {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
                         let outputs = target.outputs(&config).await?;
 
-                        match format.as_str() {
-                            "json" => {
+                        match format {
+                            FormatValue::Json => {
                                 println!("{}", serde_json::to_string_pretty(&outputs)?);
                             },
-                            "text" => {
+                            FormatValue::Text => {
                                 outputs.display();
                             },
-                            _ => bail!("Unknown format: {}", format),
                         }
                         Ok(())
                     },

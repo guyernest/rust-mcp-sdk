@@ -19,12 +19,19 @@ pub enum FormatValue {
     Json,
 }
 
+impl FormatValue {
+    /// Return the format as a static string slice (avoids heap allocation).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FormatValue::Text => "text",
+            FormatValue::Json => "json",
+        }
+    }
+}
+
 impl fmt::Display for FormatValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FormatValue::Text => write!(f, "text"),
-            FormatValue::Json => write!(f, "json"),
-        }
+        f.write_str(self.as_str())
     }
 }
 

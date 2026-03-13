@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use std::path::PathBuf;
 
+use crate::commands::flags::FormatValue;
 use crate::commands::GlobalFlags;
 use crate::deployment::targets::pmcp_run::{auth, graphql};
 
@@ -11,7 +12,7 @@ use crate::deployment::targets::pmcp_run::{auth, graphql};
 pub async fn execute(
     scenario_id: String,
     output: Option<PathBuf>,
-    format: String,
+    format: FormatValue,
     global_flags: &GlobalFlags,
 ) -> Result<()> {
     if global_flags.should_output() {
@@ -34,10 +35,8 @@ pub async fn execute(
         println!("  {} Scenario ID: {}", "→".blue(), scenario_id);
     }
 
-    let format_str = &format;
-
     let result =
-        graphql::download_test_scenario(&credentials.access_token, &scenario_id, format_str)
+        graphql::download_test_scenario(&credentials.access_token, &scenario_id, format.as_str())
             .await
             .context("Failed to download scenario")?;
 
@@ -45,7 +44,10 @@ pub async fn execute(
     let output_path = if let Some(path) = output {
         path
     } else {
-        let ext = if format_str == "json" { "json" } else { "txt" };
+        let ext = match format {
+            FormatValue::Json => "json",
+            FormatValue::Text => "txt",
+        };
         PathBuf::from(format!("{}.{}", result.name, ext))
     };
 
