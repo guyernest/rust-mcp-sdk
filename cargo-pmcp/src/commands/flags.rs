@@ -4,7 +4,7 @@
 //! Using shared structs ensures uniform naming, help text, and behavior.
 
 use anyhow::Result;
-use clap::{Args, Parser, ValueEnum};
+use clap::{Args, ValueEnum};
 use std::fmt;
 
 /// Output format for commands that support structured output.
@@ -131,7 +131,21 @@ impl AuthFlags {
     /// `conflicts_with` prevents both from being specified simultaneously).
     /// If no auth flags are provided, returns [`AuthMethod::None`].
     pub fn resolve(&self) -> AuthMethod {
-        // Stub: always returns None (TDD RED phase)
+        if let Some(ref key) = self.api_key {
+            return AuthMethod::ApiKey(key.clone());
+        }
+        if let Some(ref client_id) = self.oauth_client_id {
+            return AuthMethod::OAuth {
+                client_id: client_id.clone(),
+                issuer: self.oauth_issuer.clone(),
+                scopes: self
+                    .oauth_scopes
+                    .clone()
+                    .unwrap_or_else(|| vec!["openid".to_string()]),
+                no_cache: self.oauth_no_cache,
+                redirect_port: self.oauth_redirect_port,
+            };
+        }
         AuthMethod::None
     }
 }
@@ -139,6 +153,7 @@ impl AuthFlags {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
 
     /// Helper CLI struct for testing AuthFlags via clap parsing.
     #[derive(Debug, Parser)]
