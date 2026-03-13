@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Completed 47-02-PLAN.md
-last_updated: "2026-03-12T00:39:23.931Z"
-last_activity: 2026-03-12 -- Added cargo pmcp test apps subcommand and App-capable hint in check
+stopped_at: Completed 49-01-PLAN.md (Phase 49 complete)
+last_updated: "2026-03-13T03:03:41.848Z"
+last_activity: 2026-03-13 -- Bump reqwest 0.13 and jsonschema 0.45
 progress:
-  total_phases: 21
-  completed_phases: 13
-  total_plans: 30
-  completed_plans: 28
-  percent: 100
+  total_phases: 23
+  completed_phases: 17
+  total_plans: 40
+  completed_plans: 38
+  percent: 97
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** Phase 47 -- Add MCP App support to mcp-tester
+**Current focus:** Phase 49 -- Bump Dependencies (reqwest 0.13, jsonschema 0.45)
 
 ## Current Position
 
-Phase: 47 (add-mcp-app-support-to-mcp-tester)
-Plan: 2 of 2 (47-02 complete)
-Status: Completed 47-02 -- cargo pmcp test apps subcommand and check hint
-Last activity: 2026-03-12 -- Added cargo pmcp test apps subcommand and App-capable hint in check
+Phase: 49 (bump-dependencies-reqwest-0-13-jsonschema-0-45)
+Plan: 1 of 1 (49-01 complete)
+Status: Phase 49 complete -- reqwest 0.13 and jsonschema 0.45 across workspace
+Last activity: 2026-03-13 -- Bump reqwest 0.13 and jsonschema 0.45
 
-Progress: [██████████] 100%
+Progress: [█████████░] 97%
 
 ## Shipped Milestones
 
@@ -46,8 +46,8 @@ Progress: [██████████] 100%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 56 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6)
-- Total phases completed: 26
+- Total plans completed: 60 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 3, misc: 1)
+- Total phases completed: 27
 
 ## Accumulated Context
 
@@ -90,6 +90,18 @@ v1.6 decisions:
 - [Phase 46-02]: mcp-preview deliverToolResult emits dual ui/toolResult (primary) + ui/notifications/tool-result (fallback); readiness signal replaces 300ms setTimeout with ui/notifications/initialized listener + 3s fallback
 - [Phase 47-01]: Resource URI cross-reference mismatch produces Warning not Failure; ChatGPT key absence is Warning; AppValidator applies strict mode internally
 - [Phase 47-02]: Apps subcommand follows check.rs pattern for UX consistency; resources listing failure non-fatal (empty vec) since cross-reference is advisory
+- [Phase 48-03]: THEME_PALETTES placed as module-level constant before PreviewRuntime class; THEME_PALETTES[this.theme] || {} for safe palette lookup
+- [Phase 48]: THEME_PALETTES placed as module-level constant before PreviewRuntime class; safe palette lookup with || {}
+- [Phase 48-01]: Used GUIDE.md as authoritative source for ch12-5 rewrite; eliminated ChatGptAdapter -- standard SDK APIs are primary documented pattern
+- [Phase 48]: Eliminated ChatGptAdapter, WidgetDir, window.mcpBridge from course -- standard SDK APIs (ToolInfo::with_ui, ext-apps App class) are primary
+- [Phase 28-01]: Retained #[allow(dead_code)] on GlobalFlags.verbose until Plans 02/03 add readers; ServerFlags makes both url and server optional for flexible flatten usage
+- [Phase 28]: Retained #[allow(dead_code)] on GlobalFlags.verbose until Plans 02/03 add readers
+- [Phase 28-02]: Removed #[allow(dead_code)] from GlobalFlags.verbose (now read by check, apps, run, validate, deploy); download format yaml->json default; schema diff url positional at index 2
+- [Phase 28-03]: Landing deploy handler parameter server_id kept as internal API name; CLI field renamed to server
+- [Phase 29-01]: allow(dead_code) on AuthMethod/resolve()/resolve_auth_middleware()/resolve_api_key() until Plans 02/03 add consumers; AuthMethod derives PartialEq for test assertions
+- [Phase 29-02]: Middleware-only auth for ServerTester (None for api_key, middleware for chain) to avoid double headers; warning approach for run/generate library functions without auth passthrough
+- [Phase 29-03]: McpProxy uses auth_header string (not middleware chain) since it uses raw reqwest; OAuth acquires token once at startup via get_access_token(); connect_inspector ignores auth; schema diff auth deferred
+- [Phase 49-01]: Use oauth2::reqwest::Client for oauth2 token exchange (oauth2 5.0 re-exports reqwest 0.12); MSRV bumped 1.82->1.83 for jsonschema 0.45; accept dual reqwest in lockfile
 
 ### Roadmap Evolution
 
@@ -104,6 +116,8 @@ v1.6 decisions:
 - Phase 45 added: Extend MCP Apps Support to Claude Desktop
 - Phase 46 added: MCP Bridge Review and Fixes
 - Phase 47 added: Add MCP App support to mcp-tester
+- Phase 48 added: MCP Apps Documentation and Education Refresh
+- Phase 49 added: Bump dependencies (reqwest 0.13, jsonschema 0.45)
 
 ### Pending Todos
 
@@ -115,6 +129,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-12T00:36:30.000Z
-Stopped at: Completed 47-02-PLAN.md
-Resume: Phase 47 complete -- all plans shipped
+Last session: 2026-03-13T02:58:57Z
+Stopped at: Completed 49-01-PLAN.md (Phase 49 complete)
+Resume: Phase 49 complete -- reqwest 0.13 and jsonschema 0.45 bumped across workspace.

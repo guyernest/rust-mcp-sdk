@@ -20,7 +20,7 @@ pub enum LandingCommand {
         template: String,
 
         /// Output directory for landing page
-        #[arg(long, default_value = "./landing")]
+        #[arg(long, short, default_value = "./landing")]
         output: PathBuf,
 
         /// MCP server name (reads from pmcp.toml if not provided)
@@ -64,9 +64,9 @@ pub enum LandingCommand {
         #[arg(long, default_value = "pmcp-run")]
         target: String,
 
-        /// MCP server ID to link to (optional - auto-detected from deployment)
+        /// MCP server to link to (optional - auto-detected from deployment)
         #[arg(long)]
-        server_id: Option<String>,
+        server: Option<String>,
     },
 }
 
@@ -100,8 +100,8 @@ impl LandingCommand {
             LandingCommand::Deploy {
                 dir,
                 target,
-                server_id,
-            } => deploy::deploy_landing_page(project_root, dir, target, server_id).await,
+                server,
+            } => deploy::deploy_landing_page(project_root, dir, target, server).await,
         }
     }
 }

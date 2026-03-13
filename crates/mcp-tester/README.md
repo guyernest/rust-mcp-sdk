@@ -32,12 +32,31 @@ A comprehensive testing tool for Model Context Protocol (MCP) servers, providing
 
 ## Installation
 
-```bash
-# From the examples directory
-cd examples/26-server-tester
-cargo build --release
+### Pre-built Binaries
 
-# The binary will be at target/release/mcp-tester
+Download pre-built binaries from [GitHub Releases](https://github.com/paiml/rust-mcp-sdk/releases). Available platforms: Linux x86_64, macOS x86_64, Windows x86_64.
+
+```bash
+# Linux
+curl -L https://github.com/paiml/rust-mcp-sdk/releases/latest/download/mcp-tester-linux-x86_64 -o mcp-tester && chmod +x mcp-tester
+
+# macOS
+curl -L https://github.com/paiml/rust-mcp-sdk/releases/latest/download/mcp-tester-macos-x86_64 -o mcp-tester && chmod +x mcp-tester
+```
+
+### Via Cargo
+
+```bash
+cargo install mcp-tester
+```
+
+### Via cargo-pmcp
+
+Install the PMCP CLI toolkit, which includes a `cargo pmcp test` wrapper:
+
+```bash
+cargo install cargo-pmcp
+# Then use: cargo pmcp test <URL> [OPTIONS]
 ```
 
 ## Usage
@@ -263,6 +282,90 @@ Options:
 
 ```bash
 mcp-tester health <URL>
+```
+
+#### `apps` - Validate MCP App Metadata
+
+Validate that MCP App-capable tools have correct metadata structure, resource cross-references, and host-specific keys.
+
+```bash
+mcp-tester apps <URL> [OPTIONS]
+
+Options:
+  --mode <MODE>    Validation mode (default: standard)
+                   standard       - Nested ui.resourceUri only
+                   chatgpt        - Also checks openai/* keys and flat ui/resourceUri
+                   claude-desktop - Same as standard (for now)
+  --tool <NAME>    Test a specific tool only
+  --strict         Promote warnings to failures
+```
+
+**Usage examples:**
+
+```bash
+# Standard validation (checks all App-capable tools)
+mcp-tester apps http://localhost:3000
+
+# ChatGPT-specific validation (checks openai/* descriptor keys)
+mcp-tester apps http://localhost:3000 --mode chatgpt
+
+# Claude Desktop validation
+mcp-tester apps http://localhost:3000 --mode claude-desktop
+
+# Strict mode (warnings become failures -- useful in CI)
+mcp-tester apps http://localhost:3000 --strict
+
+# Validate a single tool
+mcp-tester apps http://localhost:3000 --tool search_images
+
+# Combine mode, strict, and tool filter
+mcp-tester apps http://localhost:3000 --mode chatgpt --tool search_images --strict
+```
+
+**What gets validated (per App-capable tool):**
+
+1. `_meta` field is present on the tool
+2. `ui.resourceUri` is present (nested `_meta.ui.resourceUri` or flat `_meta["ui/resourceUri"]`)
+3. `resourceUri` format is valid (non-empty, has scheme separator `://`)
+4. Resource cross-reference: tool's URI matches an entry in `resources/list`
+5. Resource MIME type is valid (`text/html`, `text/html+mcp`, `text/html+skybridge`, `text/html;profile=mcp-app`)
+6. **[ChatGPT mode]** `openai/*` descriptor keys are present (`openai/outputTemplate`, `openai/widgetAccessible`, etc.)
+7. **[ChatGPT mode]** Flat legacy `ui/resourceUri` key is present
+8. **[If present]** `outputSchema` structure is valid (object with `type` field)
+
+**Sample output (passing):**
+
+```
+=== MCP App Metadata Validation (standard) ===
+
+  PASS [search_images] ui.resourceUri present
+  PASS [search_images] resourceUri format          URI: ui://open-images/explorer.html
+  PASS [search_images] resource cross-reference    Found resource: Image Explorer
+  PASS [search_images] resource MIME type          MIME type: text/html;profile=mcp-app
+
+Summary: 4 passed, 0 failed, 0 warnings
+```
+
+**Sample output (warning):**
+
+```
+=== MCP App Metadata Validation (chatgpt) ===
+
+  PASS [search_images] ui.resourceUri present
+  PASS [search_images] resourceUri format          URI: ui://open-images/explorer.html
+  WARN [search_images] resource cross-reference    No resource found with URI in resources/list
+  WARN [search_images] ChatGPT key: openai/widgetAccessible    Missing ChatGPT key
+  WARN [search_images] ChatGPT flat ui/resourceUri             Missing flat legacy key
+
+Summary: 2 passed, 0 failed, 3 warnings
+```
+
+You can also use the `cargo pmcp` wrapper:
+
+```bash
+cargo pmcp test apps --url http://localhost:3000
+cargo pmcp test apps --url http://localhost:3000 --mode chatgpt --strict
+cargo pmcp test apps --url http://localhost:3000 --tool search_images
 ```
 
 #### `scenario` - Run Test Scenarios
@@ -569,6 +672,15 @@ Detailed output with full error messages and protocol exchanges.
 - Connection latency
 - Response times
 - Throughput measurements
+
+### App Metadata Tests
+- `_meta` field presence on App-capable tools
+- `ui.resourceUri` present and well-formed
+- Resource MIME type validation (`text/html;profile=mcp-app`, etc.)
+- Resource cross-reference (tool URI matches `resources/list`)
+- `outputSchema` structure validation
+- **[ChatGPT mode]** `openai/*` descriptor keys
+- **[ChatGPT mode]** Flat `ui/resourceUri` legacy key
 
 ## Deployment-Specific Testing
 

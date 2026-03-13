@@ -1,6 +1,6 @@
 [package]
 name = "mcp-tester"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 authors = ["PMCP SDK Contributors"]
 description = "Comprehensive MCP server testing tool - library and CLI"
@@ -18,7 +18,7 @@ name = "mcp-tester"
 path = "src/main.rs"
 
 [dependencies]
-pmcp = { version = "1.17.0", path = "../../", features = ["streamable-http", "oauth"] }
+pmcp = { version = "1.18.0", path = "../../", features = ["streamable-http", "oauth"] }
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
@@ -33,7 +33,7 @@ indicatif = "0.18"
 regex = "1"
 rand = "0.10"
 url = "2"
-reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+reqwest = { version = "0.13", features = ["json", "stream", "rustls"], default-features = false }
 chrono = "0.4"
 prettytable-rs = "0.10"
 base64 = "0.22"

@@ -66,7 +66,7 @@ use init::InitCommand;
 #[derive(Debug, Parser)]
 pub struct DeployCommand {
     /// Deployment target (aws-lambda, cloudflare-workers)
-    #[clap(long, global = true)]
+    #[arg(long, global = true)]
     target: Option<String>,
 
     /// Use shared OAuth pool for SSO (pmcp-run only).
@@ -79,7 +79,7 @@ pub struct DeployCommand {
     /// Equivalent to running:
     ///   cargo pmcp deploy
     ///   cargo pmcp deploy oauth enable --server <server> --shared-pool <name>
-    #[clap(long, value_name = "POOL_NAME")]
+    #[arg(long, value_name = "POOL_NAME")]
     shared_pool: Option<String>,
 
     /// Skip OAuth configuration during deployment.
@@ -88,10 +88,10 @@ pub struct DeployCommand {
     ///   cargo pmcp deploy oauth enable --server <server> [--shared-pool <name>]
     ///
     /// This is useful for testing the server before adding authentication.
-    #[clap(long)]
+    #[arg(long)]
     no_oauth: bool,
 
-    #[clap(subcommand)]
+    #[command(subcommand)]
     action: Option<DeployAction>,
 }
 
@@ -100,58 +100,54 @@ pub enum DeployAction {
     /// Initialize deployment configuration
     Init {
         /// AWS region for deployment (uses AWS_REGION or AWS_DEFAULT_REGION env vars if set)
-        #[clap(long, env = "AWS_REGION", default_value = "us-east-1")]
+        #[arg(long, env = "AWS_REGION", default_value = "us-east-1")]
         region: String,
 
         /// Skip credentials check
-        #[clap(long)]
+        #[arg(long)]
         skip_credentials_check: bool,
 
         /// OAuth provider (cognito, oidc, none)
-        #[clap(long, value_name = "PROVIDER")]
+        #[arg(long, value_name = "PROVIDER")]
         oauth: Option<String>,
 
         /// Use shared OAuth infrastructure (format: shared:<name>)
-        #[clap(long, value_name = "NAME")]
+        #[arg(long, value_name = "NAME")]
         oauth_shared: Option<String>,
 
         /// Existing Cognito User Pool ID (skip creation)
-        #[clap(long, value_name = "POOL_ID")]
+        #[arg(long, value_name = "POOL_ID")]
         cognito_user_pool_id: Option<String>,
 
         /// Cognito User Pool name (when creating new)
-        #[clap(long, value_name = "NAME")]
+        #[arg(long, value_name = "NAME")]
         cognito_pool_name: Option<String>,
 
         /// Enable social login providers (comma-separated: github,google,apple)
-        #[clap(long, value_name = "PROVIDERS", value_delimiter = ',')]
+        #[arg(long, value_name = "PROVIDERS", value_delimiter = ',')]
         social_providers: Option<Vec<String>>,
     },
 
     /// View deployment logs
     Logs {
         /// Follow logs in real-time
-        #[clap(long)]
+        #[arg(long)]
         tail: bool,
 
         /// Number of lines to show
-        #[clap(long, default_value = "100")]
+        #[arg(long, default_value = "100")]
         lines: usize,
     },
 
     /// View deployment metrics
     Metrics {
         /// Time period (1h, 24h, 7d, 30d)
-        #[clap(long, default_value = "24h")]
+        #[arg(long, default_value = "24h")]
         period: String,
     },
 
     /// Test the deployment
-    Test {
-        /// Verbose output
-        #[clap(long)]
-        verbose: bool,
-    },
+    Test {},
 
     /// Rollback to previous version
     Rollback {
@@ -159,35 +155,35 @@ pub enum DeployAction {
         version: Option<String>,
 
         /// Skip confirmation
-        #[clap(long)]
+        #[arg(long)]
         yes: bool,
     },
 
     /// Destroy the deployment
     Destroy {
         /// Skip confirmation prompt
-        #[clap(long)]
+        #[arg(long)]
         yes: bool,
 
         /// Remove all deployment files (CDK project, Lambda wrapper, config)
-        #[clap(long)]
+        #[arg(long)]
         clean: bool,
 
         /// Don't wait for async operations to complete (pmcp-run only)
-        #[clap(long)]
+        #[arg(long)]
         no_wait: bool,
     },
 
     /// Manage secrets
     Secrets {
-        #[clap(subcommand)]
+        #[command(subcommand)]
         action: SecretsAction,
     },
 
     /// Show deployment outputs
     Outputs {
         /// Output format (text, json)
-        #[clap(long, default_value = "text")]
+        #[arg(long, default_value = "text")]
         format: String,
     },
 
@@ -199,7 +195,7 @@ pub enum DeployAction {
 
     /// Manage OAuth configuration for pmcp.run servers
     Oauth {
-        #[clap(subcommand)]
+        #[command(subcommand)]
         action: OAuthAction,
     },
 
@@ -218,7 +214,7 @@ pub enum SecretsAction {
         key: String,
 
         /// Get value from environment variable
-        #[clap(long)]
+        #[arg(long)]
         from_env: Option<String>,
     },
 
@@ -231,7 +227,7 @@ pub enum SecretsAction {
         key: String,
 
         /// Skip confirmation
-        #[clap(long)]
+        #[arg(long)]
         yes: bool,
     },
 }
@@ -252,7 +248,7 @@ pub enum OAuthAction {
     /// Single Sign-On (SSO) across servers.
     Enable {
         /// Server ID (deployment ID) to enable OAuth for
-        #[clap(long)]
+        #[arg(long)]
         server: String,
 
         /// Copy OAuth configuration from an existing server.
@@ -262,7 +258,7 @@ pub enum OAuthAction {
         /// way to enable SSO across multiple MCP servers.
         ///
         /// Example: --copy-from advanced-mcp-course
-        #[clap(long, value_name = "SERVER_ID")]
+        #[arg(long, value_name = "SERVER_ID")]
         copy_from: Option<String>,
 
         /// OAuth scopes for this server (comma-separated).
@@ -277,7 +273,7 @@ pub enum OAuthAction {
         ///
         /// Note: When using --shared-pool, scopes are server-specific and
         /// do NOT affect other servers sharing the same pool.
-        #[clap(long, value_delimiter = ',', value_name = "SCOPES")]
+        #[arg(long, value_delimiter = ',', value_name = "SCOPES")]
         scopes: Option<Vec<String>>,
 
         /// Enable Dynamic Client Registration (RFC 7591).
@@ -286,7 +282,7 @@ pub enum OAuthAction {
         /// register themselves when users add your server URL.
         ///
         /// Default: true (recommended for MCP servers)
-        #[clap(long, default_value = "true")]
+        #[arg(long, default_value = "true")]
         dcr: bool,
 
         /// Public client patterns (comma-separated).
@@ -298,7 +294,7 @@ pub enum OAuthAction {
         /// Default: "claude,cursor,desktop,mcp-inspector,chatgpt"
         ///
         /// Example: --public-clients "claude,cursor,my-app"
-        #[clap(long, value_delimiter = ',', value_name = "PATTERNS")]
+        #[arg(long, value_delimiter = ',', value_name = "PATTERNS")]
         public_clients: Option<Vec<String>>,
 
         /// Use an existing Cognito User Pool instead of creating a new one.
@@ -316,7 +312,7 @@ pub enum OAuthAction {
         ///
         /// Note: Other parameters (--scopes, --dcr, --public-clients) configure
         /// THIS server's OAuth behavior, not the shared pool itself.
-        #[clap(long, value_name = "POOL_ID_OR_NAME")]
+        #[arg(long, value_name = "POOL_ID_OR_NAME")]
         shared_pool: Option<String>,
     },
 
@@ -326,7 +322,7 @@ pub enum OAuthAction {
     /// so you can re-enable OAuth at any time.
     Disable {
         /// Server ID (deployment ID)
-        #[clap(long)]
+        #[arg(long)]
         server: String,
     },
 
@@ -337,7 +333,7 @@ pub enum OAuthAction {
     /// sharing with other servers.
     Status {
         /// Server ID (deployment ID)
-        #[clap(long)]
+        #[arg(long)]
         server: String,
     },
 }
@@ -439,9 +435,9 @@ impl DeployCommand {
                         println!("Metrics for {}: {}", target.name(), metrics.period);
                         Ok(())
                     },
-                    DeployAction::Test { verbose } => {
+                    DeployAction::Test {} => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
-                        let results = target.test(&config, *verbose).await?;
+                        let results = target.test(&config, global_flags.verbose).await?;
                         // Test results are requested output
                         if results.success {
                             println!(

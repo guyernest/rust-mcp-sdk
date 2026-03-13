@@ -1,8 +1,10 @@
 pub mod add;
 pub mod app;
+pub mod auth;
 pub mod connect;
 pub mod deploy;
 pub mod dev;
+pub mod flags;
 pub mod landing;
 pub mod loadtest;
 pub mod new;
@@ -25,9 +27,8 @@ pub mod validate;
 pub struct GlobalFlags {
     /// Enable verbose output for debugging.
     ///
-    /// Currently used to resolve quiet precedence (verbose wins over quiet).
-    /// Will be used by individual commands for detailed output in future phases.
-    #[allow(dead_code)]
+    /// Used to resolve quiet precedence (verbose wins over quiet) and by
+    /// individual commands for detailed diagnostic output.
     pub verbose: bool,
     /// Suppress colored output (resolved: flag, env, or non-TTY).
     pub no_color: bool,

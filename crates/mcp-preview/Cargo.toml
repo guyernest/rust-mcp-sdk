@@ -1,6 +1,6 @@
 [package]
 name = "mcp-preview"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "MCP Apps Preview Server - Browser-based UI testing for MCP widgets"
 license = "MIT OR Apache-2.0"
@@ -23,7 +23,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # HTTP client for MCP proxy
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 
 # Widget utilities (shared with pmcp core)
 pmcp-widget-utils = { version = "0.1.0", path = "../pmcp-widget-utils" }

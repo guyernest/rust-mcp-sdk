@@ -111,7 +111,7 @@ impl ServerTester {
                 let mut client_builder = reqwest::ClientBuilder::new().timeout(timeout);
 
                 if insecure {
-                    client_builder = client_builder.danger_accept_invalid_certs(true);
+                    client_builder = client_builder.tls_danger_accept_invalid_certs(true);
                 }
 
                 let client = client_builder
@@ -132,7 +132,7 @@ impl ServerTester {
                         let mut client_builder = reqwest::ClientBuilder::new().timeout(timeout);
 
                         if insecure {
-                            client_builder = client_builder.danger_accept_invalid_certs(true);
+                            client_builder = client_builder.tls_danger_accept_invalid_certs(true);
                         }
 
                         let client = client_builder
@@ -1068,7 +1068,7 @@ impl ServerTester {
             // For streamable HTTP transport, create a temporary client
             let mut client_builder = reqwest::ClientBuilder::new().timeout(Duration::from_secs(30));
             if self.insecure {
-                client_builder = client_builder.danger_accept_invalid_certs(true);
+                client_builder = client_builder.tls_danger_accept_invalid_certs(true);
             }
             client_builder.build().ok()
         } else {

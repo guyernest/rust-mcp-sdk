@@ -202,16 +202,27 @@ pub struct McpProxy {
     client: reqwest::Client,
     request_id: AtomicU64,
     session: RwLock<Option<SessionInfo>>,
+    auth_header: Option<String>,
 }
 
 impl McpProxy {
-    /// Create a new MCP proxy targeting the given base URL
+    /// Create a new MCP proxy targeting the given base URL (no authentication).
+    #[allow(dead_code)]
     pub fn new(base_url: &str) -> Self {
+        Self::new_with_auth(base_url, None)
+    }
+
+    /// Create a new MCP proxy with an optional `Authorization` header value.
+    ///
+    /// When `auth_header` is `Some`, it is attached to every outbound request
+    /// (initialize, JSON-RPC calls, notifications, raw forwards).
+    pub fn new_with_auth(base_url: &str, auth_header: Option<String>) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             client: reqwest::Client::new(),
             request_id: AtomicU64::new(1),
             session: RwLock::new(None),
+            auth_header,
         }
     }
 
@@ -221,11 +232,18 @@ impl McpProxy {
     }
 
     /// Build a base POST request with standard MCP headers.
+    ///
+    /// When an auth header is configured, it is attached automatically.
     fn mcp_post(&self) -> reqwest::RequestBuilder {
-        self.client
+        let mut builder = self
+            .client
             .post(&self.base_url)
             .header("Accept", "application/json, text/event-stream")
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/json");
+        if let Some(ref auth) = self.auth_header {
+            builder = builder.header("Authorization", auth);
+        }
+        builder
     }
 
     /// Attach the stored session ID header to a request builder, if available.

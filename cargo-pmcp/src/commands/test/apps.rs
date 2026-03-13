@@ -8,20 +8,22 @@ use colored::Colorize;
 use mcp_tester::{AppValidationMode, AppValidator, TestReport, TestStatus};
 use std::time::Duration;
 
+use crate::commands::auth;
+use crate::commands::flags::AuthFlags;
 use crate::commands::GlobalFlags;
 
 /// Execute the `cargo pmcp test apps` command.
-#[allow(clippy::too_many_arguments)]
 pub async fn execute(
     url: String,
     mode: Option<String>,
     tool: Option<String>,
     strict: bool,
     transport: Option<String>,
-    verbose: bool,
     timeout: u64,
+    auth_flags: &AuthFlags,
     global_flags: &GlobalFlags,
 ) -> Result<()> {
+    let verbose = global_flags.verbose;
     // Parse validation mode
     let validation_mode: AppValidationMode = mode
         .as_deref()
@@ -47,14 +49,18 @@ pub async fn execute(
         println!();
     }
 
+    // Resolve authentication middleware
+    let auth_method = auth_flags.resolve();
+    let middleware = auth::resolve_auth_middleware(&url, &auth_method).await?;
+
     // Create server tester and verify connectivity
     let mut tester = mcp_tester::ServerTester::new(
         &url,
         Duration::from_secs(timeout),
         false, // insecure
-        None,  // api_key
+        None,  // api_key -- auth handled via middleware for consistency
         transport.as_deref(),
-        None, // http_middleware_chain
+        middleware,
     )
     .context("Failed to create server tester")?;
 

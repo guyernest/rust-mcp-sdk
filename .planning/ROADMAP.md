@@ -91,8 +91,8 @@ See phase details in `.planning/phases/25-*` and `.planning/phases/26-*`
 **Milestone Goal:** Normalize the cargo pmcp CLI for consistency and developer experience ahead of course recording -- fix flag inconsistencies, propagate auth to all server-facing commands, surface mcp-tester via `cargo pmcp test`, and add doctor/completions commands.
 
 - [x] **Phase 27: Global Flag Infrastructure** - Add --no-color and --quiet as global flags available on all commands (completed 2026-03-04)
-- [ ] **Phase 28: Flag Normalization** - Rename and normalize all per-command flags for consistency (positional URL, --server, --verbose, --yes, -o, --format, #[arg()])
-- [ ] **Phase 29: Auth Flag Propagation** - Add shared OAuth and API-key flag structs to all server-facing commands
+- [x] **Phase 28: Flag Normalization** - Rename and normalize all per-command flags for consistency (positional URL, --server, --verbose, --yes, -o, --format, #[arg()]) (completed 2026-03-12)
+- [x] **Phase 29: Auth Flag Propagation** - Add shared OAuth and API-key flag structs to all server-facing commands (completed 2026-03-13)
 - [ ] **Phase 30: Tester CLI Integration** - Surface mcp-tester subcommands through cargo pmcp test with aligned flags
 - [ ] **Phase 31: New Commands** - Add cargo pmcp doctor and cargo pmcp completions commands
 - [ ] **Phase 32: Help Text Polish** - Consistent help text format with descriptions and usage examples across all commands
@@ -122,7 +122,12 @@ Plans:
   3. User can use `--verbose` / `-v` for detailed output on any command (no more `--detailed`)
   4. User can use `--yes` to skip confirmations and `-o` as shorthand for `--output` on any command that supports them
   5. All `--format` flags accept `text` and `json` as values (no other human-readable format names)
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 28-01-PLAN.md — Create shared flag structs (FormatValue, OutputFlags, FormatFlags), convert deploy #[clap()] to #[arg()], clean up dead code
+- [ ] 28-02-PLAN.md — Normalize test/schema/preview/connect/validate/deploy flags: URL positional, verbose removal, format normalization
+- [ ] 28-03-PLAN.md — Normalize app/secret/loadtest/landing flags: URL positional, --force to --yes, -o alias, --server-id to --server
 
 ### Phase 29: Auth Flag Propagation
 **Goal**: Every command that connects to an MCP server accepts OAuth and API-key authentication flags
@@ -133,7 +138,12 @@ Plans:
   2. User can pass OAuth flags (--oauth-issuer, --oauth-client-id, --oauth-scopes, --oauth-no-cache, --oauth-redirect-port) to any of those same commands
   3. Auth flags are defined in a shared struct (AuthFlags or similar) flattened into each command, not duplicated per command
   4. Commands that already had auth support (e.g., loadtest) continue to work unchanged
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 29-01-PLAN.md — Define AuthFlags struct, AuthMethod enum, resolve() method in flags.rs; create shared auth.rs with resolve_auth_middleware()
+- [ ] 29-02-PLAN.md — Flatten AuthFlags into test check/run/generate/apps, wire handlers; migrate loadtest inline auth to shared AuthFlags
+- [ ] 29-03-PLAN.md — Add AuthFlags to preview/schema export/connect; extend McpProxy with auth_header; wire connect config generation
 
 ### Phase 30: Tester CLI Integration
 **Goal**: Users can run all mcp-tester capabilities through cargo pmcp test subcommands with consistent flag conventions
@@ -199,8 +209,8 @@ Plans:
 | 25. Loadtest Upload | v1.5 | 2/2 | Complete | 2026-02-28 |
 | 26. OAuth Load Testing | v1.5 | 4/4 | Complete | 2026-03-01 |
 | 27. Global Flag Infrastructure | 3/3 | Complete   | 2026-03-04 | - |
-| 28. Flag Normalization | v1.6 | 0/? | Not started | - |
-| 29. Auth Flag Propagation | v1.6 | 0/? | Not started | - |
+| 28. Flag Normalization | 3/3 | Complete   | 2026-03-12 | - |
+| 29. Auth Flag Propagation | 3/3 | Complete    | 2026-03-13 | - |
 | 30. Tester CLI Integration | v1.6 | 0/? | Not started | - |
 | 31. New Commands | v1.6 | 0/? | Not started | - |
 | 32. Help Text Polish | v1.6 | 0/? | Not started | - |
@@ -210,7 +220,7 @@ Plans:
 **Goal:** Bump mcp-tester to 0.2.2 and cargo-pmcp to 0.3.4, publish both to crates.io so `cargo install cargo-pmcp` works without `--locked`
 **Requirements**: None (hotfix)
 **Depends on:** Phase 32
-**Plans:** 1 plan
+**Plans:** 3/3 plans complete
 
 Plans:
 - [ ] 33-01-PLAN.md — Version bumps and crates.io publish
@@ -377,3 +387,36 @@ Plans:
 Plans:
 - [ ] 47-01-PLAN.md -- AppValidator module, TestCategory::Apps, mcp-tester apps subcommand
 - [ ] 47-02-PLAN.md -- cargo pmcp test apps subcommand, check command App hint
+
+### Phase 48: MCP Apps Documentation and Education Refresh
+
+**Goal:** Update all documentation, tooling READMEs, book chapters, and course materials to reflect the current MCP Apps capabilities including multi-host support (ChatGPT, Claude Desktop), mcp-tester apps validation, mcp-preview improvements, and the developer guide. Also fix mcp-preview theme support by sending CSS variable palettes in host context.
+**Requirements**: DOCS-01, DOCS-02, DOCS-03, DOCS-04, PREVIEW-01
+**Depends on:** Phase 47
+**Success Criteria** (what must be TRUE):
+  1. mcp-tester README documents the `apps` subcommand with usage examples and validation modes
+  2. mcp-preview README describes current capabilities including multi-host preview, widget runtime, and DevTools
+  3. pmcp-book MCP Apps chapters are updated with current tooling, host layer system, and developer guide content
+  4. pmcp-course materials are aligned with book updates
+  5. mcp-preview sends `styles.variables` CSS custom properties in host context so widgets respond to theme changes
+**Plans:** 3/3 plans complete
+
+Plans:
+- [ ] 48-01-PLAN.md — Update mcp-tester/mcp-preview READMEs and rewrite book ch12-5 MCP Apps chapter with GUIDE.md content
+- [ ] 48-02-PLAN.md — Update pmcp-course ch20 MCP Apps chapters and ch11-02 mcp-tester lesson to align with book
+- [ ] 48-03-PLAN.md — Add theme CSS variable palettes to mcp-preview host context for ext-apps widget theming
+
+### Phase 49: Bump dependencies (reqwest 0.13, jsonschema 0.45)
+
+**Goal:** Upgrade reqwest from 0.12 to 0.13 and jsonschema from 0.38 to 0.45 across the workspace, updating feature flags, MSRV, deprecated methods, and template strings
+**Requirements**: DEP-01
+**Depends on:** Phase 48
+**Success Criteria** (what must be TRUE):
+  1. All four workspace Cargo.toml files reference reqwest 0.13 with correct feature names (rustls, form)
+  2. jsonschema bumped to 0.45 with MSRV raised to 1.83.0
+  3. Template strings in deploy/scaffold generate correct reqwest 0.13 lines for new projects
+  4. `make quality-gate` passes with zero warnings
+**Plans:** 1/1 plans complete
+
+Plans:
+- [ ] 49-01-PLAN.md — Update all Cargo.toml files, MSRV, deprecated methods, and template strings for reqwest 0.13 + jsonschema 0.45

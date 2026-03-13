@@ -5,31 +5,35 @@ use colored::Colorize;
 use mcp_tester::run_scenario_with_transport;
 use std::path::PathBuf;
 
+use crate::commands::flags::{AuthFlags, AuthMethod, ServerFlags};
 use crate::commands::GlobalFlags;
 
 /// Run test scenarios against a local or remote MCP server
 pub fn execute(
-    server: Option<String>,
-    url: Option<String>,
+    server_flags: ServerFlags,
     port: u16,
     scenarios: Option<PathBuf>,
     transport: Option<String>,
-    detailed: bool,
+    auth_flags: &AuthFlags,
     global_flags: &GlobalFlags,
 ) -> Result<()> {
+    // Warn if auth is configured: run_scenario_with_transport() does not yet support auth passthrough
+    let auth_method = auth_flags.resolve();
+    if !matches!(auth_method, AuthMethod::None) {
+        eprintln!(
+            "Warning: Auth flags are accepted but run_scenario_with_transport does not yet \
+             support auth passthrough. For authenticated servers, use `cargo pmcp test check` \
+             to verify connectivity."
+        );
+    }
+
+    let detailed = global_flags.verbose;
+    let (target_url, server) = server_flags.resolve_url(port)?;
+
     if global_flags.should_output() {
         println!("\n{}", "Running MCP server tests".bright_cyan().bold());
         println!("{}", "─────────────────────────────────────".bright_cyan());
     }
-
-    // Determine the target URL
-    let target_url = if let Some(url) = url {
-        url
-    } else if server.is_some() {
-        format!("http://0.0.0.0:{}", port)
-    } else {
-        anyhow::bail!("Either --url or --server must be specified");
-    };
 
     // Determine scenarios directory
     let scenarios_dir = if let Some(dir) = scenarios {
@@ -156,7 +160,7 @@ pub fn execute(
                 println!("\n{}", "Troubleshooting:".bright_white().bold());
                 println!("  - Review scenario files in {}", scenarios_dir.display());
                 println!("  - Check server logs for errors");
-                println!("  - Run with --detailed for more output");
+                println!("  - Run with --verbose for more output");
             }
             anyhow::bail!("Tests failed");
         },

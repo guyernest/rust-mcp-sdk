@@ -3,6 +3,8 @@
 use anyhow::Result;
 use colored::Colorize;
 
+use crate::commands::flags::AuthFlags;
+
 /// Start the MCP Apps preview server
 pub async fn execute(
     url: String,
@@ -13,6 +15,7 @@ pub async fn execute(
     locale: String,
     widgets_dir: Option<String>,
     mode: String,
+    auth_flags: &AuthFlags,
     global_flags: &crate::commands::GlobalFlags,
 ) -> Result<()> {
     let preview_mode = if mode == "chatgpt" {
@@ -45,6 +48,10 @@ pub async fn execute(
         println!();
     }
 
+    // Resolve authentication
+    let auth_method = auth_flags.resolve();
+    let auth_header = super::auth::resolve_auth_header(&url, &auth_method).await?;
+
     let widgets_path = widgets_dir.map(std::path::PathBuf::from);
 
     let config = mcp_preview::PreviewConfig {
@@ -55,6 +62,7 @@ pub async fn execute(
         locale,
         widgets_dir: widgets_path,
         mode: preview_mode,
+        auth_header,
     };
 
     // Open browser if requested

@@ -877,7 +877,7 @@ pmcp = {{ workspace = true }}
 # Lambda runtime
 lambda_http = "0.13"
 tokio = {{ version = "1", features = ["full"] }}
-reqwest = {{ version = "0.12", default-features = false, features = ["json", "rustls-tls"] }}
+reqwest = {{ version = "0.13", default-features = false, features = ["json", "rustls"] }}
 once_cell = "1.19"
 
 # Serialization
@@ -915,7 +915,7 @@ pmcp = {{ workspace = true }}
 # Lambda runtime
 lambda_http = "0.13"
 tokio = {{ version = "1", features = ["full"] }}
-reqwest = {{ version = "0.12", default-features = false, features = ["json", "rustls-tls"] }}
+reqwest = {{ version = "0.13", default-features = false, features = ["json", "rustls"] }}
 once_cell = "1.19"
 
 # Serialization

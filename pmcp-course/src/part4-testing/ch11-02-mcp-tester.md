@@ -1142,6 +1142,59 @@ cargo pmcp test run --server http://localhost:3000
 cargo pmcp test run --format junit --output results.xml
 ```
 
+## App Metadata Validation
+
+**Learning objective:** After this section, you will be able to validate MCP App metadata compliance using `mcp-tester apps` and `cargo pmcp test apps`.
+
+### Why App Metadata Validation Matters
+
+MCP Apps servers must emit correct `_meta`, MIME types, and resource cross-references for widgets to render across different hosts (Claude Desktop, ChatGPT, VS Code). Each host has specific requirements:
+
+- Claude Desktop requires `text/html;profile=mcp-app` MIME type and `_meta.ui.resourceUri` on resources
+- ChatGPT requires additional `openai/*` descriptor keys in tool and resource metadata
+- All hosts require that `_meta.ui.resourceUri` on tools points to a resource that actually exists in `resources/list`
+
+Manual inspection of `tools/list` and `resources/read` responses is tedious and error-prone. The `mcp-tester apps` command automates this validation.
+
+### CLI Usage
+
+```bash
+# Standard validation -- checks all App-capable tools
+mcp-tester apps http://localhost:3000
+
+# ChatGPT-specific validation -- also checks openai/* keys
+mcp-tester apps http://localhost:3000 --mode chatgpt
+
+# Claude Desktop validation
+mcp-tester apps http://localhost:3000 --mode claude-desktop
+
+# Strict mode -- warnings become failures (ideal for CI)
+mcp-tester apps http://localhost:3000 --strict
+
+# Via cargo pmcp wrapper
+cargo pmcp test apps --url http://localhost:3000
+cargo pmcp test apps --url http://localhost:3000 --mode chatgpt --strict
+```
+
+### What Gets Validated
+
+The validator checks each App-capable tool in the server:
+
+| Check | What It Verifies |
+|-------|-----------------|
+| `_meta` field present | Tool has metadata indicating it's App-capable |
+| `ui.resourceUri` present | Tool links to a widget resource |
+| MIME type correct | Resource uses `text/html;profile=mcp-app` (not legacy variants) |
+| Resource cross-reference | Tool's URI matches an entry in `resources/list` |
+| [ChatGPT mode] `openai/*` keys | ChatGPT descriptor keys present in tool metadata |
+| [if present] `outputSchema` valid | Output schema structure is well-formed |
+
+**Try this:** Run `mcp-tester apps` against the Open Images example server and examine the validation output. Note the difference between `--mode standard` and `--mode chatgpt` output.
+
+### Knowledge Check
+
+What validation mode would you use to ensure your MCP App works with Claude Desktop? Answer: `--mode claude-desktop`. What about ensuring it works with ChatGPT? Answer: `--mode chatgpt`. For maximum compatibility, run both modes and fix any issues.
+
 ## Practice Ideas
 
 These informal exercises help reinforce the concepts. For structured exercises with starter code and tests, see the chapter exercise pages.
@@ -1150,6 +1203,7 @@ These informal exercises help reinforce the concepts. For structured exercises w
 2. **Write security tests**: Create a security-focused scenario file for SQL injection prevention
 3. **Build a workflow**: Create a multi-step CRUD workflow with variable capture
 4. **CI integration**: Set up GitHub Actions to run mcp-tester on every PR
+5. **Validate App metadata**: Run `mcp-tester apps` against an MCP Apps server and fix any warnings reported in strict mode
 
 ---
 

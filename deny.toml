@@ -27,6 +27,7 @@ allow = [
     "CDLA-Permissive-2.0",
     "Zlib",
     "MPL-2.0",
+    "OpenSSL",
 ]
 confidence-threshold = 0.8
 exceptions = []
@@ -39,9 +40,9 @@ allow = []
 deny = []
 skip = [
     # Allow multiple getrandom versions during transition period
-    # v0.2.16 is used by ring/rustls (not yet updated to v0.3)
-    # v0.3.4 is our direct dependency for WASM support
-    { name = "getrandom", version = "=0.2.16" },
+    # v0.2.x is used by ring/rustls (not yet updated to v0.3)
+    # v0.3.x is our direct dependency for WASM support
+    { name = "getrandom", version = "=0.2" },
 
     # Allow multiple hashbrown versions during indexmap transition
     # v0.14.5 is used by older dependencies
@@ -51,20 +52,29 @@ skip = [
     # Allow multiple windows-sys versions during ecosystem transition
     # Various versions used by different Windows dependencies
     { name = "windows-sys", version = "=0.52.0" },
-    { name = "windows-sys", version = "=0.59.0" },
+    # windows-sys 0.45.0 used by jni (via rustls-platform-verifier in reqwest 0.13)
+    { name = "windows-sys", version = "=0.45.0" },
     { name = "windows-sys", version = "=0.60.2" },
 
     # Allow multiple windows-targets versions
+    { name = "windows-targets", version = "=0.42.2" },
     { name = "windows-targets", version = "=0.52.6" },
 
-    # Allow multiple windows_* crate versions (0.52.6 used by older deps)
+    # Allow multiple windows_* crate versions (0.42.2 from jni, 0.52.6 from older deps)
+    { name = "windows_aarch64_gnullvm", version = "=0.42.2" },
     { name = "windows_aarch64_gnullvm", version = "=0.52.6" },
+    { name = "windows_aarch64_msvc", version = "=0.42.2" },
     { name = "windows_aarch64_msvc", version = "=0.52.6" },
+    { name = "windows_i686_gnu", version = "=0.42.2" },
     { name = "windows_i686_gnu", version = "=0.52.6" },
     { name = "windows_i686_gnullvm", version = "=0.52.6" },
+    { name = "windows_i686_msvc", version = "=0.42.2" },
     { name = "windows_i686_msvc", version = "=0.52.6" },
+    { name = "windows_x86_64_gnu", version = "=0.42.2" },
     { name = "windows_x86_64_gnu", version = "=0.52.6" },
+    { name = "windows_x86_64_gnullvm", version = "=0.42.2" },
     { name = "windows_x86_64_gnullvm", version = "=0.52.6" },
+    { name = "windows_x86_64_msvc", version = "=0.42.2" },
     { name = "windows_x86_64_msvc", version = "=0.52.6" },
 ]
 skip-tree = []

@@ -9,24 +9,24 @@ Requirements for CLI DX Overhaul. Each maps to roadmap phases.
 
 ### Flag Consistency
 
-- [ ] **FLAG-01**: All commands taking a server URL accept it as a positional argument (replace `--url`, `--endpoint`)
-- [ ] **FLAG-02**: All pmcp.run server references use `--server` flag consistently (replace `--server-id`)
-- [ ] **FLAG-03**: All verbose output flags use `--verbose` / `-v` (replace `--detailed`)
-- [ ] **FLAG-04**: All confirmation-skip flags use `--yes` (replace `--force`)
-- [ ] **FLAG-05**: All `--output` flags have `-o` short alias
-- [ ] **FLAG-06**: Human-readable format values normalized to `text`/`json` across all `--format` flags
-- [ ] **FLAG-07**: All clap derive attributes use `#[arg()]` style (replace `#[clap()]` in deploy)
+- [x] **FLAG-01**: All commands taking a server URL accept it as a positional argument (replace `--url`, `--endpoint`)
+- [x] **FLAG-02**: All pmcp.run server references use `--server` flag consistently (replace `--server-id`)
+- [x] **FLAG-03**: All verbose output flags use `--verbose` / `-v` (replace `--detailed`)
+- [x] **FLAG-04**: All confirmation-skip flags use `--yes` (replace `--force`)
+- [x] **FLAG-05**: All `--output` flags have `-o` short alias
+- [x] **FLAG-06**: Human-readable format values normalized to `text`/`json` across all `--format` flags
+- [x] **FLAG-07**: All clap derive attributes use `#[arg()]` style (replace `#[clap()]` in deploy)
 - [x] **FLAG-08**: `--no-color` available as global flag on all commands
 - [x] **FLAG-09**: `--quiet` available as global flag on all commands
 
 ### Auth Propagation
 
-- [ ] **AUTH-01**: `cargo pmcp test check` accepts `--api-key` and OAuth flags (issuer, client-id, scopes, no-cache, redirect-port)
-- [ ] **AUTH-02**: `cargo pmcp test run` accepts `--api-key` and OAuth flags
-- [ ] **AUTH-03**: `cargo pmcp test generate` accepts `--api-key` and OAuth flags
-- [ ] **AUTH-04**: `cargo pmcp preview` accepts `--api-key` and OAuth flags
-- [ ] **AUTH-05**: `cargo pmcp schema export` accepts `--api-key` and OAuth flags
-- [ ] **AUTH-06**: `cargo pmcp connect` accepts `--api-key` and OAuth flags
+- [x] **AUTH-01**: `cargo pmcp test check` accepts `--api-key` and OAuth flags (issuer, client-id, scopes, no-cache, redirect-port)
+- [x] **AUTH-02**: `cargo pmcp test run` accepts `--api-key` and OAuth flags
+- [x] **AUTH-03**: `cargo pmcp test generate` accepts `--api-key` and OAuth flags
+- [x] **AUTH-04**: `cargo pmcp preview` accepts `--api-key` and OAuth flags
+- [x] **AUTH-05**: `cargo pmcp schema export` accepts `--api-key` and OAuth flags
+- [x] **AUTH-06**: `cargo pmcp connect` accepts `--api-key` and OAuth flags
 
 ### Tester Integration
 
@@ -104,21 +104,21 @@ Deferred to future release. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FLAG-01 | Phase 28 | Pending |
-| FLAG-02 | Phase 28 | Pending |
-| FLAG-03 | Phase 28 | Pending |
-| FLAG-04 | Phase 28 | Pending |
-| FLAG-05 | Phase 28 | Pending |
-| FLAG-06 | Phase 28 | Pending |
-| FLAG-07 | Phase 28 | Pending |
+| FLAG-01 | Phase 28 | Complete |
+| FLAG-02 | Phase 28 | Complete |
+| FLAG-03 | Phase 28 | Complete |
+| FLAG-04 | Phase 28 | Complete |
+| FLAG-05 | Phase 28 | Complete |
+| FLAG-06 | Phase 28 | Complete |
+| FLAG-07 | Phase 28 | Complete |
 | FLAG-08 | Phase 27 | Complete |
 | FLAG-09 | Phase 27 | Complete |
-| AUTH-01 | Phase 29 | Pending |
-| AUTH-02 | Phase 29 | Pending |
-| AUTH-03 | Phase 29 | Pending |
-| AUTH-04 | Phase 29 | Pending |
-| AUTH-05 | Phase 29 | Pending |
-| AUTH-06 | Phase 29 | Pending |
+| AUTH-01 | Phase 29 | Complete |
+| AUTH-02 | Phase 29 | Complete |
+| AUTH-03 | Phase 29 | Complete |
+| AUTH-04 | Phase 29 | Complete |
+| AUTH-05 | Phase 29 | Complete |
+| AUTH-06 | Phase 29 | Complete |
 | TEST-01 | Phase 30 | Pending |
 | TEST-02 | Phase 30 | Pending |
 | TEST-03 | Phase 30 | Pending |
