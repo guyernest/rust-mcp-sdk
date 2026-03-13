@@ -30,6 +30,7 @@ mod secrets;
 mod templates;
 mod utils;
 
+use commands::flags::AuthFlags;
 use commands::GlobalFlags;
 
 /// Production-grade MCP server development toolkit
@@ -119,6 +120,10 @@ enum Commands {
         /// Server URL
         #[arg(default_value = "http://localhost:3000")]
         url: String,
+
+        /// Authentication flags for the target MCP server
+        #[command(flatten)]
+        auth_flags: AuthFlags,
     },
 
     /// Deploy MCP server to cloud platforms
@@ -213,6 +218,10 @@ enum Commands {
         /// Preview mode: standard (default) or chatgpt (strict ChatGPT protocol validation)
         #[arg(long, default_value = "standard")]
         mode: String,
+
+        /// Authentication flags for the target MCP server
+        #[command(flatten)]
+        auth_flags: AuthFlags,
     },
 }
 
@@ -348,8 +357,9 @@ fn execute_command(command: Commands, global_flags: &GlobalFlags) -> Result<()> 
             server,
             client,
             url,
+            auth_flags,
         } => {
-            commands::connect::execute(server, client, url, global_flags)?;
+            commands::connect::execute(server, client, url, &auth_flags, global_flags)?;
         },
         Commands::Deploy(deploy_cmd) => {
             deploy_cmd.execute(global_flags)?;
@@ -383,6 +393,7 @@ fn execute_command(command: Commands, global_flags: &GlobalFlags) -> Result<()> 
             locale,
             widgets_dir,
             mode,
+            auth_flags,
         } => {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(commands::preview::execute(
@@ -394,6 +405,7 @@ fn execute_command(command: Commands, global_flags: &GlobalFlags) -> Result<()> 
                 locale,
                 widgets_dir,
                 mode,
+                &auth_flags,
                 global_flags,
             ))?;
         },

@@ -3,6 +3,8 @@
 use anyhow::Result;
 use colored::Colorize;
 
+use crate::commands::flags::{AuthFlags, AuthMethod};
+
 /// Start the MCP Apps preview server
 pub async fn execute(
     url: String,
@@ -13,6 +15,7 @@ pub async fn execute(
     locale: String,
     widgets_dir: Option<String>,
     mode: String,
+    auth_flags: &AuthFlags,
     global_flags: &crate::commands::GlobalFlags,
 ) -> Result<()> {
     let preview_mode = if mode == "chatgpt" {
@@ -45,6 +48,43 @@ pub async fn execute(
         println!();
     }
 
+    // Resolve authentication
+    let auth_method = auth_flags.resolve();
+    let auth_header = match &auth_method {
+        AuthMethod::None => None,
+        AuthMethod::ApiKey(key) => Some(format!("Bearer {}", key)),
+        AuthMethod::OAuth {
+            client_id,
+            issuer,
+            scopes,
+            no_cache,
+            redirect_port,
+        } => {
+            use pmcp::client::oauth::{default_cache_path, OAuthConfig, OAuthHelper};
+
+            let cache_file = if *no_cache {
+                None
+            } else {
+                Some(default_cache_path())
+            };
+            let config = OAuthConfig {
+                issuer: issuer.clone(),
+                mcp_server_url: Some(url.clone()),
+                client_id: client_id.clone(),
+                scopes: scopes.clone(),
+                cache_file,
+                redirect_port: *redirect_port,
+            };
+            let helper = OAuthHelper::new(config)
+                .map_err(|e| anyhow::anyhow!("OAuth setup failed: {e}"))?;
+            let token = helper
+                .get_access_token()
+                .await
+                .map_err(|e| anyhow::anyhow!("OAuth token acquisition failed: {e}"))?;
+            Some(format!("Bearer {}", token))
+        },
+    };
+
     let widgets_path = widgets_dir.map(std::path::PathBuf::from);
 
     let config = mcp_preview::PreviewConfig {
@@ -55,6 +95,7 @@ pub async fn execute(
         locale,
         widgets_dir: widgets_path,
         mode: preview_mode,
+        auth_header,
     };
 
     // Open browser if requested

@@ -57,6 +57,11 @@ pub struct PreviewConfig {
     pub widgets_dir: Option<PathBuf>,
     /// Preview mode (standard or chatgpt)
     pub mode: PreviewMode,
+    /// Optional `Authorization` header value for authenticated MCP servers.
+    ///
+    /// When set, the proxy attaches this header to every outbound request
+    /// to the target MCP server.
+    pub auth_header: Option<String>,
 }
 
 impl Default for PreviewConfig {
@@ -69,6 +74,7 @@ impl Default for PreviewConfig {
             locale: "en-US".to_string(),
             widgets_dir: None,
             mode: PreviewMode::default(),
+            auth_header: None,
         }
     }
 }
@@ -86,7 +92,7 @@ pub struct PreviewServer;
 impl PreviewServer {
     /// Start the preview server
     pub async fn start(config: PreviewConfig) -> Result<()> {
-        let proxy = McpProxy::new(&config.mcp_url);
+        let proxy = McpProxy::new_with_auth(&config.mcp_url, config.auth_header.clone());
 
         // Locate the workspace root to find the WASM client source
         let cwd = std::env::current_dir().unwrap_or_default();

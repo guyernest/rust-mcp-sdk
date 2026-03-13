@@ -5,33 +5,28 @@ use colored::Colorize;
 use mcp_tester::{generate_scenarios_with_transport, GenerateOptions};
 use std::path::PathBuf;
 
+use crate::commands::flags::{AuthFlags, ServerFlags};
 use crate::commands::GlobalFlags;
 
 /// Generate test scenarios from server capabilities
 pub fn execute(
-    server: Option<String>,
-    url: Option<String>,
+    server_flags: ServerFlags,
     port: u16,
     output: Option<PathBuf>,
     transport: Option<String>,
     all_tools: bool,
     with_resources: bool,
     with_prompts: bool,
+    auth_flags: &AuthFlags,
     global_flags: &GlobalFlags,
 ) -> Result<()> {
+    let _ = auth_flags; // Auth wiring deferred to Plan 29-02
+    let (target_url, server) = server_flags.resolve_url(port)?;
+
     if global_flags.should_output() {
         println!("\n{}", "Generating test scenarios".bright_cyan().bold());
         println!("{}", "─────────────────────────────────────".bright_cyan());
     }
-
-    // Determine target URL
-    let target_url = if let Some(url) = url {
-        url
-    } else if server.is_some() {
-        format!("http://0.0.0.0:{}", port)
-    } else {
-        anyhow::bail!("Either a URL or --server must be specified");
-    };
 
     // Determine output path
     let output_path = if let Some(path) = output {
