@@ -31,7 +31,8 @@ try {
 
 switch ($arch) {
     "X64"   { $target = "x86_64-pc-windows-msvc" }
-    default { Write-Error "Unsupported architecture: $arch"; exit 1 }
+    "Arm64" { Write-Error "ARM64 Windows binaries are not yet available. Only x86_64 is supported."; exit 1 }
+    default { Write-Error "Unsupported architecture: $arch. Only x86_64 Windows binaries are available."; exit 1 }
 }
 
 Write-Host "Detected platform: $target"
@@ -61,7 +62,7 @@ try {
 
     # Verify checksum
     Write-Host "Verifying checksum..."
-    $expectedHash = (Get-Content $checksumPath).Split(" ")[0]
+    $expectedHash = (Get-Content $checksumPath).Trim().Split(" ", [StringSplitOptions]::RemoveEmptyEntries)[0]
     $actualHash = (Get-FileHash -Path $binaryPath -Algorithm SHA256).Hash.ToLower()
 
     if ($actualHash -ne $expectedHash) {

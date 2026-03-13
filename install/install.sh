@@ -31,6 +31,7 @@ detect_os() {
     case "$(uname -s)" in
         Linux*)  echo "unknown-linux-gnu" ;;
         Darwin*) echo "apple-darwin" ;;
+        MINGW*|MSYS*|CYGWIN*) printf "Error: Use install.ps1 for Windows.\n" >&2; exit 1 ;;
         *)       printf "Error: Unsupported OS: %s\n" "$(uname -s)" >&2; exit 1 ;;
     esac
 }
@@ -91,6 +92,14 @@ case "$TOOL" in
     mcp-tester|mcp-preview) ;;
     *) printf "Error: Unknown tool '%s'. Must be mcp-tester or mcp-preview.\n" "$TOOL" >&2; exit 1 ;;
 esac
+
+# --- Normalize version (auto-prepend v if needed) ---
+if [ "$VERSION" != "latest" ]; then
+    case "$VERSION" in
+        v*) ;;
+        *)  VERSION="v${VERSION}" ;;
+    esac
+fi
 
 # --- Detect platform ---
 ARCH=$(detect_arch)
