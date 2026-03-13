@@ -2,31 +2,41 @@
 name: Release Tester Binary
 
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      tag_name:
+        required: true
+        type: string
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag (leave empty for latest)'
+        required: false
+        type: string
 
 jobs:
   build-release:
     name: Build and Release Tester
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            asset_name: mcp-tester-linux-x86_64
             target: x86_64-unknown-linux-gnu
-          - os: macos-latest
-            asset_name: mcp-tester-macos-x86_64
+            asset_name: mcp-tester-x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset_name: mcp-tester-aarch64-unknown-linux-gnu
+          - os: macos-15-intel
             target: x86_64-apple-darwin
-          # Note: Apple Silicon cross-compilation disabled due to ring crate limitations
-          # GitHub Actions doesn't provide ARM64 macOS runners yet
-          # - os: macos-latest
-          #   asset_name: mcp-tester-macos-aarch64
-          #   target: aarch64-apple-darwin
+            asset_name: mcp-tester-x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+            asset_name: mcp-tester-aarch64-apple-darwin
           - os: windows-latest
-            asset_name: mcp-tester-windows-x86_64.exe
             target: x86_64-pc-windows-msvc
+            asset_name: mcp-tester-x86_64-pc-windows-msvc.exe
 
     steps:
       - name: Checkout repository
@@ -37,43 +47,58 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Build binary
         run: cargo build --release --package mcp-tester --target ${{ matrix.target }}
 
-      - name: Prepare artifact for upload
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ inputs.tag_name }}"
+          if [ -z "$TAG" ]; then
+            TAG=$(gh release list --limit 1 --json tagName -q '.[0].tagName')
+          fi
+          echo "TAG_NAME=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Prepare artifact
         shell: bash
         run: |
           cd target/${{ matrix.target }}/release
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            mv mcp-tester.exe ${{ matrix.asset_name }}
-            # Use relative path from repo root for Windows
-            echo "ASSET_PATH=target/${{ matrix.target }}/release/${{ matrix.asset_name }}" >> $GITHUB_ENV
+            mv mcp-tester.exe "${{ matrix.asset_name }}"
           else
-            mv mcp-tester ${{ matrix.asset_name }}
-            echo "ASSET_PATH=target/${{ matrix.target }}/release/${{ matrix.asset_name }}" >> $GITHUB_ENV
+            mv mcp-tester "${{ matrix.asset_name }}"
           fi
 
-      - name: Get release tag
-        id: get_tag
+      - name: Generate checksum
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            echo "TAG_NAME=${{ github.event.release.tag_name }}" >> $GITHUB_ENV
+          cd target/${{ matrix.target }}/release
+          if command -v sha256sum &>/dev/null; then
+            sha256sum "${{ matrix.asset_name }}" > "${{ matrix.asset_name }}.sha256"
           else
-            # For workflow_dispatch or push, use the latest release tag or create a dev release
-            TAG=$(gh release list --limit 1 --json tagName -q '.[0].tagName' || echo "")
-            if [ -z "$TAG" ]; then
-              # No releases exist, create a dev release
-              TAG="dev-$(date +%Y%m%d-%H%M%S)"
-              gh release create "$TAG" --title "Development Build $TAG" --notes "Automated development build" --prerelease
-            fi
-            echo "TAG_NAME=${TAG}" >> $GITHUB_ENV
+            shasum -a 256 "${{ matrix.asset_name }}" > "${{ matrix.asset_name }}.sha256"
           fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload release asset
+      - name: Upload binary and checksum
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          gh release upload "${{ env.TAG_NAME }}" "${{ env.ASSET_PATH }}" --clobber
+          gh release upload "${{ steps.tag.outputs.TAG_NAME }}" \
+            "target/${{ matrix.target }}/release/${{ matrix.asset_name }}" \
+            "target/${{ matrix.target }}/release/${{ matrix.asset_name }}.sha256" \
+            --clobber
