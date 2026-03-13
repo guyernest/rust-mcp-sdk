@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::Path;
 
+use super::flags::{AuthFlags, AuthMethod};
+
 #[derive(Subcommand)]
 pub enum SchemaCommand {
     /// Export schema from an MCP server endpoint
@@ -22,6 +24,10 @@ pub enum SchemaCommand {
         /// Output file path (default: schemas/<server_id>.json)
         #[arg(short, long)]
         output: Option<String>,
+
+        /// Authentication flags for the target MCP server
+        #[command(flatten)]
+        auth_flags: AuthFlags,
     },
 
     /// Validate a schema file
@@ -50,7 +56,17 @@ impl SchemaCommand {
                 SchemaCommand::Export {
                     server_flags,
                     output,
-                } => export(server_flags.url, server_flags.server, output, quiet).await,
+                    auth_flags,
+                } => {
+                    export(
+                        server_flags.url,
+                        server_flags.server,
+                        output,
+                        quiet,
+                        &auth_flags,
+                    )
+                    .await
+                },
                 SchemaCommand::Validate { schema } => validate(&schema, quiet).await,
                 SchemaCommand::Diff { schema, url } => diff(&schema, &url, quiet).await,
             }
@@ -238,6 +254,7 @@ async fn export(
     server: Option<String>,
     output: Option<String>,
     quiet: bool,
+    auth_flags: &AuthFlags,
 ) -> Result<()> {
     // Determine endpoint URL
     let endpoint_url = match (&endpoint, &server) {
@@ -254,6 +271,43 @@ async fn export(
                  cargo pmcp schema export --server db-demo"
             ));
         },
+    };
+
+    // Resolve authentication
+    let auth_method = auth_flags.resolve();
+    let auth_header_value = match &auth_method {
+        AuthMethod::ApiKey(key) => Some(format!("Bearer {}", key)),
+        AuthMethod::OAuth {
+            client_id,
+            issuer,
+            scopes,
+            no_cache,
+            redirect_port,
+        } => {
+            use pmcp::client::oauth::{default_cache_path, OAuthConfig, OAuthHelper};
+
+            let cache_file = if *no_cache {
+                None
+            } else {
+                Some(default_cache_path())
+            };
+            let config = OAuthConfig {
+                issuer: issuer.clone(),
+                mcp_server_url: Some(endpoint_url.clone()),
+                client_id: client_id.clone(),
+                scopes: scopes.clone(),
+                cache_file,
+                redirect_port: *redirect_port,
+            };
+            let helper = OAuthHelper::new(config)
+                .map_err(|e| anyhow::anyhow!("OAuth setup failed: {e}"))?;
+            let token = helper
+                .get_access_token()
+                .await
+                .map_err(|e| anyhow::anyhow!("OAuth token acquisition failed: {e}"))?;
+            Some(format!("Bearer {}", token))
+        },
+        AuthMethod::None => None,
     };
 
     if !quiet {
@@ -286,6 +340,7 @@ async fn export(
                 "version": env!("CARGO_PKG_VERSION")
             }
         })),
+        auth_header_value.as_deref(),
     )
     .await?;
 
@@ -309,10 +364,14 @@ async fn export(
     // Derive server_id from name or endpoint
     let server_id = server.clone().unwrap_or_else(|| slugify(&server_name));
 
-    // Send initialized notification (fire and forget)
-    let _ = client
+    // Send initialized notification (fire and forget, with auth)
+    let mut notif_builder = client
         .post(&endpoint_url)
-        .header("Content-Type", "application/json")
+        .header("Content-Type", "application/json");
+    if let Some(ref auth) = auth_header_value {
+        notif_builder = notif_builder.header("Authorization", auth);
+    }
+    let _ = notif_builder
         .json(&json!({
             "jsonrpc": "2.0",
             "method": "notifications/initialized"
@@ -324,7 +383,14 @@ async fn export(
     if !quiet {
         println!("  {} Fetching tools...", style("*").dim());
     }
-    let tools_response = send_mcp_request(&client, &endpoint_url, "tools/list", None).await?;
+    let tools_response = send_mcp_request(
+        &client,
+        &endpoint_url,
+        "tools/list",
+        None,
+        auth_header_value.as_deref(),
+    )
+    .await?;
     let tools: Vec<ToolSchema> = tools_response
         .get("tools")
         .and_then(|t| serde_json::from_value(t.clone()).ok())
@@ -341,7 +407,14 @@ async fn export(
     if !quiet {
         println!("  {} Fetching resources...", style("*").dim());
     }
-    let resources_response = send_mcp_request(&client, &endpoint_url, "resources/list", None).await;
+    let resources_response = send_mcp_request(
+        &client,
+        &endpoint_url,
+        "resources/list",
+        None,
+        auth_header_value.as_deref(),
+    )
+    .await;
     let resources: Vec<ResourceSchema> = resources_response
         .ok()
         .and_then(|r| r.get("resources").cloned())
@@ -359,7 +432,14 @@ async fn export(
     if !quiet {
         println!("  {} Fetching prompts...", style("*").dim());
     }
-    let prompts_response = send_mcp_request(&client, &endpoint_url, "prompts/list", None).await;
+    let prompts_response = send_mcp_request(
+        &client,
+        &endpoint_url,
+        "prompts/list",
+        None,
+        auth_header_value.as_deref(),
+    )
+    .await;
     let prompts: Vec<PromptSchema> = prompts_response
         .ok()
         .and_then(|r| r.get("prompts").cloned())
@@ -531,7 +611,7 @@ async fn diff(schema_path: &str, endpoint: &str, quiet: bool) -> Result<()> {
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
 
-    // Initialize and fetch remote
+    // Initialize and fetch remote (diff does not support auth yet)
     send_mcp_request(
         &client,
         endpoint,
@@ -541,10 +621,12 @@ async fn diff(schema_path: &str, endpoint: &str, quiet: bool) -> Result<()> {
             "capabilities": {},
             "clientInfo": { "name": "cargo-pmcp", "version": env!("CARGO_PKG_VERSION") }
         })),
+        None,
     )
     .await?;
 
-    let tools_response = send_mcp_request(&client, endpoint, "tools/list", None).await?;
+    let tools_response =
+        send_mcp_request(&client, endpoint, "tools/list", None, None).await?;
     let remote_tools: Vec<ToolSchema> = tools_response
         .get("tools")
         .and_then(|t| serde_json::from_value(t.clone()).ok())
@@ -591,12 +673,16 @@ async fn diff(schema_path: &str, endpoint: &str, quiet: bool) -> Result<()> {
     Ok(())
 }
 
-/// Send an MCP JSON-RPC request
+/// Send an MCP JSON-RPC request with optional authentication.
+///
+/// When `auth_header` is `Some`, it is attached as the `Authorization` header
+/// on the outbound HTTP request.
 async fn send_mcp_request(
     client: &reqwest::Client,
     endpoint: &str,
     method: &str,
     params: Option<Value>,
+    auth_header: Option<&str>,
 ) -> Result<Value> {
     let request = McpRequest {
         jsonrpc: "2.0",
@@ -605,10 +691,15 @@ async fn send_mcp_request(
         params,
     };
 
-    let response = client
+    let mut builder = client
         .post(endpoint)
         .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
+        .header("Accept", "application/json");
+    if let Some(auth) = auth_header {
+        builder = builder.header("Authorization", auth);
+    }
+
+    let response = builder
         .json(&request)
         .send()
         .await
