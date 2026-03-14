@@ -7,6 +7,10 @@
 //! - scaffold: Code template generation (future)
 //! - schema_export: Schema discovery and export (future)
 
+pub mod test_apps;
 pub mod test_check;
+pub mod test_generate;
 
+pub use test_apps::TestAppsTool;
 pub use test_check::TestCheckTool;
+pub use test_generate::TestGenerateTool;
