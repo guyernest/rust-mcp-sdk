@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
-status: in-progress
-stopped_at: Completed 51-02-PLAN.md
-last_updated: "2026-03-14T04:40:00Z"
-last_activity: 2026-03-14 -- testing tools wrapping mcp-tester library API
+status: Resources and prompts implemented -- docs handler and 7 workflow prompts
+stopped_at: Completed 51-03-PLAN.md
+last_updated: "2026-03-14T04:50:30.766Z"
+last_activity: 2026-03-14 -- embedded docs resources + workflow prompts
 progress:
   total_phases: 25
   completed_phases: 20
-  total_plans: 42
-  completed_plans: 43
-  percent: 97
+  total_plans: 47
+  completed_plans: 46
+  percent: 98
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 ## Current Position
 
 Phase: 51 (pmcp-mcp-server) -- IN PROGRESS
-Plan: 2 of 5 (51-02 complete)
-Status: Three testing tools (test_check, test_generate, test_apps) implemented
-Last activity: 2026-03-14 -- testing tools wrapping mcp-tester library API
+Plan: 4 of 5 (51-04 complete)
+Status: Resources and prompts implemented -- docs handler and 7 workflow prompts
+Last activity: 2026-03-14 -- embedded docs resources + workflow prompts
 
-Progress: [██████████] 97%
+Progress: [██████████] 98%
 
 ## Shipped Milestones
 
@@ -108,6 +108,8 @@ v1.6 decisions:
 - [Phase 50]: POSIX /bin/sh for install.sh; explicit repo URL in binstall pkg-url; pkg-fmt = bin for bare binaries; v{ version } prefix for tag convention
 - [Phase 51-01]: Used pmcp::server::Server (not ServerCore) as builder returns Server type; inserted pmcp-server after mcp-preview in workspace members
 - [Phase 51-02]: AppValidationMode "all" implemented by iterating Standard+ChatGpt+ClaudeDesktop; "claude" accepted as alias for "claude-desktop"; strict mode applies inline on Vec<TestResult>
+- [Phase 51-03]: Templates as const &str with {name} placeholder substitution; added get_server_version() to ServerTester; schema_export Rust codegen maps JSON Schema types to Rust types with Value fallback
+- [Phase 51-04]: Used Content::Resource variant for ReadResourceResult to include URI and MIME type per MCP spec
 
 ### Roadmap Evolution
 
@@ -137,6 +139,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-14T04:46:05Z
-Stopped at: Completed 51-02-PLAN.md
-Resume: Plan 51-02 complete -- three testing tools. Continue with 51-03 (resources implementation).
+Last session: 2026-03-14T04:48:40Z
+Stopped at: Completed 51-03-PLAN.md
+Resume: Plan 51-03 complete -- scaffold and schema_export tools. Continue with 51-04 (resources and prompts).
