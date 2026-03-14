@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
-status: Resources and prompts implemented -- docs handler and 7 workflow prompts
-stopped_at: Completed 51-04-PLAN.md
-last_updated: "2026-03-14T04:50:33.237Z"
-last_activity: 2026-03-14 -- embedded docs resources + workflow prompts
+status: Phase 51 complete -- PMCP MCP Server fully wired with CI/CD pipeline
+stopped_at: Completed 51-05-PLAN.md
+last_updated: "2026-03-14T04:55:11.000Z"
+last_activity: 2026-03-14 -- server wiring and release workflow updates
 progress:
   total_phases: 25
-  completed_phases: 20
+  completed_phases: 21
   total_plans: 47
-  completed_plans: 46
-  percent: 98
+  completed_plans: 47
+  percent: 100
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 
 ## Current Position
 
-Phase: 51 (pmcp-mcp-server) -- IN PROGRESS
-Plan: 4 of 5 (51-04 complete)
-Status: Resources and prompts implemented -- docs handler and 7 workflow prompts
-Last activity: 2026-03-14 -- embedded docs resources + workflow prompts
+Phase: 51 (pmcp-mcp-server) -- COMPLETE
+Plan: 5 of 5 (51-05 complete)
+Status: Phase 51 complete -- PMCP MCP Server fully wired with CI/CD pipeline
+Last activity: 2026-03-14 -- server wiring and release workflow updates
 
-Progress: [██████████] 98%
+Progress: [██████████] 100%
 
 ## Shipped Milestones
 
@@ -46,8 +46,8 @@ Progress: [██████████] 98%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 62 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 4, misc: 2)
-- Total phases completed: 28
+- Total plans completed: 63 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, misc: 2)
+- Total phases completed: 29
 
 ## Accumulated Context
 
@@ -112,6 +112,7 @@ v1.6 decisions:
 - [Phase 51-04]: Used Content::Resource variant for ReadResourceResult to include URI and MIME type per MCP spec
 - [Phase 51-04]: Const DOC_RESOURCES lookup table for URI routing avoids duplication between list() and read()
 - [Phase 51-04]: One struct per prompt handler for cleaner PromptHandler trait impl and independent metadata
+- [Phase 51-05]: Omitted explicit capabilities() since builder auto-sets on handler registration; publish order widget-utils->pmcp->mcp-tester->mcp-preview->pmcp-server->cargo-pmcp
 
 ### Roadmap Evolution
 
@@ -141,6 +142,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-14T04:49:00Z
-Stopped at: Completed 51-04-PLAN.md
-Resume: Plan 51-04 complete -- embedded docs resources and 7 workflow prompts. Continue with 51-05 (server wiring).
+Last session: 2026-03-14T04:55:11Z
+Stopped at: Completed 51-05-PLAN.md
+Resume: Phase 51 complete -- PMCP MCP Server fully functional with all tools, resources, prompts wired and CI/CD pipeline ready.
