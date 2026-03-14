@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: in-progress
-stopped_at: Completed 51-01-PLAN.md
+stopped_at: Completed 51-02-PLAN.md
 last_updated: "2026-03-14T04:40:00Z"
-last_activity: 2026-03-14 -- pmcp-server crate skeleton with streamable HTTP binary
+last_activity: 2026-03-14 -- testing tools wrapping mcp-tester library API
 progress:
   total_phases: 25
   completed_phases: 20
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 ## Current Position
 
 Phase: 51 (pmcp-mcp-server) -- IN PROGRESS
-Plan: 1 of 5 (51-01 complete)
-Status: pmcp-server crate skeleton created with streamable HTTP binary
-Last activity: 2026-03-14 -- pmcp-server crate skeleton with streamable HTTP binary
+Plan: 2 of 5 (51-02 complete)
+Status: Three testing tools (test_check, test_generate, test_apps) implemented
+Last activity: 2026-03-14 -- testing tools wrapping mcp-tester library API
 
 Progress: [██████████] 97%
 
@@ -107,6 +107,7 @@ v1.6 decisions:
 - [Phase 50-02]: POSIX /bin/sh for install.sh; explicit repo URL in binstall pkg-url; pkg-fmt = bin for bare binaries; v{ version } prefix for tag convention
 - [Phase 50]: POSIX /bin/sh for install.sh; explicit repo URL in binstall pkg-url; pkg-fmt = bin for bare binaries; v{ version } prefix for tag convention
 - [Phase 51-01]: Used pmcp::server::Server (not ServerCore) as builder returns Server type; inserted pmcp-server after mcp-preview in workspace members
+- [Phase 51-02]: AppValidationMode "all" implemented by iterating Standard+ChatGpt+ClaudeDesktop; "claude" accepted as alias for "claude-desktop"; strict mode applies inline on Vec<TestResult>
 
 ### Roadmap Evolution
 
@@ -136,6 +137,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-14T04:40:00Z
-Stopped at: Completed 51-01-PLAN.md
-Resume: Plan 51-01 complete -- pmcp-server crate skeleton. Continue with 51-02 (tools implementation).
+Last session: 2026-03-14T04:46:05Z
+Stopped at: Completed 51-02-PLAN.md
+Resume: Plan 51-02 complete -- three testing tools. Continue with 51-03 (resources implementation).
