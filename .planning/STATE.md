@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
-status: completed
-stopped_at: Phase 51 context gathered
-last_updated: "2026-03-14T04:15:20.732Z"
-last_activity: 2026-03-13 -- Installer scripts and cargo-binstall metadata for binary distribution
+status: in-progress
+stopped_at: Completed 51-01-PLAN.md
+last_updated: "2026-03-14T04:40:00Z"
+last_activity: 2026-03-14 -- pmcp-server crate skeleton with streamable HTTP binary
 progress:
   total_phases: 25
   completed_phases: 20
   total_plans: 42
-  completed_plans: 42
+  completed_plans: 43
   percent: 97
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** Phase 50 -- Improve Binary Release
+**Current focus:** Phase 51 -- PMCP MCP Server
 
 ## Current Position
 
-Phase: 50 (improve-binary-release) -- COMPLETE
-Plan: 2 of 2 (50-02 complete)
-Status: Phase 50 complete -- installer scripts and cargo-binstall metadata for binary distribution
-Last activity: 2026-03-13 -- Installer scripts and cargo-binstall metadata for binary distribution
+Phase: 51 (pmcp-mcp-server) -- IN PROGRESS
+Plan: 1 of 5 (51-01 complete)
+Status: pmcp-server crate skeleton created with streamable HTTP binary
+Last activity: 2026-03-14 -- pmcp-server crate skeleton with streamable HTTP binary
 
 Progress: [██████████] 97%
 
@@ -46,7 +46,7 @@ Progress: [██████████] 97%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 61 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 4, misc: 1)
+- Total plans completed: 62 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 4, misc: 2)
 - Total phases completed: 28
 
 ## Accumulated Context
@@ -106,6 +106,7 @@ v1.6 decisions:
 - [Phase 50]: Rust target triples for asset naming; per-binary .sha256 files; macos-15-intel for x86_64, macos-14 for aarch64; ubuntu-24.04-arm for ARM Linux
 - [Phase 50-02]: POSIX /bin/sh for install.sh; explicit repo URL in binstall pkg-url; pkg-fmt = bin for bare binaries; v{ version } prefix for tag convention
 - [Phase 50]: POSIX /bin/sh for install.sh; explicit repo URL in binstall pkg-url; pkg-fmt = bin for bare binaries; v{ version } prefix for tag convention
+- [Phase 51-01]: Used pmcp::server::Server (not ServerCore) as builder returns Server type; inserted pmcp-server after mcp-preview in workspace members
 
 ### Roadmap Evolution
 
@@ -135,6 +136,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-14T04:15:20.725Z
-Stopped at: Phase 51 context gathered
-Resume: Phase 50 complete -- binary release pipeline with installer scripts and binstall metadata.
+Last session: 2026-03-14T04:40:00Z
+Stopped at: Completed 51-01-PLAN.md
+Resume: Plan 51-01 complete -- pmcp-server crate skeleton. Continue with 51-02 (tools implementation).

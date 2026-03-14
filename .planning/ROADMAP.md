@@ -449,7 +449,7 @@ Plans:
   3. Server provides 7 guided workflow prompts (quickstart, create-mcp-server, add-tool, diagnose, setup-auth, debug-protocol-error, migrate)
   4. All content is statically embedded in the binary via include_str! -- no runtime file dependencies
   5. Release workflow builds pmcp-server binaries for 5 platform targets and publishes to crates.io
-**Plans:** 5 plans
+**Plans:** 1/5 plans executed
 
 Plans:
 - [ ] 51-01-PLAN.md — Crate scaffold, workspace integration, server skeleton, ScenarioGenerator API addition
