@@ -24,6 +24,7 @@ on:
         type: choice
         options:
           - mcp-tester
+          - pmcp-server
 
 env:
   CARGO_TERM_COLOR: never
