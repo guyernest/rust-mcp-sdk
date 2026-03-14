@@ -1,4 +1,12 @@
 //! Guided workflow prompt templates.
 //!
 //! Prompts for common MCP development scenarios:
-//! create-mcp-server, add-tool, quickstart, diagnose, etc.
+//! quickstart, create-mcp-server, add-tool, diagnose, setup-auth,
+//! debug-protocol-error, and migrate.
+
+pub mod workflows;
+
+pub use workflows::{
+    AddToolPrompt, CreateMcpServerPrompt, DebugProtocolErrorPrompt, DiagnosePrompt,
+    MigratePrompt, QuickstartPrompt, SetupAuthPrompt,
+};
