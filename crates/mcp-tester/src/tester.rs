@@ -2667,6 +2667,13 @@ impl ServerTester {
             .map(|info| info.server_info.name.clone())
     }
 
+    /// Get the server version from the last initialize response.
+    pub fn get_server_version(&self) -> Option<String> {
+        self.server_info
+            .as_ref()
+            .map(|info| info.server_info.version.clone())
+    }
+
     pub async fn list_resources(&mut self) -> Result<pmcp::types::ListResourcesResult> {
         // Try to use existing client if initialized
         if let Some(client) = &mut self.pmcp_client {
