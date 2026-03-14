@@ -1,14 +1,11 @@
 {
   "name": "pmcp",
-  "version": "1.6.1",
-  "description": "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility",
-  "main": "target/release/pmcp",
-  "bin": {
-    "pmcp": "target/release/pmcp"
-  },
-  "mcp": {
-    "runtime": "binary",
-    "tools": {},
-    "resources": {}
+  "version": "1.19.0",
+  "description": "PMCP SDK developer tools — protocol testing, scaffolding, schema export, and documentation for Model Context Protocol servers",
+  "repository": "https://github.com/paiml/rust-mcp-sdk",
+  "servers": {
+    "streamable-http": {
+      "url": "https://pmcp-server.us-east.true-mcp.com/mcp"
+    }
   }
 }

@@ -51,16 +51,15 @@ impl ToolHandler for SchemaExportTool {
         let mut tester = create_tester(&params.url, params.timeout)?;
 
         // Initialize the connection.
-        tester
-            .run_quick_test()
-            .await
-            .map_err(internal_err)?;
+        tester.run_quick_test().await.map_err(internal_err)?;
 
         // Explicitly load tools (run_quick_test only initializes, doesn't list tools).
         let tools_result = tester.test_tools_list().await;
         if tools_result.status == mcp_tester::TestStatus::Failed {
             return Err(internal_err(
-                tools_result.error.unwrap_or_else(|| "failed to list tools".into()),
+                tools_result
+                    .error
+                    .unwrap_or_else(|| "failed to list tools".into()),
             ));
         }
 

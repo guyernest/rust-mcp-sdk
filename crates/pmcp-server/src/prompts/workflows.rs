@@ -5,9 +5,7 @@
 //! guidance for common MCP development scenarios.
 
 use async_trait::async_trait;
-use pmcp::types::{
-    Content, GetPromptResult, PromptArgument, PromptInfo, PromptMessage, Role,
-};
+use pmcp::types::{Content, GetPromptResult, PromptArgument, PromptInfo, PromptMessage, Role};
 use pmcp::RequestHandlerExtra;
 use std::collections::HashMap;
 
@@ -195,9 +193,9 @@ impl pmcp::server::PromptHandler for AddToolPrompt {
         args: HashMap<String, String>,
         _extra: RequestHandlerExtra,
     ) -> pmcp::Result<GetPromptResult> {
-        let tool_name = args.get("tool_name").ok_or_else(|| {
-            pmcp::Error::validation("Required argument 'tool_name' is missing")
-        })?;
+        let tool_name = args
+            .get("tool_name")
+            .ok_or_else(|| pmcp::Error::validation("Required argument 'tool_name' is missing"))?;
         let desc = args
             .get("description")
             .cloned()
@@ -265,9 +263,9 @@ impl pmcp::server::PromptHandler for DiagnosePrompt {
         args: HashMap<String, String>,
         _extra: RequestHandlerExtra,
     ) -> pmcp::Result<GetPromptResult> {
-        let server_url = args.get("server_url").ok_or_else(|| {
-            pmcp::Error::validation("Required argument 'server_url' is missing")
-        })?;
+        let server_url = args
+            .get("server_url")
+            .ok_or_else(|| pmcp::Error::validation("Required argument 'server_url' is missing"))?;
         let text = format!(
             "# Diagnose Server: {server_url}\n\n\
              ## Step 1: Check connectivity\n\n\
@@ -298,9 +296,7 @@ impl pmcp::server::PromptHandler for DiagnosePrompt {
     fn metadata(&self) -> Option<PromptInfo> {
         Some(PromptInfo {
             name: "diagnose".to_string(),
-            description: Some(
-                "Diagnose issues with a running MCP server".to_string(),
-            ),
+            description: Some("Diagnose issues with a running MCP server".to_string()),
             arguments: Some(vec![arg(
                 "server_url",
                 "URL of the MCP server to diagnose",
@@ -324,10 +320,7 @@ impl pmcp::server::PromptHandler for SetupAuthPrompt {
         args: HashMap<String, String>,
         _extra: RequestHandlerExtra,
     ) -> pmcp::Result<GetPromptResult> {
-        let auth_type = args
-            .get("auth_type")
-            .map(String::as_str)
-            .unwrap_or("oauth");
+        let auth_type = args.get("auth_type").map(String::as_str).unwrap_or("oauth");
         let text = match auth_type {
             "api-key" => AUTH_API_KEY_CONTENT.to_string(),
             "jwt" => AUTH_JWT_CONTENT.to_string(),
@@ -613,12 +606,6 @@ mod tests {
         let meta = create.metadata().unwrap();
         let args = meta.arguments.unwrap();
         assert!(args.iter().find(|a| a.name == "name").unwrap().required);
-        assert!(
-            !args
-                .iter()
-                .find(|a| a.name == "template")
-                .unwrap()
-                .required
-        );
+        assert!(!args.iter().find(|a| a.name == "template").unwrap().required);
     }
 }

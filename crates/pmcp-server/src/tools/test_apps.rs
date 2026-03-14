@@ -67,20 +67,18 @@ impl ToolHandler for TestAppsTool {
         let params: TestAppsInput = serde_json::from_value(args)
             .map_err(|e| pmcp::Error::validation(format!("Invalid arguments: {e}")))?;
 
-        let modes =
-            parse_modes(&params.mode).map_err(pmcp::Error::validation)?;
+        let modes = parse_modes(&params.mode).map_err(pmcp::Error::validation)?;
 
         let mut tester = create_tester(&params.url, params.timeout)?;
 
         // Initialize and discover tools (run_quick_test only initializes).
-        tester
-            .run_quick_test()
-            .await
-            .map_err(internal_err)?;
+        tester.run_quick_test().await.map_err(internal_err)?;
         let tools_result = tester.test_tools_list().await;
         if tools_result.status == mcp_tester::TestStatus::Failed {
             return Err(internal_err(
-                tools_result.error.unwrap_or_else(|| "failed to list tools".into()),
+                tools_result
+                    .error
+                    .unwrap_or_else(|| "failed to list tools".into()),
             ));
         }
 

@@ -7,6 +7,6 @@
 pub mod workflows;
 
 pub use workflows::{
-    AddToolPrompt, CreateMcpServerPrompt, DebugProtocolErrorPrompt, DiagnosePrompt,
-    MigratePrompt, QuickstartPrompt, SetupAuthPrompt,
+    AddToolPrompt, CreateMcpServerPrompt, DebugProtocolErrorPrompt, DiagnosePrompt, MigratePrompt,
+    QuickstartPrompt, SetupAuthPrompt,
 };

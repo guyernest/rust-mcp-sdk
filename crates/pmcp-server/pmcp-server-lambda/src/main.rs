@@ -32,7 +32,7 @@ async fn main() -> Result<(), Error> {
         Err(e) => {
             eprintln!("[pmcp-server-lambda] build_server failed: {e}");
             return Err(Error::from(e.to_string()));
-        }
+        },
     };
 
     let bound = match start_http_in_background(server).await {
@@ -40,7 +40,7 @@ async fn main() -> Result<(), Error> {
         Err(e) => {
             eprintln!("[pmcp-server-lambda] start_http failed: {e}");
             return Err(e);
-        }
+        },
     };
     info!(%bound, "StreamableHttpServer listening");
 
@@ -65,8 +65,9 @@ async fn start_http_in_background(server: pmcp::Server) -> Result<SocketAddr, Er
         http_middleware: None,
     };
 
-    let http_server =
-        pmcp::server::streamable_http_server::StreamableHttpServer::with_config(addr, server, config);
+    let http_server = pmcp::server::streamable_http_server::StreamableHttpServer::with_config(
+        addr, server, config,
+    );
 
     let (bound, handle) = http_server
         .start()

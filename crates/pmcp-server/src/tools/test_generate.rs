@@ -67,9 +67,7 @@ impl ToolHandler for TestGenerateTool {
     fn metadata(&self) -> Option<ToolInfo> {
         Some(ToolInfo::new(
             "test_generate",
-            Some(
-                "Generate test scenarios from a remote MCP server's capabilities".to_string(),
-            ),
+            Some("Generate test scenarios from a remote MCP server's capabilities".to_string()),
             json!({
                 "type": "object",
                 "properties": {
