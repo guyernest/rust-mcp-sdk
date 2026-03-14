@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.19.0] - 2026-03-14
+
+### Added
+- **PMCP Server** (`pmcp-server` crate): MCP server exposing SDK developer tools via Streamable HTTP
+  - `test_check`: Protocol compliance testing against remote MCP servers
+  - `test_generate`: Test scenario generation from server schemas
+  - `test_apps`: MCP Apps metadata validation (standard, ChatGPT, Claude Desktop modes)
+  - `scaffold`: Code template generation for MCP servers, tools, and resources
+  - `schema_export`: Schema discovery and export (JSON and Rust type stubs)
+  - Documentation resources and workflow prompts
+- **AWS Lambda deployment**: Lambda wrapper crate for running pmcp-server on AWS
+- **MCP Registry**: Deployed server at `https://pmcp-server.us-east.true-mcp.com/mcp`
+- **Release binaries**: Cross-platform pmcp-server binaries attached to GitHub releases
+
+### Fixed
+- `schema_export` and `test_apps` tools now correctly discover tools (was silently failing after `run_quick_test()`)
+- `cargo-pmcp deploy`: workspace binary path resolution for Lambda builds
+- `cargo-pmcp deploy`: OAuth Lambda copy using correct source path
+- `pmcp-macros`: deduplicated `to_pascal_case` into shared `utils` module
+
+### Changed
+- Bumped `pmcp-macros` to 0.2.2
+- Bumped `mcp-tester` to 0.3.4
+- Bumped `cargo-pmcp` to 0.4.5
+
 ## [1.11.0] - 2026-02-26
 
 ### v1.3 MCP Apps Developer Experience

@@ -162,14 +162,19 @@ impl BinaryBuilder {
         let package_name = self.get_package_name()?;
 
         // cargo-lambda outputs to target/lambda/{binary-name}/bootstrap
+        // In a workspace, the target dir is at the workspace root, not the crate dir.
         let src = self
             .project_root
             .join(format!("target/lambda/{}/bootstrap", package_name));
 
-        if !src.exists() {
+        let src = if src.exists() {
+            src
+        } else if let Some(workspace_src) = self.find_workspace_lambda_binary(&package_name) {
+            workspace_src
+        } else {
             println!(" ❌");
             bail!("Binary not found at: {}", src.display());
-        }
+        };
 
         // Destination path for CDK
         let deploy_build_dir = self.project_root.join("deploy/.build");
@@ -198,6 +203,19 @@ impl BinaryBuilder {
         // cargo-lambda outputs to target/lambda/{binary-name}/bootstrap
         // Since AWS Lambda requires binary name "bootstrap", the output is in target/lambda/bootstrap/
         Ok("bootstrap".to_string())
+    }
+
+    /// Search ancestor directories for the workspace root's target/lambda output.
+    fn find_workspace_lambda_binary(&self, package_name: &str) -> Option<PathBuf> {
+        let mut dir = self.project_root.parent()?;
+        for _ in 0..5 {
+            let candidate = dir.join(format!("target/lambda/{}/bootstrap", package_name));
+            if candidate.exists() {
+                return Some(candidate);
+            }
+            dir = dir.parent()?;
+        }
+        None
     }
 
     /// Find the Lambda wrapper package in the workspace.
@@ -270,12 +288,17 @@ impl BinaryBuilder {
         // Copy to deploy/{output_dir}/bootstrap
         let src = self.project_root.join("target/lambda/bootstrap/bootstrap");
 
-        if !src.exists() {
-            // Try alternative path
+        let src = if src.exists() {
+            src
+        } else {
             let alt_src = self
                 .project_root
                 .join(format!("target/lambda/{}/bootstrap", package_name));
-            if !alt_src.exists() {
+            if alt_src.exists() {
+                alt_src
+            } else if let Some(ws_src) = self.find_workspace_lambda_binary("bootstrap") {
+                ws_src
+            } else {
                 println!(" ❌");
                 bail!(
                     "{} binary not found at {} or {}",
@@ -284,7 +307,7 @@ impl BinaryBuilder {
                     alt_src.display()
                 );
             }
-        }
+        };
 
         let deploy_build_dir = self.project_root.join(format!("deploy/{}", output_dir));
         std::fs::create_dir_all(&deploy_build_dir)

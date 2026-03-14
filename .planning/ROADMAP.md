@@ -437,3 +437,23 @@ Plans:
 Plans:
 - [ ] 50-01-PLAN.md — Convert binary workflows to reusable workflow_call, fix runner labels, add ARM64 targets, add SHA256 checksums
 - [ ] 50-02-PLAN.md — Create install.sh and install.ps1 installer scripts, add cargo-binstall metadata to Cargo.toml files
+
+### Phase 51: PMCP MCP Server
+
+**Goal:** Build a developer tools MCP server (crates/pmcp-server/) that provides protocol testing, scaffolding, schema export, documentation resources, and guided workflow prompts over streamable HTTP -- deployed at pmcp.run and released as cross-platform binary
+**Requirements**: None (new feature)
+**Depends on:** Phase 50
+**Success Criteria** (what must be TRUE):
+  1. Server binary starts and serves 5 tools (test_check, test_generate, test_apps, scaffold, schema_export) over streamable HTTP
+  2. Server provides 9 documentation resources via pmcp:// URIs with embedded markdown content
+  3. Server provides 7 guided workflow prompts (quickstart, create-mcp-server, add-tool, diagnose, setup-auth, debug-protocol-error, migrate)
+  4. All content is statically embedded in the binary via include_str! -- no runtime file dependencies
+  5. Release workflow builds pmcp-server binaries for 5 platform targets and publishes to crates.io
+**Plans:** 5/5 plans complete
+
+Plans:
+- [ ] 51-01-PLAN.md — Crate scaffold, workspace integration, server skeleton, ScenarioGenerator API addition
+- [ ] 51-02-PLAN.md — Testing tools: test_check, test_generate, test_apps wrapping mcp-tester library
+- [ ] 51-03-PLAN.md — Build tools: scaffold (code templates) and schema_export (schema discovery)
+- [ ] 51-04-PLAN.md — Embedded content, documentation resources handler, workflow prompt handlers
+- [ ] 51-05-PLAN.md — Wire all tools/resources/prompts into server builder, CI workflow updates

@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: completed
-stopped_at: Completed 50-02-PLAN.md
-last_updated: "2026-03-13T17:14:56.546Z"
-last_activity: 2026-03-13 -- Installer scripts and cargo-binstall metadata for binary distribution
+stopped_at: Completed 51-05-PLAN.md
+last_updated: "2026-03-14T05:00:09.695Z"
+last_activity: 2026-03-14 -- server wiring and release workflow updates
 progress:
-  total_phases: 24
-  completed_phases: 18
-  total_plans: 42
-  completed_plans: 40
-  percent: 97
+  total_phases: 25
+  completed_phases: 21
+  total_plans: 47
+  completed_plans: 47
+  percent: 100
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** Phase 50 -- Improve Binary Release
+**Current focus:** Phase 51 -- PMCP MCP Server
 
 ## Current Position
 
-Phase: 50 (improve-binary-release) -- COMPLETE
-Plan: 2 of 2 (50-02 complete)
-Status: Phase 50 complete -- installer scripts and cargo-binstall metadata for binary distribution
-Last activity: 2026-03-13 -- Installer scripts and cargo-binstall metadata for binary distribution
+Phase: 51 (pmcp-mcp-server) -- COMPLETE
+Plan: 5 of 5 (51-05 complete)
+Status: Phase 51 complete -- PMCP MCP Server fully wired with CI/CD pipeline
+Last activity: 2026-03-14 -- server wiring and release workflow updates
 
-Progress: [██████████] 97%
+Progress: [██████████] 100%
 
 ## Shipped Milestones
 
@@ -46,8 +46,8 @@ Progress: [██████████] 97%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 61 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 4, misc: 1)
-- Total phases completed: 28
+- Total plans completed: 63 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, misc: 2)
+- Total phases completed: 29
 
 ## Accumulated Context
 
@@ -106,6 +106,13 @@ v1.6 decisions:
 - [Phase 50]: Rust target triples for asset naming; per-binary .sha256 files; macos-15-intel for x86_64, macos-14 for aarch64; ubuntu-24.04-arm for ARM Linux
 - [Phase 50-02]: POSIX /bin/sh for install.sh; explicit repo URL in binstall pkg-url; pkg-fmt = bin for bare binaries; v{ version } prefix for tag convention
 - [Phase 50]: POSIX /bin/sh for install.sh; explicit repo URL in binstall pkg-url; pkg-fmt = bin for bare binaries; v{ version } prefix for tag convention
+- [Phase 51-01]: Used pmcp::server::Server (not ServerCore) as builder returns Server type; inserted pmcp-server after mcp-preview in workspace members
+- [Phase 51-02]: AppValidationMode "all" implemented by iterating Standard+ChatGpt+ClaudeDesktop; "claude" accepted as alias for "claude-desktop"; strict mode applies inline on Vec<TestResult>
+- [Phase 51-03]: Templates as const &str with {name} placeholder substitution; added get_server_version() to ServerTester; schema_export Rust codegen maps JSON Schema types to Rust types with Value fallback
+- [Phase 51-04]: Used Content::Resource variant for ReadResourceResult to include URI and MIME type per MCP spec
+- [Phase 51-04]: Const DOC_RESOURCES lookup table for URI routing avoids duplication between list() and read()
+- [Phase 51-04]: One struct per prompt handler for cleaner PromptHandler trait impl and independent metadata
+- [Phase 51-05]: Omitted explicit capabilities() since builder auto-sets on handler registration; publish order widget-utils->pmcp->mcp-tester->mcp-preview->pmcp-server->cargo-pmcp
 
 ### Roadmap Evolution
 
@@ -123,6 +130,7 @@ v1.6 decisions:
 - Phase 48 added: MCP Apps Documentation and Education Refresh
 - Phase 49 added: Bump dependencies (reqwest 0.13, jsonschema 0.45)
 - Phase 50 added: Improve Binary Release
+- Phase 51 added: PMCP MCP Server
 
 ### Pending Todos
 
@@ -134,6 +142,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-13T17:14:52.484Z
-Stopped at: Completed 50-02-PLAN.md
-Resume: Phase 50 complete -- binary release pipeline with installer scripts and binstall metadata.
+Last session: 2026-03-14T04:55:11Z
+Stopped at: Completed 51-05-PLAN.md
+Resume: Phase 51 complete -- PMCP MCP Server fully functional with all tools, resources, prompts wired and CI/CD pipeline ready.
