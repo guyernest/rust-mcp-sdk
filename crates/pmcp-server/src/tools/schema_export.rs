@@ -4,12 +4,13 @@
 //! prompts, then returns the schemas as JSON or generates Rust type stubs.
 
 use async_trait::async_trait;
-use mcp_tester::ServerTester;
 use pmcp::types::ToolInfo;
 use pmcp::ToolHandler;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::time::Duration;
+
+use super::{create_tester, default_timeout, internal_err};
+use crate::util::to_pascal_case;
 
 /// Input parameters for the `schema_export` tool.
 #[derive(Deserialize)]
@@ -26,10 +27,6 @@ struct SchemaExportInput {
 
 fn default_format() -> String {
     "json".to_string()
-}
-
-const fn default_timeout() -> u64 {
-    30
 }
 
 /// Schema discovery and export tool.
@@ -51,21 +48,21 @@ impl ToolHandler for SchemaExportTool {
             )));
         }
 
-        let mut tester = ServerTester::new(
-            &params.url,
-            Duration::from_secs(params.timeout),
-            false, // insecure
-            None,  // api_key
-            None,  // transport (auto-detect)
-            None,  // http_middleware_chain
-        )
-        .map_err(|e| pmcp::Error::Internal(e.to_string()))?;
+        let mut tester = create_tester(&params.url, params.timeout)?;
 
-        // Initialize the connection and discover capabilities.
-        let _report = tester
+        // Initialize the connection.
+        tester
             .run_quick_test()
             .await
-            .map_err(|e| pmcp::Error::Internal(e.to_string()))?;
+            .map_err(internal_err)?;
+
+        // Explicitly load tools (run_quick_test only initializes, doesn't list tools).
+        let tools_result = tester.test_tools_list().await;
+        if tools_result.status == mcp_tester::TestStatus::Failed {
+            return Err(internal_err(
+                tools_result.error.unwrap_or_else(|| "failed to list tools".into()),
+            ));
+        }
 
         let server_name = tester
             .get_server_name()
@@ -74,39 +71,31 @@ impl ToolHandler for SchemaExportTool {
             .get_server_version()
             .unwrap_or_else(|| "unknown".to_string());
 
-        // Collect tools.
-        let tools_value: Value = match tester.get_tools() {
-            Some(tools) => {
-                serde_json::to_value(tools).map_err(|e| pmcp::Error::Internal(e.to_string()))?
-            },
-            None => json!([]),
-        };
-
-        // Collect resources (non-fatal on failure).
-        let resources_value: Value = match tester.list_resources().await {
-            Ok(res) => serde_json::to_value(&res.resources)
-                .map_err(|e| pmcp::Error::Internal(e.to_string()))?,
-            Err(_) => json!([]),
-        };
-
-        // Collect prompts (non-fatal on failure).
-        let prompts_value: Value = match tester.list_prompts().await {
-            Ok(res) => serde_json::to_value(&res.prompts)
-                .map_err(|e| pmcp::Error::Internal(e.to_string()))?,
-            Err(_) => json!([]),
-        };
-
         let mut response = json!({
             "server_name": server_name,
             "server_version": server_version,
             "format": params.format,
-            "tools": tools_value,
-            "resources": resources_value,
-            "prompts": prompts_value
         });
 
-        // Generate Rust type stubs when requested.
-        if params.format == "rust" {
+        if params.format == "json" {
+            // JSON format: serialize all schemas.
+            let tools_value: Value = match tester.get_tools() {
+                Some(tools) => serde_json::to_value(tools).map_err(internal_err)?,
+                None => json!([]),
+            };
+            let resources_value: Value = match tester.list_resources().await {
+                Ok(res) => serde_json::to_value(&res.resources).map_err(internal_err)?,
+                Err(_) => json!([]),
+            };
+            let prompts_value: Value = match tester.list_prompts().await {
+                Ok(res) => serde_json::to_value(&res.prompts).map_err(internal_err)?,
+                Err(_) => json!([]),
+            };
+            response["tools"] = tools_value;
+            response["resources"] = resources_value;
+            response["prompts"] = prompts_value;
+        } else {
+            // Rust format: generate type stubs from tool schemas.
             let rust_types = generate_rust_types(tester.get_tools());
             response["rust_types"] = json!(rust_types);
         }
@@ -163,23 +152,6 @@ fn json_type_to_rust(json_type: &str) -> &str {
     }
 }
 
-/// Convert a snake_case or kebab-case tool name to PascalCase struct name.
-fn to_pascal_case(s: &str) -> String {
-    s.split(|c: char| c == '_' || c == '-')
-        .filter(|seg| !seg.is_empty())
-        .map(|seg| {
-            let mut chars = seg.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => {
-                    let upper: String = first.to_uppercase().collect();
-                    upper + chars.as_str()
-                },
-            }
-        })
-        .collect()
-}
-
 /// Generate Rust type stubs from discovered tool schemas.
 fn generate_rust_types(tools: Option<&Vec<pmcp::types::ToolInfo>>) -> String {
     let tools = match tools {
@@ -188,7 +160,6 @@ fn generate_rust_types(tools: Option<&Vec<pmcp::types::ToolInfo>>) -> String {
     };
 
     let mut output = String::from("use serde::Deserialize;\n\n");
-    let mut has_camel_case = false;
 
     for tool in tools {
         let struct_name = format!("{}Input", to_pascal_case(&tool.name));
@@ -204,12 +175,10 @@ fn generate_rust_types(tools: Option<&Vec<pmcp::types::ToolInfo>>) -> String {
             .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
             .unwrap_or_default();
 
-        // Check for camelCase field names.
-        if let Some(props) = properties {
-            if props.keys().any(|k| k.chars().any(|c| c.is_uppercase())) {
-                has_camel_case = true;
-            }
-        }
+        // Check for camelCase field names (scoped per tool).
+        let has_camel_case = properties
+            .map(|props| props.keys().any(|k| k.chars().any(|c| c.is_uppercase())))
+            .unwrap_or(false);
 
         output.push_str("#[derive(Deserialize)]\n");
         if has_camel_case {

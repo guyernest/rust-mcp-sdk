@@ -4,12 +4,12 @@
 //! test any MCP server for protocol compliance via a single tool call.
 
 use async_trait::async_trait;
-use mcp_tester::ServerTester;
 use pmcp::types::ToolInfo;
 use pmcp::ToolHandler;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::time::Duration;
+
+use super::{create_tester, default_timeout, internal_err};
 
 /// Input parameters for the `test_check` tool.
 #[derive(Deserialize)]
@@ -24,10 +24,6 @@ struct TestCheckInput {
     timeout: u64,
 }
 
-const fn default_timeout() -> u64 {
-    30
-}
-
 /// Protocol compliance testing tool.
 ///
 /// Connects to a remote MCP server and runs the full compliance test suite,
@@ -40,22 +36,14 @@ impl ToolHandler for TestCheckTool {
         let params: TestCheckInput = serde_json::from_value(args)
             .map_err(|e| pmcp::Error::validation(format!("Invalid arguments: {e}")))?;
 
-        let mut tester = ServerTester::new(
-            &params.url,
-            Duration::from_secs(params.timeout),
-            false, // insecure
-            None,  // api_key
-            None,  // transport (auto-detect)
-            None,  // http_middleware_chain
-        )
-        .map_err(|e| pmcp::Error::Internal(e.to_string()))?;
+        let mut tester = create_tester(&params.url, params.timeout)?;
 
         let report = tester
             .run_compliance_tests(params.strict)
             .await
-            .map_err(|e| pmcp::Error::Internal(e.to_string()))?;
+            .map_err(internal_err)?;
 
-        serde_json::to_value(&report).map_err(|e| pmcp::Error::Internal(e.to_string()))
+        serde_json::to_value(&report).map_err(internal_err)
     }
 
     fn metadata(&self) -> Option<ToolInfo> {

@@ -4,18 +4,22 @@
 //! users generate test scenarios from a live MCP server's capabilities.
 
 use async_trait::async_trait;
-use mcp_tester::{ScenarioGenerator, ServerTester};
+use mcp_tester::ScenarioGenerator;
 use pmcp::types::ToolInfo;
 use pmcp::ToolHandler;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::time::Duration;
+
+use super::{create_tester, default_timeout, internal_err};
 
 /// Input parameters for the `test_generate` tool.
 #[derive(Deserialize)]
 struct TestGenerateInput {
     /// MCP server URL to discover capabilities from.
     url: String,
+    /// Timeout in seconds (default: 30).
+    #[serde(default = "default_timeout")]
+    timeout: u64,
     /// Include all discovered tools in the scenario.
     #[serde(default = "default_true")]
     all_tools: bool,
@@ -43,15 +47,7 @@ impl ToolHandler for TestGenerateTool {
         let params: TestGenerateInput = serde_json::from_value(args)
             .map_err(|e| pmcp::Error::validation(format!("Invalid arguments: {e}")))?;
 
-        let mut tester = ServerTester::new(
-            &params.url,
-            Duration::from_secs(30),
-            false, // insecure
-            None,  // api_key
-            None,  // transport (auto-detect)
-            None,  // http_middleware_chain
-        )
-        .map_err(|e| pmcp::Error::Internal(e.to_string()))?;
+        let mut tester = create_tester(&params.url, params.timeout)?;
 
         let generator = ScenarioGenerator::new(
             params.url,
@@ -63,9 +59,9 @@ impl ToolHandler for TestGenerateTool {
         let scenario = generator
             .create_scenario_struct(&mut tester)
             .await
-            .map_err(|e| pmcp::Error::Internal(e.to_string()))?;
+            .map_err(internal_err)?;
 
-        serde_json::to_value(&scenario).map_err(|e| pmcp::Error::Internal(e.to_string()))
+        serde_json::to_value(&scenario).map_err(internal_err)
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
@@ -80,6 +76,11 @@ impl ToolHandler for TestGenerateTool {
                     "url": {
                         "type": "string",
                         "description": "MCP server URL to discover capabilities from"
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Timeout in seconds",
+                        "default": 30
                     },
                     "all_tools": {
                         "type": "boolean",

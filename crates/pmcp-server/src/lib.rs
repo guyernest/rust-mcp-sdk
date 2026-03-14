@@ -7,6 +7,7 @@ pub mod content;
 pub mod prompts;
 pub mod resources;
 pub mod tools;
+mod util;
 
 /// Build the PMCP MCP server with all tools, resources, and prompts.
 ///

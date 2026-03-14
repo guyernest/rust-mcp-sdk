@@ -4,18 +4,22 @@
 //! App-capable tools have correct `_meta` structure and resource cross-references.
 
 use async_trait::async_trait;
-use mcp_tester::{AppValidationMode, AppValidator, ServerTester};
+use mcp_tester::{AppValidationMode, AppValidator};
 use pmcp::types::ToolInfo;
 use pmcp::ToolHandler;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::time::Duration;
+
+use super::{create_tester, default_timeout, internal_err};
 
 /// Input parameters for the `test_apps` tool.
 #[derive(Deserialize)]
 struct TestAppsInput {
     /// MCP server URL to validate.
     url: String,
+    /// Timeout in seconds (default: 30).
+    #[serde(default = "default_timeout")]
+    timeout: u64,
     /// Validation mode: "standard", "chatgpt", "claude", or "all".
     #[serde(default = "default_mode")]
     mode: String,
@@ -66,21 +70,19 @@ impl ToolHandler for TestAppsTool {
         let modes =
             parse_modes(&params.mode).map_err(pmcp::Error::validation)?;
 
-        let mut tester = ServerTester::new(
-            &params.url,
-            Duration::from_secs(30),
-            false, // insecure
-            None,  // api_key
-            None,  // transport (auto-detect)
-            None,  // http_middleware_chain
-        )
-        .map_err(|e| pmcp::Error::Internal(e.to_string()))?;
+        let mut tester = create_tester(&params.url, params.timeout)?;
 
-        // Initialize the server connection to discover tools and resources.
+        // Initialize and discover tools (run_quick_test only initializes).
         tester
             .run_quick_test()
             .await
-            .map_err(|e| pmcp::Error::Internal(e.to_string()))?;
+            .map_err(internal_err)?;
+        let tools_result = tester.test_tools_list().await;
+        if tools_result.status == mcp_tester::TestStatus::Failed {
+            return Err(internal_err(
+                tools_result.error.unwrap_or_else(|| "failed to list tools".into()),
+            ));
+        }
 
         let tools = tester.get_tools().cloned().unwrap_or_default();
         let resources = tester
@@ -90,8 +92,9 @@ impl ToolHandler for TestAppsTool {
             .unwrap_or_default();
 
         let mut all_results = Vec::new();
+        let tool_filter = params.tool_filter;
         for mode in modes {
-            let validator = AppValidator::new(mode, params.tool_filter.clone());
+            let validator = AppValidator::new(mode, tool_filter.clone());
             let mut results = validator.validate_tools(&tools, &resources);
 
             if params.strict {
@@ -105,7 +108,7 @@ impl ToolHandler for TestAppsTool {
             all_results.extend(results);
         }
 
-        serde_json::to_value(&all_results).map_err(|e| pmcp::Error::Internal(e.to_string()))
+        serde_json::to_value(&all_results).map_err(internal_err)
     }
 
     fn metadata(&self) -> Option<ToolInfo> {
@@ -118,6 +121,11 @@ impl ToolHandler for TestAppsTool {
                     "url": {
                         "type": "string",
                         "description": "MCP server URL to validate"
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Timeout in seconds",
+                        "default": 30
                     },
                     "mode": {
                         "type": "string",

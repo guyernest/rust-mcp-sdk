@@ -31,6 +31,7 @@
 //! }
 //! ```
 
+use crate::utils::to_pascal_case;
 use darling::FromMeta;
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
@@ -419,19 +420,6 @@ fn is_result_type(ty: &Type) -> bool {
         }
     }
     false
-}
-
-/// Convert snake_case to PascalCase
-fn to_pascal_case(s: &str) -> String {
-    s.split('_')
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => first.to_uppercase().chain(chars).collect(),
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]

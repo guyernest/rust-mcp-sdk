@@ -382,10 +382,10 @@ impl pmcp::server::ToolHandler for ScaffoldTool {
         _extra: pmcp::RequestHandlerExtra,
     ) -> Result<Value, pmcp::Error> {
         let input: ScaffoldInput = serde_json::from_value(args)
-            .map_err(|e| pmcp::Error::Internal(format!("Invalid arguments: {e}")))?;
+            .map_err(|e| pmcp::Error::validation(format!("Invalid arguments: {e}")))?;
 
         if !TEMPLATE_VARIANTS.contains(&input.template.as_str()) {
-            return Err(pmcp::Error::Internal(format!(
+            return Err(pmcp::Error::validation(format!(
                 "Unknown template '{}'. Available: {}",
                 input.template,
                 TEMPLATE_VARIANTS.join(", ")

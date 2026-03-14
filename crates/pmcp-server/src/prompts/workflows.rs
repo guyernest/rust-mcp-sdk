@@ -234,7 +234,7 @@ impl pmcp::server::PromptHandler for AddToolPrompt {
              ```bash\n\
              cargo pmcp test check http://localhost:8080\n\
              ```\n",
-            pascal = to_pascal_case(tool_name),
+            pascal = crate::util::to_pascal_case(tool_name),
         );
         assistant_result("Tool creation guide", text)
     }
@@ -249,19 +249,6 @@ impl pmcp::server::PromptHandler for AddToolPrompt {
             ]),
         })
     }
-}
-
-/// Convert `snake_case` to `PascalCase`.
-fn to_pascal_case(s: &str) -> String {
-    s.split('_')
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                Some(c) => c.to_uppercase().to_string() + chars.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -588,13 +575,6 @@ impl TypedSyncTool for GreetTool {
 mod tests {
     use super::*;
     use pmcp::server::PromptHandler;
-
-    #[test]
-    fn to_pascal_case_basic() {
-        assert_eq!(to_pascal_case("hello_world"), "HelloWorld");
-        assert_eq!(to_pascal_case("search"), "Search");
-        assert_eq!(to_pascal_case("get_user_data"), "GetUserData");
-    }
 
     #[test]
     fn all_prompts_have_metadata() {
