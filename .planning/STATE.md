@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: Resources and prompts implemented -- docs handler and 7 workflow prompts
-stopped_at: Completed 51-03-PLAN.md
-last_updated: "2026-03-14T04:50:30.766Z"
+stopped_at: Completed 51-04-PLAN.md
+last_updated: "2026-03-14T04:50:33.237Z"
 last_activity: 2026-03-14 -- embedded docs resources + workflow prompts
 progress:
   total_phases: 25
@@ -110,6 +110,8 @@ v1.6 decisions:
 - [Phase 51-02]: AppValidationMode "all" implemented by iterating Standard+ChatGpt+ClaudeDesktop; "claude" accepted as alias for "claude-desktop"; strict mode applies inline on Vec<TestResult>
 - [Phase 51-03]: Templates as const &str with {name} placeholder substitution; added get_server_version() to ServerTester; schema_export Rust codegen maps JSON Schema types to Rust types with Value fallback
 - [Phase 51-04]: Used Content::Resource variant for ReadResourceResult to include URI and MIME type per MCP spec
+- [Phase 51-04]: Const DOC_RESOURCES lookup table for URI routing avoids duplication between list() and read()
+- [Phase 51-04]: One struct per prompt handler for cleaner PromptHandler trait impl and independent metadata
 
 ### Roadmap Evolution
 
@@ -139,6 +141,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-14T04:48:40Z
-Stopped at: Completed 51-03-PLAN.md
-Resume: Plan 51-03 complete -- scaffold and schema_export tools. Continue with 51-04 (resources and prompts).
+Last session: 2026-03-14T04:49:00Z
+Stopped at: Completed 51-04-PLAN.md
+Resume: Plan 51-04 complete -- embedded docs resources and 7 workflow prompts. Continue with 51-05 (server wiring).
