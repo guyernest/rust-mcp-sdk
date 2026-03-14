@@ -1,5 +1,5 @@
 # Reusable workflow: build a single binary package for all platforms.
-# Called from release.yml for mcp-tester and mcp-preview.
+# Called from release.yml for mcp-tester.
 name: Release Binary
 
 on:
@@ -11,7 +11,7 @@ on:
       package_name:
         required: true
         type: string
-        description: 'Cargo package name (mcp-tester or mcp-preview)'
+        description: 'Cargo package name (e.g. mcp-tester)'
   workflow_dispatch:
     inputs:
       tag_name:
@@ -24,7 +24,13 @@ on:
         type: choice
         options:
           - mcp-tester
-          - mcp-preview
+
+env:
+  CARGO_TERM_COLOR: never
+  # Override .cargo/config.toml target-cpu=native which causes ring compilation
+  # failure on macOS ARM64 CI runners where LLVM misidentifies the native CPU,
+  # stripping aes/sha2 target features that ring requires for aarch64-apple-darwin.
+  RUSTFLAGS: ""
 
 jobs:
   build-release:

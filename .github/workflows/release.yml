@@ -202,11 +202,3 @@ jobs:
       package_name: mcp-tester
     secrets: inherit
 
-  build-preview:
-    name: Build Preview Binaries
-    needs: create-release
-    uses: ./.github/workflows/release-binary.yml
-    with:
-      tag_name: ${{ needs.create-release.outputs.version }}
-      package_name: mcp-preview
-    secrets: inherit

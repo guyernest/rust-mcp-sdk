@@ -301,10 +301,13 @@ jobs:
     if: always()
     steps:
       - name: Evaluate required checks
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+          QG_RESULT: ${{ needs.quality-gate.result }}
         run: |
-          if [[ "${{ needs.test.result }}" != "success" ]] || \
-             [[ "${{ needs.quality-gate.result }}" != "success" ]]; then
-            echo "Required checks failed: test=${{ needs.test.result }}, quality-gate=${{ needs.quality-gate.result }}"
+          if [[ "$TEST_RESULT" != "success" ]] || \
+             [[ "$QG_RESULT" != "success" ]]; then
+            echo "Required checks failed: test=$TEST_RESULT, quality-gate=$QG_RESULT"
             exit 1
           fi
           echo "All required checks passed."

@@ -1,9 +1,7 @@
 name: Publish to MCP Registry
 
 on:
-  workflow_dispatch:  # Allow manual triggering
-  push:
-    tags: ["v*"]  # Also trigger on version tags
+  workflow_dispatch:  # Manual re-publish only; release.yml handles tag-triggered publish
 
 jobs:
   publish-mcp:
