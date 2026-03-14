@@ -95,6 +95,57 @@ impl ScenarioGenerator {
         Ok(())
     }
 
+    /// Generate a test scenario from server discovery, returning the struct directly.
+    ///
+    /// Unlike [`generate()`](Self::generate), this does not write to a file or print to stdout,
+    /// making it suitable for programmatic use (e.g., from an MCP tool handler).
+    pub async fn create_scenario_struct(
+        &self,
+        tester: &mut ServerTester,
+    ) -> Result<TestScenario> {
+        // Initialize to get server info (same as generate() but without println!)
+        let init_result = tester.test_initialize().await;
+        if init_result.status != crate::report::TestStatus::Passed {
+            anyhow::bail!("Failed to initialize server: {:?}", init_result.error);
+        }
+
+        let tools = if self.all_tools || self.with_resources || self.with_prompts {
+            let tools_result = tester.test_tools_list().await;
+            if tools_result.status == crate::report::TestStatus::Passed {
+                tester.get_tools().cloned()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let resources = if self.with_resources {
+            match tester.list_resources().await {
+                Ok(result) => Some(result.resources),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
+        let prompts = if self.with_prompts {
+            match tester.list_prompts().await {
+                Ok(result) => Some(result.prompts),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
+        Ok(self.create_scenario(
+            tester.get_server_name(),
+            tools.as_ref(),
+            resources.as_ref(),
+            prompts.as_ref(),
+        ))
+    }
+
     fn create_scenario(
         &self,
         server_name: Option<String>,
