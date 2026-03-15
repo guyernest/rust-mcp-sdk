@@ -1,11 +1,16 @@
 {
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
   "name": "pmcp",
   "version": "1.19.0",
-  "description": "PMCP SDK developer tools — protocol testing, scaffolding, schema export, and documentation for Model Context Protocol servers",
-  "repository": "https://github.com/paiml/rust-mcp-sdk",
-  "servers": {
-    "streamable-http": {
+  "description": "PMCP SDK developer tools — protocol testing, scaffolding, schema export, and docs",
+  "repository": {
+    "url": "https://github.com/paiml/rust-mcp-sdk",
+    "source": "github"
+  },
+  "remotes": [
+    {
+      "type": "streamable-http",
       "url": "https://pmcp-server.us-east.true-mcp.com/mcp"
     }
-  }
+  ]
 }
