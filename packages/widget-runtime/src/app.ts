@@ -164,7 +164,7 @@ export class App {
     }
 
     try {
-      await this._transport.send('ui/sendMessage', params);
+      await this._transport.send('ui/message', params);
     } catch (err) {
       console.warn('[App] sendMessage not supported by host:', err);
     }

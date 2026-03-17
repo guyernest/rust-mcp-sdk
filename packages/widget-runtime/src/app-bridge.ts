@@ -175,7 +175,8 @@ export class AppBridge {
           },
           hostCapabilities: {
             callTool: true,
-            sendMessage: false,
+            sendMessage: true,
+            updateModelContext: {},
             openLink: true,
           },
           hostContext: this._hostContext,
@@ -190,9 +191,13 @@ export class AppBridge {
         return await this._toolCallHandler(name, args);
       }
 
-      case 'ui/sendMessage':
-        // Host can handle this or ignore it
+      case 'ui/message':
+      case 'ui/sendMessage': // backward compat with pre-spec widgets
         console.log('[AppBridge] Widget sent message:', params);
+        return {};
+
+      case 'ui/update-model-context':
+        console.log('[AppBridge] Widget updated model context:', params);
         return {};
 
       case 'ui/openLink': {
