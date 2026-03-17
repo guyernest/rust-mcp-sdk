@@ -1,800 +1,170 @@
-# MCP Server Tester
+# MCP Tester
 
-A comprehensive testing tool for Model Context Protocol (MCP) servers, providing protocol compliance validation, capability testing, and diagnostic features.
+The Swiss Army knife for testing MCP servers. Validate protocol compliance, test tools, generate scenarios, and diagnose connection issues — all from a single binary.
 
-## Features
+```
+$ mcp-tester test http://localhost:3000
 
-### Core Testing
-- **Protocol Compliance Testing**: Validates JSON-RPC 2.0 and MCP protocol compliance
-- **Multi-Transport Support**: Tests HTTP, HTTPS, WebSocket, and stdio transports
-- **OAuth 2.0 Authentication (NEW!)**: Interactive browser-based OAuth flow with PKCE, token caching, and automatic middleware injection across all transport types
-- **Comprehensive Diagnostics**: Layer-by-layer connection troubleshooting
-- **Server Comparison**: Compare capabilities and performance between servers
-- **CI/CD Ready**: JSON output for automated testing pipelines
+  MCP Server Test Report
+  ══════════════════════════════════════════════════════
+  Server: my-server v1.0.0 | Protocol: 2025-06-18
 
-### Discovery & Validation (NEW!)
-- **Tool Schema Validation**: Automatically validates JSON schemas and warns about incomplete definitions
-- **Resource Testing**: Tests resource discovery, reading, and metadata validation
-- **Prompt Testing**: Validates prompt templates, arguments, and metadata
-- **Metadata Validation**: Checks for missing descriptions, MIME types, and other essential metadata
+  Core
+    ✓ Initialize          Server responded with valid capabilities
+    ✓ Tools Discovery     Found 5 tools
+    ✓ Resources           Found 2 resources
+    ✓ Prompts             Found 1 prompt
 
-### Test Automation (NEW!)
-- **Automated Scenario Generation**: Generates test scenarios from discovered server capabilities
-- **Smart Schema Analysis**: Creates appropriate test values based on JSON schema definitions
-- **Tool Testing**: Discover and test individual tools with custom arguments
-- **Scenario Testing**: Define and run complex test scenarios from YAML/JSON files
-- **Assertion Framework**: Validate server responses with powerful assertions
+  Protocol Compliance
+    ✓ JSON-RPC 2.0        Valid framing
+    ✓ Error Codes         Standard error codes implemented
+    ✓ Capabilities        All declared capabilities functional
 
-### Reporting
-- **Multiple Output Formats**: Pretty, JSON, minimal, and verbose outputs
-- **Schema Validation Reports**: Detailed warnings about tool schema completeness
-- **Color-Coded Results**: Visual feedback for test status and warnings
-
-## Installation
-
-### Pre-built Binaries
-
-Download pre-built binaries from [GitHub Releases](https://github.com/paiml/rust-mcp-sdk/releases). Available platforms: Linux x86_64, macOS x86_64, Windows x86_64.
-
-```bash
-# Linux
-curl -L https://github.com/paiml/rust-mcp-sdk/releases/latest/download/mcp-tester-linux-x86_64 -o mcp-tester && chmod +x mcp-tester
-
-# macOS
-curl -L https://github.com/paiml/rust-mcp-sdk/releases/latest/download/mcp-tester-macos-x86_64 -o mcp-tester && chmod +x mcp-tester
+  Summary: 7 passed, 0 failed, 0 warnings in 1.23s
 ```
 
-### Via Cargo
+## Install
+
+### Option 1: Cargo (recommended for Rust developers)
 
 ```bash
+# Standalone binary
 cargo install mcp-tester
-```
 
-### Via cargo-pmcp
-
-Install the PMCP CLI toolkit, which includes a `cargo pmcp test` wrapper:
-
-```bash
+# Or as part of the full PMCP toolkit
 cargo install cargo-pmcp
-# Then use: cargo pmcp test <URL> [OPTIONS]
 ```
 
-## Usage
+### Option 2: Shell script (no Rust required)
 
-### Quick Start
+Linux and macOS — downloads the pre-built binary for your platform:
 
 ```bash
-# Test a local HTTP server
-mcp-tester test http://localhost:8080
-
-# Test with tools validation
-mcp-tester test http://localhost:8080 --with-tools
-
-# Test a stdio server
-mcp-tester test stdio
-
-# Quick connectivity check
-mcp-tester quick http://localhost:8080
-
-# Test OAuth-protected server with access token
-mcp-tester test https://api.example.com/mcp --api-key YOUR_ACCESS_TOKEN
+curl -fsSL https://raw.githubusercontent.com/paiml/rust-mcp-sdk/main/install/install.sh | sh
 ```
 
-### Testing OAuth-Protected MCP Servers (Interactive OAuth)
+Windows PowerShell:
 
-The MCP Tester now supports **interactive OAuth 2.0 authentication** with automatic browser-based login and token management.
+```powershell
+irm https://raw.githubusercontent.com/paiml/rust-mcp-sdk/main/install/install.ps1 | iex
+```
 
-#### Interactive OAuth Flow
+Pre-built binaries are available for Linux x86_64/ARM64, macOS Intel/Apple Silicon, and Windows x86_64.
 
-For servers that require OAuth authentication, the tester provides a seamless authentication experience:
+### Option 3: Via MCP (use from any MCP client)
 
-> **Auto-Discovery vs Explicit Issuer**: If `--oauth-issuer` is omitted, the tester attempts
-> OIDC discovery from the MCP server base URL. Providing `--oauth-issuer` explicitly is
-> **recommended for reliability**, especially when the OAuth provider and MCP server are on different domains.
+The PMCP server at `https://pmcp-server.us-east.true-mcp.com/mcp` exposes testing tools you can call directly from Claude Desktop, ChatGPT, or any MCP client — no local install needed.
+
+## Quick Start: Check
+
+The fastest way to validate an MCP server — one command, pass/fail answer:
 
 ```bash
-# Interactive OAuth with automatic browser login (OIDC discovery - explicit issuer recommended)
-mcp-tester test https://your-oauth-server.com/mcp \
-  --oauth-client-id "your-client-id" \
+# Test a local server
+mcp-tester quick http://localhost:3000
+
+# Test a remote server
+mcp-tester quick https://my-server.example.com/mcp
+
+# Test with OAuth
+mcp-tester quick https://api.example.com/mcp \
   --oauth-issuer "https://auth.example.com" \
-  --oauth-scopes openid,email,profile
+  --oauth-client-id "my-client-id"
+
+# Via cargo-pmcp (auto-discovers server in your workspace)
+cargo pmcp test check http://localhost:3000
 ```
 
-**What happens:**
-1. ✅ Tester generates secure PKCE challenge
-2. 🌐 Opens your browser to the OAuth provider login page
-3. 🔐 You authenticate with your credentials
-4. ✅ Tester receives the authorization code via local callback server
-5. 🎫 Exchanges code for access token
-6. 💾 **Caches token locally** for future requests
-7. 🚀 Automatically injects `Authorization: Bearer` header into all MCP requests
+## Generate Test Scenarios
 
-#### Token Caching
-
-Tokens are cached in `~/.mcp-tester/tokens.json`:
-- Cached tokens are automatically reused until expiration
-- No need to re-authenticate for every test run
-- Tokens are stored securely with expiration timestamps
-- Manual refresh is handled automatically when tokens expire
-
-#### AWS Cognito Example (OIDC discovery)
-
-Testing an MCP server protected by AWS Cognito:
+Auto-generate test scenarios from your server's capabilities. The generator discovers all tools, analyzes their JSON schemas, and creates YAML scenario files with smart placeholder values:
 
 ```bash
-mcp-tester test https://your-api.execute-api.us-west-2.amazonaws.com/mcp \
-  --oauth-issuer "https://your-pool.auth.us-west-2.amazoncognito.com" \
-  --oauth-client-id "your-cognito-client-id" \
-  --oauth-scopes openid \
-  --oauth-redirect-port 8080
+# Generate from a running server
+mcp-tester generate-scenario http://localhost:3000 -o tests/my-server.yaml \
+  --all-tools --with-resources --with-prompts
+
+# Via cargo-pmcp
+cargo pmcp test generate --server my-server --port 3000
 ```
 
-**Important for AWS Cognito:**
-- Add `http://localhost:8765/callback` to your Cognito App Client's allowed callback URLs
-- Ensure your App Client has "Authorization code grant" enabled
-- The tester automatically handles PKCE (no client secret needed)
-
-#### Multi-Transport OAuth Support
-
-OAuth middleware now works seamlessly across **all transport types**:
-
-- ✅ **JSON-RPC HTTP** (AWS Lambda, API Gateway, standard HTTP servers)
-- ✅ **StreamableHTTP** (SSE-based streaming servers)
-- ✅ **Automatic Transport Detection** - OAuth works regardless of transport
-
-The tester automatically detects the correct transport and applies OAuth middleware appropriately.
-
-#### Manual Token Usage (Alternative)
-
-If you already have an access token from another source:
-
-```bash
-# Pass token directly
-mcp-tester test https://your-oauth-server.com/mcp --api-key "YOUR_ACCESS_TOKEN"
-
-# Or via environment variable
-export MCP_API_KEY="YOUR_ACCESS_TOKEN"
-mcp-tester test https://your-oauth-server.com/mcp
-```
-
-The tester will automatically add the `Authorization: Bearer YOUR_ACCESS_TOKEN` header to all requests.
-
-### Commands
-
-#### `test` - Run Full Test Suite
-
-```bash
-mcp-tester test <URL> [OPTIONS]
-
-Options:
-  --with-tools                Test all discovered tools
-  --tool <NAME>               Test specific tool
-  --args <JSON>               Tool arguments as JSON
-  --format <FORMAT>           Output format (pretty|json|minimal|verbose)
-  --timeout <SECONDS>         Connection timeout (default: 30)
-  --insecure                  Skip TLS certificate verification
-
-  # OAuth 2.0 Authentication (OIDC discovery)
-  --oauth-issuer <URL>        OAuth/OIDC issuer URL (for discovery)
-  --oauth-client-id <ID>      OAuth client ID
-  --oauth-scopes <SCOPES>     Comma-separated scopes (default: openid)
-  --oauth-redirect-port <N>   Local redirect port (default: 8080)
-  --oauth-no-cache            Disable token cache (~/.mcp-tester/tokens.json)
-  --api-key <TOKEN>           Manual bearer token (alternative)
-```
-
-#### `compliance` - Protocol Compliance Validation
-
-```bash
-mcp-tester compliance <URL> [OPTIONS]
-
-Options:
-  --strict              Treat warnings as failures
-```
-
-#### `tools` - Discover and Test Tools with Schema Validation
-
-```bash
-mcp-tester tools <URL> [OPTIONS]
-
-Options:
-  --test-all            Test each tool with sample data
-  --verbose             Show detailed schema validation warnings
-```
-
-**NEW: Schema Validation Output Example:**
-```
-✓ Found 10 tools:
-  • search_wikipedia - Search for Wikipedia articles by query
-    ✓ Schema properly defined
-  • get_article - Retrieve full Wikipedia article content
-    ⚠ Tool 'get_article' missing 'properties' field for object type
-  • get_summary - Get a summary of a Wikipedia article
-    ⚠ Tool 'get_summary' has empty input schema - consider defining parameters
-
-Schema Validation Summary:
-⚠ 3 total warnings found
-  - 1 tools with empty schema
-  - 2 tools missing 'properties' in schema
-```
-
-#### `resources` - Test Resources (NEW!)
-
-```bash
-mcp-tester resources <URL>
-
-Discovers and validates all available resources, checking for:
-- Missing MIME types
-- Invalid URIs
-- Metadata completeness
-```
-
-#### `prompts` - Test Prompts (NEW!)
-
-```bash
-mcp-tester prompts <URL>
-
-Discovers and validates all available prompts, checking for:
-- Missing descriptions
-- Undefined arguments
-- Argument schema validation
-```
-
-#### `generate-scenario` - Generate Test Scenarios (NEW!)
-
-```bash
-mcp-tester generate-scenario <URL> [OPTIONS]
-
-Options:
-  -o, --output <FILE>        Output file path (default: generated_scenario.yaml)
-  --all-tools                Include all discovered tools
-  --with-resources           Include resource testing
-  --with-prompts             Include prompt testing
-
-Examples:
-  # Generate basic scenario
-  mcp-tester generate-scenario http://localhost:8080 -o test.yaml
-
-  # Generate comprehensive scenario
-  mcp-tester generate-scenario http://localhost:8080 -o full_test.yaml \
-    --all-tools --with-resources --with-prompts
-```
-
-#### `diagnose` - Connection Diagnostics
-
-```bash
-mcp-tester diagnose <URL> [OPTIONS]
-
-Options:
-  --network             Include network-level diagnostics
-```
-
-#### `compare` - Compare Two Servers
-
-```bash
-mcp-tester compare <SERVER1> <SERVER2> [OPTIONS]
-
-Options:
-  --with-perf           Include performance comparison
-```
-
-#### `health` - Server Health Check
-
-```bash
-mcp-tester health <URL>
-```
-
-#### `apps` - Validate MCP App Metadata
-
-Validate that MCP App-capable tools have correct metadata structure, resource cross-references, and host-specific keys.
-
-```bash
-mcp-tester apps <URL> [OPTIONS]
-
-Options:
-  --mode <MODE>    Validation mode (default: standard)
-                   standard       - Nested ui.resourceUri only
-                   chatgpt        - Also checks openai/* keys and flat ui/resourceUri
-                   claude-desktop - Same as standard (for now)
-  --tool <NAME>    Test a specific tool only
-  --strict         Promote warnings to failures
-```
-
-**Usage examples:**
-
-```bash
-# Standard validation (checks all App-capable tools)
-mcp-tester apps http://localhost:3000
-
-# ChatGPT-specific validation (checks openai/* descriptor keys)
-mcp-tester apps http://localhost:3000 --mode chatgpt
-
-# Claude Desktop validation
-mcp-tester apps http://localhost:3000 --mode claude-desktop
-
-# Strict mode (warnings become failures -- useful in CI)
-mcp-tester apps http://localhost:3000 --strict
-
-# Validate a single tool
-mcp-tester apps http://localhost:3000 --tool search_images
-
-# Combine mode, strict, and tool filter
-mcp-tester apps http://localhost:3000 --mode chatgpt --tool search_images --strict
-```
-
-**What gets validated (per App-capable tool):**
-
-1. `_meta` field is present on the tool
-2. `ui.resourceUri` is present (nested `_meta.ui.resourceUri` or flat `_meta["ui/resourceUri"]`)
-3. `resourceUri` format is valid (non-empty, has scheme separator `://`)
-4. Resource cross-reference: tool's URI matches an entry in `resources/list`
-5. Resource MIME type is valid (`text/html`, `text/html+mcp`, `text/html+skybridge`, `text/html;profile=mcp-app`)
-6. **[ChatGPT mode]** `openai/*` descriptor keys are present (`openai/outputTemplate`, `openai/widgetAccessible`, etc.)
-7. **[ChatGPT mode]** Flat legacy `ui/resourceUri` key is present
-8. **[If present]** `outputSchema` structure is valid (object with `type` field)
-
-**Sample output (passing):**
-
-```
-=== MCP App Metadata Validation (standard) ===
-
-  PASS [search_images] ui.resourceUri present
-  PASS [search_images] resourceUri format          URI: ui://open-images/explorer.html
-  PASS [search_images] resource cross-reference    Found resource: Image Explorer
-  PASS [search_images] resource MIME type          MIME type: text/html;profile=mcp-app
-
-Summary: 4 passed, 0 failed, 0 warnings
-```
-
-**Sample output (warning):**
-
-```
-=== MCP App Metadata Validation (chatgpt) ===
-
-  PASS [search_images] ui.resourceUri present
-  PASS [search_images] resourceUri format          URI: ui://open-images/explorer.html
-  WARN [search_images] resource cross-reference    No resource found with URI in resources/list
-  WARN [search_images] ChatGPT key: openai/widgetAccessible    Missing ChatGPT key
-  WARN [search_images] ChatGPT flat ui/resourceUri             Missing flat legacy key
-
-Summary: 2 passed, 0 failed, 3 warnings
-```
-
-You can also use the `cargo pmcp` wrapper:
-
-```bash
-cargo pmcp test apps --url http://localhost:3000
-cargo pmcp test apps --url http://localhost:3000 --mode chatgpt --strict
-cargo pmcp test apps --url http://localhost:3000 --tool search_images
-```
-
-#### `scenario` - Run Test Scenarios
-
-```bash
-mcp-tester scenario <URL> <SCENARIO_FILE> [OPTIONS]
-
-Options:
-  --detailed       Show detailed step-by-step output
-
-Examples:
-# Run a basic test scenario
-mcp-tester scenario http://localhost:8080 scenarios/basic-test.yaml
-
-# Run with detailed output
-mcp-tester scenario http://localhost:8080 scenarios/complex-workflow.json --detailed
-
-# Run performance tests
-mcp-tester scenario http://localhost:8080 scenarios/performance-test.yaml
-```
-
-Test scenarios allow you to define complex test sequences with variables, assertions, and workflows. See [SCENARIO_FORMAT.md](SCENARIO_FORMAT.md) for detailed documentation on creating test scenarios.
-
-## Scenario Generation (NEW!)
-
-The MCP Tester can automatically generate test scenarios from your server's discovered capabilities. This feature analyzes tool schemas and creates comprehensive test templates.
-
-### Generated Scenario Example
-
-When you run `mcp-tester generate-scenario`, it creates a YAML file like this:
+This produces editable YAML like:
 
 ```yaml
-name: wikipedia-mcp-server Test Scenario
-description: Automated test scenario for server
+name: my-server Test Scenario
 timeout: 60
-stop_on_failure: false
-variables:
-  test_id: test_123
-  test_value: sample_value
-
 steps:
-  - name: List available capabilities
+  - name: Test tool search
     operation:
-      type: list_tools
-    store_result: available_tools
+      type: tool_call
+      tool: search
+      arguments:
+        query: "TODO: query"    # ← fill in real test data
     assertions:
       - type: success
       - type: exists
-        path: tools
-
-  - name: Test tool: search_wikipedia
-    operation:
-      type: tool_call
-      tool: search_wikipedia
-      arguments:
-        query: "TODO: query"  # Automatically generated from schema
-    timeout: 30
-    continue_on_failure: true
-    store_result: search_wikipedia_result
-    assertions:
-      - type: success
-
-  - name: Test tool: get_article
-    operation:
-      type: tool_call
-      tool: get_article
-      arguments:
-        title: "TODO: title"  # Placeholder based on schema type
-    store_result: get_article_result
-    assertions:
-      - type: success
+        path: results
 ```
 
-### Smart Value Generation
+## Run Test Scenarios
 
-The scenario generator creates appropriate placeholder values based on JSON schema types:
-
-| Schema Type | Example Generated Value |
-|------------|------------------------|
-| `string` with format `uri` | `"https://example.com"` |
-| `string` with format `email` | `"test@example.com"` |
-| `string` with format `date` | `"2024-01-01"` |
-| `string` with format `uuid` | `"550e8400-e29b-41d4-a716-446655440000"` |
-| `string` with description containing "path" | `"/path/to/file"` |
-| `string` with description containing "id" | `"test_id_123"` |
-| `number` with minimum | The minimum value |
-| `boolean` | `false` |
-| `array` | Sample array with one item |
-| `object` | Nested object with all properties |
-| Unknown types | `"TODO: field_name"` |
-
-### Workflow
-
-1. **Generate the scenario:**
-   ```bash
-   mcp-tester generate-scenario https://api.example.com/mcp -o my_test.yaml --all-tools
-   ```
-
-2. **Edit the generated file to replace TODOs with actual test data:**
-   ```yaml
-   arguments:
-     query: "artificial intelligence"  # Was: "TODO: query"
-     limit: 10
-   ```
-
-3. **Add custom assertions:**
-   ```yaml
-   assertions:
-     - type: success
-     - type: array_length
-       path: results
-       greater_than: 0
-     - type: contains
-       path: results[0].title
-       value: "AI"
-   ```
-
-4. **Run the scenario:**
-   ```bash
-   mcp-tester scenario https://api.example.com/mcp my_test.yaml --detailed
-   ```
-
-## Examples
-
-### Testing an OAuth-enabled Server
+Execute generated or hand-written scenarios against your server:
 
 ```bash
-# Test the OAuth example server (local development)
-cd ../25-oauth-basic
-make run-http &  # Start server in background
+# Run a single scenario
+mcp-tester scenario http://localhost:3000 tests/my-server.yaml --detailed
 
-# Run tests with OAuth middleware
-mcp-tester test http://localhost:8080 --with-tools
-
-# Test specific tool with arguments
-mcp-tester test http://localhost:8080 \
-  --tool admin_action \
-  --args '{"action": "test"}'
-
-# Test AWS Lambda MCP server with interactive OAuth (recommended)
-mcp-tester test https://your-api.execute-api.us-west-2.amazonaws.com/mcp \
-  --oauth-issuer "https://your-pool.auth.us-west-2.amazoncognito.com" \
-  --oauth-client-id "your-cognito-client-id" \
-  --with-tools
-
-# Or with manual token (if you already have one)
-mcp-tester test https://your-api.execute-api.us-west-2.amazonaws.com/mcp \
-  --api-key "YOUR_ACCESS_TOKEN" \
-  --with-tools
-
-# Subsequent runs will use cached token (no re-authentication needed!)
-mcp-tester test https://your-api.execute-api.us-west-2.amazonaws.com/mcp \
-  --oauth-client-id "your-cognito-client-id" \
-  --with-tools
+# Run all scenarios in a directory
+cargo pmcp test run --server my-server --scenarios tests/
 ```
 
-### CI/CD Integration
+## All Commands
 
-```bash
-# Output JSON for automated testing
-mcp-tester test $SERVER_URL --format json > test-results.json
+| Command | Description |
+|---------|-------------|
+| `test` | Full test suite — protocol, tools, resources, prompts |
+| `quick` | Fast connectivity and protocol check |
+| `compliance` | Protocol compliance validation |
+| `tools` | Discover tools and validate schemas |
+| `resources` | Test resource discovery and reading |
+| `prompts` | Validate prompt templates and arguments |
+| `apps` | Validate MCP App metadata (standard, ChatGPT, Claude Desktop modes) |
+| `generate-scenario` | Auto-generate test scenarios from server capabilities |
+| `scenario` | Run YAML/JSON test scenarios |
+| `diagnose` | Layer-by-layer connection diagnostics |
+| `compare` | Compare two servers side-by-side |
+| `health` | Health check endpoint |
 
-# Check exit code
-if [ $? -eq 0 ]; then
-  echo "All tests passed"
-else
-  echo "Tests failed"
-  exit 1
-fi
-```
+## Key Features
 
-### Debugging Connection Issues
+- **Multi-transport**: HTTP, HTTPS, WebSocket, stdio — auto-detected or forced with `--transport`
+- **OAuth 2.0**: Interactive browser-based PKCE flow with token caching (`--oauth-*` flags)
+- **Schema validation**: Warns about missing properties, empty schemas, incomplete metadata
+- **MCP App validation**: Checks `_meta`, `ui.resourceUri`, resource cross-refs, ChatGPT keys
+- **CI/CD ready**: `--format json` for machine-readable output, deterministic exit codes
+- **Multiple output formats**: `pretty` (default), `json`, `minimal`, `verbose`
 
-```bash
-# Run comprehensive diagnostics
-mcp-tester diagnose http://localhost:8080 --network
-
-# This will test:
-# - URL validation
-# - DNS resolution
-# - TCP connectivity
-# - TLS/SSL certificates (for HTTPS)
-# - HTTP response
-# - MCP protocol handshake
-```
-
-### Running Test Scenarios
-
-```bash
-# Run a basic test scenario
-mcp-tester scenario http://localhost:8080 scenarios/basic-test.yaml
-
-# Create a custom scenario for your server
-cat > my-test.yaml << EOF
-name: My Server Test
-steps:
-  - name: List available tools
-    operation:
-      type: list_tools
-    assertions:
-      - type: success
-      - type: array_length
-        path: tools
-        greater_than: 0
-        
-  - name: Test my custom tool
-    operation:
-      type: tool_call
-      tool: my_tool
-      arguments:
-        param: "test"
-    assertions:
-      - type: success
-      - type: exists
-        path: result
-EOF
-
-# Run the custom scenario
-mcp-tester scenario http://localhost:8080 my-test.yaml --verbose
-```
-
-### Comparing Server Implementations
-
-```bash
-# Compare two servers
-mcp-tester compare http://server1.example.com http://server2.example.com --with-perf
-
-# This compares:
-# - Protocol versions
-# - Capabilities
-# - Available tools
-# - Performance metrics
-```
-
-## Output Formats
-
-### Pretty (Default)
-
-Color-coded terminal output with symbols:
-- ✓ Passed (green)
-- ✗ Failed (red)  
-- ⚠ Warning (yellow)
-- ○ Skipped (gray)
-
-### JSON
-
-Structured output for programmatic processing:
-
-```json
-{
-  "tests": [
-    {
-      "name": "Initialize",
-      "category": "Core",
-      "status": "Passed",
-      "duration": { "secs": 0, "nanos": 123456 },
-      "error": null,
-      "details": "Server: my-server v1.0.0, Protocol: 2024-11-05"
-    }
-  ],
-  "summary": {
-    "total": 10,
-    "passed": 8,
-    "failed": 1,
-    "warnings": 1,
-    "skipped": 0
-  },
-  "duration": { "secs": 2, "nanos": 500000000 }
-}
-```
-
-### Minimal
-
-Single-line summary:
-```
-PASS: 8 passed, 0 failed, 1 warnings in 2.50s
-```
-
-### Verbose
-
-Detailed output with full error messages and protocol exchanges.
-
-## Test Categories
-
-### Core Tests
-- Connection establishment
-- Server initialization
-- Capability discovery
-- Health endpoints
-
-### Protocol Tests
-- JSON-RPC 2.0 compliance
-- MCP protocol version validation
-- Required method implementation
-- Error code standards
-
-### Tool Tests
-- Tool discovery (tools/list)
-- Tool invocation
-- Input validation
-- Response format validation
-
-### Performance Tests
-- Connection latency
-- Response times
-- Throughput measurements
-
-### App Metadata Tests
-- `_meta` field presence on App-capable tools
-- `ui.resourceUri` present and well-formed
-- Resource MIME type validation (`text/html;profile=mcp-app`, etc.)
-- Resource cross-reference (tool URI matches `resources/list`)
-- `outputSchema` structure validation
-- **[ChatGPT mode]** `openai/*` descriptor keys
-- **[ChatGPT mode]** Flat `ui/resourceUri` legacy key
-
-## Deployment-Specific Testing
-
-### AWS Lambda
-
-```bash
-# Test Lambda function via API Gateway
-mcp-tester test https://abc123.execute-api.us-east-1.amazonaws.com/prod
-
-# Lambda cold starts may timeout - increase timeout
-mcp-tester test <LAMBDA_URL> --timeout 60
-```
-
-### Docker Containers
-
-```bash
-# Test containerized server
-docker run -p 8080:8080 my-mcp-server
-
-mcp-tester test http://localhost:8080
-```
-
-### Kubernetes
-
-```bash
-# Port-forward to test in-cluster service
-kubectl port-forward service/mcp-server 8080:80
-
-mcp-tester test http://localhost:8080
-```
-
-## Troubleshooting
-
-### Connection Refused
-
-```bash
-# Run diagnostics to identify the issue
-mcp-tester diagnose http://localhost:8080 --network
-
-# Common solutions:
-# - Verify server is running
-# - Check port is correct
-# - Review firewall settings
-```
-
-### TLS Certificate Errors
-
-```bash
-# For self-signed certificates
-mcp-tester test https://localhost:8443 --insecure
-```
-
-### Protocol Version Mismatch
-
-The tester supports protocol versions:
-- 2024-11-05 (current)
-- 2025-03-26
-- 2025-06-18
-
-### Timeout Issues
-
-```bash
-# Increase timeout for slow servers
-mcp-tester test <URL> --timeout 120
-```
-
-## Integration with CI/CD
-
-### GitHub Actions
+## CI/CD Integration
 
 ```yaml
+# GitHub Actions
 - name: Test MCP Server
   run: |
-    cargo run --bin mcp-tester -- test ${{ env.SERVER_URL }} --format json > results.json
-    
-- name: Upload Test Results
-  uses: actions/upload-artifact@v2
-  with:
-    name: test-results
-    path: results.json
+    curl -fsSL https://raw.githubusercontent.com/paiml/rust-mcp-sdk/main/install/install.sh | sh
+    mcp-tester test ${{ env.SERVER_URL }} --format json > results.json
 ```
-
-### Jenkins
-
-```groovy
-stage('Test MCP Server') {
-  steps {
-    sh 'mcp-tester test ${SERVER_URL} --format json > results.json'
-    archiveArtifacts 'results.json'
-  }
-}
-```
-
-## Contributing
-
-The server tester is part of the Rust MCP SDK. Contributions are welcome!
-
-### Adding New Tests
-
-1. Add test logic to `src/tester.rs`
-2. Add validators to `src/validators.rs`
-3. Update test categories in `src/report.rs`
-4. Add CLI options in `src/main.rs`
-
-### Testing the Tester
 
 ```bash
-# Run against known good server
-cargo run -- test http://localhost:8080
-
-# Run against test fixtures
-cargo test
+# Any CI — exit code tells you pass/fail
+mcp-tester test "$SERVER_URL" --format minimal
 ```
+
+## Documentation
+
+- [Scenario Format Reference](SCENARIO_FORMAT.md) — YAML/JSON scenario structure, operations, and assertions
+- [cargo-pmcp README](../../cargo-pmcp/README.md) — Full PMCP toolkit including test, preview, and deploy commands
+- [PMCP SDK](../../README.md) — The Rust MCP SDK that powers mcp-tester
 
 ## License
 
-MIT - See LICENSE file in the repository root.
+MIT — See [LICENSE](../../LICENSE) in the repository root.
