@@ -1030,7 +1030,7 @@ var _App = class _App {
       return;
     }
     try {
-      await this._transport.send("ui/sendMessage", params);
+      await this._transport.send("ui/message", params);
     } catch (err) {
       console.warn("[App] sendMessage not supported by host:", err);
     }
@@ -1292,7 +1292,8 @@ var AppBridge = class {
           },
           hostCapabilities: {
             callTool: true,
-            sendMessage: false,
+            sendMessage: true,
+            updateModelContext: {},
             openLink: true
           },
           hostContext: this._hostContext
@@ -1305,8 +1306,12 @@ var AppBridge = class {
         }
         return await this._toolCallHandler(name, args);
       }
-      case "ui/sendMessage":
+      case "ui/message":
+      case "ui/sendMessage": // backward compat with pre-spec widgets
         console.log("[AppBridge] Widget sent message:", params);
+        return {};
+      case "ui/update-model-context":
+        console.log("[AppBridge] Widget updated model context:", params);
         return {};
       case "ui/openLink": {
         const url = params?.url;
