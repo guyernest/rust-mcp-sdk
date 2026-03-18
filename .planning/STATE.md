@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
-status: in-progress
-stopped_at: Completed 52-01-PLAN.md
-last_updated: "2026-03-18T15:22:11Z"
-last_activity: 2026-03-18 -- reduce transitive dependencies Cargo.toml changes
+status: verifying
+stopped_at: Completed 52-02-PLAN.md
+last_updated: "2026-03-18T15:30:33.058Z"
+last_activity: 2026-03-18 -- reduce transitive dependencies source cfg gates
 progress:
-  total_phases: 25
-  completed_phases: 21
-  total_plans: 47
-  completed_plans: 47
+  total_phases: 26
+  completed_phases: 22
+  total_plans: 49
+  completed_plans: 49
   percent: 100
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 ## Current Position
 
 Phase: 52 (reduce-transitive-dependencies)
-Plan: 1 of 2 (52-01 complete)
-Status: Cargo.toml dependency changes applied; Plan 02 pending for cfg gate source changes
-Last activity: 2026-03-18 -- reduce transitive dependencies Cargo.toml changes
+Plan: 2 of 2 (52-01, 52-02 complete)
+Status: Phase 52 complete -- all cfg gates applied, full feature matrix verified
+Last activity: 2026-03-18 -- reduce transitive dependencies source cfg gates
 
 Progress: [██████████] 100%
 
@@ -46,7 +46,7 @@ Progress: [██████████] 100%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 64 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, misc: 3)
+- Total plans completed: 65 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 6, misc: 3)
 - Total phases completed: 29
 
 ## Accumulated Context
@@ -115,6 +115,8 @@ v1.6 decisions:
 - [Phase 51-05]: Omitted explicit capabilities() since builder auto-sets on handler registration; publish order widget-utils->pmcp->mcp-tester->mcp-preview->pmcp-server->cargo-pmcp
 - [Phase 52-01]: default feature changed from validation (phantom) to logging; reqwest behind http-client with implication from oauth/jwt-auth/sse; tracing-subscriber behind logging; tokio slimmed from full to explicit features
 - [Phase 52-01]: hyper slimmed from full to http1+server; jsonschema default-features=false; chrono slimmed to clock+serde+std; lazy_static and pin-project removed as unused
+- [Phase 52-02]: Gate entire modules (jwt, jwt_validator, providers) at parent auth/mod.rs rather than inside individual files; CorrelationLayer gated behind logging
+- [Phase 52-02]: Dependency counts: no-default-features=134, logging=145, http-client=190, full=295
 
 ### Roadmap Evolution
 
@@ -145,6 +147,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-18T15:22:11Z
-Stopped at: Completed 52-01-PLAN.md
-Resume: Phase 52 Plan 01 complete -- Cargo.toml updated with slimmed deps and new features. Plan 02 pending for cfg gate source changes.
+Last session: 2026-03-18T15:30:33.055Z
+Stopped at: Completed 52-02-PLAN.md
+Resume: Phase 52 complete -- both plans done. Cargo.toml deps slimmed (Plan 01) and source cfg gates applied (Plan 02). pmcp builds with 134 deps at --no-default-features vs 295 at full.
