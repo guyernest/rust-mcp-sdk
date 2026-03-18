@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
-status: completed
-stopped_at: Completed 51-05-PLAN.md
-last_updated: "2026-03-14T05:00:09.695Z"
-last_activity: 2026-03-14 -- server wiring and release workflow updates
+status: in-progress
+stopped_at: Completed 52-01-PLAN.md
+last_updated: "2026-03-18T15:22:11Z"
+last_activity: 2026-03-18 -- reduce transitive dependencies Cargo.toml changes
 progress:
   total_phases: 25
   completed_phases: 21
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** Phase 51 -- PMCP MCP Server
+**Current focus:** Phase 52 -- Reduce Transitive Dependencies
 
 ## Current Position
 
-Phase: 51 (pmcp-mcp-server) -- COMPLETE
-Plan: 5 of 5 (51-05 complete)
-Status: Phase 51 complete -- PMCP MCP Server fully wired with CI/CD pipeline
-Last activity: 2026-03-14 -- server wiring and release workflow updates
+Phase: 52 (reduce-transitive-dependencies)
+Plan: 1 of 2 (52-01 complete)
+Status: Cargo.toml dependency changes applied; Plan 02 pending for cfg gate source changes
+Last activity: 2026-03-18 -- reduce transitive dependencies Cargo.toml changes
 
 Progress: [██████████] 100%
 
@@ -46,7 +46,7 @@ Progress: [██████████] 100%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 63 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, misc: 2)
+- Total plans completed: 64 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, misc: 3)
 - Total phases completed: 29
 
 ## Accumulated Context
@@ -113,6 +113,8 @@ v1.6 decisions:
 - [Phase 51-04]: Const DOC_RESOURCES lookup table for URI routing avoids duplication between list() and read()
 - [Phase 51-04]: One struct per prompt handler for cleaner PromptHandler trait impl and independent metadata
 - [Phase 51-05]: Omitted explicit capabilities() since builder auto-sets on handler registration; publish order widget-utils->pmcp->mcp-tester->mcp-preview->pmcp-server->cargo-pmcp
+- [Phase 52-01]: default feature changed from validation (phantom) to logging; reqwest behind http-client with implication from oauth/jwt-auth/sse; tracing-subscriber behind logging; tokio slimmed from full to explicit features
+- [Phase 52-01]: hyper slimmed from full to http1+server; jsonschema default-features=false; chrono slimmed to clock+serde+std; lazy_static and pin-project removed as unused
 
 ### Roadmap Evolution
 
@@ -143,6 +145,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-14T04:55:11Z
-Stopped at: Completed 51-05-PLAN.md
-Resume: Phase 51 complete -- PMCP MCP Server fully functional with all tools, resources, prompts wired and CI/CD pipeline ready.
+Last session: 2026-03-18T15:22:11Z
+Stopped at: Completed 52-01-PLAN.md
+Resume: Phase 52 Plan 01 complete -- Cargo.toml updated with slimmed deps and new features. Plan 02 pending for cfg gate source changes.

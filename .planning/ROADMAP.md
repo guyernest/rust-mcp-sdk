@@ -469,7 +469,7 @@ Plans:
   3. `cargo check --workspace` succeeds (all workspace members build)
   4. All tests pass with `--features full`
   5. Transitive dep count with no-default-features is measurably lower than before
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 52-01-PLAN.md — Remove unused deps, slim tokio/hyper/chrono features, make reqwest and tracing-subscriber optional, update feature definitions
