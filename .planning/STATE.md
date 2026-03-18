@@ -4,7 +4,7 @@ milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: verifying
 stopped_at: Completed 52-02-PLAN.md
-last_updated: "2026-03-18T15:30:33.058Z"
+last_updated: "2026-03-18T15:35:28.246Z"
 last_activity: 2026-03-18 -- reduce transitive dependencies source cfg gates
 progress:
   total_phases: 26
