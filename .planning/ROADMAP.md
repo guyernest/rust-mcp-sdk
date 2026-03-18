@@ -457,3 +457,20 @@ Plans:
 - [ ] 51-03-PLAN.md — Build tools: scaffold (code templates) and schema_export (schema discovery)
 - [ ] 51-04-PLAN.md — Embedded content, documentation resources handler, workflow prompt handlers
 - [ ] 51-05-PLAN.md — Wire all tools/resources/prompts into server builder, CI workflow updates
+
+### Phase 52: Reduce transitive dependencies
+
+**Goal:** Reduce pmcp crate's transitive dependency count from ~249 to ~150-185 by removing unused deps, slimming feature flags, making reqwest optional behind `http-client` feature, and making tracing-subscriber optional behind `logging` feature
+**Requirements**: DEP-REDUCE-01, DEP-REDUCE-02, DEP-REDUCE-03, DEP-REDUCE-04, DEP-REDUCE-05, DEP-REDUCE-06, DEP-REDUCE-07
+**Depends on:** Phase 51
+**Success Criteria** (what must be TRUE):
+  1. `cargo check -p pmcp --no-default-features` succeeds (no reqwest, no tracing-subscriber required)
+  2. `cargo check -p pmcp --features full` succeeds (everything still works)
+  3. `cargo check --workspace` succeeds (all workspace members build)
+  4. All tests pass with `--features full`
+  5. Transitive dep count with no-default-features is measurably lower than before
+**Plans:** 2 plans
+
+Plans:
+- [ ] 52-01-PLAN.md — Remove unused deps, slim tokio/hyper/chrono features, make reqwest and tracing-subscriber optional, update feature definitions
+- [ ] 52-02-PLAN.md — Add cfg(feature) gates to source files for reqwest and tracing-subscriber usage, verify full feature matrix
