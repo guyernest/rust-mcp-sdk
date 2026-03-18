@@ -78,7 +78,7 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter"], optional =
 # Transport dependencies (optional, feature-gated)
 tokio-tungstenite = { version = "0.28", optional = true }
 hyper = { version = "1.6", features = ["http1", "server"], optional = true }
-hyper-util = { version = "0.1", features = ["tokio", "http1", "server-auto"], optional = true }
+hyper-util = { version = "0.1", features = ["tokio", "http1", "server-auto", "client-legacy"], optional = true }
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "tls12", "ring", "native-tokio"], optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 axum = { version = "0.8.5", optional = true }
@@ -285,6 +285,7 @@ path = "examples/19_elicit_input.rs"
 [[example]]
 name = "20_oidc_discovery"
 path = "examples/20_oidc_discovery.rs"
+required-features = ["http-client"]
 
 # [[example]]
 # name = "21_macro_tools"

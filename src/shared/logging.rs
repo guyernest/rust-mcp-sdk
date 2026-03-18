@@ -143,8 +143,8 @@ impl Default for LogConfig {
     }
 }
 
-/// Initialize logging with configuration.
 #[cfg(all(not(target_arch = "wasm32"), feature = "logging"))]
+/// Initialize logging with configuration.
 ///
 /// # Examples
 ///
