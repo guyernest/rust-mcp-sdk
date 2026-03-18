@@ -96,7 +96,7 @@ rayon = { version = "1.10", optional = true }
 
 # Platform-specific dependencies
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio = { version = "1.46", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "fs", "sync", "time"] }
+tokio = { version = "1.46", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "fs", "sync", "time", "process", "signal"] }
 tokio-stream = { version = "0.1.15" }
 tokio-util = { version = "0.7", features = ["rt"] }
 reqwest = { version = "0.13", optional = true, default-features = false, features = ["json", "rustls", "form"] }
