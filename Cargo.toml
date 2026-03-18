@@ -285,7 +285,6 @@ path = "examples/19_elicit_input.rs"
 [[example]]
 name = "20_oidc_discovery"
 path = "examples/20_oidc_discovery.rs"
-required-features = ["http-client"]
 
 # [[example]]
 # name = "21_macro_tools"
