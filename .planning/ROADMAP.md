@@ -9,7 +9,8 @@
 - ✅ **v1.4 Book & Course Update** — Phases 20-24 (shipped 2026-02-28)
 - ✅ **v1.5 Cloud Load Testing Upload** — Phases 25-26 (shipped 2026-03-01)
 - **v1.6 CLI DX Overhaul** — Phases 27-32 (in progress)
-- **v1.7 SDK Maturation** — Phases 52-57 (in progress)
+- ✅ **v1.7 SDK Maturation** — Phases 52-53 (shipped 2026-03-20)
+- **v2.0 Protocol Modernization** — Phases 54-59 (in progress)
 
 ## Phases
 
