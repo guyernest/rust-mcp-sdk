@@ -158,6 +158,7 @@ v1.6 decisions:
 - Phases 54-57 added: Protocol 2025-11-25 Support, Conformance Test Infrastructure, Tower Middleware, Conformance Extension (from Phase 53 gap analysis)
 - Phase 58 added: #[mcp_tool] proc macro (from composition team DX review)
 - Phase 59 added: TypedPrompt with auto-deserialization (from composition team DX review)
+- Phase 54.1 inserted after Phase 54: Protocol Type Construction DX — Default impls, builders, and constructors for all protocol types (URGENT)
 
 ### Pending Todos
 

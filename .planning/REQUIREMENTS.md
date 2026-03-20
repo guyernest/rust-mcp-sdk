@@ -137,6 +137,29 @@ Deferred to future release. Tracked but not in current roadmap.
 - Mapped to phases: 27
 - Unmapped: 0
 
+## v2.0 Requirements
+
+### PROTO-TYPE-DX: Protocol Type Construction DX
+
+**Priority:** P1
+**Source:** Dev team feedback (v1.16→v1.20 upgrade)
+
+All protocol types (structs and enum variants) must be constructable by downstream users without specifying every optional field. This requires one or more of:
+1. `Default` impls on all protocol structs
+2. Builder methods for complex types
+3. Constructor functions (e.g., `::new()`) for types where only required fields are added
+4. Enum variant construction helpers for Content, MessageContent, etc.
+
+**Acceptance criteria:**
+- Every `#[non_exhaustive]` protocol struct has either a Default impl or a constructor/builder
+- Every Content/MessageContent enum variant has a construction helper
+- Downstream users can upgrade SDK versions without updating every construction site when new Optional fields are added
+- SDK's own test patterns (struct literals) are not the only way to construct types
+
+| ID | Phase | Status |
+|----|-------|--------|
+| PROTO-TYPE-DX | Phase 54.1 | Pending |
+
 ---
 *Requirements defined: 2026-03-03*
-*Last updated: 2026-03-03 after roadmap creation*
+*Last updated: 2026-03-20 — added v2.0 PROTO-TYPE-DX requirement*
