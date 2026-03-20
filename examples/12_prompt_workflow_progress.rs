@@ -167,10 +167,7 @@ async fn main() -> Result<()> {
     let request = GetPromptRequest {
         name: "analysis_workflow".to_string(),
         arguments: HashMap::from([("topic".to_string(), "Data Science".to_string())]),
-        _meta: Some(RequestMeta {
-            progress_token: Some(ProgressToken::String("workflow-2".to_string())),
-            _task_id: None,
-        }),
+        _meta: Some(RequestMeta::new().with_progress_token(ProgressToken::String("workflow-2".to_string()))),
     };
 
     println!("Executing workflow with cancellation after 2.5 seconds...\n");

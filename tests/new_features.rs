@@ -48,6 +48,7 @@ async fn test_sampling_client_method() {
         Role::User,
         SamplingMessageContent::Text {
             text: "Test message".to_string(),
+            meta: None,
         },
     )]);
 

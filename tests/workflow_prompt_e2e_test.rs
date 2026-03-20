@@ -54,12 +54,7 @@ async fn test_workflow_prompt_metadata_over_http() -> Result<()> {
     let server = Server::builder()
         .name("test-logseq-server")
         .version("1.0.0")
-        .capabilities(pmcp::types::ServerCapabilities {
-            prompts: Some(pmcp::types::PromptCapabilities {
-                list_changed: Some(false),
-            }),
-            ..Default::default()
-        })
+        .capabilities(pmcp::types::ServerCapabilities::prompts_only())
         .prompt_workflow(workflow)?
         .build()?;
 
