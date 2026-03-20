@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.6
-milestone_name: CLI DX Overhaul
+milestone: v2.0
+milestone_name: Protocol Modernization
 status: in-progress
-stopped_at: Completed 53-02-PLAN.md
-last_updated: "2026-03-20T04:24:04Z"
-last_activity: 2026-03-20 -- Gap analysis report produced with 4 proposed implementation phases
+stopped_at: Phase 53 complete -- v2.0 roadmap defined
+last_updated: "2026-03-20T05:00:00Z"
+last_activity: 2026-03-20 -- v2.0 roadmap defined with phases 54-57
 progress:
-  total_phases: 31
-  completed_phases: 21
-  total_plans: 49
-  completed_plans: 49
-  percent: 100
+  total_phases: 4
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -20,17 +20,17 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-03-03)
 
-**Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** Phase 53 complete -- Review TypeScript SDK Updates
+**Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
+**Current focus:** v2.0 Protocol Modernization -- Phase 54 next (protocol 2025-11-25 upgrade)
 
 ## Current Position
 
-Phase: 53 (review-typescript-sdk-updates)
-Plan: 2 of 2 (53-02 complete)
-Status: Phase 53 complete -- gap analysis produced with 4 proposed phases (54-57)
-Last activity: 2026-03-20 -- Gap analysis report produced with 4 proposed implementation phases
+Phase: 54 (protocol-version-2025-11-25) -- Not started
+Plan: 0 of 0
+Status: v2.0 roadmap defined -- phases 54-57 ready for discussion and planning
+Last activity: 2026-03-20 -- v2.0 roadmap defined
 
-Progress: [██████████] 100%
+Progress: [░░░░░░░░░░] 0%
 
 ## Shipped Milestones
 

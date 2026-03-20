@@ -98,16 +98,21 @@ See phase details in `.planning/phases/25-*` and `.planning/phases/26-*`
 - [ ] **Phase 31: New Commands** - Add cargo pmcp doctor and cargo pmcp completions commands
 - [ ] **Phase 32: Help Text Polish** - Consistent help text format with descriptions and usage examples across all commands
 
-### v1.7 SDK Maturation (In Progress)
+### v1.7 SDK Maturation (Complete)
 
-**Milestone Goal:** Reduce dependency footprint, align with TypeScript SDK where beneficial, and close feature gaps in protocol negotiation, conformance testing, and MCP Apps.
+**Milestone Goal:** Reduce dependency footprint and produce gap analysis against TypeScript SDK v2.
 
 - [x] **Phase 52: Reduce transitive dependencies** - Feature-gate reqwest and tracing-subscriber, slim tokio/hyper/chrono (completed 2026-03-18)
 - [x] **Phase 53: Review TypeScript SDK Updates** - Gap analysis comparing TypeScript v2 against Rust SDK (completed 2026-03-20)
-- [ ] **Phase 54: Protocol Version 2025-11-25 Support** - Add all 2025-11-25 types, content variants, expanded capabilities, and task capability negotiation
-- [ ] **Phase 55: Conformance Test Infrastructure** - Add mcp-tester conformance command with core protocol, tools, resources, and prompts scenarios
-- [ ] **Phase 56: Tower Middleware and DNS Rebinding Protection** - Tower middleware stack with DNS rebinding protection and Axum convenience adapter
-- [ ] **Phase 57: Conformance Test Extension** - Advanced conformance scenarios for progress, logging, transport, elicitation, and sampling
+
+### v2.0 Protocol Modernization (In Progress)
+
+**Milestone Goal:** Upgrade to MCP protocol 2025-11-25 with massive type cleanup, add Tasks with polling, Tower middleware with DNS rebinding protection, and conformance testing. Focus on streamable HTTP and stateless calls. SSE, elicitations, and notifications are de-prioritized — Tasks with status polling is the primary async pattern. This is a semver major bump enabling breaking changes for a cleaner API surface.
+
+- [ ] **Phase 54: Protocol Version 2025-11-25 + Type Cleanup** - Add all 2025-11-25 types (TaskSchema, IconSchema, AudioContent, ResourceLink), expanded capabilities, version negotiation for latest 3 versions. Breaking change: clean up legacy type aliases and deprecated fields.
+- [ ] **Phase 55: Tasks with Polling** - Task capability negotiation, TaskStore trait, in-memory + DynamoDB backends, task status polling via streamable HTTP. No SSE-based notifications — polling is the pattern.
+- [ ] **Phase 56: Tower Middleware + DNS Rebinding Protection** - Tower Layer for MCP protocol concerns (host validation, DNS rebinding protection, session management, JSON-RPC routing). Axum convenience adapter. Enterprise security focus.
+- [ ] **Phase 57: Conformance Test Suite** - mcp-tester conformance command with core protocol, tools, resources, prompts, and tasks scenarios. Validates any MCP server against the spec.
 
 ## Phase Details
 
@@ -492,40 +497,40 @@ Plans:
 - [x] 53-01-PLAN.md — Deep verification of TypeScript vs Rust SDK source differences across 6 domains
 - [x] 53-02-PLAN.md — Gap analysis report with prioritized recommendations and proposed implementation phases
 
-### Phase 54: Protocol Version 2025-11-25 Support
+### Phase 54: Protocol Version 2025-11-25 + Type Cleanup
 
-**Goal:** Update the Rust SDK to support the 2025-11-25 MCP protocol version, adding all new types, content variants, expanded capabilities, and task capability negotiation fields.
-**Requirements**: TBD
+**Goal:** Upgrade Rust SDK to MCP protocol 2025-11-25 with version negotiation (latest 3 versions). Add 20+ new types (TaskSchema, IconSchema, AudioContent, ResourceLink, expanded ServerCapabilities/ClientCapabilities). Clean up legacy type aliases and deprecated fields. Breaking change — part of the v2.0.0 semver bump.
+**Requirements**: PROTO-2025-11-25, VERSION-NEGOTIATION, TYPE-CLEANUP
 **Depends on:** Phase 53
 **Plans:** 0 plans
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 54 to break down)
 
-### Phase 55: Conformance Test Infrastructure
+### Phase 55: Tasks with Polling
 
-**Goal:** Add a `mcp-tester conformance <url>` command that runs a suite of MCP spec compliance test scenarios against any MCP server, starting with core protocol and tools.
-**Requirements**: TBD
+**Goal:** Implement MCP Tasks with status polling over streamable HTTP. Add tasks/create, tasks/get, tasks/cancel methods. TaskStore trait with in-memory and DynamoDB backends. Task capability negotiation in ServerCapabilities.tasks and ClientCapabilities.tasks. No SSE-based task notifications — polling is the async pattern.
+**Requirements**: TASKS-POLLING, TASK-STORE, TASK-CAPABILITIES
 **Depends on:** Phase 54
 **Plans:** 0 plans
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 55 to break down)
 
-### Phase 56: Tower Middleware and DNS Rebinding Protection
+### Phase 56: Tower Middleware + DNS Rebinding Protection
 
-**Goal:** Build a Tower middleware stack for MCP server hosting with DNS rebinding protection, host header validation, and an Axum convenience adapter.
-**Requirements**: TBD
+**Goal:** Build a Tower Layer stack for MCP server hosting: DNS rebinding protection (host header validation against allowed origins), session management, JSON-RPC routing. Axum convenience adapter (`pmcp::axum::router()`) for the 90% case. Enterprise security focus — protect against DNS rebinding attacks that bypass same-origin policy.
+**Requirements**: TOWER-MIDDLEWARE, DNS-REBINDING, AXUM-ADAPTER
 **Depends on:** Phase 54
 **Plans:** 0 plans
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 56 to break down)
 
-### Phase 57: Conformance Test Extension -- Advanced Scenarios
+### Phase 57: Conformance Test Suite
 
-**Goal:** Extend the conformance test suite with progress/logging, transport, elicitation, and sampling scenarios.
-**Requirements**: TBD
+**Goal:** Add `mcp-tester conformance <url>` command that validates any MCP server against the protocol spec. Core scenarios: initialize handshake, tools CRUD, resources CRUD, prompts CRUD, task lifecycle. Modeled after TypeScript SDK's @modelcontextprotocol/conformance infrastructure.
+**Requirements**: CONFORMANCE-CLI, CONFORMANCE-SCENARIOS
 **Depends on:** Phase 55
 **Plans:** 0 plans
 
