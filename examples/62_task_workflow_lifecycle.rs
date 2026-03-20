@@ -353,7 +353,7 @@ fn main() {
         println!("\n--- Stage 4: Client continuation ---\n");
 
         let mut call_tool = CallToolRequest::new("fetch_data", json!({"source": "production_api"}));
-        call_tool._meta = Some(RequestMeta::new().with_task_id(&task_id));
+        call_tool._meta = Some(RequestMeta::new().with_task_id(task_id));
         let continuation_req = Request::Client(Box::new(ClientRequest::CallTool(call_tool)));
 
         println!("  Sending CallTool 'fetch_data' with _task_id: {}", task_id);
@@ -404,6 +404,7 @@ fn main() {
         let cancel_req = Request::Client(Box::new(ClientRequest::TasksCancel(
             pmcp::types::CancelTaskRequest {
                 task_id: task_id.to_string(),
+                result: Some(cancel_result_payload.clone()),
             },
         )));
 

@@ -13,7 +13,7 @@ use pmcp::shared::middleware::{
     AdvancedMiddleware, EnhancedMiddlewareChain, MiddlewareContext, MiddlewarePriority,
 };
 use pmcp::types::{
-    ClientRequest, InitializeParams, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse,
+    ClientRequest, InitializeRequest, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse,
     Notification, ProgressNotification, ProgressToken, Request, RequestId,
 };
 use std::sync::Arc;
@@ -258,11 +258,12 @@ async fn test_server_protocol_middleware_integration() {
         .unwrap();
 
     // Send a request through the server (will trigger middleware)
-    let init_request = Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-        protocol_version: pmcp::DEFAULT_PROTOCOL_VERSION.to_string(),
-        capabilities: pmcp::types::ClientCapabilities::default(),
-        client_info: pmcp::types::Implementation::new("test-client", "1.0.0"),
-    })));
+    let init_request = Request::Client(Box::new(ClientRequest::Initialize(
+        InitializeRequest::new(
+            pmcp::types::Implementation::new("test-client", "1.0.0"),
+            pmcp::types::ClientCapabilities::default(),
+        ),
+    )));
 
     let _response = server
         .handle_request(RequestId::from(1i64), init_request, None)

@@ -6,7 +6,7 @@ mod spec_compliance_tests {
     use pmcp::shared::streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig};
     use pmcp::shared::{Transport, TransportMessage};
     use pmcp::types::{
-        ClientCapabilities, ClientRequest, Implementation, InitializeParams, Request,
+        ClientCapabilities, ClientRequest, Implementation, InitializeRequest, Request,
     };
     use std::net::{Ipv4Addr, SocketAddr};
     use std::sync::Arc;
@@ -168,11 +168,10 @@ mod spec_compliance_tests {
 
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation::new("test-client", "1.0.0"),
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         client.send(init_message).await.map_err(box_err)?;
@@ -246,11 +245,10 @@ mod spec_compliance_tests {
 
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation::new("test-client", "1.0.0"),
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         client.send(init_message).await.map_err(box_err)?;
@@ -321,11 +319,10 @@ mod spec_compliance_tests {
 
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation::new("test-client", "1.0.0"),
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         client.send(init_message).await.map_err(box_err)?;
@@ -411,11 +408,10 @@ mod spec_compliance_tests {
 
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation::new("test-client", "1.0.0"),
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         client.send(init_message).await.map_err(box_err)?;
@@ -460,11 +456,10 @@ mod spec_compliance_tests {
 
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation::new("test-client", "1.0.0"),
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         client.send(init_message).await.map_err(box_err)?;
@@ -546,11 +541,10 @@ mod spec_compliance_tests {
 
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation::new("test-client", "1.0.0"),
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         client.send(init_message).await.map_err(box_err)?;
@@ -585,11 +579,10 @@ mod spec_compliance_tests {
 
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation::new("test-client", "1.0.0"),
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         // First initialization
@@ -599,11 +592,10 @@ mod spec_compliance_tests {
         // Second initialization - should also succeed in stateless mode
         let init_message2 = TransportMessage::Request {
             id: 2i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation::new("test-client", "1.0.0"),
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         client.send(init_message2).await.map_err(box_err)?;

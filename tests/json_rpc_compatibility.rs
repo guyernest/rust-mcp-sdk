@@ -33,10 +33,10 @@ fn test_serialize_to_json_rpc_2_0_format() {
     assert!(json_str.contains(r#""id":1"#));
     assert!(json_str.contains(r#""method":"initialize""#));
     assert!(json_str.contains(r#""params":{"#));
-    assert!(json_str.contains(r#""protocolVersion":"2025-06-18""#));
+    assert!(json_str.contains(r#""protocolVersion":"2025-11-25""#));
 
     // Full format check
-    let expected = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}"#;
+    let expected = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}"#;
     assert_eq!(json_str, expected);
 }
 
@@ -229,7 +229,7 @@ fn test_issue_38_json_rpc_compatibility() {
     let json_str = String::from_utf8(serialized.clone()).unwrap();
 
     // This is the standard JSON-RPC 2.0 format expected by Claude Code
-    let expected = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"claude-code","version":"1.0.0"}}}"#;
+    let expected = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"claude-code","version":"1.0.0"}}}"#;
     assert_eq!(json_str, expected, "Output format is not JSON-RPC 2.0");
 
     // Verify we can also parse TypeScript SDK messages

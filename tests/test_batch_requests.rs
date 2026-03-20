@@ -50,7 +50,6 @@ impl ResourceHandler for TestResourceHandler {
             ResourceInfo::new("file:///test2.txt", "test2.txt")
                 .with_description("Test file 2")
                 .with_mime_type("text/plain"),
-            },
         ]))
     }
 }

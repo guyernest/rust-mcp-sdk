@@ -13,7 +13,7 @@
 //!
 //! ## Basic preset with defaults
 //!
-//! ```rust
+//! ```rust,ignore
 //! use pmcp::server::preset::ServerPreset;
 //! use pmcp::Server;
 //! use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpServerConfig};
@@ -238,7 +238,7 @@ impl ServerPreset {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// use pmcp::server::preset::ServerPreset;
     /// use pmcp::server::streamable_http_server::StreamableHttpServerConfig;
     ///

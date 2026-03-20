@@ -955,33 +955,24 @@ impl<T: Transport> Client<T> {
     /// client.initialize(capabilities).await?;
     ///
     /// // Create a message with the LLM
-    /// let request = CreateMessageParams {
-    ///     messages: vec![
-    ///         SamplingMessage {
-    ///             role: pmcp::types::Role::User,
-    ///             content: pmcp::types::SamplingMessageContent::Text {
-    ///                 text: "Explain how to implement a binary search tree".to_string(),
-    ///                 meta: None,
-    ///             },
-    ///         },
-    ///     ],
-    ///     model_preferences: Some(pmcp::types::ModelPreferences {
-    ///         hints: Some(vec![
-    ///             pmcp::types::ModelHint {
-    ///                 name: Some("gpt-4".to_string()),
-    ///             },
-    ///         ]),
-    ///         cost_priority: Some(0.5),
-    ///         speed_priority: Some(0.3),
-    ///         intelligence_priority: Some(0.2),
-    ///     }),
-    ///     system_prompt: Some("You are a helpful programming assistant".to_string()),
-    ///     include_context: pmcp::types::IncludeContext::ThisServer,
-    ///     temperature: Some(0.7),
-    ///     max_tokens: Some(1000),
-    ///     stop_sequences: None,
-    ///     metadata: Default::default(),
-    /// };
+    /// let msg = SamplingMessage::new(
+    ///     pmcp::types::Role::User,
+    ///     pmcp::types::SamplingMessageContent::Text {
+    ///         text: "Explain how to implement a binary search tree".to_string(),
+    ///         meta: None,
+    ///     },
+    /// );
+    /// let prefs = pmcp::types::ModelPreferences::new()
+    ///     .with_hints(vec![pmcp::types::ModelHint::new("gpt-4")])
+    ///     .with_cost_priority(0.5)
+    ///     .with_speed_priority(0.3)
+    ///     .with_intelligence_priority(0.2);
+    /// let mut request = CreateMessageParams::new(vec![msg])
+    ///     .with_model_preferences(prefs)
+    ///     .with_system_prompt("You are a helpful programming assistant")
+    ///     .with_temperature(0.7)
+    ///     .with_max_tokens(1000);
+    /// request.include_context = pmcp::types::IncludeContext::ThisServer;
     ///
     /// let result = client.create_message(request).await?;
     /// println!("Model: {}", result.model);

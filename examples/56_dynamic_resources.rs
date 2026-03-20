@@ -293,14 +293,3 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
-Ok(())
-}
- println!("   - Automatic parameter extraction");
-    println!("   - Priority-based routing");
-    println!("   - Type-safe provider interface");
-    println!("   - Template discovery for clients");
-
-    Ok(())
-}
-Ok(())
-}

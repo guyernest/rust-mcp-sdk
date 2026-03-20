@@ -10,7 +10,7 @@ prop_compose! {
         version_idx in 0..3usize,
         client_name in "[a-zA-Z][a-zA-Z0-9_-]{0,20}",
         client_version in "[0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]{1,2}",
-    ) -> InitializeParams {
+    ) -> InitializeRequest {
         let versions = ["2024-11-05", "2024-10-15", "2024-09-01"];
 
         // Note: Client capabilities are what the CLIENT supports (sampling, elicitation, roots)
@@ -18,11 +18,12 @@ prop_compose! {
         // For property testing, we just use minimal capabilities
         let capabilities = ClientCapabilities::minimal();
 
-        InitializeParams {
-            protocol_version: versions[version_idx % versions.len()].to_string(),
+        let mut req = InitializeRequest::new(
+            Implementation::new(client_name, client_version),
             capabilities,
-            client_info: Implementation::new(client_name, client_version),
-        }
+        );
+        req.protocol_version = versions[version_idx % versions.len()].to_string();
+        req
     }
 }
 
@@ -30,7 +31,7 @@ prop_compose! {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 enum ClientAction {
-    Initialize(InitializeParams),
+    Initialize(InitializeRequest),
     Ping,
     ListTools,
     CallTool(String),

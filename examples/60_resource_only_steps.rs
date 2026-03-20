@@ -296,8 +296,3 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
-ference materials for LLM reasoning");
-    println!("   • Building multi-source context for complex prompts\n");
-
-    Ok(())
-}

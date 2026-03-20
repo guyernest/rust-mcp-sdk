@@ -350,6 +350,7 @@ impl ClientCapabilities {
     ///         "claude-3".to_string(),
     ///         "llama-2".to_string(),
     ///     ]),
+    ///     ..SamplingCapabilities::default()
     /// });
     /// assert!(llm_client.supports_sampling());
     ///
@@ -559,11 +560,9 @@ impl ServerCapabilities {
     ///
     /// // Combine multiple capabilities
     /// use pmcp::types::capabilities::{ToolCapabilities, PromptCapabilities};
-    /// let multi_server = ServerCapabilities {
-    ///     tools: Some(ToolCapabilities::default()),
-    ///     prompts: Some(PromptCapabilities::default()),
-    ///     ..Default::default()
-    /// };
+    /// let mut multi_server = ServerCapabilities::default();
+    /// multi_server.tools = Some(ToolCapabilities::default());
+    /// multi_server.prompts = Some(PromptCapabilities::default());
     /// assert!(multi_server.provides_tools());
     /// assert!(multi_server.provides_prompts());
     /// ```
@@ -623,15 +622,13 @@ impl ServerCapabilities {
     ///
     /// // Build a full-featured server
     /// use pmcp::types::capabilities::*;
-    /// let full_server = ServerCapabilities {
-    ///     tools: Some(ToolCapabilities::default()),
-    ///     prompts: Some(PromptCapabilities::default()),
-    ///     resources: Some(ResourceCapabilities {
-    ///         subscribe: Some(true),
-    ///         list_changed: Some(true),
-    ///     }),
-    ///     ..Default::default()
-    /// };
+    /// let mut full_server = ServerCapabilities::default();
+    /// full_server.tools = Some(ToolCapabilities::default());
+    /// full_server.prompts = Some(PromptCapabilities::default());
+    /// let mut res_caps = ResourceCapabilities::default();
+    /// res_caps.subscribe = Some(true);
+    /// res_caps.list_changed = Some(true);
+    /// full_server.resources = Some(res_caps);
     /// assert!(full_server.provides_tools());
     /// assert!(full_server.provides_prompts());
     /// assert!(full_server.provides_resources());

@@ -5,7 +5,7 @@ mod streamable_http_server_tests {
     use pmcp::shared::streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig};
     use pmcp::shared::{Transport, TransportMessage};
     use pmcp::types::{
-        ClientCapabilities, ClientRequest, Implementation, InitializeParams, Request,
+        ClientCapabilities, ClientRequest, Implementation, InitializeRequest, Request,
     };
     // Use boxed error for tests to satisfy clippy
     type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -49,11 +49,10 @@ mod streamable_http_server_tests {
         // Send initialization without session ID
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation::new("test-client", "1.0.0"),
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         client
@@ -168,11 +167,10 @@ mod streamable_http_server_tests {
         // Send initialization
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation::new("test-client", "1.0.0"),
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         client
@@ -244,11 +242,10 @@ mod streamable_http_server_tests {
         // Send initialization
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation::new("test-client", "1.0.0"),
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         client

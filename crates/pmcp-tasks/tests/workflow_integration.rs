@@ -16,7 +16,7 @@ use pmcp::server::core::ProtocolHandler;
 use pmcp::server::workflow::{DataSource, SequentialWorkflow, ToolHandle, WorkflowStep};
 use pmcp::types::jsonrpc::ResponsePayload;
 use pmcp::types::{
-    CallToolParams, ClientRequest, GetPromptParams, Request, RequestId, RequestMeta, ToolInfo,
+    CallToolRequest, ClientRequest, GetPromptRequest, Request, RequestId, RequestMeta, ToolInfo,
 };
 use pmcp::RequestHandlerExtra;
 use pmcp_tasks::{InMemoryTaskStore, TaskRouterImpl, TaskSecurityConfig, TaskStore};
@@ -305,7 +305,7 @@ fn unwrap_result(response: pmcp::types::JSONRPCResponse) -> Value {
 
 /// Build a `GetPrompt` request for a named workflow with arguments.
 fn get_prompt_request(name: &str, args: HashMap<String, String>) -> Request {
-    Request::Client(Box::new(ClientRequest::GetPrompt(GetPromptParams {
+    Request::Client(Box::new(ClientRequest::GetPrompt(GetPromptRequest {
         name: name.to_string(),
         arguments: args,
         _meta: None,
@@ -314,31 +314,28 @@ fn get_prompt_request(name: &str, args: HashMap<String, String>) -> Request {
 
 /// Build a `CallTool` request with `_task_id` in `_meta` for continuation.
 fn continuation_call_request(tool_name: &str, args: Value, task_id: &str) -> Request {
-    Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
-        name: tool_name.to_string(),
-        arguments: args,
-        _meta: Some(RequestMeta {
-            progress_token: None,
-            _task_id: Some(task_id.to_string()),
-        }),
-        task: None,
-    })))
+    let mut req = CallToolRequest::new(tool_name, args);
+    req._meta = Some(RequestMeta::new().with_task_id(task_id));
+    Request::Client(Box::new(ClientRequest::CallTool(req)))
 }
 
 /// Build a `tasks/cancel` request with an optional result payload.
 fn tasks_cancel_request(task_id: &str, result: Option<Value>) -> Request {
-    let mut params = json!({ "taskId": task_id });
-    if let Some(r) = result {
-        params["result"] = r;
-    }
-    Request::Client(Box::new(ClientRequest::TasksCancel(params)))
+    Request::Client(Box::new(ClientRequest::TasksCancel(
+        pmcp::types::tasks::CancelTaskRequest {
+            task_id: task_id.to_string(),
+            result,
+        },
+    )))
 }
 
 /// Build a `tasks/result` request.
 fn tasks_result_request(task_id: &str) -> Request {
-    Request::Client(Box::new(ClientRequest::TasksResult(json!({
-        "taskId": task_id
-    }))))
+    Request::Client(Box::new(ClientRequest::TasksResult(
+        pmcp::types::tasks::GetTaskPayloadRequest {
+            task_id: task_id.to_string(),
+        },
+    )))
 }
 
 // ---------------------------------------------------------------------------

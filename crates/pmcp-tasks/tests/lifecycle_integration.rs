@@ -8,7 +8,11 @@ use async_trait::async_trait;
 use pmcp::server::builder::ServerCoreBuilder;
 use pmcp::server::core::ProtocolHandler;
 use pmcp::types::jsonrpc::ResponsePayload;
-use pmcp::types::{CallToolParams, ClientRequest, Request, RequestId, ToolInfo};
+use pmcp::types::tasks::{
+    CancelTaskRequest, GetTaskPayloadRequest, GetTaskRequest, ListTasksRequest,
+};
+use pmcp::types::tools::{TaskSupport, ToolExecution};
+use pmcp::types::{CallToolRequest, ClientRequest, Request, RequestId, ToolInfo};
 use pmcp::RequestHandlerExtra;
 use pmcp_tasks::task::TaskStatus;
 use pmcp_tasks::{InMemoryTaskStore, TaskRouterImpl, TaskSecurityConfig, TaskStore};
@@ -62,7 +66,7 @@ impl pmcp::ToolHandler for RequiredTaskTool {
             Some("A tool that requires task augmentation".to_string()),
             json!({ "type": "object" }),
         );
-        info.execution = Some(json!({ "taskSupport": "required" }));
+        info.execution = Some(ToolExecution::new().with_task_support(TaskSupport::Required));
         Some(info)
     }
 }
@@ -132,48 +136,44 @@ fn unwrap_error(response: pmcp::types::JSONRPCResponse) -> pmcp::types::JSONRPCE
 
 /// Build a tools/call request with task augmentation.
 fn task_call_request(tool_name: &str, args: Value, task_params: Value) -> Request {
-    Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
-        name: tool_name.to_string(),
-        arguments: args,
-        _meta: None,
-        task: Some(task_params),
-    })))
+    let mut req = CallToolRequest::new(tool_name, args);
+    req.task = Some(task_params);
+    Request::Client(Box::new(ClientRequest::CallTool(req)))
 }
 
 /// Build a tools/call request without task augmentation.
 fn normal_call_request(tool_name: &str, args: Value) -> Request {
-    Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
-        name: tool_name.to_string(),
-        arguments: args,
-        _meta: None,
-        task: None,
-    })))
+    Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest::new(
+        tool_name,
+        args,
+    ))))
 }
 
 /// Build a tasks/get request.
 fn tasks_get_request(task_id: &str) -> Request {
-    Request::Client(Box::new(ClientRequest::TasksGet(json!({
-        "taskId": task_id
-    }))))
+    Request::Client(Box::new(ClientRequest::TasksGet(GetTaskRequest {
+        task_id: task_id.to_string(),
+    })))
 }
 
 /// Build a tasks/result request.
 fn tasks_result_request(task_id: &str) -> Request {
-    Request::Client(Box::new(ClientRequest::TasksResult(json!({
-        "taskId": task_id
-    }))))
+    Request::Client(Box::new(ClientRequest::TasksResult(GetTaskPayloadRequest {
+        task_id: task_id.to_string(),
+    })))
 }
 
 /// Build a tasks/list request.
 fn tasks_list_request() -> Request {
-    Request::Client(Box::new(ClientRequest::TasksList(json!({}))))
+    Request::Client(Box::new(ClientRequest::TasksList(ListTasksRequest::default())))
 }
 
 /// Build a tasks/cancel request.
 fn tasks_cancel_request(task_id: &str) -> Request {
-    Request::Client(Box::new(ClientRequest::TasksCancel(json!({
-        "taskId": task_id
-    }))))
+    Request::Client(Box::new(ClientRequest::TasksCancel(CancelTaskRequest {
+        task_id: task_id.to_string(),
+        result: None,
+    })))
 }
 
 // --------------------------------------------------------------------------

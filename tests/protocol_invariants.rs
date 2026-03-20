@@ -219,21 +219,16 @@ proptest! {
     ) {
         let request = match method_type {
             0 => ClientRequest::Ping,
-            1 => ClientRequest::ListTools(ListToolsParams { cursor: cursor.clone() }),
-            2 => ClientRequest::CallTool(CallToolParams {
-                name: tool_name,
-                arguments: args,
-                _meta: None,
-                task: None,
-            }),
-            3 => ClientRequest::ListPrompts(ListPromptsParams { cursor: cursor.clone() }),
-            4 => ClientRequest::GetPrompt(GetPromptParams {
+            1 => ClientRequest::ListTools(ListToolsRequest { cursor: cursor.clone() }),
+            2 => ClientRequest::CallTool(CallToolRequest::new(tool_name, args)),
+            3 => ClientRequest::ListPrompts(ListPromptsRequest { cursor: cursor.clone() }),
+            4 => ClientRequest::GetPrompt(GetPromptRequest {
                 name: prompt_name,
                 arguments: Default::default(),
                 _meta: None,
             }),
-            5 => ClientRequest::ListResources(ListResourcesParams { cursor }),
-            _ => ClientRequest::ReadResource(ReadResourceParams { uri: resource_uri, _meta: None }),
+            5 => ClientRequest::ListResources(ListResourcesRequest { cursor }),
+            _ => ClientRequest::ReadResource(ReadResourceRequest { uri: resource_uri, _meta: None }),
         };
 
         let json = serde_json::to_value(&request).unwrap();

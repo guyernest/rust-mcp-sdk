@@ -353,11 +353,3 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-d middleware system demonstration complete");
-
-    Ok(())
-}
-d middleware system demonstration complete");
-
-    Ok(())
-}

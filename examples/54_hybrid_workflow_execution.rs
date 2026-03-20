@@ -311,16 +311,3 @@ fn create_logseq_task_workflow() -> SequentialWorkflow {
             .bind("result"),
     )
 }
-hand off to client LLM
-            .bind("result"),
-    )
-}
- detect this doesn't satisfy schema
-            // and gracefully hand off to client LLM
-            .bind("result"),
-    )
-}
-hand off to client LLM
-            .bind("result"),
-    )
-}

@@ -1753,12 +1753,10 @@ impl ServerBuilder {
     /// ```rust,no_run
     /// use pmcp::{Server, ServerCapabilities, ToolCapabilities};
     ///
-    /// let capabilities = ServerCapabilities {
-    ///     tools: Some(ToolCapabilities {
-    ///         list_changed: Some(true),
-    ///     }),
-    ///     ..Default::default()
-    /// };
+    /// let mut capabilities = ServerCapabilities::default();
+    /// capabilities.tools = Some(ToolCapabilities {
+    ///     list_changed: Some(true),
+    /// });
     ///
     /// let server = Server::builder()
     ///     .name("advanced-server")

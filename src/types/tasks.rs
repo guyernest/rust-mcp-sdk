@@ -245,11 +245,21 @@ impl ListTasksResult {
 }
 
 /// Cancel task request.
+///
+/// When `result` is `Some`, the task transitions to `Completed` status
+/// (workflow completion). When `result` is `None`, the task transitions to
+/// `Cancelled` status (standard cancel).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelTaskRequest {
     /// Task ID to cancel
     pub task_id: String,
+    /// Optional result value for workflow completion.
+    ///
+    /// When present, completes the task (transitions to `Completed` status)
+    /// instead of cancelling it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
 }
 
 /// Cancel task result.

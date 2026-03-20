@@ -30,7 +30,7 @@ use crate::error::Result;
 use crate::server::cancellation::RequestHandlerExtra;
 use crate::server::middleware_executor::MiddlewareExecutor;
 use crate::server::{PromptHandler, ResourceHandler, ToolHandler};
-use crate::types::{Content, GetPromptResult, PromptArgument, PromptInfo, PromptMessage};
+use crate::types::{Content, GetPromptResult, PromptArgument, PromptInfo, PromptMessage, Role};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
