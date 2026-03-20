@@ -341,9 +341,9 @@ impl GetPromptResult {
 /// use pmcp::types::{PromptMessage, Content};
 /// use pmcp::types::content::Role;
 ///
-/// let msg = PromptMessage::user(Content::Text { text: "Hello".into() });
-/// let msg = PromptMessage::assistant(Content::Text { text: "Hi there!".into() });
-/// let msg = PromptMessage::new(Role::System, Content::Text { text: "You are helpful.".into() });
+/// let msg = PromptMessage::user(Content::text("Hello"));
+/// let msg = PromptMessage::assistant(Content::text("Hi there!"));
+/// let msg = PromptMessage::new(Role::System, Content::text("You are helpful."));
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -460,9 +460,7 @@ mod tests {
         );
 
         let result = GetPromptResult::new(
-            vec![PromptMessage::user(Content::Text {
-                text: "Hello".to_string(),
-            })],
+            vec![PromptMessage::user(Content::text("Hello"))],
             Some("Workflow result".to_string()),
         )
         .with_meta(meta);
@@ -482,19 +480,13 @@ mod tests {
 
     #[test]
     fn test_prompt_message_convenience() {
-        let user_msg = PromptMessage::user(Content::Text {
-            text: "Hello".to_string(),
-        });
+        let user_msg = PromptMessage::user(Content::text("Hello"));
         assert_eq!(user_msg.role, Role::User);
 
-        let assistant_msg = PromptMessage::assistant(Content::Text {
-            text: "Hi".to_string(),
-        });
+        let assistant_msg = PromptMessage::assistant(Content::text("Hi"));
         assert_eq!(assistant_msg.role, Role::Assistant);
 
-        let system_msg = PromptMessage::system(Content::Text {
-            text: "Be helpful".to_string(),
-        });
+        let system_msg = PromptMessage::system(Content::text("Be helpful"));
         assert_eq!(system_msg.role, Role::System);
     }
 

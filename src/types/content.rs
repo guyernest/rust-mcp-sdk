@@ -7,7 +7,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Content annotations providing metadata hints (MCP 2025-11-25).
+///
+/// # Construction
+///
+/// ```rust
+/// use pmcp::types::content::Annotations;
+///
+/// let ann = Annotations::new()
+///     .with_priority(0.8)
+///     .with_audience(vec!["user".into()]);
+/// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct Annotations {
     /// Target audience for this content.
@@ -19,6 +30,31 @@ pub struct Annotations {
     /// ISO 8601 timestamp of last modification.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_modified: Option<String>,
+}
+
+impl Annotations {
+    /// Create empty annotations with all fields set to `None`.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the target audience.
+    pub fn with_audience(mut self, audience: Vec<String>) -> Self {
+        self.audience = Some(audience);
+        self
+    }
+
+    /// Set the priority hint (0.0 = lowest, 1.0 = highest).
+    pub fn with_priority(mut self, priority: f64) -> Self {
+        self.priority = Some(priority);
+        self
+    }
+
+    /// Set the last-modified ISO 8601 timestamp.
+    pub fn with_last_modified(mut self, last_modified: impl Into<String>) -> Self {
+        self.last_modified = Some(last_modified.into());
+        self
+    }
 }
 
 /// Content item in responses.
@@ -75,8 +111,109 @@ pub enum Content {
     ResourceLink(Box<ResourceLinkContent>),
 }
 
+impl Content {
+    /// Create text content.
+    ///
+    /// ```rust
+    /// use pmcp::types::Content;
+    ///
+    /// let c = Content::text("Hello, world!");
+    /// ```
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::Text {
+            text: text.into(),
+        }
+    }
+
+    /// Create image content from base64-encoded data.
+    ///
+    /// ```rust
+    /// use pmcp::types::Content;
+    ///
+    /// let c = Content::image("iVBORw0KGgo=", "image/png");
+    /// ```
+    pub fn image(data: impl Into<String>, mime_type: impl Into<String>) -> Self {
+        Self::Image {
+            data: data.into(),
+            mime_type: mime_type.into(),
+        }
+    }
+
+    /// Create a minimal resource reference (URI only).
+    ///
+    /// Use [`Content::resource_with_text`] when you have content to include.
+    pub fn resource(uri: impl Into<String>) -> Self {
+        Self::Resource {
+            uri: uri.into(),
+            text: None,
+            mime_type: None,
+            meta: None,
+        }
+    }
+
+    /// Create a resource reference with text content and MIME type.
+    ///
+    /// ```rust
+    /// use pmcp::types::Content;
+    ///
+    /// let c = Content::resource_with_text("file://test.txt", "hello", "text/plain");
+    /// ```
+    pub fn resource_with_text(
+        uri: impl Into<String>,
+        text: impl Into<String>,
+        mime_type: impl Into<String>,
+    ) -> Self {
+        Self::Resource {
+            uri: uri.into(),
+            text: Some(text.into()),
+            mime_type: Some(mime_type.into()),
+            meta: None,
+        }
+    }
+
+    /// Create audio content from base64-encoded data.
+    ///
+    /// ```rust
+    /// use pmcp::types::Content;
+    ///
+    /// let c = Content::audio("base64data==", "audio/wav");
+    /// ```
+    pub fn audio(data: impl Into<String>, mime_type: impl Into<String>) -> Self {
+        Self::Audio {
+            data: data.into(),
+            mime_type: mime_type.into(),
+            annotations: None,
+            meta: None,
+        }
+    }
+
+    /// Create a resource link.
+    ///
+    /// Delegates to [`ResourceLinkContent::new`] and wraps in a `Box`.
+    ///
+    /// ```rust
+    /// use pmcp::types::Content;
+    ///
+    /// let c = Content::resource_link("my-file", "file:///path/to/file.txt");
+    /// ```
+    pub fn resource_link(name: impl Into<String>, uri: impl Into<String>) -> Self {
+        Self::ResourceLink(Box::new(ResourceLinkContent::new(name, uri)))
+    }
+}
+
 /// Resource link content fields (MCP 2025-11-25).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Construction
+///
+/// ```rust
+/// use pmcp::types::content::ResourceLinkContent;
+///
+/// let rl = ResourceLinkContent::new("my-file", "file:///path/to/file.txt")
+///     .with_title("My File")
+///     .with_mime_type("text/plain");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceLinkContent {
     /// Resource name
@@ -101,6 +238,60 @@ pub struct ResourceLinkContent {
     /// Optional metadata
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<serde_json::Map<String, Value>>,
+}
+
+impl ResourceLinkContent {
+    /// Create a new resource link with the required name and URI fields.
+    ///
+    /// All optional fields default to `None`.
+    pub fn new(name: impl Into<String>, uri: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            uri: uri.into(),
+            title: None,
+            description: None,
+            mime_type: None,
+            icons: None,
+            annotations: None,
+            meta: None,
+        }
+    }
+
+    /// Set the title.
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set the description.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set the MIME type.
+    pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
+        self.mime_type = Some(mime_type.into());
+        self
+    }
+
+    /// Set the icons.
+    pub fn with_icons(mut self, icons: Vec<super::protocol::IconInfo>) -> Self {
+        self.icons = Some(icons);
+        self
+    }
+
+    /// Set content annotations.
+    pub fn with_annotations(mut self, annotations: Annotations) -> Self {
+        self.annotations = Some(annotations);
+        self
+    }
+
+    /// Set metadata.
+    pub fn with_meta(mut self, meta: serde_json::Map<String, Value>) -> Self {
+        self.meta = Some(meta);
+        self
+    }
 }
 
 /// Message role.
@@ -229,9 +420,7 @@ mod tests {
 
     #[test]
     fn serialize_content() {
-        let content = Content::Text {
-            text: "Hello".to_string(),
-        };
+        let content = Content::text("Hello");
         let json = serde_json::to_value(&content).unwrap();
         assert_eq!(json["type"], "text");
         assert_eq!(json["text"], "Hello");
@@ -257,12 +446,7 @@ mod tests {
 
     #[test]
     fn test_content_resource_no_meta_serialization() {
-        let content = Content::Resource {
-            uri: "file:///test.txt".to_string(),
-            text: Some("hello".to_string()),
-            mime_type: Some("text/plain".to_string()),
-            meta: None,
-        };
+        let content = Content::resource_with_text("file:///test.txt", "hello", "text/plain");
         let json = serde_json::to_value(&content).unwrap();
         assert!(json.get("_meta").is_none());
         assert_eq!(json["uri"], "file:///test.txt");
@@ -315,10 +499,7 @@ mod tests {
         let content = Content::Audio {
             data: "base64audiodata==".to_string(),
             mime_type: "audio/wav".to_string(),
-            annotations: Some(Annotations {
-                priority: Some(0.8),
-                ..Default::default()
-            }),
+            annotations: Some(Annotations::new().with_priority(0.8)),
             meta: None,
         };
         let json = serde_json::to_value(&content).unwrap();
@@ -341,16 +522,12 @@ mod tests {
 
     #[test]
     fn test_resource_link_content_serialization_roundtrip() {
-        let content = Content::ResourceLink(Box::new(ResourceLinkContent {
-            name: "my-file".to_string(),
-            uri: "file:///path/to/file.txt".to_string(),
-            title: Some("My File".to_string()),
-            description: Some("A file resource".to_string()),
-            mime_type: Some("text/plain".to_string()),
-            icons: None,
-            annotations: None,
-            meta: None,
-        }));
+        let content = Content::ResourceLink(Box::new(
+            ResourceLinkContent::new("my-file", "file:///path/to/file.txt")
+                .with_title("My File")
+                .with_description("A file resource")
+                .with_mime_type("text/plain"),
+        ));
         let json = serde_json::to_value(&content).unwrap();
         assert_eq!(json["type"], "resource_link");
         assert_eq!(json["name"], "my-file");
@@ -369,9 +546,95 @@ mod tests {
 
     #[test]
     fn test_annotations_default() {
-        let ann = Annotations::default();
+        let ann = Annotations::new();
         assert!(ann.audience.is_none());
         assert!(ann.priority.is_none());
         assert!(ann.last_modified.is_none());
+    }
+
+    #[test]
+    fn test_content_text_helper() {
+        let c = Content::text("Hello");
+        match c {
+            Content::Text { text } => assert_eq!(text, "Hello"),
+            _ => panic!("Expected Content::Text"),
+        }
+    }
+
+    #[test]
+    fn test_content_image_helper() {
+        let c = Content::image("data==", "image/png");
+        match c {
+            Content::Image { data, mime_type } => {
+                assert_eq!(data, "data==");
+                assert_eq!(mime_type, "image/png");
+            },
+            _ => panic!("Expected Content::Image"),
+        }
+    }
+
+    #[test]
+    fn test_content_resource_helper() {
+        let c = Content::resource("file://test.txt");
+        match c {
+            Content::Resource { uri, text, mime_type, meta } => {
+                assert_eq!(uri, "file://test.txt");
+                assert!(text.is_none());
+                assert!(mime_type.is_none());
+                assert!(meta.is_none());
+            },
+            _ => panic!("Expected Content::Resource"),
+        }
+    }
+
+    #[test]
+    fn test_content_audio_helper() {
+        let c = Content::audio("audiodata==", "audio/wav");
+        match c {
+            Content::Audio { data, mime_type, annotations, meta } => {
+                assert_eq!(data, "audiodata==");
+                assert_eq!(mime_type, "audio/wav");
+                assert!(annotations.is_none());
+                assert!(meta.is_none());
+            },
+            _ => panic!("Expected Content::Audio"),
+        }
+    }
+
+    #[test]
+    fn test_content_resource_link_helper() {
+        let c = Content::resource_link("my-file", "file:///path");
+        match c {
+            Content::ResourceLink(rl) => {
+                assert_eq!(rl.name, "my-file");
+                assert_eq!(rl.uri, "file:///path");
+                assert!(rl.title.is_none());
+            },
+            _ => panic!("Expected Content::ResourceLink"),
+        }
+    }
+
+    #[test]
+    fn test_annotations_with_methods() {
+        let ann = Annotations::new()
+            .with_priority(0.9)
+            .with_audience(vec!["user".into(), "admin".into()])
+            .with_last_modified("2025-01-01T00:00:00Z");
+        assert_eq!(ann.priority, Some(0.9));
+        assert_eq!(ann.audience.as_ref().unwrap().len(), 2);
+        assert_eq!(ann.last_modified.as_deref(), Some("2025-01-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn test_resource_link_content_with_methods() {
+        let rl = ResourceLinkContent::new("test", "file:///test")
+            .with_title("Test")
+            .with_description("A test resource")
+            .with_mime_type("text/plain");
+        assert_eq!(rl.name, "test");
+        assert_eq!(rl.uri, "file:///test");
+        assert_eq!(rl.title.as_deref(), Some("Test"));
+        assert_eq!(rl.description.as_deref(), Some("A test resource"));
+        assert_eq!(rl.mime_type.as_deref(), Some("text/plain"));
     }
 }
