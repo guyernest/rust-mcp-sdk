@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: in-progress
-stopped_at: Phase 54.1 context gathered
-last_updated: "2026-03-20T22:00:00Z"
-last_activity: 2026-03-20 -- Phase 54.1 inserted and context captured
+stopped_at: Completed 54.1-01-PLAN.md
+last_updated: "2026-03-20T20:14:29Z"
+last_activity: 2026-03-20 -- Plan 01 executed (constructors for resources, prompts, content)
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 8
-  completed_plans: 4
-  percent: 17
+  completed_plans: 5
+  percent: 21
 ---
 
 # Project State
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 
 ## Current Position
 
-Phase: 54.1 (protocol-type-construction-dx) -- CONTEXT GATHERED
-Plan: 0 of TBD
-Status: Phase 54.1 inserted after Phase 54. Context gathered. Ready for planning.
-Last activity: 2026-03-20 -- Phase 54.1 context captured (dev team DX feedback)
+Phase: 54.1 (protocol-type-construction-dx) -- IN PROGRESS
+Plan: 1 of 3
+Status: Plan 01 complete (resources, prompts, content DX). Plans 02/03 in parallel.
+Last activity: 2026-03-20 -- Plan 01 executed (constructors for resources, prompts, content)
 
 Progress: [##########] 100%
 
@@ -135,6 +135,8 @@ v1.6 decisions:
 - [Phase 54]: Used Implementation::new() across all test files instead of adding 4 optional fields to each struct literal
 - [Phase 54]: Rewrote elicitation example 19 using spec-compliant ElicitRequestParams instead of disabling
 - [Phase 54]: Added task type re-exports to protocol/mod.rs for flat pmcp::types:: access
+- [Phase 54.1]: Content enum variants keep struct literal syntax; #[non_exhaustive] only on structs per D-08
+- [Phase 54.1]: PromptMessage does not derive Default (both role and content required); uses ::new(role, content) + convenience ::user() ::assistant() ::system()
 
 ### Roadmap Evolution
 
@@ -170,6 +172,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-20T14:45:24.621Z
-Stopped at: Completed 54-04-PLAN.md
-Resume: Phase 54 complete. All 4 plans executed. MIGRATION.md written (407 lines). Workspace compiles, 707 tests pass, all examples build. Phase 55 (Tasks with Polling) next.
+Last session: 2026-03-20T20:13:20Z
+Stopped at: Completed 54.1-01-PLAN.md
+Resume: Phase 54.1 Plan 01 complete. ResourceInfo, ResourceTemplate, PromptInfo, PromptArgument, PromptMessage, Content, ResourceLinkContent, Annotations all have constructors and #[non_exhaustive]. Plans 02/03 executing in parallel.
