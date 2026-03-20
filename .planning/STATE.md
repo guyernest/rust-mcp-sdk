@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.7
-milestone_name: SDK Maturation
+milestone: v1.6
+milestone_name: CLI DX Overhaul
 status: in-progress
-stopped_at: Phase 53 context gathered
-last_updated: "2026-03-19T00:00:00Z"
-last_activity: 2026-03-19 -- TypeScript SDK review context captured
+stopped_at: Completed 53-01-PLAN.md
+last_updated: "2026-03-20T04:17:53.353Z"
+last_activity: 2026-03-20 -- TypeScript SDK v2 verification notes completed
 progress:
-  total_phases: 2
-  completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
-  percent: 50
+  total_phases: 27
+  completed_phases: 21
+  total_plans: 49
+  completed_plans: 48
+  percent: 98
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** Phase 51 -- PMCP MCP Server
+**Current focus:** Phase 53 -- Review TypeScript SDK Updates
 
 ## Current Position
 
-Phase: 51 (pmcp-mcp-server) -- COMPLETE
-Plan: 5 of 5 (51-05 complete)
-Status: Phase 51 complete -- PMCP MCP Server fully wired with CI/CD pipeline
-Last activity: 2026-03-14 -- server wiring and release workflow updates
+Phase: 53 (review-typescript-sdk-updates)
+Plan: 1 of 2 (53-01 complete)
+Status: Verification notes complete -- gap analysis report next
+Last activity: 2026-03-20 -- TypeScript SDK v2 verification notes completed
 
-Progress: [██████████] 100%
+Progress: [██████████] 98%
 
 ## Shipped Milestones
 
@@ -113,6 +113,8 @@ v1.6 decisions:
 - [Phase 51-04]: Const DOC_RESOURCES lookup table for URI routing avoids duplication between list() and read()
 - [Phase 51-04]: One struct per prompt handler for cleaner PromptHandler trait impl and independent metadata
 - [Phase 51-05]: Omitted explicit capabilities() since builder auto-sets on handler registration; publish order widget-utils->pmcp->mcp-tester->mcp-preview->pmcp-server->cargo-pmcp
+- [Phase 53]: [Phase 53-01]: Verified Rust missing 2025-11-25 protocol version (20+ new types including TaskSchema, IconSchema, AudioContent, ResourceLink, expanded capabilities)
+- [Phase 53]: [Phase 53-01]: Confirmed Rust ahead in MCP Apps (full adapter stack) but behind in Tasks capability negotiation (no ServerCapabilities.tasks/ClientCapabilities.tasks)
 
 ### Roadmap Evolution
 
@@ -144,6 +146,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-14T04:55:11Z
-Stopped at: Completed 51-05-PLAN.md
+Last session: 2026-03-20T04:17:53.350Z
+Stopped at: Completed 53-01-PLAN.md
 Resume: Phase 51 complete -- PMCP MCP Server fully functional with all tools, resources, prompts wired and CI/CD pipeline ready.
