@@ -28,12 +28,21 @@ pub type ListPromptsParams = ListPromptsRequest;
 pub struct PromptInfo {
     /// Prompt name (unique identifier)
     pub name: String,
+    /// Optional human-readable title (MCP 2025-11-25)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Human-readable description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Prompt arguments schema
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<Vec<PromptArgument>>,
+    /// Optional icons (MCP 2025-11-25)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icons: Option<Vec<crate::types::protocol::IconInfo>>,
+    /// Optional metadata (MCP 2025-11-25)
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// Type hint for prompt arguments.
@@ -240,6 +249,7 @@ mod tests {
     fn test_prompt_types() {
         let prompt = PromptInfo {
             name: "test_prompt".to_string(),
+            title: None,
             description: Some("A test prompt".to_string()),
             arguments: Some(vec![PromptArgument {
                 name: "arg1".to_string(),
@@ -248,6 +258,8 @@ mod tests {
                 completion: None,
                 arg_type: None,
             }]),
+            icons: None,
+            meta: None,
         };
 
         let json = serde_json::to_value(&prompt).unwrap();

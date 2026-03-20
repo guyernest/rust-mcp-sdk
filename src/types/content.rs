@@ -4,9 +4,25 @@
 //! prompt messages, sampling messages, and resource responses.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Message content type alias.
 pub type MessageContent = Content;
+
+/// Content annotations providing metadata hints (MCP 2025-11-25).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Annotations {
+    /// Target audience for this content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audience: Option<Vec<String>>,
+    /// Priority hint (0.0 = lowest, 1.0 = highest).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<f64>,
+    /// ISO 8601 timestamp of last modification.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_modified: Option<String>,
+}
 
 /// Content item in responses.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +56,46 @@ pub enum Content {
         /// Optional metadata for resource content (e.g., widget metadata for MCP Apps)
         #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
         meta: Option<serde_json::Map<String, serde_json::Value>>,
+    },
+    /// Audio content (MCP 2025-11-25)
+    #[serde(rename = "audio", rename_all = "camelCase")]
+    Audio {
+        /// Base64-encoded audio data
+        data: String,
+        /// Audio MIME type (e.g., "audio/wav", "audio/mp3")
+        mime_type: String,
+        /// Optional content annotations
+        #[serde(skip_serializing_if = "Option::is_none")]
+        annotations: Option<Annotations>,
+        /// Optional metadata
+        #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+        meta: Option<serde_json::Map<String, Value>>,
+    },
+    /// Resource link content (MCP 2025-11-25)
+    #[serde(rename = "resource_link", rename_all = "camelCase")]
+    ResourceLink {
+        /// Resource name
+        name: String,
+        /// Resource URI
+        uri: String,
+        /// Optional title
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        /// Optional description
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// Optional MIME type
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mime_type: Option<String>,
+        /// Optional icons
+        #[serde(skip_serializing_if = "Option::is_none")]
+        icons: Option<Vec<crate::types::protocol::IconInfo>>,
+        /// Optional content annotations
+        #[serde(skip_serializing_if = "Option::is_none")]
+        annotations: Option<Annotations>,
+        /// Optional metadata
+        #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+        meta: Option<serde_json::Map<String, Value>>,
     },
 }
 
@@ -115,7 +171,9 @@ pub(crate) mod resource_contents_serde {
                     }
                     seq.serialize_element(&Tc { text })?;
                 },
-                other @ Content::Image { .. } => {
+                other @ Content::Image { .. }
+                | other @ Content::Audio { .. }
+                | other @ Content::ResourceLink { .. } => {
                     seq.serialize_element(other)?;
                 },
             }
@@ -246,5 +304,70 @@ mod tests {
             },
             _ => panic!("Expected Content::Resource"),
         }
+    }
+
+    #[test]
+    fn test_audio_content_serialization_roundtrip() {
+        let content = Content::Audio {
+            data: "base64audiodata==".to_string(),
+            mime_type: "audio/wav".to_string(),
+            annotations: Some(Annotations {
+                priority: Some(0.8),
+                ..Default::default()
+            }),
+            meta: None,
+        };
+        let json = serde_json::to_value(&content).unwrap();
+        assert_eq!(json["type"], "audio");
+        assert_eq!(json["data"], "base64audiodata==");
+        assert_eq!(json["mimeType"], "audio/wav");
+        assert_eq!(json["annotations"]["priority"], 0.8);
+
+        let roundtrip: Content = serde_json::from_value(json).unwrap();
+        match roundtrip {
+            Content::Audio {
+                data, mime_type, ..
+            } => {
+                assert_eq!(data, "base64audiodata==");
+                assert_eq!(mime_type, "audio/wav");
+            },
+            _ => panic!("Expected Content::Audio"),
+        }
+    }
+
+    #[test]
+    fn test_resource_link_content_serialization_roundtrip() {
+        let content = Content::ResourceLink {
+            name: "my-file".to_string(),
+            uri: "file:///path/to/file.txt".to_string(),
+            title: Some("My File".to_string()),
+            description: Some("A file resource".to_string()),
+            mime_type: Some("text/plain".to_string()),
+            icons: None,
+            annotations: None,
+            meta: None,
+        };
+        let json = serde_json::to_value(&content).unwrap();
+        assert_eq!(json["type"], "resource_link");
+        assert_eq!(json["name"], "my-file");
+        assert_eq!(json["uri"], "file:///path/to/file.txt");
+        assert_eq!(json["title"], "My File");
+
+        let roundtrip: Content = serde_json::from_value(json).unwrap();
+        match roundtrip {
+            Content::ResourceLink { name, uri, .. } => {
+                assert_eq!(name, "my-file");
+                assert_eq!(uri, "file:///path/to/file.txt");
+            },
+            _ => panic!("Expected Content::ResourceLink"),
+        }
+    }
+
+    #[test]
+    fn test_annotations_default() {
+        let ann = Annotations::default();
+        assert!(ann.audience.is_none());
+        assert!(ann.priority.is_none());
+        assert!(ann.last_modified.is_none());
     }
 }

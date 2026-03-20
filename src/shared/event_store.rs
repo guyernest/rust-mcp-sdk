@@ -366,10 +366,7 @@ mod tests {
                     crate::types::ClientRequest::Initialize(crate::types::InitializeParams {
                         protocol_version: crate::DEFAULT_PROTOCOL_VERSION.to_string(),
                         capabilities: crate::types::ClientCapabilities::default(),
-                        client_info: crate::types::Implementation {
-                            name: "test".to_string(),
-                            version: "1.0.0".to_string(),
-                        },
+                        client_info: crate::types::Implementation::new("test", "1.0.0"),
                     }),
                 )),
             },
@@ -405,10 +402,7 @@ mod tests {
                 crate::types::ClientRequest::Initialize(crate::types::InitializeParams {
                     protocol_version: "2024-11-05".to_string(),
                     capabilities: crate::types::ClientCapabilities::default(),
-                    client_info: crate::types::Implementation {
-                        name: "test".to_string(),
-                        version: "1.0.0".to_string(),
-                    },
+                    client_info: crate::types::Implementation::new("test", "1.0.0"),
                 }),
             )),
         };

@@ -415,8 +415,12 @@ mod tests {
             vec![ResourceTemplate {
                 uri_template: "test://{id}".to_string(),
                 name: "Test Resource".to_string(),
+                title: None,
                 description: Some("A test resource".to_string()),
                 mime_type: Some("text/plain".to_string()),
+                icons: None,
+                annotations: None,
+                meta: None,
             }]
         }
 

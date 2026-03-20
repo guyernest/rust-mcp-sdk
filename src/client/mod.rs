@@ -82,10 +82,7 @@ impl<T: Transport> Client<T> {
     pub fn new(transport: T) -> Self {
         Self::with_info(
             transport,
-            Implementation {
-                name: "pmcp-client".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-            },
+            Implementation::new("pmcp-client", env!("CARGO_PKG_VERSION")),
         )
     }
 
@@ -100,10 +97,7 @@ impl<T: Transport> Client<T> {
     /// use pmcp::{Client, StdioTransport, Implementation};
     ///
     /// let transport = StdioTransport::new();
-    /// let client_info = Implementation {
-    ///     name: "my-custom-client".to_string(),
-    ///     version: "2.1.0".to_string(),
-    /// };
+    /// let client_info = Implementation::new("my-custom-client", "2.1.0");
     /// let client = Client::with_info(transport, client_info);
     /// ```
     pub fn with_info(transport: T, client_info: Implementation) -> Self {
@@ -140,10 +134,7 @@ impl<T: Transport> Client<T> {
     /// };
     ///
     /// let transport = StdioTransport::new();
-    /// let client_info = Implementation {
-    ///     name: "high-throughput-client".to_string(),
-    ///     version: "1.0.0".to_string(),
-    /// };
+    /// let client_info = Implementation::new("high-throughput-client", "1.0.0");
     ///
     /// let client = Client::with_options(transport, client_info, options);
     /// ```
@@ -1543,10 +1534,7 @@ impl<T: Transport> ClientBuilder<T> {
     pub fn build(self) -> Client<T> {
         let mut client = Client::with_options(
             self.transport,
-            Implementation {
-                name: "pmcp-client".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-            },
+            Implementation::new("pmcp-client", env!("CARGO_PKG_VERSION")),
             self.options,
         );
         // Replace the default middleware chain with the configured one
@@ -1644,10 +1632,7 @@ mod tests {
     #[test]
     fn test_client_with_info() {
         let transport = MockTransport::new();
-        let info = Implementation {
-            name: "test-client".to_string(),
-            version: "1.0.0".to_string(),
-        };
+        let info = Implementation::new("test-client", "1.0.0");
         let client = Client::with_info(transport, info);
         assert_eq!(client.info.name, "test-client");
         assert_eq!(client.info.version, "1.0.0");

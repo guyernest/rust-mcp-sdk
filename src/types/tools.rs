@@ -134,6 +134,27 @@ impl ToolAnnotations {
     }
 }
 
+/// Tool execution metadata declaring task support level (MCP 2025-11-25).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolExecution {
+    /// Task support level for this tool
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_support: Option<TaskSupport>,
+}
+
+/// Task support level for a tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskSupport {
+    /// Task creation is required for this tool
+    Required,
+    /// Task creation is optional for this tool
+    Optional,
+    /// Task creation is not supported for this tool
+    Forbidden,
+}
+
 /// Tool information.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[non_exhaustive]
@@ -141,6 +162,9 @@ impl ToolAnnotations {
 pub struct ToolInfo {
     /// Tool name (unique identifier)
     pub name: String,
+    /// Optional human-readable title (MCP 2025-11-25)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Human-readable description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -156,17 +180,16 @@ pub struct ToolInfo {
     /// Tool annotations (hints and PMCP extensions)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<ToolAnnotations>,
+    /// Optional icons (MCP 2025-11-25)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icons: Option<Vec<crate::types::protocol::IconInfo>>,
     /// Optional metadata (e.g., for UI resource association in MCP Apps Extension)
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none", default)]
     #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
     pub _meta: Option<serde_json::Map<String, Value>>,
-    /// Execution metadata declaring task support level (experimental MCP Tasks).
-    ///
-    /// Uses `serde_json::Value` to avoid circular crate dependency
-    /// (`pmcp-tasks` depends on `pmcp`). Tools set this via
-    /// `serde_json::to_value(ToolExecution { .. })`.
+    /// Execution metadata declaring task support level (MCP 2025-11-25).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub execution: Option<Value>,
+    pub execution: Option<ToolExecution>,
 }
 
 impl ToolInfo {
@@ -174,10 +197,12 @@ impl ToolInfo {
     pub fn new(name: impl Into<String>, description: Option<String>, input_schema: Value) -> Self {
         Self {
             name: name.into(),
+            title: None,
             description,
             input_schema,
             output_schema: None,
             annotations: None,
+            icons: None,
             _meta: None,
             execution: None,
         }
@@ -213,10 +238,12 @@ impl ToolInfo {
     ) -> Self {
         Self {
             name: name.into(),
+            title: None,
             description,
             input_schema,
             output_schema: None,
             annotations: Some(annotations),
+            icons: None,
             _meta: None,
             execution: None,
         }
@@ -238,10 +265,12 @@ impl ToolInfo {
 
         Self {
             name: name.into(),
+            title: None,
             description,
             input_schema,
             output_schema: None,
             annotations: None,
+            icons: None,
             _meta: Some(meta),
             execution: None,
         }
@@ -694,11 +723,34 @@ mod tests {
             Some("A task-enabled tool".to_string()),
             json!({"type": "object"}),
         );
-        tool.execution = Some(json!({"taskSupport": "required"}));
+        tool.execution = Some(ToolExecution {
+            task_support: Some(TaskSupport::Required),
+        });
 
         let json = serde_json::to_value(&tool).unwrap();
         assert_eq!(json["name"], "task-tool");
         assert_eq!(json["execution"]["taskSupport"], "required");
+    }
+
+    #[test]
+    fn test_tool_execution_serialization() {
+        let exec = ToolExecution {
+            task_support: Some(TaskSupport::Required),
+        };
+        let json = serde_json::to_value(&exec).unwrap();
+        assert_eq!(json["taskSupport"], "required");
+
+        let exec2 = ToolExecution {
+            task_support: Some(TaskSupport::Optional),
+        };
+        let json2 = serde_json::to_value(&exec2).unwrap();
+        assert_eq!(json2["taskSupport"], "optional");
+
+        let exec3 = ToolExecution {
+            task_support: Some(TaskSupport::Forbidden),
+        };
+        let json3 = serde_json::to_value(&exec3).unwrap();
+        assert_eq!(json3["taskSupport"], "forbidden");
     }
 
     #[test]

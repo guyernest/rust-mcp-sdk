@@ -363,10 +363,7 @@ impl WasmMcpServerBuilder {
     /// Build the server.
     pub fn build(self) -> WasmMcpServer {
         WasmMcpServer {
-            info: Implementation {
-                name: self.name,
-                version: self.version,
-            },
+            info: Implementation::new(self.name, self.version),
             capabilities: self.capabilities,
             tools: self.tools,
             resources: self.resources,

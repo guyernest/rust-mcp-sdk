@@ -929,13 +929,9 @@ impl Server {
             | ClientRequest::SetLoggingLevel { level: _ }
             | ClientRequest::Ping => Ok(serde_json::json!({})),
             ClientRequest::CreateMessage(req) => self.handle_create_message(request_id, req).await,
-            ClientRequest::ElicitInputResponse(response) => {
-                // Handle elicitation response if we have a manager
-                if let Some(elicitation_manager) = &self.elicitation_manager {
-                    elicitation_manager.handle_response(response).await?;
-                }
-                Ok(serde_json::json!({}))
-            },
+            // Note: Elicitation responses are now handled as the response to
+            // ServerRequest::ElicitationCreate in the JSON-RPC response flow,
+            // not as a separate client request variant.
             // Task requests (experimental MCP Tasks) -- routing handled in Plan 02
             ClientRequest::TasksGet(_)
             | ClientRequest::TasksResult(_)
@@ -1133,8 +1129,11 @@ impl Server {
                 } else {
                     crate::types::PromptInfo {
                         name: name.clone(),
+                        title: None,
                         description: None,
                         arguments: None,
+                        icons: None,
+                        meta: None,
                     }
                 }
             })
@@ -3083,7 +3082,7 @@ impl ServerBuilder {
         let uri_to_tool_meta = core::build_uri_to_tool_meta(&tool_infos);
 
         Ok(Server {
-            info: Implementation { name, version },
+            info: Implementation::new(name, version),
             capabilities: self.capabilities,
             tools: self.tools,
             tool_infos,
@@ -3311,10 +3310,7 @@ mod tests {
             request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest {
                 protocol_version: "2024-11-05".to_string(),
                 capabilities: ClientCapabilities::minimal(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
+                client_info: Implementation::new("test-client", "1.0.0"),
             }))),
         };
 
@@ -3404,10 +3400,7 @@ mod tests {
         let request = Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest {
             protocol_version: "2024-11-05".to_string(),
             capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            client_info: Implementation::new("test-client", "1.0.0"),
         })));
 
         let response = server

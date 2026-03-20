@@ -336,10 +336,7 @@ mod tests {
         use crate::shared::middleware::EnhancedMiddlewareChain;
 
         let server = ServerCore::new(
-            Implementation {
-                name: "test-server".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            Implementation::new("test-server", "1.0.0"),
             ServerCapabilities::tools_only(),
             HashMap::new(),
             HashMap::new(),
@@ -364,10 +361,7 @@ mod tests {
         let init_req = Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest {
             protocol_version: "2024-11-05".to_string(),
             capabilities: crate::types::ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            client_info: Implementation::new("test-client", "1.0.0"),
         })));
 
         adapter.add_request(RequestId::from(1i64), init_req).await;

@@ -87,8 +87,11 @@ impl StaticResource {
         ResourceInfo {
             uri: self.uri.clone(),
             name: self.name.clone(),
+            title: None,
             description: self.description.clone(),
             mime_type: self.mime_type.clone(),
+            icons: None,
+            annotations: None,
             meta: None,
         }
     }
@@ -291,8 +294,11 @@ impl ResourceCollection {
             infos.push(ResourceInfo {
                 uri: ui_resource.uri.clone(),
                 name: ui_resource.name.clone(),
+                title: None,
                 description: ui_resource.description.clone(),
                 mime_type: Some(ui_resource.mime_type.clone()),
+                icons: None,
+                annotations: None,
                 meta: crate::types::ui::build_ui_meta(Some(&ui_resource.uri)),
             });
         }
@@ -302,8 +308,11 @@ impl ResourceCollection {
             infos.push(ResourceInfo {
                 uri: template.uri_template.clone(),
                 name: template.name,
+                title: None,
                 description: template.description,
                 mime_type: template.mime_type,
+                icons: None,
+                annotations: None,
                 meta: None,
             });
         }

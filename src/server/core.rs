@@ -816,7 +816,10 @@ impl ServerCore {
                                 .get(&req.name)
                                 .and_then(|m| m.execution.as_ref());
                             let needs_task = req.task.is_some()
-                                || task_router.tool_requires_task(&req.name, tool_execution);
+                                || {
+                                    let exec_value = tool_execution.and_then(|e| serde_json::to_value(e).ok());
+                                    task_router.tool_requires_task(&req.name, exec_value.as_ref())
+                                };
                             if needs_task {
                                 let owner_id = self
                                     .resolve_task_owner(auth_context.as_ref())
@@ -933,7 +936,7 @@ impl ServerCore {
                                 .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
-                                .handle_tasks_get(params.clone(), &owner_id)
+                                .handle_tasks_get(serde_json::to_value(&params).unwrap_or_default(), &owner_id)
                                 .await
                             {
                                 Ok(result) => Self::success_response(id, result),
@@ -950,7 +953,7 @@ impl ServerCore {
                                 .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
-                                .handle_tasks_result(params.clone(), &owner_id)
+                                .handle_tasks_result(serde_json::to_value(&params).unwrap_or_default(), &owner_id)
                                 .await
                             {
                                 Ok(result) => Self::success_response(id, result),
@@ -967,7 +970,7 @@ impl ServerCore {
                                 .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
-                                .handle_tasks_list(params.clone(), &owner_id)
+                                .handle_tasks_list(serde_json::to_value(&params).unwrap_or_default(), &owner_id)
                                 .await
                             {
                                 Ok(result) => Self::success_response(id, result),
@@ -984,7 +987,7 @@ impl ServerCore {
                                 .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
-                                .handle_tasks_cancel(params.clone(), &owner_id)
+                                .handle_tasks_cancel(serde_json::to_value(&params).unwrap_or_default(), &owner_id)
                                 .await
                             {
                                 Ok(result) => Self::success_response(id, result),
@@ -1096,10 +1099,7 @@ mod tests {
         let tool_infos = build_tool_infos(&tools);
 
         let server = ServerCore::new(
-            Implementation {
-                name: "test-server".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            Implementation::new("test-server", "1.0.0"),
             ServerCapabilities::tools_only(),
             tools,
             HashMap::new(),
@@ -1120,10 +1120,7 @@ mod tests {
         let init_req = Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
             protocol_version: crate::DEFAULT_PROTOCOL_VERSION.to_string(),
             capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            client_info: Implementation::new("test-client", "1.0.0"),
         })));
 
         let response = server
@@ -1148,10 +1145,7 @@ mod tests {
         let tool_infos = build_tool_infos(&tools);
 
         let server = ServerCore::new(
-            Implementation {
-                name: "test-server".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            Implementation::new("test-server", "1.0.0"),
             ServerCapabilities::tools_only(),
             tools,
             HashMap::new(),
@@ -1171,10 +1165,7 @@ mod tests {
         let init_req = Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
             protocol_version: crate::DEFAULT_PROTOCOL_VERSION.to_string(),
             capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            client_info: Implementation::new("test-client", "1.0.0"),
         })));
         server
             .handle_request(RequestId::from(1i64), init_req, None)
@@ -1209,10 +1200,7 @@ mod tests {
         let tool_infos = build_tool_infos(&tools);
 
         let server = ServerCore::new(
-            Implementation {
-                name: "test-server".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            Implementation::new("test-server", "1.0.0"),
             ServerCapabilities::tools_only(),
             tools,
             HashMap::new(),
@@ -1261,10 +1249,7 @@ mod tests {
         let tool_infos = build_tool_infos(&tools);
 
         let server = ServerCore::new(
-            Implementation {
-                name: "test-server".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            Implementation::new("test-server", "1.0.0"),
             ServerCapabilities::tools_only(),
             tools,
             HashMap::new(),

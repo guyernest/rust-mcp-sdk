@@ -197,8 +197,11 @@ impl ServerCoreBuilder {
         // Cache metadata at registration time to avoid per-request cloning
         let mut info = handler.metadata().unwrap_or_else(|| PromptInfo {
             name: name.clone(),
+            title: None,
             description: None,
             arguments: None,
+            icons: None,
+            meta: None,
         });
         info.name.clone_from(&name);
         self.prompt_infos.insert(name.clone(), info);
@@ -223,8 +226,11 @@ impl ServerCoreBuilder {
         // Cache metadata at registration time to avoid per-request cloning
         let mut info = handler.metadata().unwrap_or_else(|| PromptInfo {
             name: name.clone(),
+            title: None,
             description: None,
             arguments: None,
+            icons: None,
+            meta: None,
         });
         info.name.clone_from(&name);
         self.prompt_infos.insert(name.clone(), info);
@@ -285,7 +291,7 @@ impl ServerCoreBuilder {
 
         // Update capabilities to include sampling
         if self.capabilities.sampling.is_none() {
-            self.capabilities.sampling = Some(crate::types::SamplingCapabilities { models: None });
+            self.capabilities.sampling = Some(crate::types::SamplingCapabilities::default());
         }
 
         self
@@ -299,7 +305,7 @@ impl ServerCoreBuilder {
 
         // Update capabilities to include sampling
         if self.capabilities.sampling.is_none() {
-            self.capabilities.sampling = Some(crate::types::SamplingCapabilities { models: None });
+            self.capabilities.sampling = Some(crate::types::SamplingCapabilities::default());
         }
 
         self
@@ -750,8 +756,11 @@ impl ServerCoreBuilder {
             // Cache metadata at registration time
             let mut info = prompt_handler.metadata().unwrap_or_else(|| PromptInfo {
                 name: name.clone(),
+                title: None,
                 description: None,
                 arguments: None,
+                icons: None,
+                meta: None,
             });
             info.name.clone_from(&name);
             self.prompt_infos.insert(name.clone(), info);
@@ -761,8 +770,11 @@ impl ServerCoreBuilder {
             // Cache metadata at registration time
             let mut info = prompt_handler.metadata().unwrap_or_else(|| PromptInfo {
                 name: name.clone(),
+                title: None,
                 description: None,
                 arguments: None,
+                icons: None,
+                meta: None,
             });
             info.name.clone_from(&name);
             self.prompt_infos.insert(name.clone(), info);
@@ -795,7 +807,7 @@ impl ServerCoreBuilder {
             .version
             .ok_or_else(|| Error::validation("Server version is required"))?;
 
-        let info = Implementation { name, version };
+        let info = Implementation::new(name, version);
 
         // Build tool middleware chain from accumulated middleware
         #[cfg(not(target_arch = "wasm32"))]

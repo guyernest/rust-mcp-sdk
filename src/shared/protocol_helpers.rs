@@ -250,15 +250,11 @@ fn client_request_to_jsonrpc(req: ClientRequest) -> (String, Option<Value>) {
         ClientRequest::CreateMessage(params) => {
             create_method_params("sampling/createMessage", params)
         },
-        // Elicitation response
-        ClientRequest::ElicitInputResponse(params) => {
-            create_method_params("elicitation/response", params)
-        },
-        // Task requests (experimental MCP Tasks)
-        ClientRequest::TasksGet(params) => ("tasks/get".to_string(), Some(params)),
-        ClientRequest::TasksResult(params) => ("tasks/result".to_string(), Some(params)),
-        ClientRequest::TasksList(params) => ("tasks/list".to_string(), Some(params)),
-        ClientRequest::TasksCancel(params) => ("tasks/cancel".to_string(), Some(params)),
+        // Task requests (MCP 2025-11-25)
+        ClientRequest::TasksGet(params) => create_method_params("tasks/get", params),
+        ClientRequest::TasksResult(params) => create_method_params("tasks/result", params),
+        ClientRequest::TasksList(params) => create_method_params("tasks/list", params),
+        ClientRequest::TasksCancel(params) => create_method_params("tasks/cancel", params),
     }
 }
 
@@ -277,8 +273,8 @@ fn server_request_to_jsonrpc(req: ServerRequest) -> (String, Option<Value>) {
             Some(serde_json::to_value(params).unwrap()),
         ),
         ServerRequest::ListRoots => ("roots/list".to_string(), None),
-        ServerRequest::ElicitInput(params) => (
-            "elicitation/input".to_string(),
+        ServerRequest::ElicitationCreate(params) => (
+            "elicitation/create".to_string(),
             Some(serde_json::to_value(params).unwrap()),
         ),
     }
@@ -602,10 +598,7 @@ mod tests {
         let request = Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest {
             protocol_version: "2024-11-05".to_string(),
             capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            client_info: Implementation::new("test-client", "1.0.0"),
         })));
 
         let jsonrpc_request = create_request(id.clone(), request);

@@ -543,8 +543,10 @@ impl WorkflowPromptHandler {
                         text_content.push_str(&format!("[Resource: {}]", uri));
                     }
                 },
-                Content::Image { .. } => {
-                    // Skip image content - we only embed text
+                Content::Image { .. }
+                | Content::Audio { .. }
+                | Content::ResourceLink { .. } => {
+                    // Skip non-text content - we only embed text
                 },
             }
         }
@@ -1012,8 +1014,11 @@ impl PromptHandler for WorkflowPromptHandler {
 
         Some(PromptInfo {
             name: self.workflow.name().to_string(),
+            title: None,
             description: Some(self.workflow.description().to_string()),
             arguments,
+            icons: None,
+            meta: None,
         })
     }
 }

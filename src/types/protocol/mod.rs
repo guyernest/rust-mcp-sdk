@@ -6,7 +6,6 @@
 pub mod version;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use crate::types::capabilities::{ClientCapabilities, ServerCapabilities};
 
 // Re-export version constants and negotiation function.
@@ -46,14 +45,83 @@ impl std::fmt::Display for ProtocolVersion {
     }
 }
 
+/// Icon information for entities (MCP 2025-11-25).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IconInfo {
+    /// Icon source URL
+    pub src: String,
+    /// Icon MIME type
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    /// Icon sizes (e.g., ["16x16", "32x32"])
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sizes: Option<Vec<String>>,
+    /// Icon theme preference
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<IconTheme>,
+}
+
+/// Icon theme preference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IconTheme {
+    /// Light theme icon
+    Light,
+    /// Dark theme icon
+    Dark,
+}
+
+/// MCP-specific JSON-RPC error codes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolErrorCode {
+    /// Invalid request
+    InvalidRequest = -32600,
+    /// Method not found
+    MethodNotFound = -32601,
+    /// Invalid parameters
+    InvalidParams = -32602,
+    /// Internal error
+    InternalError = -32603,
+}
+
 /// Implementation information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Implementation {
     /// Implementation name (e.g., "mcp-sdk-rust")
     pub name: String,
+    /// Optional human-readable title (MCP 2025-11-25)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Implementation version
     pub version: String,
+    /// Optional website URL (MCP 2025-11-25)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub website_url: Option<String>,
+    /// Optional description (MCP 2025-11-25)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Optional icons (MCP 2025-11-25)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icons: Option<Vec<IconInfo>>,
+}
+
+impl Implementation {
+    /// Create an `Implementation` with just name and version.
+    ///
+    /// The optional 2025-11-25 fields (title, website\_url, description, icons)
+    /// default to `None`.
+    pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            title: None,
+            version: version.into(),
+            website_url: None,
+            description: None,
+            icons: None,
+        }
+    }
 }
 
 /// Initialize request.
@@ -222,21 +290,18 @@ pub enum ClientRequest {
     /// Create message (sampling)
     #[serde(rename = "sampling/createMessage")]
     CreateMessage(super::sampling::CreateMessageRequest),
-    /// Response to elicitation request
-    #[serde(rename = "elicitation/response")]
-    ElicitInputResponse(crate::types::elicitation::ElicitInputResponse),
-    /// Get task status (experimental MCP Tasks).
+    /// Get task status (MCP 2025-11-25 Tasks).
     #[serde(rename = "tasks/get")]
-    TasksGet(Value),
-    /// Get task result (experimental MCP Tasks).
+    TasksGet(crate::types::tasks::GetTaskRequest),
+    /// Get task result (MCP 2025-11-25 Tasks).
     #[serde(rename = "tasks/result")]
-    TasksResult(Value),
-    /// List tasks (experimental MCP Tasks).
+    TasksResult(crate::types::tasks::GetTaskPayloadRequest),
+    /// List tasks (MCP 2025-11-25 Tasks).
     #[serde(rename = "tasks/list")]
-    TasksList(Value),
-    /// Cancel a task (experimental MCP Tasks).
+    TasksList(crate::types::tasks::ListTasksRequest),
+    /// Cancel a task (MCP 2025-11-25 Tasks).
     #[serde(rename = "tasks/cancel")]
-    TasksCancel(Value),
+    TasksCancel(crate::types::tasks::CancelTaskRequest),
 }
 
 /// Server request types.
@@ -249,9 +314,9 @@ pub enum ServerRequest {
     /// List roots request
     #[serde(rename = "roots/list")]
     ListRoots,
-    /// Elicit input from user
-    #[serde(rename = "elicitation/elicitInput")]
-    ElicitInput(Box<crate::types::elicitation::ElicitInputRequest>),
+    /// Request to elicit user input (spec method: elicitation/create)
+    #[serde(rename = "elicitation/create")]
+    ElicitationCreate(Box<crate::types::elicitation::ElicitRequestParams>),
 }
 
 /// Combined request types (client or server).
@@ -302,7 +367,9 @@ mod tests {
 
     #[test]
     fn test_task_client_request_roundtrip() {
-        let req = ClientRequest::TasksGet(json!({"taskId": "t-123"}));
+        let req = ClientRequest::TasksGet(crate::types::tasks::GetTaskRequest {
+            task_id: "t-123".to_string(),
+        });
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["method"], "tasks/get");
         assert_eq!(json["params"]["taskId"], "t-123");

@@ -125,12 +125,15 @@ where
     fn metadata(&self) -> Option<PromptInfo> {
         Some(PromptInfo {
             name: self.name.clone(),
+            title: None,
             description: self.description.clone(),
             arguments: if self.arguments.is_empty() {
                 None
             } else {
                 Some(self.arguments.clone())
             },
+            icons: None,
+            meta: None,
         })
     }
 }
@@ -229,12 +232,15 @@ where
     fn metadata(&self) -> Option<PromptInfo> {
         Some(PromptInfo {
             name: self.name.clone(),
+            title: None,
             description: self.description.clone(),
             arguments: if self.arguments.is_empty() {
                 None
             } else {
                 Some(self.arguments.clone())
             },
+            icons: None,
+            meta: None,
         })
     }
 }

@@ -112,8 +112,11 @@ mod tests {
                 resources: vec![ResourceInfo {
                     uri: "test://resource1".to_string(),
                     name: "Resource 1".to_string(),
+                    title: None,
                     description: Some("Test resource 1".to_string()),
                     mime_type: Some("text/plain".to_string()),
+                    icons: None,
+                    annotations: None,
                     meta: None,
                 }],
             }
@@ -160,10 +163,7 @@ mod tests {
         Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
             protocol_version: "2025-06-18".to_string(),
             capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            client_info: Implementation::new("test-client", "1.0.0"),
         })))
     }
 
@@ -726,6 +726,7 @@ mod tests {
             logging: None,
             completions: None,
             sampling: None,
+            tasks: None,
             experimental: None,
         };
 

@@ -4,6 +4,7 @@
 //! use to advertise their supported features.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 
 /// Client capabilities advertised during initialization.
@@ -34,6 +35,10 @@ pub struct ClientCapabilities {
     /// Roots capabilities
     #[serde(skip_serializing_if = "Option::is_none")]
     pub roots: Option<RootsCapabilities>,
+
+    /// Task capabilities (MCP 2025-11-25)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tasks: Option<ClientTasksCapability>,
 
     /// Experimental capabilities
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -67,6 +72,10 @@ pub struct ServerCapabilities {
     /// Sampling capabilities (for LLM providers)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sampling: Option<SamplingCapabilities>,
+
+    /// Task capabilities (MCP 2025-11-25)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tasks: Option<ServerTasksCapability>,
 
     /// Experimental capabilities
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -113,24 +122,100 @@ pub struct LoggingCapabilities {
     pub levels: Option<Vec<String>>,
 }
 
-/// Sampling capabilities for LLM operations.
+/// Sampling capabilities for LLM operations (expanded MCP 2025-11-25).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SamplingCapabilities {
     /// Supported model families/providers
     #[serde(skip_serializing_if = "Option::is_none")]
     pub models: Option<Vec<String>>,
+    /// Context capabilities
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<Value>,
+    /// Tool use capabilities during sampling
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Value>,
 }
 
-/// Elicitation capabilities for user input.
-///
-/// This capability indicates that the client supports requesting user input
-/// during tool execution or other operations. The structure is intentionally
-/// minimal as per the MCP specification.
+/// Elicitation capabilities for user input (expanded MCP 2025-11-25).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ElicitationCapabilities {
-    // Empty object as per MCP spec - client just advertises support
+    /// Form-based elicitation support
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub form: Option<FormElicitationCapability>,
+    /// URL-based elicitation support
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<Value>,
+}
+
+/// Form-based elicitation capability options.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormElicitationCapability {
+    /// Whether the client supports applying default values
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub apply_defaults: Option<bool>,
+}
+
+/// Server task capabilities (MCP 2025-11-25).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerTasksCapability {
+    /// Whether tasks/list is supported
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list: Option<Value>,
+    /// Whether tasks/cancel is supported
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancel: Option<Value>,
+    /// Request-specific task capabilities
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requests: Option<ServerTasksRequestCapability>,
+}
+
+/// Server task request capabilities.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerTasksRequestCapability {
+    /// Tool-specific task capabilities
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<ServerTasksToolsCapability>,
+}
+
+/// Server task tools capabilities.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerTasksToolsCapability {
+    /// Whether tools/call can create tasks
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call: Option<Value>,
+}
+
+/// Client task capabilities (MCP 2025-11-25).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientTasksCapability {
+    /// Whether tasks/list is supported
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list: Option<Value>,
+    /// Whether tasks/cancel is supported
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancel: Option<Value>,
+    /// Request-specific task capabilities
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requests: Option<ClientTasksRequestCapability>,
+}
+
+/// Client task request capabilities.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientTasksRequestCapability {
+    /// Sampling-related task capabilities
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<Value>,
+    /// Elicitation-related task capabilities
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elicitation: Option<Value>,
 }
 
 /// Roots capabilities.
@@ -211,6 +296,7 @@ impl ClientCapabilities {
             sampling: Some(SamplingCapabilities::default()),
             elicitation: Some(ElicitationCapabilities::default()),
             roots: Some(RootsCapabilities { list_changed: true }),
+            tasks: Some(ClientTasksCapability::default()),
             experimental: None,
         }
     }
@@ -560,6 +646,11 @@ impl ServerCapabilities {
     pub fn provides_resources(&self) -> bool {
         self.resources.is_some()
     }
+
+    /// Check if the server provides task support (MCP 2025-11-25).
+    pub fn provides_tasks(&self) -> bool {
+        self.tasks.is_some()
+    }
 }
 
 #[cfg(test)]
@@ -645,6 +736,35 @@ mod tests {
         assert_eq!(json["prompts"]["listChanged"], false);
         assert_eq!(json["resources"]["listChanged"], false);
         assert_eq!(json["resources"]["subscribe"], false);
+    }
+
+    #[test]
+    fn server_tasks_capability_serialization() {
+        let caps = ServerCapabilities {
+            tasks: Some(ServerTasksCapability {
+                list: Some(serde_json::json!({})),
+                cancel: Some(serde_json::json!({})),
+                requests: Some(ServerTasksRequestCapability {
+                    tools: Some(ServerTasksToolsCapability {
+                        call: Some(serde_json::json!({})),
+                    }),
+                }),
+            }),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&caps).unwrap();
+        assert!(json.get("tasks").is_some());
+        assert!(json["tasks"].get("list").is_some());
+        assert!(json["tasks"].get("cancel").is_some());
+        assert!(json["tasks"]["requests"]["tools"]["call"].is_object());
+        assert!(caps.provides_tasks());
+    }
+
+    #[test]
+    fn client_tasks_capability_serialization() {
+        let caps = ClientCapabilities::full();
+        let json = serde_json::to_value(&caps).unwrap();
+        assert!(json.get("tasks").is_some());
     }
 
     #[test]

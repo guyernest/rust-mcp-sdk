@@ -566,8 +566,11 @@ mod tests {
                 Arc::new(TestPrompt),
                 PromptInfo {
                     name: "prompt1".to_string(),
+                    title: None,
                     description: Some("Prompt 1".to_string()),
                     arguments: None,
+                    icons: None,
+                    meta: None,
                 },
             )
             .build();

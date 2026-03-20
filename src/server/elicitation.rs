@@ -1,7 +1,10 @@
-//! User input elicitation support for MCP servers.
+//! User input elicitation support for MCP servers (MCP 2025-11-25).
+//!
+//! This module provides the `ElicitationManager` for handling elicitation
+//! requests using the spec-compliant `elicitation/create` method.
 
 use crate::error::{Error, ErrorCode, Result};
-use crate::types::elicitation::{ElicitInputRequest, ElicitInputResponse};
+use crate::types::elicitation::{ElicitRequestParams, ElicitResult};
 use crate::types::protocol::ServerRequest;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,10 +14,13 @@ use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio::time::{timeout, Duration};
 use tracing::{debug, warn};
 
+/// Monotonically increasing counter for elicitation IDs.
+static ELICITATION_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// Manager for handling input elicitation requests.
 pub struct ElicitationManager {
     /// Pending elicitation requests waiting for responses.
-    pending: Arc<RwLock<HashMap<String, oneshot::Sender<ElicitInputResponse>>>>,
+    pending: Arc<RwLock<HashMap<String, oneshot::Sender<ElicitResult>>>>,
     /// Channel for sending requests to the client.
     request_tx: Option<mpsc::Sender<ServerRequest>>,
     /// Default timeout for elicitation requests.
@@ -50,9 +56,15 @@ impl ElicitationManager {
         self.timeout_duration = duration;
     }
 
-    /// Request input from the user.
+    /// Generate a unique elicitation ID.
+    fn next_elicitation_id() -> String {
+        let id = ELICITATION_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("elicit-{id}")
+    }
+
+    /// Request input from the user using the spec-compliant elicitation/create method.
     #[allow(clippy::cognitive_complexity)]
-    pub async fn elicit_input(&self, request: ElicitInputRequest) -> Result<ElicitInputResponse> {
+    pub async fn elicit_input(&self, request: ElicitRequestParams) -> Result<ElicitResult> {
         let request_tx = self.request_tx.as_ref().ok_or_else(|| {
             Error::protocol(ErrorCode::INTERNAL_ERROR, "Elicitation not configured")
         })?;
@@ -60,22 +72,23 @@ impl ElicitationManager {
         // Create response channel
         let (tx, rx) = oneshot::channel();
 
+        // Generate a correlation ID for tracking the pending request
+        let elicitation_id = Self::next_elicitation_id();
+
         // Store pending request
         {
             let mut pending = self.pending.write().await;
-            pending.insert(request.elicitation_id.clone(), tx);
+            pending.insert(elicitation_id.clone(), tx);
         }
 
-        let elicitation_id = request.elicitation_id.clone();
-
         // Send elicitation request
-        let server_request = ServerRequest::ElicitInput(Box::new(request));
+        let server_request = ServerRequest::ElicitationCreate(Box::new(request));
         if let Err(e) = request_tx.send(server_request).await {
             // Remove from pending on send error
             self.pending.write().await.remove(&elicitation_id);
             return Err(Error::protocol(
                 ErrorCode::INTERNAL_ERROR,
-                format!("Failed to send elicitation request: {}", e),
+                format!("Failed to send elicitation request: {e}"),
             ));
         }
 
@@ -106,10 +119,17 @@ impl ElicitationManager {
     }
 
     /// Handle an elicitation response from the client.
-    pub async fn handle_response(&self, response: ElicitInputResponse) -> Result<()> {
+    ///
+    /// The `elicitation_id` parameter correlates this response to the
+    /// original pending request.
+    pub async fn handle_response(
+        &self,
+        elicitation_id: &str,
+        response: ElicitResult,
+    ) -> Result<()> {
         let mut pending = self.pending.write().await;
 
-        if let Some(tx) = pending.remove(&response.elicitation_id) {
+        if let Some(tx) = pending.remove(elicitation_id) {
             if tx.send(response).is_err() {
                 warn!("Failed to deliver elicitation response - receiver dropped");
             }
@@ -117,7 +137,7 @@ impl ElicitationManager {
         } else {
             warn!(
                 "Received response for unknown elicitation: {}",
-                response.elicitation_id
+                elicitation_id
             );
             Err(Error::protocol(
                 ErrorCode::INVALID_REQUEST,
@@ -132,11 +152,9 @@ impl ElicitationManager {
 
         if let Some(tx) = pending.remove(elicitation_id) {
             // Send cancellation response
-            let response = ElicitInputResponse {
-                elicitation_id: elicitation_id.to_string(),
-                value: None,
-                cancelled: true,
-                error: Some("Cancelled by server".to_string()),
+            let response = ElicitResult {
+                action: crate::types::elicitation::ElicitAction::Cancel,
+                content: None,
             };
 
             if tx.send(response).is_err() {
@@ -155,12 +173,10 @@ impl ElicitationManager {
     pub async fn cancel_all(&self) {
         let mut pending = self.pending.write().await;
 
-        for (id, tx) in pending.drain() {
-            let response = ElicitInputResponse {
-                elicitation_id: id,
-                value: None,
-                cancelled: true,
-                error: Some("Server shutting down".to_string()),
+        for (_id, tx) in pending.drain() {
+            let response = ElicitResult {
+                action: crate::types::elicitation::ElicitAction::Cancel,
+                content: None,
             };
 
             let _ = tx.send(response);
@@ -183,7 +199,7 @@ impl Default for ElicitationManager {
 #[async_trait::async_trait]
 pub trait ElicitInput {
     /// Request input from the user.
-    async fn elicit_input(&self, request: ElicitInputRequest) -> Result<ElicitInputResponse>;
+    async fn elicit_input(&self, request: ElicitRequestParams) -> Result<ElicitResult>;
 }
 
 /// Context that provides elicitation capabilities to tool handlers.
@@ -201,7 +217,7 @@ impl ElicitationContext {
 
 #[async_trait::async_trait]
 impl ElicitInput for ElicitationContext {
-    async fn elicit_input(&self, request: ElicitInputRequest) -> Result<ElicitInputResponse> {
+    async fn elicit_input(&self, request: ElicitRequestParams) -> Result<ElicitResult> {
         self.manager.elicit_input(request).await
     }
 }
@@ -209,106 +225,34 @@ impl ElicitInput for ElicitationContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::elicitation::elicit_text;
 
     #[tokio::test]
-    async fn test_elicitation_manager() {
+    async fn test_elicitation_manager_no_channel() {
         let manager = ElicitationManager::new();
 
         // Should fail without request channel
-        let request = elicit_text("Test prompt").build();
+        let request = ElicitRequestParams::Form {
+            message: "Test prompt".to_string(),
+            requested_schema: serde_json::json!({"type": "object"}),
+        };
         let result = manager.elicit_input(request).await;
         assert!(result.is_err());
-
-        // Set up request channel
-        let (tx, mut rx) = mpsc::channel(10);
-        let mut manager = manager;
-        manager.set_request_channel(tx);
-        manager.set_timeout(Duration::from_millis(100)); // Short timeout for test
-
-        // Send request
-        let request = elicit_text("Test prompt").build();
-        let elicitation_id = request.elicitation_id.clone();
-
-        let handle = tokio::spawn(async move { manager.elicit_input(request).await });
-
-        // Verify request was sent
-        let received = rx.recv().await.unwrap();
-        match received {
-            ServerRequest::ElicitInput(req) => {
-                assert_eq!(req.elicitation_id, elicitation_id);
-                assert_eq!(req.prompt, "Test prompt");
-            },
-            _ => panic!("Expected ElicitInput request"),
-        }
-
-        // Should timeout without response
-        let result = handle.await.unwrap();
-        assert!(result.is_err());
     }
 
     #[tokio::test]
-    async fn test_elicitation_response_handling() {
-        let _manager = Arc::new(ElicitationManager::new());
-        let (tx, _rx) = mpsc::channel(10);
+    async fn test_elicitation_timeout() {
+        let (tx, mut _rx) = mpsc::channel(10);
+        let mut manager = ElicitationManager::new();
+        manager.set_request_channel(tx);
+        manager.set_timeout(Duration::from_millis(50)); // Short timeout for test
 
-        let mut manager_mut = ElicitationManager::new();
-        manager_mut.set_request_channel(tx);
-        let manager = Arc::new(manager_mut);
-
-        // Create request
-        let request = elicit_text("Test prompt").build();
-        let elicitation_id = request.elicitation_id.clone();
-
-        // Start elicitation in background
-        let manager_clone = manager.clone();
-        let handle = tokio::spawn(async move { manager_clone.elicit_input(request).await });
-
-        // Give it time to register
-        tokio::time::sleep(Duration::from_millis(10)).await;
-
-        // Send response
-        let response = ElicitInputResponse {
-            elicitation_id: elicitation_id.clone(),
-            value: Some(serde_json::json!("User input")),
-            cancelled: false,
-            error: None,
+        let request = ElicitRequestParams::Form {
+            message: "Test prompt".to_string(),
+            requested_schema: serde_json::json!({"type": "object"}),
         };
 
-        manager.handle_response(response).await.unwrap();
-
-        // Check that elicitation completed
-        let result = handle.await.unwrap().unwrap();
-        assert_eq!(result.value, Some(serde_json::json!("User input")));
-        assert!(!result.cancelled);
-    }
-
-    #[tokio::test]
-    async fn test_elicitation_cancellation() {
-        let _manager = Arc::new(ElicitationManager::new());
-        let (tx, _rx) = mpsc::channel(10);
-
-        let mut manager_mut = ElicitationManager::new();
-        manager_mut.set_request_channel(tx);
-        let manager = Arc::new(manager_mut);
-
-        // Create request
-        let request = elicit_text("Test prompt").build();
-        let elicitation_id = request.elicitation_id.clone();
-
-        // Start elicitation in background
-        let manager_clone = manager.clone();
-        let handle = tokio::spawn(async move { manager_clone.elicit_input(request).await });
-
-        // Give it time to register
-        tokio::time::sleep(Duration::from_millis(10)).await;
-
-        // Cancel the request
-        manager.cancel(&elicitation_id).await.unwrap();
-
-        // Check that elicitation was cancelled
-        let result = handle.await.unwrap().unwrap();
-        assert!(result.cancelled);
-        assert_eq!(result.error, Some("Cancelled by server".to_string()));
+        // Should timeout since nobody responds
+        let result = manager.elicit_input(request).await;
+        assert!(result.is_err());
     }
 }

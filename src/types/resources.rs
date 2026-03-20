@@ -4,6 +4,7 @@
 //! templates, read/list requests, and subscription types.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::content::Content;
 use super::protocol::Cursor;
@@ -29,15 +30,24 @@ pub struct ResourceInfo {
     pub uri: String,
     /// Human-readable name
     pub name: String,
+    /// Optional human-readable title (MCP 2025-11-25)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Resource description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// MIME type
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
+    /// Optional icons (MCP 2025-11-25)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icons: Option<Vec<crate::types::protocol::IconInfo>>,
+    /// Optional content annotations (MCP 2025-11-25)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<crate::types::content::Annotations>,
     /// Optional metadata (e.g., widget descriptor keys for `ChatGPT` MCP Apps)
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    pub meta: Option<serde_json::Map<String, serde_json::Value>>,
+    pub meta: Option<serde_json::Map<String, Value>>,
 }
 
 /// List resources response.
@@ -113,12 +123,24 @@ pub struct ResourceTemplate {
     pub uri_template: String,
     /// Template name
     pub name: String,
+    /// Optional human-readable title (MCP 2025-11-25)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Template description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// MIME type for resources created from this template
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
+    /// Optional icons (MCP 2025-11-25)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icons: Option<Vec<crate::types::protocol::IconInfo>>,
+    /// Optional content annotations (MCP 2025-11-25)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<crate::types::content::Annotations>,
+    /// Optional metadata (MCP 2025-11-25)
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Map<String, Value>>,
 }
 
 /// List resource templates result.
@@ -224,8 +246,11 @@ mod tests {
         let resource = ResourceInfo {
             uri: "file://test.txt".to_string(),
             name: "test.txt".to_string(),
+            title: None,
             description: Some("Test file".to_string()),
             mime_type: Some("text/plain".to_string()),
+            icons: None,
+            annotations: None,
             meta: None,
         };
 
