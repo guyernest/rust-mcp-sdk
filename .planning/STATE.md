@@ -156,6 +156,8 @@ v1.6 decisions:
 - Phase 52 added: Reduce transitive dependencies
 - Phase 53 added: Review TypeScript SDK Updates
 - Phases 54-57 added: Protocol 2025-11-25 Support, Conformance Test Infrastructure, Tower Middleware, Conformance Extension (from Phase 53 gap analysis)
+- Phase 58 added: #[mcp_tool] proc macro (from composition team DX review)
+- Phase 59 added: TypedPrompt with auto-deserialization (from composition team DX review)
 
 ### Pending Todos
 

@@ -113,6 +113,8 @@ See phase details in `.planning/phases/25-*` and `.planning/phases/26-*`
 - [ ] **Phase 55: Tasks with Polling** - Task capability negotiation, TaskStore trait, in-memory + DynamoDB backends, task status polling via streamable HTTP. No SSE-based notifications — polling is the pattern.
 - [ ] **Phase 56: Tower Middleware + DNS Rebinding Protection** - Tower Layer for MCP protocol concerns (host validation, DNS rebinding protection, session management, JSON-RPC routing). Axum convenience adapter. Enterprise security focus.
 - [ ] **Phase 57: Conformance Test Suite** - mcp-tester conformance command with core protocol, tools, resources, prompts, and tasks scenarios. Validates any MCP server against the spec.
+- [ ] **Phase 58: #[mcp_tool] Proc Macro** - Eliminate Box::pin(async move {}) boilerplate on every tool definition. Expand pmcp-macros crate with #[mcp_tool] attribute that accepts async fn directly, handles Arc state injection, and auto-derives input/output schema. Also addresses the foundation Arc cloning ceremony.
+- [ ] **Phase 59: TypedPrompt with Auto-Deserialization** - Typed prompt equivalent of TypedToolWithOutput. Prompt arguments deserialize from HashMap<String, String> into a typed struct automatically via JsonSchema + serde, matching the tool DX pattern.
 
 ## Phase Details
 
@@ -539,3 +541,23 @@ Plans:
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 57 to break down)
+
+### Phase 58: #[mcp_tool] Proc Macro
+
+**Goal:** Expand pmcp-macros crate with `#[mcp_tool]` attribute macro that eliminates `Box::pin(async move {})` boilerplate on tool definitions. Accepts `async fn(input: T, extra: RequestHandlerExtra) -> Result<Output>` directly. Handles Arc state injection for composition scenarios (eliminates the foundation cloning ceremony). Auto-derives input/output JSON schema from types.
+**Requirements**: TOOL-MACRO, STATE-INJECTION
+**Depends on:** Phase 54
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 58 to break down)
+
+### Phase 59: TypedPrompt with Auto-Deserialization
+
+**Goal:** Add `TypedPrompt` analogous to `TypedToolWithOutput` for prompts. Prompt arguments deserialize from `HashMap<String, String>` into a typed struct via JsonSchema + serde, eliminating the manual `args.get("x").ok_or()?.parse()?` pattern on every prompt. Builder-friendly registration via `.prompt("name", TypedPrompt::new(handler))`.
+**Requirements**: TYPED-PROMPT, PROMPT-SCHEMA
+**Depends on:** Phase 54
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 59 to break down)
