@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: in-progress
-stopped_at: Phase 53 complete -- v2.0 roadmap defined
-last_updated: "2026-03-20T05:00:00Z"
-last_activity: 2026-03-20 -- v2.0 roadmap defined with phases 54-57
+stopped_at: Completed 54-01-PLAN.md
+last_updated: "2026-03-20T06:20:00Z"
+last_activity: 2026-03-20 -- Phase 54 Plan 01 complete (protocol split + version 2025-11-25)
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_plans: 4
+  completed_plans: 1
+  percent: 25
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
-**Current focus:** v2.0 Protocol Modernization -- Phase 54 next (protocol 2025-11-25 upgrade)
+**Current focus:** v2.0 Protocol Modernization -- Phase 54 Plan 02 next (new 2025-11-25 types)
 
 ## Current Position
 
-Phase: 54 (protocol-version-2025-11-25) -- Not started
-Plan: 0 of 0
-Status: v2.0 roadmap defined -- phases 54-57 ready for discussion and planning
-Last activity: 2026-03-20 -- v2.0 roadmap defined
+Phase: 54 (protocol-version-2025-11-25-type-cleanup)
+Plan: 1 of 4
+Status: Plan 01 complete -- protocol split + version 2025-11-25. Plan 02 next.
+Last activity: 2026-03-20 -- Phase 54 Plan 01 complete
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [##░░░░░░░░] 25%
 
 ## Shipped Milestones
 
@@ -46,7 +46,7 @@ Progress: [░░░░░░░░░░] 0%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 65 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4)
+- Total plans completed: 66 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 1)
 - Total phases completed: 29
 
 ## Accumulated Context
@@ -118,6 +118,9 @@ v1.6 decisions:
 - [Phase 53-02]: Proposed 4 follow-up phases: Protocol 2025-11-25 (P0), Conformance Tests (P1), Tower Middleware (P2), Advanced Conformance (P2)
 - [Phase 53-02]: 35 gaps identified across 6 domains; 15 areas where Rust leads TypeScript
 - [Phase 53-02]: Deferred WebSocket transport, WASM cross-runtime, auth conformance, TaskMessageQueue per CONTEXT.md
+- [Phase 54-01]: Protocol/mod.rs re-exports all domain types preserving crate::types::protocol::X paths; types/mod.rs uses single pub use protocol::* for flat access
+- [Phase 54-01]: negotiate_protocol_version returns LATEST_PROTOCOL_VERSION (not DEFAULT) for unsupported versions; 3-version rolling window drops 2024 versions
+- [Phase 54-01]: Domain module split pattern: types split by MCP domain (tools, resources, prompts, content, sampling, notifications) with re-export chain
 
 ### Roadmap Evolution
 
@@ -150,6 +153,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-20T04:24:04Z
-Stopped at: Completed 53-02-PLAN.md
-Resume: Phase 53 complete -- gap analysis report produced. Phase 54 (Protocol 2025-11-25) is the recommended next phase.
+Last session: 2026-03-20T06:20:00Z
+Stopped at: Completed 54-01-PLAN.md
+Resume: Plan 01 complete (protocol split + 2025-11-25 version). Plan 02 next (new types: AudioContent, ResourceLink, TaskSchema, IconSchema, expanded capabilities).

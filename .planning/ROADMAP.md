@@ -505,7 +505,7 @@ Plans:
 **Plans:** 4 plans
 
 Plans:
-- [ ] 54-01-PLAN.md — Module split (protocol.rs -> 7 domain sub-modules) + version negotiation update to 2025-11-25
+- [x] 54-01-PLAN.md — Module split (protocol.rs -> 7 domain sub-modules) + version negotiation update to 2025-11-25
 - [ ] 54-02-PLAN.md — Add 33 new types (task, content, sampling, elicitation, capabilities) + fix IncludeContext, LogLevel bugs
 - [ ] 54-03-PLAN.md — Fix internal src/ imports, remove 11 legacy type aliases
 - [ ] 54-04-PLAN.md — Fix external imports (examples/tests/workspace), write MIGRATION.md
