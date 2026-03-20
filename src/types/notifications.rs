@@ -8,6 +8,7 @@ use serde_json::Value;
 
 /// Progress notification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressNotification {
     /// Progress token from the original request
@@ -41,6 +42,12 @@ impl ProgressNotification {
             message,
         }
     }
+
+    /// Set the total value for the operation.
+    pub fn with_total(mut self, total: f64) -> Self {
+        self.total = Some(total);
+        self
+    }
 }
 
 /// Progress token type.
@@ -73,6 +80,7 @@ pub enum ClientNotification {
 
 /// Cancelled notification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct CancelledNotification {
     /// The request ID that was cancelled
@@ -80,6 +88,24 @@ pub struct CancelledNotification {
     /// Optional reason for cancellation
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+impl CancelledNotification {
+    /// Create a cancelled notification for the given request ID.
+    ///
+    /// `reason` defaults to `None`.
+    pub fn new(request_id: super::RequestId) -> Self {
+        Self {
+            request_id,
+            reason: None,
+        }
+    }
+
+    /// Set the reason for cancellation.
+    pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = Some(reason.into());
+        self
+    }
 }
 
 /// Server notification types.
@@ -114,14 +140,23 @@ pub enum ServerNotification {
 
 /// Resource updated notification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceUpdatedParams {
     /// Resource URI that was updated
     pub uri: String,
 }
 
+impl ResourceUpdatedParams {
+    /// Create a resource updated notification for the given URI.
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self { uri: uri.into() }
+    }
+}
+
 /// Log message notification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct LogMessageParams {
     /// Log level
@@ -134,6 +169,32 @@ pub struct LogMessageParams {
     /// Additional data
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
+}
+
+impl LogMessageParams {
+    /// Create a log message with level and message.
+    ///
+    /// `logger` and `data` default to `None`.
+    pub fn new(level: LoggingLevel, message: impl Into<String>) -> Self {
+        Self {
+            level,
+            logger: None,
+            message: message.into(),
+            data: None,
+        }
+    }
+
+    /// Set the logger name/category.
+    pub fn with_logger(mut self, logger: impl Into<String>) -> Self {
+        self.logger = Some(logger.into());
+        self
+    }
+
+    /// Set additional data.
+    pub fn with_data(mut self, data: Value) -> Self {
+        self.data = Some(data);
+        self
+    }
 }
 
 /// Combined notification types (client or server).
@@ -185,12 +246,13 @@ mod tests {
 
     #[test]
     fn test_all_notification_types() {
-        let progress = ServerNotification::Progress(ProgressNotification {
-            progress_token: ProgressToken::String("token123".to_string()),
-            progress: 50.0,
-            total: None,
-            message: Some("Processing...".to_string()),
-        });
+        let progress = ServerNotification::Progress(
+            ProgressNotification::new(
+                ProgressToken::String("token123".to_string()),
+                50.0,
+                Some("Processing...".to_string()),
+            ),
+        );
         let json = serde_json::to_value(&progress).unwrap();
         assert_eq!(json["method"], "notifications/progress");
 
@@ -210,18 +272,15 @@ mod tests {
         let json = serde_json::to_value(&roots_changed).unwrap();
         assert_eq!(json["method"], "notifications/roots/list_changed");
 
-        let resource_updated = ServerNotification::ResourceUpdated(ResourceUpdatedParams {
-            uri: "file://test.txt".to_string(),
-        });
+        let resource_updated =
+            ServerNotification::ResourceUpdated(ResourceUpdatedParams::new("file://test.txt"));
         let json = serde_json::to_value(&resource_updated).unwrap();
         assert_eq!(json["method"], "notifications/resources/updated");
 
-        let log_msg = ServerNotification::LogMessage(LogMessageParams {
-            level: LoggingLevel::Info,
-            logger: None,
-            message: "Test log message".to_string(),
-            data: Some(json!({"extra": "data"})),
-        });
+        let log_msg = ServerNotification::LogMessage(
+            LogMessageParams::new(LoggingLevel::Info, "Test log message")
+                .with_data(json!({"extra": "data"})),
+        );
         let json = serde_json::to_value(&log_msg).unwrap();
         assert_eq!(json["method"], "notifications/message");
     }
@@ -261,10 +320,8 @@ mod tests {
     fn test_cancelled_notification() {
         use crate::types::RequestId;
 
-        let cancelled = CancelledNotification {
-            request_id: RequestId::Number(123),
-            reason: Some("User cancelled".to_string()),
-        };
+        let cancelled =
+            CancelledNotification::new(RequestId::Number(123)).with_reason("User cancelled");
 
         let json = serde_json::to_value(&cancelled).unwrap();
         assert_eq!(json["requestId"], 123);
@@ -276,15 +333,9 @@ mod tests {
         use crate::types::tasks::{Task, TaskStatus as TStatus, TaskStatusNotification};
 
         let notif = ServerNotification::TaskStatus(TaskStatusNotification {
-            task: Task {
-                task_id: "t-789".to_string(),
-                status: TStatus::Completed,
-                ttl: None,
-                created_at: "2025-11-25T00:00:00Z".to_string(),
-                last_updated_at: "2025-11-25T00:05:00Z".to_string(),
-                poll_interval: None,
-                status_message: Some("Done".to_string()),
-            },
+            task: Task::new("t-789", TStatus::Completed)
+                .with_timestamps("2025-11-25T00:00:00Z", "2025-11-25T00:05:00Z")
+                .with_status_message("Done"),
         });
         let json = serde_json::to_value(&notif).unwrap();
         assert_eq!(json["method"], "notifications/tasks/status");

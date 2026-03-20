@@ -9,10 +9,11 @@ use serde::{Deserialize, Serialize};
 pub const RELATED_TASK_META_KEY: &str = "io.modelcontextprotocol/related-task";
 
 /// Task status (5-value enum).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
     /// Task is actively being worked on
+    #[default]
     Working,
     /// Task requires user input to continue
     InputRequired,
@@ -25,7 +26,23 @@ pub enum TaskStatus {
 }
 
 /// A task resource representing an in-progress or completed operation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Backward Compatibility
+///
+/// This struct is `#[non_exhaustive]`. Use the constructor to remain
+/// forward-compatible:
+///
+/// ```rust
+/// use pmcp::types::tasks::{Task, TaskStatus};
+///
+/// let task = Task::new("t-123", TaskStatus::Working)
+///     .with_timestamps("2025-11-25T00:00:00Z", "2025-11-25T00:01:00Z")
+///     .with_ttl(60000)
+///     .with_poll_interval(5000)
+///     .with_status_message("Processing...");
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct Task {
     /// Unique task identifier
@@ -47,8 +64,56 @@ pub struct Task {
     pub status_message: Option<String>,
 }
 
+impl Task {
+    /// Create a task with the given ID and status.
+    ///
+    /// Timestamps default to empty strings (caller should set via
+    /// [`Task::with_timestamps`]). Optional fields default to `None`.
+    pub fn new(task_id: impl Into<String>, status: TaskStatus) -> Self {
+        Self {
+            task_id: task_id.into(),
+            status,
+            ttl: None,
+            created_at: String::new(),
+            last_updated_at: String::new(),
+            poll_interval: None,
+            status_message: None,
+        }
+    }
+
+    /// Set the time-to-live in milliseconds.
+    pub fn with_ttl(mut self, ttl: u64) -> Self {
+        self.ttl = Some(ttl);
+        self
+    }
+
+    /// Set both creation and last-updated timestamps.
+    pub fn with_timestamps(
+        mut self,
+        created_at: impl Into<String>,
+        last_updated_at: impl Into<String>,
+    ) -> Self {
+        self.created_at = created_at.into();
+        self.last_updated_at = last_updated_at.into();
+        self
+    }
+
+    /// Set the suggested polling interval in milliseconds.
+    pub fn with_poll_interval(mut self, interval: u64) -> Self {
+        self.poll_interval = Some(interval);
+        self
+    }
+
+    /// Set a human-readable status message.
+    pub fn with_status_message(mut self, message: impl Into<String>) -> Self {
+        self.status_message = Some(message.into());
+        self
+    }
+}
+
 /// Parameters for task creation (augments tools/call).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct TaskCreationParams {
     /// Time-to-live in milliseconds
@@ -57,6 +122,25 @@ pub struct TaskCreationParams {
     /// Suggested polling interval in milliseconds
     #[serde(skip_serializing_if = "Option::is_none")]
     pub poll_interval: Option<u64>,
+}
+
+impl TaskCreationParams {
+    /// Create empty task creation parameters.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the time-to-live in milliseconds.
+    pub fn with_ttl(mut self, ttl: u64) -> Self {
+        self.ttl = Some(ttl);
+        self
+    }
+
+    /// Set the suggested polling interval in milliseconds.
+    pub fn with_poll_interval(mut self, interval: u64) -> Self {
+        self.poll_interval = Some(interval);
+        self
+    }
 }
 
 /// Task metadata for related-task references.
@@ -69,10 +153,18 @@ pub struct RelatedTaskMetadata {
 
 /// Result of creating a task.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct CreateTaskResult {
     /// The created task
     pub task: Task,
+}
+
+impl CreateTaskResult {
+    /// Create a task creation result.
+    pub fn new(task: Task) -> Self {
+        Self { task }
+    }
 }
 
 /// Task status notification.
@@ -93,10 +185,18 @@ pub struct GetTaskRequest {
 
 /// Get task result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct GetTaskResult {
     /// The requested task
     pub task: Task,
+}
+
+impl GetTaskResult {
+    /// Create a get task result.
+    pub fn new(task: Task) -> Self {
+        Self { task }
+    }
 }
 
 /// Get task payload request.
@@ -117,7 +217,8 @@ pub struct ListTasksRequest {
 }
 
 /// List tasks result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct ListTasksResult {
     /// List of tasks
@@ -125,6 +226,22 @@ pub struct ListTasksResult {
     /// Pagination cursor for next page
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+}
+
+impl ListTasksResult {
+    /// Create a list tasks result.
+    pub fn new(tasks: Vec<Task>) -> Self {
+        Self {
+            tasks,
+            next_cursor: None,
+        }
+    }
+
+    /// Set the pagination cursor for the next page.
+    pub fn with_next_cursor(mut self, cursor: impl Into<String>) -> Self {
+        self.next_cursor = Some(cursor.into());
+        self
+    }
 }
 
 /// Cancel task request.
@@ -137,10 +254,18 @@ pub struct CancelTaskRequest {
 
 /// Cancel task result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct CancelTaskResult {
     /// The cancelled task
     pub task: Task,
+}
+
+impl CancelTaskResult {
+    /// Create a cancel task result.
+    pub fn new(task: Task) -> Self {
+        Self { task }
+    }
 }
 
 #[cfg(test)]
@@ -171,15 +296,11 @@ mod tests {
 
     #[test]
     fn task_roundtrip() {
-        let task = Task {
-            task_id: "t-123".to_string(),
-            status: TaskStatus::Working,
-            ttl: Some(60000),
-            created_at: "2025-11-25T00:00:00Z".to_string(),
-            last_updated_at: "2025-11-25T00:01:00Z".to_string(),
-            poll_interval: Some(5000),
-            status_message: Some("Processing...".to_string()),
-        };
+        let task = Task::new("t-123", TaskStatus::Working)
+            .with_timestamps("2025-11-25T00:00:00Z", "2025-11-25T00:01:00Z")
+            .with_ttl(60000)
+            .with_poll_interval(5000)
+            .with_status_message("Processing...");
         let json = serde_json::to_value(&task).unwrap();
         assert_eq!(json["taskId"], "t-123");
         assert_eq!(json["status"], "working");
@@ -194,17 +315,10 @@ mod tests {
 
     #[test]
     fn create_task_result_roundtrip() {
-        let result = CreateTaskResult {
-            task: Task {
-                task_id: "t-456".to_string(),
-                status: TaskStatus::Completed,
-                ttl: None,
-                created_at: "2025-11-25T00:00:00Z".to_string(),
-                last_updated_at: "2025-11-25T00:05:00Z".to_string(),
-                poll_interval: None,
-                status_message: None,
-            },
-        };
+        let result = CreateTaskResult::new(
+            Task::new("t-456", TaskStatus::Completed)
+                .with_timestamps("2025-11-25T00:00:00Z", "2025-11-25T00:05:00Z"),
+        );
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["task"]["taskId"], "t-456");
         assert_eq!(json["task"]["status"], "completed");

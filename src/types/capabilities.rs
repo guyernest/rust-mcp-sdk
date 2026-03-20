@@ -22,6 +22,7 @@ use std::collections::HashMap;
 /// };
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct ClientCapabilities {
     /// Sampling capabilities (for LLM providers)
@@ -47,6 +48,7 @@ pub struct ClientCapabilities {
 
 /// Server capabilities advertised during initialization.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct ServerCapabilities {
     /// Tool providing capabilities

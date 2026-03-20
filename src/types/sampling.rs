@@ -10,6 +10,7 @@ use super::content::Role;
 
 /// Model preferences for sampling.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct ModelPreferences {
     /// Hints for model selection
@@ -26,8 +27,40 @@ pub struct ModelPreferences {
     pub intelligence_priority: Option<f64>,
 }
 
+impl ModelPreferences {
+    /// Create empty model preferences.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the cost priority (0-1, higher = more important).
+    pub fn with_cost_priority(mut self, priority: f64) -> Self {
+        self.cost_priority = Some(priority);
+        self
+    }
+
+    /// Set the speed priority (0-1, higher = more important).
+    pub fn with_speed_priority(mut self, priority: f64) -> Self {
+        self.speed_priority = Some(priority);
+        self
+    }
+
+    /// Set the intelligence priority (0-1, higher = more important).
+    pub fn with_intelligence_priority(mut self, priority: f64) -> Self {
+        self.intelligence_priority = Some(priority);
+        self
+    }
+
+    /// Set model selection hints.
+    pub fn with_hints(mut self, hints: Vec<ModelHint>) -> Self {
+        self.hints = Some(hints);
+        self
+    }
+}
+
 /// Model hint for sampling.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct ModelHint {
     /// Model name/identifier hint
@@ -35,13 +68,46 @@ pub struct ModelHint {
     pub name: Option<String>,
 }
 
+impl ModelHint {
+    /// Create a model hint with the given name.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: Some(name.into()),
+        }
+    }
+}
+
 /// Tool choice configuration for sampling (MCP 2025-11-25).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct ToolChoice {
     /// Tool choice mode
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<ToolChoiceMode>,
+}
+
+impl ToolChoice {
+    /// Create a tool choice with auto mode (model decides).
+    pub fn auto() -> Self {
+        Self {
+            mode: Some(ToolChoiceMode::Auto),
+        }
+    }
+
+    /// Create a tool choice with required mode (model must use a tool).
+    pub fn required() -> Self {
+        Self {
+            mode: Some(ToolChoiceMode::Required),
+        }
+    }
+
+    /// Create a tool choice with none mode (model must not use tools).
+    pub fn none() -> Self {
+        Self {
+            mode: Some(ToolChoiceMode::None),
+        }
+    }
 }
 
 /// Tool choice mode.
@@ -129,6 +195,7 @@ pub enum SamplingMessageContent {
 
 /// Create message parameters (for server requests).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct CreateMessageParams {
     /// Messages to sample from
@@ -162,8 +229,66 @@ pub struct CreateMessageParams {
     pub tool_choice: Option<ToolChoice>,
 }
 
+impl CreateMessageParams {
+    /// Create message parameters with the given messages.
+    ///
+    /// All optional fields default to `None`, `include_context` defaults
+    /// to [`IncludeContext::None`].
+    pub fn new(messages: Vec<SamplingMessage>) -> Self {
+        Self {
+            messages,
+            model_preferences: None,
+            system_prompt: None,
+            include_context: IncludeContext::default(),
+            temperature: None,
+            max_tokens: None,
+            stop_sequences: None,
+            metadata: None,
+            tools: None,
+            tool_choice: None,
+        }
+    }
+
+    /// Set model preferences.
+    pub fn with_model_preferences(mut self, prefs: ModelPreferences) -> Self {
+        self.model_preferences = Some(prefs);
+        self
+    }
+
+    /// Set the system prompt.
+    pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.system_prompt = Some(prompt.into());
+        self
+    }
+
+    /// Set the temperature (0-1).
+    pub fn with_temperature(mut self, temp: f64) -> Self {
+        self.temperature = Some(temp);
+        self
+    }
+
+    /// Set the maximum number of tokens to generate.
+    pub fn with_max_tokens(mut self, tokens: u32) -> Self {
+        self.max_tokens = Some(tokens);
+        self
+    }
+
+    /// Set tool definitions available to the model.
+    pub fn with_tools(mut self, tools: Vec<super::tools::ToolInfo>) -> Self {
+        self.tools = Some(tools);
+        self
+    }
+
+    /// Set the tool choice configuration.
+    pub fn with_tool_choice(mut self, choice: ToolChoice) -> Self {
+        self.tool_choice = Some(choice);
+        self
+    }
+}
+
 /// Create message result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct CreateMessageResult {
     /// The content generated by the model
@@ -178,11 +303,38 @@ pub struct CreateMessageResult {
     pub stop_reason: Option<String>,
 }
 
+impl CreateMessageResult {
+    /// Create a message result with content and model.
+    ///
+    /// `usage` and `stop_reason` default to `None`.
+    pub fn new(content: super::content::Content, model: impl Into<String>) -> Self {
+        Self {
+            content,
+            model: model.into(),
+            usage: None,
+            stop_reason: None,
+        }
+    }
+
+    /// Set the token usage information.
+    pub fn with_usage(mut self, usage: TokenUsage) -> Self {
+        self.usage = Some(usage);
+        self
+    }
+
+    /// Set the stop reason.
+    pub fn with_stop_reason(mut self, reason: impl Into<String>) -> Self {
+        self.stop_reason = Some(reason.into());
+        self
+    }
+}
+
 /// Sampling result with tool use support (MCP 2025-11-25).
 ///
 /// Extends `CreateMessageResult` with array content that can include
 /// tool use and tool result items alongside standard content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct CreateMessageResultWithTools {
     /// The model used for sampling
@@ -199,8 +351,40 @@ pub struct CreateMessageResultWithTools {
     pub meta: Option<serde_json::Map<String, Value>>,
 }
 
+impl CreateMessageResultWithTools {
+    /// Create a sampling result with tool support.
+    ///
+    /// `stop_reason` and `meta` default to `None`.
+    pub fn new(
+        model: impl Into<String>,
+        role: Role,
+        content: Vec<SamplingMessageContent>,
+    ) -> Self {
+        Self {
+            model: model.into(),
+            stop_reason: None,
+            role,
+            content,
+            meta: None,
+        }
+    }
+
+    /// Set the stop reason.
+    pub fn with_stop_reason(mut self, reason: impl Into<String>) -> Self {
+        self.stop_reason = Some(reason.into());
+        self
+    }
+
+    /// Set metadata.
+    pub fn with_meta(mut self, meta: serde_json::Map<String, Value>) -> Self {
+        self.meta = Some(meta);
+        self
+    }
+}
+
 /// Token usage information.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct TokenUsage {
     /// Input tokens used
@@ -211,14 +395,33 @@ pub struct TokenUsage {
     pub total_tokens: u32,
 }
 
+impl TokenUsage {
+    /// Create token usage information.
+    pub fn new(input_tokens: u32, output_tokens: u32, total_tokens: u32) -> Self {
+        Self {
+            input_tokens,
+            output_tokens,
+            total_tokens,
+        }
+    }
+}
+
 /// Sampling message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct SamplingMessage {
     /// Message role
     pub role: Role,
     /// Message content (expanded to support tool use in MCP 2025-11-25)
     pub content: SamplingMessageContent,
+}
+
+impl SamplingMessage {
+    /// Create a sampling message.
+    pub fn new(role: Role, content: SamplingMessageContent) -> Self {
+        Self { role, content }
+    }
 }
 
 /// Context to include in sampling.
@@ -266,26 +469,25 @@ mod tests {
 
     #[test]
     fn tool_choice_serialization() {
-        let choice = ToolChoice {
-            mode: Some(ToolChoiceMode::Auto),
-        };
+        let choice = ToolChoice::auto();
         let json = serde_json::to_value(&choice).unwrap();
         assert_eq!(json["mode"], "auto");
 
-        let choice2 = ToolChoice {
-            mode: Some(ToolChoiceMode::Required),
-        };
+        let choice2 = ToolChoice::required();
         let json2 = serde_json::to_value(&choice2).unwrap();
         assert_eq!(json2["mode"], "required");
+
+        let choice3 = ToolChoice::none();
+        let json3 = serde_json::to_value(&choice3).unwrap();
+        assert_eq!(json3["mode"], "none");
     }
 
     #[test]
     fn create_message_result_with_tools_roundtrip() {
-        let result = CreateMessageResultWithTools {
-            model: "claude-3".to_string(),
-            stop_reason: Some("end_turn".to_string()),
-            role: Role::Assistant,
-            content: vec![
+        let result = CreateMessageResultWithTools::new(
+            "claude-3",
+            Role::Assistant,
+            vec![
                 SamplingMessageContent::Text {
                     text: "I'll call the tool.".to_string(),
                     meta: None,
@@ -297,8 +499,9 @@ mod tests {
                     meta: None,
                 },
             ],
-            meta: None,
-        };
+        )
+        .with_stop_reason("end_turn");
+
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["model"], "claude-3");
         assert_eq!(json["role"], "assistant");
@@ -314,15 +517,15 @@ mod tests {
 
     #[test]
     fn sampling_message_with_tool_use_content() {
-        let msg = SamplingMessage {
-            role: Role::Assistant,
-            content: SamplingMessageContent::ToolUse {
+        let msg = SamplingMessage::new(
+            Role::Assistant,
+            SamplingMessageContent::ToolUse {
                 name: "calculate".to_string(),
                 id: "tu-2".to_string(),
                 input: json!({"expression": "2+2"}),
                 meta: None,
             },
-        };
+        );
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["role"], "assistant");
         assert_eq!(json["content"]["type"], "tool_use");

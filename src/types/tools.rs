@@ -136,11 +136,25 @@ impl ToolAnnotations {
 
 /// Tool execution metadata declaring task support level (MCP 2025-11-25).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct ToolExecution {
     /// Task support level for this tool
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_support: Option<TaskSupport>,
+}
+
+impl ToolExecution {
+    /// Create empty tool execution metadata.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the task support level.
+    pub fn with_task_support(mut self, support: TaskSupport) -> Self {
+        self.task_support = Some(support);
+        self
+    }
 }
 
 /// Task support level for a tool.
@@ -417,6 +431,7 @@ impl ListToolsResult {
 
 /// Tool call request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct CallToolRequest {
     /// Tool name to invoke
@@ -435,6 +450,20 @@ pub struct CallToolRequest {
     /// crate dependency (`pmcp-tasks` depends on `pmcp`).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub task: Option<Value>,
+}
+
+impl CallToolRequest {
+    /// Create a tool call request.
+    ///
+    /// `_meta` and `task` default to `None`.
+    pub fn new(name: impl Into<String>, arguments: Value) -> Self {
+        Self {
+            name: name.into(),
+            arguments,
+            _meta: None,
+            task: None,
+        }
+    }
 }
 
 /// Tool call result.
@@ -474,6 +503,7 @@ pub struct CallToolRequest {
 /// };
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct CallToolResult {
     /// Tool execution result (model-focused narration).
@@ -717,9 +747,7 @@ mod tests {
             Some("A task-enabled tool".to_string()),
             json!({"type": "object"}),
         );
-        tool.execution = Some(ToolExecution {
-            task_support: Some(TaskSupport::Required),
-        });
+        tool.execution = Some(ToolExecution::new().with_task_support(TaskSupport::Required));
 
         let json = serde_json::to_value(&tool).unwrap();
         assert_eq!(json["name"], "task-tool");
@@ -728,21 +756,15 @@ mod tests {
 
     #[test]
     fn test_tool_execution_serialization() {
-        let exec = ToolExecution {
-            task_support: Some(TaskSupport::Required),
-        };
+        let exec = ToolExecution::new().with_task_support(TaskSupport::Required);
         let json = serde_json::to_value(&exec).unwrap();
         assert_eq!(json["taskSupport"], "required");
 
-        let exec2 = ToolExecution {
-            task_support: Some(TaskSupport::Optional),
-        };
+        let exec2 = ToolExecution::new().with_task_support(TaskSupport::Optional);
         let json2 = serde_json::to_value(&exec2).unwrap();
         assert_eq!(json2["taskSupport"], "optional");
 
-        let exec3 = ToolExecution {
-            task_support: Some(TaskSupport::Forbidden),
-        };
+        let exec3 = ToolExecution::new().with_task_support(TaskSupport::Forbidden);
         let json3 = serde_json::to_value(&exec3).unwrap();
         assert_eq!(json3["taskSupport"], "forbidden");
     }
