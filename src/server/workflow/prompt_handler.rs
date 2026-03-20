@@ -30,9 +30,7 @@ use crate::error::Result;
 use crate::server::cancellation::RequestHandlerExtra;
 use crate::server::middleware_executor::MiddlewareExecutor;
 use crate::server::{PromptHandler, ResourceHandler, ToolHandler};
-use crate::types::{
-    Content, GetPromptResult, PromptArgument, PromptInfo, PromptMessage, Role,
-};
+use crate::types::{Content, GetPromptResult, PromptArgument, PromptInfo, PromptMessage, Role};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -543,9 +541,7 @@ impl WorkflowPromptHandler {
                         text_content.push_str(&format!("[Resource: {}]", uri));
                     }
                 },
-                Content::Image { .. }
-                | Content::Audio { .. }
-                | Content::ResourceLink { .. } => {
+                Content::Image { .. } | Content::Audio { .. } | Content::ResourceLink { .. } => {
                     // Skip non-text content - we only embed text
                 },
             }

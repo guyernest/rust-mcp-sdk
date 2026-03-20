@@ -19,7 +19,6 @@ pub struct ListPromptsRequest {
     pub cursor: Cursor,
 }
 
-
 /// Prompt information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -169,7 +168,6 @@ pub struct GetPromptRequest {
     #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
     pub _meta: Option<RequestMeta>,
 }
-
 
 /// Get prompt result.
 ///

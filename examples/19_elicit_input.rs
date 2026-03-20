@@ -74,9 +74,9 @@ impl ToolHandler for InteractiveConfigTool {
                     "message": format!("Project '{}' configured successfully", name)
                 }))
             },
-            ElicitAction::Decline | ElicitAction::Cancel => Ok(
-                json!({"status": "cancelled", "message": "Configuration cancelled by user"}),
-            ),
+            ElicitAction::Decline | ElicitAction::Cancel => {
+                Ok(json!({"status": "cancelled", "message": "Configuration cancelled by user"}))
+            },
         }
     }
 }
@@ -107,10 +107,7 @@ impl ToolHandler for SensitiveDataTool {
         });
 
         let request = ElicitRequestParams::Form {
-            message: format!(
-                "Are you sure you want to {} sensitive data?",
-                operation
-            ),
+            message: format!("Are you sure you want to {} sensitive data?", operation),
             requested_schema: schema,
         };
 

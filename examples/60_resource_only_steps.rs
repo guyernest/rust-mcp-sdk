@@ -27,8 +27,8 @@ use async_trait::async_trait;
 use pmcp::server::workflow::dsl::field;
 use pmcp::server::workflow::{SequentialWorkflow, ToolHandle, WorkflowStep};
 use pmcp::{
-    Content, ListResourcesResult, ReadResourceResult, RequestHandlerExtra,
-    ResourceHandler, ResourceInfo, Result, Server, SimpleTool,
+    Content, ListResourcesResult, ReadResourceResult, RequestHandlerExtra, ResourceHandler,
+    ResourceInfo, Result, Server, SimpleTool,
 };
 use serde_json::json;
 

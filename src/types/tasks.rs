@@ -169,10 +169,7 @@ mod tests {
             serde_json::to_value(TaskStatus::Completed).unwrap(),
             "completed"
         );
-        assert_eq!(
-            serde_json::to_value(TaskStatus::Failed).unwrap(),
-            "failed"
-        );
+        assert_eq!(serde_json::to_value(TaskStatus::Failed).unwrap(), "failed");
         assert_eq!(
             serde_json::to_value(TaskStatus::Cancelled).unwrap(),
             "cancelled"

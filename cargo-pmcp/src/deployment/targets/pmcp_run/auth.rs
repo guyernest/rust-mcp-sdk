@@ -199,11 +199,11 @@ async fn fetch_pmcp_config() -> Result<PmcpRunConfig> {
                 }
 
                 return Ok(config);
-            }
+            },
             Err(e) => {
                 last_err = Some(e.into());
                 continue;
-            }
+            },
         }
     }
 
@@ -261,7 +261,7 @@ pub async fn get_pmcp_config() -> Result<PmcpRunConfig> {
                 api_type: config.api_type,
                 version: config.version,
             })
-        }
+        },
         Err(e) => {
             // Discovery failed - check if we have partial env vars
             if env_client_id.is_some() || env_domain.is_some() {
@@ -271,8 +271,7 @@ pub async fn get_pmcp_config() -> Result<PmcpRunConfig> {
                 );
                 Ok(PmcpRunConfig {
                     cognito_client_id: env_client_id.unwrap_or_default(),
-                    cognito_domain: env_domain
-                        .unwrap_or_else(|| DEFAULT_AUTH_DOMAIN.to_string()),
+                    cognito_domain: env_domain.unwrap_or_else(|| DEFAULT_AUTH_DOMAIN.to_string()),
                     graphql_url: std::env::var("PMCP_RUN_GRAPHQL_URL").ok(),
                     mcp_url: None,
                     api_type: Some("graphql".to_string()),
@@ -293,7 +292,7 @@ pub async fn get_pmcp_config() -> Result<PmcpRunConfig> {
                     e
                 )
             }
-        }
+        },
     }
 }
 

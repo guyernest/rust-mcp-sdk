@@ -144,9 +144,7 @@ mod tests {
 
         let roundtrip: ElicitRequestParams = serde_json::from_value(json).unwrap();
         match roundtrip {
-            ElicitRequestParams::Url {
-                elicitation_id, ..
-            } => {
+            ElicitRequestParams::Url { elicitation_id, .. } => {
                 assert_eq!(elicitation_id, "auth-123");
             },
             _ => panic!("Expected Url variant"),

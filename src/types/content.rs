@@ -6,7 +6,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-
 /// Content annotations providing metadata hints (MCP 2025-11-25).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

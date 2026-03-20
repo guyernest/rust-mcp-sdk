@@ -1790,7 +1790,9 @@ impl ServerTester {
                                         println!("      Text: {}", preview);
                                     }
                                 },
-                                pmcp::types::Content::Audio { mime_type, data, .. } => {
+                                pmcp::types::Content::Audio {
+                                    mime_type, data, ..
+                                } => {
                                     println!("      Content type: Audio");
                                     println!("      MIME type: {}", mime_type);
                                     println!("      Data size: {} bytes (base64)", data.len());
@@ -1872,7 +1874,9 @@ impl ServerTester {
                                     }
                                 }
                             },
-                            pmcp::types::Content::Audio { data, mime_type, .. } => {
+                            pmcp::types::Content::Audio {
+                                data, mime_type, ..
+                            } => {
                                 if data.is_empty() {
                                     warnings.push(format!(
                                         "Resource '{}' has empty audio data",

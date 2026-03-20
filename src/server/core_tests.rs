@@ -8,8 +8,8 @@ mod tests {
     use crate::server::cancellation::RequestHandlerExtra;
     use crate::server::core::{ProtocolHandler, ServerCore};
     use crate::server::{PromptHandler, ResourceHandler, ToolHandler};
-    use crate::types::{ResourceInfo, Role};
     use crate::types::*;
+    use crate::types::{ResourceInfo, Role};
     use async_trait::async_trait;
     use serde_json::{json, Value};
     use std::collections::HashMap;

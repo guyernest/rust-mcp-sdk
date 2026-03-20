@@ -385,8 +385,8 @@ mod tests {
         CallToolRequest, CancelledNotification, ClientCapabilities, CompleteRequest,
         CompletionArgument, CompletionReference, GetPromptRequest, Implementation,
         InitializeRequest, ListPromptsRequest, ListResourceTemplatesRequest, ListResourcesRequest,
-        ListToolsRequest, LoggingLevel, ProgressNotification, ProgressToken,
-        ReadResourceRequest, SubscribeRequest, UnsubscribeRequest,
+        ListToolsRequest, LoggingLevel, ProgressNotification, ProgressToken, ReadResourceRequest,
+        SubscribeRequest, UnsubscribeRequest,
     };
     use serde_json::json;
 

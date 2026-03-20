@@ -196,7 +196,6 @@ pub struct CreateMessageParams {
     pub tool_choice: Option<ToolChoice>,
 }
 
-
 /// Create message result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -280,10 +279,7 @@ mod tests {
             serde_json::to_value(IncludeContext::AllServers).unwrap(),
             "allServers"
         );
-        assert_eq!(
-            serde_json::to_value(IncludeContext::None).unwrap(),
-            "none"
-        );
+        assert_eq!(serde_json::to_value(IncludeContext::None).unwrap(), "none");
         assert_eq!(
             serde_json::to_value(IncludeContext::ThisServer).unwrap(),
             "thisServer"

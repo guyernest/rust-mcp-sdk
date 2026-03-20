@@ -815,11 +815,11 @@ impl ServerCore {
                                 .tool_infos
                                 .get(&req.name)
                                 .and_then(|m| m.execution.as_ref());
-                            let needs_task = req.task.is_some()
-                                || {
-                                    let exec_value = tool_execution.and_then(|e| serde_json::to_value(e).ok());
-                                    task_router.tool_requires_task(&req.name, exec_value.as_ref())
-                                };
+                            let needs_task = req.task.is_some() || {
+                                let exec_value =
+                                    tool_execution.and_then(|e| serde_json::to_value(e).ok());
+                                task_router.tool_requires_task(&req.name, exec_value.as_ref())
+                            };
                             if needs_task {
                                 let owner_id = self
                                     .resolve_task_owner(auth_context.as_ref())
@@ -936,7 +936,10 @@ impl ServerCore {
                                 .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
-                                .handle_tasks_get(serde_json::to_value(&params).unwrap_or_default(), &owner_id)
+                                .handle_tasks_get(
+                                    serde_json::to_value(&params).unwrap_or_default(),
+                                    &owner_id,
+                                )
                                 .await
                             {
                                 Ok(result) => Self::success_response(id, result),
@@ -953,7 +956,10 @@ impl ServerCore {
                                 .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
-                                .handle_tasks_result(serde_json::to_value(&params).unwrap_or_default(), &owner_id)
+                                .handle_tasks_result(
+                                    serde_json::to_value(&params).unwrap_or_default(),
+                                    &owner_id,
+                                )
                                 .await
                             {
                                 Ok(result) => Self::success_response(id, result),
@@ -970,7 +976,10 @@ impl ServerCore {
                                 .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
-                                .handle_tasks_list(serde_json::to_value(&params).unwrap_or_default(), &owner_id)
+                                .handle_tasks_list(
+                                    serde_json::to_value(&params).unwrap_or_default(),
+                                    &owner_id,
+                                )
                                 .await
                             {
                                 Ok(result) => Self::success_response(id, result),
@@ -987,7 +996,10 @@ impl ServerCore {
                                 .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
-                                .handle_tasks_cancel(serde_json::to_value(&params).unwrap_or_default(), &owner_id)
+                                .handle_tasks_cancel(
+                                    serde_json::to_value(&params).unwrap_or_default(),
+                                    &owner_id,
+                                )
                                 .await
                             {
                                 Ok(result) => Self::success_response(id, result),

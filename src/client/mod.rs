@@ -997,10 +997,7 @@ impl<T: Transport> Client<T> {
     /// - The server doesn't support sampling
     /// - The request parameters are invalid
     /// - Network or protocol errors occur
-    pub async fn create_message(
-        &self,
-        params: CreateMessageParams,
-    ) -> Result<CreateMessageResult> {
+    pub async fn create_message(&self, params: CreateMessageParams) -> Result<CreateMessageResult> {
         self.ensure_initialized()?;
         self.assert_capability("sampling", "sampling/createMessage")?;
 

@@ -5,8 +5,8 @@
 
 pub mod version;
 
-use serde::{Deserialize, Serialize};
 use crate::types::capabilities::{ClientCapabilities, ServerCapabilities};
+use serde::{Deserialize, Serialize};
 
 // Re-export version constants and negotiation function.
 pub use version::*;
@@ -136,7 +136,6 @@ pub struct InitializeRequest {
     /// Client implementation info
     pub client_info: Implementation,
 }
-
 
 /// Initialize response.
 #[derive(Debug, Clone, Serialize, Deserialize)]

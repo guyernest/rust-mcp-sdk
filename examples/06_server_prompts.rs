@@ -7,9 +7,7 @@
 //! - Prompt templates and formatting
 
 use pmcp::{
-    types::{
-        capabilities::ServerCapabilities, Content, GetPromptResult, PromptMessage, Role,
-    },
+    types::{capabilities::ServerCapabilities, Content, GetPromptResult, PromptMessage, Role},
     Server, SimplePrompt, SyncPrompt,
 };
 use std::collections::HashMap;

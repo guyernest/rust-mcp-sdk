@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use pmcp::{
     types::{
-        capabilities::ServerCapabilities,
-        Content, CreateMessageParams, CreateMessageResult, SamplingMessageContent, TokenUsage,
+        capabilities::ServerCapabilities, Content, CreateMessageParams, CreateMessageResult,
+        SamplingMessageContent, TokenUsage,
     },
     SamplingHandler, Server,
 };

@@ -19,7 +19,6 @@ pub struct ListResourcesRequest {
     pub cursor: Cursor,
 }
 
-
 /// Resource information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -100,7 +99,6 @@ pub struct ReadResourceRequest {
     #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec
     pub _meta: Option<RequestMeta>,
 }
-
 
 /// List resource templates request.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -126,7 +126,9 @@ async fn main() {
     // 4. Poll task status
     println!("\nStep 2: Poll task status...");
     let get_req = Request::Client(Box::new(ClientRequest::TasksGet(
-        pmcp::types::GetTaskRequest { task_id: task_id.to_string() },
+        pmcp::types::GetTaskRequest {
+            task_id: task_id.to_string(),
+        },
     )));
     let response = server
         .handle_request(RequestId::from(2i64), get_req, None)
@@ -172,7 +174,9 @@ async fn main() {
     // 6. Poll again to see completion
     println!("\nStep 4: Poll after completion...");
     let get_req = Request::Client(Box::new(ClientRequest::TasksGet(
-        pmcp::types::GetTaskRequest { task_id: task_id.to_string() },
+        pmcp::types::GetTaskRequest {
+            task_id: task_id.to_string(),
+        },
     )));
     let response = server
         .handle_request(RequestId::from(3i64), get_req, None)
@@ -186,7 +190,9 @@ async fn main() {
     // 7. Get the result
     println!("\nStep 5: Retrieve task result...");
     let result_req = Request::Client(Box::new(ClientRequest::TasksResult(
-        pmcp::types::GetTaskPayloadRequest { task_id: task_id.to_string() },
+        pmcp::types::GetTaskPayloadRequest {
+            task_id: task_id.to_string(),
+        },
     )));
     let response = server
         .handle_request(RequestId::from(4i64), result_req, None)

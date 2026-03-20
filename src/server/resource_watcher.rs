@@ -154,9 +154,10 @@ async fn process_events(
                 debug!("Resource {:?} changed: {}", kind, uri);
 
                 // Send resource update notification
-                let notification = ServerNotification::ResourceUpdated(
-                    crate::types::ResourceUpdatedParams { uri: uri.clone() },
-                );
+                let notification =
+                    ServerNotification::ResourceUpdated(crate::types::ResourceUpdatedParams {
+                        uri: uri.clone(),
+                    });
 
                 if let Err(e) = notification_tx.send(notification).await {
                     error!("Failed to send resource update notification: {}", e);

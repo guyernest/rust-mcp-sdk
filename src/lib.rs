@@ -140,12 +140,12 @@ pub use shared::{HttpConfig, HttpTransport};
 pub use types::{
     AuthInfo, AuthScheme, CallToolRequest, CallToolResult, ClientCapabilities, ClientNotification,
     ClientRequest, CompleteRequest, CompleteResult, CompletionArgument, CompletionReference,
-    Content, CreateMessageParams, CreateMessageResult, GetPromptResult,
-    Implementation, IncludeContext, ListResourcesResult, ListToolsResult, LoggingLevel,
-    ModelPreferences, ProgressNotification, ProgressToken, PromptMessage,
-    ProtocolVersion, ReadResourceResult, RequestId, ResourceInfo, Role, RootsCapabilities,
-    SamplingCapabilities, SamplingMessage, ServerCapabilities, ServerNotification, ServerRequest,
-    TokenUsage, ToolCapabilities, ToolInfo, UIMimeType, UIResource, UIResourceContents,
+    Content, CreateMessageParams, CreateMessageResult, GetPromptResult, Implementation,
+    IncludeContext, ListResourcesResult, ListToolsResult, LoggingLevel, ModelPreferences,
+    ProgressNotification, ProgressToken, PromptMessage, ProtocolVersion, ReadResourceResult,
+    RequestId, ResourceInfo, Role, RootsCapabilities, SamplingCapabilities, SamplingMessage,
+    ServerCapabilities, ServerNotification, ServerRequest, TokenUsage, ToolCapabilities, ToolInfo,
+    UIMimeType, UIResource, UIResourceContents,
 };
 
 /// Type alias for [`CallToolResult`] - provides convenient access to tool execution results
@@ -295,8 +295,8 @@ pub use async_trait::async_trait;
 /// assert!(!SUPPORTED_PROTOCOL_VERSIONS.contains(&"2024-11-05"));
 /// ```
 pub use types::protocol::version::{
-    DEFAULT_PROTOCOL_VERSION, LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS,
-    negotiate_protocol_version,
+    negotiate_protocol_version, DEFAULT_PROTOCOL_VERSION, LATEST_PROTOCOL_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
 };
 
 /// Default request timeout in milliseconds

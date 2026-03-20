@@ -374,8 +374,6 @@ pub struct ListToolsRequest {
     pub cursor: Cursor,
 }
 
-
-
 /// List tools response.
 ///
 /// # Backward Compatibility
@@ -438,8 +436,6 @@ pub struct CallToolRequest {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub task: Option<Value>,
 }
-
-
 
 /// Tool call result.
 ///

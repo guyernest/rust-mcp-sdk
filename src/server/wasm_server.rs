@@ -8,8 +8,8 @@ use crate::types::{
     CallToolRequest, CallToolResult, ClientRequest, Content, GetPromptRequest, GetPromptResult,
     Implementation, InitializeRequest, InitializeResult, JSONRPCError, JSONRPCResponse,
     ListPromptsRequest, ListPromptsResult, ListResourcesRequest, ListResourcesResult,
-    ListToolsRequest, ListToolsResult, PromptInfo, ReadResourceRequest, ReadResourceResult, Request,
-    RequestId, ResourceInfo, ServerCapabilities, ToolInfo,
+    ListToolsRequest, ListToolsResult, PromptInfo, ReadResourceRequest, ReadResourceResult,
+    Request, RequestId, ResourceInfo, ServerCapabilities, ToolInfo,
 };
 use crate::{ErrorCode, SUPPORTED_PROTOCOL_VERSIONS};
 use serde_json::json;

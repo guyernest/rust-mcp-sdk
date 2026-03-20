@@ -221,11 +221,12 @@ fn main() {
 
         let prompt_args = HashMap::from([("source".to_string(), "production_api".to_string())]);
 
-        let get_prompt_req = Request::Client(Box::new(ClientRequest::GetPrompt(GetPromptRequest {
-            name: "data_pipeline".to_string(),
-            arguments: prompt_args,
-            _meta: None,
-        })));
+        let get_prompt_req =
+            Request::Client(Box::new(ClientRequest::GetPrompt(GetPromptRequest {
+                name: "data_pipeline".to_string(),
+                arguments: prompt_args,
+                _meta: None,
+            })));
 
         let response = server
             .handle_request(RequestId::from(1i64), get_prompt_req, None)
@@ -351,15 +352,16 @@ fn main() {
 
         println!("\n--- Stage 4: Client continuation ---\n");
 
-        let continuation_req = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
-            name: "fetch_data".to_string(),
-            arguments: json!({"source": "production_api"}),
-            _meta: Some(RequestMeta {
-                progress_token: None,
-                _task_id: Some(task_id.to_string()),
-            }),
-            task: None,
-        })));
+        let continuation_req =
+            Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
+                name: "fetch_data".to_string(),
+                arguments: json!({"source": "production_api"}),
+                _meta: Some(RequestMeta {
+                    progress_token: None,
+                    _task_id: Some(task_id.to_string()),
+                }),
+                task: None,
+            })));
 
         println!("  Sending CallTool 'fetch_data' with _task_id: {}", task_id);
 
@@ -407,7 +409,9 @@ fn main() {
         });
 
         let cancel_req = Request::Client(Box::new(ClientRequest::TasksCancel(
-            pmcp::types::CancelTaskRequest { task_id: task_id.to_string() },
+            pmcp::types::CancelTaskRequest {
+                task_id: task_id.to_string(),
+            },
         )));
 
         println!("  Sending tasks/cancel with result for task: {}", task_id);
@@ -434,7 +438,9 @@ fn main() {
         println!("\n  Polling tasks/result to verify final state...");
 
         let result_req = Request::Client(Box::new(ClientRequest::TasksResult(
-            pmcp::types::GetTaskPayloadRequest { task_id: task_id.to_string() },
+            pmcp::types::GetTaskPayloadRequest {
+                task_id: task_id.to_string(),
+            },
         )));
 
         let response = server

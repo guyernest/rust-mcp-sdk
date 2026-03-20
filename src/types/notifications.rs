@@ -43,7 +43,6 @@ impl ProgressNotification {
     }
 }
 
-
 /// Progress token type.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -82,7 +81,6 @@ pub struct CancelledNotification {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
-
 
 /// Server notification types.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,10 +228,7 @@ mod tests {
 
     #[test]
     fn test_logging_level_all_8_values() {
-        assert_eq!(
-            serde_json::to_value(LoggingLevel::Debug).unwrap(),
-            "debug"
-        );
+        assert_eq!(serde_json::to_value(LoggingLevel::Debug).unwrap(), "debug");
         assert_eq!(serde_json::to_value(LoggingLevel::Info).unwrap(), "info");
         assert_eq!(
             serde_json::to_value(LoggingLevel::Notice).unwrap(),
@@ -243,18 +238,12 @@ mod tests {
             serde_json::to_value(LoggingLevel::Warning).unwrap(),
             "warning"
         );
-        assert_eq!(
-            serde_json::to_value(LoggingLevel::Error).unwrap(),
-            "error"
-        );
+        assert_eq!(serde_json::to_value(LoggingLevel::Error).unwrap(), "error");
         assert_eq!(
             serde_json::to_value(LoggingLevel::Critical).unwrap(),
             "critical"
         );
-        assert_eq!(
-            serde_json::to_value(LoggingLevel::Alert).unwrap(),
-            "alert"
-        );
+        assert_eq!(serde_json::to_value(LoggingLevel::Alert).unwrap(), "alert");
         assert_eq!(
             serde_json::to_value(LoggingLevel::Emergency).unwrap(),
             "emergency"
