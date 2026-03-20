@@ -9,7 +9,7 @@
 - ✅ **v1.4 Book & Course Update** — Phases 20-24 (shipped 2026-02-28)
 - ✅ **v1.5 Cloud Load Testing Upload** — Phases 25-26 (shipped 2026-03-01)
 - **v1.6 CLI DX Overhaul** — Phases 27-32 (in progress)
-- **v1.7 SDK Maturation** — Phases 52-53 (in progress)
+- **v1.7 SDK Maturation** — Phases 52-57 (in progress)
 
 ## Phases
 
@@ -104,6 +104,10 @@ See phase details in `.planning/phases/25-*` and `.planning/phases/26-*`
 
 - [x] **Phase 52: Reduce transitive dependencies** - Feature-gate reqwest and tracing-subscriber, slim tokio/hyper/chrono (completed 2026-03-18)
 - [ ] **Phase 53: Review TypeScript SDK Updates** - Gap analysis comparing TypeScript v2 against Rust SDK
+- [ ] **Phase 54: Protocol Version 2025-11-25 Support** - Add all 2025-11-25 types, content variants, expanded capabilities, and task capability negotiation
+- [ ] **Phase 55: Conformance Test Infrastructure** - Add mcp-tester conformance command with core protocol, tools, resources, and prompts scenarios
+- [ ] **Phase 56: Tower Middleware and DNS Rebinding Protection** - Tower middleware stack with DNS rebinding protection and Axum convenience adapter
+- [ ] **Phase 57: Conformance Test Extension** - Advanced conformance scenarios for progress, logging, transport, elicitation, and sampling
 
 ## Phase Details
 
@@ -482,8 +486,48 @@ Plans:
 **Goal:** Compare TypeScript MCP SDK v2 against Rust SDK v1.20.0 to identify gaps worth adopting. Produce gap analysis with prioritized recommendations covering protocol negotiation, conformance testing, MCP Apps, Tasks, and framework adapters.
 **Requirements**: GAP-ANALYSIS
 **Depends on:** Phase 52
-**Plans:** 1/2 plans executed
+**Plans:** 2 plans
 
 Plans:
-- [ ] 53-01-PLAN.md — Deep verification of TypeScript vs Rust SDK source differences across 6 domains
-- [ ] 53-02-PLAN.md — Gap analysis report with prioritized recommendations and proposed implementation phases
+- [x] 53-01-PLAN.md — Deep verification of TypeScript vs Rust SDK source differences across 6 domains
+- [x] 53-02-PLAN.md — Gap analysis report with prioritized recommendations and proposed implementation phases
+
+### Phase 54: Protocol Version 2025-11-25 Support
+
+**Goal:** Update the Rust SDK to support the 2025-11-25 MCP protocol version, adding all new types, content variants, expanded capabilities, and task capability negotiation fields.
+**Requirements**: TBD
+**Depends on:** Phase 53
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 54 to break down)
+
+### Phase 55: Conformance Test Infrastructure
+
+**Goal:** Add a `mcp-tester conformance <url>` command that runs a suite of MCP spec compliance test scenarios against any MCP server, starting with core protocol and tools.
+**Requirements**: TBD
+**Depends on:** Phase 54
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 55 to break down)
+
+### Phase 56: Tower Middleware and DNS Rebinding Protection
+
+**Goal:** Build a Tower middleware stack for MCP server hosting with DNS rebinding protection, host header validation, and an Axum convenience adapter.
+**Requirements**: TBD
+**Depends on:** Phase 54
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 56 to break down)
+
+### Phase 57: Conformance Test Extension -- Advanced Scenarios
+
+**Goal:** Extend the conformance test suite with progress/logging, transport, elicitation, and sampling scenarios.
+**Requirements**: TBD
+**Depends on:** Phase 55
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 57 to break down)
