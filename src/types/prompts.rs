@@ -20,7 +20,22 @@ pub struct ListPromptsRequest {
 }
 
 /// Prompt information.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Construction
+///
+/// Use [`PromptInfo::new`] for ergonomic construction:
+///
+/// ```rust
+/// use pmcp::types::{PromptInfo, PromptArgument};
+///
+/// let prompt = PromptInfo::new("analyze_code")
+///     .with_description("Analyze source code")
+///     .with_arguments(vec![
+///         PromptArgument::new("language").with_description("Programming language").required(),
+///     ]);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct PromptInfo {
     /// Prompt name (unique identifier)
@@ -40,6 +55,52 @@ pub struct PromptInfo {
     /// Optional metadata (MCP 2025-11-25)
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+impl PromptInfo {
+    /// Create a new prompt with the required name field.
+    ///
+    /// All optional fields default to `None`.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            title: None,
+            description: None,
+            arguments: None,
+            icons: None,
+            meta: None,
+        }
+    }
+
+    /// Set the human-readable title.
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set the prompt description.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set the prompt arguments.
+    pub fn with_arguments(mut self, arguments: Vec<PromptArgument>) -> Self {
+        self.arguments = Some(arguments);
+        self
+    }
+
+    /// Set the prompt icons.
+    pub fn with_icons(mut self, icons: Vec<super::protocol::IconInfo>) -> Self {
+        self.icons = Some(icons);
+        self
+    }
+
+    /// Set metadata.
+    pub fn with_meta(mut self, meta: serde_json::Map<String, serde_json::Value>) -> Self {
+        self.meta = Some(meta);
+        self
+    }
 }
 
 /// Type hint for prompt arguments.
@@ -87,7 +148,18 @@ impl PromptArgumentType {
 }
 
 /// Prompt argument definition.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Construction
+///
+/// ```rust
+/// use pmcp::types::PromptArgument;
+///
+/// let arg = PromptArgument::new("language")
+///     .with_description("The programming language")
+///     .required();
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct PromptArgument {
     /// Argument name
@@ -111,6 +183,45 @@ pub struct PromptArgument {
     /// MCP clients that don't understand this field will safely ignore it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arg_type: Option<PromptArgumentType>,
+}
+
+impl PromptArgument {
+    /// Create a new prompt argument with the required name field.
+    ///
+    /// Defaults to not required. Use [`.required()`](PromptArgument::required) to mark as required.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: None,
+            required: false,
+            completion: None,
+            arg_type: None,
+        }
+    }
+
+    /// Set the argument description.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Mark this argument as required.
+    pub fn required(mut self) -> Self {
+        self.required = true;
+        self
+    }
+
+    /// Set the completion configuration.
+    pub fn with_completion(mut self, completion: crate::types::completable::CompletionConfig) -> Self {
+        self.completion = Some(completion);
+        self
+    }
+
+    /// Set the type hint for this argument.
+    pub fn with_arg_type(mut self, arg_type: PromptArgumentType) -> Self {
+        self.arg_type = Some(arg_type);
+        self
+    }
 }
 
 /// List prompts response.
@@ -223,13 +334,56 @@ impl GetPromptResult {
 }
 
 /// Message in a prompt.
+///
+/// # Construction
+///
+/// ```rust
+/// use pmcp::types::{PromptMessage, Content};
+/// use pmcp::types::content::Role;
+///
+/// let msg = PromptMessage::user(Content::Text { text: "Hello".into() });
+/// let msg = PromptMessage::assistant(Content::Text { text: "Hi there!".into() });
+/// let msg = PromptMessage::new(Role::System, Content::Text { text: "You are helpful.".into() });
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct PromptMessage {
     /// Message role
     pub role: Role,
     /// Message content
     pub content: Content,
+}
+
+impl PromptMessage {
+    /// Create a new prompt message with a role and content.
+    pub fn new(role: Role, content: Content) -> Self {
+        Self { role, content }
+    }
+
+    /// Create a user message.
+    pub fn user(content: Content) -> Self {
+        Self {
+            role: Role::User,
+            content,
+        }
+    }
+
+    /// Create an assistant message.
+    pub fn assistant(content: Content) -> Self {
+        Self {
+            role: Role::Assistant,
+            content,
+        }
+    }
+
+    /// Create a system message.
+    pub fn system(content: Content) -> Self {
+        Self {
+            role: Role::System,
+            content,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -241,20 +395,13 @@ mod tests {
 
     #[test]
     fn test_prompt_types() {
-        let prompt = PromptInfo {
-            name: "test_prompt".to_string(),
-            title: None,
-            description: Some("A test prompt".to_string()),
-            arguments: Some(vec![PromptArgument {
-                name: "arg1".to_string(),
-                description: Some("First argument".to_string()),
-                required: true,
-                completion: None,
-                arg_type: None,
-            }]),
-            icons: None,
-            meta: None,
-        };
+        let prompt = PromptInfo::new("test_prompt")
+            .with_description("A test prompt")
+            .with_arguments(vec![
+                PromptArgument::new("arg1")
+                    .with_description("First argument")
+                    .required(),
+            ]);
 
         let json = serde_json::to_value(&prompt).unwrap();
         assert_eq!(json["name"], "test_prompt");
@@ -264,11 +411,7 @@ mod tests {
 
     #[test]
     fn get_prompt_result_without_meta_omits_field() {
-        let result = GetPromptResult {
-            description: Some("Test".to_string()),
-            messages: vec![],
-            _meta: None,
-        };
+        let result = GetPromptResult::new(vec![], Some("Test".to_string()));
 
         let json = serde_json::to_value(&result).unwrap();
         assert!(
@@ -286,11 +429,7 @@ mod tests {
             serde_json::Value::String("task-123".to_string()),
         );
 
-        let result = GetPromptResult {
-            description: None,
-            messages: vec![],
-            _meta: Some(meta),
-        };
+        let result = GetPromptResult::new(vec![], None).with_meta(meta);
 
         let json = serde_json::to_value(&result).unwrap();
         assert!(json.get("_meta").is_some(), "_meta should be present");
@@ -320,16 +459,13 @@ mod tests {
             serde_json::Value::String("working".to_string()),
         );
 
-        let result = GetPromptResult {
-            description: Some("Workflow result".to_string()),
-            messages: vec![PromptMessage {
-                role: Role::User,
-                content: Content::Text {
-                    text: "Hello".to_string(),
-                },
-            }],
-            _meta: Some(meta),
-        };
+        let result = GetPromptResult::new(
+            vec![PromptMessage::user(Content::Text {
+                text: "Hello".to_string(),
+            })],
+            Some("Workflow result".to_string()),
+        )
+        .with_meta(meta);
 
         let json = serde_json::to_value(&result).unwrap();
         let round_trip: GetPromptResult = serde_json::from_value(json).unwrap();
@@ -342,5 +478,31 @@ mod tests {
             rt_meta.get("taskId").unwrap(),
             &serde_json::Value::String("task-456".to_string())
         );
+    }
+
+    #[test]
+    fn test_prompt_message_convenience() {
+        let user_msg = PromptMessage::user(Content::Text {
+            text: "Hello".to_string(),
+        });
+        assert_eq!(user_msg.role, Role::User);
+
+        let assistant_msg = PromptMessage::assistant(Content::Text {
+            text: "Hi".to_string(),
+        });
+        assert_eq!(assistant_msg.role, Role::Assistant);
+
+        let system_msg = PromptMessage::system(Content::Text {
+            text: "Be helpful".to_string(),
+        });
+        assert_eq!(system_msg.role, Role::System);
+    }
+
+    #[test]
+    fn test_prompt_argument_default() {
+        let arg = PromptArgument::new("test");
+        assert_eq!(arg.name, "test");
+        assert!(!arg.required);
+        assert!(arg.description.is_none());
     }
 }

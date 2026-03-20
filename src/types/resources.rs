@@ -20,7 +20,20 @@ pub struct ListResourcesRequest {
 }
 
 /// Resource information.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Construction
+///
+/// Use [`ResourceInfo::new`] for ergonomic construction:
+///
+/// ```rust
+/// use pmcp::types::ResourceInfo;
+///
+/// let resource = ResourceInfo::new("file://test.txt", "test.txt")
+///     .with_description("A test file")
+///     .with_mime_type("text/plain");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceInfo {
     /// Resource URI
@@ -45,6 +58,60 @@ pub struct ResourceInfo {
     /// Optional metadata (e.g., widget descriptor keys for `ChatGPT` MCP Apps)
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<serde_json::Map<String, Value>>,
+}
+
+impl ResourceInfo {
+    /// Create a new resource with the required URI and name fields.
+    ///
+    /// All optional fields default to `None`.
+    pub fn new(uri: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            uri: uri.into(),
+            name: name.into(),
+            title: None,
+            description: None,
+            mime_type: None,
+            icons: None,
+            annotations: None,
+            meta: None,
+        }
+    }
+
+    /// Set the human-readable title.
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set the resource description.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set the MIME type.
+    pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
+        self.mime_type = Some(mime_type.into());
+        self
+    }
+
+    /// Set the resource icons.
+    pub fn with_icons(mut self, icons: Vec<super::protocol::IconInfo>) -> Self {
+        self.icons = Some(icons);
+        self
+    }
+
+    /// Set content annotations.
+    pub fn with_annotations(mut self, annotations: crate::types::content::Annotations) -> Self {
+        self.annotations = Some(annotations);
+        self
+    }
+
+    /// Set metadata (e.g., widget descriptor keys for MCP Apps).
+    pub fn with_meta(mut self, meta: serde_json::Map<String, Value>) -> Self {
+        self.meta = Some(meta);
+        self
+    }
 }
 
 /// List resources response.
@@ -110,7 +177,20 @@ pub struct ListResourceTemplatesRequest {
 }
 
 /// Resource template.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Construction
+///
+/// Use [`ResourceTemplate::new`] for ergonomic construction:
+///
+/// ```rust
+/// use pmcp::types::ResourceTemplate;
+///
+/// let template = ResourceTemplate::new("file://{path}", "File Template")
+///     .with_description("Access files by path")
+///     .with_mime_type("text/plain");
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceTemplate {
     /// Template URI pattern
@@ -135,6 +215,60 @@ pub struct ResourceTemplate {
     /// Optional metadata (MCP 2025-11-25)
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<serde_json::Map<String, Value>>,
+}
+
+impl ResourceTemplate {
+    /// Create a new resource template with the required URI template and name fields.
+    ///
+    /// All optional fields default to `None`.
+    pub fn new(uri_template: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            uri_template: uri_template.into(),
+            name: name.into(),
+            title: None,
+            description: None,
+            mime_type: None,
+            icons: None,
+            annotations: None,
+            meta: None,
+        }
+    }
+
+    /// Set the human-readable title.
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set the template description.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set the MIME type for resources created from this template.
+    pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
+        self.mime_type = Some(mime_type.into());
+        self
+    }
+
+    /// Set the template icons.
+    pub fn with_icons(mut self, icons: Vec<super::protocol::IconInfo>) -> Self {
+        self.icons = Some(icons);
+        self
+    }
+
+    /// Set content annotations.
+    pub fn with_annotations(mut self, annotations: crate::types::content::Annotations) -> Self {
+        self.annotations = Some(annotations);
+        self
+    }
+
+    /// Set metadata.
+    pub fn with_meta(mut self, meta: serde_json::Map<String, Value>) -> Self {
+        self.meta = Some(meta);
+        self
+    }
 }
 
 /// List resource templates result.
@@ -237,21 +371,35 @@ mod tests {
 
     #[test]
     fn test_resource_types() {
-        let resource = ResourceInfo {
-            uri: "file://test.txt".to_string(),
-            name: "test.txt".to_string(),
-            title: None,
-            description: Some("Test file".to_string()),
-            mime_type: Some("text/plain".to_string()),
-            icons: None,
-            annotations: None,
-            meta: None,
-        };
+        let resource = ResourceInfo::new("file://test.txt", "test.txt")
+            .with_description("Test file")
+            .with_mime_type("text/plain");
 
         let json = serde_json::to_value(&resource).unwrap();
         assert_eq!(json["uri"], "file://test.txt");
         assert_eq!(json["name"], "test.txt");
         assert_eq!(json["description"], "Test file");
+        assert_eq!(json["mimeType"], "text/plain");
+    }
+
+    #[test]
+    fn test_resource_info_default() {
+        let resource = ResourceInfo::default();
+        assert!(resource.uri.is_empty());
+        assert!(resource.name.is_empty());
+        assert!(resource.description.is_none());
+    }
+
+    #[test]
+    fn test_resource_template_new() {
+        let template = ResourceTemplate::new("file://{path}", "File Template")
+            .with_description("Access files by path")
+            .with_mime_type("text/plain");
+
+        let json = serde_json::to_value(&template).unwrap();
+        assert_eq!(json["uriTemplate"], "file://{path}");
+        assert_eq!(json["name"], "File Template");
+        assert_eq!(json["description"], "Access files by path");
         assert_eq!(json["mimeType"], "text/plain");
     }
 }

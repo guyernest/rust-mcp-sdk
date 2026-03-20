@@ -5,7 +5,7 @@
 //! guidance for common MCP development scenarios.
 
 use async_trait::async_trait;
-use pmcp::types::{Content, GetPromptResult, PromptArgument, PromptInfo, PromptMessage, Role};
+use pmcp::types::{Content, GetPromptResult, PromptArgument, PromptInfo, PromptMessage};
 use pmcp::RequestHandlerExtra;
 use std::collections::HashMap;
 
@@ -16,23 +16,15 @@ use std::collections::HashMap;
 /// Build a single-message assistant prompt result.
 fn assistant_result(description: &str, text: String) -> pmcp::Result<GetPromptResult> {
     Ok(GetPromptResult::new(
-        vec![PromptMessage {
-            role: Role::Assistant,
-            content: Content::Text { text },
-        }],
+        vec![PromptMessage::assistant(Content::Text { text })],
         Some(description.to_string()),
     ))
 }
 
 /// Build a prompt argument descriptor.
 fn arg(name: &str, description: &str, required: bool) -> PromptArgument {
-    PromptArgument {
-        name: name.to_string(),
-        description: Some(description.to_string()),
-        required,
-        completion: None,
-        arg_type: None,
-    }
+    let a = PromptArgument::new(name).with_description(description);
+    if required { a.required() } else { a }
 }
 
 // ---------------------------------------------------------------------------
@@ -56,16 +48,10 @@ impl pmcp::server::PromptHandler for QuickstartPrompt {
     }
 
     fn metadata(&self) -> Option<PromptInfo> {
-        Some(PromptInfo {
-            name: "quickstart".to_string(),
-            description: Some(
-                "Step-by-step guide to create your first PMCP MCP server".to_string(),
-            ),
-            arguments: None,
-            title: None,
-            icons: None,
-            meta: None,
-        })
+        Some(
+            PromptInfo::new("quickstart")
+                .with_description("Step-by-step guide to create your first PMCP MCP server"),
+        )
     }
 }
 
@@ -167,21 +153,18 @@ impl pmcp::server::PromptHandler for CreateMcpServerPrompt {
     }
 
     fn metadata(&self) -> Option<PromptInfo> {
-        Some(PromptInfo {
-            name: "create-mcp-server".to_string(),
-            description: Some("Set up a new PMCP MCP server workspace".to_string()),
-            arguments: Some(vec![
-                arg("name", "Server project name", true),
-                arg(
-                    "template",
-                    "Template: minimal or calculator (default: minimal)",
-                    false,
-                ),
-            ]),
-            title: None,
-            icons: None,
-            meta: None,
-        })
+        Some(
+            PromptInfo::new("create-mcp-server")
+                .with_description("Set up a new PMCP MCP server workspace")
+                .with_arguments(vec![
+                    arg("name", "Server project name", true),
+                    arg(
+                        "template",
+                        "Template: minimal or calculator (default: minimal)",
+                        false,
+                    ),
+                ]),
+        )
     }
 }
 
@@ -244,17 +227,14 @@ impl pmcp::server::PromptHandler for AddToolPrompt {
     }
 
     fn metadata(&self) -> Option<PromptInfo> {
-        Some(PromptInfo {
-            name: "add-tool".to_string(),
-            description: Some("Add a new tool to an existing PMCP server".to_string()),
-            arguments: Some(vec![
-                arg("tool_name", "Name for the new tool (snake_case)", true),
-                arg("description", "Human-readable tool description", false),
-            ]),
-            title: None,
-            icons: None,
-            meta: None,
-        })
+        Some(
+            PromptInfo::new("add-tool")
+                .with_description("Add a new tool to an existing PMCP server")
+                .with_arguments(vec![
+                    arg("tool_name", "Name for the new tool (snake_case)", true),
+                    arg("description", "Human-readable tool description", false),
+                ]),
+        )
     }
 }
 
@@ -303,18 +283,15 @@ impl pmcp::server::PromptHandler for DiagnosePrompt {
     }
 
     fn metadata(&self) -> Option<PromptInfo> {
-        Some(PromptInfo {
-            name: "diagnose".to_string(),
-            description: Some("Diagnose issues with a running MCP server".to_string()),
-            arguments: Some(vec![arg(
-                "server_url",
-                "URL of the MCP server to diagnose",
-                true,
-            )]),
-            title: None,
-            icons: None,
-            meta: None,
-        })
+        Some(
+            PromptInfo::new("diagnose")
+                .with_description("Diagnose issues with a running MCP server")
+                .with_arguments(vec![arg(
+                    "server_url",
+                    "URL of the MCP server to diagnose",
+                    true,
+                )]),
+        )
     }
 }
 
@@ -342,18 +319,15 @@ impl pmcp::server::PromptHandler for SetupAuthPrompt {
     }
 
     fn metadata(&self) -> Option<PromptInfo> {
-        Some(PromptInfo {
-            name: "setup-auth".to_string(),
-            description: Some("Configure authentication for your MCP server".to_string()),
-            arguments: Some(vec![arg(
-                "auth_type",
-                "Auth type: oauth, api-key, or jwt (default: oauth)",
-                false,
-            )]),
-            title: None,
-            icons: None,
-            meta: None,
-        })
+        Some(
+            PromptInfo::new("setup-auth")
+                .with_description("Configure authentication for your MCP server")
+                .with_arguments(vec![arg(
+                    "auth_type",
+                    "Auth type: oauth, api-key, or jwt (default: oauth)",
+                    false,
+                )]),
+        )
     }
 }
 
@@ -484,18 +458,15 @@ impl pmcp::server::PromptHandler for DebugProtocolErrorPrompt {
     }
 
     fn metadata(&self) -> Option<PromptInfo> {
-        Some(PromptInfo {
-            name: "debug-protocol-error".to_string(),
-            description: Some("Debug MCP protocol errors".to_string()),
-            arguments: Some(vec![arg(
-                "error_message",
-                "The error message to diagnose",
-                false,
-            )]),
-            title: None,
-            icons: None,
-            meta: None,
-        })
+        Some(
+            PromptInfo::new("debug-protocol-error")
+                .with_description("Debug MCP protocol errors")
+                .with_arguments(vec![arg(
+                    "error_message",
+                    "The error message to diagnose",
+                    false,
+                )]),
+        )
     }
 }
 
@@ -520,16 +491,10 @@ impl pmcp::server::PromptHandler for MigratePrompt {
     }
 
     fn metadata(&self) -> Option<PromptInfo> {
-        Some(PromptInfo {
-            name: "migrate".to_string(),
-            description: Some(
-                "Guide for migrating from TypeScript MCP SDK to PMCP (Rust)".to_string(),
-            ),
-            arguments: None,
-            title: None,
-            icons: None,
-            meta: None,
-        })
+        Some(
+            PromptInfo::new("migrate")
+                .with_description("Guide for migrating from TypeScript MCP SDK to PMCP (Rust)"),
+        )
     }
 }
 
