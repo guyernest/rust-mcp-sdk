@@ -352,10 +352,9 @@ fn main() {
 
         println!("\n--- Stage 4: Client continuation ---\n");
 
-        let continuation_req = Request::Client(Box::new(ClientRequest::CallTool(
-            CallToolRequest::new("fetch_data", json!({"source": "production_api"}))
-                .with_meta(RequestMeta::new().with_task_id(&task_id)),
-        )));
+        let mut call_tool = CallToolRequest::new("fetch_data", json!({"source": "production_api"}));
+        call_tool._meta = Some(RequestMeta::new().with_task_id(&task_id));
+        let continuation_req = Request::Client(Box::new(ClientRequest::CallTool(call_tool)));
 
         println!("  Sending CallTool 'fetch_data' with _task_id: {}", task_id);
 
