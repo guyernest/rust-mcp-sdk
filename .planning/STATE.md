@@ -131,6 +131,8 @@ v1.6 decisions:
 - Phase 49 added: Bump dependencies (reqwest 0.13, jsonschema 0.45)
 - Phase 50 added: Improve Binary Release
 - Phase 51 added: PMCP MCP Server
+- Phase 52 added: Reduce transitive dependencies
+- Phase 53 added: Review TypeScript SDK Updates
 
 ### Pending Todos
 

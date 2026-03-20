@@ -457,3 +457,13 @@ Plans:
 - [ ] 51-03-PLAN.md — Build tools: scaffold (code templates) and schema_export (schema discovery)
 - [ ] 51-04-PLAN.md — Embedded content, documentation resources handler, workflow prompt handlers
 - [ ] 51-05-PLAN.md — Wire all tools/resources/prompts into server builder, CI workflow updates
+
+### Phase 53: Review TypeScript SDK Updates
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 52
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 53 to break down)
