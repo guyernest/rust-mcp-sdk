@@ -441,11 +441,11 @@ impl ServerCore {
             // Widget tool: structured data goes in structuredContent,
             // text is a brief summary to avoid duplication in `ChatGPT`
             let summary = summarize_structured_output(&value);
-            CallToolResult::new(vec![Content::Text { text: summary }])
+            CallToolResult::new(vec![Content::text(summary)])
                 .with_widget_enrichment(info, value)
         } else {
             let text = serde_json::to_string_pretty(&value)?;
-            CallToolResult::new(vec![Content::Text { text }])
+            CallToolResult::new(vec![Content::text(text)])
         };
 
         Ok(call_result)

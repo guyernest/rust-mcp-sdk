@@ -158,36 +158,22 @@ impl WasmMcpServer {
             Ok(result_value) => {
                 // Determine content type based on the result structure
                 let content = if let Some(text) = result_value.as_str() {
-                    vec![Content::Text {
-                        text: text.to_string(),
-                    }]
+                    vec![Content::text(text)]
                 } else if result_value.is_object() {
                     // For structured data, wrap in a content type that preserves structure
-                    vec![Content::Text {
-                        text: serde_json::to_string_pretty(&result_value)
+                    vec![Content::text(
+                        serde_json::to_string_pretty(&result_value)
                             .unwrap_or_else(|_| "{}".to_string()),
-                    }]
+                    )]
                 } else {
-                    vec![Content::Text {
-                        text: result_value.to_string(),
-                    }]
+                    vec![Content::text(result_value.to_string())]
                 };
 
-                let result = CallToolResult {
-                    content,
-                    is_error: false,
-                    ..Default::default()
-                };
+                let result = CallToolResult::new(content);
                 serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
             },
             Err(e) => {
-                let result = CallToolResult {
-                    content: vec![Content::Text {
-                        text: format!("Error: {}", e),
-                    }],
-                    is_error: true,
-                    ..Default::default()
-                };
+                let result = CallToolResult::error(vec![Content::text(format!("Error: {}", e))]);
                 serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
             },
         }

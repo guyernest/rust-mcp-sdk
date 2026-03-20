@@ -491,16 +491,16 @@ impl CallToolRequest {
 ///
 /// # Backward Compatibility
 ///
-/// For struct initialization syntax, use `..Default::default()` to fill in the new optional fields:
+/// Use constructors for clean, future-proof initialization:
 ///
 /// ```rust
 /// use pmcp::types::{CallToolResult, Content};
 ///
-/// let result = CallToolResult {
-///     content: vec![Content::Text { text: "Hello".to_string() }],
-///     is_error: false,
-///     ..Default::default()
-/// };
+/// let result = CallToolResult::new(vec![Content::text("Hello")]);
+/// assert!(!result.is_error);
+///
+/// let error = CallToolResult::error(vec![Content::text("Something went wrong")]);
+/// assert!(error.is_error);
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[non_exhaustive]

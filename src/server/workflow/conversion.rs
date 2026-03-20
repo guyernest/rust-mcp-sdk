@@ -49,19 +49,11 @@ impl PromptContent {
     pub fn to_protocol(&self, ctx: &ExpansionContext<'_>) -> Result<Content, WorkflowError> {
         match self {
             // Loose mode - direct passthrough
-            Self::Text(text) => Ok(Content::Text { text: text.clone() }),
+            Self::Text(text) => Ok(Content::text(text)),
 
-            Self::Image { data, mime_type } => Ok(Content::Image {
-                data: data.clone(),
-                mime_type: mime_type.clone(),
-            }),
+            Self::Image { data, mime_type } => Ok(Content::image(data, mime_type)),
 
-            Self::ResourceUri(uri) => Ok(Content::Resource {
-                uri: uri.clone(),
-                text: None,
-                mime_type: None,
-                meta: None,
-            }),
+            Self::ResourceUri(uri) => Ok(Content::resource(uri)),
 
             // Strict mode - expand handles
             Self::ToolHandle(handle) => {
@@ -75,15 +67,13 @@ impl PromptContent {
                         })?;
 
                 // Embed tool schema as text (LLM can read it)
-                Ok(Content::Text {
-                    text: format!(
-                        "Tool: {}\nDescription: {}\nSchema: {}",
-                        handle.name(),
-                        tool_info.description,
-                        serde_json::to_string_pretty(&tool_info.input_schema)
-                            .unwrap_or_else(|_| "{}".to_string())
-                    ),
-                })
+                Ok(Content::text(format!(
+                    "Tool: {}\nDescription: {}\nSchema: {}",
+                    handle.name(),
+                    tool_info.description,
+                    serde_json::to_string_pretty(&tool_info.input_schema)
+                        .unwrap_or_else(|_| "{}".to_string())
+                )))
             },
 
             Self::ResourceHandle(handle) => {
@@ -96,12 +86,7 @@ impl PromptContent {
                 }
 
                 // Return as resource reference (LLM will fetch)
-                Ok(Content::Resource {
-                    uri: handle.uri().to_string(),
-                    text: None,
-                    mime_type: None,
-                    meta: None,
-                })
+                Ok(Content::resource(handle.uri()))
             },
 
             Self::Multi(parts) => {
@@ -113,9 +98,7 @@ impl PromptContent {
                         text_parts.push(text);
                     }
                 }
-                Ok(Content::Text {
-                    text: text_parts.join("\n\n"),
-                })
+                Ok(Content::text(text_parts.join("\n\n")))
             },
         }
     }
@@ -125,10 +108,7 @@ impl InternalPromptMessage {
     /// Convert to protocol `PromptMessage`
     /// Expands handles using server registry
     pub fn to_protocol(&self, ctx: &ExpansionContext<'_>) -> Result<PromptMessage, WorkflowError> {
-        Ok(PromptMessage {
-            role: self.role,
-            content: self.content.to_protocol(ctx)?,
-        })
+        Ok(PromptMessage::new(self.role, self.content.to_protocol(ctx)?))
     }
 }
 

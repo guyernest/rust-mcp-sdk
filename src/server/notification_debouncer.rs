@@ -422,12 +422,11 @@ mod tests {
         // Send multiple notifications quickly with the same token
         for i in 0..5 {
             debouncer
-                .submit(ServerNotification::Progress(ProgressNotification {
-                    progress_token: crate::types::ProgressToken::String("test-token".to_string()),
-                    progress: i as f64 * 20.0,
-                    total: None,
-                    message: Some(format!("Progress {}", i)),
-                }))
+                .submit(ServerNotification::Progress(ProgressNotification::new(
+                    crate::types::ProgressToken::String("test-token".to_string()),
+                    i as f64 * 20.0,
+                    Some(format!("Progress {}", i)),
+                )))
                 .await
                 .unwrap();
             sleep(Duration::from_millis(20)).await;
@@ -469,12 +468,11 @@ mod tests {
         // Add notifications with the same key for batching
         for i in 0..5 {
             batcher
-                .add(ServerNotification::Progress(ProgressNotification {
-                    progress_token: crate::types::ProgressToken::String("batch-token".to_string()),
-                    progress: i as f64 * 20.0,
-                    total: None,
-                    message: Some(format!("Progress {}", i)),
-                }))
+                .add(ServerNotification::Progress(ProgressNotification::new(
+                    crate::types::ProgressToken::String("batch-token".to_string()),
+                    i as f64 * 20.0,
+                    Some(format!("Progress {}", i)),
+                )))
                 .await
                 .unwrap();
         }

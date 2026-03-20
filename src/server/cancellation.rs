@@ -52,10 +52,12 @@ impl CancellationManager {
             // Send cancellation notification
             if let Some(sender) = &self.notification_sender {
                 let notification = Notification::Client(
-                    crate::types::ClientNotification::Cancelled(CancelledNotification {
-                        request_id: crate::types::RequestId::String(request_id.clone()),
-                        reason: Some(reason.unwrap_or_else(|| "Cancelled by server".to_string())),
-                    }),
+                    crate::types::ClientNotification::Cancelled(
+                        CancelledNotification::new(crate::types::RequestId::String(
+                            request_id.clone(),
+                        ))
+                        .with_reason(reason.unwrap_or_else(|| "Cancelled by server".to_string())),
+                    ),
                 );
                 sender(notification);
             }

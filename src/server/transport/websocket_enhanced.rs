@@ -471,10 +471,9 @@ mod tests {
         let server = EnhancedWebSocketServer::new(config);
         let result = server
             .broadcast(TransportMessage::Notification(
-                crate::types::Notification::Cancelled(crate::types::CancelledNotification {
-                    request_id: crate::types::RequestId::Number(1),
-                    reason: None,
-                }),
+                crate::types::Notification::Cancelled(
+                    crate::types::CancelledNotification::new(crate::types::RequestId::Number(1)),
+                ),
             ))
             .await;
 

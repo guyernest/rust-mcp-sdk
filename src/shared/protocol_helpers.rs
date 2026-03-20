@@ -706,12 +706,11 @@ mod tests {
 
     #[test]
     fn test_create_notification_progress() {
-        let progress = ProgressNotification {
-            progress_token: ProgressToken::String("test".to_string()),
-            progress: 75.0,
-            total: None,
-            message: Some("Almost done".to_string()),
-        };
+        let progress = ProgressNotification::new(
+            ProgressToken::String("test".to_string()),
+            75.0,
+            Some("Almost done".to_string()),
+        );
         let notification = Notification::Progress(progress);
         let jsonrpc_notif = create_notification(notification);
         assert_eq!(jsonrpc_notif.method, "notifications/progress");
@@ -720,10 +719,8 @@ mod tests {
 
     #[test]
     fn test_create_notification_cancelled() {
-        let cancelled = CancelledNotification {
-            request_id: RequestId::String("test-req".to_string()),
-            reason: Some("Timeout".to_string()),
-        };
+        let cancelled = CancelledNotification::new(RequestId::String("test-req".to_string()))
+            .with_reason("Timeout");
         let notification = Notification::Cancelled(cancelled);
         let jsonrpc_notif = create_notification(notification);
         assert_eq!(jsonrpc_notif.method, "notifications/cancelled");
@@ -820,16 +817,12 @@ mod tests {
 
     #[test]
     fn test_client_notification_to_jsonrpc_all_variants() {
-        let cancelled = CancelledNotification {
-            request_id: RequestId::String("test".to_string()),
-            reason: None,
-        };
-        let progress = ProgressNotification {
-            progress_token: ProgressToken::String("test".to_string()),
-            progress: 50.0,
-            total: None,
-            message: None,
-        };
+        let cancelled = CancelledNotification::new(RequestId::String("test".to_string()));
+        let progress = ProgressNotification::new(
+            ProgressToken::String("test".to_string()),
+            50.0,
+            None,
+        );
 
         let test_cases = vec![
             (
@@ -853,21 +846,13 @@ mod tests {
 
     #[test]
     fn test_server_notification_to_jsonrpc_all_variants() {
-        let progress = ProgressNotification {
-            progress_token: ProgressToken::String("test".to_string()),
-            progress: 25.0,
-            total: None,
-            message: None,
-        };
-        let resource_updated = crate::types::ResourceUpdatedParams {
-            uri: "test://uri".to_string(),
-        };
-        let log_message = crate::types::LogMessageParams {
-            level: crate::types::LogLevel::Info,
-            message: String::new(),
-            logger: None,
-            data: None,
-        };
+        let progress = ProgressNotification::new(
+            ProgressToken::String("test".to_string()),
+            25.0,
+            None,
+        );
+        let resource_updated = crate::types::ResourceUpdatedParams::new("test://uri");
+        let log_message = crate::types::LogMessageParams::new(crate::types::LoggingLevel::Info, "");
 
         let test_cases = vec![
             (

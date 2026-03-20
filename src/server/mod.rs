@@ -472,12 +472,11 @@ impl Server {
     ///     .build()?;
     ///
     /// // Send a progress notification
-    /// let progress = ProgressNotification {
-    ///     progress_token: ProgressToken::String("task-123".to_string()),
-    ///     progress: 50.0,
-    ///     total: None,
-    ///     message: Some("Processing...".to_string()),
-    /// };
+    /// let progress = ProgressNotification::new(
+    ///     ProgressToken::String("task-123".to_string()),
+    ///     50.0,
+    ///     Some("Processing...".to_string()),
+    /// );
     ///
     /// server.send_notification(ServerNotification::Progress(progress)).await;
     /// # Ok(())
@@ -1107,7 +1106,7 @@ impl Server {
         }?;
         // Build CallToolResult, adding structured_content for widget tools
         let text = result.to_string();
-        let mut call_result = CallToolResult::new(vec![crate::types::Content::Text { text }]);
+        let mut call_result = CallToolResult::new(vec![crate::types::Content::text(text)]);
 
         if let Some(info) = self.tool_infos.get(&req.name) {
             call_result = call_result.with_widget_enrichment(info, result);
@@ -1127,14 +1126,7 @@ impl Server {
                     info.name.clone_from(name);
                     info
                 } else {
-                    crate::types::PromptInfo {
-                        name: name.clone(),
-                        title: None,
-                        description: None,
-                        arguments: None,
-                        icons: None,
-                        meta: None,
-                    }
+                    crate::types::PromptInfo::new(name)
                 }
             })
             .collect::<Vec<_>>();
@@ -2284,12 +2276,10 @@ impl ServerBuilder {
     ///     async fn handle(&self, args: HashMap<String, String>, _extra: pmcp::RequestHandlerExtra) -> pmcp::Result<GetPromptResult> {
     ///         let language = args.get("language").map(|s| s.as_str()).unwrap_or("unknown");
     ///         Ok(GetPromptResult::new(
-    ///             vec![PromptMessage {
-    ///                 role: pmcp::Role::User,
-    ///                 content: pmcp::Content::Text {
-    ///                     text: format!("Please review this {} code:", language),
-    ///                 },
-    ///             }],
+    ///             vec![PromptMessage::user(pmcp::Content::text(format!(
+    ///                 "Please review this {} code:",
+    ///                 language
+    ///             )))],
     ///             Some(format!("Code review prompt for {}", language)),
     ///         ))
     ///     }
@@ -2439,19 +2429,15 @@ impl ServerBuilder {
     /// impl ResourceHandler for FileResourceHandler {
     ///     async fn read(&self, uri: &str, _extra: pmcp::RequestHandlerExtra) -> pmcp::Result<ReadResourceResult> {
     ///         // Read file content...
-    ///         Ok(ReadResourceResult::new(vec![pmcp::Content::Text {
-    ///             text: "File content here".to_string(),
-    ///         }]))
+    ///         Ok(ReadResourceResult::new(vec![pmcp::Content::text("File content here")]))
     ///     }
     ///
     ///     async fn list(&self, _cursor: Option<String>, _extra: pmcp::RequestHandlerExtra) -> pmcp::Result<ListResourcesResult> {
-    ///         Ok(ListResourcesResult::new(vec![pmcp::ResourceInfo {
-    ///             uri: "file://example.txt".to_string(),
-    ///             name: "example.txt".to_string(),
-    ///             description: Some("Example file".to_string()),
-    ///             mime_type: Some("text/plain".to_string()),
-    ///             meta: None,
-    ///         }]))
+    ///         Ok(ListResourcesResult::new(vec![
+    ///             pmcp::ResourceInfo::new("file://example.txt", "example.txt")
+    ///                 .with_description("Example file")
+    ///                 .with_mime_type("text/plain"),
+    ///         ]))
     ///     }
     /// }
     ///
@@ -2498,18 +2484,9 @@ impl ServerBuilder {
     /// impl SamplingHandler for MockLLM {
     ///     async fn create_message(&self, params: CreateMessageParams, _extra: pmcp::RequestHandlerExtra) -> pmcp::Result<CreateMessageResult> {
     ///         // Process the messages and generate a response
-    ///         Ok(CreateMessageResult {
-    ///             content: pmcp::Content::Text {
-    ///                 text: "Generated response".to_string(),
-    ///             },
-    ///             model: "mock-llm-v1".to_string(),
-    ///             usage: Some(pmcp::TokenUsage {
-    ///                 input_tokens: 10,
-    ///                 output_tokens: 5,
-    ///                 total_tokens: 15,
-    ///             }),
-    ///             stop_reason: Some("end_of_text".to_string()),
-    ///         })
+    ///         Ok(CreateMessageResult::new(pmcp::Content::text("Generated response"), "mock-llm-v1")
+    ///             .with_usage(pmcp::TokenUsage::new(10, 5, 15))
+    ///             .with_stop_reason("end_of_text"))
     ///     }
     /// }
     ///
@@ -3366,11 +3343,9 @@ mod tests {
             _meta: None,
         };
 
-        let resource_content = crate::types::ReadResourceResult {
-            contents: vec![crate::types::Content::Text {
-                text: "Hello, world!".to_string(),
-            }],
-        };
+        let resource_content = crate::types::ReadResourceResult::new(vec![
+            crate::types::Content::text("Hello, world!"),
+        ]);
 
         let server = Server::builder()
             .name("test-server")
@@ -3568,11 +3543,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_list_resources() {
-        let resource_content = crate::types::ReadResourceResult {
-            contents: vec![crate::types::Content::Text {
-                text: "Hello, world!".to_string(),
-            }],
-        };
+        let resource_content = crate::types::ReadResourceResult::new(vec![
+            crate::types::Content::text("Hello, world!"),
+        ]);
 
         let server = Server::builder()
             .name("test-server")
@@ -3601,11 +3574,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_read_resource() {
-        let resource_content = crate::types::ReadResourceResult {
-            contents: vec![crate::types::Content::Text {
-                text: "Hello, world!".to_string(),
-            }],
-        };
+        let resource_content = crate::types::ReadResourceResult::new(vec![
+            crate::types::Content::text("Hello, world!"),
+        ]);
 
         let server = Server::builder()
             .name("test-server")

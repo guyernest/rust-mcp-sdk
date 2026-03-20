@@ -77,13 +77,12 @@ where
         description: impl Into<String>,
         required: bool,
     ) -> Self {
-        self.arguments.push(PromptArgument {
-            name: name.into(),
-            description: Some(description.into()),
-            required,
-            completion: None,
-            arg_type: None,
-        });
+        let mut arg = PromptArgument::new(name);
+        arg = arg.with_description(description);
+        if required {
+            arg = arg.required();
+        }
+        self.arguments.push(arg);
         self
     }
 
@@ -123,18 +122,14 @@ where
     }
 
     fn metadata(&self) -> Option<PromptInfo> {
-        Some(PromptInfo {
-            name: self.name.clone(),
-            title: None,
-            description: self.description.clone(),
-            arguments: if self.arguments.is_empty() {
-                None
-            } else {
-                Some(self.arguments.clone())
-            },
-            icons: None,
-            meta: None,
-        })
+        let mut info = PromptInfo::new(&self.name);
+        if let Some(desc) = &self.description {
+            info = info.with_description(desc);
+        }
+        if !self.arguments.is_empty() {
+            info = info.with_arguments(self.arguments.clone());
+        }
+        Some(info)
     }
 }
 
@@ -189,13 +184,12 @@ where
         description: impl Into<String>,
         required: bool,
     ) -> Self {
-        self.arguments.push(PromptArgument {
-            name: name.into(),
-            description: Some(description.into()),
-            required,
-            completion: None,
-            arg_type: None,
-        });
+        let mut arg = PromptArgument::new(name);
+        arg = arg.with_description(description);
+        if required {
+            arg = arg.required();
+        }
+        self.arguments.push(arg);
         self
     }
 
@@ -230,17 +224,13 @@ where
     }
 
     fn metadata(&self) -> Option<PromptInfo> {
-        Some(PromptInfo {
-            name: self.name.clone(),
-            title: None,
-            description: self.description.clone(),
-            arguments: if self.arguments.is_empty() {
-                None
-            } else {
-                Some(self.arguments.clone())
-            },
-            icons: None,
-            meta: None,
-        })
+        let mut info = PromptInfo::new(&self.name);
+        if let Some(desc) = &self.description {
+            info = info.with_description(desc);
+        }
+        if !self.arguments.is_empty() {
+            info = info.with_arguments(self.arguments.clone());
+        }
+        Some(info)
     }
 }

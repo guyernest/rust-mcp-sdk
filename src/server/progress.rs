@@ -250,13 +250,11 @@ impl ProgressReporter for ServerProgressReporter {
         );
 
         // Create and send progress notification
-        let notification =
-            Notification::Server(ServerNotification::Progress(ProgressNotification {
-                progress_token: self.progress_token.clone(),
-                progress,
-                total,
-                message,
-            }));
+        let mut pn = ProgressNotification::new(self.progress_token.clone(), progress, message);
+        if let Some(t) = total {
+            pn = pn.with_total(t);
+        }
+        let notification = Notification::Server(ServerNotification::Progress(pn));
 
         (self.notification_sender)(notification);
         Ok(())

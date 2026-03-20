@@ -39,7 +39,7 @@ use crate::error::Result;
 use crate::server::cancellation::RequestHandlerExtra;
 use crate::server::tasks::TaskRouter;
 use crate::server::PromptHandler;
-use crate::types::{Content, GetPromptResult, PromptInfo, PromptMessage, Role};
+use crate::types::{Content, GetPromptResult, PromptInfo, PromptMessage};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -494,10 +494,7 @@ impl TaskWorkflowPromptHandler {
             step_num += 1;
         }
 
-        PromptMessage {
-            role: Role::Assistant,
-            content: Content::Text { text },
-        }
+        PromptMessage::assistant(Content::text(text))
     }
 
     /// Resolve the owner ID from the request's auth context.
@@ -685,12 +682,7 @@ impl PromptHandler for TaskWorkflowPromptHandler {
             if let Some(guidance_template) = step.guidance() {
                 let guidance_text =
                     WorkflowPromptHandler::substitute_arguments(guidance_template, &args);
-                messages.push(PromptMessage {
-                    role: Role::Assistant,
-                    content: Content::Text {
-                        text: guidance_text,
-                    },
-                });
+                messages.push(PromptMessage::assistant(Content::text(guidance_text)));
             }
 
             // Fetch pre-tool resources (those not depending on step outputs)
@@ -710,12 +702,10 @@ impl PromptHandler for TaskWorkflowPromptHandler {
 
             // Handle resource-only steps
             if step.is_resource_only() {
-                messages.push(PromptMessage {
-                    role: Role::Assistant,
-                    content: Content::Text {
-                        text: format!("I'll fetch the required resources for {}...", step.name()),
-                    },
-                });
+                messages.push(PromptMessage::assistant(Content::text(format!(
+                    "I'll fetch the required resources for {}...",
+                    step.name()
+                ))));
 
                 if fetch_resources_after_tool
                     && self
@@ -807,16 +797,11 @@ impl PromptHandler for TaskWorkflowPromptHandler {
                                 .await
                             {
                                 Ok(result) => {
-                                    messages.push(PromptMessage {
-                                        role: Role::User,
-                                        content: Content::Text {
-                                            text: format!(
-                                                "Tool result:\n{}",
-                                                serde_json::to_string_pretty(&result)
-                                                    .unwrap_or_else(|_| format!("{:?}", result))
-                                            ),
-                                        },
-                                    });
+                                    messages.push(PromptMessage::user(Content::text(format!(
+                                        "Tool result:\n{}",
+                                        serde_json::to_string_pretty(&result)
+                                            .unwrap_or_else(|_| format!("{:?}", result))
+                                    ))));
 
                                     step_results.push((step.name().to_string(), result.clone()));
                                     step_statuses[idx] = StepStatus::Completed;
@@ -842,12 +827,10 @@ impl PromptHandler for TaskWorkflowPromptHandler {
                                     }
                                 },
                                 Err(e) => {
-                                    messages.push(PromptMessage {
-                                        role: Role::User,
-                                        content: Content::Text {
-                                            text: format!("Error executing tool: {}", e),
-                                        },
-                                    });
+                                    messages.push(PromptMessage::user(Content::text(format!(
+                                        "Error executing tool: {}",
+                                        e
+                                    ))));
 
                                     let step_name = step.name().to_string();
                                     step_results.push((

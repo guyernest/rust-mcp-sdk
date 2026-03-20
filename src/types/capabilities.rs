@@ -14,12 +14,10 @@ use std::collections::HashMap;
 /// ```rust
 /// use pmcp::types::ClientCapabilities;
 ///
-/// let capabilities = ClientCapabilities {
-///     experimental: Some([("custom-feature".to_string(), serde_json::json!(true))]
-///         .into_iter()
-///         .collect()),
-///     ..Default::default()
-/// };
+/// let mut capabilities = ClientCapabilities::default();
+/// capabilities.experimental = Some([("custom-feature".to_string(), serde_json::json!(true))]
+///     .into_iter()
+///     .collect());
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -315,10 +313,8 @@ impl ClientCapabilities {
     /// assert!(caps.supports_elicitation());
     ///
     /// // Build capabilities with elicitation
-    /// let interactive_client = ClientCapabilities {
-    ///     elicitation: Some(ElicitationCapabilities::default()),
-    ///     ..Default::default()
-    /// };
+    /// let mut interactive_client = ClientCapabilities::default();
+    /// interactive_client.elicitation = Some(ElicitationCapabilities::default());
     /// assert!(interactive_client.supports_elicitation());
     ///
     /// // Use for interactive tools
@@ -347,16 +343,14 @@ impl ClientCapabilities {
     /// assert!(caps.supports_sampling());
     ///
     /// // Build LLM client capabilities
-    /// let llm_client = ClientCapabilities {
-    ///     sampling: Some(SamplingCapabilities {
-    ///         models: Some(vec![
-    ///             "gpt-4".to_string(),
-    ///             "claude-3".to_string(),
-    ///             "llama-2".to_string(),
-    ///         ]),
-    ///     }),
-    ///     ..Default::default()
-    /// };
+    /// let mut llm_client = ClientCapabilities::default();
+    /// llm_client.sampling = Some(SamplingCapabilities {
+    ///     models: Some(vec![
+    ///         "gpt-4".to_string(),
+    ///         "claude-3".to_string(),
+    ///         "llama-2".to_string(),
+    ///     ]),
+    /// });
     /// assert!(llm_client.supports_sampling());
     ///
     /// // List supported models
@@ -464,10 +458,7 @@ impl ServerCapabilities {
     /// # impl PromptHandler for GreetingPrompt {
     /// #     async fn handle(&self, args: std::collections::HashMap<String, String>, _extra: pmcp::RequestHandlerExtra) -> Result<GetPromptResult, pmcp::Error> {
     /// #         Ok(GetPromptResult::new(
-    /// #             vec![PromptMessage {
-    /// #                 role: Role::System,
-    /// #                 content: Content::Text { text: "Hello!".to_string() },
-    /// #             }],
+    /// #             vec![PromptMessage::system(Content::text("Hello!"))],
     /// #             Some("Greeting prompt".to_string()),
     /// #         ))
     /// #     }
@@ -517,7 +508,7 @@ impl ServerCapabilities {
     /// # #[async_trait]
     /// # impl ResourceHandler for FileResource {
     /// #     async fn read(&self, uri: &str, _extra: pmcp::RequestHandlerExtra) -> Result<ReadResourceResult, pmcp::Error> {
-    /// #         Ok(ReadResourceResult::new(vec![Content::Text { text: "File contents".to_string() }]))
+    /// #         Ok(ReadResourceResult::new(vec![Content::text("File contents")]))
     /// #     }
     /// #     async fn list(&self, _path: Option<String>, _extra: pmcp::RequestHandlerExtra) -> Result<ListResourcesResult, pmcp::Error> {
     /// #         Ok(ListResourcesResult::new(vec![]))

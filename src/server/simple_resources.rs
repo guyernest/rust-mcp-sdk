@@ -84,16 +84,14 @@ impl StaticResource {
 
     /// Get the resource info.
     pub fn info(&self) -> ResourceInfo {
-        ResourceInfo {
-            uri: self.uri.clone(),
-            name: self.name.clone(),
-            title: None,
-            description: self.description.clone(),
-            mime_type: self.mime_type.clone(),
-            icons: None,
-            annotations: None,
-            meta: None,
+        let mut info = ResourceInfo::new(&self.uri, &self.name);
+        if let Some(desc) = &self.description {
+            info = info.with_description(desc);
         }
+        if let Some(mime) = &self.mime_type {
+            info = info.with_mime_type(mime);
+        }
+        info
     }
 
     /// Get the resource URI.
@@ -247,12 +245,11 @@ impl ResourceCollection {
     /// #[async_trait]
     /// impl DynamicResourceProvider for DatasetProvider {
     ///     fn templates(&self) -> Vec<ResourceTemplate> {
-    ///         vec![ResourceTemplate {
-    ///             uri_template: "datasets://{id}/schema".parse().unwrap(),
-    ///             name: "Dataset Schema".to_string(),
-    ///             description: Some("Schema for a dataset".to_string()),
-    ///             mime_type: Some("application/json".to_string()),
-    ///         }]
+    ///         vec![
+    ///             ResourceTemplate::new("datasets://{id}/schema", "Dataset Schema")
+    ///                 .with_description("Schema for a dataset")
+    ///                 .with_mime_type("application/json"),
+    ///         ]
     ///     }
     ///
     ///     async fn fetch(
@@ -262,9 +259,10 @@ impl ResourceCollection {
     ///         _context: RequestContext,
     ///     ) -> pmcp::Result<ReadResourceResult> {
     ///         let id = params.get("id").unwrap();
-    ///         Ok(ReadResourceResult::new(vec![Content::Text {
-    ///             text: format!("Schema for dataset {}", id),
-    ///         }]))
+    ///         Ok(ReadResourceResult::new(vec![Content::text(format!(
+    ///             "Schema for dataset {}",
+    ///             id
+    ///         ))]))
     ///     }
     /// }
     ///
@@ -291,30 +289,25 @@ impl ResourceCollection {
 
         // Add UI resources with `_meta.ui` descriptor (same format as tools/list)
         for (ui_resource, _contents) in self.ui_resources.values() {
-            infos.push(ResourceInfo {
-                uri: ui_resource.uri.clone(),
-                name: ui_resource.name.clone(),
-                title: None,
-                description: ui_resource.description.clone(),
-                mime_type: Some(ui_resource.mime_type.clone()),
-                icons: None,
-                annotations: None,
-                meta: crate::types::ui::build_ui_meta(Some(&ui_resource.uri)),
-            });
+            let mut info = ResourceInfo::new(&ui_resource.uri, &ui_resource.name)
+                .with_mime_type(&ui_resource.mime_type);
+            if let Some(desc) = &ui_resource.description {
+                info = info.with_description(desc);
+            }
+            info.meta = crate::types::ui::build_ui_meta(Some(&ui_resource.uri));
+            infos.push(info);
         }
 
         // Add dynamic templates as resources
         for template in self.router.all_templates() {
-            infos.push(ResourceInfo {
-                uri: template.uri_template.clone(),
-                name: template.name,
-                title: None,
-                description: template.description,
-                mime_type: template.mime_type,
-                icons: None,
-                annotations: None,
-                meta: None,
-            });
+            let mut info = ResourceInfo::new(&template.uri_template, &template.name);
+            if let Some(desc) = &template.description {
+                info = info.with_description(desc);
+            }
+            if let Some(mime) = &template.mime_type {
+                info = info.with_mime_type(mime);
+            }
+            infos.push(info);
         }
 
         infos

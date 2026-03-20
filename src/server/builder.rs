@@ -195,14 +195,7 @@ impl ServerCoreBuilder {
         let name = name.into();
         let handler = Arc::new(handler) as Arc<dyn PromptHandler>;
         // Cache metadata at registration time to avoid per-request cloning
-        let mut info = handler.metadata().unwrap_or_else(|| PromptInfo {
-            name: name.clone(),
-            title: None,
-            description: None,
-            arguments: None,
-            icons: None,
-            meta: None,
-        });
+        let mut info = handler.metadata().unwrap_or_else(|| PromptInfo::new(&name));
         info.name.clone_from(&name);
         self.prompt_infos.insert(name.clone(), info);
         self.prompts.insert(name, handler);
@@ -224,14 +217,7 @@ impl ServerCoreBuilder {
     pub fn prompt_arc(mut self, name: impl Into<String>, handler: Arc<dyn PromptHandler>) -> Self {
         let name = name.into();
         // Cache metadata at registration time to avoid per-request cloning
-        let mut info = handler.metadata().unwrap_or_else(|| PromptInfo {
-            name: name.clone(),
-            title: None,
-            description: None,
-            arguments: None,
-            icons: None,
-            meta: None,
-        });
+        let mut info = handler.metadata().unwrap_or_else(|| PromptInfo::new(&name));
         info.name.clone_from(&name);
         self.prompt_infos.insert(name.clone(), info);
         self.prompts.insert(name, handler);
@@ -754,28 +740,14 @@ impl ServerCoreBuilder {
                 workflow::TaskWorkflowPromptHandler::new(handler, task_router.clone(), workflow);
             let prompt_handler: Arc<dyn PromptHandler> = Arc::new(task_handler);
             // Cache metadata at registration time
-            let mut info = prompt_handler.metadata().unwrap_or_else(|| PromptInfo {
-                name: name.clone(),
-                title: None,
-                description: None,
-                arguments: None,
-                icons: None,
-                meta: None,
-            });
+            let mut info = prompt_handler.metadata().unwrap_or_else(|| PromptInfo::new(&name));
             info.name.clone_from(&name);
             self.prompt_infos.insert(name.clone(), info);
             self.prompts.insert(name, prompt_handler);
         } else {
             let prompt_handler: Arc<dyn PromptHandler> = Arc::new(handler);
             // Cache metadata at registration time
-            let mut info = prompt_handler.metadata().unwrap_or_else(|| PromptInfo {
-                name: name.clone(),
-                title: None,
-                description: None,
-                arguments: None,
-                icons: None,
-                meta: None,
-            });
+            let mut info = prompt_handler.metadata().unwrap_or_else(|| PromptInfo::new(&name));
             info.name.clone_from(&name);
             self.prompt_infos.insert(name.clone(), info);
             self.prompts.insert(name, prompt_handler);

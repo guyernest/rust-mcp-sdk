@@ -154,10 +154,9 @@ async fn process_events(
                 debug!("Resource {:?} changed: {}", kind, uri);
 
                 // Send resource update notification
-                let notification =
-                    ServerNotification::ResourceUpdated(crate::types::ResourceUpdatedParams {
-                        uri: uri.clone(),
-                    });
+                let notification = ServerNotification::ResourceUpdated(
+                    crate::types::ResourceUpdatedParams::new(&uri),
+                );
 
                 if let Err(e) = notification_tx.send(notification).await {
                     error!("Failed to send resource update notification: {}", e);
@@ -507,16 +506,8 @@ mod tests {
         let watcher = ResourceWatcher::new("/tmp", WatchConfig::default(), tx);
 
         // Add resource
-        let info = ResourceInfo {
-            uri: "file:///tmp/test.txt".to_string(),
-            name: "test.txt".to_string(),
-            title: None,
-            description: None,
-            mime_type: Some("text/plain".to_string()),
-            icons: None,
-            annotations: None,
-            meta: None,
-        };
+        let info = ResourceInfo::new("file:///tmp/test.txt", "test.txt")
+            .with_mime_type("text/plain");
 
         watcher
             .add_resource("file:///tmp/test.txt".to_string(), info.clone())

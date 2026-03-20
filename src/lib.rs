@@ -162,13 +162,7 @@ pub use types::{
 /// use pmcp::{ToolResult, Content};
 ///
 /// // Create a successful tool result
-/// let result = ToolResult {
-///     content: vec![Content::Text {
-///         text: "Operation completed successfully".to_string(),
-///     }],
-///     is_error: false,
-///     ..Default::default()
-/// };
+/// let result = ToolResult::new(vec![Content::text("Operation completed successfully")]);
 ///
 /// assert_eq!(result.content.len(), 1);
 /// assert!(!result.is_error);
@@ -180,13 +174,9 @@ pub use types::{
 /// use pmcp::{ToolResult, Content};
 ///
 /// // Create an error result
-/// let error_result = ToolResult {
-///     content: vec![Content::Text {
-///         text: "Tool execution failed: Invalid input parameter".to_string(),
-///     }],
-///     is_error: true,
-///     ..Default::default()
-/// };
+/// let error_result = ToolResult::error(vec![
+///     Content::text("Tool execution failed: Invalid input parameter"),
+/// ]);
 ///
 /// assert!(error_result.is_error);
 /// ```
@@ -197,16 +187,9 @@ pub use types::{
 /// use pmcp::{ToolResult, Content};
 ///
 /// // Tool result with resource content
-/// let resource_result = ToolResult {
-///     content: vec![Content::Resource {
-///         uri: "file:///tmp/output.txt".to_string(),
-///         text: Some("File contents here...".to_string()),
-///         mime_type: Some("text/plain".to_string()),
-///         meta: None,
-///     }],
-///     is_error: false,
-///     ..Default::default()
-/// };
+/// let resource_result = ToolResult::new(vec![
+///     Content::resource_with_text("file:///tmp/output.txt", "File contents here...", "text/plain"),
+/// ]);
 ///
 /// match &resource_result.content[0] {
 ///     Content::Resource { uri, mime_type, .. } => {
@@ -223,13 +206,7 @@ pub use types::{
 /// use pmcp::{ToolResult, Content};
 /// use serde_json;
 ///
-/// let result = ToolResult {
-///     content: vec![Content::Text {
-///         text: "Hello, MCP!".to_string(),
-///     }],
-///     is_error: false,
-///     ..Default::default()
-/// };
+/// let result = ToolResult::new(vec![Content::text("Hello, MCP!")]);
 ///
 /// // Serialize to JSON
 /// let json_str = serde_json::to_string(&result).unwrap();

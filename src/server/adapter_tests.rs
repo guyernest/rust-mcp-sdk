@@ -200,13 +200,13 @@ mod tests {
         let transport_clone = transport.clone();
 
         // Add a notification message
-        let notification =
-            TransportMessage::Notification(Notification::Progress(ProgressNotification {
-                progress_token: ProgressToken::String("test".to_string()),
-                progress: 50.0,
-                total: None,
-                message: Some("Processing".to_string()),
-            }));
+        let notification = TransportMessage::Notification(Notification::Progress(
+            ProgressNotification::new(
+                ProgressToken::String("test".to_string()),
+                50.0,
+                Some("Processing".to_string()),
+            ),
+        ));
         transport.add_message_to_receive(notification).await;
 
         let adapter = GenericTransportAdapter::new(transport);
@@ -380,13 +380,13 @@ mod tests {
         let handler = create_test_handler();
 
         // Create a notification body
-        let notification =
-            TransportMessage::Notification(Notification::Progress(ProgressNotification {
-                progress_token: ProgressToken::String("test".to_string()),
-                progress: 50.0,
-                total: None,
-                message: Some("Processing".to_string()),
-            }));
+        let notification = TransportMessage::Notification(Notification::Progress(
+            ProgressNotification::new(
+                ProgressToken::String("test".to_string()),
+                50.0,
+                Some("Processing".to_string()),
+            ),
+        ));
         let notification_body = serde_json::to_string(&notification).unwrap();
 
         // Handle the notification

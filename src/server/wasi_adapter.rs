@@ -378,10 +378,9 @@ mod tests {
 
         // Create a notification
         let notification = TransportMessage::Notification(crate::types::Notification::Server(
-            crate::types::ServerNotification::Cancelled(crate::types::CancelledNotification {
-                request_id: RequestId::from(1i64),
-                reason: "test".to_string(),
-            }),
+            crate::types::ServerNotification::Cancelled(
+                crate::types::CancelledNotification::new(RequestId::from(1i64)).with_reason("test"),
+            ),
         ));
 
         let request_body = serde_json::to_string(&notification).unwrap();

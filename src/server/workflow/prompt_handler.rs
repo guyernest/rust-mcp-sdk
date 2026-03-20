@@ -30,7 +30,7 @@ use crate::error::Result;
 use crate::server::cancellation::RequestHandlerExtra;
 use crate::server::middleware_executor::MiddlewareExecutor;
 use crate::server::{PromptHandler, ResourceHandler, ToolHandler};
-use crate::types::{Content, GetPromptResult, PromptArgument, PromptInfo, PromptMessage, Role};
+use crate::types::{Content, GetPromptResult, PromptArgument, PromptInfo, PromptMessage};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -381,24 +381,17 @@ impl WorkflowPromptHandler {
             match self.fetch_resource_content(&interpolated_uri, extra).await {
                 Ok(content) => {
                     // Embed resource content as user message
-                    messages.push(PromptMessage {
-                        role: Role::User,
-                        content: Content::Text {
-                            text: format!(
-                                "Resource content from {}:\n{}",
-                                interpolated_uri, content
-                            ),
-                        },
-                    });
+                    messages.push(PromptMessage::user(Content::text(format!(
+                        "Resource content from {}:\n{}",
+                        interpolated_uri, content
+                    ))));
                 },
                 Err(e) => {
                     // Resource fetch failed - add error message
-                    messages.push(PromptMessage {
-                        role: Role::User,
-                        content: Content::Text {
-                            text: format!("Error fetching resource {}: {}", interpolated_uri, e),
-                        },
-                    });
+                    messages.push(PromptMessage::user(Content::text(format!(
+                        "Error fetching resource {}: {}",
+                        interpolated_uri, e
+                    ))));
                     return Err(e);
                 },
             }
@@ -424,12 +417,7 @@ impl WorkflowPromptHandler {
             )
         };
 
-        PromptMessage {
-            role: Role::User,
-            content: Content::Text {
-                text: format!("I want to {}.{}", description, args_display),
-            },
-        }
+        PromptMessage::user(Content::text(format!("I want to {}.{}", description, args_display)))
     }
 
     /// Create assistant plan message listing all workflow steps
@@ -465,10 +453,7 @@ impl WorkflowPromptHandler {
             }
         }
 
-        Ok(PromptMessage {
-            role: Role::Assistant,
-            content: Content::Text { text: plan },
-        })
+        Ok(PromptMessage::assistant(Content::text(plan)))
     }
 
     /// Create assistant message announcing the tool call with resolved parameters
@@ -487,17 +472,12 @@ impl WorkflowPromptHandler {
 
         let params = self.resolve_tool_parameters(step, args, ctx)?;
 
-        Ok(PromptMessage {
-            role: Role::Assistant,
-            content: Content::Text {
-                text: format!(
-                    "Calling tool '{}' with parameters:\n{}",
-                    tool_handle.name(),
-                    serde_json::to_string_pretty(&params)
-                        .unwrap_or_else(|_| format!("{:?}", params))
-                ),
-            },
-        })
+        Ok(PromptMessage::assistant(Content::text(format!(
+            "Calling tool '{}' with parameters:\n{}",
+            tool_handle.name(),
+            serde_json::to_string_pretty(&params)
+                .unwrap_or_else(|_| format!("{:?}", params))
+        ))))
     }
 
     /// Fetch a resource and extract its text content
@@ -818,12 +798,7 @@ impl PromptHandler for WorkflowPromptHandler {
             // Guidance helps LLM understand the step's intent, especially for hybrid execution
             if let Some(guidance_template) = step.guidance() {
                 let guidance_text = Self::substitute_arguments(guidance_template, &args);
-                messages.push(PromptMessage {
-                    role: Role::Assistant,
-                    content: Content::Text {
-                        text: guidance_text,
-                    },
-                });
+                messages.push(PromptMessage::assistant(Content::text(guidance_text)));
             }
 
             // Fetch resources that DON'T depend on step outputs (pre-tool phase)
@@ -851,12 +826,10 @@ impl PromptHandler for WorkflowPromptHandler {
             if step.is_resource_only() {
                 // For resource-only steps, just fetch resources (already done above or will be done below)
                 // Add an assistant message to explain what we're doing
-                messages.push(PromptMessage {
-                    role: Role::Assistant,
-                    content: Content::Text {
-                        text: format!("I'll fetch the required resources for {}...", step.name()),
-                    },
-                });
+                messages.push(PromptMessage::assistant(Content::text(format!(
+                    "I'll fetch the required resources for {}...",
+                    step.name()
+                ))));
 
                 // If resources depend on step outputs, fetch them now
                 if fetch_resources_after_tool
@@ -915,16 +888,11 @@ impl PromptHandler for WorkflowPromptHandler {
                     {
                         Ok(result) => {
                             // User message with successful result
-                            messages.push(PromptMessage {
-                                role: Role::User,
-                                content: Content::Text {
-                                    text: format!(
-                                        "Tool result:\n{}",
-                                        serde_json::to_string_pretty(&result)
-                                            .unwrap_or_else(|_| format!("{:?}", result))
-                                    ),
-                                },
-                            });
+                            messages.push(PromptMessage::user(Content::text(format!(
+                                "Tool result:\n{}",
+                                serde_json::to_string_pretty(&result)
+                                    .unwrap_or_else(|_| format!("{:?}", result))
+                            ))));
 
                             // Store binding for next steps
                             if let Some(binding) = step.binding() {
@@ -951,12 +919,10 @@ impl PromptHandler for WorkflowPromptHandler {
                         },
                         Err(e) => {
                             // Execution error - STOP with error
-                            messages.push(PromptMessage {
-                                role: Role::User,
-                                content: Content::Text {
-                                    text: format!("Error executing tool: {}", e),
-                                },
-                            });
+                            messages.push(PromptMessage::user(Content::text(format!(
+                                "Error executing tool: {}",
+                                e
+                            ))));
                             break; // Let LLM handle recovery
                         },
                     }
@@ -997,25 +963,27 @@ impl PromptHandler for WorkflowPromptHandler {
                 self.workflow
                     .arguments()
                     .iter()
-                    .map(|(name, spec)| PromptArgument {
-                        name: name.to_string(),
-                        description: Some(spec.description.clone()),
-                        required: spec.required,
-                        completion: None,
-                        arg_type: spec.arg_type,
+                    .map(|(name, spec)| {
+                        let mut arg = PromptArgument::new(name.to_string())
+                            .with_description(&spec.description);
+                        if spec.required {
+                            arg = arg.required();
+                        }
+                        if let Some(arg_type) = spec.arg_type {
+                            arg.arg_type = Some(arg_type);
+                        }
+                        arg
                     })
                     .collect(),
             )
         };
 
-        Some(PromptInfo {
-            name: self.workflow.name().to_string(),
-            title: None,
-            description: Some(self.workflow.description().to_string()),
-            arguments,
-            icons: None,
-            meta: None,
-        })
+        let mut info = PromptInfo::new(self.workflow.name())
+            .with_description(self.workflow.description());
+        if let Some(args) = arguments {
+            info = info.with_arguments(args);
+        }
+        Some(info)
     }
 }
 
@@ -2012,11 +1980,9 @@ mod tests {
                 _extra: crate::server::cancellation::RequestHandlerExtra,
             ) -> Result<ReadResourceResult> {
                 if uri == "docs://task-format" {
-                    Ok(ReadResourceResult {
-                        contents: vec![Content::Text {
-                            text: "Task Format Guide:\n- Use [[page-name]] for links\n- Add TASK prefix for action items".to_string(),
-                        }],
-                    })
+                    Ok(ReadResourceResult::new(vec![Content::text(
+                        "Task Format Guide:\n- Use [[page-name]] for links\n- Add TASK prefix for action items",
+                    )]))
                 } else {
                     Err(crate::Error::validation(format!(
                         "Unknown resource: {}",
@@ -2151,17 +2117,12 @@ mod tests {
                 _extra: crate::server::cancellation::RequestHandlerExtra,
             ) -> Result<ReadResourceResult> {
                 match uri {
-                    "docs://format" => Ok(ReadResourceResult {
-                        contents: vec![Content::Text {
-                            text: "Format: [[link]]".to_string(),
-                        }],
-                    }),
-                    "docs://examples" => Ok(ReadResourceResult {
-                        contents: vec![Content::Text {
-                            text: "Examples:\n- [[project]] Task 1\n- [[project]] Task 2"
-                                .to_string(),
-                        }],
-                    }),
+                    "docs://format" => Ok(ReadResourceResult::new(vec![Content::text(
+                        "Format: [[link]]",
+                    )])),
+                    "docs://examples" => Ok(ReadResourceResult::new(vec![Content::text(
+                        "Examples:\n- [[project]] Task 1\n- [[project]] Task 2",
+                    )])),
                     _ => Err(crate::Error::validation(format!(
                         "Unknown resource: {}",
                         uri

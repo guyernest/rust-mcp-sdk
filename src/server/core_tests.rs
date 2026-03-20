@@ -90,12 +90,10 @@ mod tests {
             self.invocation_count.fetch_add(1, Ordering::SeqCst);
             Ok(GetPromptResult {
                 description: Some("Test prompt".to_string()),
-                messages: vec![PromptMessage {
-                    role: Role::User,
-                    content: Content::Text {
-                        text: format!("Prompt with args: {:?}", args),
-                    },
-                }],
+                messages: vec![PromptMessage::user(Content::text(format!(
+                    "Prompt with args: {:?}",
+                    args
+                )))],
                 _meta: None,
             })
         }
@@ -109,16 +107,9 @@ mod tests {
     impl MockResourceHandler {
         fn new() -> Self {
             Self {
-                resources: vec![ResourceInfo {
-                    uri: "test://resource1".to_string(),
-                    name: "Resource 1".to_string(),
-                    title: None,
-                    description: Some("Test resource 1".to_string()),
-                    mime_type: Some("text/plain".to_string()),
-                    icons: None,
-                    annotations: None,
-                    meta: None,
-                }],
+                resources: vec![ResourceInfo::new("test://resource1", "Resource 1")
+                    .with_description("Test resource 1")
+                    .with_mime_type("text/plain")],
             }
         }
     }
@@ -127,11 +118,9 @@ mod tests {
     impl ResourceHandler for MockResourceHandler {
         async fn read(&self, uri: &str, _extra: RequestHandlerExtra) -> Result<ReadResourceResult> {
             if uri == "test://resource1" {
-                Ok(ReadResourceResult {
-                    contents: vec![Content::Text {
-                        text: "Resource content".to_string(),
-                    }],
-                })
+                Ok(ReadResourceResult::new(vec![Content::text(
+                    "Resource content",
+                )]))
             } else {
                 Err(Error::internal(format!("Resource not found: {}", uri)))
             }
@@ -629,12 +618,9 @@ mod tests {
         let server = create_test_server();
 
         // Send a notification
-        let notification = Notification::Progress(ProgressNotification {
-            progress_token: ProgressToken::String("test".to_string()),
-            progress: 50.0,
-            total: None,
-            message: Some("Processing".to_string()),
-        });
+        let notification = Notification::Progress(
+            ProgressNotification::new(ProgressToken::String("test".to_string()), 50.0, Some("Processing".to_string())),
+        );
 
         // Should handle without error
         let result = server.handle_notification(notification).await;

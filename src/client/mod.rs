@@ -1161,10 +1161,10 @@ impl<T: Transport> Client<T> {
     /// - Network or protocol errors occur while sending the cancellation
     pub async fn cancel_request(&self, request_id: &RequestId) -> Result<()> {
         // Send cancellation notification
-        self.send_notification(Notification::Cancelled(CancelledNotification {
-            request_id: request_id.clone(),
-            reason: Some("User requested cancellation".to_string()),
-        }))
+        self.send_notification(Notification::Cancelled(
+            CancelledNotification::new(request_id.clone())
+                .with_reason("User requested cancellation"),
+        ))
         .await?;
 
         // Cancel any local tracking
@@ -1196,12 +1196,11 @@ impl<T: Transport> Client<T> {
     /// client.initialize(ClientCapabilities::default()).await?;
     ///
     /// // Send progress update for a file processing operation
-    /// let progress = ProgressNotification {
-    ///     progress_token: pmcp::ProgressToken::String("file-processing".to_string()),
-    ///     progress: 75.0,
-    ///     total: None,
-    ///     message: Some("Processing files...".to_string()),
-    /// };
+    /// let progress = ProgressNotification::new(
+    ///     pmcp::ProgressToken::String("file-processing".to_string()),
+    ///     75.0,
+    ///     Some("Processing files...".to_string()),
+    /// );
     ///
     /// client.send_progress(progress).await?;
     /// # Ok(())
@@ -1856,12 +1855,11 @@ mod tests {
         let _ = client.initialize(ClientCapabilities::default()).await;
 
         // Send progress
-        let progress = ProgressNotification {
-            progress_token: ProgressToken::String("test".to_string()),
-            progress: 50.0,
-            total: None,
-            message: Some("Halfway done".to_string()),
-        };
+        let progress = ProgressNotification::new(
+            ProgressToken::String("test".to_string()),
+            50.0,
+            Some("Halfway done".to_string()),
+        );
 
         let result = client.send_progress(progress).await;
         assert!(result.is_ok());

@@ -24,12 +24,9 @@
 //! impl DynamicResourceProvider for DatasetProvider {
 //!     fn templates(&self) -> Vec<ResourceTemplate> {
 //!         vec![
-//!             ResourceTemplate {
-//!                 uri_template: "datasets://{id}/schema".parse().unwrap(),
-//!                 name: "Dataset Schema".to_string(),
-//!                 description: Some("Schema for a dataset".to_string()),
-//!                 mime_type: Some("application/json".to_string()),
-//!             }
+//!             ResourceTemplate::new("datasets://{id}/schema", "Dataset Schema")
+//!                 .with_description("Schema for a dataset")
+//!                 .with_mime_type("application/json"),
 //!         ]
 //!     }
 //!
@@ -40,9 +37,10 @@
 //!         _context: RequestContext,
 //!     ) -> Result<ReadResourceResult> {
 //!         let id = params.get("id").unwrap();
-//!         Ok(ReadResourceResult::new(vec![Content::Text {
-//!             text: format!("Schema for dataset {}", id),
-//!         }]))
+//!         Ok(ReadResourceResult::new(vec![Content::text(format!(
+//!             "Schema for dataset {}",
+//!             id
+//!         ))]))
 //!     }
 //! }
 //! ```
@@ -196,12 +194,8 @@ impl RequestContext {
 /// impl DynamicResourceProvider for FileProvider {
 ///     fn templates(&self) -> Vec<ResourceTemplate> {
 ///         vec![
-///             ResourceTemplate {
-///                 uri_template: "file://{path}".parse().unwrap(),
-///                 name: "File Resource".to_string(),
-///                 description: Some("Access to file system".to_string()),
-///                 mime_type: None,
-///             }
+///             ResourceTemplate::new("file://{path}", "File Resource")
+///                 .with_description("Access to file system"),
 ///         ]
 ///     }
 ///
@@ -219,9 +213,10 @@ impl RequestContext {
 ///         let full_path = format!("{}/{}", self.base_path, path);
 ///
 ///         // Read file and return contents...
-///         Ok(ReadResourceResult::new(vec![Content::Text {
-///             text: format!("Contents of {}", full_path),
-///         }]))
+///         Ok(ReadResourceResult::new(vec![Content::text(format!(
+///             "Contents of {}",
+///             full_path
+///         ))]))
 ///     }
 /// }
 /// ```
@@ -241,18 +236,12 @@ pub trait DynamicResourceProvider: Send + Sync {
     /// use pmcp::types::ResourceTemplate;
     ///
     /// let templates = vec![
-    ///     ResourceTemplate {
-    ///         uri_template: "datasets://{id}/schema".parse().unwrap(),
-    ///         name: "Dataset Schema".to_string(),
-    ///         description: Some("Schema for a dataset".to_string()),
-    ///         mime_type: Some("application/json".to_string()),
-    ///     },
-    ///     ResourceTemplate {
-    ///         uri_template: "datasets://{id}/preview".parse().unwrap(),
-    ///         name: "Dataset Preview".to_string(),
-    ///         description: Some("Preview of dataset contents".to_string()),
-    ///         mime_type: Some("text/plain".to_string()),
-    ///     },
+    ///     ResourceTemplate::new("datasets://{id}/schema", "Dataset Schema")
+    ///         .with_description("Schema for a dataset")
+    ///         .with_mime_type("application/json"),
+    ///     ResourceTemplate::new("datasets://{id}/preview", "Dataset Preview")
+    ///         .with_description("Preview of dataset contents")
+    ///         .with_mime_type("text/plain"),
     /// ];
     /// ```
     fn templates(&self) -> Vec<ResourceTemplate>;
@@ -412,16 +401,9 @@ mod tests {
     #[async_trait]
     impl DynamicResourceProvider for TestProvider {
         fn templates(&self) -> Vec<ResourceTemplate> {
-            vec![ResourceTemplate {
-                uri_template: "test://{id}".to_string(),
-                name: "Test Resource".to_string(),
-                title: None,
-                description: Some("A test resource".to_string()),
-                mime_type: Some("text/plain".to_string()),
-                icons: None,
-                annotations: None,
-                meta: None,
-            }]
+            vec![ResourceTemplate::new("test://{id}", "Test Resource")
+                .with_description("A test resource")
+                .with_mime_type("text/plain")]
         }
 
         fn priority(&self) -> i32 {
@@ -435,11 +417,10 @@ mod tests {
             _context: RequestContext,
         ) -> Result<ReadResourceResult> {
             let id = params.get("id").unwrap();
-            Ok(ReadResourceResult {
-                contents: vec![Content::Text {
-                    text: format!("Resource {}", id),
-                }],
-            })
+            Ok(ReadResourceResult::new(vec![Content::text(format!(
+                "Resource {}",
+                id
+            ))]))
         }
     }
 
