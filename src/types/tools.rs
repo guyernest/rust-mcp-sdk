@@ -182,7 +182,7 @@ pub struct ToolInfo {
     pub annotations: Option<ToolAnnotations>,
     /// Optional icons (MCP 2025-11-25)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub icons: Option<Vec<crate::types::protocol::IconInfo>>,
+    pub icons: Option<Vec<super::protocol::IconInfo>>,
     /// Optional metadata (e.g., for UI resource association in MCP Apps Extension)
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none", default)]
     #[allow(clippy::pub_underscore_fields)] // _meta is part of MCP protocol spec

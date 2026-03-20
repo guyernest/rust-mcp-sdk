@@ -5,7 +5,7 @@
 
 use crate::error::{Error, ErrorCode, Result};
 use crate::types::elicitation::{ElicitRequestParams, ElicitResult};
-use crate::types::protocol::ServerRequest;
+use crate::types::ServerRequest;
 use std::collections::HashMap;
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]

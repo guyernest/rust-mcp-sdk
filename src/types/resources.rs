@@ -41,7 +41,7 @@ pub struct ResourceInfo {
     pub mime_type: Option<String>,
     /// Optional icons (MCP 2025-11-25)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub icons: Option<Vec<crate::types::protocol::IconInfo>>,
+    pub icons: Option<Vec<super::protocol::IconInfo>>,
     /// Optional content annotations (MCP 2025-11-25)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<crate::types::content::Annotations>,
@@ -134,7 +134,7 @@ pub struct ResourceTemplate {
     pub mime_type: Option<String>,
     /// Optional icons (MCP 2025-11-25)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub icons: Option<Vec<crate::types::protocol::IconInfo>>,
+    pub icons: Option<Vec<super::protocol::IconInfo>>,
     /// Optional content annotations (MCP 2025-11-25)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub annotations: Option<crate::types::content::Annotations>,

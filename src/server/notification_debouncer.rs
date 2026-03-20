@@ -5,7 +5,7 @@
 //! state changes.
 
 use crate::error::Result;
-use crate::types::protocol::ServerNotification;
+use crate::types::ServerNotification;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -405,7 +405,7 @@ impl std::fmt::Debug for NotificationBatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::protocol::ProgressNotification;
+    use crate::types::ProgressNotification;
 
     #[tokio::test]
     async fn test_notification_debouncing() {

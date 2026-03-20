@@ -668,11 +668,11 @@ mod tests {
     fn test_create_server_request_create_message() {
         let id = RequestId::from(6i64);
         let request = Request::Server(Box::new(ServerRequest::CreateMessage(Box::new(
-            crate::types::protocol::CreateMessageParams {
+            crate::types::CreateMessageParams {
                 messages: vec![],
                 model_preferences: None,
                 system_prompt: None,
-                include_context: crate::types::protocol::IncludeContext::None,
+                include_context: crate::types::IncludeContext::None,
                 temperature: None,
                 max_tokens: None,
                 stop_sequences: None,
@@ -859,11 +859,11 @@ mod tests {
             total: None,
             message: None,
         };
-        let resource_updated = crate::types::protocol::ResourceUpdatedParams {
+        let resource_updated = crate::types::ResourceUpdatedParams {
             uri: "test://uri".to_string(),
         };
-        let log_message = crate::types::protocol::LogMessageParams {
-            level: crate::types::protocol::LogLevel::Info,
+        let log_message = crate::types::LogMessageParams {
+            level: crate::types::LogLevel::Info,
             message: String::new(),
             logger: None,
             data: None,

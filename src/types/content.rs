@@ -89,7 +89,7 @@ pub enum Content {
         mime_type: Option<String>,
         /// Optional icons
         #[serde(skip_serializing_if = "Option::is_none")]
-        icons: Option<Vec<crate::types::protocol::IconInfo>>,
+        icons: Option<Vec<super::protocol::IconInfo>>,
         /// Optional content annotations
         #[serde(skip_serializing_if = "Option::is_none")]
         annotations: Option<Annotations>,

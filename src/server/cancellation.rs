@@ -2,7 +2,7 @@
 
 use crate::error::Result;
 use crate::server::progress::ProgressReporter;
-use crate::types::protocol::{CancelledNotification, Notification};
+use crate::types::{CancelledNotification, Notification};
 use std::collections::HashMap;
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]

@@ -39,7 +39,7 @@ pub struct PromptInfo {
     pub arguments: Option<Vec<PromptArgument>>,
     /// Optional icons (MCP 2025-11-25)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub icons: Option<Vec<crate::types::protocol::IconInfo>>,
+    pub icons: Option<Vec<super::protocol::IconInfo>>,
     /// Optional metadata (MCP 2025-11-25)
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
     pub meta: Option<serde_json::Map<String, serde_json::Value>>,

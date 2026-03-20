@@ -808,17 +808,17 @@ impl Server {
 
     /// Log an error message.
     async fn log_error(message: &str) {
-        crate::log(crate::types::protocol::LogLevel::Error, message, None).await;
+        crate::log(crate::types::LogLevel::Error, message, None).await;
     }
 
     /// Log a warning message.
     async fn log_warning(message: &str) {
-        crate::log(crate::types::protocol::LogLevel::Warning, message, None).await;
+        crate::log(crate::types::LogLevel::Warning, message, None).await;
     }
 
     /// Log a debug message.
     async fn log_debug(message: &str) {
-        crate::log(crate::types::protocol::LogLevel::Debug, message, None).await;
+        crate::log(crate::types::LogLevel::Debug, message, None).await;
     }
 
     /// Run the main event loop.
@@ -1312,7 +1312,7 @@ impl Server {
         // Merge tool descriptor keys into content _meta for widget resources
         if !self.uri_to_tool_meta.is_empty() {
             for content in &mut result.contents {
-                if let crate::types::protocol::Content::Resource { uri, meta, .. } = content {
+                if let crate::types::Content::Resource { uri, meta, .. } = content {
                     if let Some(tool_meta) = self.uri_to_tool_meta.get(uri.as_str()) {
                         let content_meta = meta.get_or_insert_with(serde_json::Map::new);
                         crate::types::ui::deep_merge(content_meta, tool_meta.clone());
@@ -3692,11 +3692,11 @@ mod tests {
             .unwrap();
 
         let request = Request::Server(Box::new(crate::types::ServerRequest::CreateMessage(
-            Box::new(crate::types::protocol::CreateMessageParams {
+            Box::new(crate::types::CreateMessageParams {
                 messages: vec![],
                 model_preferences: None,
                 system_prompt: None,
-                include_context: crate::types::protocol::IncludeContext::None,
+                include_context: crate::types::IncludeContext::None,
                 temperature: None,
                 max_tokens: None,
                 stop_sequences: None,
