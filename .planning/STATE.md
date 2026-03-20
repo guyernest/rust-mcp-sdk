@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: in-progress
-stopped_at: Completed 54-02-PLAN.md
-last_updated: "2026-03-20T06:45:00Z"
-last_activity: 2026-03-20 -- Phase 54 Plan 02 complete (33+ new 2025-11-25 types)
+stopped_at: Completed 54-03-PLAN.md
+last_updated: "2026-03-20T14:23:00Z"
+last_activity: 2026-03-20 -- Phase 54 Plan 03 complete (import cleanup, 11 aliases removed)
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 4
-  completed_plans: 2
-  percent: 50
+  completed_plans: 3
+  percent: 75
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
-**Current focus:** v2.0 Protocol Modernization -- Phase 54 Plan 03 next (re-export consolidation)
+**Current focus:** v2.0 Protocol Modernization -- Phase 54 Plan 04 next (migration guide + external consumer updates)
 
 ## Current Position
 
 Phase: 54 (protocol-version-2025-11-25-type-cleanup)
-Plan: 2 of 4
-Status: Plan 02 complete -- 33+ new 2025-11-25 types. Plan 03 next.
-Last activity: 2026-03-20 -- Phase 54 Plan 02 complete
+Plan: 3 of 4
+Status: Plan 03 complete -- import cleanup, 11 aliases removed, 707 tests pass. Plan 04 next.
+Last activity: 2026-03-20 -- Phase 54 Plan 03 complete
 
-Progress: [#####░░░░░] 50%
+Progress: [########░░] 75%
 
 ## Shipped Milestones
 
@@ -46,7 +46,7 @@ Progress: [#####░░░░░] 50%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 67 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 2)
+- Total plans completed: 68 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 3)
 - Total phases completed: 29
 
 ## Accumulated Context
@@ -126,6 +126,10 @@ v1.6 decisions:
 - [Phase 54-02]: SamplingMessageContent consolidates SamplingResultContent -- single enum for SamplingMessage and CreateMessageResultWithTools
 - [Phase 54-02]: LogLevel kept as deprecated type alias; LoggingLevel is canonical 8-value enum with Notice, Alert, Emergency
 - [Phase 54-02]: TaskRouter trait kept Value params -- typed params converted at call sites to avoid breaking pmcp-tasks interface
+- [Phase 54-03]: LogLevel kept as deprecated alias (not removed) per Plan 02 decision for v2.0 backward compat
+- [Phase 54-03]: types-internal IconInfo references use super::protocol::IconInfo for clean module-local paths
+- [Phase 54-03]: ClientRequest enum variants now use canonical names (ListToolsRequest, CallToolRequest, etc.)
+- [Phase 54-03]: PromptMessage.content field type changed from MessageContent to Content (canonical name)
 
 ### Roadmap Evolution
 
@@ -158,6 +162,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-20T06:45:00Z
-Stopped at: Completed 54-02-PLAN.md
-Resume: Plan 02 complete (33+ new 2025-11-25 types, bug fixes). Plan 03 next (re-export consolidation and integration testing).
+Last session: 2026-03-20T14:23:00Z
+Stopped at: Completed 54-03-PLAN.md
+Resume: Plan 03 complete (import cleanup, 11 aliases removed, 31 files updated). Plan 04 next (migration guide, external consumer updates).
