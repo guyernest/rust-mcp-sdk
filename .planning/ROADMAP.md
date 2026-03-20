@@ -528,13 +528,22 @@ Plans:
 
 ### Phase 55: Tasks with Polling
 
-**Goal:** Implement MCP Tasks with status polling over streamable HTTP. Add tasks/create, tasks/get, tasks/cancel methods. TaskStore trait with in-memory and DynamoDB backends. Task capability negotiation in ServerCapabilities.tasks and ClientCapabilities.tasks. No SSE-based task notifications — polling is the async pattern.
+**Goal:** Reconcile SDK task types as canonical source, add TaskStore trait with InMemoryTaskStore to SDK, wire into server builder and request dispatch with ServerCapabilities.tasks capability negotiation. Polling-only async pattern -- no SSE notifications.
 **Requirements**: TASKS-POLLING, TASK-STORE, TASK-CAPABILITIES
 **Depends on:** Phase 54.1
-**Plans:** 0 plans
+**Success Criteria** (what must be TRUE):
+  1. SDK TaskStatus has is_terminal() and can_transition_to() utility methods matching pmcp-tasks
+  2. Task.ttl serializes as null (not omitted) when None, per MCP spec
+  3. SDK defines TaskStore trait with create/get/list/cancel/update_status/cleanup_expired
+  4. InMemoryTaskStore provides dev/test implementation with owner isolation, state machine, TTL
+  5. Builder.task_store() registers Arc<dyn TaskStore> and auto-configures ServerCapabilities.tasks
+  6. Server dispatches tasks/get, tasks/list, tasks/cancel through TaskStore
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 55 to break down)
+- [ ] 55-01-PLAN.md — SDK task type reconciliation: add utility methods, fix TTL serialization
+- [ ] 55-02-PLAN.md — TaskStore trait + InMemoryTaskStore in SDK core
+- [ ] 55-03-PLAN.md — Server builder integration, core dispatch, capability negotiation, re-exports
 
 ### Phase 56: Tower Middleware + DNS Rebinding Protection
 
