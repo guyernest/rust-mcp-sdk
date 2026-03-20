@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: Protocol Modernization
-status: in-progress
-stopped_at: Completed 54-03-PLAN.md
-last_updated: "2026-03-20T14:23:00Z"
-last_activity: 2026-03-20 -- Phase 54 Plan 03 complete (import cleanup, 11 aliases removed)
+milestone: v1.6
+milestone_name: CLI DX Overhaul
+status: completed
+stopped_at: Completed 54-04-PLAN.md
+last_updated: "2026-03-20T14:45:24.624Z"
+last_activity: 2026-03-20 -- Phase 54 Plan 04 complete (external consumer cleanup + MIGRATION.md)
 progress:
-  total_phases: 4
-  completed_phases: 0
-  total_plans: 4
-  completed_plans: 3
+  total_phases: 31
+  completed_phases: 23
+  total_plans: 53
+  completed_plans: 53
   percent: 75
 ---
 
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
-**Current focus:** v2.0 Protocol Modernization -- Phase 54 Plan 04 next (migration guide + external consumer updates)
+**Current focus:** v2.0 Protocol Modernization -- Phase 54 complete. Phase 55 (Tasks with Polling) next.
 
 ## Current Position
 
-Phase: 54 (protocol-version-2025-11-25-type-cleanup)
-Plan: 3 of 4
-Status: Plan 03 complete -- import cleanup, 11 aliases removed, 707 tests pass. Plan 04 next.
-Last activity: 2026-03-20 -- Phase 54 Plan 03 complete
+Phase: 54 (protocol-version-2025-11-25-type-cleanup) -- COMPLETE
+Plan: 4 of 4
+Status: Phase 54 complete -- all 4 plans done. MIGRATION.md written. Workspace compiles.
+Last activity: 2026-03-20 -- Phase 54 Plan 04 complete (external consumer cleanup + MIGRATION.md)
 
-Progress: [########░░] 75%
+Progress: [##########] 100%
 
 ## Shipped Milestones
 
@@ -46,7 +46,7 @@ Progress: [########░░] 75%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 68 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 3)
+- Total plans completed: 69 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 4)
 - Total phases completed: 29
 
 ## Accumulated Context
@@ -130,6 +130,9 @@ v1.6 decisions:
 - [Phase 54-03]: types-internal IconInfo references use super::protocol::IconInfo for clean module-local paths
 - [Phase 54-03]: ClientRequest enum variants now use canonical names (ListToolsRequest, CallToolRequest, etc.)
 - [Phase 54-03]: PromptMessage.content field type changed from MessageContent to Content (canonical name)
+- [Phase 54]: Used Implementation::new() across all test files instead of adding 4 optional fields to each struct literal
+- [Phase 54]: Rewrote elicitation example 19 using spec-compliant ElicitRequestParams instead of disabling
+- [Phase 54]: Added task type re-exports to protocol/mod.rs for flat pmcp::types:: access
 
 ### Roadmap Evolution
 
@@ -162,6 +165,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-20T14:23:00Z
-Stopped at: Completed 54-03-PLAN.md
-Resume: Plan 03 complete (import cleanup, 11 aliases removed, 31 files updated). Plan 04 next (migration guide, external consumer updates).
+Last session: 2026-03-20T14:45:24.621Z
+Stopped at: Completed 54-04-PLAN.md
+Resume: Phase 54 complete. All 4 plans executed. MIGRATION.md written (407 lines). Workspace compiles, 707 tests pass, all examples build. Phase 55 (Tasks with Polling) next.
