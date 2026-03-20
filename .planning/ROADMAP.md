@@ -258,7 +258,7 @@ Plans:
 **Goal:** Align SDK types, bridge protocol, and scaffold template with ChatGPT's official MCP Apps protocol -- add _meta to Content::Resource, fix MIME type, update bridge method names, fix scaffold
 **Requirements**: P41-01, P41-02, P41-03, P41-04, P41-05
 **Depends on:** Phase 34
-**Plans:** 3 plans
+**Plans:** 4 plans
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 35 to break down)
@@ -502,12 +502,13 @@ Plans:
 **Goal:** Upgrade Rust SDK to MCP protocol 2025-11-25 with version negotiation (latest 3 versions). Add 20+ new types (TaskSchema, IconSchema, AudioContent, ResourceLink, expanded ServerCapabilities/ClientCapabilities). Clean up legacy type aliases and deprecated fields. Breaking change — part of the v2.0.0 semver bump.
 **Requirements**: PROTO-2025-11-25, VERSION-NEGOTIATION, TYPE-CLEANUP
 **Depends on:** Phase 53
-**Plans:** 3 plans
+**Plans:** 4 plans
 
 Plans:
 - [ ] 54-01-PLAN.md — Module split (protocol.rs -> 7 domain sub-modules) + version negotiation update to 2025-11-25
 - [ ] 54-02-PLAN.md — Add 33 new types (task, content, sampling, elicitation, capabilities) + fix IncludeContext, LogLevel bugs
-- [ ] 54-03-PLAN.md — Fix consumer imports, remove 11 legacy aliases, write MIGRATION.md
+- [ ] 54-03-PLAN.md — Fix internal src/ imports, remove 11 legacy type aliases
+- [ ] 54-04-PLAN.md — Fix external imports (examples/tests/workspace), write MIGRATION.md
 
 ### Phase 55: Tasks with Polling
 
