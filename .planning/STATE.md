@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: in-progress
-stopped_at: Phase 55 context gathered
-last_updated: "2026-03-20T18:00:00Z"
-last_activity: 2026-03-20 -- Phase 54 complete, Phase 55 context captured
+stopped_at: Phase 54.1 context gathered
+last_updated: "2026-03-20T22:00:00Z"
+last_activity: 2026-03-20 -- Phase 54.1 inserted and context captured
 progress:
   total_phases: 6
   completed_phases: 1
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
-**Current focus:** v2.0 Protocol Modernization -- Phase 54 complete. Phase 55 (Tasks with Polling) next.
+**Current focus:** v2.0 Protocol Modernization -- Phase 54 complete. Phase 54.1 (Protocol Type Construction DX) next, then Phase 55 (Tasks with Polling).
 
 ## Current Position
 
-Phase: 54 (protocol-version-2025-11-25-type-cleanup) -- COMPLETE
-Plan: 4 of 4
-Status: Phase 54 complete -- all 4 plans done. MIGRATION.md written. Workspace compiles.
-Last activity: 2026-03-20 -- Phase 54 Plan 04 complete (external consumer cleanup + MIGRATION.md)
+Phase: 54.1 (protocol-type-construction-dx) -- CONTEXT GATHERED
+Plan: 0 of TBD
+Status: Phase 54.1 inserted after Phase 54. Context gathered. Ready for planning.
+Last activity: 2026-03-20 -- Phase 54.1 context captured (dev team DX feedback)
 
 Progress: [##########] 100%
 
