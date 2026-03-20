@@ -209,6 +209,21 @@ impl Default for StreamableHttpServerConfig {
     }
 }
 
+impl StreamableHttpServerConfig {
+    /// Create a stateless configuration — no sessions, JSON responses.
+    /// Ideal for Lambda and serverless deployments.
+    pub fn stateless() -> Self {
+        Self {
+            session_id_generator: None,
+            enable_json_response: true,
+            event_store: None,
+            on_session_initialized: None,
+            on_session_closed: None,
+            http_middleware: None,
+        }
+    }
+}
+
 /// Session information
 #[derive(Debug, Clone)]
 struct SessionInfo {

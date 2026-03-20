@@ -166,3 +166,9 @@ impl From<crate::Error> for CompositionError {
         Self::Transport(err.to_string())
     }
 }
+
+impl From<CompositionError> for crate::Error {
+    fn from(err: CompositionError) -> Self {
+        crate::Error::internal(err.to_string())
+    }
+}
