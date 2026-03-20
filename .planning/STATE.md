@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 ## Current Position
 
 Phase: 54.1 (protocol-type-construction-dx) -- IN PROGRESS
-Plan: 1 of 3
-Status: Plan 01 complete (resources, prompts, content DX). Plans 02/03 in parallel.
-Last activity: 2026-03-20 -- Plan 01 executed (constructors for resources, prompts, content)
+Plan: 2 of 3
+Status: Plans 01 and 02 complete. Plan 03 (codebase migration) remaining.
+Last activity: 2026-03-20 -- Plan 02 executed (protocol core, tasks, sampling, notifications, capabilities, tools DX)
 
 Progress: [##########] 100%
 
@@ -137,6 +137,10 @@ v1.6 decisions:
 - [Phase 54]: Added task type re-exports to protocol/mod.rs for flat pmcp::types:: access
 - [Phase 54.1]: Content enum variants keep struct literal syntax; #[non_exhaustive] only on structs per D-08
 - [Phase 54.1]: PromptMessage does not derive Default (both role and content required); uses ::new(role, content) + convenience ::user() ::assistant() ::system()
+- [Phase 54.1-02]: TaskStatus Default variant is Working (most common initial state for task creation)
+- [Phase 54.1-02]: Task::new() sets timestamps to empty strings -- .with_timestamps() sets both at once
+- [Phase 54.1-02]: ToolChoice uses static factory methods (auto/required/none) not ::new() since it wraps single enum field
+- [Phase 54.1-02]: CreateMessageParams has no Default (messages required) -- ::new(messages) only
 
 ### Roadmap Evolution
 
@@ -172,6 +176,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-20T20:13:20Z
-Stopped at: Completed 54.1-01-PLAN.md
-Resume: Phase 54.1 Plan 01 complete. ResourceInfo, ResourceTemplate, PromptInfo, PromptArgument, PromptMessage, Content, ResourceLinkContent, Annotations all have constructors and #[non_exhaustive]. Plans 02/03 executing in parallel.
+Last session: 2026-03-20T20:13:52Z
+Stopped at: Completed 54.1-02-PLAN.md
+Resume: Phase 54.1 Plans 01+02 complete. 26 protocol types across 6 modules now have #[non_exhaustive] + constructors + fluent builders. 48 module tests pass. Plan 03 (codebase migration) remaining.
