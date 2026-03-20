@@ -374,8 +374,7 @@ pub struct ListToolsRequest {
     pub cursor: Cursor,
 }
 
-/// List tools params (legacy name).
-pub type ListToolsParams = ListToolsRequest;
+
 
 /// List tools response.
 ///
@@ -440,8 +439,7 @@ pub struct CallToolRequest {
     pub task: Option<Value>,
 }
 
-/// Tool call parameters (legacy name).
-pub type CallToolParams = CallToolRequest;
+
 
 /// Tool call result.
 ///

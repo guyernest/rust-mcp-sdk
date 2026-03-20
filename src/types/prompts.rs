@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::content::{MessageContent, Role};
+use super::content::{Content, Role};
 use super::protocol::Cursor;
 use super::protocol::RequestMeta;
 
@@ -19,8 +19,6 @@ pub struct ListPromptsRequest {
     pub cursor: Cursor,
 }
 
-/// List prompts params (legacy name).
-pub type ListPromptsParams = ListPromptsRequest;
 
 /// Prompt information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,8 +170,6 @@ pub struct GetPromptRequest {
     pub _meta: Option<RequestMeta>,
 }
 
-/// Get prompt params (legacy name).
-pub type GetPromptParams = GetPromptRequest;
 
 /// Get prompt result.
 ///
@@ -235,7 +231,7 @@ pub struct PromptMessage {
     /// Message role
     pub role: Role,
     /// Message content
-    pub content: MessageContent,
+    pub content: Content,
 }
 
 #[cfg(test)]

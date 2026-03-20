@@ -456,7 +456,7 @@ impl ServerCapabilities {
     /// // Use in a prompt template server
     /// # use pmcp::{Server, PromptHandler};
     /// # use async_trait::async_trait;
-    /// # use pmcp::types::protocol::{GetPromptResult, PromptMessage, Role, Content};
+    /// # use pmcp::types::{GetPromptResult, PromptMessage, Role, Content};
     /// # struct GreetingPrompt;
     /// # #[async_trait]
     /// # impl PromptHandler for GreetingPrompt {
@@ -510,7 +510,7 @@ impl ServerCapabilities {
     /// // Use in a file system resource server
     /// # use pmcp::{Server, ResourceHandler};
     /// # use async_trait::async_trait;
-    /// # use pmcp::types::protocol::{ReadResourceResult, ListResourcesResult, ResourceInfo, Content};
+    /// # use pmcp::types::{ReadResourceResult, ListResourcesResult, ResourceInfo, Content};
     /// # struct FileResource;
     /// # #[async_trait]
     /// # impl ResourceHandler for FileResource {

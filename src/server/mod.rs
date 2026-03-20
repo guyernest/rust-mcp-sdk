@@ -1334,7 +1334,7 @@ impl Server {
     async fn handle_create_message(
         &self,
         request_id: RequestId,
-        req: crate::types::CreateMessageRequest,
+        req: crate::types::CreateMessageParams,
     ) -> Result<Value> {
         let handler = self
             .sampling
@@ -2273,7 +2273,7 @@ impl ServerBuilder {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use pmcp::{Server, PromptHandler, GetPromptResult, PromptMessage, MessageContent};
+    /// use pmcp::{Server, PromptHandler, GetPromptResult, PromptMessage, Content};
     /// use async_trait::async_trait;
     /// use std::collections::HashMap;
     ///
@@ -2499,7 +2499,7 @@ impl ServerBuilder {
     ///     async fn create_message(&self, params: CreateMessageParams, _extra: pmcp::RequestHandlerExtra) -> pmcp::Result<CreateMessageResult> {
     ///         // Process the messages and generate a response
     ///         Ok(CreateMessageResult {
-    ///             content: pmcp::MessageContent::Text {
+    ///             content: pmcp::Content::Text {
     ///                 text: "Generated response".to_string(),
     ///             },
     ///             model: "mock-llm-v1".to_string(),

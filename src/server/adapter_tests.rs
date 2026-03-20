@@ -120,7 +120,7 @@ mod tests {
     fn create_init_request() -> TransportMessage {
         TransportMessage::Request {
             id: RequestId::from(1i64),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest {
                 protocol_version: "2024-11-05".to_string(),
                 capabilities: ClientCapabilities::default(),
                 client_info: Implementation::new("test-client", "1.0.0"),
@@ -131,7 +131,7 @@ mod tests {
     fn create_tool_call_request(id: i64, tool_name: &str) -> TransportMessage {
         TransportMessage::Request {
             id: RequestId::from(id),
-            request: Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
+            request: Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
                 name: tool_name.to_string(),
                 arguments: json!({ "test": "data" }),
                 _meta: None,
@@ -462,7 +462,7 @@ mod tests {
                 .await;
 
             for i in 2..=5 {
-                let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
+                let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
                     name: "echo".to_string(),
                     arguments: json!({ "id": i }),
                     _meta: None,
@@ -504,7 +504,7 @@ mod tests {
 
             for id in &ids {
                 let request =
-                    Request::Client(Box::new(ClientRequest::ListTools(ListToolsParams {
+                    Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
                         cursor: None,
                     })));
                 adapter.add_request(RequestId::from(*id), request).await;

@@ -5,10 +5,10 @@
 
 use crate::error::{Error, Result};
 use crate::types::{
-    CallToolParams, CallToolResult, ClientRequest, Content, GetPromptParams, GetPromptResult,
-    Implementation, InitializeParams, InitializeResult, JSONRPCError, JSONRPCResponse,
-    ListPromptsParams, ListPromptsResult, ListResourcesParams, ListResourcesResult,
-    ListToolsParams, ListToolsResult, PromptInfo, ReadResourceParams, ReadResourceResult, Request,
+    CallToolRequest, CallToolResult, ClientRequest, Content, GetPromptRequest, GetPromptResult,
+    Implementation, InitializeRequest, InitializeResult, JSONRPCError, JSONRPCResponse,
+    ListPromptsRequest, ListPromptsResult, ListResourcesRequest, ListResourcesResult,
+    ListToolsRequest, ListToolsResult, PromptInfo, ReadResourceRequest, ReadResourceResult, Request,
     RequestId, ResourceInfo, ServerCapabilities, ToolInfo,
 };
 use crate::{ErrorCode, SUPPORTED_PROTOCOL_VERSIONS};
@@ -123,7 +123,7 @@ impl WasmMcpServer {
         }
     }
 
-    fn handle_initialize(&self, params: InitializeParams) -> Result<Value> {
+    fn handle_initialize(&self, params: InitializeRequest) -> Result<Value> {
         let negotiated_version = crate::negotiate_protocol_version(&params.protocol_version);
 
         let result = InitializeResult {
@@ -135,7 +135,7 @@ impl WasmMcpServer {
         serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
     }
 
-    fn handle_list_tools(&self, _params: ListToolsParams) -> Result<Value> {
+    fn handle_list_tools(&self, _params: ListToolsRequest) -> Result<Value> {
         let tools: Vec<ToolInfo> = self.tool_infos.values().cloned().collect();
 
         let result = ListToolsResult {
@@ -145,7 +145,7 @@ impl WasmMcpServer {
         serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
     }
 
-    fn handle_call_tool(&self, params: CallToolParams) -> Result<Value> {
+    fn handle_call_tool(&self, params: CallToolRequest) -> Result<Value> {
         let tool = self.tools.get(&params.name).ok_or_else(|| {
             Error::protocol(
                 ErrorCode::METHOD_NOT_FOUND,
@@ -193,7 +193,7 @@ impl WasmMcpServer {
         }
     }
 
-    fn handle_list_resources(&self, params: ListResourcesParams) -> Result<Value> {
+    fn handle_list_resources(&self, params: ListResourcesRequest) -> Result<Value> {
         // Aggregate resources from all providers with cursor support
         let mut all_resources = Vec::new();
         let mut next_cursor = None;
@@ -244,7 +244,7 @@ impl WasmMcpServer {
         serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
     }
 
-    fn handle_read_resource(&self, params: ReadResourceParams) -> Result<Value> {
+    fn handle_read_resource(&self, params: ReadResourceRequest) -> Result<Value> {
         // Find the first resource that can handle this URI
         for resource in self.resources.values() {
             if let Ok(result) = resource.read(&params.uri) {
@@ -257,7 +257,7 @@ impl WasmMcpServer {
         ))
     }
 
-    fn handle_list_prompts(&self, _params: ListPromptsParams) -> Result<Value> {
+    fn handle_list_prompts(&self, _params: ListPromptsRequest) -> Result<Value> {
         let prompts: Vec<PromptInfo> = self.prompt_infos.values().cloned().collect();
 
         let result = ListPromptsResult {
@@ -267,7 +267,7 @@ impl WasmMcpServer {
         serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
     }
 
-    fn handle_get_prompt(&self, params: GetPromptParams) -> Result<Value> {
+    fn handle_get_prompt(&self, params: GetPromptRequest) -> Result<Value> {
         let prompt = self.prompts.get(&params.name).ok_or_else(|| {
             Error::protocol(
                 ErrorCode::METHOD_NOT_FOUND,

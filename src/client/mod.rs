@@ -6,7 +6,7 @@ use crate::shared::{
 };
 use crate::types::{
     CallToolRequest, CallToolResult, CancelledNotification, ClientCapabilities, ClientNotification,
-    ClientRequest, CompleteRequest, CompleteResult, CreateMessageRequest, CreateMessageResult,
+    ClientRequest, CompleteRequest, CompleteResult, CreateMessageParams, CreateMessageResult,
     GetPromptRequest, GetPromptResult, Implementation, InitializeRequest, InitializeResult,
     ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
     ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
@@ -944,7 +944,7 @@ impl<T: Transport> Client<T> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use pmcp::{Client, StdioTransport, ClientCapabilities, CreateMessageRequest, SamplingMessage};
+    /// use pmcp::{Client, StdioTransport, ClientCapabilities, CreateMessageParams, SamplingMessage};
     ///
     /// # async fn example() -> pmcp::Result<()> {
     /// let mut capabilities = ClientCapabilities::default();
@@ -955,7 +955,7 @@ impl<T: Transport> Client<T> {
     /// client.initialize(capabilities).await?;
     ///
     /// // Create a message with the LLM
-    /// let request = CreateMessageRequest {
+    /// let request = CreateMessageParams {
     ///     messages: vec![
     ///         SamplingMessage {
     ///             role: pmcp::types::Role::User,
@@ -999,7 +999,7 @@ impl<T: Transport> Client<T> {
     /// - Network or protocol errors occur
     pub async fn create_message(
         &self,
-        params: CreateMessageRequest,
+        params: CreateMessageParams,
     ) -> Result<CreateMessageResult> {
         self.ensure_initialized()?;
         self.assert_capability("sampling", "sampling/createMessage")?;

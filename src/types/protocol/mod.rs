@@ -136,8 +136,6 @@ pub struct InitializeRequest {
     pub client_info: Implementation,
 }
 
-/// Initialize request parameters (legacy name).
-pub type InitializeParams = InitializeRequest;
 
 /// Initialize response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,28 +245,28 @@ pub struct CompletionResult {
 pub enum ClientRequest {
     /// Initialize the connection
     #[serde(rename = "initialize")]
-    Initialize(InitializeParams),
+    Initialize(InitializeRequest),
     /// List available tools
     #[serde(rename = "tools/list")]
-    ListTools(super::tools::ListToolsParams),
+    ListTools(super::tools::ListToolsRequest),
     /// Call a tool
     #[serde(rename = "tools/call")]
-    CallTool(super::tools::CallToolParams),
+    CallTool(super::tools::CallToolRequest),
     /// List available prompts
     #[serde(rename = "prompts/list")]
-    ListPrompts(super::prompts::ListPromptsParams),
+    ListPrompts(super::prompts::ListPromptsRequest),
     /// Get a prompt
     #[serde(rename = "prompts/get")]
-    GetPrompt(super::prompts::GetPromptParams),
+    GetPrompt(super::prompts::GetPromptRequest),
     /// List available resources
     #[serde(rename = "resources/list")]
-    ListResources(super::resources::ListResourcesParams),
+    ListResources(super::resources::ListResourcesRequest),
     /// List resource templates
     #[serde(rename = "resources/templates/list")]
     ListResourceTemplates(super::resources::ListResourceTemplatesRequest),
     /// Read a resource
     #[serde(rename = "resources/read")]
-    ReadResource(super::resources::ReadResourceParams),
+    ReadResource(super::resources::ReadResourceRequest),
     /// Subscribe to resource updates
     #[serde(rename = "resources/subscribe")]
     Subscribe(super::resources::SubscribeRequest),
@@ -289,7 +287,7 @@ pub enum ClientRequest {
     Ping,
     /// Create message (sampling)
     #[serde(rename = "sampling/createMessage")]
-    CreateMessage(super::sampling::CreateMessageRequest),
+    CreateMessage(super::sampling::CreateMessageParams),
     /// Get task status (MCP 2025-11-25 Tasks).
     #[serde(rename = "tasks/get")]
     TasksGet(crate::types::tasks::GetTaskRequest),
@@ -341,7 +339,7 @@ mod tests {
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["method"], "ping");
 
-        let req = ClientRequest::ListTools(super::super::tools::ListToolsParams::default());
+        let req = ClientRequest::ListTools(super::super::tools::ListToolsRequest::default());
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["method"], "tools/list");
     }

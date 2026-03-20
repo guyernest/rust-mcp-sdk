@@ -385,7 +385,7 @@ mod tests {
         CallToolRequest, CancelledNotification, ClientCapabilities, CompleteRequest,
         CompletionArgument, CompletionReference, GetPromptRequest, Implementation,
         InitializeRequest, ListPromptsRequest, ListResourceTemplatesRequest, ListResourcesRequest,
-        ListToolsRequest, LoggingLevel, Progress, ProgressNotification, ProgressToken,
+        ListToolsRequest, LoggingLevel, ProgressNotification, ProgressToken,
         ReadResourceRequest, SubscribeRequest, UnsubscribeRequest,
     };
     use serde_json::json;
@@ -853,7 +853,7 @@ mod tests {
 
     #[test]
     fn test_server_notification_to_jsonrpc_all_variants() {
-        let progress = Progress {
+        let progress = ProgressNotification {
             progress_token: ProgressToken::String("test".to_string()),
             progress: 25.0,
             total: None,

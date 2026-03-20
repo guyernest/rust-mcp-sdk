@@ -140,9 +140,9 @@ pub use shared::{HttpConfig, HttpTransport};
 pub use types::{
     AuthInfo, AuthScheme, CallToolRequest, CallToolResult, ClientCapabilities, ClientNotification,
     ClientRequest, CompleteRequest, CompleteResult, CompletionArgument, CompletionReference,
-    Content, CreateMessageParams, CreateMessageRequest, CreateMessageResult, GetPromptResult,
+    Content, CreateMessageParams, CreateMessageResult, GetPromptResult,
     Implementation, IncludeContext, ListResourcesResult, ListToolsResult, LoggingLevel,
-    MessageContent, ModelPreferences, ProgressNotification, ProgressToken, PromptMessage,
+    ModelPreferences, ProgressNotification, ProgressToken, PromptMessage,
     ProtocolVersion, ReadResourceResult, RequestId, ResourceInfo, Role, RootsCapabilities,
     SamplingCapabilities, SamplingMessage, ServerCapabilities, ServerNotification, ServerRequest,
     TokenUsage, ToolCapabilities, ToolInfo, UIMimeType, UIResource, UIResourceContents,

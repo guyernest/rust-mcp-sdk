@@ -19,8 +19,6 @@ pub struct ListResourcesRequest {
     pub cursor: Cursor,
 }
 
-/// List resources params (legacy name).
-pub type ListResourcesParams = ListResourcesRequest;
 
 /// Resource information.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,8 +101,6 @@ pub struct ReadResourceRequest {
     pub _meta: Option<RequestMeta>,
 }
 
-/// Read resource params (legacy name).
-pub type ReadResourceParams = ReadResourceRequest;
 
 /// List resource templates request.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

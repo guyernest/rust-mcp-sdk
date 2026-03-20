@@ -196,8 +196,6 @@ pub struct CreateMessageParams {
     pub tool_choice: Option<ToolChoice>,
 }
 
-/// Create message request (for client requests).
-pub type CreateMessageRequest = CreateMessageParams;
 
 /// Create message result.
 #[derive(Debug, Clone, Serialize, Deserialize)]

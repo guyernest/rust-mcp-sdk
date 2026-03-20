@@ -39,7 +39,7 @@ use crate::error::Result;
 use crate::server::cancellation::RequestHandlerExtra;
 use crate::server::tasks::TaskRouter;
 use crate::server::PromptHandler;
-use crate::types::{GetPromptResult, MessageContent, PromptInfo, PromptMessage, Role};
+use crate::types::{Content, GetPromptResult, PromptInfo, PromptMessage, Role};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -496,7 +496,7 @@ impl TaskWorkflowPromptHandler {
 
         PromptMessage {
             role: Role::Assistant,
-            content: MessageContent::Text { text },
+            content: Content::Text { text },
         }
     }
 
@@ -687,7 +687,7 @@ impl PromptHandler for TaskWorkflowPromptHandler {
                     WorkflowPromptHandler::substitute_arguments(guidance_template, &args);
                 messages.push(PromptMessage {
                     role: Role::Assistant,
-                    content: MessageContent::Text {
+                    content: Content::Text {
                         text: guidance_text,
                     },
                 });
@@ -712,7 +712,7 @@ impl PromptHandler for TaskWorkflowPromptHandler {
             if step.is_resource_only() {
                 messages.push(PromptMessage {
                     role: Role::Assistant,
-                    content: MessageContent::Text {
+                    content: Content::Text {
                         text: format!("I'll fetch the required resources for {}...", step.name()),
                     },
                 });
@@ -809,7 +809,7 @@ impl PromptHandler for TaskWorkflowPromptHandler {
                                 Ok(result) => {
                                     messages.push(PromptMessage {
                                         role: Role::User,
-                                        content: MessageContent::Text {
+                                        content: Content::Text {
                                             text: format!(
                                                 "Tool result:\n{}",
                                                 serde_json::to_string_pretty(&result)
@@ -844,7 +844,7 @@ impl PromptHandler for TaskWorkflowPromptHandler {
                                 Err(e) => {
                                     messages.push(PromptMessage {
                                         role: Role::User,
-                                        content: MessageContent::Text {
+                                        content: Content::Text {
                                             text: format!("Error executing tool: {}", e),
                                         },
                                     });
@@ -1413,7 +1413,7 @@ mod tests {
 
         assert_eq!(msg.role, Role::Assistant);
         let text = match &msg.content {
-            MessageContent::Text { text } => text.as_str(),
+            Content::Text { text } => text.as_str(),
             _ => panic!("Expected text content"),
         };
 
@@ -1472,7 +1472,7 @@ mod tests {
         );
 
         let text = match &msg.content {
-            MessageContent::Text { text } => text.as_str(),
+            Content::Text { text } => text.as_str(),
             _ => panic!("Expected text content"),
         };
 
@@ -1516,7 +1516,7 @@ mod tests {
         );
 
         let text = match &msg.content {
-            MessageContent::Text { text } => text.as_str(),
+            Content::Text { text } => text.as_str(),
             _ => panic!("Expected text content"),
         };
 
@@ -1552,7 +1552,7 @@ mod tests {
         );
 
         let text = match &msg.content {
-            MessageContent::Text { text } => text.as_str(),
+            Content::Text { text } => text.as_str(),
             _ => panic!("Expected text content"),
         };
 
@@ -1589,7 +1589,7 @@ mod tests {
         );
 
         let text = match &msg.content {
-            MessageContent::Text { text } => text.as_str(),
+            Content::Text { text } => text.as_str(),
             _ => panic!("Expected text content"),
         };
 
@@ -1669,7 +1669,7 @@ mod tests {
             handler.build_handoff_message(&step_statuses, &pause, &args, &ExecutionContext::new());
 
         let text = match &msg.content {
-            MessageContent::Text { text } => text.as_str(),
+            Content::Text { text } => text.as_str(),
             _ => panic!("Expected text content"),
         };
 

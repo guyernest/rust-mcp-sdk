@@ -43,8 +43,6 @@ impl ProgressNotification {
     }
 }
 
-/// Progress (legacy alias).
-pub type Progress = ProgressNotification;
 
 /// Progress token type.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -68,10 +66,10 @@ pub enum ClientNotification {
     RootsListChanged,
     /// Notification that a request was cancelled
     #[serde(rename = "notifications/cancelled")]
-    Cancelled(CancelledParams),
+    Cancelled(CancelledNotification),
     /// Progress update
     #[serde(rename = "notifications/progress")]
-    Progress(Progress),
+    Progress(ProgressNotification),
 }
 
 /// Cancelled notification.
@@ -85,8 +83,6 @@ pub struct CancelledNotification {
     pub reason: Option<String>,
 }
 
-/// Cancelled params (legacy alias).
-pub type CancelledParams = CancelledNotification;
 
 /// Server notification types.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,7 +90,7 @@ pub type CancelledParams = CancelledNotification;
 pub enum ServerNotification {
     /// Progress update
     #[serde(rename = "notifications/progress")]
-    Progress(Progress),
+    Progress(ProgressNotification),
     /// Tools have changed
     #[serde(rename = "notifications/tools/list_changed")]
     ToolsChanged,

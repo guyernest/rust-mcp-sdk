@@ -9,11 +9,11 @@ use crate::shared::middleware::{EnhancedMiddlewareChain, MiddlewareContext};
 use crate::shared::protocol_helpers::{create_notification, create_request};
 use crate::types::jsonrpc::ResponsePayload;
 use crate::types::{
-    CallToolParams, CallToolResult, ClientCapabilities, ClientRequest, Content, GetPromptParams,
-    GetPromptResult, Implementation, InitializeParams, InitializeResult, JSONRPCError,
-    JSONRPCResponse, ListPromptsParams, ListPromptsResult, ListResourceTemplatesRequest,
-    ListResourceTemplatesResult, ListResourcesParams, ListResourcesResult, ListToolsParams,
-    ListToolsResult, Notification, PromptInfo, ProtocolVersion, ReadResourceParams,
+    CallToolRequest, CallToolResult, ClientCapabilities, ClientRequest, Content, GetPromptRequest,
+    GetPromptResult, Implementation, InitializeRequest, InitializeResult, JSONRPCError,
+    JSONRPCResponse, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
+    ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
+    ListToolsResult, Notification, PromptInfo, ProtocolVersion, ReadResourceRequest,
     ReadResourceResult, Request, RequestId, ServerCapabilities, ToolInfo,
 };
 use async_trait::async_trait;
@@ -321,7 +321,7 @@ impl ServerCore {
     }
 
     /// Handle initialization request.
-    async fn handle_initialize(&self, init_req: &InitializeParams) -> Result<InitializeResult> {
+    async fn handle_initialize(&self, init_req: &InitializeRequest) -> Result<InitializeResult> {
         // Store client capabilities
         *self.client_capabilities.write().await = Some(init_req.capabilities.clone());
         *self.initialized.write().await = true;
@@ -337,7 +337,7 @@ impl ServerCore {
     }
 
     /// Handle list tools request.
-    async fn handle_list_tools(&self, _req: &ListToolsParams) -> Result<ListToolsResult> {
+    async fn handle_list_tools(&self, _req: &ListToolsRequest) -> Result<ListToolsResult> {
         let tools: Vec<ToolInfo> = self.tool_infos.values().cloned().collect();
 
         Ok(ListToolsResult {
@@ -349,7 +349,7 @@ impl ServerCore {
     /// Handle call tool request.
     async fn handle_call_tool(
         &self,
-        req: &CallToolParams,
+        req: &CallToolRequest,
         auth_context: Option<AuthContext>,
     ) -> Result<CallToolResult> {
         let handler = self
@@ -452,7 +452,7 @@ impl ServerCore {
     }
 
     /// Handle list prompts request.
-    async fn handle_list_prompts(&self, _req: &ListPromptsParams) -> Result<ListPromptsResult> {
+    async fn handle_list_prompts(&self, _req: &ListPromptsRequest) -> Result<ListPromptsResult> {
         let prompts: Vec<PromptInfo> = self.prompt_infos.values().cloned().collect();
 
         tracing::debug!(
@@ -470,7 +470,7 @@ impl ServerCore {
     /// Handle get prompt request.
     async fn handle_get_prompt(
         &self,
-        req: &GetPromptParams,
+        req: &GetPromptRequest,
         auth_context: Option<AuthContext>,
     ) -> Result<GetPromptResult> {
         let handler = self
@@ -494,7 +494,7 @@ impl ServerCore {
     /// Handle list resources request.
     async fn handle_list_resources(
         &self,
-        req: &ListResourcesParams,
+        req: &ListResourcesRequest,
         auth_context: Option<AuthContext>,
     ) -> Result<ListResourcesResult> {
         let mut result = match &self.resources {
@@ -534,7 +534,7 @@ impl ServerCore {
     /// Handle read resource request.
     async fn handle_read_resource(
         &self,
-        req: &ReadResourceParams,
+        req: &ReadResourceRequest,
         auth_context: Option<AuthContext>,
     ) -> Result<ReadResourceResult> {
         let handler = self.resources.as_ref().ok_or_else(|| {
@@ -1117,7 +1117,7 @@ mod tests {
 
         assert!(!server.is_initialized().await);
 
-        let init_req = Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
+        let init_req = Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest {
             protocol_version: crate::DEFAULT_PROTOCOL_VERSION.to_string(),
             capabilities: ClientCapabilities::default(),
             client_info: Implementation::new("test-client", "1.0.0"),
@@ -1162,7 +1162,7 @@ mod tests {
         );
 
         // Initialize first
-        let init_req = Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
+        let init_req = Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest {
             protocol_version: crate::DEFAULT_PROTOCOL_VERSION.to_string(),
             capabilities: ClientCapabilities::default(),
             client_info: Implementation::new("test-client", "1.0.0"),
@@ -1172,7 +1172,7 @@ mod tests {
             .await;
 
         // List tools
-        let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsParams {
+        let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
         })));
         let response = server
@@ -1217,7 +1217,7 @@ mod tests {
         );
 
         // Try to list tools WITHOUT initializing first
-        let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsParams {
+        let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
         })));
         let response = server
@@ -1266,7 +1266,7 @@ mod tests {
         );
 
         // Try to list tools WITHOUT initializing first
-        let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsParams {
+        let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
         })));
         let response = server

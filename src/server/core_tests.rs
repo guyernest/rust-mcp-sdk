@@ -160,7 +160,7 @@ mod tests {
     }
 
     fn create_init_request() -> Request {
-        Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
+        Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest {
             protocol_version: "2025-06-18".to_string(),
             capabilities: ClientCapabilities::default(),
             client_info: Implementation::new("test-client", "1.0.0"),
@@ -206,7 +206,7 @@ mod tests {
         let server = create_test_server();
 
         // Try to call a tool before initialization
-        let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsParams {
+        let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
         })));
 
@@ -243,7 +243,7 @@ mod tests {
             .await;
 
         // List tools
-        let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsParams {
+        let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
         })));
 
@@ -298,7 +298,7 @@ mod tests {
             .await;
 
         // List tools
-        let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsParams {
+        let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
         })));
 
@@ -358,7 +358,7 @@ mod tests {
             .await;
 
         // Call the tool
-        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
             name: "calculator".to_string(),
             arguments: json!({
                 "operation": "add",
@@ -396,7 +396,7 @@ mod tests {
             .await;
 
         // Call non-existent tool
-        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
             name: "nonexistent".to_string(),
             arguments: json!({}),
             _meta: None,
@@ -432,7 +432,7 @@ mod tests {
             .await;
 
         // Call the failing tool
-        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
             name: "failing_tool".to_string(),
             arguments: json!({}),
             _meta: None,
@@ -469,7 +469,7 @@ mod tests {
 
         // List prompts
         let list_request =
-            Request::Client(Box::new(ClientRequest::ListPrompts(ListPromptsParams {
+            Request::Client(Box::new(ClientRequest::ListPrompts(ListPromptsRequest {
                 cursor: None,
             })));
 
@@ -487,7 +487,7 @@ mod tests {
         }
 
         // Get prompt
-        let get_request = Request::Client(Box::new(ClientRequest::GetPrompt(GetPromptParams {
+        let get_request = Request::Client(Box::new(ClientRequest::GetPrompt(GetPromptRequest {
             name: "test_prompt".to_string(),
             arguments: HashMap::from([("key".to_string(), "value".to_string())]),
             _meta: None,
@@ -525,7 +525,7 @@ mod tests {
 
         // List resources
         let list_request = Request::Client(Box::new(ClientRequest::ListResources(
-            ListResourcesParams { cursor: None },
+            ListResourcesRequest { cursor: None },
         )));
 
         let list_response = server
@@ -543,7 +543,7 @@ mod tests {
 
         // Read resource
         let read_request =
-            Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceParams {
+            Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceRequest {
                 uri: "test://resource1".to_string(),
                 _meta: None,
             })));
@@ -580,7 +580,7 @@ mod tests {
             .await;
 
         // Read non-existent resource
-        let request = Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceParams {
+        let request = Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceRequest {
             uri: "test://nonexistent".to_string(),
             _meta: None,
         })));
@@ -667,7 +667,7 @@ mod tests {
         for i in 1..=10 {
             let server_clone = server.clone();
             let future = async move {
-                let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
+                let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
                     name: "concurrent_tool".to_string(),
                     arguments: json!({ "id": i }),
                     _meta: None,

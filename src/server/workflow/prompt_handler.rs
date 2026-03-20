@@ -31,7 +31,7 @@ use crate::server::cancellation::RequestHandlerExtra;
 use crate::server::middleware_executor::MiddlewareExecutor;
 use crate::server::{PromptHandler, ResourceHandler, ToolHandler};
 use crate::types::{
-    Content, GetPromptResult, MessageContent, PromptArgument, PromptInfo, PromptMessage, Role,
+    Content, GetPromptResult, PromptArgument, PromptInfo, PromptMessage, Role,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -385,7 +385,7 @@ impl WorkflowPromptHandler {
                     // Embed resource content as user message
                     messages.push(PromptMessage {
                         role: Role::User,
-                        content: MessageContent::Text {
+                        content: Content::Text {
                             text: format!(
                                 "Resource content from {}:\n{}",
                                 interpolated_uri, content
@@ -397,7 +397,7 @@ impl WorkflowPromptHandler {
                     // Resource fetch failed - add error message
                     messages.push(PromptMessage {
                         role: Role::User,
-                        content: MessageContent::Text {
+                        content: Content::Text {
                             text: format!("Error fetching resource {}: {}", interpolated_uri, e),
                         },
                     });
@@ -428,7 +428,7 @@ impl WorkflowPromptHandler {
 
         PromptMessage {
             role: Role::User,
-            content: MessageContent::Text {
+            content: Content::Text {
                 text: format!("I want to {}.{}", description, args_display),
             },
         }
@@ -469,7 +469,7 @@ impl WorkflowPromptHandler {
 
         Ok(PromptMessage {
             role: Role::Assistant,
-            content: MessageContent::Text { text: plan },
+            content: Content::Text { text: plan },
         })
     }
 
@@ -491,7 +491,7 @@ impl WorkflowPromptHandler {
 
         Ok(PromptMessage {
             role: Role::Assistant,
-            content: MessageContent::Text {
+            content: Content::Text {
                 text: format!(
                     "Calling tool '{}' with parameters:\n{}",
                     tool_handle.name(),
@@ -824,7 +824,7 @@ impl PromptHandler for WorkflowPromptHandler {
                 let guidance_text = Self::substitute_arguments(guidance_template, &args);
                 messages.push(PromptMessage {
                     role: Role::Assistant,
-                    content: MessageContent::Text {
+                    content: Content::Text {
                         text: guidance_text,
                     },
                 });
@@ -857,7 +857,7 @@ impl PromptHandler for WorkflowPromptHandler {
                 // Add an assistant message to explain what we're doing
                 messages.push(PromptMessage {
                     role: Role::Assistant,
-                    content: MessageContent::Text {
+                    content: Content::Text {
                         text: format!("I'll fetch the required resources for {}...", step.name()),
                     },
                 });
@@ -921,7 +921,7 @@ impl PromptHandler for WorkflowPromptHandler {
                             // User message with successful result
                             messages.push(PromptMessage {
                                 role: Role::User,
-                                content: MessageContent::Text {
+                                content: Content::Text {
                                     text: format!(
                                         "Tool result:\n{}",
                                         serde_json::to_string_pretty(&result)
@@ -957,7 +957,7 @@ impl PromptHandler for WorkflowPromptHandler {
                             // Execution error - STOP with error
                             messages.push(PromptMessage {
                                 role: Role::User,
-                                content: MessageContent::Text {
+                                content: Content::Text {
                                     text: format!("Error executing tool: {}", e),
                                 },
                             });
@@ -1104,7 +1104,7 @@ mod tests {
 
         // First message: user intent
         assert_eq!(result.messages[0].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[0].content {
+        if let Content::Text { text } = &result.messages[0].content {
             assert!(text.contains("add a task to a project"));
             assert!(text.contains("Website"));
             assert!(text.contains("Fix bug"));
@@ -1112,20 +1112,20 @@ mod tests {
 
         // Second message: assistant plan
         assert_eq!(result.messages[1].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[1].content {
+        if let Content::Text { text } = &result.messages[1].content {
             assert!(text.contains("Here's my plan"));
             assert!(text.contains("list_pages"));
         }
 
         // Third message: assistant tool call announcement
         assert_eq!(result.messages[2].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[2].content {
+        if let Content::Text { text } = &result.messages[2].content {
             assert!(text.contains("Calling tool 'list_pages'"));
         }
 
         // Fourth message: user tool result
         assert_eq!(result.messages[3].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[3].content {
+        if let Content::Text { text } = &result.messages[3].content {
             assert!(text.contains("Tool result"));
             assert!(text.contains("Website"));
             assert!(text.contains("Mobile"));
@@ -1294,7 +1294,7 @@ mod tests {
 
         // Verify message 1: User intent
         assert_eq!(result.messages[0].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[0].content {
+        if let Content::Text { text } = &result.messages[0].content {
             assert!(text.contains("add a task to a project"));
             assert!(text.contains("Website"));
             assert!(text.contains("Fix login bug"));
@@ -1302,7 +1302,7 @@ mod tests {
 
         // Verify message 2: Assistant plan
         assert_eq!(result.messages[1].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[1].content {
+        if let Content::Text { text } = &result.messages[1].content {
             assert!(text.contains("Here's my plan"));
             assert!(text.contains("list_pages"));
             assert!(text.contains("verify_project"));
@@ -1311,7 +1311,7 @@ mod tests {
 
         // Verify message 8: Final result contains data from all steps
         assert_eq!(result.messages[7].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[7].content {
+        if let Content::Text { text } = &result.messages[7].content {
             assert!(text.contains("Tool result"));
             assert!(text.contains("success"));
             assert!(text.contains("task-123"));
@@ -1394,7 +1394,7 @@ mod tests {
 
         // Verify message 3: Tool call should NOT include priority parameter
         assert_eq!(result.messages[2].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[2].content {
+        if let Content::Text { text } = &result.messages[2].content {
             assert!(text.contains("add_task"));
             assert!(text.contains("Fix bug"));
             // Priority should NOT be in parameters since it wasn't provided
@@ -1403,7 +1403,7 @@ mod tests {
 
         // Verify message 4: Result should show priority as null
         assert_eq!(result.messages[3].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[3].content {
+        if let Content::Text { text } = &result.messages[3].content {
             assert!(text.contains("Tool result"));
             assert!(text.contains("success"));
         }
@@ -1419,7 +1419,7 @@ mod tests {
             .expect("Should execute successfully with optional arg provided");
 
         // Verify message 3: Tool call SHOULD include priority parameter
-        if let MessageContent::Text { text } = &result2.messages[2].content {
+        if let Content::Text { text } = &result2.messages[2].content {
             assert!(text.contains("add_task"));
             assert!(text.contains("Write docs"));
             assert!(text.contains("priority"));
@@ -1500,7 +1500,7 @@ mod tests {
             Role::User,
             "Tool execution error should appear as user message"
         );
-        if let MessageContent::Text { text } = &result.messages[3].content {
+        if let Content::Text { text } = &result.messages[3].content {
             assert!(
                 text.contains("Error executing tool"),
                 "Error message should indicate tool execution error"
@@ -1630,7 +1630,7 @@ mod tests {
 
         // Verify message 1: User intent
         assert_eq!(result.messages[0].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[0].content {
+        if let Content::Text { text } = &result.messages[0].content {
             assert!(text.contains("add a task to a Logseq project"));
             assert!(text.contains("MCP Tester"));
             assert!(text.contains("Fix workflow bug"));
@@ -1638,13 +1638,13 @@ mod tests {
 
         // Verify message 2: Assistant plan
         assert_eq!(result.messages[1].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[1].content {
+        if let Content::Text { text } = &result.messages[1].content {
             assert!(text.contains("Here's my plan"));
         }
 
         // Verify message 3: Guidance for step 1
         assert_eq!(result.messages[2].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[2].content {
+        if let Content::Text { text } = &result.messages[2].content {
             assert_eq!(
                 text, "I'll first get all available page names from Logseq",
                 "Guidance should be rendered as-is"
@@ -1653,13 +1653,13 @@ mod tests {
 
         // Verify message 4: Tool call announcement
         assert_eq!(result.messages[3].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[3].content {
+        if let Content::Text { text } = &result.messages[3].content {
             assert!(text.contains("list_pages"));
         }
 
         // Verify message 5: Tool result
         assert_eq!(result.messages[4].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[4].content {
+        if let Content::Text { text } = &result.messages[4].content {
             assert!(text.contains("Tool result"));
             assert!(text.contains("mcp-tester"));
             assert!(text.contains("MCP Rust SDK"));
@@ -1667,7 +1667,7 @@ mod tests {
 
         // Verify message 6: Guidance for step 2 (with argument substitution)
         assert_eq!(result.messages[5].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[5].content {
+        if let Content::Text { text } = &result.messages[5].content {
             assert!(
                 text.contains(
                     "Find the page name from the list above that best matches 'MCP Tester'"
@@ -1748,7 +1748,7 @@ mod tests {
 
         // Verify guidance has substituted arguments
         assert_eq!(result.messages[2].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[2].content {
+        if let Content::Text { text } = &result.messages[2].content {
             assert_eq!(
                 text, "Processing 'login' for user 'Alice'",
                 "All argument placeholders should be substituted"
@@ -1815,13 +1815,13 @@ mod tests {
 
         // Verify message 3 is guidance
         assert_eq!(result.messages[2].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[2].content {
+        if let Content::Text { text } = &result.messages[2].content {
             assert_eq!(text, "I'll greet the user 'Bob'");
         }
 
         // Verify execution completed
         assert_eq!(result.messages[4].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[4].content {
+        if let Content::Text { text } = &result.messages[4].content {
             assert!(text.contains("Hello, Bob!"));
         }
     }
@@ -1904,7 +1904,7 @@ mod tests {
 
         // Message 3: Guidance (NOT an error)
         assert_eq!(result.messages[2].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[2].content {
+        if let Content::Text { text } = &result.messages[2].content {
             assert!(
                 text.contains("Process the data"),
                 "Last message should be guidance"
@@ -1993,7 +1993,7 @@ mod tests {
 
         // Last message should be guidance, not error
         assert_eq!(result.messages[2].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[2].content {
+        if let Content::Text { text } = &result.messages[2].content {
             assert!(text.contains("Process data"));
             assert!(!text.contains("Error"));
         }
@@ -2129,7 +2129,7 @@ mod tests {
 
         // Check resource was embedded
         assert_eq!(result.messages[3].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[3].content {
+        if let Content::Text { text } = &result.messages[3].content {
             assert!(text.contains("Resource content from docs://task-format"));
             assert!(text.contains("Task Format Guide"));
             assert!(text.contains("[[page-name]]"));
@@ -2276,7 +2276,7 @@ mod tests {
 
         // Check both resources were embedded
         assert_eq!(result.messages[3].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[3].content {
+        if let Content::Text { text } = &result.messages[3].content {
             assert!(text.contains("docs://format"));
             assert!(text.contains("Format: [[link]]"));
         } else {
@@ -2284,7 +2284,7 @@ mod tests {
         }
 
         assert_eq!(result.messages[4].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[4].content {
+        if let Content::Text { text } = &result.messages[4].content {
             assert!(text.contains("docs://examples"));
             assert!(text.contains("Examples:"));
         } else {
@@ -2387,7 +2387,7 @@ mod tests {
 
         // Last message should be error
         assert_eq!(result.messages[3].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[3].content {
+        if let Content::Text { text } = &result.messages[3].content {
             assert!(text.contains("Error fetching resource"));
             assert!(text.contains("docs://missing"));
         } else {
