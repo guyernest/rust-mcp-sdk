@@ -502,10 +502,12 @@ Plans:
 **Goal:** Upgrade Rust SDK to MCP protocol 2025-11-25 with version negotiation (latest 3 versions). Add 20+ new types (TaskSchema, IconSchema, AudioContent, ResourceLink, expanded ServerCapabilities/ClientCapabilities). Clean up legacy type aliases and deprecated fields. Breaking change — part of the v2.0.0 semver bump.
 **Requirements**: PROTO-2025-11-25, VERSION-NEGOTIATION, TYPE-CLEANUP
 **Depends on:** Phase 53
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 54 to break down)
+- [ ] 54-01-PLAN.md — Module split (protocol.rs -> 7 domain sub-modules) + version negotiation update to 2025-11-25
+- [ ] 54-02-PLAN.md — Add 33 new types (task, content, sampling, elicitation, capabilities) + fix IncludeContext, LogLevel bugs
+- [ ] 54-03-PLAN.md — Fix consumer imports, remove 11 legacy aliases, write MIGRATION.md
 
 ### Phase 55: Tasks with Polling
 
