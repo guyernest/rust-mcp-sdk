@@ -35,7 +35,7 @@ use pmcp::server::core::ProtocolHandler;
 use pmcp::server::workflow::{DataSource, SequentialWorkflow, ToolHandle, WorkflowStep};
 use pmcp::types::jsonrpc::ResponsePayload;
 use pmcp::types::{
-    CallToolParams, ClientRequest, GetPromptParams, Request, RequestId, RequestMeta, ToolInfo,
+    CallToolRequest, ClientRequest, GetPromptRequest, Request, RequestId, RequestMeta, ToolInfo,
 };
 use pmcp::RequestHandlerExtra;
 use pmcp_tasks::{InMemoryTaskStore, TaskRouterImpl, TaskSecurityConfig};
@@ -221,7 +221,7 @@ fn main() {
 
         let prompt_args = HashMap::from([("source".to_string(), "production_api".to_string())]);
 
-        let get_prompt_req = Request::Client(Box::new(ClientRequest::GetPrompt(GetPromptParams {
+        let get_prompt_req = Request::Client(Box::new(ClientRequest::GetPrompt(GetPromptRequest {
             name: "data_pipeline".to_string(),
             arguments: prompt_args,
             _meta: None,
@@ -351,7 +351,7 @@ fn main() {
 
         println!("\n--- Stage 4: Client continuation ---\n");
 
-        let continuation_req = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
+        let continuation_req = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
             name: "fetch_data".to_string(),
             arguments: json!({"source": "production_api"}),
             _meta: Some(RequestMeta {
@@ -406,10 +406,9 @@ fn main() {
             "stored_at": "db://processed/production_api"
         });
 
-        let cancel_req = Request::Client(Box::new(ClientRequest::TasksCancel(json!({
-            "taskId": task_id,
-            "result": cancel_result_payload
-        }))));
+        let cancel_req = Request::Client(Box::new(ClientRequest::TasksCancel(
+            pmcp::types::CancelTaskRequest { task_id: task_id.to_string() },
+        )));
 
         println!("  Sending tasks/cancel with result for task: {}", task_id);
 
@@ -434,9 +433,9 @@ fn main() {
         // Poll tasks/result to verify final state
         println!("\n  Polling tasks/result to verify final state...");
 
-        let result_req = Request::Client(Box::new(ClientRequest::TasksResult(json!({
-            "taskId": task_id
-        }))));
+        let result_req = Request::Client(Box::new(ClientRequest::TasksResult(
+            pmcp::types::GetTaskPayloadRequest { task_id: task_id.to_string() },
+        )));
 
         let response = server
             .handle_request(RequestId::from(4i64), result_req, None)

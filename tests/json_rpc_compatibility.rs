@@ -16,10 +16,7 @@ fn test_serialize_to_json_rpc_2_0_format() {
     let init_params = InitializeRequest {
         protocol_version: "2025-06-18".to_string(),
         capabilities: ClientCapabilities::default(),
-        client_info: Implementation {
-            name: "test-client".to_string(),
-            version: "1.0.0".to_string(),
-        },
+        client_info: Implementation::new("test-client", "1.0.0"),
     };
 
     let request = Request::Client(Box::new(ClientRequest::Initialize(init_params)));
@@ -78,10 +75,7 @@ fn test_roundtrip_compatibility() {
     let init_params = InitializeRequest {
         protocol_version: "2025-06-18".to_string(),
         capabilities: ClientCapabilities::default(),
-        client_info: Implementation {
-            name: "test-client".to_string(),
-            version: "1.0.0".to_string(),
-        },
+        client_info: Implementation::new("test-client", "1.0.0"),
     };
 
     let request = Request::Client(Box::new(ClientRequest::Initialize(init_params.clone())));
@@ -224,10 +218,7 @@ fn test_issue_38_json_rpc_compatibility() {
     let init_params = InitializeRequest {
         protocol_version: "2025-06-18".to_string(),
         capabilities: ClientCapabilities::default(),
-        client_info: Implementation {
-            name: "claude-code".to_string(),
-            version: "1.0.0".to_string(),
-        },
+        client_info: Implementation::new("claude-code", "1.0.0"),
     };
 
     let request = Request::Client(Box::new(ClientRequest::Initialize(init_params)));

@@ -84,6 +84,9 @@ impl ResourceHandler for FileSystemResources {
                 name: uri.rsplit('/').next().unwrap_or("").to_string(),
                 description: Some(format!("Mock file at {}", uri)),
                 mime_type: Some(guess_mime_type(uri)),
+                title: None,
+                icons: None,
+                annotations: None,
                 meta: None,
             })
             .collect();
@@ -150,6 +153,9 @@ impl ResourceHandler for TemplateResources {
                 name: "Greeting Template".to_string(),
                 description: Some("Personalized greeting message".to_string()),
                 mime_type: Some("text/plain".to_string()),
+                title: None,
+                icons: None,
+                annotations: None,
                 meta: None,
             },
             ResourceInfo {
@@ -157,6 +163,9 @@ impl ResourceHandler for TemplateResources {
                 name: "Time Template".to_string(),
                 description: Some("Current time in specified timezone".to_string()),
                 mime_type: Some("text/plain".to_string()),
+                title: None,
+                icons: None,
+                annotations: None,
                 meta: None,
             },
         ]))

@@ -8,7 +8,7 @@
 
 use pmcp::{
     types::{
-        capabilities::ServerCapabilities, GetPromptResult, MessageContent, PromptMessage, Role,
+        capabilities::ServerCapabilities, Content, GetPromptResult, PromptMessage, Role,
     },
     Server, SimplePrompt, SyncPrompt,
 };
@@ -46,7 +46,7 @@ fn create_code_review_prompt() -> SimplePrompt<AsyncPromptHandler> {
                 // System message
                 messages.push(PromptMessage {
                     role: Role::System,
-                    content: MessageContent::Text {
+                    content: Content::Text {
                         text: format!(
                             "You are an expert {} code reviewer. Focus on {} aspects of the code. \
                              Provide constructive feedback with specific suggestions for improvement.",
@@ -58,7 +58,7 @@ fn create_code_review_prompt() -> SimplePrompt<AsyncPromptHandler> {
                 // User message with the code
                 messages.push(PromptMessage {
                     role: Role::User,
-                    content: MessageContent::Text {
+                    content: Content::Text {
                         text: format!(
                             "Please review this {} code:\n\n```{}\n{}\n```",
                             language, language, code
@@ -98,7 +98,7 @@ fn create_data_analysis_prompt(
         // System message
         messages.push(PromptMessage {
             role: Role::System,
-            content: MessageContent::Text {
+            content: Content::Text {
                 text: format!(
                     "You are a data analyst expert. Analyze the provided {} data and \
                          provide insights in {} format. Be thorough and precise.",
@@ -118,7 +118,7 @@ fn create_data_analysis_prompt(
 
         messages.push(PromptMessage {
             role: Role::User,
-            content: MessageContent::Text { text: user_text },
+            content: Content::Text { text: user_text },
         });
 
         Ok(GetPromptResult::new(
@@ -161,7 +161,7 @@ fn create_writing_assistant_prompt(
             // System message
             messages.push(PromptMessage {
                 role: Role::System,
-                content: MessageContent::Text {
+                content: Content::Text {
                     text: format!(
                         "You are a skilled writing assistant. Write in a {} style for a {} audience. \
                          The content should be {} in length. Ensure clarity, engagement, and appropriate tone.",
@@ -173,7 +173,7 @@ fn create_writing_assistant_prompt(
             // User message
             messages.push(PromptMessage {
                 role: Role::User,
-                content: MessageContent::Text {
+                content: Content::Text {
                     text: format!("Write about: {}", topic),
                 },
             });

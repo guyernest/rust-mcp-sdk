@@ -76,6 +76,9 @@ impl ResourceHandler for TestResourceHandler {
                 name: uri.split('/').next_back().unwrap_or("").to_string(),
                 description: Some(format!("Test resource at {}", uri)),
                 mime_type: Some("text/plain".to_string()),
+                title: None,
+                icons: None,
+                annotations: None,
                 meta: None,
             })
             .collect();

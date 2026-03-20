@@ -281,10 +281,7 @@ mod tests {
         let server_info = pmcp::types::InitializeResult {
             protocol_version: pmcp::ProtocolVersion(pmcp::DEFAULT_PROTOCOL_VERSION.to_string()),
             capabilities: pmcp::types::ServerCapabilities::tools_only(),
-            server_info: pmcp::types::Implementation {
-                name: "transport-e2e-test".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            server_info: pmcp::types::Implementation::new("transport-e2e-test", "1.0.0"),
             instructions: None,
         };
 

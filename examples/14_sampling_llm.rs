@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use pmcp::{
     types::{
         capabilities::ServerCapabilities,
-        protocol::{Content, CreateMessageParams, CreateMessageResult, TokenUsage},
+        Content, CreateMessageParams, CreateMessageResult, SamplingMessageContent, TokenUsage,
     },
     SamplingHandler, Server,
 };
@@ -33,9 +33,9 @@ impl SamplingHandler for MockLLM {
                 .messages
                 .last()
                 .map(|m| match &m.content {
-                    Content::Text { text } => text.as_str(),
-                    Content::Image { .. } => "[image]",
-                    Content::Resource { .. } => "[resource]",
+                    SamplingMessageContent::Text { text, .. } => text.as_str(),
+                    SamplingMessageContent::Image { .. } => "[image]",
+                    _ => "[other]",
                 })
                 .unwrap_or("empty")
         );

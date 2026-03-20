@@ -32,6 +32,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         elicitation: Some(pmcp::types::capabilities::ElicitationCapabilities::default()),
         // Client supports roots notifications
         roots: Some(pmcp::types::capabilities::RootsCapabilities::default()),
+        // Tasks capabilities
+        tasks: None,
         // No experimental features
         experimental: None,
     };

@@ -1790,6 +1790,16 @@ impl ServerTester {
                                         println!("      Text: {}", preview);
                                     }
                                 },
+                                pmcp::types::Content::Audio { mime_type, data, .. } => {
+                                    println!("      Content type: Audio");
+                                    println!("      MIME type: {}", mime_type);
+                                    println!("      Data size: {} bytes (base64)", data.len());
+                                },
+                                pmcp::types::Content::ResourceLink { uri, name, .. } => {
+                                    println!("      Content type: ResourceLink");
+                                    println!("      URI: {}", uri);
+                                    println!("      Name: {}", name);
+                                },
                             }
                         }
 
@@ -1860,6 +1870,28 @@ impl ServerTester {
                                             resource.name, list_mime, content_mime
                                         ));
                                     }
+                                }
+                            },
+                            pmcp::types::Content::Audio { data, mime_type, .. } => {
+                                if data.is_empty() {
+                                    warnings.push(format!(
+                                        "Resource '{}' has empty audio data",
+                                        resource.name
+                                    ));
+                                }
+                                if !mime_type.starts_with("audio/") {
+                                    warnings.push(format!(
+                                        "Resource '{}' has non-audio MIME type '{}' for audio content",
+                                        resource.name, mime_type
+                                    ));
+                                }
+                            },
+                            pmcp::types::Content::ResourceLink { uri, .. } => {
+                                if uri.is_empty() {
+                                    warnings.push(format!(
+                                        "Resource '{}' link has empty URI",
+                                        resource.name
+                                    ));
                                 }
                             },
                         }

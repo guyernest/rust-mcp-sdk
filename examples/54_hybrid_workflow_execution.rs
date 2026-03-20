@@ -127,6 +127,9 @@ Best Practices:
                 name: "Logseq Task Formatting Guide".to_string(),
                 description: Some("Guide for formatting tasks in Logseq".to_string()),
                 mime_type: Some("text/plain".to_string()),
+                title: None,
+                icons: None,
+                annotations: None,
                 meta: None,
             }]))
         }
@@ -197,7 +200,7 @@ Best Practices:
 
     for (i, msg) in result.messages.iter().enumerate() {
         println!("Message {} [{:?}]:", i + 1, msg.role);
-        if let pmcp::types::MessageContent::Text { text } = &msg.content {
+        if let pmcp::types::Content::Text { text } = &msg.content {
             println!("{}\n", text);
         }
     }

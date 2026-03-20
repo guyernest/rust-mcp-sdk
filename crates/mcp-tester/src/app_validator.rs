@@ -377,6 +377,9 @@ mod tests {
             name: uri.to_string(),
             description: None,
             mime_type: mime.map(|s| s.to_string()),
+            title: None,
+            icons: None,
+            annotations: None,
             meta: None,
         }
     }

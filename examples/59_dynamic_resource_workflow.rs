@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use pmcp::server::workflow::dsl::field;
 use pmcp::server::workflow::{SequentialWorkflow, ToolHandle, WorkflowStep};
 use pmcp::{
-    Content, ListResourcesResult, MessageContent, ReadResourceResult, RequestHandlerExtra,
+    Content, ListResourcesResult, ReadResourceResult, RequestHandlerExtra,
     ResourceHandler, ResourceInfo, Result, Server, SimpleTool,
 };
 use serde_json::json;
@@ -73,6 +73,9 @@ You are standing in an open field west of a white house, with a boarded front do
                 name: "Zork I Walkthrough".to_string(),
                 description: Some("Complete walkthrough for Zork I".to_string()),
                 mime_type: Some("text/markdown".to_string()),
+                title: None,
+                icons: None,
+                annotations: None,
                 meta: None,
             },
             ResourceInfo {
@@ -80,6 +83,9 @@ You are standing in an open field west of a white house, with a boarded front do
                 name: "Planetfall Walkthrough".to_string(),
                 description: Some("Complete walkthrough for Planetfall".to_string()),
                 mime_type: Some("text/markdown".to_string()),
+                title: None,
+                icons: None,
+                annotations: None,
                 meta: None,
             },
         ]))
@@ -173,7 +179,7 @@ async fn main() -> Result<()> {
             for (i, message) in result.messages.iter().enumerate() {
                 println!("\n[Message {}] Role: {:?}", i + 1, message.role);
                 match &message.content {
-                    MessageContent::Text { text } => {
+                    Content::Text { text } => {
                         // Truncate very long text for display
                         let display_text = if text.len() > 300 {
                             format!(
@@ -186,11 +192,14 @@ async fn main() -> Result<()> {
                         };
                         println!("{}", display_text);
                     },
-                    MessageContent::Image { .. } => {
+                    Content::Image { .. } => {
                         println!("[Image content]");
                     },
-                    MessageContent::Resource { .. } => {
+                    Content::Resource { .. } => {
                         println!("[Resource content]");
+                    },
+                    _ => {
+                        println!("[Other content]");
                     },
                 }
             }

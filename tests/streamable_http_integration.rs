@@ -9,10 +9,9 @@ use pmcp::server::Server;
 use pmcp::shared::streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig};
 use pmcp::shared::{Transport, TransportMessage};
 use pmcp::types::capabilities::ServerCapabilities;
-use pmcp::types::protocol::ProtocolVersion;
 use pmcp::types::{
-    ClientNotification, ClientRequest, Implementation, InitializeParams, Notification, Request,
-    RequestId,
+    ClientNotification, ClientRequest, Implementation, InitializeParams, Notification,
+    ProtocolVersion, Request, RequestId,
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -67,10 +66,7 @@ async fn test_streamable_http_stateless_mode() {
         request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
             protocol_version: ProtocolVersion::default().0,
             capabilities: Default::default(),
-            client_info: Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            client_info: Implementation::new("test-client", "1.0.0"),
         }))),
     };
 
@@ -145,10 +141,7 @@ async fn test_streamable_http_stateful_mode() {
         request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
             protocol_version: ProtocolVersion::default().0,
             capabilities: Default::default(),
-            client_info: Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            client_info: Implementation::new("test-client", "1.0.0"),
         }))),
     };
 
@@ -244,10 +237,7 @@ async fn test_transport_send_receive_multiple() {
             request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
                 protocol_version: ProtocolVersion::default().0,
                 capabilities: Default::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
+                client_info: Implementation::new("test-client", "1.0.0"),
             }))),
         };
 
@@ -325,10 +315,7 @@ async fn test_transport_with_headers() {
         request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
             protocol_version: ProtocolVersion::default().0,
             capabilities: Default::default(),
-            client_info: Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            client_info: Implementation::new("test-client", "1.0.0"),
         }))),
     };
 

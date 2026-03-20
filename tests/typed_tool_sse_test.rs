@@ -120,10 +120,7 @@ mod tests {
         let init_result = pmcp::types::InitializeResult {
             protocol_version: pmcp::ProtocolVersion(pmcp::DEFAULT_PROTOCOL_VERSION.to_string()),
             capabilities: pmcp::types::ServerCapabilities::tools_only(),
-            server_info: pmcp::types::Implementation {
-                name: "sse-typed-test".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            server_info: pmcp::types::Implementation::new("sse-typed-test", "1.0.0"),
             instructions: None,
         };
 

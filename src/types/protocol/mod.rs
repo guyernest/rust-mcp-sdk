@@ -20,6 +20,7 @@ pub use super::notifications::*;
 pub use super::prompts::*;
 pub use super::resources::*;
 pub use super::sampling::*;
+pub use super::tasks::*;
 pub use super::tools::*;
 
 /// Protocol version identifier.

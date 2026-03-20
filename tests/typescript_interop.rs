@@ -69,6 +69,9 @@ impl ResourceHandler for TestResourceHandler {
                 name: "Example Text File".to_string(),
                 description: Some("A test resource from Rust".to_string()),
                 mime_type: Some("text/plain".to_string()),
+                title: None,
+                icons: None,
+                annotations: None,
                 meta: None,
             },
         ]))

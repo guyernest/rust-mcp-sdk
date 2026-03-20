@@ -127,20 +127,32 @@ impl DynamicResourceProvider for DatasetResourceProvider {
             ResourceTemplate {
                 uri_template: "datasets://{id}/schema".to_string(),
                 name: "Dataset Schema".to_string(),
+                title: None,
                 description: Some("Schema definition for a dataset".to_string()),
                 mime_type: Some("application/json".to_string()),
+                icons: None,
+                annotations: None,
+                meta: None,
             },
             ResourceTemplate {
                 uri_template: "datasets://{id}/preview".to_string(),
                 name: "Dataset Preview".to_string(),
+                title: None,
                 description: Some("Preview of dataset contents (first 10 rows)".to_string()),
                 mime_type: Some("text/plain".to_string()),
+                icons: None,
+                annotations: None,
+                meta: None,
             },
             ResourceTemplate {
                 uri_template: "datasets://{id}/stats".to_string(),
                 name: "Dataset Statistics".to_string(),
+                title: None,
                 description: Some("Statistical summary of dataset".to_string()),
                 mime_type: Some("application/json".to_string()),
+                icons: None,
+                annotations: None,
+                meta: None,
             },
         ]
     }
@@ -236,8 +248,12 @@ impl DynamicResourceProvider for FileSystemProvider {
         vec![ResourceTemplate {
             uri_template: "file://{path}".to_string(),
             name: "File Resource".to_string(),
+            title: None,
             description: Some("Access to local files".to_string()),
             mime_type: None,
+            icons: None,
+            annotations: None,
+            meta: None,
         }]
     }
 

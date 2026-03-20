@@ -21,10 +21,7 @@ prop_compose! {
         InitializeParams {
             protocol_version: versions[version_idx % versions.len()].to_string(),
             capabilities,
-            client_info: Implementation {
-                name: client_name,
-                version: client_version,
-            },
+            client_info: Implementation::new(client_name, client_version),
         }
     }
 }

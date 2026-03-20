@@ -92,6 +92,7 @@ fn fibonacci(n: u32) -> u32 {
                         pmcp::types::Content::Text { text } => text,
                         pmcp::types::Content::Image { .. } => "[Image content]",
                         pmcp::types::Content::Resource { .. } => "[Resource content]",
+                        _ => "[Other content]",
                     }
                 );
             }

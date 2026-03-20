@@ -6,7 +6,7 @@ use pmcp::error::Result as PmcpResult;
 use pmcp::server::resource_watcher::{ResourceWatcher, ResourceWatcherBuilder};
 use pmcp::server::{ResourceHandler, Server};
 use pmcp::types::capabilities::ServerCapabilities;
-use pmcp::types::protocol::{Content, ListResourcesResult, ReadResourceResult, ResourceInfo};
+use pmcp::types::{Content, ListResourcesResult, ReadResourceResult, ResourceInfo};
 use pmcp::RequestHandlerExtra;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -38,7 +38,7 @@ impl FileSystemResourceHandler {
     #[allow(dead_code)]
     async fn start_watching(
         &self,
-        notification_tx: mpsc::Sender<pmcp::types::protocol::Notification>,
+        notification_tx: mpsc::Sender<pmcp::types::Notification>,
     ) -> PmcpResult<()> {
         let (tx, mut rx) = mpsc::channel(100);
 
@@ -46,7 +46,7 @@ impl FileSystemResourceHandler {
         let notification_tx_clone = notification_tx.clone();
         tokio::spawn(async move {
             while let Some(server_notif) = rx.recv().await {
-                let notif = pmcp::types::protocol::Notification::Server(server_notif);
+                let notif = pmcp::types::Notification::Server(server_notif);
                 let _ = notification_tx_clone.send(notif).await;
             }
         });
@@ -99,6 +99,9 @@ impl FileSystemResourceHandler {
                             name: name.to_string(),
                             description: Some(format!("File resource: {}", name)),
                             mime_type,
+                            title: None,
+                            icons: None,
+                            annotations: None,
                             meta: None,
                         };
 

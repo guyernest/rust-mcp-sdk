@@ -48,6 +48,9 @@ impl ResourceHandler for TestResourceHandler {
                 name: "test1.txt".to_string(),
                 description: Some("Test file 1".to_string()),
                 mime_type: Some("text/plain".to_string()),
+                title: None,
+                icons: None,
+                annotations: None,
                 meta: None,
             },
             ResourceInfo {
@@ -55,6 +58,9 @@ impl ResourceHandler for TestResourceHandler {
                 name: "test2.txt".to_string(),
                 description: Some("Test file 2".to_string()),
                 mime_type: Some("text/plain".to_string()),
+                title: None,
+                icons: None,
+                annotations: None,
                 meta: None,
             },
         ]))

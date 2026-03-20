@@ -62,6 +62,9 @@ impl pmcp::server::PromptHandler for QuickstartPrompt {
                 "Step-by-step guide to create your first PMCP MCP server".to_string(),
             ),
             arguments: None,
+            title: None,
+            icons: None,
+            meta: None,
         })
     }
 }
@@ -175,6 +178,9 @@ impl pmcp::server::PromptHandler for CreateMcpServerPrompt {
                     false,
                 ),
             ]),
+            title: None,
+            icons: None,
+            meta: None,
         })
     }
 }
@@ -245,6 +251,9 @@ impl pmcp::server::PromptHandler for AddToolPrompt {
                 arg("tool_name", "Name for the new tool (snake_case)", true),
                 arg("description", "Human-readable tool description", false),
             ]),
+            title: None,
+            icons: None,
+            meta: None,
         })
     }
 }
@@ -302,6 +311,9 @@ impl pmcp::server::PromptHandler for DiagnosePrompt {
                 "URL of the MCP server to diagnose",
                 true,
             )]),
+            title: None,
+            icons: None,
+            meta: None,
         })
     }
 }
@@ -338,6 +350,9 @@ impl pmcp::server::PromptHandler for SetupAuthPrompt {
                 "Auth type: oauth, api-key, or jwt (default: oauth)",
                 false,
             )]),
+            title: None,
+            icons: None,
+            meta: None,
         })
     }
 }
@@ -477,6 +492,9 @@ impl pmcp::server::PromptHandler for DebugProtocolErrorPrompt {
                 "The error message to diagnose",
                 false,
             )]),
+            title: None,
+            icons: None,
+            meta: None,
         })
     }
 }
@@ -508,6 +526,9 @@ impl pmcp::server::PromptHandler for MigratePrompt {
                 "Guide for migrating from TypeScript MCP SDK to PMCP (Rust)".to_string(),
             ),
             arguments: None,
+            title: None,
+            icons: None,
+            meta: None,
         })
     }
 }

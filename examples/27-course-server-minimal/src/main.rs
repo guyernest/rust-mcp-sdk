@@ -356,6 +356,9 @@ impl ResourceHandler for ChapterResources {
                 name: c.title.clone(),
                 description: Some(format!("Chapter: {}", c.title)),
                 mime_type: Some("text/markdown".to_string()),
+                title: None,
+                icons: None,
+                annotations: None,
                 meta: None,
             })
             .collect();

@@ -261,10 +261,7 @@ async fn test_server_protocol_middleware_integration() {
     let init_request = Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
         protocol_version: pmcp::DEFAULT_PROTOCOL_VERSION.to_string(),
         capabilities: pmcp::types::ClientCapabilities::default(),
-        client_info: pmcp::types::Implementation {
-            name: "test-client".to_string(),
-            version: "1.0.0".to_string(),
-        },
+        client_info: pmcp::types::Implementation::new("test-client", "1.0.0"),
     })));
 
     let _response = server

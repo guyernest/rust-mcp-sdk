@@ -93,6 +93,9 @@ impl pmcp::server::ResourceHandler for DocsResourceHandler {
                 name: (*name).to_string(),
                 description: Some((*description).to_string()),
                 mime_type: Some("text/markdown".to_string()),
+                title: None,
+                icons: None,
+                annotations: None,
                 meta: None,
             })
             .collect();

@@ -5,7 +5,7 @@ use pmcp::error::Result as PmcpResult;
 use pmcp::server::{PromptHandler, Server};
 use pmcp::types::capabilities::ServerCapabilities;
 use pmcp::types::completable::completable;
-use pmcp::types::protocol::{Content, GetPromptResult, PromptArgument, PromptMessage, Role};
+use pmcp::types::{Content, GetPromptResult, PromptArgument, PromptMessage, Role};
 use pmcp::RequestHandlerExtra;
 use serde_json::json;
 use std::collections::HashMap;
@@ -167,9 +167,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Helper to create prompt info with completable arguments.
 /// This would be used during server registration to define prompts with completions.
 #[allow(dead_code)]
-fn create_database_prompt_info() -> pmcp::types::protocol::PromptInfo {
-    pmcp::types::protocol::PromptInfo {
+fn create_database_prompt_info() -> pmcp::types::PromptInfo {
+    pmcp::types::PromptInfo {
         name: "database_query".to_string(),
+        title: None,
         description: Some("Generate database queries with auto-completion".to_string()),
         arguments: Some(vec![
             PromptArgument {
@@ -225,5 +226,7 @@ fn create_database_prompt_info() -> pmcp::types::protocol::PromptInfo {
                 arg_type: None,
             },
         ]),
+        icons: None,
+        meta: None,
     }
 }

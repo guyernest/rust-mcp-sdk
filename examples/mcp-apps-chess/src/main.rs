@@ -32,7 +32,7 @@ use pmcp::server::streamable_http_server::{StreamableHttpServer, StreamableHttpS
 use pmcp::server::typed_tool::TypedToolWithOutput;
 use pmcp::server::ServerBuilder;
 use pmcp::types::mcp_apps::{ExtendedUIMimeType, HostType};
-use pmcp::types::protocol::Content;
+use pmcp::types::Content;
 use pmcp::types::{ListResourcesResult, ReadResourceResult, ResourceInfo};
 use pmcp::{RequestHandlerExtra, ResourceHandler, Result};
 use schemars::JsonSchema;
@@ -527,6 +527,9 @@ impl ResourceHandler for ChessResources {
                 name: entry.filename.clone(),
                 description: Some(format!("Interactive {} widget", entry.filename)),
                 mime_type: Some(ExtendedUIMimeType::HtmlMcpApp.to_string()),
+                title: None,
+                icons: None,
+                annotations: None,
                 meta: None,
             })
             .collect();

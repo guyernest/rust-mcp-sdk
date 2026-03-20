@@ -172,10 +172,7 @@ async fn test_auth_context_flows_from_transport_to_tools() {
         pmcp::types::InitializeParams {
             protocol_version: pmcp::DEFAULT_PROTOCOL_VERSION.to_string(),
             capabilities: pmcp::types::ClientCapabilities::default(),
-            client_info: pmcp::types::Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            client_info: pmcp::types::Implementation::new("test-client", "1.0.0"),
         },
     )));
 
@@ -254,10 +251,7 @@ async fn test_missing_auth_context_fails_in_tool() {
         pmcp::types::InitializeParams {
             protocol_version: pmcp::DEFAULT_PROTOCOL_VERSION.to_string(),
             capabilities: pmcp::types::ClientCapabilities::default(),
-            client_info: pmcp::types::Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            client_info: pmcp::types::Implementation::new("test-client", "1.0.0"),
         },
     )));
 

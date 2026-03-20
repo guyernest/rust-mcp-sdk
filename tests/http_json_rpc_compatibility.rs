@@ -68,10 +68,7 @@ mod http_tests {
         let init_params = InitializeRequest {
             protocol_version: "2024-11-05".to_string(),
             capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            client_info: Implementation::new("test-client", "1.0.0"),
         };
 
         let request = Request::Client(Box::new(ClientRequest::Initialize(init_params)));

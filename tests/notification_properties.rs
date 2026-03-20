@@ -301,13 +301,13 @@ proptest! {
         level1_idx in 0..4usize,
         level2_idx in 0..4usize,
     ) {
-        use pmcp::types::protocol::LogLevel;
+        use pmcp::types::LoggingLevel;
 
         let levels = [
-            LogLevel::Debug,
-            LogLevel::Info,
-            LogLevel::Warning,
-            LogLevel::Error,
+            LoggingLevel::Debug,
+            LoggingLevel::Info,
+            LoggingLevel::Warning,
+            LoggingLevel::Error,
         ];
 
         let level1 = &levels[level1_idx];
@@ -315,17 +315,19 @@ proptest! {
 
         // Log levels should have a clear ordering
         let severity1 = match level1 {
-            LogLevel::Debug => 0,
-            LogLevel::Info => 1,
-            LogLevel::Warning => 2,
-            LogLevel::Error => 3,
+            LoggingLevel::Debug => 0,
+            LoggingLevel::Info => 1,
+            LoggingLevel::Warning => 2,
+            LoggingLevel::Error => 3,
+            _ => unreachable!("test only uses 4 levels"),
         };
 
         let severity2 = match level2 {
-            LogLevel::Debug => 0,
-            LogLevel::Info => 1,
-            LogLevel::Warning => 2,
-            LogLevel::Error => 3,
+            LoggingLevel::Debug => 0,
+            LoggingLevel::Info => 1,
+            LoggingLevel::Warning => 2,
+            LoggingLevel::Error => 3,
+            _ => unreachable!("test only uses 4 levels"),
         };
 
         match severity1.cmp(&severity2) {

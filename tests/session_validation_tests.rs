@@ -55,10 +55,7 @@ mod session_validation_tests {
             request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
                 protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
                 capabilities: ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
+                client_info: Implementation::new("test-client", "1.0.0"),
             }))),
         };
 
@@ -186,10 +183,7 @@ mod session_validation_tests {
             request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
                 protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
                 capabilities: ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
+                client_info: Implementation::new("test-client", "1.0.0"),
             }))),
         };
 
@@ -294,10 +288,7 @@ mod session_validation_tests {
             request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
                 protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
                 capabilities: ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
+                client_info: Implementation::new("test-client", "1.0.0"),
             }))),
         };
 
@@ -374,10 +365,7 @@ mod session_validation_tests {
             request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
                 protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
                 capabilities: ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
+                client_info: Implementation::new("test-client", "1.0.0"),
             }))),
         };
 
@@ -483,10 +471,7 @@ mod session_validation_tests {
             request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
                 protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
                 capabilities: ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
+                client_info: Implementation::new("test-client", "1.0.0"),
             }))),
         };
 
@@ -574,10 +559,7 @@ mod session_validation_tests {
             request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
                 protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
                 capabilities: ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
+                client_info: Implementation::new("test-client", "1.0.0"),
             }))),
         };
 
