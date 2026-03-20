@@ -47,7 +47,21 @@ impl std::fmt::Display for ProtocolVersion {
 }
 
 /// Icon information for entities (MCP 2025-11-25).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Backward Compatibility
+///
+/// This struct is `#[non_exhaustive]`. Use the constructor to remain
+/// forward-compatible:
+///
+/// ```rust
+/// use pmcp::types::protocol::IconInfo;
+///
+/// let icon = IconInfo::new("https://example.com/icon.png")
+///     .with_mime_type("image/png")
+///     .with_sizes(vec!["32x32".to_string()]);
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct IconInfo {
     /// Icon source URL
@@ -61,6 +75,38 @@ pub struct IconInfo {
     /// Icon theme preference
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<IconTheme>,
+}
+
+impl IconInfo {
+    /// Create an `IconInfo` with just the source URL.
+    ///
+    /// Optional fields (mime_type, sizes, theme) default to `None`.
+    pub fn new(src: impl Into<String>) -> Self {
+        Self {
+            src: src.into(),
+            mime_type: None,
+            sizes: None,
+            theme: None,
+        }
+    }
+
+    /// Set the MIME type for the icon.
+    pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
+        self.mime_type = Some(mime_type.into());
+        self
+    }
+
+    /// Set the icon sizes (e.g., \["16x16", "32x32"\]).
+    pub fn with_sizes(mut self, sizes: Vec<String>) -> Self {
+        self.sizes = Some(sizes);
+        self
+    }
+
+    /// Set the icon theme preference.
+    pub fn with_theme(mut self, theme: IconTheme) -> Self {
+        self.theme = Some(theme);
+        self
+    }
 }
 
 /// Icon theme preference.
@@ -87,7 +133,21 @@ pub enum ProtocolErrorCode {
 }
 
 /// Implementation information.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Backward Compatibility
+///
+/// This struct is `#[non_exhaustive]`. Use the constructor and fluent
+/// methods to remain forward-compatible:
+///
+/// ```rust
+/// use pmcp::types::protocol::Implementation;
+///
+/// let info = Implementation::new("my-server", "1.0.0")
+///     .with_title("My Server")
+///     .with_description("A great server");
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct Implementation {
     /// Implementation name (e.g., "mcp-sdk-rust")
@@ -123,10 +183,35 @@ impl Implementation {
             icons: None,
         }
     }
+
+    /// Set a human-readable title (MCP 2025-11-25).
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set the website URL (MCP 2025-11-25).
+    pub fn with_website_url(mut self, url: impl Into<String>) -> Self {
+        self.website_url = Some(url.into());
+        self
+    }
+
+    /// Set a human-readable description (MCP 2025-11-25).
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set icons for the implementation (MCP 2025-11-25).
+    pub fn with_icons(mut self, icons: Vec<IconInfo>) -> Self {
+        self.icons = Some(icons);
+        self
+    }
 }
 
 /// Initialize request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeRequest {
     /// Protocol version the client wants to use
@@ -137,8 +222,35 @@ pub struct InitializeRequest {
     pub client_info: Implementation,
 }
 
+impl InitializeRequest {
+    /// Create an initialize request with the latest protocol version.
+    pub fn new(client_info: Implementation, capabilities: ClientCapabilities) -> Self {
+        Self {
+            protocol_version: crate::LATEST_PROTOCOL_VERSION.to_string(),
+            capabilities,
+            client_info,
+        }
+    }
+}
+
 /// Initialize response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Backward Compatibility
+///
+/// This struct is `#[non_exhaustive]`. Use the constructor to remain
+/// forward-compatible:
+///
+/// ```rust
+/// use pmcp::types::protocol::{InitializeResult, Implementation};
+/// use pmcp::ServerCapabilities;
+///
+/// let result = InitializeResult::new(
+///     Implementation::new("my-server", "1.0.0"),
+///     ServerCapabilities::tools_only(),
+/// ).with_instructions("Use this server for ...");
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResult {
     /// Negotiated protocol version
@@ -152,13 +264,48 @@ pub struct InitializeResult {
     pub instructions: Option<String>,
 }
 
+impl InitializeResult {
+    /// Create an initialize result with the default protocol version.
+    ///
+    /// Instructions default to `None`.
+    pub fn new(server_info: Implementation, capabilities: ServerCapabilities) -> Self {
+        Self {
+            protocol_version: ProtocolVersion::default(),
+            capabilities,
+            server_info,
+            instructions: None,
+        }
+    }
+
+    /// Set optional instructions for the client.
+    pub fn with_instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.instructions = Some(instructions.into());
+        self
+    }
+}
+
 /// Pagination cursor.
 pub type Cursor = Option<String>;
 
 /// Request metadata that can be attached to any request.
 ///
 /// This follows the MCP protocol's `_meta` field specification.
+///
+/// # Backward Compatibility
+///
+/// This struct is `#[non_exhaustive]`. Use the constructor to remain
+/// forward-compatible:
+///
+/// ```rust
+/// use pmcp::types::protocol::RequestMeta;
+/// use pmcp::types::notifications::ProgressToken;
+///
+/// let meta = RequestMeta::new()
+///     .with_progress_token(ProgressToken::String("tok-1".to_string()))
+///     .with_task_id("task-abc");
+/// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct RequestMeta {
     /// Progress token for out-of-band progress notifications.
@@ -177,6 +324,26 @@ pub struct RequestMeta {
     #[serde(skip_serializing_if = "Option::is_none", rename = "_task_id")]
     #[allow(clippy::pub_underscore_fields)]
     pub _task_id: Option<String>,
+}
+
+impl RequestMeta {
+    /// Create an empty `RequestMeta`.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the progress token.
+    pub fn with_progress_token(mut self, token: super::notifications::ProgressToken) -> Self {
+        self.progress_token = Some(token);
+        self
+    }
+
+    /// Set the task ID for workflow continuation (PMCP extension).
+    #[allow(clippy::used_underscore_binding)]
+    pub fn with_task_id(mut self, task_id: impl Into<String>) -> Self {
+        self._task_id = Some(task_id.into());
+        self
+    }
 }
 
 /// Completion request.
@@ -217,8 +384,9 @@ pub struct CompletionArgument {
     pub value: String,
 }
 
-/// Completion result.
+/// Completion result wrapper.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct CompleteResult {
     /// Completion options
@@ -226,7 +394,8 @@ pub struct CompleteResult {
 }
 
 /// Completion result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct CompletionResult {
     /// Suggested values
@@ -237,6 +406,31 @@ pub struct CompletionResult {
     /// Whether there are more completions available
     #[serde(default)]
     pub has_more: bool,
+}
+
+impl CompletionResult {
+    /// Create a completion result with the given values.
+    ///
+    /// `has_more` defaults to `false`, `total` defaults to `None`.
+    pub fn new(values: Vec<String>) -> Self {
+        Self {
+            values,
+            total: None,
+            has_more: false,
+        }
+    }
+
+    /// Set the total number of completions available.
+    pub fn with_total(mut self, total: usize) -> Self {
+        self.total = Some(total);
+        self
+    }
+
+    /// Set whether there are more completions available.
+    pub fn with_has_more(mut self, has_more: bool) -> Self {
+        self.has_more = has_more;
+        self
+    }
 }
 
 /// Client request types.
@@ -379,10 +573,7 @@ mod tests {
 
     #[test]
     fn request_meta_task_id_serializes_as_underscore() {
-        let meta = RequestMeta {
-            progress_token: None,
-            _task_id: Some("abc".to_string()),
-        };
+        let meta = RequestMeta::new().with_task_id("abc");
         let json = serde_json::to_value(&meta).unwrap();
         assert_eq!(json["_task_id"], "abc");
         assert!(
@@ -393,10 +584,7 @@ mod tests {
 
     #[test]
     fn request_meta_task_id_omitted_when_none() {
-        let meta = RequestMeta {
-            progress_token: None,
-            _task_id: None,
-        };
+        let meta = RequestMeta::new();
         let json = serde_json::to_value(&meta).unwrap();
         assert!(
             json.get("_task_id").is_none(),
