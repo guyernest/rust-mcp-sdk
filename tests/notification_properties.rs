@@ -280,9 +280,9 @@ proptest! {
         // Cancellation reasons should handle various lengths
         let reason = "X".repeat(reason_length);
 
-        let notification = CancelledNotification {
-            request_id,
-            reason: if reason_length > 0 { Some(reason) } else { None },
+        let notification = {
+            let n = CancelledNotification::new(request_id);
+            if reason_length > 0 { n.with_reason(reason) } else { n }
         };
 
         let json = serde_json::to_value(&notification).unwrap();
