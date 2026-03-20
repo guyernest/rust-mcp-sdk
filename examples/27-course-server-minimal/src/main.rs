@@ -20,8 +20,8 @@ use pmcp::{
         capabilities::{
             PromptCapabilities, ResourceCapabilities, ServerCapabilities, ToolCapabilities,
         },
-        Content, GetPromptResult, ListResourcesResult, MessageContent, PromptMessage,
-        ReadResourceResult, ResourceInfo, Role,
+        Content, GetPromptResult, ListResourcesResult, PromptMessage,
+        ReadResourceResult, ResourceInfo,
     },
     ResourceHandler, Server, SyncPrompt, ToolHandler,
 };
@@ -392,10 +392,7 @@ async fn main() -> anyhow::Result<()> {
         let first_chapter = chapters.first();
 
         Ok(GetPromptResult::new(
-            vec![PromptMessage {
-                role: Role::User,
-                content: MessageContent::Text {
-                    text: format!(
+            vec![PromptMessage::user(Content::text(format!(
                         "I'm ready to learn MCP development!\n\n\
                         The course has {} chapters.\n\n\
                         {}",
@@ -407,9 +404,7 @@ async fn main() -> anyhow::Result<()> {
                                 c.content.lines().take(5).collect::<Vec<_>>().join("\n")
                             ))
                             .unwrap_or_else(|| "No chapters loaded.".to_string())
-                    ),
-                },
-            }],
+                    )))],
             Some("Start your MCP learning journey".to_string()),
         ))
     })
@@ -428,18 +423,13 @@ async fn main() -> anyhow::Result<()> {
             .ok_or_else(|| pmcp::Error::validation("Chapter not found"))?;
 
         Ok(GetPromptResult::new(
-            vec![PromptMessage {
-                role: Role::User,
-                content: MessageContent::Text {
-                    text: format!(
+            vec![PromptMessage::user(Content::text(format!(
                         "Please review the key concepts from this chapter:\n\n\
                         # {}\n\n\
                         {}\n\n\
                         Summarize the main takeaways.",
                         chapter.title, chapter.content
-                    ),
-                },
-            }],
+                    )))],
             Some(format!("Review: {}", chapter.title)),
         ))
     })
@@ -450,11 +440,12 @@ async fn main() -> anyhow::Result<()> {
     let server = Server::builder()
         .name("course-server-minimal")
         .version("0.1.0")
-        .capabilities(ServerCapabilities {
-            tools: Some(ToolCapabilities::default()),
-            resources: Some(ResourceCapabilities::default()),
-            prompts: Some(PromptCapabilities::default()),
-            ..Default::default()
+        .capabilities({
+            let mut caps = ServerCapabilities::default();
+            caps.tools = Some(ToolCapabilities::default());
+            caps.resources = Some(ResourceCapabilities::default());
+            caps.prompts = Some(PromptCapabilities::default());
+            caps
         })
         .tool("list_chapters", ListChaptersTool {
             content: Arc::clone(&content),
