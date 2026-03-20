@@ -117,12 +117,10 @@ mod tests {
         let _server = create_test_server();
 
         // Create an InitializeResult as would be sent over SSE
-        let init_result = pmcp::types::InitializeResult {
-            protocol_version: pmcp::ProtocolVersion(pmcp::DEFAULT_PROTOCOL_VERSION.to_string()),
-            capabilities: pmcp::types::ServerCapabilities::tools_only(),
-            server_info: pmcp::types::Implementation::new("sse-typed-test", "1.0.0"),
-            instructions: None,
-        };
+        let init_result = pmcp::types::InitializeResult::new(
+            pmcp::types::Implementation::new("sse-typed-test", "1.0.0"),
+            pmcp::types::ServerCapabilities::tools_only(),
+        );
 
         // Create JSON-RPC response as would be sent over SSE
         let response =
