@@ -16,7 +16,7 @@ use std::collections::HashMap;
 /// Build a single-message assistant prompt result.
 fn assistant_result(description: &str, text: String) -> pmcp::Result<GetPromptResult> {
     Ok(GetPromptResult::new(
-        vec![PromptMessage::assistant(Content::Text { text })],
+        vec![PromptMessage::assistant(Content::text(text))],
         Some(description.to_string()),
     ))
 }

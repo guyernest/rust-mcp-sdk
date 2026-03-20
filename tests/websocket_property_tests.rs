@@ -55,12 +55,11 @@ mod websocket_reliability {
 
                 let server = EnhancedWebSocketServer::new(config);
                 let dummy_msg = TransportMessage::Notification(
-                    pmcp::types::Notification::Progress(pmcp::types::ProgressNotification {
-                        progress_token: pmcp::types::ProgressToken::String("test".to_string()),
-                        progress: 0.0,
-                        total: None,
-                        message: None,
-                    })
+                    pmcp::types::Notification::Progress(pmcp::types::ProgressNotification::new(
+                        pmcp::types::ProgressToken::String("test".to_string()),
+                        0.0,
+                        None,
+                    ))
                 );
                 let result = server.broadcast(dummy_msg).await;
 

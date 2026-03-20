@@ -201,15 +201,10 @@ impl ResourceHandler for AppResources {{
         let entries = self.widget_dir.discover().unwrap_or_default();
         let resources = entries
             .into_iter()
-            .map(|entry| ResourceInfo {{
-                uri: entry.uri,
-                name: entry.filename.clone(),
-                description: Some(format!("Interactive {{}} widget", entry.filename)),
-                mime_type: Some(ExtendedUIMimeType::HtmlMcpApp.to_string()),
-                title: None,
-                icons: None,
-                annotations: None,
-                meta: None,
+            .map(|entry| {{
+                ResourceInfo::new(&entry.uri, &entry.filename)
+                    .with_description(format!("Interactive {{}} widget", entry.filename))
+                    .with_mime_type(ExtendedUIMimeType::HtmlMcpApp.to_string())
             }})
             .collect();
 

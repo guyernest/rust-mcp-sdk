@@ -331,9 +331,7 @@ impl ResourceHandler for ChapterResources {
                     )
                 })?;
 
-            Ok(ReadResourceResult::new(vec![Content::Text {
-                    text: chapter.content.clone(),
-                }]))
+            Ok(ReadResourceResult::new(vec![Content::text(&chapter.content)]))
         } else {
             Err(pmcp::Error::protocol(
                 pmcp::ErrorCode::METHOD_NOT_FOUND,
@@ -351,15 +349,10 @@ impl ResourceHandler for ChapterResources {
             .content
             .chapters
             .iter()
-            .map(|c| ResourceInfo {
-                uri: format!("course://chapters/{}", c.id),
-                name: c.title.clone(),
-                description: Some(format!("Chapter: {}", c.title)),
-                mime_type: Some("text/markdown".to_string()),
-                title: None,
-                icons: None,
-                annotations: None,
-                meta: None,
+            .map(|c| {
+                ResourceInfo::new(format!("course://chapters/{}", c.id), &c.title)
+                    .with_description(format!("Chapter: {}", c.title))
+                    .with_mime_type("text/markdown")
             })
             .collect();
 

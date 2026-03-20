@@ -42,12 +42,11 @@ prop_compose! {
         has_message in prop::bool::ANY,
         message in prop::string::string_regex("[a-zA-Z0-9 .,!?]{0,200}").unwrap(),
     ) -> ProgressNotification {
-        ProgressNotification {
-            progress_token: token,
+        ProgressNotification::new(
+            token,
             progress,
-            total: None,
-            message: if has_message { Some(message) } else { None },
-        }
+            if has_message { Some(message) } else { None },
+        )
     }
 }
 
@@ -58,9 +57,9 @@ prop_compose! {
         has_reason in prop::bool::ANY,
         reason in prop::string::string_regex("[a-zA-Z0-9 .,!?]{0,200}").unwrap(),
     ) -> CancelledNotification {
-        CancelledNotification {
-            request_id,
-            reason: if has_reason { Some(reason) } else { None },
+        {
+            let n = CancelledNotification::new(request_id);
+            if has_reason { n.with_reason(reason) } else { n }
         }
     }
 }
@@ -140,12 +139,11 @@ proptest! {
         message in prop::string::string_regex("[a-zA-Z0-9 ]{0,100}").unwrap(),
     ) {
         // Progress messages are optional
-        let notification = ProgressNotification {
-            progress_token: token,
+        let notification = ProgressNotification::new(
+            token,
             progress,
-            total: None,
-            message: if include_message { Some(message.clone()) } else { None },
-        };
+            if include_message { Some(message.clone()) } else { None },
+        );
 
         let json = serde_json::to_value(&notification).unwrap();
 
@@ -259,12 +257,11 @@ proptest! {
         let mut notifications = Vec::new();
 
         for progress in progress_values {
-            notifications.push(ProgressNotification {
-                progress_token: token.clone(),
+            notifications.push(ProgressNotification::new(
+                token.clone(),
                 progress,
-                total: None,
-                message: Some(format!("Progress: {:.1}%", progress)),
-            });
+                Some(format!("Progress: {:.1}%", progress)),
+            ));
         }
 
         // Check if progress values make sense

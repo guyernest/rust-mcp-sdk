@@ -166,10 +166,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = Server::builder()
         .name("oauth-example-server")
         .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            tools: Some(Default::default()),
-            ..Default::default()
-        })
+        .capabilities(ServerCapabilities::tools_only())
         // Add public tool - no auth required
         .tool("get_time", GetTimeTool)
         // Add read-only tool - requires 'read' scope

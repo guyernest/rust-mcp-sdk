@@ -34,12 +34,11 @@ impl pmcp::shared::Transport for MockTransport {
         // Mock receiving - return a progress notification
         tokio::time::sleep(Duration::from_millis(100)).await;
         Ok(TransportMessage::Notification(
-            pmcp::types::Notification::Progress(pmcp::types::ProgressNotification {
-                progress_token: pmcp::types::ProgressToken::String(format!("mock-{}", self.id)),
-                progress: 50.0,
-                total: None,
-                message: Some(format!("Mock message from transport {}", self.id)),
-            }),
+            pmcp::types::Notification::Progress(pmcp::types::ProgressNotification::new(
+                pmcp::types::ProgressToken::String(format!("mock-{}", self.id)),
+                50.0,
+                Some(format!("Mock message from transport {}", self.id)),
+            )),
         ))
     }
 
@@ -144,12 +143,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         // Send several test messages
         for i in 0..5 {
             let message = TransportMessage::Notification(pmcp::types::Notification::Progress(
-                pmcp::types::ProgressNotification {
-                    progress_token: pmcp::types::ProgressToken::String(format!("test-{}", i)),
-                    progress: (i as f64 * 20.0),
-                    total: None,
-                    message: Some(format!("Load balancing test {}", i)),
-                },
+                pmcp::types::ProgressNotification::new(
+                    pmcp::types::ProgressToken::String(format!("test-{}", i)),
+                    i as f64 * 20.0,
+                    Some(format!("Load balancing test {}", i)),
+                ),
             ));
 
             if let Ok(connection_id) = test_pool.get_connection().await {
@@ -178,12 +176,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     for i in 0..10 {
         let message = TransportMessage::Notification(pmcp::types::Notification::Progress(
-            pmcp::types::ProgressNotification {
-                progress_token: pmcp::types::ProgressToken::String(format!("load-test-{}", i)),
-                progress: (i as f64 * 10.0),
-                total: None,
-                message: Some(format!("Load test message {}", i)),
-            },
+            pmcp::types::ProgressNotification::new(
+                pmcp::types::ProgressToken::String(format!("load-test-{}", i)),
+                i as f64 * 10.0,
+                Some(format!("Load test message {}", i)),
+            ),
         ));
 
         if let Err(e) = pool.send_message(message).await {

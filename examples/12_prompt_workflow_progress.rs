@@ -105,15 +105,10 @@ impl PromptHandler for AnalysisWorkflowPrompt {
         let workflow_summary = results.join("\n");
 
         Ok(GetPromptResult::new(
-            vec![PromptMessage {
-                role: Role::User,
-                content: Content::Text {
-                    text: format!(
-                        "Analysis Workflow Complete\n\nTopic: {}\n\nWorkflow Steps:\n{}\n\nAll {} steps completed successfully. Ready for review.",
-                        topic, workflow_summary, steps.len()
-                    ),
-                },
-            }],
+            vec![PromptMessage::user(Content::text(format!(
+                "Analysis Workflow Complete\n\nTopic: {}\n\nWorkflow Steps:\n{}\n\nAll {} steps completed successfully. Ready for review.",
+                topic, workflow_summary, steps.len()
+            )))],
             Some(format!(
                 "Multi-step analysis workflow for: {}",
                 topic
@@ -149,10 +144,7 @@ async fn main() -> Result<()> {
     let request = GetPromptRequest {
         name: "analysis_workflow".to_string(),
         arguments: HashMap::from([("topic".to_string(), "Machine Learning".to_string())]),
-        _meta: Some(RequestMeta {
-            progress_token: Some(ProgressToken::String("workflow-1".to_string())),
-            _task_id: None,
-        }),
+        _meta: Some(RequestMeta::new().with_progress_token(ProgressToken::String("workflow-1".to_string()))),
     };
 
     println!("Executing workflow with progress token 'workflow-1'...\n");

@@ -205,18 +205,10 @@ async fn main() -> Result<()> {
     let server = Server::builder()
         .name("sampling-tools-server")
         .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            tools: Some(pmcp::ToolCapabilities {
-                list_changed: Some(true),
-            }),
-            // In a real implementation, you would also enable sampling capabilities
-            sampling: Some(pmcp::SamplingCapabilities {
-                models: Some(vec![
-                    "example-llm-model".to_string(),
-                    "gpt-3.5-turbo".to_string(),
-                ]),
-            }),
-            ..Default::default()
+        .capabilities({
+            let mut caps = ServerCapabilities::tools_only();
+            caps.sampling = Some(Default::default());
+            caps
         })
         .tool("summarize", SummarizeTool)
         .tool("analyze_text", AnalyzeTextTool)

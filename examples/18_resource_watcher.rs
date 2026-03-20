@@ -94,16 +94,11 @@ impl FileSystemResourceHandler {
                         };
 
                         let uri = format!("file://{}", path.display());
-                        let info = ResourceInfo {
-                            uri: uri.clone(),
-                            name: name.to_string(),
-                            description: Some(format!("File resource: {}", name)),
-                            mime_type,
-                            title: None,
-                            icons: None,
-                            annotations: None,
-                            meta: None,
-                        };
+                        let mut info = ResourceInfo::new(&uri, name)
+                            .with_description(format!("File resource: {}", name));
+                        if let Some(mime) = &mime_type {
+                            info = info.with_mime_type(mime);
+                        }
 
                         resources.push(info.clone());
                         resource_map.insert(uri.clone(), info.clone());
@@ -148,9 +143,7 @@ impl ResourceHandler for FileSystemResourceHandler {
             })
             .unwrap_or("text/plain");
 
-        Ok(ReadResourceResult::new(vec![Content::Text {
-            text: content,
-        }]))
+        Ok(ReadResourceResult::new(vec![Content::text(content)]))
     }
 
     async fn list(
@@ -187,13 +180,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = Server::builder()
         .name("resource-watcher-example")
         .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            resources: Some(pmcp::types::capabilities::ResourceCapabilities {
-                subscribe: Some(true),
-                list_changed: Some(true),
-            }),
-            ..Default::default()
-        })
+        .capabilities(ServerCapabilities::resources_only())
         .resources(handler)
         .build()?;
 
@@ -225,4 +212,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     server.run_stdio().await?;
 
     Ok(())
+}
+ Ok(())
 }

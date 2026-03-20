@@ -76,11 +76,7 @@ async fn run_logging_server() -> Result<(), Box<dyn std::error::Error>> {
     let server = Server::builder()
         .name("logging-server")
         .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            tools: Some(Default::default()),
-            logging: Some(Default::default()),
-            ..Default::default()
-        })
+        .capabilities(ServerCapabilities::tools_only())
         .tool("process_with_logs", LoggingTool)
         .build()?;
 

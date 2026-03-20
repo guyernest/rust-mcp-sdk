@@ -405,3 +405,94 @@ src/types/
 - [ ] Update `SamplingMessage.content` usage from `Content` to `SamplingMessageContent`
 - [ ] Rewrite elicitation code using `ElicitRequestParams` / `ElicitResult`
 - [ ] Update protocol version references from 2024 to 2025
+
+## Construction DX (v2.0)
+
+All protocol structs now use the uniform construction pattern:
+`#[non_exhaustive]` + `Default` + `::new(required_fields)` + `.with_*(optional_field)`
+
+This means:
+- **Struct literal syntax from outside the crate no longer works** (due to `#[non_exhaustive]`)
+- **New optional fields in future versions won't break your code** (constructor defaults them to `None`)
+- **Upgrades are painless** -- just bump the version, constructors handle new fields
+
+### Before (v1.x)
+
+```rust
+// Painful -- every field must be specified, breaks on every SDK update
+let resource = ResourceInfo {
+    uri: "file://test.txt".to_string(),
+    name: "test.txt".to_string(),
+    title: None,
+    description: Some("A test file".to_string()),
+    mime_type: Some("text/plain".to_string()),
+    icons: None,
+    annotations: None,
+    meta: None,
+};
+
+let prompt = PromptInfo {
+    name: "greet".to_string(),
+    title: None,
+    description: Some("A greeting prompt".to_string()),
+    arguments: Some(vec![PromptArgument {
+        name: "name".to_string(),
+        description: Some("Name to greet".to_string()),
+        required: true,
+        completion: None,
+        arg_type: None,
+    }]),
+    icons: None,
+    meta: None,
+};
+
+let content = Content::Text { text: "Hello".to_string() };
+```
+
+### After (v2.0)
+
+```rust
+// Clean -- only specify what matters, future-proof
+let resource = ResourceInfo::new("file://test.txt", "test.txt")
+    .with_description("A test file")
+    .with_mime_type("text/plain");
+
+let prompt = PromptInfo::new("greet")
+    .with_description("A greeting prompt")
+    .with_arguments(vec![
+        PromptArgument::new("name")
+            .with_description("Name to greet")
+            .required(),
+    ]);
+
+let content = Content::text("Hello");
+```
+
+### Content Enum Helpers
+
+| Helper | Creates |
+|--------|---------|
+| `Content::text("hello")` | `Content::Text { text: "hello" }` |
+| `Content::image(data, mime)` | `Content::Image { data, mime_type }` |
+| `Content::resource(uri)` | `Content::Resource { uri, text: None, mime_type: None, meta: None }` |
+| `Content::resource_with_text(uri, text, mime)` | `Content::Resource { uri, text, mime_type, meta: None }` |
+| `Content::audio(data, mime)` | `Content::Audio { data, mime_type, annotations: None, meta: None }` |
+| `Content::resource_link(name, uri)` | `Content::ResourceLink(Box::new(ResourceLinkContent::new(name, uri)))` |
+
+### Task Type Helpers (for Phase 55+)
+
+```rust
+let task = Task::new("t-123", TaskStatus::Working)
+    .with_timestamps("2025-01-01T00:00:00Z", "2025-01-01T00:01:00Z")
+    .with_ttl(60000)
+    .with_poll_interval(5000)
+    .with_status_message("Processing...");
+```
+
+### Types Affected
+
+Every protocol struct now has this pattern. Key types:
+`ResourceInfo`, `ResourceTemplate`, `PromptInfo`, `PromptArgument`, `PromptMessage`,
+`Implementation`, `IconInfo`, `InitializeResult`, `Task`, `CreateMessageParams`,
+`ProgressNotification`, `CancelledNotification`, `LogMessageParams`, `CallToolResult`,
+`ToolExecution`, `CallToolRequest`, `Annotations`, `ResourceLinkContent`

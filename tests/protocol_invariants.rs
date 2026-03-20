@@ -114,7 +114,7 @@ prop_compose! {
         uri in "[a-z]+://[a-z0-9./_-]+",
     ) -> Content {
         match choice {
-            0 => Content::Text { text },
+            0 => Content::text(text),
             1 => Content::Image {
                 data: String::from_utf8(data).unwrap_or_else(|_| "invalid_data".to_string()),
                 mime_type: mime_type.to_string(),

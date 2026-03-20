@@ -42,27 +42,17 @@ fn create_code_review_prompt() -> SimplePrompt<AsyncPromptHandler> {
                 let mut messages = vec![];
 
                 // System message
-                messages.push(PromptMessage {
-                    role: Role::System,
-                    content: Content::Text {
-                        text: format!(
-                            "You are an expert {} code reviewer. Focus on {} aspects of the code. \
-                             Provide constructive feedback with specific suggestions for improvement.",
-                            language, focus
-                        ),
-                    },
-                });
+                messages.push(PromptMessage::system(Content::text(format!(
+                    "You are an expert {} code reviewer. Focus on {} aspects of the code. \
+                     Provide constructive feedback with specific suggestions for improvement.",
+                    language, focus
+                ))));
 
                 // User message with the code
-                messages.push(PromptMessage {
-                    role: Role::User,
-                    content: Content::Text {
-                        text: format!(
-                            "Please review this {} code:\n\n```{}\n{}\n```",
-                            language, language, code
-                        ),
-                    },
-                });
+                messages.push(PromptMessage::user(Content::text(format!(
+                    "Please review this {} code:\n\n```{}\n{}\n```",
+                    language, language, code
+                ))));
 
                 Ok(GetPromptResult::new(messages, Some(format!(
                         "Code review for {} code focusing on {}",
@@ -94,16 +84,11 @@ fn create_data_analysis_prompt(
         let mut messages = vec![];
 
         // System message
-        messages.push(PromptMessage {
-            role: Role::System,
-            content: Content::Text {
-                text: format!(
-                    "You are a data analyst expert. Analyze the provided {} data and \
-                         provide insights in {} format. Be thorough and precise.",
-                    data_type, output_format
-                ),
-            },
-        });
+        messages.push(PromptMessage::system(Content::text(format!(
+            "You are a data analyst expert. Analyze the provided {} data and \
+                 provide insights in {} format. Be thorough and precise.",
+            data_type, output_format
+        ))));
 
         // User message with data
         let mut user_text = format!("Here is the {} data:\n\n{}\n\n", data_type, data);
@@ -114,10 +99,7 @@ fn create_data_analysis_prompt(
             user_text.push_str("Please provide a comprehensive analysis of this data.");
         }
 
-        messages.push(PromptMessage {
-            role: Role::User,
-            content: Content::Text { text: user_text },
-        });
+        messages.push(PromptMessage::user(Content::text(user_text)));
 
         Ok(GetPromptResult::new(
             messages,
@@ -157,24 +139,17 @@ fn create_writing_assistant_prompt(
             let mut messages = vec![];
 
             // System message
-            messages.push(PromptMessage {
-                role: Role::System,
-                content: Content::Text {
-                    text: format!(
-                        "You are a skilled writing assistant. Write in a {} style for a {} audience. \
-                         The content should be {} in length. Ensure clarity, engagement, and appropriate tone.",
-                        style, audience, length
-                    ),
-                },
-            });
+            messages.push(PromptMessage::system(Content::text(format!(
+                "You are a skilled writing assistant. Write in a {} style for a {} audience. \
+                 The content should be {} in length. Ensure clarity, engagement, and appropriate tone.",
+                style, audience, length
+            ))));
 
             // User message
-            messages.push(PromptMessage {
-                role: Role::User,
-                content: Content::Text {
-                    text: format!("Write about: {}", topic),
-                },
-            });
+            messages.push(PromptMessage::user(Content::text(format!(
+                "Write about: {}",
+                topic
+            ))));
 
             Ok(GetPromptResult::new(messages, Some(format!(
                     "Writing assistance for '{}' in {} style",

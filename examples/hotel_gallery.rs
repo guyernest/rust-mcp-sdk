@@ -335,11 +335,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = Server::builder()
         .name("hotel-gallery-server")
         .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            resources: Some(Default::default()),
-            tools: Some(Default::default()),
-            ..Default::default()
-        })
+        .capabilities(ServerCapabilities::default())
         .resources(resources)
         .tool("get_room_images", get_images_tool)
         .build()?;

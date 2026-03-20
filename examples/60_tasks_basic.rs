@@ -102,12 +102,9 @@ async fn main() {
 
     // 3. Send tools/call with task augmentation
     println!("Step 1: Call tool with task augmentation...");
-    let call_req = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
-        name: "analyze_data".to_string(),
-        arguments: json!({"dataset": "sales_2024"}),
-        _meta: None,
-        task: Some(json!({"ttl": 60000})),
-    })));
+    let mut call_tool = CallToolRequest::new("analyze_data", json!({"dataset": "sales_2024"}));
+    call_tool.task = Some(json!({"ttl": 60000}));
+    let call_req = Request::Client(Box::new(ClientRequest::CallTool(call_tool)));
 
     let response = server
         .handle_request(RequestId::from(1i64), call_req, None)

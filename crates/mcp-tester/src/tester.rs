@@ -930,12 +930,7 @@ impl ServerTester {
         let start = Instant::now();
         let name = "Initialize".to_string();
 
-        let capabilities = ClientCapabilities {
-            sampling: Some(Default::default()),
-            elicitation: Some(Default::default()),
-            roots: Some(Default::default()),
-            ..Default::default()
-        };
+        let capabilities = ClientCapabilities::full();
 
         let result = match self.transport_type {
             TransportType::Http => {
@@ -2265,13 +2260,9 @@ impl ServerTester {
                             )))
                         } else {
                             // Should have returned an error for non-existent tool
-                            Ok(pmcp::types::CallToolResult {
-                                content: vec![pmcp::types::Content::Text {
-                                    text: "Unexpected success".to_string(),
-                                }],
-                                is_error: false,
-                                ..Default::default()
-                            })
+                            Ok(pmcp::types::CallToolResult::new(vec![
+                                pmcp::types::Content::text("Unexpected success"),
+                            ]))
                         }
                     },
                     Err(e) => Err(pmcp::Error::Transport(

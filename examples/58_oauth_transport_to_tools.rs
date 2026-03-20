@@ -300,14 +300,9 @@ async fn main() -> Result<()> {
     // Scenario 1: Authenticated request with valid token
     println!("=== Scenario 1: Authenticated Request (Valid Token) ===\n");
     let request1 = McpRequest::Client(Box::new(ClientRequest::CallTool(
-        pmcp::types::CallToolRequest {
-            name: "call_backend_api".to_string(),
-            arguments: json!({
-                "endpoint": "/api/users"
-            }),
-            _meta: None,
-            task: None,
-        },
+        pmcp::types::CallToolRequest::new("call_backend_api", json!({
+            "endpoint": "/api/users"
+        })),
     )));
 
     let response1 = simulate_transport_request(

@@ -85,10 +85,7 @@ async fn main() -> Result<()> {
     let server = ServerBuilder::new()
         .name("typed-tools-example")
         .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            tools: Some(pmcp::types::ToolCapabilities::default()),
-            ..Default::default()
-        })
+        .capabilities(ServerCapabilities::tools_only())
         // TypedTool with async handler and automatic schema generation
         .tool(
             "calculator",

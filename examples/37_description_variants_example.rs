@@ -60,10 +60,7 @@ async fn main() -> Result<()> {
     let server = ServerBuilder::new()
         .name("description-example")
         .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            tools: Some(pmcp::types::ToolCapabilities::default()),
-            ..Default::default()
-        })
+        .capabilities(ServerCapabilities::tools_only())
 
         // 1. Async tool with input typing and description
         .tool_typed_with_description(

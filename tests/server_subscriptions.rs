@@ -54,9 +54,7 @@ impl ResourceHandler for TestResourceHandler {
                 )))
             },
             |content| {
-                Ok(ReadResourceResult::new(vec![Content::Text {
-                    text: content.clone(),
-                }]))
+                Ok(ReadResourceResult::new(vec![Content::text(content)]))
             },
         )
     }
@@ -71,15 +69,10 @@ impl ResourceHandler for TestResourceHandler {
             .read()
             .await
             .keys()
-            .map(|uri| ResourceInfo {
-                uri: uri.clone(),
-                name: uri.split('/').next_back().unwrap_or("").to_string(),
-                description: Some(format!("Test resource at {}", uri)),
-                mime_type: Some("text/plain".to_string()),
-                title: None,
-                icons: None,
-                annotations: None,
-                meta: None,
+            .map(|uri| {
+                ResourceInfo::new(uri, uri.split('/').next_back().unwrap_or(""))
+                    .with_description(format!("Test resource at {}", uri))
+                    .with_mime_type("text/plain")
             })
             .collect();
 

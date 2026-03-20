@@ -372,16 +372,11 @@ mod tests {
     }
 
     fn make_resource(uri: &str, mime: Option<&str>) -> ResourceInfo {
-        ResourceInfo {
-            uri: uri.to_string(),
-            name: uri.to_string(),
-            description: None,
-            mime_type: mime.map(|s| s.to_string()),
-            title: None,
-            icons: None,
-            annotations: None,
-            meta: None,
+        let mut info = ResourceInfo::new(uri, uri);
+        if let Some(m) = mime {
+            info = info.with_mime_type(m);
         }
+        info
     }
 
     #[test]

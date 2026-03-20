@@ -90,12 +90,11 @@ async fn test_websocket_server_send_receive() {
 
         // Send a notification
         let notification = TransportMessage::Notification(Notification::Client(
-            ClientNotification::Progress(ProgressNotification {
-                progress: 50.0,
-                total: None,
-                message: Some("Testing".to_string()),
-                progress_token: pmcp::types::ProgressToken::String("test-token".to_string()),
-            }),
+            ClientNotification::Progress(ProgressNotification::new(
+                pmcp::types::ProgressToken::String("test-token".to_string()),
+                50.0,
+                Some("Testing".to_string()),
+            )),
         ));
         server_transport
             .send(notification)

@@ -32,9 +32,10 @@ impl ResourceHandler for TestResourceHandler {
         uri: &str,
         _extra: pmcp::RequestHandlerExtra,
     ) -> pmcp::Result<ReadResourceResult> {
-        Ok(ReadResourceResult::new(vec![Content::Text {
-            text: format!("Content of {}", uri),
-        }]))
+        Ok(ReadResourceResult::new(vec![Content::text(format!(
+            "Content of {}",
+            uri
+        ))]))
     }
 
     async fn list(
@@ -43,25 +44,12 @@ impl ResourceHandler for TestResourceHandler {
         _extra: pmcp::RequestHandlerExtra,
     ) -> pmcp::Result<ListResourcesResult> {
         Ok(ListResourcesResult::new(vec![
-            ResourceInfo {
-                uri: "file:///test1.txt".to_string(),
-                name: "test1.txt".to_string(),
-                description: Some("Test file 1".to_string()),
-                mime_type: Some("text/plain".to_string()),
-                title: None,
-                icons: None,
-                annotations: None,
-                meta: None,
-            },
-            ResourceInfo {
-                uri: "file:///test2.txt".to_string(),
-                name: "test2.txt".to_string(),
-                description: Some("Test file 2".to_string()),
-                mime_type: Some("text/plain".to_string()),
-                title: None,
-                icons: None,
-                annotations: None,
-                meta: None,
+            ResourceInfo::new("file:///test1.txt", "test1.txt")
+                .with_description("Test file 1")
+                .with_mime_type("text/plain"),
+            ResourceInfo::new("file:///test2.txt", "test2.txt")
+                .with_description("Test file 2")
+                .with_mime_type("text/plain"),
             },
         ]))
     }

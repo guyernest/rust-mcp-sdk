@@ -259,10 +259,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let server = Server::builder()
         .name("structured-output-schema-server")
         .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            tools: Some(pmcp::ToolCapabilities { list_changed: Some(true) }),
-            ..Default::default()
-        })
+        .capabilities(ServerCapabilities::tools_only())
         // Register weather tool
         .tool("get_weather", WeatherTool)
         // Register product tool
