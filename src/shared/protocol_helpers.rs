@@ -321,6 +321,10 @@ fn server_notification_to_jsonrpc(notif: ServerNotification) -> (String, Option<
             "notifications/message".to_string(),
             Some(serde_json::to_value(params).unwrap()),
         ),
+        ServerNotification::TaskStatus(params) => (
+            "notifications/tasks/status".to_string(),
+            Some(serde_json::to_value(params).unwrap()),
+        ),
     }
 }
 
@@ -673,6 +677,8 @@ mod tests {
                 max_tokens: None,
                 stop_sequences: None,
                 metadata: None,
+                tools: None,
+                tool_choice: None,
             },
         ))));
 

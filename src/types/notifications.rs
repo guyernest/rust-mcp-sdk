@@ -113,6 +113,9 @@ pub enum ServerNotification {
     /// Log message
     #[serde(rename = "notifications/message")]
     LogMessage(LogMessageParams),
+    /// Task status changed (MCP 2025-11-25)
+    #[serde(rename = "notifications/tasks/status")]
+    TaskStatus(crate::types::tasks::TaskStatusNotification),
 }
 
 /// Resource updated notification.
@@ -128,7 +131,7 @@ pub struct ResourceUpdatedParams {
 #[serde(rename_all = "camelCase")]
 pub struct LogMessageParams {
     /// Log level
-    pub level: LogLevel,
+    pub level: LoggingLevel,
     /// Logger name/category
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logger: Option<String>,
@@ -153,21 +156,7 @@ pub enum Notification {
     Cancelled(CancelledNotification),
 }
 
-/// Log level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum LogLevel {
-    /// Debug level
-    Debug,
-    /// Info level
-    Info,
-    /// Warning level
-    Warning,
-    /// Error level
-    Error,
-}
-
-/// Logging level.
+/// Logging level (MCP 2025-11-25 -- full syslog severity).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LoggingLevel {
@@ -175,13 +164,25 @@ pub enum LoggingLevel {
     Debug,
     /// Informational messages
     Info,
+    /// Notice-level messages
+    Notice,
     /// Warnings
     Warning,
     /// Errors
     Error,
     /// Critical errors
     Critical,
+    /// Alerts requiring immediate action
+    Alert,
+    /// System emergency
+    Emergency,
 }
+
+/// Deprecated: Use [`LoggingLevel`] instead.
+///
+/// This type alias is provided for backward compatibility during
+/// the v2.0 transition. It will be removed in a future release.
+pub type LogLevel = LoggingLevel;
 
 #[cfg(test)]
 mod tests {
@@ -222,7 +223,7 @@ mod tests {
         assert_eq!(json["method"], "notifications/resources/updated");
 
         let log_msg = ServerNotification::LogMessage(LogMessageParams {
-            level: LogLevel::Info,
+            level: LoggingLevel::Info,
             logger: None,
             message: "Test log message".to_string(),
             data: Some(json!({"extra": "data"})),
@@ -232,11 +233,43 @@ mod tests {
     }
 
     #[test]
-    fn test_log_levels() {
-        assert_eq!(serde_json::to_value(LogLevel::Debug).unwrap(), "debug");
-        assert_eq!(serde_json::to_value(LogLevel::Info).unwrap(), "info");
-        assert_eq!(serde_json::to_value(LogLevel::Warning).unwrap(), "warning");
-        assert_eq!(serde_json::to_value(LogLevel::Error).unwrap(), "error");
+    fn test_logging_level_all_8_values() {
+        assert_eq!(
+            serde_json::to_value(LoggingLevel::Debug).unwrap(),
+            "debug"
+        );
+        assert_eq!(serde_json::to_value(LoggingLevel::Info).unwrap(), "info");
+        assert_eq!(
+            serde_json::to_value(LoggingLevel::Notice).unwrap(),
+            "notice"
+        );
+        assert_eq!(
+            serde_json::to_value(LoggingLevel::Warning).unwrap(),
+            "warning"
+        );
+        assert_eq!(
+            serde_json::to_value(LoggingLevel::Error).unwrap(),
+            "error"
+        );
+        assert_eq!(
+            serde_json::to_value(LoggingLevel::Critical).unwrap(),
+            "critical"
+        );
+        assert_eq!(
+            serde_json::to_value(LoggingLevel::Alert).unwrap(),
+            "alert"
+        );
+        assert_eq!(
+            serde_json::to_value(LoggingLevel::Emergency).unwrap(),
+            "emergency"
+        );
+    }
+
+    #[test]
+    fn test_log_level_alias_works() {
+        // LogLevel is now a type alias for LoggingLevel
+        let level: LogLevel = LoggingLevel::Warning;
+        assert_eq!(serde_json::to_value(level).unwrap(), "warning");
     }
 
     #[test]
@@ -251,5 +284,26 @@ mod tests {
         let json = serde_json::to_value(&cancelled).unwrap();
         assert_eq!(json["requestId"], 123);
         assert_eq!(json["reason"], "User cancelled");
+    }
+
+    #[test]
+    fn test_task_status_notification() {
+        use crate::types::tasks::{Task, TaskStatus as TStatus, TaskStatusNotification};
+
+        let notif = ServerNotification::TaskStatus(TaskStatusNotification {
+            task: Task {
+                task_id: "t-789".to_string(),
+                status: TStatus::Completed,
+                ttl: None,
+                created_at: "2025-11-25T00:00:00Z".to_string(),
+                last_updated_at: "2025-11-25T00:05:00Z".to_string(),
+                poll_interval: None,
+                status_message: Some("Done".to_string()),
+            },
+        });
+        let json = serde_json::to_value(&notif).unwrap();
+        assert_eq!(json["method"], "notifications/tasks/status");
+        assert_eq!(json["params"]["task"]["taskId"], "t-789");
+        assert_eq!(json["params"]["task"]["status"], "completed");
     }
 }

@@ -3701,6 +3701,8 @@ mod tests {
                 max_tokens: None,
                 stop_sequences: None,
                 metadata: None,
+                tools: None,
+                tool_choice: None,
             }),
         )));
         let response = server

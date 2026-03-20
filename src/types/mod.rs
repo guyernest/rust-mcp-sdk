@@ -38,9 +38,13 @@ pub use protocol::*;
 
 pub use auth::{AuthInfo, AuthScheme};
 pub use capabilities::{
-    ClientCapabilities, CompletionCapabilities, LoggingCapabilities, PromptCapabilities,
-    ResourceCapabilities, RootsCapabilities, SamplingCapabilities, ServerCapabilities,
+    ClientCapabilities, ClientTasksCapability, CompletionCapabilities, ElicitationCapabilities,
+    FormElicitationCapability, LoggingCapabilities, PromptCapabilities, ResourceCapabilities,
+    RootsCapabilities, SamplingCapabilities, ServerCapabilities, ServerTasksCapability,
     ToolCapabilities,
+};
+pub use elicitation::{
+    ElicitAction, ElicitRequestParams, ElicitResult, ElicitationCompleteNotification,
 };
 pub use jsonrpc::{JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, RequestId};
 pub use ui::{ToolUIMetadata, UIMimeType, UIResource, UIResourceContents};

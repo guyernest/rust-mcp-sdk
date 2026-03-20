@@ -959,8 +959,9 @@ impl<T: Transport> Client<T> {
     ///     messages: vec![
     ///         SamplingMessage {
     ///             role: pmcp::types::Role::User,
-    ///             content: pmcp::types::Content::Text {
+    ///             content: pmcp::types::SamplingMessageContent::Text {
     ///                 text: "Explain how to implement a binary search tree".to_string(),
+    ///                 meta: None,
     ///             },
     ///         },
     ///     ],
@@ -975,7 +976,7 @@ impl<T: Transport> Client<T> {
     ///         intelligence_priority: Some(0.2),
     ///     }),
     ///     system_prompt: Some("You are a helpful programming assistant".to_string()),
-    ///     include_context: pmcp::types::IncludeContext::ThisServerOnly,
+    ///     include_context: pmcp::types::IncludeContext::ThisServer,
     ///     temperature: Some(0.7),
     ///     max_tokens: Some(1000),
     ///     stop_sequences: None,
