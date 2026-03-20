@@ -14,7 +14,7 @@ use crate::secrets::provider::{
 };
 use crate::secrets::value::{SecretEntry, SecretMetadata, SecretValue};
 
-const DEFAULT_GRAPHQL_URL: &str = "https://api.pmcp.run/graphql";
+use crate::deployment::targets::pmcp_run::auth::{load_cached_config, DEFAULT_GRAPHQL_URL};
 
 /// pmcp.run secret provider.
 ///
@@ -32,8 +32,11 @@ impl PmcpRunSecretProvider {
     pub fn new(api_url: Option<String>) -> Self {
         Self {
             api_url: api_url.unwrap_or_else(|| {
+                // Priority: env var > discovery cache > default
                 std::env::var("PMCP_RUN_GRAPHQL_URL")
-                    .unwrap_or_else(|_| DEFAULT_GRAPHQL_URL.to_string())
+                    .ok()
+                    .or_else(|| load_cached_config().and_then(|c| c.graphql_url))
+                    .unwrap_or_else(|| DEFAULT_GRAPHQL_URL.to_string())
             }),
         }
     }

@@ -50,6 +50,7 @@ const CALLBACK_PORT: u16 = 8787;
 // Production defaults for pmcp.run
 const DEFAULT_API_URL: &str = "https://api.pmcp.run";
 const DEFAULT_AUTH_DOMAIN: &str = "auth.pmcp.run";
+pub(crate) const DEFAULT_GRAPHQL_URL: &str = "https://api.pmcp.run/graphql";
 
 // Cache duration for discovered config (1 hour)
 const CONFIG_CACHE_DURATION_SECS: u64 = 3600;
@@ -59,11 +60,17 @@ const CONFIG_CACHE_DURATION_SECS: u64 = 3600;
 pub struct PmcpRunConfig {
     /// OAuth client ID for authentication
     pub cognito_client_id: String,
-    /// Cognito domain for OAuth flows
+    /// Cognito domain for OAuth flows (may include https:// prefix)
     pub cognito_domain: String,
     /// GraphQL API URL
     #[serde(default)]
     pub graphql_url: Option<String>,
+    /// MCP endpoint base URL (CLI appends /{serverId}/mcp)
+    #[serde(default)]
+    pub mcp_url: Option<String>,
+    /// API type (must be "graphql" — CLI fails on unknown types)
+    #[serde(default)]
+    pub api_type: Option<String>,
     /// Config version for compatibility checking
     #[serde(default)]
     pub version: Option<String>,
@@ -76,9 +83,12 @@ struct CachedConfig {
     cached_at: String,
 }
 
-/// Get the base API URL from environment or use default
+/// Get the base API URL from environment or use default.
+/// Supports both PMCP_API_URL (preferred) and PMCP_RUN_API_URL (legacy).
 fn get_api_base_url() -> String {
-    std::env::var("PMCP_RUN_API_URL").unwrap_or_else(|_| DEFAULT_API_URL.to_string())
+    std::env::var("PMCP_API_URL")
+        .or_else(|_| std::env::var("PMCP_RUN_API_URL"))
+        .unwrap_or_else(|_| DEFAULT_API_URL.to_string())
 }
 
 /// Get the config cache file path
@@ -91,8 +101,10 @@ fn config_cache_path() -> Result<PathBuf> {
     Ok(pmcp_dir.join("pmcp-run-config.json"))
 }
 
-/// Load cached config if valid
-fn load_cached_config() -> Option<PmcpRunConfig> {
+/// Load cached config if valid (within TTL).
+/// Exposed as pub(crate) so graphql.rs and secrets provider can reuse it
+/// instead of reimplementing cache reads.
+pub(crate) fn load_cached_config() -> Option<PmcpRunConfig> {
     let path = config_cache_path().ok()?;
     if !path.exists() {
         return None;
@@ -125,38 +137,77 @@ fn save_config_cache(config: &PmcpRunConfig) -> Result<()> {
     Ok(())
 }
 
-/// Fetch configuration from pmcp.run discovery endpoint
+/// Fetch configuration from pmcp.run discovery endpoint.
+/// Retries once on transient failure before giving up.
 async fn fetch_pmcp_config() -> Result<PmcpRunConfig> {
     let api_url = get_api_base_url();
     let discovery_url = format!("{}/.well-known/pmcp-config", api_url);
 
     let client = reqwest::Client::new();
-    let response = client
-        .get(&discovery_url)
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await
-        .context("Failed to fetch pmcp.run configuration")?;
 
-    if !response.status().is_success() {
-        bail!(
-            "Discovery endpoint returned status {}: {}",
-            response.status(),
-            discovery_url
-        );
+    // Try up to 2 times (initial + 1 retry on transient failure)
+    let mut last_err = None;
+    for attempt in 0..2 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+
+        match client
+            .get(&discovery_url)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+        {
+            Ok(response) => {
+                if !response.status().is_success() {
+                    let status = response.status();
+                    // 4xx errors are not transient — don't retry
+                    if status.is_client_error() {
+                        bail!(
+                            "Discovery endpoint returned status {}: {}",
+                            status,
+                            discovery_url
+                        );
+                    }
+                    last_err = Some(anyhow::anyhow!(
+                        "Discovery endpoint returned status {}: {}",
+                        status,
+                        discovery_url
+                    ));
+                    continue;
+                }
+
+                let config: PmcpRunConfig = response
+                    .json()
+                    .await
+                    .context("Failed to parse pmcp.run configuration")?;
+
+                // Validate api_type if present
+                if let Some(ref api_type) = config.api_type {
+                    if api_type != "graphql" {
+                        bail!(
+                            "Unsupported API type: \"{}\". This version of cargo-pmcp only supports \"graphql\".\n\
+                             💡 Update cargo-pmcp: cargo install cargo-pmcp",
+                            api_type
+                        );
+                    }
+                }
+
+                // Cache the fetched config
+                if let Err(e) = save_config_cache(&config) {
+                    eprintln!("⚠️  Warning: Could not cache config: {}", e);
+                }
+
+                return Ok(config);
+            }
+            Err(e) => {
+                last_err = Some(e.into());
+                continue;
+            }
+        }
     }
 
-    let config: PmcpRunConfig = response
-        .json()
-        .await
-        .context("Failed to parse pmcp.run configuration")?;
-
-    // Cache the fetched config
-    if let Err(e) = save_config_cache(&config) {
-        eprintln!("⚠️  Warning: Could not cache config: {}", e);
-    }
-
-    Ok(config)
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("Discovery endpoint unreachable")))
 }
 
 /// Get pmcp.run configuration with fallback chain:
@@ -169,12 +220,14 @@ pub async fn get_pmcp_config() -> Result<PmcpRunConfig> {
     let env_client_id = std::env::var("PMCP_RUN_COGNITO_CLIENT_ID").ok();
     let env_domain = std::env::var("PMCP_RUN_COGNITO_DOMAIN").ok();
 
-    // If both env vars are set, use them directly
+    // If both env vars are set, use them directly (legacy env vars take precedence)
     if let (Some(client_id), Some(domain)) = (env_client_id.clone(), env_domain.clone()) {
         return Ok(PmcpRunConfig {
             cognito_client_id: client_id,
             cognito_domain: domain,
             graphql_url: std::env::var("PMCP_RUN_GRAPHQL_URL").ok(),
+            mcp_url: None,
+            api_type: Some("graphql".to_string()),
             version: None,
         });
     }
@@ -188,11 +241,13 @@ pub async fn get_pmcp_config() -> Result<PmcpRunConfig> {
             graphql_url: std::env::var("PMCP_RUN_GRAPHQL_URL")
                 .ok()
                 .or(cached.graphql_url),
+            mcp_url: cached.mcp_url,
+            api_type: cached.api_type,
             version: cached.version,
         });
     }
 
-    // Try discovery endpoint
+    // Try discovery endpoint (retries once on transient failure)
     match fetch_pmcp_config().await {
         Ok(config) => {
             // Apply any env var overrides
@@ -202,9 +257,11 @@ pub async fn get_pmcp_config() -> Result<PmcpRunConfig> {
                 graphql_url: std::env::var("PMCP_RUN_GRAPHQL_URL")
                     .ok()
                     .or(config.graphql_url),
+                mcp_url: config.mcp_url,
+                api_type: config.api_type,
                 version: config.version,
             })
-        },
+        }
         Err(e) => {
             // Discovery failed - check if we have partial env vars
             if env_client_id.is_some() || env_domain.is_some() {
@@ -214,8 +271,11 @@ pub async fn get_pmcp_config() -> Result<PmcpRunConfig> {
                 );
                 Ok(PmcpRunConfig {
                     cognito_client_id: env_client_id.unwrap_or_default(),
-                    cognito_domain: env_domain.unwrap_or_else(|| DEFAULT_AUTH_DOMAIN.to_string()),
+                    cognito_domain: env_domain
+                        .unwrap_or_else(|| DEFAULT_AUTH_DOMAIN.to_string()),
                     graphql_url: std::env::var("PMCP_RUN_GRAPHQL_URL").ok(),
+                    mcp_url: None,
+                    api_type: Some("graphql".to_string()),
                     version: None,
                 })
             } else {
@@ -224,21 +284,29 @@ pub async fn get_pmcp_config() -> Result<PmcpRunConfig> {
                     "❌ Could not retrieve pmcp.run configuration\n\n\
                      Discovery endpoint failed: {}\n\n\
                      💡 Options:\n\
-                     1. Check your internet connection\n\
-                     2. Set environment variables manually:\n\
+                     1. Set PMCP_API_URL to your deployment base URL\n\
+                     2. Check your internet connection\n\
+                     3. Set legacy environment variables manually:\n\
                         PMCP_RUN_COGNITO_CLIENT_ID=<client_id>\n\
                         PMCP_RUN_COGNITO_DOMAIN=<domain>\n\
-                     3. Visit https://pmcp.run/settings for configuration values\n",
+                     4. Visit https://pmcp.run/settings for configuration values\n",
                     e
                 )
             }
-        },
+        }
     }
 }
 
-/// Get Cognito domain (legacy function for compatibility)
+/// Get Cognito domain as bare hostname (strips scheme prefix if present).
+/// The discovery endpoint may return the full URL per spec v1.0.
 fn get_cognito_domain_from_config(config: &PmcpRunConfig) -> String {
-    config.cognito_domain.clone()
+    config
+        .cognito_domain
+        .strip_prefix("https://")
+        .or_else(|| config.cognito_domain.strip_prefix("http://"))
+        .unwrap_or(&config.cognito_domain)
+        .trim_end_matches('/')
+        .to_string()
 }
 
 /// Get Cognito client ID (legacy function for compatibility)
@@ -364,7 +432,8 @@ async fn get_credentials_via_client_credentials(
     client_secret: &str,
 ) -> Result<Credentials> {
     let config = get_pmcp_config().await?;
-    let token_url = format!("https://{}/oauth2/token", config.cognito_domain);
+    let cognito_domain = get_cognito_domain_from_config(&config);
+    let token_url = format!("https://{}/oauth2/token", cognito_domain);
 
     let client = reqwest::Client::new();
     let response = client
