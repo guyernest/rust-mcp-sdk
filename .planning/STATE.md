@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.6
-milestone_name: CLI DX Overhaul
-status: completed
-stopped_at: Completed 51-05-PLAN.md
-last_updated: "2026-03-14T05:00:09.695Z"
-last_activity: 2026-03-14 -- server wiring and release workflow updates
+milestone: v1.7
+milestone_name: SDK Maturation
+status: in-progress
+stopped_at: Phase 53 context gathered
+last_updated: "2026-03-19T00:00:00Z"
+last_activity: 2026-03-19 -- TypeScript SDK review context captured
 progress:
-  total_phases: 25
-  completed_phases: 21
-  total_plans: 47
-  completed_plans: 47
-  percent: 100
+  total_phases: 2
+  completed_phases: 1
+  total_plans: 2
+  completed_plans: 2
+  percent: 50
 ---
 
 # Project State

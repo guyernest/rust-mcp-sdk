@@ -9,6 +9,7 @@
 - ✅ **v1.4 Book & Course Update** — Phases 20-24 (shipped 2026-02-28)
 - ✅ **v1.5 Cloud Load Testing Upload** — Phases 25-26 (shipped 2026-03-01)
 - **v1.6 CLI DX Overhaul** — Phases 27-32 (in progress)
+- **v1.7 SDK Maturation** — Phases 52-53 (in progress)
 
 ## Phases
 
@@ -96,6 +97,13 @@ See phase details in `.planning/phases/25-*` and `.planning/phases/26-*`
 - [ ] **Phase 30: Tester CLI Integration** - Surface mcp-tester subcommands through cargo pmcp test with aligned flags
 - [ ] **Phase 31: New Commands** - Add cargo pmcp doctor and cargo pmcp completions commands
 - [ ] **Phase 32: Help Text Polish** - Consistent help text format with descriptions and usage examples across all commands
+
+### v1.7 SDK Maturation (In Progress)
+
+**Milestone Goal:** Reduce dependency footprint, align with TypeScript SDK where beneficial, and close feature gaps in protocol negotiation, conformance testing, and MCP Apps.
+
+- [x] **Phase 52: Reduce transitive dependencies** - Feature-gate reqwest and tracing-subscriber, slim tokio/hyper/chrono (completed 2026-03-18)
+- [ ] **Phase 53: Review TypeScript SDK Updates** - Gap analysis comparing TypeScript v2 against Rust SDK
 
 ## Phase Details
 
@@ -458,9 +466,20 @@ Plans:
 - [ ] 51-04-PLAN.md — Embedded content, documentation resources handler, workflow prompt handlers
 - [ ] 51-05-PLAN.md — Wire all tools/resources/prompts into server builder, CI workflow updates
 
+### Phase 52: Reduce transitive dependencies
+
+**Goal:** Reduce pmcp crate's transitive dependency count from ~249 to ~150-185 by removing unused deps, slimming feature flags, making reqwest optional behind `http-client` feature, and making tracing-subscriber optional behind `logging` feature
+**Requirements**: DEP-REDUCE-01, DEP-REDUCE-02, DEP-REDUCE-03, DEP-REDUCE-04, DEP-REDUCE-05, DEP-REDUCE-06, DEP-REDUCE-07
+**Depends on:** Phase 51
+**Plans:** 2 plans — Complete (2026-03-18)
+
+Plans:
+- [x] 52-01-PLAN.md — Cargo.toml: remove unused deps, slim features, make reqwest/tracing-subscriber optional
+- [x] 52-02-PLAN.md — Source code: cfg gates for optional deps, full feature matrix verification
+
 ### Phase 53: Review TypeScript SDK Updates
 
-**Goal:** [To be planned]
+**Goal:** Compare TypeScript MCP SDK v2 against Rust SDK v1.20.0 to identify gaps worth adopting. Produce gap analysis with prioritized recommendations covering protocol negotiation, conformance testing, MCP Apps, Tasks, and framework adapters.
 **Requirements**: TBD
 **Depends on:** Phase 52
 **Plans:** 0 plans
