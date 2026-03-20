@@ -13,11 +13,10 @@ use pmcp::types::{
 #[test]
 fn test_serialize_to_json_rpc_2_0_format() {
     // Create an initialize request using internal types
-    let init_params = InitializeRequest {
-        protocol_version: "2025-06-18".to_string(),
-        capabilities: ClientCapabilities::default(),
-        client_info: Implementation::new("test-client", "1.0.0"),
-    };
+    let init_params = InitializeRequest::new(
+        Implementation::new("test-client", "1.0.0"),
+        ClientCapabilities::default(),
+    );
 
     let request = Request::Client(Box::new(ClientRequest::Initialize(init_params)));
     let transport_msg = TransportMessage::Request {
@@ -72,11 +71,10 @@ fn test_deserialize_typescript_sdk_format() {
 #[test]
 fn test_roundtrip_compatibility() {
     // Create message, serialize, then deserialize
-    let init_params = InitializeRequest {
-        protocol_version: "2025-06-18".to_string(),
-        capabilities: ClientCapabilities::default(),
-        client_info: Implementation::new("test-client", "1.0.0"),
-    };
+    let init_params = InitializeRequest::new(
+        Implementation::new("test-client", "1.0.0"),
+        ClientCapabilities::default(),
+    );
 
     let request = Request::Client(Box::new(ClientRequest::Initialize(init_params.clone())));
     let original = TransportMessage::Request {
@@ -215,11 +213,10 @@ fn test_issue_38_json_rpc_compatibility() {
     // But this test proves it actually uses standard JSON-RPC 2.0:
     // {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {...}}
 
-    let init_params = InitializeRequest {
-        protocol_version: "2025-06-18".to_string(),
-        capabilities: ClientCapabilities::default(),
-        client_info: Implementation::new("claude-code", "1.0.0"),
-    };
+    let init_params = InitializeRequest::new(
+        Implementation::new("claude-code", "1.0.0"),
+        ClientCapabilities::default(),
+    );
 
     let request = Request::Client(Box::new(ClientRequest::Initialize(init_params)));
     let transport_msg = TransportMessage::Request {

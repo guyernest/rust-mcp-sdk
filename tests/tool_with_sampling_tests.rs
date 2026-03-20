@@ -166,12 +166,7 @@ mod tests {
         let server = Server::builder()
             .name("test-sampling-server")
             .version("1.0.0")
-            .capabilities(ServerCapabilities {
-                tools: Some(pmcp::ToolCapabilities {
-                    list_changed: Some(true),
-                }),
-                ..Default::default()
-            })
+            .capabilities(ServerCapabilities::tools_only())
             .tool("summarize", handler);
 
         // Verify server builds successfully

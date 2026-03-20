@@ -195,19 +195,7 @@ async fn test_typescript_client_rust_server() -> Result<(), Box<dyn std::error::
     let server = ServerBuilder::new()
         .name("rust-test-server")
         .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            tools: Some(pmcp::types::ToolCapabilities {
-                list_changed: Some(false),
-            }),
-            resources: Some(pmcp::types::ResourceCapabilities {
-                subscribe: Some(false),
-                list_changed: Some(false),
-            }),
-            prompts: Some(pmcp::types::PromptCapabilities {
-                list_changed: Some(false),
-            }),
-            ..Default::default()
-        })
+        .capabilities(ServerCapabilities::default())
         .tool("echo", TestToolHandler)
         .tool("add", TestToolHandler)
         .resources(TestResourceHandler)
