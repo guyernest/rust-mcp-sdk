@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: in-progress
-stopped_at: Completed 54-01-PLAN.md
-last_updated: "2026-03-20T06:20:00Z"
-last_activity: 2026-03-20 -- Phase 54 Plan 01 complete (protocol split + version 2025-11-25)
+stopped_at: Completed 54-02-PLAN.md
+last_updated: "2026-03-20T06:45:00Z"
+last_activity: 2026-03-20 -- Phase 54 Plan 02 complete (33+ new 2025-11-25 types)
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 4
-  completed_plans: 1
-  percent: 25
+  completed_plans: 2
+  percent: 50
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
-**Current focus:** v2.0 Protocol Modernization -- Phase 54 Plan 02 next (new 2025-11-25 types)
+**Current focus:** v2.0 Protocol Modernization -- Phase 54 Plan 03 next (re-export consolidation)
 
 ## Current Position
 
 Phase: 54 (protocol-version-2025-11-25-type-cleanup)
-Plan: 1 of 4
-Status: Plan 01 complete -- protocol split + version 2025-11-25. Plan 02 next.
-Last activity: 2026-03-20 -- Phase 54 Plan 01 complete
+Plan: 2 of 4
+Status: Plan 02 complete -- 33+ new 2025-11-25 types. Plan 03 next.
+Last activity: 2026-03-20 -- Phase 54 Plan 02 complete
 
-Progress: [##░░░░░░░░] 25%
+Progress: [#####░░░░░] 50%
 
 ## Shipped Milestones
 
@@ -46,7 +46,7 @@ Progress: [##░░░░░░░░] 25%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 66 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 1)
+- Total plans completed: 67 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 2)
 - Total phases completed: 29
 
 ## Accumulated Context
@@ -121,6 +121,11 @@ v1.6 decisions:
 - [Phase 54-01]: Protocol/mod.rs re-exports all domain types preserving crate::types::protocol::X paths; types/mod.rs uses single pub use protocol::* for flat access
 - [Phase 54-01]: negotiate_protocol_version returns LATEST_PROTOCOL_VERSION (not DEFAULT) for unsupported versions; 3-version rolling window drops 2024 versions
 - [Phase 54-01]: Domain module split pattern: types split by MCP domain (tools, resources, prompts, content, sampling, notifications) with re-export chain
+- [Phase 54-02]: Implementation::new(name, version) constructor for backward-compat; 25+ struct literal sites unchanged
+- [Phase 54-02]: ElicitRequestParams uses per-variant serde rename_all (not enum-level) for correct internally-tagged serialization
+- [Phase 54-02]: SamplingMessageContent consolidates SamplingResultContent -- single enum for SamplingMessage and CreateMessageResultWithTools
+- [Phase 54-02]: LogLevel kept as deprecated type alias; LoggingLevel is canonical 8-value enum with Notice, Alert, Emergency
+- [Phase 54-02]: TaskRouter trait kept Value params -- typed params converted at call sites to avoid breaking pmcp-tasks interface
 
 ### Roadmap Evolution
 
@@ -153,6 +158,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-20T06:20:00Z
-Stopped at: Completed 54-01-PLAN.md
-Resume: Plan 01 complete (protocol split + 2025-11-25 version). Plan 02 next (new types: AudioContent, ResourceLink, TaskSchema, IconSchema, expanded capabilities).
+Last session: 2026-03-20T06:45:00Z
+Stopped at: Completed 54-02-PLAN.md
+Resume: Plan 02 complete (33+ new 2025-11-25 types, bug fixes). Plan 03 next (re-export consolidation and integration testing).
