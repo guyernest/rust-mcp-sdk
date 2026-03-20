@@ -258,10 +258,9 @@ pub use async_trait::async_trait;
 /// println!("Using MCP protocol version: {}", protocol_version);
 ///
 /// // Check if a version is the latest
-/// assert_eq!(LATEST_PROTOCOL_VERSION, "2025-06-18");
+/// assert_eq!(LATEST_PROTOCOL_VERSION, "2025-11-25");
 /// ```
-pub const LATEST_PROTOCOL_VERSION: &str = "2025-06-18";
-
+///
 /// Default protocol version to use for negotiation
 ///
 /// # Examples
@@ -276,8 +275,7 @@ pub const LATEST_PROTOCOL_VERSION: &str = "2025-06-18";
 /// // This is typically used internally by the SDK
 /// assert_eq!(DEFAULT_PROTOCOL_VERSION, "2025-03-26");
 /// ```
-pub const DEFAULT_PROTOCOL_VERSION: &str = "2025-03-26";
-
+///
 /// List of all protocol versions supported by this SDK
 ///
 /// # Examples
@@ -290,37 +288,16 @@ pub const DEFAULT_PROTOCOL_VERSION: &str = "2025-03-26";
 /// let is_supported = SUPPORTED_PROTOCOL_VERSIONS.contains(&version_to_check);
 /// assert!(is_supported);
 ///
-/// // List all supported versions
-/// println!("Supported MCP protocol versions:");
-/// for version in SUPPORTED_PROTOCOL_VERSIONS {
-///     println!("  - {}", version);
-/// }
+/// // Exactly 3 supported versions
+/// assert_eq!(SUPPORTED_PROTOCOL_VERSIONS.len(), 3);
 ///
-/// // Use in version negotiation
-/// fn negotiate_version(client_version: &str) -> Option<&'static str> {
-///     SUPPORTED_PROTOCOL_VERSIONS.iter()
-///         .find(|&&v| v == client_version)
-///         .copied()
-/// }
+/// // 2024 versions are no longer supported
+/// assert!(!SUPPORTED_PROTOCOL_VERSIONS.contains(&"2024-11-05"));
 /// ```
-pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
-    LATEST_PROTOCOL_VERSION,
-    "2025-03-26",
-    "2024-11-05",
-    "2024-10-07",
-];
-
-/// Negotiate the protocol version for the MCP session.
-///
-/// If the client's requested version is in [`SUPPORTED_PROTOCOL_VERSIONS`],
-/// echo it back. Otherwise fall back to [`DEFAULT_PROTOCOL_VERSION`].
-pub fn negotiate_protocol_version(client_version: &str) -> String {
-    if SUPPORTED_PROTOCOL_VERSIONS.contains(&client_version) {
-        client_version.to_string()
-    } else {
-        DEFAULT_PROTOCOL_VERSION.to_string()
-    }
-}
+pub use types::protocol::version::{
+    DEFAULT_PROTOCOL_VERSION, LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS,
+    negotiate_protocol_version,
+};
 
 /// Default request timeout in milliseconds
 ///

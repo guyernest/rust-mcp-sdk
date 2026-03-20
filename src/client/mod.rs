@@ -1675,7 +1675,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: RequestId::from(1i64),
             payload: ResponsePayload::Result(json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-06-18",
                 "capabilities": {
                     "tools": {}
                 },
@@ -1703,7 +1703,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: RequestId::from(1i64),
             payload: ResponsePayload::Result(json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-06-18",
                 "capabilities": {},
                 "serverInfo": {
                     "name": "test-server",
@@ -1735,7 +1735,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: RequestId::from(1i64),
             payload: ResponsePayload::Result(json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-06-18",
                 "capabilities": {
                     "tools": {}
                 },
@@ -1778,7 +1778,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: RequestId::from(1i64),
             payload: ResponsePayload::Result(json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-06-18",
                 "capabilities": {
                     "tools": {}
                 },
@@ -1828,7 +1828,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: RequestId::from(1i64),
             payload: ResponsePayload::Result(json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-06-18",
                 "capabilities": {
                     // No tools capability
                 },
@@ -1857,7 +1857,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: RequestId::from(1i64),
             payload: ResponsePayload::Result(json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-06-18",
                 "capabilities": {},
                 "serverInfo": {
                     "name": "test-server",
@@ -1890,7 +1890,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: RequestId::from(1i64),
             payload: ResponsePayload::Result(json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-06-18",
                 "capabilities": {
                     "completions": {}
                 },
@@ -1938,7 +1938,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: RequestId::from(1i64),
             payload: ResponsePayload::Result(json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-06-18",
                 "capabilities": {
                     "resources": {}
                 },

@@ -158,7 +158,7 @@ mod tests {
 
     fn create_init_request() -> Request {
         Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-            protocol_version: "2024-11-05".to_string(),
+            protocol_version: "2025-06-18".to_string(),
             capabilities: ClientCapabilities::default(),
             client_info: Implementation {
                 name: "test-client".to_string(),
@@ -188,7 +188,7 @@ mod tests {
                 let init_result: InitializeResult = serde_json::from_value(result).unwrap();
                 assert_eq!(
                     init_result.protocol_version,
-                    ProtocolVersion("2024-11-05".to_string())
+                    ProtocolVersion("2025-06-18".to_string())
                 );
                 assert_eq!(init_result.server_info.name, "test-server");
                 assert_eq!(init_result.server_info.version, "1.0.0");

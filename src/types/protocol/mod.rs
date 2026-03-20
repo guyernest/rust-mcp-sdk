@@ -3,9 +3,14 @@
 //! This module contains the core protocol types including initialization,
 //! version negotiation, request routing, and completion types.
 
+pub mod version;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use crate::types::capabilities::{ClientCapabilities, ServerCapabilities};
+
+// Re-export version constants and negotiation function.
+pub use version::*;
 
 // Re-export domain modules' types for backward compatibility.
 // Types that were previously in this file are now in their own modules
