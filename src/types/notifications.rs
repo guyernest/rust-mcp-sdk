@@ -76,7 +76,7 @@ pub enum ClientNotification {
 #[serde(rename_all = "camelCase")]
 pub struct CancelledNotification {
     /// The request ID that was cancelled
-    pub request_id: crate::types::RequestId,
+    pub request_id: super::RequestId,
     /// Optional reason for cancellation
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -109,7 +109,7 @@ pub enum ServerNotification {
     LogMessage(LogMessageParams),
     /// Task status changed (MCP 2025-11-25)
     #[serde(rename = "notifications/tasks/status")]
-    TaskStatus(crate::types::tasks::TaskStatusNotification),
+    TaskStatus(super::tasks::TaskStatusNotification),
 }
 
 /// Resource updated notification.

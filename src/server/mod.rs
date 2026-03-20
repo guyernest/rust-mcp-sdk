@@ -849,7 +849,7 @@ impl Server {
                     crate::negotiate_protocol_version(&init_req.protocol_version);
 
                 let result = InitializeResult {
-                    protocol_version: ProtocolVersion(negotiated_version),
+                    protocol_version: ProtocolVersion(negotiated_version.to_string()),
                     capabilities: self.capabilities.clone(),
                     server_info: self.info.clone(),
                     instructions: None,
@@ -928,7 +928,7 @@ impl Server {
             | ClientRequest::Complete(_)
             | ClientRequest::SetLoggingLevel { level: _ }
             | ClientRequest::Ping => Ok(serde_json::json!({})),
-            ClientRequest::CreateMessage(req) => self.handle_create_message(request_id, req).await,
+            ClientRequest::CreateMessage(req) => self.handle_create_message(request_id, *req).await,
             // Note: Elicitation responses are now handled as the response to
             // ServerRequest::ElicitationCreate in the JSON-RPC response flow,
             // not as a separate client request variant.

@@ -285,6 +285,13 @@ impl FoundationClient for McpFoundationClient {
                     text: None,
                     blob: Some(data.clone()),
                 }),
+                crate::types::Content::Audio { .. }
+                | crate::types::Content::ResourceLink(_) => Ok(ResourceContent {
+                    uri: uri.to_string(),
+                    mime_type: None,
+                    text: None,
+                    blob: None,
+                }),
             }
         } else {
             Err(CompositionError::InvalidResponse(
@@ -359,6 +366,12 @@ impl FoundationClient for McpFoundationClient {
                             text,
                             blob: None,
                         },
+                    },
+                    crate::types::Content::Audio { .. }
+                    | crate::types::Content::ResourceLink(_) => {
+                        PromptContent::Text {
+                            text: String::new(),
+                        }
                     },
                 };
 

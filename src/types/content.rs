@@ -68,32 +68,39 @@ pub enum Content {
         #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
         meta: Option<serde_json::Map<String, Value>>,
     },
-    /// Resource link content (MCP 2025-11-25)
-    #[serde(rename = "resource_link", rename_all = "camelCase")]
-    ResourceLink {
-        /// Resource name
-        name: String,
-        /// Resource URI
-        uri: String,
-        /// Optional title
-        #[serde(skip_serializing_if = "Option::is_none")]
-        title: Option<String>,
-        /// Optional description
-        #[serde(skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
-        /// Optional MIME type
-        #[serde(skip_serializing_if = "Option::is_none")]
-        mime_type: Option<String>,
-        /// Optional icons
-        #[serde(skip_serializing_if = "Option::is_none")]
-        icons: Option<Vec<super::protocol::IconInfo>>,
-        /// Optional content annotations
-        #[serde(skip_serializing_if = "Option::is_none")]
-        annotations: Option<Annotations>,
-        /// Optional metadata
-        #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-        meta: Option<serde_json::Map<String, Value>>,
-    },
+    /// Resource link content (MCP 2025-11-25).
+    /// Boxed to avoid inflating the Content enum size — ResourceLink has ~264 bytes
+    /// of fields while Text has ~24 bytes.
+    #[serde(rename = "resource_link")]
+    ResourceLink(Box<ResourceLinkContent>),
+}
+
+/// Resource link content fields (MCP 2025-11-25).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceLinkContent {
+    /// Resource name
+    pub name: String,
+    /// Resource URI
+    pub uri: String,
+    /// Optional title
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Optional description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Optional MIME type
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    /// Optional icons
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icons: Option<Vec<super::protocol::IconInfo>>,
+    /// Optional content annotations
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<Annotations>,
+    /// Optional metadata
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Map<String, Value>>,
 }
 
 /// Message role.
@@ -334,7 +341,7 @@ mod tests {
 
     #[test]
     fn test_resource_link_content_serialization_roundtrip() {
-        let content = Content::ResourceLink {
+        let content = Content::ResourceLink(Box::new(ResourceLinkContent {
             name: "my-file".to_string(),
             uri: "file:///path/to/file.txt".to_string(),
             title: Some("My File".to_string()),
@@ -343,7 +350,7 @@ mod tests {
             icons: None,
             annotations: None,
             meta: None,
-        };
+        }));
         let json = serde_json::to_value(&content).unwrap();
         assert_eq!(json["type"], "resource_link");
         assert_eq!(json["name"], "my-file");
@@ -352,9 +359,9 @@ mod tests {
 
         let roundtrip: Content = serde_json::from_value(json).unwrap();
         match roundtrip {
-            Content::ResourceLink { name, uri, .. } => {
-                assert_eq!(name, "my-file");
-                assert_eq!(uri, "file:///path/to/file.txt");
+            Content::ResourceLink(rl) => {
+                assert_eq!(rl.name, "my-file");
+                assert_eq!(rl.uri, "file:///path/to/file.txt");
             },
             _ => panic!("Expected Content::ResourceLink"),
         }

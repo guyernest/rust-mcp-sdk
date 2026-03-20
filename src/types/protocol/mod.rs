@@ -285,9 +285,10 @@ pub enum ClientRequest {
     /// Ping request
     #[serde(rename = "ping")]
     Ping,
-    /// Create message (sampling)
+    /// Create message (sampling).
+    /// Boxed to match ServerRequest::CreateMessage and avoid inflating the enum.
     #[serde(rename = "sampling/createMessage")]
-    CreateMessage(super::sampling::CreateMessageParams),
+    CreateMessage(Box<super::sampling::CreateMessageParams>),
     /// Get task status (MCP 2025-11-25 Tasks).
     #[serde(rename = "tasks/get")]
     TasksGet(crate::types::tasks::GetTaskRequest),

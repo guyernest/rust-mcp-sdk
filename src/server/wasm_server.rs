@@ -127,7 +127,7 @@ impl WasmMcpServer {
         let negotiated_version = crate::negotiate_protocol_version(&params.protocol_version);
 
         let result = InitializeResult {
-            protocol_version: crate::types::ProtocolVersion(negotiated_version),
+            protocol_version: crate::types::ProtocolVersion(negotiated_version.to_string()),
             capabilities: self.capabilities.clone(),
             server_info: self.info.clone(),
             instructions: None,

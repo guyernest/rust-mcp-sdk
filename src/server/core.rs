@@ -329,7 +329,7 @@ impl ServerCore {
         let negotiated_version = crate::negotiate_protocol_version(&init_req.protocol_version);
 
         Ok(InitializeResult {
-            protocol_version: ProtocolVersion(negotiated_version),
+            protocol_version: ProtocolVersion(negotiated_version.to_string()),
             capabilities: self.capabilities.clone(),
             server_info: self.info.clone(),
             instructions: None,

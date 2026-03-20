@@ -1001,7 +1001,7 @@ impl<T: Transport> Client<T> {
         self.ensure_initialized()?;
         self.assert_capability("sampling", "sampling/createMessage")?;
 
-        let request = Request::Client(Box::new(ClientRequest::CreateMessage(params)));
+        let request = Request::Client(Box::new(ClientRequest::CreateMessage(Box::new(params))));
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
 

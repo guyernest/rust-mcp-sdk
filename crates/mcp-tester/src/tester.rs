@@ -1797,10 +1797,10 @@ impl ServerTester {
                                     println!("      MIME type: {}", mime_type);
                                     println!("      Data size: {} bytes (base64)", data.len());
                                 },
-                                pmcp::types::Content::ResourceLink { uri, name, .. } => {
+                                pmcp::types::Content::ResourceLink(rl) => {
                                     println!("      Content type: ResourceLink");
-                                    println!("      URI: {}", uri);
-                                    println!("      Name: {}", name);
+                                    println!("      URI: {}", rl.uri);
+                                    println!("      Name: {}", rl.name);
                                 },
                             }
                         }
@@ -1890,8 +1890,8 @@ impl ServerTester {
                                     ));
                                 }
                             },
-                            pmcp::types::Content::ResourceLink { uri, .. } => {
-                                if uri.is_empty() {
+                            pmcp::types::Content::ResourceLink(rl) => {
+                                if rl.uri.is_empty() {
                                     warnings.push(format!(
                                         "Resource '{}' link has empty URI",
                                         resource.name

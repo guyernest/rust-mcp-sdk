@@ -4,7 +4,6 @@
 //! in the 2025-11-25 protocol version.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 /// Related task metadata key per MCP spec.
 pub const RELATED_TASK_META_KEY: &str = "io.modelcontextprotocol/related-task";
@@ -143,12 +142,6 @@ pub struct CancelTaskResult {
     /// The cancelled task
     pub task: Task,
 }
-
-// Suppress unused import warning -- Value is used by tests
-#[allow(unused_imports)]
-use std::marker::PhantomData;
-// Ensure Value is accessible in tests without triggering unused warning
-const _: fn() -> Value = || Value::Null;
 
 #[cfg(test)]
 mod tests {
