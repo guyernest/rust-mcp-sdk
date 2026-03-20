@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: Protocol Modernization
-status: in-progress
-stopped_at: Completed 54.1-01-PLAN.md
-last_updated: "2026-03-20T20:14:29Z"
-last_activity: 2026-03-20 -- Plan 01 executed (constructors for resources, prompts, content)
+milestone: v1.6
+milestone_name: CLI DX Overhaul
+status: completed
+stopped_at: Completed 54.1-03-PLAN.md
+last_updated: "2026-03-20T21:43:17.474Z"
+last_activity: 2026-03-20 -- Plan 02 executed (protocol core, tasks, sampling, notifications, capabilities, tools DX)
 progress:
-  total_phases: 6
-  completed_phases: 1
-  total_plans: 8
-  completed_plans: 5
-  percent: 21
+  total_phases: 34
+  completed_phases: 24
+  total_plans: 56
+  completed_plans: 56
+  percent: 100
 ---
 
 # Project State
@@ -141,6 +141,7 @@ v1.6 decisions:
 - [Phase 54.1-02]: Task::new() sets timestamps to empty strings -- .with_timestamps() sets both at once
 - [Phase 54.1-02]: ToolChoice uses static factory methods (auto/required/none) not ::new() since it wraps single enum field
 - [Phase 54.1-02]: CreateMessageParams has no Default (messages required) -- ::new(messages) only
+- [Phase 54.1]: Content enum variant syntax preserved per D-08 but replaced with Content::text()/resource() helpers where available for consistency
 
 ### Roadmap Evolution
 
@@ -176,6 +177,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-20T20:13:52Z
-Stopped at: Completed 54.1-02-PLAN.md
+Last session: 2026-03-20T21:43:17.470Z
+Stopped at: Completed 54.1-03-PLAN.md
 Resume: Phase 54.1 Plans 01+02 complete. 26 protocol types across 6 modules now have #[non_exhaustive] + constructors + fluent builders. 48 module tests pass. Plan 03 (codebase migration) remaining.

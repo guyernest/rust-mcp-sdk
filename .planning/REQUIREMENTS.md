@@ -158,7 +158,7 @@ All protocol types (structs and enum variants) must be constructable by downstre
 
 | ID | Phase | Status |
 |----|-------|--------|
-| PROTO-TYPE-DX | Phase 54.1 | Pending |
+| PROTO-TYPE-DX | Phase 54.1 | Complete |
 
 ---
 *Requirements defined: 2026-03-03*
