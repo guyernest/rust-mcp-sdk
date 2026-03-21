@@ -547,13 +547,20 @@ Plans:
 
 ### Phase 56: Tower Middleware + DNS Rebinding Protection
 
-**Goal:** Build a Tower Layer stack for MCP server hosting: DNS rebinding protection (host header validation against allowed origins), session management, JSON-RPC routing. Axum convenience adapter (`pmcp::axum::router()`) for the 90% case. Enterprise security focus — protect against DNS rebinding attacks that bypass same-origin policy.
+**Goal:** Build a Tower Layer stack for MCP server hosting: DNS rebinding protection (Host + Origin header validation against allowed origins), security response headers, and origin-locked CORS. Axum convenience adapter (`pmcp::axum::router()`) for the 90% case. Enterprise security focus -- fix CVE-pattern wildcard CORS and achieve MCP spec 2025-03-26 Origin validation compliance.
 **Requirements**: TOWER-MIDDLEWARE, DNS-REBINDING, AXUM-ADAPTER
 **Depends on:** Phase 54
-**Plans:** 0 plans
+**Success Criteria** (what must be TRUE):
+  1. DnsRebindingLayer validates Host header (always) and Origin header (when present), returns 403 on mismatch
+  2. SecurityHeadersLayer adds X-Content-Type-Options: nosniff, X-Frame-Options: DENY, Cache-Control: no-store
+  3. `pmcp::axum::router(server)` returns axum::Router with DNS rebinding + security headers + origin-locked CORS
+  4. StreamableHttpServer no longer uses wildcard `Access-Control-Allow-Origin: *`
+  5. Example 55 (ServerHttpMiddleware) still compiles unchanged
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 56 to break down)
+- [ ] 56-01-PLAN.md -- Tower deps, AllowedOrigins config, DnsRebindingLayer, SecurityHeadersLayer with unit tests
+- [ ] 56-02-PLAN.md -- Axum router convenience function, StreamableHttpServer CORS fix, lib.rs re-exports
 
 ### Phase 57: Conformance Test Suite
 
