@@ -361,4 +361,92 @@ mod tests {
             "io.modelcontextprotocol/related-task"
         );
     }
+
+    #[test]
+    fn task_status_is_terminal() {
+        assert!(!TaskStatus::Working.is_terminal());
+        assert!(!TaskStatus::InputRequired.is_terminal());
+        assert!(TaskStatus::Completed.is_terminal());
+        assert!(TaskStatus::Failed.is_terminal());
+        assert!(TaskStatus::Cancelled.is_terminal());
+    }
+
+    #[test]
+    fn task_status_can_transition_to() {
+        // Working can transition to all except itself
+        assert!(TaskStatus::Working.can_transition_to(&TaskStatus::InputRequired));
+        assert!(TaskStatus::Working.can_transition_to(&TaskStatus::Completed));
+        assert!(TaskStatus::Working.can_transition_to(&TaskStatus::Failed));
+        assert!(TaskStatus::Working.can_transition_to(&TaskStatus::Cancelled));
+
+        // InputRequired can transition to all except itself
+        assert!(TaskStatus::InputRequired.can_transition_to(&TaskStatus::Working));
+        assert!(TaskStatus::InputRequired.can_transition_to(&TaskStatus::Completed));
+        assert!(TaskStatus::InputRequired.can_transition_to(&TaskStatus::Failed));
+        assert!(TaskStatus::InputRequired.can_transition_to(&TaskStatus::Cancelled));
+    }
+
+    #[test]
+    fn task_status_self_transition_rejected() {
+        assert!(!TaskStatus::Working.can_transition_to(&TaskStatus::Working));
+        assert!(!TaskStatus::InputRequired.can_transition_to(&TaskStatus::InputRequired));
+        assert!(!TaskStatus::Completed.can_transition_to(&TaskStatus::Completed));
+        assert!(!TaskStatus::Failed.can_transition_to(&TaskStatus::Failed));
+        assert!(!TaskStatus::Cancelled.can_transition_to(&TaskStatus::Cancelled));
+    }
+
+    #[test]
+    fn task_status_terminal_rejects_all() {
+        for terminal in [
+            TaskStatus::Completed,
+            TaskStatus::Failed,
+            TaskStatus::Cancelled,
+        ] {
+            for target in [
+                TaskStatus::Working,
+                TaskStatus::InputRequired,
+                TaskStatus::Completed,
+                TaskStatus::Failed,
+                TaskStatus::Cancelled,
+            ] {
+                assert!(
+                    !terminal.can_transition_to(&target),
+                    "{terminal:?} should not transition to {target:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn task_ttl_null_serialization() {
+        let task = Task::new("test-null-ttl", TaskStatus::Working)
+            .with_timestamps("2025-11-25T00:00:00Z", "2025-11-25T00:01:00Z");
+        let json = serde_json::to_value(&task).unwrap();
+        // ttl MUST be present as null, not omitted (MCP spec: number | null)
+        assert!(json.get("ttl").is_some(), "ttl must be present");
+        assert!(json["ttl"].is_null(), "ttl must be null when None");
+        // pollInterval SHOULD be omitted when None
+        assert!(
+            json.get("pollInterval").is_none(),
+            "pollInterval should be omitted when None"
+        );
+    }
+
+    #[test]
+    fn task_ttl_present_serialization() {
+        let task = Task::new("test-present-ttl", TaskStatus::Working)
+            .with_timestamps("2025-11-25T00:00:00Z", "2025-11-25T00:01:00Z")
+            .with_ttl(60000);
+        let json = serde_json::to_value(&task).unwrap();
+        assert_eq!(json["ttl"], 60000);
+    }
+
+    #[test]
+    fn task_status_display() {
+        assert_eq!(TaskStatus::Working.to_string(), "working");
+        assert_eq!(TaskStatus::InputRequired.to_string(), "input_required");
+        assert_eq!(TaskStatus::Completed.to_string(), "completed");
+        assert_eq!(TaskStatus::Failed.to_string(), "failed");
+        assert_eq!(TaskStatus::Cancelled.to_string(), "cancelled");
+    }
 }
