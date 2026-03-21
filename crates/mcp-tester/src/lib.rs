@@ -61,7 +61,7 @@ pub use app_validator::{AppValidationMode, AppValidator};
 pub use conformance::{ConformanceDomain, ConformanceRunner};
 pub use pmcp::client::oauth;
 pub use pmcp::client::oauth::{OAuthConfig, OAuthHelper};
-pub use report::{OutputFormat, TestReport, TestResult, TestStatus};
+pub use report::{OutputFormat, TestCategory, TestReport, TestResult, TestStatus};
 pub use scenario::TestScenario;
 pub use scenario_executor::ScenarioExecutor;
 pub use scenario_generator::ScenarioGenerator;

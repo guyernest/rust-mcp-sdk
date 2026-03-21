@@ -10,6 +10,7 @@
 
 mod apps;
 mod check;
+mod conformance;
 mod download;
 mod generate;
 mod list;
@@ -44,6 +45,35 @@ pub enum TestCommand {
         /// Strict mode (promote warnings to failures)
         #[arg(long)]
         strict: bool,
+
+        /// Transport type: http, jsonrpc, or stdio
+        #[arg(long)]
+        transport: Option<String>,
+
+        /// Connection timeout in seconds
+        #[arg(long, default_value = "30")]
+        timeout: u64,
+
+        #[command(flatten)]
+        auth_flags: AuthFlags,
+    },
+
+    /// MCP protocol conformance validation
+    ///
+    /// Validates a server against the MCP protocol spec (2025-11-25).
+    /// Tests 5 domains: Core (handshake, version, errors), Tools (list, call),
+    /// Resources (list, read), Prompts (list, get), Tasks (lifecycle).
+    Conformance {
+        /// URL of the MCP server to validate
+        url: String,
+
+        /// Strict mode (promote warnings to failures)
+        #[arg(long)]
+        strict: bool,
+
+        /// Run only specific domains (comma-separated: core,tools,resources,prompts,tasks)
+        #[arg(long, value_delimiter = ',')]
+        domain: Option<Vec<String>>,
 
         /// Transport type: http, jsonrpc, or stdio
         #[arg(long)]
@@ -216,6 +246,26 @@ impl TestCommand {
                     mode,
                     tool,
                     strict,
+                    transport,
+                    timeout,
+                    &auth_flags,
+                    global_flags,
+                ))
+            },
+
+            TestCommand::Conformance {
+                url,
+                strict,
+                domain,
+                transport,
+                timeout,
+                auth_flags,
+            } => {
+                let runtime = tokio::runtime::Runtime::new()?;
+                runtime.block_on(conformance::execute(
+                    url,
+                    strict,
+                    domain,
                     transport,
                     timeout,
                     &auth_flags,
