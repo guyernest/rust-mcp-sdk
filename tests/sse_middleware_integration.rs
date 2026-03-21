@@ -93,6 +93,7 @@ async fn test_middleware_runs_on_sse_get() {
         on_session_initialized: None,
         on_session_closed: None,
         http_middleware: None,
+        allowed_origins: None,
     };
 
     let server_instance = StreamableHttpServer::with_config(
@@ -194,6 +195,7 @@ async fn test_middleware_with_multiple_http_methods() {
         on_session_initialized: None,
         on_session_closed: None,
         http_middleware: None,
+        allowed_origins: None,
     };
 
     let server_instance = StreamableHttpServer::with_config(
@@ -285,6 +287,7 @@ async fn test_middleware_modifies_request_headers() {
         on_session_initialized: None,
         on_session_closed: None,
         http_middleware: None,
+        allowed_origins: None,
     };
 
     let server_instance = StreamableHttpServer::with_config(
@@ -371,6 +374,7 @@ async fn test_middleware_response_processing() {
         on_session_initialized: None,
         on_session_closed: None,
         http_middleware: None,
+        allowed_origins: None,
     };
 
     let server_instance = StreamableHttpServer::with_config(

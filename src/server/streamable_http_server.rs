@@ -252,6 +252,8 @@ struct SessionInfo {
 pub(crate) struct ServerState {
     server: Arc<tokio::sync::Mutex<Server>>,
     config: Arc<StreamableHttpServerConfig>,
+    /// Pre-resolved allowed origins for CORS and DNS rebinding protection.
+    allowed_origins: AllowedOrigins,
     /// Active SSE streams by session ID
     sse_streams: Arc<RwLock<HashMap<String, mpsc::UnboundedSender<TransportMessage>>>>,
     /// Session tracking (session ID -> session info)
@@ -278,9 +280,14 @@ pub(crate) fn make_server_state(
     server: Arc<tokio::sync::Mutex<Server>>,
     config: StreamableHttpServerConfig,
 ) -> ServerState {
+    let allowed_origins = config
+        .allowed_origins
+        .clone()
+        .unwrap_or_else(AllowedOrigins::localhost);
     ServerState {
         server,
         config: Arc::new(config),
+        allowed_origins,
         sse_streams: Arc::new(RwLock::new(HashMap::new())),
         sessions: Arc::new(RwLock::new(HashMap::new())),
     }
@@ -337,13 +344,7 @@ impl StreamableHttpServer {
         server: Arc<tokio::sync::Mutex<Server>>,
         config: StreamableHttpServerConfig,
     ) -> Self {
-        let state = ServerState {
-            server,
-            config: Arc::new(config),
-            sse_streams: Arc::new(RwLock::new(HashMap::new())),
-            sessions: Arc::new(RwLock::new(HashMap::new())),
-        };
-
+        let state = make_server_state(server, config);
         Self { addr, state }
     }
 
@@ -860,14 +861,6 @@ fn extract_auth_from_proxy_headers(
     })
 }
 
-/// Resolve the effective [`AllowedOrigins`] from server config.
-fn resolve_allowed_origins(config: &StreamableHttpServerConfig) -> AllowedOrigins {
-    config
-        .allowed_origins
-        .clone()
-        .unwrap_or_else(AllowedOrigins::localhost)
-}
-
 /// Fast path handler without HTTP middleware
 async fn handle_post_fast_path(
     state: ServerState,
@@ -877,7 +870,7 @@ async fn handle_post_fast_path(
     let headers = parts.headers;
 
     // Resolve CORS origins once for the entire request.
-    let allowed = resolve_allowed_origins(&state.config);
+    let allowed = state.allowed_origins.clone();
     let req_origin = headers.get(header::ORIGIN);
 
     // Read body to string
@@ -1070,7 +1063,7 @@ async fn handle_post_with_middleware(
         .expect("Middleware chain must exist");
 
     // Resolve CORS origins once for the entire request.
-    let allowed = resolve_allowed_origins(&state.config);
+    let allowed = state.allowed_origins.clone();
 
     // Convert from axum request
     let (parts, body) = request.into_parts();
@@ -1351,7 +1344,7 @@ async fn handle_post_with_middleware(
 
 /// Handle GET requests for SSE streams
 async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) -> impl IntoResponse {
-    let allowed = resolve_allowed_origins(&state.config);
+    let allowed = state.allowed_origins.clone();
     let req_origin = headers.get(header::ORIGIN);
 
     // Validate headers
@@ -1489,7 +1482,7 @@ async fn handle_delete_session(
     State(state): State<ServerState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let allowed = resolve_allowed_origins(&state.config);
+    let allowed = state.allowed_origins.clone();
     let req_origin = headers.get(header::ORIGIN);
 
     // Extract session ID
@@ -1578,7 +1571,7 @@ async fn handle_options(
     State(state): State<ServerState>,
     req_headers: HeaderMap,
 ) -> impl IntoResponse {
-    let allowed = resolve_allowed_origins(&state.config);
+    let allowed = state.allowed_origins.clone();
     let req_origin = req_headers.get(header::ORIGIN);
 
     let mut headers = HeaderMap::new();

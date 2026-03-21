@@ -517,6 +517,7 @@ mod spec_compliance_tests {
             on_session_initialized: None,
             on_session_closed: None,
             http_middleware: None,
+            allowed_origins: None,
         };
         let http_server = StreamableHttpServer::with_config(addr, server, config);
         http_server.start().await.map_err(box_err)

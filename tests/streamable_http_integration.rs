@@ -40,6 +40,7 @@ async fn test_streamable_http_stateless_mode() {
         on_session_initialized: None,
         on_session_closed: None,
         http_middleware: None,
+        allowed_origins: None,
     };
 
     let server_instance =
@@ -114,6 +115,7 @@ async fn test_streamable_http_stateful_mode() {
             });
         })),
         http_middleware: None,
+        allowed_origins: None,
     };
 
     let server_instance =
@@ -208,6 +210,7 @@ async fn test_transport_send_receive_multiple() {
         on_session_initialized: None,
         on_session_closed: None,
         http_middleware: None,
+        allowed_origins: None,
     };
 
     let server_instance =
@@ -232,12 +235,10 @@ async fn test_transport_send_receive_multiple() {
     for i in 1..=3 {
         let request = TransportMessage::Request {
             id: RequestId::from(i as i64),
-            request: Request::Client(Box::new(ClientRequest::Initialize(
-                InitializeRequest::new(
-                    Implementation::new("test-client", "1.0.0"),
-                    Default::default(),
-                ),
-            ))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                Default::default(),
+            )))),
         };
 
         transport.send(request).await.unwrap();

@@ -141,6 +141,7 @@ mod streamable_http_server_tests {
             on_session_initialized: None,
             on_session_closed: None,
             http_middleware: None,
+            allowed_origins: None,
         };
 
         let http_server = StreamableHttpServer::with_config(addr, server, config);

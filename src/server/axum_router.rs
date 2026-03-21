@@ -106,7 +106,12 @@ pub fn router_with_config(server: Arc<tokio::sync::Mutex<Server>>, config: Route
         .allowed_origins
         .unwrap_or_else(AllowedOrigins::localhost);
 
-    let state = make_server_state(server, config.server_config);
+    // Ensure server_config carries the resolved origins so that
+    // make_server_state() stores the same value in ServerState.
+    let mut server_config = config.server_config;
+    server_config.allowed_origins = Some(allowed.clone());
+
+    let state = make_server_state(server, server_config);
     let base_router = build_mcp_router(state);
 
     let cors = CorsLayer::new()
