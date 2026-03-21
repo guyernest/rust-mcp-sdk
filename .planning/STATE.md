@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
-status: in-progress
-stopped_at: Completed 57-02-PLAN.md
-last_updated: "2026-03-21T13:51:00Z"
-last_activity: 2026-03-21 -- Phase 57 Plan 02 complete (CLI integration for conformance test suite)
+status: completed
+stopped_at: Completed 58-01-PLAN.md
+last_updated: "2026-03-21T18:38:55.850Z"
+last_activity: 2026-03-21
 progress:
   total_phases: 34
-  completed_phases: 24
-  total_plans: 58
-  completed_plans: 58
+  completed_phases: 27
+  total_plans: 67
+  completed_plans: 65
   percent: 100
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 Phase: 57 (conformance-test-suite)
 Plan: 2 of 2 complete
 Status: Phase 57 complete. Plan 02 wired conformance suite into both CLI entry points (mcp-tester conformance, cargo pmcp test conformance) with --strict, --domain flags and per-domain CI summary line.
-Last activity: 2026-03-21 -- Phase 57 Plan 02 complete (CLI integration for conformance test suite)
+Last activity: 2026-03-21
 
 Progress: [##########] 100%
 
@@ -165,6 +165,9 @@ v1.6 decisions:
 - [Phase 57-01]: Tasks domain uses _meta.task.ttl for task creation via tools/call
 - [Phase 57-02]: TestCategory gets PartialEq/Eq derive for domain summary filtering
 - [Phase 57-02]: Old run_compliance_tests preserved as deprecated wrapper for backward compat
+- [Phase 58]: Manual Clone impl on State<T> to avoid requiring T: Clone (Arc<T> is always Clone)
+- [Phase 58]: Unconditional schema generation in #[mcp_tool] -- schema IS the macro value proposition, no feature flag guard
+- [Phase 58]: Branching ToolInfo constructors (with_annotations vs new) since ToolInfo has no set_annotations method
 
 ### Roadmap Evolution
 
@@ -200,6 +203,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-21T13:51:00Z
-Stopped at: Completed 57-02-PLAN.md
+Last session: 2026-03-21T18:38:55.846Z
+Stopped at: Completed 58-01-PLAN.md
 Resume: Phase 57 complete. Both plans shipped: Plan 01 (19-scenario conformance engine with 5 domains) and Plan 02 (CLI integration -- mcp-tester conformance and cargo pmcp test conformance with --strict/--domain flags and per-domain CI summary).
