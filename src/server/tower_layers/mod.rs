@@ -10,6 +10,32 @@ pub mod security_headers;
 pub use dns_rebinding::{AllowedOrigins, DnsRebindingLayer, DnsRebindingService};
 pub use security_headers::{SecurityHeadersLayer, SecurityHeadersService};
 
+use http::Method;
+use std::time::Duration;
+use tower_http::cors::CorsLayer;
+
+/// Build the standard MCP CORS layer for the given allowed origins.
+///
+/// Single source of truth for the CORS configuration used by both
+/// [`StreamableHttpServer::start()`] and [`pmcp::axum::router()`].
+pub(crate) fn build_mcp_cors_layer(allowed: &AllowedOrigins) -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(allowed.to_cors_allow_origin())
+        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
+        .allow_headers([
+            http::header::CONTENT_TYPE,
+            http::header::ACCEPT,
+            http::HeaderName::from_static("mcp-session-id"),
+            http::HeaderName::from_static("mcp-protocol-version"),
+            http::HeaderName::from_static("last-event-id"),
+        ])
+        .expose_headers([
+            http::HeaderName::from_static("mcp-session-id"),
+            http::HeaderName::from_static("mcp-protocol-version"),
+        ])
+        .max_age(Duration::from_secs(86400))
+}
+
 /// Shared test utilities for tower layer tests.
 #[cfg(test)]
 pub(crate) mod test_util {

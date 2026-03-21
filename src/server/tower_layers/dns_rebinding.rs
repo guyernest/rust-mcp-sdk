@@ -124,13 +124,16 @@ impl AllowedOrigins {
     }
 
     /// Convert to a `tower_http` CORS `AllowOrigin` for use with `CorsLayer`.
+    ///
+    /// Uses a predicate that delegates to [`is_allowed_origin`](Self::is_allowed_origin),
+    /// which includes hostname-fallback matching. This handles port mismatches
+    /// (e.g., `AllowedOrigins::localhost()` with port 0 still accepts
+    /// `Origin: http://localhost:8080`).
     pub fn to_cors_allow_origin(&self) -> AllowOrigin {
-        let header_values: Vec<HeaderValue> = self
-            .origins
-            .iter()
-            .filter_map(|o| HeaderValue::from_str(o).ok())
-            .collect();
-        AllowOrigin::list(header_values)
+        let this = self.clone();
+        AllowOrigin::predicate(move |origin: &HeaderValue, _parts: &http::request::Parts| {
+            this.is_allowed_origin(origin)
+        })
     }
 
     /// Get the list of allowed origin URLs.

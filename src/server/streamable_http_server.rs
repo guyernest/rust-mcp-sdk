@@ -23,13 +23,10 @@ use axum::{
 use futures_util::StreamExt;
 use parking_lot::RwLock;
 use serde_json::json;
-use http::Method;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
-use tower_http::cors::CorsLayer;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -352,29 +349,9 @@ impl StreamableHttpServer {
     /// - [`SecurityHeadersLayer`] -- nosniff, DENY, no-store
     pub async fn start(self) -> Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
         let allowed = self.state.allowed_origins.clone();
+        let cors = crate::server::tower_layers::build_mcp_cors_layer(&allowed);
 
-        let cors = CorsLayer::new()
-            .allow_origin(allowed.to_cors_allow_origin())
-            .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
-            .allow_headers([
-                "content-type".parse().expect("valid header name"),
-                "accept".parse().expect("valid header name"),
-                "mcp-session-id".parse().expect("valid header name"),
-                "mcp-protocol-version".parse().expect("valid header name"),
-                "last-event-id".parse().expect("valid header name"),
-            ])
-            .expose_headers([
-                "mcp-session-id".parse().expect("valid header name"),
-                "mcp-protocol-version".parse().expect("valid header name"),
-            ])
-            .max_age(Duration::from_secs(86400));
-
-        // Layer ordering with Router::layer():
-        //   Last .layer() call runs FIRST on incoming requests.
-        //   Request flow: CORS (outermost, handles preflight) ->
-        //                 DnsRebindingLayer (validates Host/Origin) ->
-        //                 SecurityHeadersLayer (innermost, adds response headers) ->
-        //                 handler
+        // Layer ordering: CORS (outermost) -> DnsRebinding -> SecurityHeaders -> handler
         let app = build_mcp_router(self.state)
             .layer(SecurityHeadersLayer::default())
             .layer(DnsRebindingLayer::new(allowed))

@@ -129,7 +129,11 @@ where
                 headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
             }
             if config.cache_control {
-                headers.insert("cache-control", HeaderValue::from_static("no-store"));
+                // Use entry() to avoid overwriting handler-specific Cache-Control
+                // (e.g., SSE responses use "no-cache, no-transform").
+                headers
+                    .entry("cache-control")
+                    .or_insert(HeaderValue::from_static("no-store"));
             }
 
             Ok(response)
