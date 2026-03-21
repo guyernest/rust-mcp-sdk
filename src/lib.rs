@@ -117,6 +117,7 @@ pub use server::{
     simple_prompt::{SimplePrompt, SyncPrompt},
     simple_resources::{DynamicResourceHandler, ResourceCollection, StaticResource},
     simple_tool::{SimpleTool, SyncTool},
+    state::State,
     typed_tool::{SimpleToolExt, SyncToolExt, TypedSyncTool, TypedTool, TypedToolWithOutput},
     ui::UIResourceBuilder,
     PromptHandler, ResourceHandler, SamplingHandler, Server, ServerBuilder, ToolHandler,

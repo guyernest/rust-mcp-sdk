@@ -83,6 +83,10 @@ pub mod observability;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod workflow;
 
+/// State extractor for `#[mcp_tool]` shared state injection.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod state;
+
 /// Typed tool implementations with automatic schema generation.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod typed_tool;
@@ -125,6 +129,10 @@ pub mod cancellation {
     #[derive(Debug, Clone, Default)]
     pub struct RequestHandlerExtra;
 }
+/// Axum Router convenience function for secure MCP server hosting.
+#[cfg(feature = "streamable-http")]
+#[cfg_attr(docsrs, doc(cfg(feature = "streamable-http")))]
+pub mod axum_router;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod dynamic;
 #[cfg(not(target_arch = "wasm32"))]
@@ -137,16 +145,12 @@ pub mod resource_watcher;
 pub mod roots;
 #[cfg(all(not(target_arch = "wasm32"), feature = "streamable-http"))]
 pub mod streamable_http_server;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod subscriptions;
 /// Tower middleware layers for MCP HTTP security (DNS rebinding, security headers).
 #[cfg(feature = "streamable-http")]
 #[cfg_attr(docsrs, doc(cfg(feature = "streamable-http")))]
 pub mod tower_layers;
-/// Axum Router convenience function for secure MCP server hosting.
-#[cfg(feature = "streamable-http")]
-#[cfg_attr(docsrs, doc(cfg(feature = "streamable-http")))]
-pub mod axum_router;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod subscriptions;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod transport;
 
@@ -3352,9 +3356,10 @@ mod tests {
             _meta: None,
         };
 
-        let resource_content = crate::types::ReadResourceResult::new(vec![
-            crate::types::Content::text("Hello, world!"),
-        ]);
+        let resource_content =
+            crate::types::ReadResourceResult::new(vec![crate::types::Content::text(
+                "Hello, world!",
+            )]);
 
         let server = Server::builder()
             .name("test-server")
@@ -3552,9 +3557,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_list_resources() {
-        let resource_content = crate::types::ReadResourceResult::new(vec![
-            crate::types::Content::text("Hello, world!"),
-        ]);
+        let resource_content =
+            crate::types::ReadResourceResult::new(vec![crate::types::Content::text(
+                "Hello, world!",
+            )]);
 
         let server = Server::builder()
             .name("test-server")
@@ -3583,9 +3589,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_read_resource() {
-        let resource_content = crate::types::ReadResourceResult::new(vec![
-            crate::types::Content::text("Hello, world!"),
-        ]);
+        let resource_content =
+            crate::types::ReadResourceResult::new(vec![crate::types::Content::text(
+                "Hello, world!",
+            )]);
 
         let server = Server::builder()
             .name("test-server")

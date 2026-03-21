@@ -55,6 +55,7 @@
 use proc_macro::TokenStream;
 use syn::{parse_macro_input, ItemFn, ItemImpl};
 
+mod mcp_common;
 mod tool;
 mod tool_router;
 #[allow(dead_code)]
