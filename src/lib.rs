@@ -134,6 +134,11 @@ pub use server::{
 pub use server::wasm_server::{WasmMcpServer as Server, WasmMcpServerBuilder as ServerBuilder};
 #[cfg(target_arch = "wasm32")]
 pub use server::wasm_typed_tool::WasmTypedTool as TypedTool;
+// Re-export proc macros from pmcp-macros so users can write `use pmcp::{mcp_tool, mcp_server}`
+// instead of adding pmcp-macros as a separate dependency.
+#[cfg(feature = "macros")]
+pub use pmcp_macros::{mcp_server, mcp_tool};
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use shared::StdioTransport;
 

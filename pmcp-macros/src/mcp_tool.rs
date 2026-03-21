@@ -326,25 +326,14 @@ pub fn expand_mcp_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStr
 
 /// Extract output schema code from the function's return type.
 ///
-/// Returns `None` (as tokens) if return type is `Result<Value>` or not a Result.
-/// Returns `Some(schema)` (as tokens) if return type is `Result<TypedStruct>`.
+/// Extract output schema code from a function's return type.
+/// Delegates to `mcp_common::output_schema_tokens`.
 fn extract_output_schema_code(input: &ItemFn) -> syn::Result<TokenStream> {
     let return_type = match &input.sig.output {
-        ReturnType::Default => return Ok(quote! { None }),
-        ReturnType::Type(_, ty) => ty.as_ref(),
+        ReturnType::Default => None,
+        ReturnType::Type(_, ty) => Some(ty.as_ref()),
     };
-
-    // Try to extract Ok type from Result<T> or Result<T, E>.
-    if let Some(ok_type) = mcp_common::extract_result_ok_type(return_type) {
-        // Per D-15: skip outputSchema for Result<Value>.
-        if mcp_common::is_value_type(&ok_type) {
-            Ok(quote! { None })
-        } else {
-            Ok(mcp_common::generate_output_schema_code(&ok_type))
-        }
-    } else {
-        Ok(quote! { None })
-    }
+    Ok(mcp_common::output_schema_tokens(return_type))
 }
 
 /// Generate `ToolInfo` construction code, branching on annotations presence.
