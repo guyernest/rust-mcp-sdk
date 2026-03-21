@@ -556,11 +556,12 @@ Plans:
   3. `pmcp::axum::router(server)` returns axum::Router with DNS rebinding + security headers + origin-locked CORS
   4. StreamableHttpServer no longer uses wildcard `Access-Control-Allow-Origin: *`
   5. Example 55 (ServerHttpMiddleware) still compiles unchanged
-**Plans:** 2 plans
+**Plans:** 3 plans
 
 Plans:
 - [x] 56-01-PLAN.md -- Tower deps, AllowedOrigins config, DnsRebindingLayer, SecurityHeadersLayer with unit tests (completed 2026-03-21)
 - [x] 56-02-PLAN.md -- Axum router convenience function, StreamableHttpServer CORS fix, lib.rs re-exports (completed 2026-03-21)
+- [ ] 56-03-PLAN.md -- Gap closure: apply Tower layers in StreamableHttpServer::start(), delete add_cors_headers, pre-resolve AllowedOrigins in ServerState
 
 ### Phase 57: Conformance Test Suite
 
