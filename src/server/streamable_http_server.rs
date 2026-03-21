@@ -4,7 +4,7 @@ use crate::server::http_middleware::{
     adapters::{from_axum, into_axum},
     ServerHttpContext, ServerHttpMiddlewareChain, ServerHttpResponse,
 };
-use crate::server::tower_layers::AllowedOrigins;
+use crate::server::tower_layers::{AllowedOrigins, DnsRebindingLayer, SecurityHeadersLayer};
 use crate::server::Server;
 use crate::shared::http_constants::{
     APPLICATION_JSON, LAST_EVENT_ID, MCP_PROTOCOL_VERSION, MCP_SESSION_ID, TEXT_EVENT_STREAM,
@@ -23,10 +23,13 @@ use axum::{
 use futures_util::StreamExt;
 use parking_lot::RwLock;
 use serde_json::json;
+use http::Method;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
+use tower_http::cors::CorsLayer;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -268,7 +271,6 @@ pub(crate) fn build_mcp_router(state: ServerState) -> Router<()> {
         .route("/", post(handle_post_request))
         .route("/", get(handle_get_sse))
         .route("/", delete(handle_delete_session))
-        .route("/", axum::routing::options(handle_options))
         .with_state(state)
 }
 
@@ -310,14 +312,9 @@ impl std::fmt::Debug for StreamableHttpServer {
 
 /// Helper function to create JSON-RPC error response.
 ///
-/// Includes origin-locked CORS headers so browsers can read the error.
-fn create_error_response(
-    status: StatusCode,
-    code: i32,
-    message: &str,
-    allowed_origins: &AllowedOrigins,
-    request_origin: Option<&HeaderValue>,
-) -> Response {
+/// CORS headers are added by the `CorsLayer` Tower middleware, so this
+/// function no longer needs to handle them.
+fn create_error_response(status: StatusCode, code: i32, message: &str) -> Response {
     let error_body = json!({
         "jsonrpc": "2.0",
         "error": {
@@ -327,9 +324,7 @@ fn create_error_response(
         "id": null
     });
 
-    let mut resp = (status, Json(error_body)).into_response();
-    add_cors_headers(resp.headers_mut(), allowed_origins, request_origin);
-    resp
+    (status, Json(error_body)).into_response()
 }
 
 impl StreamableHttpServer {
@@ -349,8 +344,41 @@ impl StreamableHttpServer {
     }
 
     /// Starts the server and returns the bound address and a task handle.
+    ///
+    /// Applies the same Tower layer security stack as
+    /// [`pmcp::axum::router()`](crate::server::axum_router::router):
+    /// - [`CorsLayer`] -- origin-locked CORS (no wildcard `*`)
+    /// - [`DnsRebindingLayer`] -- Host/Origin header validation
+    /// - [`SecurityHeadersLayer`] -- nosniff, DENY, no-store
     pub async fn start(self) -> Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
-        let app = build_mcp_router(self.state);
+        let allowed = self.state.allowed_origins.clone();
+
+        let cors = CorsLayer::new()
+            .allow_origin(allowed.to_cors_allow_origin())
+            .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
+            .allow_headers([
+                "content-type".parse().expect("valid header name"),
+                "accept".parse().expect("valid header name"),
+                "mcp-session-id".parse().expect("valid header name"),
+                "mcp-protocol-version".parse().expect("valid header name"),
+                "last-event-id".parse().expect("valid header name"),
+            ])
+            .expose_headers([
+                "mcp-session-id".parse().expect("valid header name"),
+                "mcp-protocol-version".parse().expect("valid header name"),
+            ])
+            .max_age(Duration::from_secs(86400));
+
+        // Layer ordering with Router::layer():
+        //   Last .layer() call runs FIRST on incoming requests.
+        //   Request flow: CORS (outermost, handles preflight) ->
+        //                 DnsRebindingLayer (validates Host/Origin) ->
+        //                 SecurityHeadersLayer (innermost, adds response headers) ->
+        //                 handler
+        let app = build_mcp_router(self.state)
+            .layer(SecurityHeadersLayer::default())
+            .layer(DnsRebindingLayer::new(allowed))
+            .layer(cors);
 
         let listener = tokio::net::TcpListener::bind(self.addr).await?;
         let local_addr = listener.local_addr()?;
@@ -363,12 +391,7 @@ impl StreamableHttpServer {
 }
 
 /// Validate request headers and return appropriate error response.
-fn validate_headers(
-    headers: &HeaderMap,
-    method: &str,
-    allowed_origins: &AllowedOrigins,
-    request_origin: Option<&HeaderValue>,
-) -> std::result::Result<(), Response> {
+fn validate_headers(headers: &HeaderMap, method: &str) -> std::result::Result<(), Response> {
     match method {
         "POST" => {
             // Validate Content-Type
@@ -379,8 +402,6 @@ fn validate_headers(
                         StatusCode::UNSUPPORTED_MEDIA_TYPE,
                         -32700,
                         "Content-Type must be application/json",
-                        allowed_origins,
-                        request_origin,
                     ));
                 }
             } else {
@@ -388,8 +409,6 @@ fn validate_headers(
                     StatusCode::UNSUPPORTED_MEDIA_TYPE,
                     -32700,
                     "Content-Type header is required",
-                    allowed_origins,
-                    request_origin,
                 ));
             }
 
@@ -402,8 +421,6 @@ fn validate_headers(
                         StatusCode::NOT_ACCEPTABLE,
                         -32700,
                         "Accept header must include application/json or text/event-stream",
-                        allowed_origins,
-                        request_origin,
                     ));
                 }
             } else {
@@ -411,8 +428,6 @@ fn validate_headers(
                     StatusCode::NOT_ACCEPTABLE,
                     -32700,
                     "Accept header is required",
-                    allowed_origins,
-                    request_origin,
                 ));
             }
         },
@@ -425,8 +440,6 @@ fn validate_headers(
                         StatusCode::NOT_ACCEPTABLE,
                         -32700,
                         "Accept header must be text/event-stream for SSE",
-                        allowed_origins,
-                        request_origin,
                     ));
                 }
             } else {
@@ -434,8 +447,6 @@ fn validate_headers(
                     StatusCode::NOT_ACCEPTABLE,
                     -32700,
                     "Accept header is required for SSE",
-                    allowed_origins,
-                    request_origin,
                 ));
             }
         },
@@ -450,8 +461,6 @@ fn process_init_session(
     state: &ServerState,
     session_id: Option<String>,
     protocol_version: Option<String>,
-    allowed_origins: &AllowedOrigins,
-    request_origin: Option<&HeaderValue>,
 ) -> std::result::Result<(Option<String>, bool), Response> {
     if let Some(generator) = &state.config.session_id_generator {
         // Stateful mode
@@ -464,8 +473,6 @@ fn process_init_session(
                         StatusCode::BAD_REQUEST,
                         -32600,
                         "Session already initialized",
-                        allowed_origins,
-                        request_origin,
                     ));
                 }
             }
@@ -497,8 +504,6 @@ fn process_init_session(
 fn validate_non_init_session(
     state: &ServerState,
     session_id: Option<String>,
-    allowed_origins: &AllowedOrigins,
-    request_origin: Option<&HeaderValue>,
 ) -> std::result::Result<Option<String>, Response> {
     if state.config.session_id_generator.is_some() {
         // Stateful mode - require and validate session ID
@@ -509,8 +514,6 @@ fn validate_non_init_session(
                     StatusCode::BAD_REQUEST,
                     -32600,
                     "Session ID required for non-initialization requests",
-                    allowed_origins,
-                    request_origin,
                 ))
             },
             Some(sid) => {
@@ -521,8 +524,6 @@ fn validate_non_init_session(
                         StatusCode::NOT_FOUND,
                         -32600,
                         "Unknown session ID",
-                        allowed_origins,
-                        request_origin,
                     ))
                 } else {
                     Ok(Some(sid))
@@ -569,8 +570,6 @@ fn build_response(
     state: &ServerState,
     response: TransportMessage,
     session_id: Option<&String>,
-    allowed_origins: &AllowedOrigins,
-    request_origin: Option<&HeaderValue>,
 ) -> Response {
     if state.config.enable_json_response {
         // JSON response mode - use JSON-RPC compatibility layer
@@ -581,8 +580,6 @@ fn build_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     -32603,
                     &format!("Failed to serialize response: {}", e),
-                    allowed_origins,
-                    request_origin,
                 );
             },
         };
@@ -602,8 +599,6 @@ fn build_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     -32603,
                     &format!("Failed to parse JSON response: {}", e),
-                    allowed_origins,
-                    request_origin,
                 );
             },
         };
@@ -615,9 +610,7 @@ fn build_response(
             "HTTP response (JSON mode)"
         );
 
-        let mut resp = (StatusCode::OK, Json(json_value)).into_response();
-        add_cors_headers(resp.headers_mut(), allowed_origins, request_origin);
-        resp
+        (StatusCode::OK, Json(json_value)).into_response()
     } else {
         // SSE streaming mode
         if let Some(sid) = session_id {
@@ -660,8 +653,6 @@ fn build_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         -32603,
                         &format!("Failed to serialize response: {}", e),
-                        allowed_origins,
-                        request_origin,
                     );
                 },
             };
@@ -673,8 +664,6 @@ fn build_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         -32603,
                         &format!("Failed to parse JSON response: {}", e),
-                        allowed_origins,
-                        request_origin,
                     );
                 },
             };
@@ -689,8 +678,6 @@ fn validate_protocol_version(
     state: &ServerState,
     session_id: Option<&String>,
     protocol_version: Option<&String>,
-    allowed_origins: &AllowedOrigins,
-    request_origin: Option<&HeaderValue>,
 ) -> std::result::Result<(), Response> {
     if let Some(version) = protocol_version {
         // Check if the provided version is supported
@@ -699,8 +686,6 @@ fn validate_protocol_version(
                 StatusCode::BAD_REQUEST,
                 -32600,
                 &format!("Unsupported protocol version: {}", version),
-                allowed_origins,
-                request_origin,
             ));
         }
     }
@@ -720,8 +705,6 @@ fn validate_protocol_version(
                                     "Protocol version mismatch: expected {}, got {}",
                                     negotiated_version, provided_version
                                 ),
-                                allowed_origins,
-                                request_origin,
                             ));
                         }
                     }
@@ -750,8 +733,6 @@ async fn handle_post_request(
 async fn extract_and_validate_auth(
     state: &ServerState,
     headers: &HeaderMap,
-    allowed_origins: &AllowedOrigins,
-    request_origin: Option<&HeaderValue>,
 ) -> std::result::Result<Option<crate::server::auth::AuthContext>, Response> {
     let server = state.server.lock().await;
     if let Some(auth_provider) = server.get_auth_provider() {
@@ -769,8 +750,6 @@ async fn extract_and_validate_auth(
                     StatusCode::UNAUTHORIZED,
                     -32003,
                     &format!("Authentication failed: {}", e),
-                    allowed_origins,
-                    request_origin,
                 ))
             },
         }
@@ -869,10 +848,6 @@ async fn handle_post_fast_path(
     let (parts, body) = request.into_parts();
     let headers = parts.headers;
 
-    // Resolve CORS origins once for the entire request.
-    let allowed = state.allowed_origins.clone();
-    let req_origin = headers.get(header::ORIGIN);
-
     // Read body to string
     let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
         Ok(b) => b,
@@ -881,15 +856,13 @@ async fn handle_post_fast_path(
                 StatusCode::BAD_REQUEST,
                 -32700,
                 &format!("Failed to read body: {}", e),
-                &allowed,
-                req_origin,
             );
         },
     };
     let body = String::from_utf8_lossy(&body_bytes).to_string();
 
     // Validate headers
-    if let Err(error_response) = validate_headers(&headers, "POST", &allowed, req_origin) {
+    if let Err(error_response) = validate_headers(&headers, "POST") {
         return error_response;
     }
 
@@ -902,8 +875,6 @@ async fn handle_post_fast_path(
                     StatusCode::BAD_REQUEST,
                     -32700,
                     &format!("Invalid JSON: {}", e),
-                    &allowed,
-                    req_origin,
                 );
             },
         };
@@ -929,18 +900,12 @@ async fn handle_post_fast_path(
 
     // Handle session ID logic based on request type
     let (response_session_id, _is_new_session) = if is_init_request {
-        match process_init_session(
-            &state,
-            session_id.clone(),
-            protocol_version.clone(),
-            &allowed,
-            req_origin,
-        ) {
+        match process_init_session(&state, session_id.clone(), protocol_version.clone()) {
             Ok(result) => result,
             Err(error_response) => return error_response,
         }
     } else {
-        match validate_non_init_session(&state, session_id.clone(), &allowed, req_origin) {
+        match validate_non_init_session(&state, session_id.clone()) {
             Ok(sid) => (sid, false),
             Err(error_response) => return error_response,
         }
@@ -952,16 +917,13 @@ async fn handle_post_fast_path(
             &state,
             session_id.as_ref(),
             protocol_version.as_ref(),
-            &allowed,
-            req_origin,
         ) {
             return error_response;
         }
     }
 
     // Extract and validate authentication if auth_provider is configured
-    let auth_context = match extract_and_validate_auth(&state, &headers, &allowed, req_origin).await
-    {
+    let auth_context = match extract_and_validate_auth(&state, &headers).await {
         Ok(ctx) => ctx,
         Err(response) => return response,
     };
@@ -999,8 +961,7 @@ async fn handle_post_fast_path(
             }
 
             // Build response with headers
-            let mut response =
-                build_response(&state, response, session_id.as_ref(), &allowed, req_origin);
+            let mut response = build_response(&state, response, session_id.as_ref());
 
             // Always add session header in stateful mode
             if let Some(sid) = &response_session_id {
@@ -1038,15 +999,9 @@ async fn handle_post_fast_path(
         },
         TransportMessage::Notification { .. } => {
             // Notifications get 202 Accepted
-            let mut resp = StatusCode::ACCEPTED.into_response();
-            add_cors_headers(resp.headers_mut(), &allowed, req_origin);
-            resp
+            StatusCode::ACCEPTED.into_response()
         },
-        TransportMessage::Response(_) => {
-            let mut resp = StatusCode::ACCEPTED.into_response();
-            add_cors_headers(resp.headers_mut(), &allowed, req_origin);
-            resp
-        },
+        TransportMessage::Response(_) => StatusCode::ACCEPTED.into_response(),
     }
 }
 
@@ -1062,14 +1017,8 @@ async fn handle_post_with_middleware(
         .as_ref()
         .expect("Middleware chain must exist");
 
-    // Resolve CORS origins once for the entire request.
-    let allowed = state.allowed_origins.clone();
-
     // Convert from axum request
     let (parts, body) = request.into_parts();
-    // Extract Origin from the original axum parts before conversion.
-    let req_origin = parts.headers.get(header::ORIGIN).cloned();
-    let req_origin_ref = req_origin.as_ref();
 
     let mut server_request = match from_axum(parts, body).await {
         Ok(req) => req,
@@ -1078,8 +1027,6 @@ async fn handle_post_with_middleware(
                 StatusCode::BAD_REQUEST,
                 -32700,
                 &format!("Failed to parse request: {}", e),
-                &allowed,
-                req_origin_ref,
             );
         },
     };
@@ -1112,15 +1059,11 @@ async fn handle_post_with_middleware(
             StatusCode::INTERNAL_SERVER_ERROR,
             -32603,
             &format!("Middleware rejected request: {}", e),
-            &allowed,
-            req_origin_ref,
         );
     }
 
     // Validate headers (consistent with fast path)
-    if let Err(error_response) =
-        validate_headers(&server_request.headers, "POST", &allowed, req_origin_ref)
-    {
+    if let Err(error_response) = validate_headers(&server_request.headers, "POST") {
         // Call error hooks for validation failures
         let validation_error = crate::Error::protocol_msg("Header validation failed");
         let _ = http_middleware
@@ -1161,13 +1104,7 @@ async fn handle_post_with_middleware(
 
     // Handle session logic
     let (response_session_id, _) = if is_init_request {
-        match process_init_session(
-            &state,
-            session_id.clone(),
-            protocol_version.clone(),
-            &allowed,
-            req_origin_ref,
-        ) {
+        match process_init_session(&state, session_id.clone(), protocol_version.clone()) {
             Ok(result) => result,
             Err(error_response) => {
                 // Call error hooks for session initialization failures
@@ -1179,7 +1116,7 @@ async fn handle_post_with_middleware(
             },
         }
     } else {
-        match validate_non_init_session(&state, session_id.clone(), &allowed, req_origin_ref) {
+        match validate_non_init_session(&state, session_id.clone()) {
             Ok(sid) => (sid, false),
             Err(error_response) => {
                 // Call error hooks for session validation failures
@@ -1198,8 +1135,6 @@ async fn handle_post_with_middleware(
             &state,
             session_id.as_ref(),
             protocol_version.as_ref(),
-            &allowed,
-            req_origin_ref,
         ) {
             // Call error hooks for protocol version validation failures
             let version_error = crate::Error::protocol_msg("Protocol version validation failed");
@@ -1232,8 +1167,6 @@ async fn handle_post_with_middleware(
                         StatusCode::UNAUTHORIZED,
                         -32003,
                         &format!("Authentication failed: {}", e),
-                        &allowed,
-                        req_origin_ref,
                     );
                 },
             }
@@ -1281,8 +1214,6 @@ async fn handle_post_with_middleware(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         -32603,
                         &format!("Failed to serialize response: {}", e),
-                        &allowed,
-                        req_origin_ref,
                     );
                 },
             };
@@ -1312,7 +1243,6 @@ async fn handle_post_with_middleware(
             };
 
             response_headers.insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
-            add_cors_headers(&mut response_headers, &allowed, req_origin_ref);
 
             // Create ServerHttpResponse
             let mut server_response =
@@ -1329,26 +1259,15 @@ async fn handle_post_with_middleware(
             // Convert back to axum response
             into_axum(server_response)
         },
-        TransportMessage::Notification { .. } => {
-            let mut resp = StatusCode::ACCEPTED.into_response();
-            add_cors_headers(resp.headers_mut(), &allowed, req_origin_ref);
-            resp
-        },
-        TransportMessage::Response(_) => {
-            let mut resp = StatusCode::ACCEPTED.into_response();
-            add_cors_headers(resp.headers_mut(), &allowed, req_origin_ref);
-            resp
-        },
+        TransportMessage::Notification { .. } => StatusCode::ACCEPTED.into_response(),
+        TransportMessage::Response(_) => StatusCode::ACCEPTED.into_response(),
     }
 }
 
 /// Handle GET requests for SSE streams
 async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) -> impl IntoResponse {
-    let allowed = state.allowed_origins.clone();
-    let req_origin = headers.get(header::ORIGIN);
-
     // Validate headers
-    if let Err(error_response) = validate_headers(&headers, "GET", &allowed, req_origin) {
+    if let Err(error_response) = validate_headers(&headers, "GET") {
         return error_response;
     }
 
@@ -1363,13 +1282,7 @@ async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) ->
         // Validate session exists
         if state.config.session_id_generator.is_some() && !state.sessions.read().contains_key(&sid)
         {
-            return create_error_response(
-                StatusCode::NOT_FOUND,
-                -32600,
-                "Unknown session ID",
-                &allowed,
-                req_origin,
-            );
+            return create_error_response(StatusCode::NOT_FOUND, -32600, "Unknown session ID");
         }
         sid
     } else if let Some(generator) = &state.config.session_id_generator {
@@ -1392,8 +1305,6 @@ async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) ->
             StatusCode::METHOD_NOT_ALLOWED,
             -32601,
             "SSE not supported in stateless mode",
-            &allowed,
-            req_origin,
         );
     };
 
@@ -1403,8 +1314,6 @@ async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) ->
             StatusCode::CONFLICT,
             -32600,
             "SSE stream already exists for this session",
-            &allowed,
-            req_origin,
         );
     }
 
@@ -1456,9 +1365,6 @@ async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) ->
 
     let mut response = sse.into_response();
 
-    // Add CORS headers
-    add_cors_headers(response.headers_mut(), &allowed, req_origin);
-
     // Add session ID header
     response
         .headers_mut()
@@ -1482,9 +1388,6 @@ async fn handle_delete_session(
     State(state): State<ServerState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let allowed = state.allowed_origins.clone();
-    let req_origin = headers.get(header::ORIGIN);
-
     // Extract session ID
     let session_id = headers
         .get(MCP_SESSION_ID)
@@ -1497,13 +1400,7 @@ async fn handle_delete_session(
 
         if !session_exists && state.config.session_id_generator.is_some() {
             // Unknown session in stateful mode
-            return create_error_response(
-                StatusCode::NOT_FOUND,
-                -32600,
-                "Unknown session ID",
-                &allowed,
-                req_origin,
-            );
+            return create_error_response(StatusCode::NOT_FOUND, -32600, "Unknown session ID");
         }
 
         // Remove SSE stream if exists
@@ -1517,66 +1414,10 @@ async fn handle_delete_session(
             callback(&sid);
         }
 
-        let mut resp = (StatusCode::OK, Json(json!({"status": "ok"}))).into_response();
-        add_cors_headers(resp.headers_mut(), &allowed, req_origin);
-        resp
+        (StatusCode::OK, Json(json!({"status": "ok"}))).into_response()
     } else {
         // No session to delete
-        create_error_response(
-            StatusCode::NOT_FOUND,
-            -32600,
-            "No session ID provided",
-            &allowed,
-            req_origin,
-        )
+        create_error_response(StatusCode::NOT_FOUND, -32600, "No session ID provided")
     }
 }
 
-/// Add CORS headers to a response `HeaderMap`.
-///
-/// Uses origin-locked CORS: reflects the request's `Origin` if it appears
-/// in the allowed list. If the request has no Origin header (non-browser
-/// client) or the origin is not allowed, no `Access-Control-Allow-Origin`
-/// header is set (the browser will block the response).
-fn add_cors_headers(
-    headers: &mut HeaderMap,
-    allowed_origins: &AllowedOrigins,
-    request_origin: Option<&HeaderValue>,
-) {
-    if let Some(origin) = request_origin {
-        if allowed_origins.is_allowed_origin(origin) {
-            headers.insert("Access-Control-Allow-Origin", origin.clone());
-        }
-        // If origin not allowed, omit the header (browser will block the response)
-    }
-    // If no Origin header (non-browser client), no Allow-Origin header needed
-    headers.insert(
-        "Access-Control-Allow-Methods",
-        HeaderValue::from_static("GET, POST, DELETE, OPTIONS"),
-    );
-    headers.insert(
-        "Access-Control-Allow-Headers",
-        HeaderValue::from_static(
-            "Content-Type, Accept, mcp-session-id, mcp-protocol-version, last-event-id",
-        ),
-    );
-    headers.insert(
-        "Access-Control-Expose-Headers",
-        HeaderValue::from_static("mcp-session-id, mcp-protocol-version"),
-    );
-}
-
-/// Handle OPTIONS request for CORS preflight
-async fn handle_options(
-    State(state): State<ServerState>,
-    req_headers: HeaderMap,
-) -> impl IntoResponse {
-    let allowed = state.allowed_origins.clone();
-    let req_origin = req_headers.get(header::ORIGIN);
-
-    let mut headers = HeaderMap::new();
-    add_cors_headers(&mut headers, &allowed, req_origin);
-    headers.insert("Access-Control-Max-Age", HeaderValue::from_static("86400"));
-
-    (StatusCode::OK, headers, "")
-}
