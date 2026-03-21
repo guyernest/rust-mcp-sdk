@@ -167,15 +167,24 @@ where
 
 /// Deserialize MCP prompt arguments from string-only HashMap into a typed struct.
 ///
-/// Converts each value to `serde_json::Value::String` then uses `serde_json::from_value`
-/// for deserialization. Used by `TypedPrompt`, `#[mcp_prompt]`, and `#[mcp_server]`.
+/// MCP sends prompt arguments as `HashMap<String, String>`. This function
+/// coerces string values to their natural JSON types before deserialization:
+/// - `"42"` → `Value::Number(42)` (works with `f64`, `u32`, `i64` fields)
+/// - `"true"` / `"false"` → `Value::Bool` (works with `bool` fields)
+/// - `"null"` → `Value::Null` (works with `Option<T>` fields)
+/// - Everything else → `Value::String` (works with `String` fields)
+///
+/// This allows typed prompt argument structs to use native Rust types
+/// instead of requiring all fields to be `String`.
+///
+/// Used by `TypedPrompt`, `#[mcp_prompt]`, and `#[mcp_server]`.
 pub fn deserialize_prompt_args<T: DeserializeOwned>(
     args: HashMap<String, String>,
     prompt_name: &str,
 ) -> Result<T> {
     let value = serde_json::Value::Object(
         args.into_iter()
-            .map(|(k, v)| (k, serde_json::Value::String(v)))
+            .map(|(k, v)| (k, coerce_string_to_value(v)))
             .collect(),
     );
     serde_json::from_value(value).map_err(|e| {
@@ -184,6 +193,18 @@ pub fn deserialize_prompt_args<T: DeserializeOwned>(
             prompt_name, e
         ))
     })
+}
+
+/// Try to parse a string as a JSON literal (number, bool, null),
+/// falling back to a JSON string if it doesn't match.
+fn coerce_string_to_value(s: String) -> serde_json::Value {
+    // Try parsing as a JSON literal — handles numbers, bools, null.
+    // serde_json::from_str is strict: "42" → Number, "true" → Bool,
+    // but "hello" → Err (not valid JSON), so we fall back to String.
+    match serde_json::from_str::<serde_json::Value>(&s) {
+        Ok(v) if !v.is_string() => v, // Number, Bool, Null, Array, Object
+        _ => serde_json::Value::String(s), // Plain text stays as String
+    }
 }
 
 /// Extract `PromptArgument` entries from a JSON Schema value.
@@ -344,5 +365,43 @@ mod tests {
 
         let info = prompt.metadata().unwrap();
         assert!(info.arguments.is_none());
+    }
+
+    #[derive(Debug, serde::Deserialize, JsonSchema)]
+    struct TypedArgs {
+        name: String,
+        count: u32,
+        enabled: bool,
+        ratio: f64,
+    }
+
+    #[test]
+    fn test_coerce_string_to_value_types() {
+        // Numbers
+        assert_eq!(coerce_string_to_value("42".into()), serde_json::json!(42));
+        assert_eq!(coerce_string_to_value("3.14".into()), serde_json::json!(3.14));
+        // Bools
+        assert_eq!(coerce_string_to_value("true".into()), serde_json::json!(true));
+        assert_eq!(coerce_string_to_value("false".into()), serde_json::json!(false));
+        // Null
+        assert_eq!(coerce_string_to_value("null".into()), serde_json::json!(null));
+        // Plain strings stay as strings
+        assert_eq!(coerce_string_to_value("hello".into()), serde_json::json!("hello"));
+        assert_eq!(coerce_string_to_value("not a number".into()), serde_json::json!("not a number"));
+    }
+
+    #[tokio::test]
+    async fn test_deserialize_prompt_args_with_typed_fields() {
+        let mut args = HashMap::new();
+        args.insert("name".to_string(), "alice".to_string());
+        args.insert("count".to_string(), "5".to_string());
+        args.insert("enabled".to_string(), "true".to_string());
+        args.insert("ratio".to_string(), "0.75".to_string());
+
+        let typed: TypedArgs = deserialize_prompt_args(args, "test").unwrap();
+        assert_eq!(typed.name, "alice");
+        assert_eq!(typed.count, 5);
+        assert!(typed.enabled);
+        assert!((typed.ratio - 0.75).abs() < f64::EPSILON);
     }
 }
