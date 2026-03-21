@@ -92,6 +92,7 @@ mod utils;
 ///     Ok(a + b)
 /// }
 /// ```
+#[deprecated(since = "0.3.0", note = "Use #[mcp_tool] instead — better DX with State<T> injection, async auto-detection, and mandatory descriptions")]
 #[proc_macro_attribute]
 pub fn tool(args: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemFn);

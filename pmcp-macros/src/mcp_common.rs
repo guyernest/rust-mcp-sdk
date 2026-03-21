@@ -5,7 +5,7 @@
 
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{FnArg, Type, TypePath};
+use syn::{FnArg, GenericParam, Generics, Type, TypePath};
 
 /// Role of a function parameter in an `#[mcp_tool]` function.
 #[derive(Debug)]
@@ -155,6 +155,19 @@ pub fn generate_empty_schema_code() -> TokenStream {
             "required": []
         })
     }
+}
+
+/// Add Send + Sync + 'static bounds to all type parameters.
+/// Used by `#[mcp_server]` to ensure handler structs are thread-safe.
+pub fn add_async_trait_bounds(mut generics: Generics) -> Generics {
+    for param in &mut generics.params {
+        if let GenericParam::Type(type_param) = param {
+            type_param.bounds.push(syn::parse_quote!(Send));
+            type_param.bounds.push(syn::parse_quote!(Sync));
+            type_param.bounds.push(syn::parse_quote!('static));
+        }
+    }
+    generics
 }
 
 #[cfg(test)]

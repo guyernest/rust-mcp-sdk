@@ -31,12 +31,12 @@
 //! }
 //! ```
 
-use crate::utils::to_pascal_case;
+use heck::ToUpperCamelCase;
 use darling::FromMeta;
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use syn::parse::Parser;
-use syn::{parse_quote, FnArg, ItemFn, Pat, PatType, ReturnType, Type, TypePath};
+use syn::{parse_quote, FnArg, ItemFn, Pat, PatType, ReturnType, Type};
 
 /// Tool macro arguments
 #[derive(Debug, FromMeta)]
@@ -123,7 +123,7 @@ pub fn expand_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStream>
 
     // Generate the wrapper struct and implementation
     let wrapper_name = Ident::new(
-        &format!("{}ToolHandler", to_pascal_case(&fn_name.to_string())),
+        &format!("{}ToolHandler", fn_name.to_string().to_upper_camel_case()),
         fn_name.span(),
     );
 
@@ -329,7 +329,7 @@ fn extract_parameters(func: &ItemFn) -> syn::Result<Vec<ParamInfo>> {
                 if let Pat::Ident(pat_ident) = pat.as_ref() {
                     let name = pat_ident.ident.clone();
                     let ty = ty.as_ref().clone();
-                    let optional = is_option_type(&ty);
+                    let optional = crate::mcp_common::type_name_matches(&ty, "Option");
 
                     params.push(ParamInfo { name, ty, optional });
                 }
@@ -382,7 +382,7 @@ fn generate_param_extraction(params: &[ParamInfo]) -> syn::Result<TokenStream> {
 /// Generate result conversion code
 fn generate_result_conversion(return_type: &Type) -> syn::Result<TokenStream> {
     // Check if return type is Result<T, E>
-    if is_result_type(return_type) {
+    if crate::mcp_common::type_name_matches(return_type, "Result") {
         Ok(quote! {
             match result {
                 Ok(value) => {
@@ -402,52 +402,26 @@ fn generate_result_conversion(return_type: &Type) -> syn::Result<TokenStream> {
     }
 }
 
-/// Check if a type is Option<T>
-fn is_option_type(ty: &Type) -> bool {
-    if let Type::Path(TypePath { path, .. }) = ty {
-        if let Some(segment) = path.segments.last() {
-            return segment.ident == "Option";
-        }
-    }
-    false
-}
-
-/// Check if a type is Result<T, E>
-fn is_result_type(ty: &Type) -> bool {
-    if let Type::Path(TypePath { path, .. }) = ty {
-        if let Some(segment) = path.segments.last() {
-            return segment.ident == "Result";
-        }
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::mcp_common;
+    use syn::{parse_quote, Type};
 
     #[test]
-    fn test_to_pascal_case() {
-        assert_eq!(to_pascal_case("hello_world"), "HelloWorld");
-        assert_eq!(to_pascal_case("add_numbers"), "AddNumbers");
-        assert_eq!(to_pascal_case("simple"), "Simple");
-    }
-
-    #[test]
-    fn test_is_option_type() {
+    fn test_type_name_matches_option() {
         let opt_type: Type = parse_quote!(Option<String>);
-        assert!(is_option_type(&opt_type));
+        assert!(mcp_common::type_name_matches(&opt_type, "Option"));
 
         let non_opt_type: Type = parse_quote!(String);
-        assert!(!is_option_type(&non_opt_type));
+        assert!(!mcp_common::type_name_matches(&non_opt_type, "Option"));
     }
 
     #[test]
-    fn test_is_result_type() {
+    fn test_type_name_matches_result() {
         let result_type: Type = parse_quote!(Result<String, Error>);
-        assert!(is_result_type(&result_type));
+        assert!(mcp_common::type_name_matches(&result_type, "Result"));
 
         let non_result_type: Type = parse_quote!(String);
-        assert!(!is_result_type(&non_result_type));
+        assert!(!mcp_common::type_name_matches(&non_result_type, "Result"));
     }
 }

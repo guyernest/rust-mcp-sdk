@@ -31,7 +31,6 @@
 
 use crate::mcp_common::{self, ParamRole};
 use crate::mcp_tool::{McpToolAnnotations, McpToolArgs};
-use crate::utils;
 use darling::FromMeta;
 use heck::ToUpperCamelCase;
 use proc_macro2::TokenStream;
@@ -92,7 +91,7 @@ pub fn expand_mcp_server(_args: TokenStream, mut input: ItemImpl) -> syn::Result
     // Extract generics from the impl block for generic server support (D-25).
     let impl_generics = input.generics.clone();
     // Add Send + Sync + 'static bounds for handler struct generics.
-    let handler_generics = utils::add_async_trait_bounds(impl_generics.clone());
+    let handler_generics = mcp_common::add_async_trait_bounds(impl_generics.clone());
     let (impl_gen_params, ty_gen_params, where_clause) = impl_generics.split_for_impl();
     let (handler_impl_params, _handler_ty_params, handler_where) =
         handler_generics.split_for_impl();
