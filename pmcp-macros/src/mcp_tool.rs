@@ -90,6 +90,12 @@ pub fn expand_mcp_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStr
     let struct_name = format_ident!("{}Tool", fn_name_str.to_upper_camel_case());
     let description = &macro_args.description;
 
+    // Rename the original function to an internal name to avoid conflict
+    // with the constructor function that uses the same name.
+    let impl_fn_name = format_ident!("__{}_impl", fn_name_str);
+    let mut impl_fn = input.clone();
+    impl_fn.sig.ident = impl_fn_name.clone();
+
     // Classify all parameters.
     let mut args_type: Option<Type> = None;
     let mut state_inner_ty: Option<Type> = None;
@@ -224,10 +230,11 @@ pub fn expand_mcp_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStr
         .collect();
 
     // Generate the function call (async vs sync).
+    // Calls the renamed internal function, not the public constructor.
     let fn_call = if is_async {
-        quote! { let result = #fn_name(#(#call_args),*).await?; }
+        quote! { let result = #impl_fn_name(#(#call_args),*).await?; }
     } else {
-        quote! { let result = #fn_name(#(#call_args),*)?; }
+        quote! { let result = #impl_fn_name(#(#call_args),*)?; }
     };
 
     // Generate result serialization.
@@ -261,8 +268,9 @@ pub fn expand_mcp_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStr
 
     // Assemble everything.
     let expanded = quote! {
-        // Preserve the original function unchanged.
-        #input
+        // Emit the original function body under an internal name to avoid
+        // collision with the public constructor function.
+        #impl_fn
 
         /// Auto-generated tool handler for the `#fn_name` MCP tool.
         #[derive(Clone)]

@@ -51,14 +51,13 @@ impl CancellationManager {
 
             // Send cancellation notification
             if let Some(sender) = &self.notification_sender {
-                let notification = Notification::Client(
-                    crate::types::ClientNotification::Cancelled(
+                let notification =
+                    Notification::Client(crate::types::ClientNotification::Cancelled(
                         CancelledNotification::new(crate::types::RequestId::String(
                             request_id.clone(),
                         ))
                         .with_reason(reason.unwrap_or_else(|| "Cancelled by server".to_string())),
-                    ),
-                );
+                    ));
                 sender(notification);
             }
         }
@@ -244,6 +243,25 @@ impl RequestHandlerExtra {
             rep.report_count(current, total, message).await
         } else {
             Ok(())
+        }
+    }
+}
+
+impl Default for RequestHandlerExtra {
+    /// Create a default `RequestHandlerExtra` for testing and simple tool invocations.
+    ///
+    /// Uses a generated UUID as request_id and an uncancellable (never-cancelled)
+    /// `CancellationToken`. Not suitable for production use where cancellation
+    /// tracking is needed.
+    fn default() -> Self {
+        Self {
+            cancellation_token: CancellationToken::new(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            session_id: None,
+            auth_info: None,
+            auth_context: None,
+            metadata: HashMap::new(),
+            progress_reporter: None,
         }
     }
 }
