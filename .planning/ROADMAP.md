@@ -538,7 +538,7 @@ Plans:
   4. InMemoryTaskStore provides dev/test implementation with owner isolation, state machine, TTL
   5. Builder.task_store() registers Arc<dyn TaskStore> and auto-configures ServerCapabilities.tasks
   6. Server dispatches tasks/get, tasks/list, tasks/cancel through TaskStore
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
 - [ ] 55-01-PLAN.md — SDK task type reconciliation: add utility methods, fix TTL serialization

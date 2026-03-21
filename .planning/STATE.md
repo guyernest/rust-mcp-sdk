@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
-status: completed
-stopped_at: Phase 54.1 complete
-last_updated: "2026-03-20T23:00:00Z"
-last_activity: 2026-03-20 -- Phase 54.1 complete (Protocol Type Construction DX)
+status: in-progress
+stopped_at: Completed 55-01-PLAN.md
+last_updated: "2026-03-21T00:17:52Z"
+last_activity: 2026-03-21 -- Phase 55 Plan 01 complete (SDK Task Type Reconciliation)
 progress:
   total_phases: 34
   completed_phases: 24
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
-**Current focus:** v2.0 Protocol Modernization -- Phase 54.1 complete. Phase 55 (Tasks with Polling) next.
+**Current focus:** v2.0 Protocol Modernization -- Phase 55 (Tasks with Polling) in progress.
 
 ## Current Position
 
-Phase: 54.1 (protocol-type-construction-dx) -- COMPLETE
-Plan: 3 of 3
-Status: All plans complete. 30+ protocol types normalized. 85+ consumer files migrated. Clippy clean.
-Last activity: 2026-03-20 -- Phase 54.1 complete (all verification gaps closed)
+Phase: 55 (tasks-with-polling) -- IN PROGRESS
+Plan: 1 of 3 complete
+Status: Plan 01 complete. SDK TaskStatus has is_terminal(), can_transition_to(), Display. Task.ttl serializes as null.
+Last activity: 2026-03-21 -- Phase 55 Plan 01 complete (SDK Task Type Reconciliation)
 
 Progress: [##########] 100%
 
@@ -47,7 +47,7 @@ Progress: [##########] 100%
 
 **Velocity:**
 
-- Total plans completed: 69 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 4)
+- Total plans completed: 70 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 5)
 - Total phases completed: 29
 
 ## Accumulated Context
@@ -142,6 +142,8 @@ v1.6 decisions:
 - [Phase 54.1-02]: ToolChoice uses static factory methods (auto/required/none) not ::new() since it wraps single enum field
 - [Phase 54.1-02]: CreateMessageParams has no Default (messages required) -- ::new(messages) only
 - [Phase 54.1]: Content enum variant syntax preserved per D-08 but replaced with Content::text()/resource() helpers where available for consistency
+- [Phase 55-01]: TTL serialization fixed -- removed skip_serializing_if from Task.ttl and TaskCreationParams.ttl so None serializes as null per MCP spec
+- [Phase 55-01]: TaskStatus utility methods (is_terminal, can_transition_to) replicate pmcp-tasks behavior for SDK canonical source of truth
 
 ### Roadmap Evolution
 
@@ -177,6 +179,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-20T21:43:17.470Z
-Stopped at: Completed 54.1-03-PLAN.md
-Resume: Phase 54.1 Plans 01+02 complete. 26 protocol types across 6 modules now have #[non_exhaustive] + constructors + fluent builders. 48 module tests pass. Plan 03 (codebase migration) remaining.
+Last session: 2026-03-21T00:17:52Z
+Stopped at: Completed 55-01-PLAN.md
+Resume: Phase 55 Plan 01 complete. SDK TaskStatus has is_terminal(), can_transition_to(), Display impl. Task.ttl serializes as null per MCP spec. Plans 02-03 remaining.
