@@ -133,6 +133,11 @@ impl AllowedOrigins {
         AllowOrigin::list(header_values)
     }
 
+    /// Get the list of allowed origin URLs.
+    pub fn origins(&self) -> &[String] {
+        &self.origins
+    }
+
     /// Access the set of allowed hostnames (for testing and diagnostics).
     #[cfg(test)]
     pub(crate) fn hostnames(&self) -> &HashSet<String> {
@@ -265,9 +270,7 @@ where
                     Ok(Response::builder()
                         .status(StatusCode::FORBIDDEN)
                         .header("content-type", "text/plain")
-                        .body(Body::from(
-                            "Forbidden: Origin not in allowed origins\n",
-                        ))
+                        .body(Body::from("Forbidden: Origin not in allowed origins\n"))
                         .expect("static response"))
                 });
             }
@@ -286,9 +289,12 @@ mod tests {
     use std::convert::Infallible;
     use tower::ServiceExt;
 
-    fn ok_service(
-    ) -> impl Service<Request<Body>, Response = Response<Body>, Error = Infallible, Future = Pin<Box<dyn Future<Output = Result<Response<Body>, Infallible>> + Send>>>
-           + Clone
+    fn ok_service() -> impl Service<
+        Request<Body>,
+        Response = Response<Body>,
+        Error = Infallible,
+        Future = Pin<Box<dyn Future<Output = Result<Response<Body>, Infallible>> + Send>>,
+    > + Clone
            + Send
            + 'static {
         tower::service_fn(|_req: Request<Body>| {
@@ -299,7 +305,8 @@ mod tests {
                         .body(Body::from("ok"))
                         .unwrap(),
                 )
-            }) as Pin<Box<dyn Future<Output = Result<Response<Body>, Infallible>> + Send>>
+            })
+                as Pin<Box<dyn Future<Output = Result<Response<Body>, Infallible>> + Send>>
         })
     }
 

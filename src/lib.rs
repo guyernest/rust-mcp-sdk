@@ -91,6 +91,19 @@ pub mod utils;
 #[cfg(feature = "simd")]
 pub mod simd;
 
+/// Axum Router convenience API for secure MCP server hosting.
+///
+/// Re-exports [`router()`](axum::router), [`router_with_config()`](axum::router_with_config),
+/// [`RouterConfig`](axum::RouterConfig), and [`AllowedOrigins`](axum::AllowedOrigins)
+/// for ergonomic usage: `pmcp::axum::router(server)`.
+#[cfg(feature = "streamable-http")]
+#[cfg_attr(docsrs, doc(cfg(feature = "streamable-http")))]
+pub mod axum {
+    pub use crate::server::axum_router::{
+        router, router_with_config, AllowedOrigins, RouterConfig,
+    };
+}
+
 // Re-export commonly used types
 pub use client::{Client, ClientBuilder};
 pub use error::{Error, ErrorCode, Result};
@@ -122,6 +135,11 @@ pub use server::wasm_server::{WasmMcpServer as Server, WasmMcpServerBuilder as S
 pub use server::wasm_typed_tool::WasmTypedTool as TypedTool;
 #[cfg(not(target_arch = "wasm32"))]
 pub use shared::StdioTransport;
+
+/// Tower middleware layers for MCP HTTP security.
+#[cfg(feature = "streamable-http")]
+pub use server::tower_layers::{AllowedOrigins, DnsRebindingLayer, SecurityHeadersLayer};
+
 pub use shared::{
     batch::{BatchRequest, BatchResponse},
     uri_template::UriTemplate,

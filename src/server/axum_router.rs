@@ -101,10 +101,7 @@ pub fn router(server: Arc<tokio::sync::Mutex<Server>>) -> Router {
 /// });
 /// # }
 /// ```
-pub fn router_with_config(
-    server: Arc<tokio::sync::Mutex<Server>>,
-    config: RouterConfig,
-) -> Router {
+pub fn router_with_config(server: Arc<tokio::sync::Mutex<Server>>, config: RouterConfig) -> Router {
     let allowed = config
         .allowed_origins
         .unwrap_or_else(AllowedOrigins::localhost);
@@ -114,12 +111,7 @@ pub fn router_with_config(
 
     let cors = CorsLayer::new()
         .allow_origin(allowed.to_cors_allow_origin())
-        .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::DELETE,
-            Method::OPTIONS,
-        ])
+        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
         .allow_headers([
             "content-type".parse().expect("valid header name"),
             "accept".parse().expect("valid header name"),
@@ -177,7 +169,7 @@ mod tests {
                 server,
                 RouterConfig {
                     allowed_origins: Some(AllowedOrigins::explicit(vec![
-                        "https://example.com".to_string(),
+                        "https://example.com".to_string()
                     ])),
                     ..Default::default()
                 },

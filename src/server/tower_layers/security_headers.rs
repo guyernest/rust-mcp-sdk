@@ -144,9 +144,12 @@ mod tests {
     use std::convert::Infallible;
     use tower::ServiceExt;
 
-    fn ok_service(
-    ) -> impl Service<Request<Body>, Response = Response<Body>, Error = Infallible, Future = Pin<Box<dyn Future<Output = Result<Response<Body>, Infallible>> + Send>>>
-           + Clone
+    fn ok_service() -> impl Service<
+        Request<Body>,
+        Response = Response<Body>,
+        Error = Infallible,
+        Future = Pin<Box<dyn Future<Output = Result<Response<Body>, Infallible>> + Send>>,
+    > + Clone
            + Send
            + 'static {
         tower::service_fn(|_req: Request<Body>| {
@@ -157,7 +160,8 @@ mod tests {
                         .body(Body::from("ok"))
                         .unwrap(),
                 )
-            }) as Pin<Box<dyn Future<Output = Result<Response<Body>, Infallible>> + Send>>
+            })
+                as Pin<Box<dyn Future<Output = Result<Response<Body>, Infallible>> + Send>>
         })
     }
 
