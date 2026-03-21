@@ -162,3 +162,59 @@ fn test_annotated_server() {
         .mcp_server(server);
     drop(builder);
 }
+
+// === Test 6: Mixed tools and prompts in one impl block (D-14) ===
+
+struct FullServer;
+
+#[mcp_server]
+impl FullServer {
+    #[mcp_tool(description = "Execute query")]
+    async fn execute(&self, args: KeyArgs) -> pmcp::Result<serde_json::Value> {
+        Ok(serde_json::json!({"key": args.key}))
+    }
+
+    #[mcp_prompt(description = "Generate query prompt")]
+    async fn query_builder(&self, args: AddArgs) -> pmcp::Result<pmcp::types::GetPromptResult> {
+        Ok(pmcp::types::GetPromptResult::new(
+            vec![pmcp::types::PromptMessage::user(pmcp::Content::text(
+                format!("Query with a={} b={}", args.a, args.b),
+            ))],
+            Some("Query builder".to_string()),
+        ))
+    }
+}
+
+#[test]
+fn test_mixed_tools_and_prompts() {
+    let server = FullServer;
+    let builder = pmcp::ServerBuilder::new()
+        .name("full")
+        .version("1.0.0")
+        .mcp_server(server);
+    // If this compiles, both tools and prompts are registered
+    drop(builder);
+}
+
+// === Test 7: Prompt-only impl block (no tools) ===
+
+struct PromptOnlyServer;
+
+#[mcp_server]
+impl PromptOnlyServer {
+    #[mcp_prompt(description = "Status prompt")]
+    async fn status(&self) -> pmcp::Result<pmcp::types::GetPromptResult> {
+        Ok(pmcp::types::GetPromptResult::new(vec![], None))
+    }
+}
+
+#[test]
+fn test_prompt_only_server() {
+    let server = PromptOnlyServer;
+    let builder = pmcp::ServerBuilder::new()
+        .name("prompt-only")
+        .version("1.0.0")
+        .mcp_server(server);
+    // If this compiles, prompt-only registration works
+    drop(builder);
+}
