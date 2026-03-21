@@ -299,9 +299,36 @@ let message = PromptMessage::user(Content::text("Hello"));
 
 No `.to_string()` noise. No explicit `None` padding. Forward-compatible — new optional fields in future SDK versions won't break your code.
 
-## Security Improvements (automatic)
+## Lambda and DNS Rebinding Protection
 
-After migration, you get these security features **with zero configuration**:
+`StreamableHttpServerConfig::stateless()` uses `AllowedOrigins::any()` — which **bypasses** DNS rebinding and Origin validation entirely. This is correct for Lambda because:
+
+1. The internal MCP server binds to `127.0.0.1` — unreachable from outside the sandbox
+2. API Gateway handles CORS at the edge
+3. DNS rebinding protection exists for browser-accessible servers, not proxied lambdas
+4. The proxy forwards external `Origin` headers that would fail against `localhost()`
+
+| Deployment | AllowedOrigins | DNS Rebinding | CORS |
+|-----------|----------------|---------------|------|
+| Lambda via `stateless()` | `any()` | Disabled | Wildcard (API Gateway handles) |
+| Lambda via `router()` | `any()` (explicit) | Disabled | Wildcard |
+| Container/direct | `localhost()` (default) | Enabled | Origin-locked |
+| Production with domain | `explicit(["https://..."])` | Enabled | Origin-locked |
+
+If your Lambda needs specific origin locking (e.g., calling from a known frontend), override with `AllowedOrigins::explicit()`:
+
+```rust
+let config = StreamableHttpServerConfig {
+    allowed_origins: Some(AllowedOrigins::explicit(vec![
+        "https://myapp.example.com".to_string(),
+    ])),
+    ..StreamableHttpServerConfig::stateless()
+};
+```
+
+## Security Improvements (non-Lambda deployments)
+
+For servers NOT behind a proxy, you get these security features **with zero configuration**:
 
 | Feature | Protection |
 |---------|-----------|
@@ -310,7 +337,7 @@ After migration, you get these security features **with zero configuration**:
 | Security headers | `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Cache-Control: no-store` |
 | Owner isolation | Task operations scoped to authenticated owner (via `AuthContext`) |
 
-The wildcard `access-control-allow-origin: *` that your Lambda handlers currently inject is a known CVE pattern (CVE-2025-66414 in TypeScript SDK, CVE-2025-66416 in Python SDK). After migration, CORS is handled by the SDK's Tower layer — **delete all hand-rolled CORS headers from your Lambda handlers.**
+The wildcard `access-control-allow-origin: *` that your Lambda handlers currently inject is a known CVE pattern (CVE-2025-66414 in TypeScript SDK, CVE-2025-66416 in Python SDK). For non-Lambda deployments, CORS is handled by the SDK's Tower layer. **Delete all hand-rolled CORS headers from your Lambda handlers** — either the SDK's `CorsLayer` or API Gateway handles it now.
 
 ## Checklist
 
