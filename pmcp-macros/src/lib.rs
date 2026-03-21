@@ -56,6 +56,7 @@ use proc_macro::TokenStream;
 use syn::{parse_macro_input, ItemFn, ItemImpl};
 
 mod mcp_common;
+mod mcp_prompt;
 mod mcp_server;
 mod mcp_tool;
 mod tool;
@@ -184,6 +185,50 @@ pub fn mcp_tool(args: TokenStream, input: TokenStream) -> TokenStream {
 pub fn mcp_server(args: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemImpl);
     mcp_server::expand_mcp_server(args.into(), input)
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
+}
+
+/// Defines a prompt handler with automatic argument schema generation.
+///
+/// Generates a struct implementing `PromptHandler` from an annotated standalone
+/// async or sync function. Eliminates boilerplate and provides automatic
+/// argument schema generation from `JsonSchema` and `State<T>` injection.
+///
+/// # Attributes
+///
+/// - `description` - Prompt description (required, enforced at compile time)
+/// - `name` - Override prompt name (defaults to function name)
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// #[mcp_prompt(description = "Review code for quality issues")]
+/// async fn code_review(args: ReviewArgs) -> Result<GetPromptResult> {
+///     Ok(GetPromptResult::new(
+///         vec![PromptMessage::user(Content::text(format!("Review {}", args.language)))],
+///         None,
+///     ))
+/// }
+///
+/// // Register: server_builder.prompt("code_review", code_review())
+/// ```
+///
+/// With state injection:
+///
+/// ```rust,ignore
+/// #[mcp_prompt(description = "Suggest improvements")]
+/// async fn suggest(args: SuggestArgs, db: State<Database>) -> Result<GetPromptResult> {
+///     let context = db.get_context(&args.topic).await?;
+///     Ok(GetPromptResult::new(vec![PromptMessage::user(Content::text(context))], None))
+/// }
+///
+/// // Register: server_builder.prompt("suggest", suggest().with_state(shared_db))
+/// ```
+#[proc_macro_attribute]
+pub fn mcp_prompt(args: TokenStream, input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ItemFn);
+    mcp_prompt::expand_mcp_prompt(args.into(), input)
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }

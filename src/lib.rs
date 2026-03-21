@@ -118,6 +118,7 @@ pub use server::{
     simple_resources::{DynamicResourceHandler, ResourceCollection, StaticResource},
     simple_tool::{SimpleTool, SyncTool},
     state::State,
+    typed_prompt::TypedPrompt,
     typed_tool::{SimpleToolExt, SyncToolExt, TypedSyncTool, TypedTool, TypedToolWithOutput},
     ui::UIResourceBuilder,
     McpServer, PromptHandler, ResourceHandler, SamplingHandler, Server, ServerBuilder, ToolHandler,
@@ -137,7 +138,7 @@ pub use server::wasm_typed_tool::WasmTypedTool as TypedTool;
 // Re-export proc macros from pmcp-macros so users can write `use pmcp::{mcp_tool, mcp_server}`
 // instead of adding pmcp-macros as a separate dependency.
 #[cfg(feature = "macros")]
-pub use pmcp_macros::{mcp_server, mcp_tool};
+pub use pmcp_macros::{mcp_prompt, mcp_server, mcp_tool};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use shared::StdioTransport;

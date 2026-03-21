@@ -91,6 +91,10 @@ pub mod state;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod typed_tool;
 
+/// Typed prompt implementations with automatic argument schema generation.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod typed_prompt;
+
 /// UI resource implementations for MCP Apps Extension (SEP-1865).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ui;
