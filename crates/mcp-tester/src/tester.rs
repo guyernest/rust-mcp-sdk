@@ -436,6 +436,35 @@ impl ServerTester {
         Ok(report)
     }
 
+    /// Run MCP protocol conformance tests against the server.
+    ///
+    /// Validates the server against the MCP spec (2025-11-25) across 5 domains:
+    /// Core, Tools, Resources, Prompts, Tasks. Each domain reports independently.
+    ///
+    /// # Arguments
+    /// * `strict` - If true, warnings are promoted to failures
+    /// * `domains` - Optional list of domain name strings to filter (e.g., ["tools", "resources"])
+    pub async fn run_conformance_tests(
+        &mut self,
+        strict: bool,
+        domains: Option<Vec<String>>,
+    ) -> Result<TestReport> {
+        use crate::conformance::{ConformanceDomain, ConformanceRunner};
+
+        // Parse domain filter strings into ConformanceDomain values
+        let parsed_domains = domains.map(|ds| {
+            ds.iter()
+                .filter_map(|s| ConformanceDomain::from_str_loose(s))
+                .collect::<Vec<_>>()
+        });
+
+        let runner = ConformanceRunner::new(strict, parsed_domains);
+        let report = runner.run(self).await;
+        Ok(report)
+    }
+
+    /// Deprecated: Use `run_conformance_tests` instead.
+    #[deprecated(note = "Use run_conformance_tests instead")]
     pub async fn run_compliance_tests(&mut self, strict: bool) -> Result<TestReport> {
         let mut report = TestReport::new();
         let start = Instant::now();

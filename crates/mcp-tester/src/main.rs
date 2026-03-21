@@ -12,6 +12,8 @@ mod scenario_generator;
 mod tester;
 mod validators;
 
+mod conformance;
+
 use pmcp::client::oauth::{default_cache_path, OAuthConfig, OAuthHelper};
 use report::{OutputFormat, TestReport};
 use tester::ServerTester;
@@ -113,14 +115,24 @@ enum Commands {
         url: String,
     },
 
-    /// Protocol compliance validation
-    Compliance {
+    /// MCP protocol conformance validation
+    ///
+    /// Validates a server against the MCP protocol spec (2025-11-25).
+    /// Tests 5 domains: Core (initialize, version, errors), Tools (list, call),
+    /// Resources (list, read), Prompts (list, get), Tasks (lifecycle).
+    /// Each domain reports independently -- a server with no resources still
+    /// passes if it correctly reports empty capabilities.
+    Conformance {
         /// Server URL
         url: String,
 
-        /// Strict mode (fail on warnings)
+        /// Strict mode (promote warnings to failures)
         #[arg(long)]
         strict: bool,
+
+        /// Run only specific domains (comma-separated: core,tools,resources,prompts,tasks)
+        #[arg(long, value_delimiter = ',')]
+        domain: Option<Vec<String>>,
     },
 
     /// List and test available tools
@@ -301,16 +313,21 @@ async fn main() -> Result<()> {
             .await
         },
 
-        Commands::Compliance { url, strict } => {
+        Commands::Conformance {
+            url,
+            strict,
+            domain,
+        } => {
             let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
-            run_compliance_test(
+            run_conformance_test(
                 &url,
                 strict,
+                domain,
                 cli.timeout,
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
-                oauth_middleware.clone(),
+                oauth_middleware,
             )
             .await
         },
@@ -657,9 +674,11 @@ async fn run_quick_test(
     tester.run_quick_test().await
 }
 
-async fn run_compliance_test(
+#[allow(clippy::too_many_arguments)]
+async fn run_conformance_test(
     url: &str,
     strict: bool,
+    domain: Option<Vec<String>>,
     timeout: u64,
     insecure: bool,
     api_key: Option<&str>,
@@ -675,9 +694,7 @@ async fn run_compliance_test(
         oauth_middleware,
     )?;
 
-    // Intentionally no unconditional prints here to keep JSON/minimal output clean
-
-    tester.run_compliance_tests(strict).await
+    tester.run_conformance_tests(strict, domain).await
 }
 
 #[allow(clippy::too_many_arguments)]
