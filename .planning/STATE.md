@@ -21,7 +21,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
-**Current focus:** v2.0 Protocol Modernization -- Phase 55 (Tasks with Polling) in progress.
+**Current focus:** v2.0 Protocol Modernization -- Phase 55 complete. Phase 56 (Tower Middleware) next.
 
 ## Current Position
 
