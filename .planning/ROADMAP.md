@@ -568,17 +568,18 @@ Plans:
 **Goal:** Add `mcp-tester conformance <url>` command that validates any MCP server against the protocol spec. Core scenarios: initialize handshake, tools CRUD, resources CRUD, prompts CRUD, task lifecycle. Modeled after TypeScript SDK's @modelcontextprotocol/conformance infrastructure.
 **Requirements**: CONFORMANCE-CLI, CONFORMANCE-SCENARIOS
 **Depends on:** Phase 55
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 57 to break down)
+- [ ] 57-01-PLAN.md — Conformance module with ConformanceRunner orchestrator and 5 domain scenario groups (Core, Tools, Resources, Prompts, Tasks)
+- [ ] 57-02-PLAN.md — CLI integration: replace Compliance with Conformance in mcp-tester, add cargo pmcp test conformance
 
 ### Phase 58: #[mcp_tool] Proc Macro
 
 **Goal:** Expand pmcp-macros crate with `#[mcp_tool]` attribute macro that eliminates `Box::pin(async move {})` boilerplate on tool definitions. Accepts `async fn(input: T, extra: RequestHandlerExtra) -> Result<Output>` directly. Handles Arc state injection for composition scenarios (eliminates the foundation cloning ceremony). Auto-derives input/output JSON schema from types.
 **Requirements**: TOOL-MACRO, STATE-INJECTION
 **Depends on:** Phase 54
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 58 to break down)
@@ -588,7 +589,7 @@ Plans:
 **Goal:** Add `TypedPrompt` analogous to `TypedToolWithOutput` for prompts. Prompt arguments deserialize from `HashMap<String, String>` into a typed struct via JsonSchema + serde, eliminating the manual `args.get("x").ok_or()?.parse()?` pattern on every prompt. Builder-friendly registration via `.prompt("name", TypedPrompt::new(handler))`.
 **Requirements**: TYPED-PROMPT, PROMPT-SCHEMA
 **Depends on:** Phase 54
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 59 to break down)
