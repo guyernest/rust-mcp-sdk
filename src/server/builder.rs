@@ -72,6 +72,9 @@ pub struct ServerCoreBuilder {
     /// Task router for experimental MCP Tasks support (optional)
     #[cfg(not(target_arch = "wasm32"))]
     task_router: Option<Arc<dyn TaskRouter>>,
+    /// Task store for MCP Tasks with polling (optional, standard capability path)
+    #[cfg(not(target_arch = "wasm32"))]
+    task_store: Option<Arc<dyn crate::server::task_store::TaskStore>>,
     /// Stateless mode for serverless deployments (None = auto-detect)
     stateless_mode: Option<bool>,
     /// Host-specific metadata layers (e.g., `ChatGpt` for openai/* keys)
@@ -105,6 +108,8 @@ impl ServerCoreBuilder {
             tool_middlewares: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             task_router: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            task_store: None,
             stateless_mode: None, // Auto-detect by default
             #[cfg(feature = "mcp-apps")]
             host_layers: Vec::new(),
@@ -628,6 +633,46 @@ impl ServerCoreBuilder {
         self
     }
 
+    /// Register a task store for MCP Tasks with polling.
+    ///
+    /// When a task store is registered, the server:
+    /// - Advertises `ServerCapabilities.tasks` with list and cancel support
+    /// - Handles `tasks/get`, `tasks/list`, `tasks/cancel` requests via the store
+    /// - Resolves task owner from auth context (OAuth subject, client ID, or session ID)
+    ///
+    /// This is the standard capability path (uses `ServerCapabilities.tasks`).
+    /// For the legacy experimental path via `pmcp-tasks`, use [`Self::with_task_store`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use pmcp::server::task_store::InMemoryTaskStore;
+    /// use std::sync::Arc;
+    ///
+    /// let store = Arc::new(InMemoryTaskStore::new());
+    /// let server = Server::builder()
+    ///     .name("my-server")
+    ///     .version("1.0.0")
+    ///     .task_store(store)
+    ///     .build()?;
+    /// ```
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn task_store(mut self, store: Arc<dyn crate::server::task_store::TaskStore>) -> Self {
+        // Set ServerCapabilities.tasks (standard, not experimental)
+        self.capabilities.tasks = Some(crate::types::capabilities::ServerTasksCapability {
+            list: Some(serde_json::json!({})),
+            cancel: Some(serde_json::json!({})),
+            requests: Some(crate::types::capabilities::ServerTasksRequestCapability {
+                tools: Some(crate::types::capabilities::ServerTasksToolsCapability {
+                    call: Some(serde_json::json!({})),
+                }),
+            }),
+        });
+
+        self.task_store = Some(store);
+        self
+    }
+
     /// Detect if running in a stateless/serverless environment.
     ///
     /// Checks for environment variables that indicate serverless platforms:
@@ -1086,6 +1131,32 @@ mod tests {
 
         // Without host layer, no openai keys should be in tool meta
         assert!(server.capabilities().tools.is_some());
+    }
+
+    #[test]
+    fn test_builder_task_store_sets_capabilities() {
+        let store = Arc::new(crate::server::task_store::InMemoryTaskStore::new());
+        let builder = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .task_store(store);
+        // Verify capabilities were set by the builder method
+        assert!(
+            builder.capabilities.tasks.is_some(),
+            "ServerCapabilities.tasks should be set"
+        );
+        let tasks_cap = builder.capabilities.tasks.as_ref().unwrap();
+        assert!(tasks_cap.list.is_some(), "tasks.list should be set");
+        assert!(tasks_cap.cancel.is_some(), "tasks.cancel should be set");
+        assert!(
+            tasks_cap.requests.is_some(),
+            "tasks.requests should be set"
+        );
+        // Verify task_store field is populated
+        assert!(
+            builder.task_store.is_some(),
+            "task_store field should be set"
+        );
     }
 
     #[test]
