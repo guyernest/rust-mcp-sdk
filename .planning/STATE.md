@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: completed
-stopped_at: Completed 58-01-PLAN.md
-last_updated: "2026-03-21T18:38:55.850Z"
+stopped_at: Completed 58-02-PLAN.md
+last_updated: "2026-03-21T18:47:38.148Z"
 last_activity: 2026-03-21
 progress:
   total_phases: 34
   completed_phases: 27
   total_plans: 67
-  completed_plans: 65
+  completed_plans: 66
   percent: 100
 ---
 
@@ -168,6 +168,8 @@ v1.6 decisions:
 - [Phase 58]: Manual Clone impl on State<T> to avoid requiring T: Clone (Arc<T> is always Clone)
 - [Phase 58]: Unconditional schema generation in #[mcp_tool] -- schema IS the macro value proposition, no feature flag guard
 - [Phase 58]: Branching ToolInfo constructors (with_annotations vs new) since ToolInfo has no set_annotations method
+- [Phase 58]: Clone server_type before mutable strip to satisfy borrow checker in mcp_server expansion
+- [Phase 58-02]: McpToolArgs/McpToolAnnotations fields made pub(crate) for cross-module reuse; generate_tool_info_code shared between mcp_tool and mcp_server
 
 ### Roadmap Evolution
 
@@ -203,6 +205,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-21T18:38:55.846Z
-Stopped at: Completed 58-01-PLAN.md
+Last session: 2026-03-21T18:47:38.145Z
+Stopped at: Completed 58-02-PLAN.md
 Resume: Phase 57 complete. Both plans shipped: Plan 01 (19-scenario conformance engine with 5 domains) and Plan 02 (CLI integration -- mcp-tester conformance and cargo pmcp test conformance with --strict/--domain flags and per-domain CI summary).
