@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: in-progress
-stopped_at: Completed 56-02-PLAN.md
-last_updated: "2026-03-21T02:55:56Z"
-last_activity: 2026-03-21 -- Phase 56 complete (Axum router + origin-locked CORS integration)
+stopped_at: Completed 56-03-PLAN.md
+last_updated: "2026-03-21T03:52:00Z"
+last_activity: 2026-03-21 -- Phase 56 Plan 03 complete (gap closure -- Tower layers in start(), single CORS)
 progress:
   total_phases: 34
   completed_phases: 24
-  total_plans: 57
-  completed_plans: 57
+  total_plans: 58
+  completed_plans: 58
   percent: 100
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
-**Current focus:** v2.0 Protocol Modernization -- Phase 56 complete. Tower middleware with DNS rebinding protection, security headers, and Axum router API shipped.
+**Current focus:** v2.0 Protocol Modernization -- Phase 56 complete (all 3 plans). Tower middleware with DNS rebinding protection, security headers, unified CORS, and Axum router API shipped.
 
 ## Current Position
 
 Phase: 56 (tower-middleware-dns-rebinding-protection)
-Plan: 2 of 2 complete
-Status: Phase 56 complete. pmcp::axum::router() API, origin-locked CORS, Tower middleware integrated. 790 lib tests passing.
-Last activity: 2026-03-21 -- Phase 56 Plan 02 complete (Axum router + origin-locked CORS)
+Plan: 3 of 3 complete
+Status: Phase 56 fully complete. Tower layers in both start() and router() paths. Single CORS via CorsLayer. 790 lib tests passing.
+Last activity: 2026-03-21 -- Phase 56 Plan 03 complete (gap closure -- Tower layers in start(), single CORS)
 
 Progress: [##########] 100%
 
@@ -47,7 +47,7 @@ Progress: [##########] 100%
 
 **Velocity:**
 
-- Total plans completed: 74 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 9)
+- Total plans completed: 75 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 10)
 - Total phases completed: 29
 
 ## Accumulated Context
@@ -154,6 +154,10 @@ v1.6 decisions:
 - [Phase 56-02]: Extracted build_mcp_router() and make_server_state() as pub(crate) for shared use by axum_router
 - [Phase 56-02]: Origin-locked CORS reflects request Origin when allowed, omits Access-Control-Allow-Origin for disallowed/missing
 - [Phase 56-02]: handle_options takes State+HeaderMap for CORS preflight; AllowedOrigins defaults to localhost() when None
+- [Phase 56-03]: AllowedOrigins resolved once in make_server_state(), stored as ServerState field -- zero per-request allocation
+- [Phase 56-03]: CorsLayer handles all CORS including preflight OPTIONS -- hand-rolled add_cors_headers deleted (13 call sites)
+- [Phase 56-03]: Handler signatures simplified by removing allowed_origins/request_origin params -- Tower layers handle CORS at middleware level
+- [Phase 56-03]: StreamableHttpServer::with_config() delegates to make_server_state() -- single construction path
 
 ### Roadmap Evolution
 
@@ -189,6 +193,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-21T02:55:56Z
-Stopped at: Completed 56-02-PLAN.md
-Resume: Phase 56 complete. Both plans shipped: Plan 01 created Tower layers, Plan 02 wired them into axum_router + origin-locked CORS. 790 lib tests passing. Next phase TBD.
+Last session: 2026-03-21T03:52:00Z
+Stopped at: Completed 56-03-PLAN.md
+Resume: Phase 56 fully complete (all 3 plans). Plan 01 created Tower layers, Plan 02 wired axum_router + origin-locked CORS, Plan 03 closed gaps (Tower layers in start(), single CORS, pre-resolved origins). 790 lib tests passing. Next phase TBD.
