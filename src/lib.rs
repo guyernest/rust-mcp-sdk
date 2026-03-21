@@ -97,6 +97,8 @@ pub use error::{Error, ErrorCode, Result};
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::cancellation::RequestHandlerExtra;
 #[cfg(not(target_arch = "wasm32"))]
+pub use server::task_store::{InMemoryTaskStore, StoreConfig, TaskStore, TaskStoreError};
+#[cfg(not(target_arch = "wasm32"))]
 pub use server::{
     auth,
     simple_prompt::{SimplePrompt, SyncPrompt},

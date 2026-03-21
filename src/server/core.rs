@@ -252,6 +252,10 @@ pub struct ServerCore {
     #[cfg(not(target_arch = "wasm32"))]
     task_router: Option<Arc<dyn TaskRouter>>,
 
+    /// Task store for MCP Tasks with polling (standard capability path)
+    #[cfg(not(target_arch = "wasm32"))]
+    task_store: Option<Arc<dyn crate::server::task_store::TaskStore>>,
+
     /// Stateless mode flag for serverless deployments
     ///
     /// When true, the server skips initialization state checking, allowing
@@ -281,6 +285,9 @@ impl ServerCore {
         protocol_middleware: Arc<RwLock<EnhancedMiddlewareChain>>,
         #[cfg(not(target_arch = "wasm32"))] tool_middleware: Arc<RwLock<ToolMiddlewareChain>>,
         #[cfg(not(target_arch = "wasm32"))] task_router: Option<Arc<dyn TaskRouter>>,
+        #[cfg(not(target_arch = "wasm32"))] task_store: Option<
+            Arc<dyn crate::server::task_store::TaskStore>,
+        >,
         stateless_mode: bool,
     ) -> Self {
         let uri_to_tool_meta = build_uri_to_tool_meta(&tool_infos);
@@ -306,6 +313,8 @@ impl ServerCore {
             tool_middleware,
             #[cfg(not(target_arch = "wasm32"))]
             task_router,
+            #[cfg(not(target_arch = "wasm32"))]
+            task_store,
             stateless_mode,
         }
     }
@@ -928,10 +937,25 @@ impl ServerCore {
                             Err(e) => Self::error_response(id, -32603, e.to_string()),
                         }
                     },
-                    // Task endpoint routing (experimental MCP Tasks)
+                    // Task endpoint routing (TaskStore preferred, TaskRouter fallback)
                     #[cfg(not(target_arch = "wasm32"))]
                     ClientRequest::TasksGet(params) => {
-                        if let Some(ref task_router) = self.task_router {
+                        if let Some(ref store) = self.task_store {
+                            let owner_id = self
+                                .resolve_task_owner(auth_context.as_ref())
+                                .unwrap_or_else(|| "local".to_string());
+                            match store.get(&params.task_id, &owner_id).await {
+                                Ok(task) => {
+                                    let result =
+                                        crate::types::tasks::GetTaskResult::new(task);
+                                    Self::success_response(
+                                        id,
+                                        serde_json::to_value(result).unwrap(),
+                                    )
+                                },
+                                Err(e) => Self::error_response(id, -32603, e.to_string()),
+                            }
+                        } else if let Some(ref task_router) = self.task_router {
                             let owner_id = self
                                 .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
@@ -951,6 +975,7 @@ impl ServerCore {
                     },
                     #[cfg(not(target_arch = "wasm32"))]
                     ClientRequest::TasksResult(params) => {
+                        // tasks/result is a PMCP extension -- delegate to TaskRouter only
                         if let Some(ref task_router) = self.task_router {
                             let owner_id = self
                                 .resolve_task_owner(auth_context.as_ref())
@@ -966,12 +991,34 @@ impl ServerCore {
                                 Err(e) => Self::error_response(id, -32603, e.to_string()),
                             }
                         } else {
-                            Self::error_response(id, -32601, "Tasks not enabled".to_string())
+                            Self::error_response(
+                                id,
+                                -32601,
+                                "tasks/result not supported".to_string(),
+                            )
                         }
                     },
                     #[cfg(not(target_arch = "wasm32"))]
                     ClientRequest::TasksList(params) => {
-                        if let Some(ref task_router) = self.task_router {
+                        if let Some(ref store) = self.task_store {
+                            let owner_id = self
+                                .resolve_task_owner(auth_context.as_ref())
+                                .unwrap_or_else(|| "local".to_string());
+                            match store.list(&owner_id, params.cursor.as_deref()).await {
+                                Ok((tasks, next_cursor)) => {
+                                    let mut result =
+                                        crate::types::tasks::ListTasksResult::new(tasks);
+                                    if let Some(cursor) = next_cursor {
+                                        result = result.with_next_cursor(cursor);
+                                    }
+                                    Self::success_response(
+                                        id,
+                                        serde_json::to_value(result).unwrap(),
+                                    )
+                                },
+                                Err(e) => Self::error_response(id, -32603, e.to_string()),
+                            }
+                        } else if let Some(ref task_router) = self.task_router {
                             let owner_id = self
                                 .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
@@ -991,7 +1038,22 @@ impl ServerCore {
                     },
                     #[cfg(not(target_arch = "wasm32"))]
                     ClientRequest::TasksCancel(params) => {
-                        if let Some(ref task_router) = self.task_router {
+                        if let Some(ref store) = self.task_store {
+                            let owner_id = self
+                                .resolve_task_owner(auth_context.as_ref())
+                                .unwrap_or_else(|| "local".to_string());
+                            match store.cancel(&params.task_id, &owner_id).await {
+                                Ok(task) => {
+                                    let result =
+                                        crate::types::tasks::CancelTaskResult::new(task);
+                                    Self::success_response(
+                                        id,
+                                        serde_json::to_value(result).unwrap(),
+                                    )
+                                },
+                                Err(e) => Self::error_response(id, -32603, e.to_string()),
+                            }
+                        } else if let Some(ref task_router) = self.task_router {
                             let owner_id = self
                                 .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
@@ -1124,6 +1186,7 @@ mod tests {
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             Arc::new(RwLock::new(ToolMiddlewareChain::new())),
             None,  // task_router
+            None,  // task_store
             false, // stateless_mode
         );
 
@@ -1170,6 +1233,7 @@ mod tests {
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             Arc::new(RwLock::new(ToolMiddlewareChain::new())),
             None,  // task_router
+            None,  // task_store
             false, // stateless_mode
         );
 
@@ -1225,6 +1289,7 @@ mod tests {
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             Arc::new(RwLock::new(ToolMiddlewareChain::new())),
             None, // task_router
+            None, // task_store
             true, // stateless_mode enabled
         );
 
@@ -1274,6 +1339,7 @@ mod tests {
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             Arc::new(RwLock::new(ToolMiddlewareChain::new())),
             None,  // task_router
+            None,  // task_store
             false, // stateless_mode disabled (normal mode)
         );
 

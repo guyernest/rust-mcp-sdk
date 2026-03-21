@@ -869,6 +869,8 @@ impl ServerCoreBuilder {
             tool_middleware,
             #[cfg(not(target_arch = "wasm32"))]
             self.task_router,
+            #[cfg(not(target_arch = "wasm32"))]
+            self.task_store,
             stateless_mode,
         ))
     }
@@ -1157,6 +1159,23 @@ mod tests {
             builder.task_store.is_some(),
             "task_store field should be set"
         );
+    }
+
+    #[test]
+    fn test_builder_with_task_store_builds_successfully() {
+        let store = Arc::new(crate::server::task_store::InMemoryTaskStore::new());
+        let server = ServerCoreBuilder::new()
+            .name("test")
+            .version("1.0.0")
+            .task_store(store)
+            .build()
+            .unwrap();
+        let caps = server.capabilities();
+        assert!(
+            caps.tasks.is_some(),
+            "ServerCapabilities.tasks should be set"
+        );
+        assert!(caps.provides_tasks(), "provides_tasks() should be true");
     }
 
     #[test]

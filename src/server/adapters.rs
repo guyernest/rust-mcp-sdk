@@ -351,6 +351,7 @@ mod tests {
                 crate::server::tool_middleware::ToolMiddlewareChain::new(),
             )),
             None, // task_router
+            None, // task_store
             false,
         );
 
