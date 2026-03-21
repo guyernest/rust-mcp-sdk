@@ -227,6 +227,16 @@ impl Default for StreamableHttpServerConfig {
 impl StreamableHttpServerConfig {
     /// Create a stateless configuration — no sessions, JSON responses.
     /// Ideal for Lambda and serverless deployments.
+    /// Create a stateless configuration for serverless/Lambda deployments.
+    ///
+    /// Uses [`AllowedOrigins::any()`] because stateless servers are behind
+    /// a reverse proxy (API Gateway, CloudFront) that handles CORS and
+    /// origin validation at the edge. DNS rebinding protection adds no
+    /// security value when the MCP server is only reachable via loopback
+    /// within a Lambda sandbox or container.
+    ///
+    /// For servers directly exposed to the internet, use `Default::default()`
+    /// instead (which defaults to `AllowedOrigins::localhost()`).
     pub fn stateless() -> Self {
         Self {
             session_id_generator: None,
@@ -235,7 +245,7 @@ impl StreamableHttpServerConfig {
             on_session_initialized: None,
             on_session_closed: None,
             http_middleware: None,
-            allowed_origins: None,
+            allowed_origins: Some(AllowedOrigins::any()),
         }
     }
 }

@@ -89,11 +89,41 @@ impl AllowedOrigins {
         Self::from_bind_addr(SocketAddr::from(([127, 0, 0, 1], 0)))
     }
 
+    /// Allow all origins — disables Host and Origin validation.
+    ///
+    /// Use this for servers behind a reverse proxy that handles CORS at
+    /// the edge (e.g., API Gateway + Lambda, CloudFront, nginx). In these
+    /// deployments, DNS rebinding protection adds no security value because
+    /// the MCP server is only reachable via loopback within the sandbox.
+    ///
+    /// [`StreamableHttpServerConfig::stateless()`] uses this by default.
+    ///
+    /// # Security Note
+    ///
+    /// Only use this when the server is behind a proxy that enforces its
+    /// own origin policy. Do NOT use for servers directly exposed to the
+    /// internet or accessible from a browser.
+    pub fn any() -> Self {
+        Self {
+            origins: Vec::new(),
+            hostnames: HashSet::new(),
+        }
+    }
+
+    /// Returns `true` if this is an `any()` configuration (all origins allowed).
+    pub fn is_any(&self) -> bool {
+        self.origins.is_empty() && self.hostnames.is_empty()
+    }
+
     /// Check if the Host header value is in the allowed set.
     ///
     /// Strips the port from the Host value before checking.
     /// Returns `false` for missing or non-ASCII Host headers.
+    /// Always returns `true` for [`AllowedOrigins::any()`].
     pub fn is_allowed_host(&self, headers: &HeaderMap) -> bool {
+        if self.is_any() {
+            return true;
+        }
         let Some(host_value) = headers.get(header::HOST) else {
             return false;
         };
@@ -108,7 +138,11 @@ impl AllowedOrigins {
     ///
     /// Checks the full origin string first, then falls back to hostname
     /// extraction for port mismatch tolerance.
+    /// Always returns `true` for [`AllowedOrigins::any()`].
     pub fn is_allowed_origin(&self, origin: &HeaderValue) -> bool {
+        if self.is_any() {
+            return true;
+        }
         let Ok(origin_str) = origin.to_str() else {
             return false;
         };
@@ -125,11 +159,15 @@ impl AllowedOrigins {
 
     /// Convert to a `tower_http` CORS `AllowOrigin` for use with `CorsLayer`.
     ///
-    /// Uses a predicate that delegates to [`is_allowed_origin`](Self::is_allowed_origin),
+    /// For [`AllowedOrigins::any()`], returns `AllowOrigin::any()` (wildcard `*`).
+    /// Otherwise, uses a predicate that delegates to [`is_allowed_origin`](Self::is_allowed_origin),
     /// which includes hostname-fallback matching. This handles port mismatches
     /// (e.g., `AllowedOrigins::localhost()` with port 0 still accepts
     /// `Origin: http://localhost:8080`).
     pub fn to_cors_allow_origin(&self) -> AllowOrigin {
+        if self.is_any() {
+            return AllowOrigin::any();
+        }
         let this = self.clone();
         AllowOrigin::predicate(move |origin: &HeaderValue, _parts: &http::request::Parts| {
             this.is_allowed_origin(origin)
@@ -325,6 +363,35 @@ mod tests {
     }
 
     #[test]
+    fn test_any_allows_all_hosts() {
+        let ao = AllowedOrigins::any();
+        assert!(ao.is_any());
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("evil.com"));
+        assert!(ao.is_allowed_host(&headers));
+    }
+
+    #[test]
+    fn test_any_allows_all_origins() {
+        let ao = AllowedOrigins::any();
+        let origin = HeaderValue::from_static("https://anything.example.com");
+        assert!(ao.is_allowed_origin(&origin));
+    }
+
+    #[test]
+    fn test_any_allows_missing_host() {
+        let ao = AllowedOrigins::any();
+        let headers = HeaderMap::new();
+        assert!(ao.is_allowed_host(&headers));
+    }
+
+    #[test]
+    fn test_localhost_is_not_any() {
+        let ao = AllowedOrigins::localhost();
+        assert!(!ao.is_any());
+    }
+
+    #[test]
     fn test_is_allowed_host_good() {
         let ao = AllowedOrigins::localhost();
         let mut headers = HeaderMap::new();
@@ -436,5 +503,21 @@ mod tests {
         let ao = AllowedOrigins::from_bind_addr("127.0.0.1:8080".parse().unwrap());
         // Verify it returns an AllowOrigin (type check -- the inner value is opaque).
         let _cors: AllowOrigin = ao.to_cors_allow_origin();
+    }
+
+    #[tokio::test]
+    async fn test_any_passes_through_layer() {
+        let layer = DnsRebindingLayer::new(AllowedOrigins::any());
+        let svc = layer.layer(ok_service());
+
+        // External host + external origin — would fail with localhost()
+        let req = Request::builder()
+            .header(header::HOST, "api.example.com")
+            .header(header::ORIGIN, "https://myapp.example.com")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = svc.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }
