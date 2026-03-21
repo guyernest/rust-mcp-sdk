@@ -15,7 +15,7 @@ Implement MCP Tasks with status polling over streamable HTTP. Add tasks/create, 
 
 ### Type reconciliation
 - **D-01:** SDK types (`src/types/tasks.rs`) are the canonical source of truth
-- **D-02:** pmcp-tasks crate re-exports or converts from SDK types, not the other way around
+- ~~D-02: pmcp-tasks crate re-exports or converts from SDK types~~ — **Deferred:** pmcp-tasks refactoring is a follow-up phase. This phase establishes SDK types as canonical; pmcp-tasks adaptation happens separately.
 - **D-03:** Fix the ttl serialization divergence — SDK types must match MCP spec (ttl present as null, not omitted)
 - **D-04:** Add utility methods from pmcp-tasks (is_terminal(), can_transition_to()) to SDK TaskStatus
 
@@ -35,7 +35,7 @@ Implement MCP Tasks with status polling over streamable HTTP. Add tasks/create, 
 - **D-13:** tasks/create, tasks/get, tasks/cancel (core trio)
 - **D-14:** tasks/list (discovery — list all tasks for current session)
 - **D-15:** Task TTL and auto-expiration (configurable, prevents zombie tasks)
-- **D-16:** Task variables (PMCP extension — shared client/server state)
+- ~~D-16: Task variables~~ — **Deferred:** PMCP extension stays in pmcp-tasks crate per D-10/D-12 (TypeScript SDK pattern = no variables in core). Not in ROADMAP success criteria.
 
 ### Claude's Discretion
 - TaskStore trait method signatures (sync vs async, error types)
