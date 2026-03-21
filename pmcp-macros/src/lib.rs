@@ -56,6 +56,7 @@ use proc_macro::TokenStream;
 use syn::{parse_macro_input, ItemFn, ItemImpl};
 
 mod mcp_common;
+mod mcp_tool;
 mod tool;
 mod tool_router;
 #[allow(dead_code)]
@@ -95,6 +96,63 @@ pub fn tool(args: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemFn);
 
     tool::expand_tool(args.into(), input)
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
+}
+
+/// Defines an MCP tool with automatic schema generation and state injection.
+///
+/// Generates a struct implementing `ToolHandler` from an annotated standalone
+/// async or sync function. Eliminates `Box::pin` boilerplate and provides
+/// automatic input/output schema generation, `State<T>` injection, and
+/// MCP annotation support.
+///
+/// # Attributes
+///
+/// - `description` - Tool description (required, enforced at compile time)
+/// - `name` - Override tool name (defaults to function name)
+/// - `annotations(...)` - MCP standard annotations (`read_only`, `destructive`,
+///   `idempotent`, `open_world`)
+/// - `ui = "..."` - Widget resource URI for MCP Apps
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// #[mcp_tool(description = "Add two numbers")]
+/// async fn add(args: AddArgs) -> Result<AddResult> {
+///     Ok(AddResult { sum: args.a + args.b })
+/// }
+///
+/// // Register: server_builder.tool("add", add())
+/// ```
+///
+/// With state injection:
+///
+/// ```rust,ignore
+/// #[mcp_tool(description = "Query database")]
+/// async fn query(args: QueryArgs, db: State<Database>) -> Result<Value> {
+///     let rows = db.execute(&args.sql).await?;
+///     Ok(json!({ "rows": rows }))
+/// }
+///
+/// // Register: server_builder.tool("query", query().with_state(shared_db))
+/// ```
+///
+/// With annotations:
+///
+/// ```rust,ignore
+/// #[mcp_tool(
+///     description = "Delete a record",
+///     annotations(destructive = true, idempotent = false),
+/// )]
+/// async fn delete(args: DeleteArgs) -> Result<Value> {
+///     // ...
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn mcp_tool(args: TokenStream, input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ItemFn);
+    mcp_tool::expand_mcp_tool(args.into(), input)
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }

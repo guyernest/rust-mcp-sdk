@@ -17,6 +17,8 @@ pub enum ParamRole {
         /// The inner type `T` from `State<T>`.
         inner_ty: Type,
         /// The full `State<T>` type as written by the user.
+        /// Used by `#[mcp_server]` expansion.
+        #[allow(dead_code)]
         full_ty: Type,
     },
     /// `RequestHandlerExtra` = cancellation/progress/auth context.
