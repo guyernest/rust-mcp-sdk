@@ -1,7 +1,7 @@
-# `#[mcp_tool]` Macro Design
+# `#[mcp_tool]` / `#[mcp_prompt]` / `#[mcp_server]` Macro Design
 
-**Status:** RFC — Seeking team feedback on DX
-**Phase:** 58
+**Status:** Shipped (Phases 58 + 59)
+**Phase:** 58 (tools), 59 (prompts)
 **Date:** 2026-03-21
 
 ## Problem
@@ -320,13 +320,13 @@ impl<F: FoundationClient + 'static> ArithmeticsServer<F> {
 
 The existing `TypedTool`, `TypedToolWithOutput`, and `TypedSyncTool` APIs remain unchanged. The macro generates code that uses these types internally — it's sugar, not a replacement. Teams can migrate one tool at a time.
 
-### Not In Scope (Phase 58)
+### Not In Scope
 
-- `#[mcp_prompt]` macro — Phase 59 (TypedPrompt)
+- ~~`#[mcp_prompt]` macro~~ — **Shipped in Phase 59**
 - `#[mcp_resource]` macro — future phase
 - Auto-discovery / inventory of tools at compile time
 - Hot-reload of tool definitions
-- WASM target support for macros (existing `#[tool]` doesn't support WASM either)
+- WASM target support for macros
 
 ## Team Feedback (Resolved)
 

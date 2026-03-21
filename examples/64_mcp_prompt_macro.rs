@@ -14,8 +14,7 @@
 //! ```
 
 use pmcp::types::{Content, GetPromptResult, PromptMessage};
-use pmcp::{PromptHandler, ServerBuilder, ServerCapabilities, State};
-use pmcp_macros::{mcp_prompt, mcp_server};
+use pmcp::{mcp_prompt, mcp_server, PromptHandler, ServerBuilder, ServerCapabilities, State};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -32,13 +31,21 @@ struct ReviewArgs {
     code: String,
 }
 
-/// Arguments for the summarize prompt (demonstrates optional args).
+/// Arguments for the summarize prompt (demonstrates typed + optional args).
+///
+/// MCP sends prompt arguments as strings, but the SDK auto-coerces them:
+/// - `"42"` → `u32` / `f64` / `i64`
+/// - `"true"` / `"false"` → `bool`
+/// - Plain text stays as `String`
 #[derive(Debug, Deserialize, JsonSchema)]
 struct SummarizeArgs {
     /// Text to summarize
     text: String,
-    /// Maximum summary length (optional)
-    max_length: Option<String>,
+    /// Maximum summary length in words (optional, numeric)
+    max_length: Option<u32>,
+    /// Include bullet points
+    #[serde(default)]
+    bullet_points: bool,
 }
 
 /// Arguments for the add tool.
@@ -76,11 +83,12 @@ async fn code_review(args: ReviewArgs) -> pmcp::Result<GetPromptResult> {
 async fn summarize(args: SummarizeArgs, config: State<AppConfig>) -> pmcp::Result<GetPromptResult> {
     let length_hint = args
         .max_length
-        .map(|l| format!(" (max {} words)", l))
+        .map(|l| format!(" (max {l} words)"))
         .unwrap_or_default();
+    let format_hint = if args.bullet_points { " Use bullet points." } else { "" };
     Ok(GetPromptResult::new(
         vec![PromptMessage::user(Content::text(format!(
-            "{} style summary{}:\n\n{}",
+            "{} style summary{}{format_hint}:\n\n{}",
             config.summary_style, length_hint, args.text
         )))],
         None,
