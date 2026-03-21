@@ -12,14 +12,10 @@ use syn::{FnArg, Type, TypePath};
 pub enum ParamRole {
     /// First struct implementing `JsonSchema` + `Deserialize` = tool input args.
     Args(Type),
-    /// `State<T>` = shared state injection (stores inner T and full type).
+    /// `State<T>` = shared state injection.
     State {
         /// The inner type `T` from `State<T>`.
         inner_ty: Type,
-        /// The full `State<T>` type as written by the user.
-        /// Used by `#[mcp_server]` expansion.
-        #[allow(dead_code)]
-        full_ty: Type,
     },
     /// `RequestHandlerExtra` = cancellation/progress/auth context.
     Extra,
@@ -39,13 +35,10 @@ pub fn classify_param(param: &FnArg) -> syn::Result<ParamRole> {
         FnArg::Receiver(_) => Ok(ParamRole::SelfRef),
         FnArg::Typed(pat_type) => {
             let ty = &*pat_type.ty;
-            if is_state_type(ty) {
+            if type_name_matches(ty, "State") {
                 let inner = extract_state_inner(ty)?;
-                Ok(ParamRole::State {
-                    inner_ty: inner,
-                    full_ty: ty.clone(),
-                })
-            } else if is_request_handler_extra(ty) {
+                Ok(ParamRole::State { inner_ty: inner })
+            } else if type_name_matches(ty, "RequestHandlerExtra") {
                 Ok(ParamRole::Extra)
             } else {
                 Ok(ParamRole::Args(ty.clone()))
@@ -54,25 +47,13 @@ pub fn classify_param(param: &FnArg) -> syn::Result<ParamRole> {
     }
 }
 
-/// Check if type is `State<T>` (matches `State`, `pmcp::State`,
-/// `pmcp::server::state::State`).
-pub fn is_state_type(ty: &Type) -> bool {
+/// Check if the last segment of a type path matches the given name.
+/// Handles qualified paths like `pmcp::State<T>` by checking only the final segment.
+pub fn type_name_matches(ty: &Type, name: &str) -> bool {
     if let Type::Path(TypePath { path, .. }) = ty {
         path.segments
             .last()
-            .map(|s| s.ident == "State")
-            .unwrap_or(false)
-    } else {
-        false
-    }
-}
-
-/// Check if type is `RequestHandlerExtra`.
-pub fn is_request_handler_extra(ty: &Type) -> bool {
-    if let Type::Path(TypePath { path, .. }) = ty {
-        path.segments
-            .last()
-            .map(|s| s.ident == "RequestHandlerExtra")
+            .map(|s| s.ident == name)
             .unwrap_or(false)
     } else {
         false
@@ -100,12 +81,7 @@ pub fn extract_state_inner(ty: &Type) -> syn::Result<Type> {
 ///
 /// Per D-15: skip `outputSchema` generation for `Result<Value>` returns.
 pub fn is_value_type(ty: &Type) -> bool {
-    if let Type::Path(TypePath { path, .. }) = ty {
-        if let Some(segment) = path.segments.last() {
-            return segment.ident == "Value";
-        }
-    }
-    false
+    type_name_matches(ty, "Value")
 }
 
 /// Extract the Ok type from `Result<T>` or `Result<T, E>`.
@@ -148,6 +124,25 @@ pub fn generate_output_schema_code(output_type: &Type) -> TokenStream {
                 serde_json::json!({"type": "object"})
             }))
         }
+    }
+}
+
+/// Generate output schema tokens from a return type.
+///
+/// If return type is `Result<T>` where T is not `Value`, generates schema code.
+/// Otherwise returns `quote! { None }`.
+pub fn output_schema_tokens(return_type: Option<&Type>) -> TokenStream {
+    let Some(rt) = return_type else {
+        return quote! { None };
+    };
+    if let Some(ok_type) = extract_result_ok_type(rt) {
+        if is_value_type(&ok_type) {
+            quote! { None }
+        } else {
+            generate_output_schema_code(&ok_type)
+        }
+    } else {
+        quote! { None }
     }
 }
 
@@ -256,14 +251,14 @@ mod tests {
     }
 
     #[test]
-    fn test_is_state_type_qualified_path() {
+    fn test_type_name_matches_state_qualified() {
         let ty: Type = parse_quote!(pmcp::State<Database>);
-        assert!(is_state_type(&ty));
+        assert!(type_name_matches(&ty, "State"));
     }
 
     #[test]
-    fn test_is_request_handler_extra_qualified() {
+    fn test_type_name_matches_extra_qualified() {
         let ty: Type = parse_quote!(pmcp::RequestHandlerExtra);
-        assert!(is_request_handler_extra(&ty));
+        assert!(type_name_matches(&ty, "RequestHandlerExtra"));
     }
 }

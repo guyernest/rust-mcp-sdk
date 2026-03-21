@@ -102,8 +102,9 @@ pub fn expand_mcp_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStr
     let mut has_extra = false;
 
     // Track parameter order for correct call-site argument passing.
-    // Each entry is one of: "args", "state", "extra".
-    let mut param_order: Vec<&str> = Vec::new();
+    #[derive(Debug, Clone, Copy)]
+    enum ParamSlot { Args, State, Extra }
+    let mut param_order: Vec<ParamSlot> = Vec::new();
 
     for param in &input.sig.inputs {
         let role = mcp_common::classify_param(param)?;
@@ -116,7 +117,7 @@ pub fn expand_mcp_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStr
                     ));
                 }
                 args_type = Some(ty);
-                param_order.push("args");
+                param_order.push(ParamSlot::Args);
             }
             mcp_common::ParamRole::State { inner_ty, .. } => {
                 if state_inner_ty.is_some() {
@@ -126,7 +127,7 @@ pub fn expand_mcp_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStr
                     ));
                 }
                 state_inner_ty = Some(inner_ty);
-                param_order.push("state");
+                param_order.push(ParamSlot::State);
             }
             mcp_common::ParamRole::Extra => {
                 if has_extra {
@@ -136,7 +137,7 @@ pub fn expand_mcp_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStr
                     ));
                 }
                 has_extra = true;
-                param_order.push("extra");
+                param_order.push(ParamSlot::Extra);
             }
             mcp_common::ParamRole::SelfRef => {
                 return Err(syn::Error::new_spanned(
@@ -200,10 +201,10 @@ pub fn expand_mcp_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStr
         quote! {
             let state_val = pmcp::State(
                 self.state.as_ref()
-                    .unwrap_or_else(|| panic!(
+                    .ok_or_else(|| pmcp::Error::internal(format!(
                         "State<{}> not provided for tool '{}' -- call .with_state() during registration",
                         #inner_name, #tool_name_for_err
-                    ))
+                    )))?
                     .clone()
             );
         }
@@ -221,11 +222,10 @@ pub fn expand_mcp_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStr
     // Generate function call arguments in correct parameter order.
     let call_args: Vec<TokenStream> = param_order
         .iter()
-        .map(|role| match *role {
-            "args" => quote! { typed_args },
-            "state" => quote! { state_val },
-            "extra" => quote! { #extra_param_name },
-            _ => unreachable!(),
+        .map(|slot| match slot {
+            ParamSlot::Args => quote! { typed_args },
+            ParamSlot::State => quote! { state_val },
+            ParamSlot::Extra => quote! { #extra_param_name },
         })
         .collect();
 

@@ -39,6 +39,13 @@ use quote::{format_ident, quote};
 use syn::parse::Parser;
 use syn::{ImplItem, ImplItemFn, ItemImpl, ReturnType, Type};
 
+/// Parameter role for call-site argument ordering.
+#[derive(Debug, Clone, Copy)]
+enum ParamSlot {
+    Args,
+    Extra,
+}
+
 /// Information collected from a single `#[mcp_tool]`-annotated method.
 struct ToolMethodInfo {
     /// The method identifier (e.g., `query`).
@@ -53,6 +60,8 @@ struct ToolMethodInfo {
     args_type: Option<Type>,
     /// Whether the method takes `RequestHandlerExtra`.
     has_extra: bool,
+    /// Parameter order for correct call-site generation (skips &self).
+    param_order: Vec<ParamSlot>,
     /// The return type of the method (full signature type).
     return_type: Option<Type>,
     /// MCP standard annotations.
@@ -114,14 +123,11 @@ pub fn expand_mcp_server(_args: TokenStream, mut input: ItemImpl) -> syn::Result
             quote! {}
         };
 
-        // Build call arguments (args and/or extra).
-        let mut call_args = Vec::new();
-        if method_info.args_type.is_some() {
-            call_args.push(quote! { typed_args });
-        }
-        if method_info.has_extra {
-            call_args.push(quote! { extra });
-        }
+        // Build call arguments in the user's declared parameter order.
+        let call_args: Vec<TokenStream> = method_info.param_order.iter().map(|slot| match slot {
+            ParamSlot::Args => quote! { typed_args },
+            ParamSlot::Extra => quote! { extra },
+        }).collect();
 
         // Generate function call (async vs sync).
         let fn_call = if method_info.is_async {
@@ -252,6 +258,7 @@ fn collect_tool_methods(impl_block: &ItemImpl) -> syn::Result<Vec<ToolMethodInfo
         let mut args_type: Option<Type> = None;
         let mut has_extra = false;
         let mut has_self = false;
+        let mut param_order: Vec<ParamSlot> = Vec::new();
 
         for param in &method.sig.inputs {
             let role = mcp_common::classify_param(param)?;
@@ -267,6 +274,7 @@ fn collect_tool_methods(impl_block: &ItemImpl) -> syn::Result<Vec<ToolMethodInfo
                         ));
                     }
                     args_type = Some(ty);
+                    param_order.push(ParamSlot::Args);
                 }
                 ParamRole::Extra => {
                     if has_extra {
@@ -276,6 +284,7 @@ fn collect_tool_methods(impl_block: &ItemImpl) -> syn::Result<Vec<ToolMethodInfo
                         ));
                     }
                     has_extra = true;
+                    param_order.push(ParamSlot::Extra);
                 }
                 ParamRole::State { .. } => {
                     return Err(syn::Error::new_spanned(
@@ -307,6 +316,7 @@ fn collect_tool_methods(impl_block: &ItemImpl) -> syn::Result<Vec<ToolMethodInfo
             is_async: method.sig.asyncness.is_some(),
             args_type,
             has_extra,
+            param_order,
             return_type,
             annotations: macro_args.annotations,
             ui: macro_args.ui,
