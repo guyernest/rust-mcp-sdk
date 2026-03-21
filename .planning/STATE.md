@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: in-progress
-stopped_at: Completed 55-02-PLAN.md
-last_updated: "2026-03-21T00:22:00Z"
-last_activity: 2026-03-21 -- Phase 55 Plan 02 complete (TaskStore trait and InMemoryTaskStore)
+stopped_at: Completed 55-03-PLAN.md
+last_updated: "2026-03-21T00:32:06Z"
+last_activity: 2026-03-21 -- Phase 55 Plan 03 complete (server builder integration and dispatch)
 progress:
   total_phases: 34
   completed_phases: 24
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 
 ## Current Position
 
-Phase: 55 (tasks-with-polling) -- IN PROGRESS
-Plan: 2 of 3 complete
-Status: Plan 02 complete. TaskStore trait and InMemoryTaskStore in SDK. 32 tests passing.
-Last activity: 2026-03-21 -- Phase 55 Plan 02 complete (TaskStore trait and InMemoryTaskStore)
+Phase: 55 (tasks-with-polling) -- COMPLETE
+Plan: 3 of 3 complete
+Status: Phase 55 complete. TaskStore wired into builder and core dispatch. 759 tests passing.
+Last activity: 2026-03-21 -- Phase 55 Plan 03 complete (server builder integration and dispatch)
 
 Progress: [##########] 100%
 
@@ -47,7 +47,7 @@ Progress: [##########] 100%
 
 **Velocity:**
 
-- Total plans completed: 71 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 6)
+- Total plans completed: 72 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 7)
 - Total phases completed: 29
 
 ## Accumulated Context
@@ -145,6 +145,8 @@ v1.6 decisions:
 - [Phase 55-01]: TTL serialization fixed -- removed skip_serializing_if from Task.ttl and TaskCreationParams.ttl so None serializes as null per MCP spec
 - [Phase 55-01]: TaskStatus utility methods (is_terminal, can_transition_to) replicate pmcp-tasks behavior for SDK canonical source of truth
 - [Phase 55-02]: Simplified TaskStore trait vs pmcp-tasks (no variables/result/request_method); returns Task wire type; TTL clamped not rejected; Instant-based expiration
+- [Phase 55-03]: TaskStore checked before TaskRouter in dispatch for tasks/get, tasks/list, tasks/cancel; tasks/result remains TaskRouter-only (PMCP extension)
+- [Phase 55-03]: ServerCapabilities.tasks (standard field) used for TaskStore path; experimental.tasks kept for TaskRouter backward compat
 
 ### Roadmap Evolution
 
@@ -180,6 +182,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-21T00:22:00Z
-Stopped at: Completed 55-02-PLAN.md
-Resume: Phase 55 Plans 01-02 complete. SDK has TaskStore trait + InMemoryTaskStore with 32 tests. Plan 03 (server builder integration) remaining.
+Last session: 2026-03-21T00:32:06Z
+Stopped at: Completed 55-03-PLAN.md
+Resume: Phase 55 complete. All 3 plans done: TaskStatus utilities (01), TaskStore trait + InMemoryTaskStore (02), builder/core integration (03). 759 tests passing.
