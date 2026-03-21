@@ -120,7 +120,7 @@ pub use server::{
     state::State,
     typed_tool::{SimpleToolExt, SyncToolExt, TypedSyncTool, TypedTool, TypedToolWithOutput},
     ui::UIResourceBuilder,
-    PromptHandler, ResourceHandler, SamplingHandler, Server, ServerBuilder, ToolHandler,
+    McpServer, PromptHandler, ResourceHandler, SamplingHandler, Server, ServerBuilder, ToolHandler,
 };
 #[cfg(target_arch = "wasm32")]
 pub use server::{
