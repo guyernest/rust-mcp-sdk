@@ -1,0 +1,5 @@
+error: mcp_tool requires at least `description = "..."` attribute
+  --> tests/ui/mcp_tool_missing_description.rs:12:10
+   |
+12 | async fn bad_tool(args: Args) -> pmcp::Result<serde_json::Value> {
+   |          ^^^^^^^^

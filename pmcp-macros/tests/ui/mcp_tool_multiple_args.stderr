@@ -1,0 +1,5 @@
+error: mcp_tool functions can have at most one args parameter
+  --> tests/ui/mcp_tool_multiple_args.rs:17:29
+   |
+17 | async fn bad_tool(a: ArgsA, b: ArgsB) -> pmcp::Result<serde_json::Value> {
+   |                             ^^^^^^^^

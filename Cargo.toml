@@ -132,6 +132,7 @@ clap = { version = "4.5", features = ["derive"] }
 env_logger = "0.11"
 dashmap = "6.1"  # Already in main deps but needed for examples
 pmcp-tasks = { path = "crates/pmcp-tasks" }  # For task examples (60_tasks_*)
+pmcp-macros = { path = "pmcp-macros" }  # For macro examples (63_mcp_tool_macro)
 
 [features]
 default = ["logging"]
