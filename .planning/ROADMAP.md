@@ -609,4 +609,5 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 59 to break down)
+- [ ] 59-01-PLAN.md — TypedPrompt runtime type and standalone #[mcp_prompt] attribute macro
+- [ ] 59-02-PLAN.md — #[mcp_server] prompt extension, integration tests, compile-fail tests, and example 64
