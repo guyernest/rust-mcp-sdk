@@ -112,8 +112,8 @@ impl AllowedOrigins {
         let Ok(origin_str) = origin.to_str() else {
             return false;
         };
-        // Check full origin match first.
-        if self.origins.contains(&origin_str.to_string()) {
+        // Check full origin match first (no allocation — compare &str directly).
+        if self.origins.iter().any(|o| o.as_str() == origin_str) {
             return true;
         }
         // Fallback: extract hostname and check against allowed hostnames.
@@ -224,7 +224,7 @@ impl<S, ReqBody> Service<Request<ReqBody>> for DnsRebindingService<S>
 where
     S: Service<Request<ReqBody>, Response = Response<Body>> + Clone + Send + 'static,
     S::Future: Send + 'static,
-    S::Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send,
+    S::Error: Send,
     ReqBody: Send + 'static,
 {
     type Response = Response<Body>;
@@ -286,29 +286,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::convert::Infallible;
+    use super::super::test_util::ok_service;
     use tower::ServiceExt;
-
-    fn ok_service() -> impl Service<
-        Request<Body>,
-        Response = Response<Body>,
-        Error = Infallible,
-        Future = Pin<Box<dyn Future<Output = Result<Response<Body>, Infallible>> + Send>>,
-    > + Clone
-           + Send
-           + 'static {
-        tower::service_fn(|_req: Request<Body>| {
-            Box::pin(async {
-                Ok::<_, Infallible>(
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .body(Body::from("ok"))
-                        .unwrap(),
-                )
-            })
-                as Pin<Box<dyn Future<Output = Result<Response<Body>, Infallible>> + Send>>
-        })
-    }
 
     // -- AllowedOrigins unit tests --
 

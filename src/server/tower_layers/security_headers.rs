@@ -29,7 +29,7 @@ use tower::{Layer, Service};
 /// let layer = SecurityHeadersLayer::new()
 ///     .without_cache_control(); // Keep X-Content-Type-Options and X-Frame-Options
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct SecurityHeadersLayer {
     x_content_type_options: bool,
     x_frame_options: bool,
@@ -140,30 +140,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::test_util::ok_service;
     use http::StatusCode;
     use std::convert::Infallible;
+    use std::future::Future;
+    use std::pin::Pin;
     use tower::ServiceExt;
-
-    fn ok_service() -> impl Service<
-        Request<Body>,
-        Response = Response<Body>,
-        Error = Infallible,
-        Future = Pin<Box<dyn Future<Output = Result<Response<Body>, Infallible>> + Send>>,
-    > + Clone
-           + Send
-           + 'static {
-        tower::service_fn(|_req: Request<Body>| {
-            Box::pin(async {
-                Ok::<_, Infallible>(
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .body(Body::from("ok"))
-                        .unwrap(),
-                )
-            })
-                as Pin<Box<dyn Future<Output = Result<Response<Body>, Infallible>> + Send>>
-        })
-    }
 
     #[tokio::test]
     async fn test_default_headers() {
