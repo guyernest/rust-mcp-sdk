@@ -56,6 +56,7 @@ use proc_macro::TokenStream;
 use syn::{parse_macro_input, ItemFn, ItemImpl};
 
 mod mcp_common;
+mod mcp_server;
 mod mcp_tool;
 mod tool;
 mod tool_router;
@@ -153,6 +154,35 @@ pub fn tool(args: TokenStream, input: TokenStream) -> TokenStream {
 pub fn mcp_tool(args: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemFn);
     mcp_tool::expand_mcp_tool(args.into(), input)
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
+}
+
+/// Collects `#[mcp_tool]` methods from an impl block and generates tool handlers.
+///
+/// Processes an impl block to find all methods annotated with `#[mcp_tool(...)]`,
+/// generates per-tool `ToolHandler` structs using `Arc<ServerType>` for shared
+/// `&self` access, and implements `McpServer` for bulk registration.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// #[mcp_server]
+/// impl MyServer {
+///     #[mcp_tool(description = "Query database")]
+///     async fn query(&self, args: QueryArgs) -> Result<QueryResult> {
+///         self.db.execute(&args.sql).await
+///     }
+/// }
+///
+/// // Register all tools at once:
+/// let builder = ServerBuilder::new()
+///     .mcp_server(my_server);
+/// ```
+#[proc_macro_attribute]
+pub fn mcp_server(args: TokenStream, input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ItemImpl);
+    mcp_server::expand_mcp_server(args.into(), input)
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }

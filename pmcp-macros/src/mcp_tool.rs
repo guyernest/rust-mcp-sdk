@@ -34,16 +34,16 @@ use syn::{ItemFn, ReturnType, Type};
 #[derive(Debug, FromMeta)]
 pub struct McpToolArgs {
     /// Tool description (mandatory per D-05).
-    description: String,
+    pub(crate) description: String,
     /// Override tool name (defaults to function name per D-06).
     #[darling(default)]
-    name: Option<String>,
+    pub(crate) name: Option<String>,
     /// MCP standard annotations (per D-23).
     #[darling(default)]
-    annotations: Option<McpToolAnnotations>,
+    pub(crate) annotations: Option<McpToolAnnotations>,
     /// UI widget resource URI (per D-24).
     #[darling(default)]
-    ui: Option<syn::Expr>,
+    pub(crate) ui: Option<syn::Expr>,
 }
 
 /// MCP standard tool annotations parsed from macro attributes.
@@ -51,16 +51,16 @@ pub struct McpToolArgs {
 pub struct McpToolAnnotations {
     /// If true, the tool does not modify any state.
     #[darling(default)]
-    read_only: Option<bool>,
+    pub(crate) read_only: Option<bool>,
     /// If true, the tool may perform destructive operations.
     #[darling(default)]
-    destructive: Option<bool>,
+    pub(crate) destructive: Option<bool>,
     /// If true, calling the tool multiple times with same args has same effect.
     #[darling(default)]
-    idempotent: Option<bool>,
+    pub(crate) idempotent: Option<bool>,
     /// If true, the tool interacts with external systems.
     #[darling(default)]
-    open_world: Option<bool>,
+    pub(crate) open_world: Option<bool>,
 }
 
 /// Expand `#[mcp_tool]` attribute macro on a standalone function.
@@ -344,7 +344,7 @@ fn extract_output_schema_code(input: &ItemFn) -> syn::Result<TokenStream> {
 /// Per the plan: ToolInfo has NO `set_annotations()` method, so we must branch:
 /// - With annotations: `ToolInfo::with_annotations(...)`
 /// - Without annotations: `ToolInfo::new(...)`
-fn generate_tool_info_code(
+pub(crate) fn generate_tool_info_code(
     tool_name: &str,
     description: &str,
     annotations: &Option<McpToolAnnotations>,
