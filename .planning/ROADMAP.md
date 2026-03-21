@@ -559,7 +559,7 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 56-01-PLAN.md -- Tower deps, AllowedOrigins config, DnsRebindingLayer, SecurityHeadersLayer with unit tests
+- [x] 56-01-PLAN.md -- Tower deps, AllowedOrigins config, DnsRebindingLayer, SecurityHeadersLayer with unit tests (completed 2026-03-21)
 - [ ] 56-02-PLAN.md -- Axum router convenience function, StreamableHttpServer CORS fix, lib.rs re-exports
 
 ### Phase 57: Conformance Test Suite

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: in-progress
-stopped_at: Completed 55-03-PLAN.md
-last_updated: "2026-03-21T00:32:06Z"
-last_activity: 2026-03-21 -- Phase 55 Plan 03 complete (server builder integration and dispatch)
+stopped_at: Completed 56-01-PLAN.md
+last_updated: "2026-03-21T02:40:25Z"
+last_activity: 2026-03-21 -- Phase 56 Plan 01 complete (Tower layers for DNS rebinding + security headers)
 progress:
   total_phases: 34
   completed_phases: 24
-  total_plans: 56
-  completed_plans: 56
+  total_plans: 57
+  completed_plans: 57
   percent: 100
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
-**Current focus:** v2.0 Protocol Modernization -- Phase 55 complete. Phase 56 (Tower Middleware) next.
+**Current focus:** v2.0 Protocol Modernization -- Phase 56 Plan 01 complete. Tower layers built. Plan 02 (Axum router integration) next.
 
 ## Current Position
 
-Phase: 55 (tasks-with-polling) -- COMPLETE
-Plan: 3 of 3 complete
-Status: Phase 55 complete. TaskStore wired into builder and core dispatch. 759 tests passing.
-Last activity: 2026-03-21 -- Phase 55 Plan 03 complete (server builder integration and dispatch)
+Phase: 56 (tower-middleware-dns-rebinding-protection)
+Plan: 1 of 2 complete
+Status: Plan 01 complete. AllowedOrigins, DnsRebindingLayer, SecurityHeadersLayer implemented with 21 tests. 975 tests passing.
+Last activity: 2026-03-21 -- Phase 56 Plan 01 complete (Tower layers for DNS rebinding + security headers)
 
 Progress: [##########] 100%
 
@@ -47,7 +47,7 @@ Progress: [##########] 100%
 
 **Velocity:**
 
-- Total plans completed: 72 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 7)
+- Total plans completed: 73 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 8)
 - Total phases completed: 29
 
 ## Accumulated Context
@@ -147,6 +147,10 @@ v1.6 decisions:
 - [Phase 55-02]: Simplified TaskStore trait vs pmcp-tasks (no variables/result/request_method); returns Task wire type; TTL clamped not rejected; Instant-based expiration
 - [Phase 55-03]: TaskStore checked before TaskRouter in dispatch for tasks/get, tasks/list, tasks/cancel; tasks/result remains TaskRouter-only (PMCP extension)
 - [Phase 55-03]: ServerCapabilities.tasks (standard field) used for TaskStore path; experimental.tasks kept for TaskRouter backward compat
+- [Phase 56-01]: AllowedOrigins auto-detects localhost/127.0.0.1/[::1] for loopback and unspecified bind addresses
+- [Phase 56-01]: Missing Origin header permitted (non-browser clients like curl omit it); present but disallowed Origin returns 403
+- [Phase 56-01]: No HSTS header per D-12 (transport-layer concern for reverse proxies)
+- [Phase 56-01]: tower and tower-http gated behind existing streamable-http feature (no new feature flags)
 
 ### Roadmap Evolution
 
@@ -182,6 +186,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-21T00:32:06Z
-Stopped at: Completed 55-03-PLAN.md
-Resume: Phase 55 complete. All 3 plans done: TaskStatus utilities (01), TaskStore trait + InMemoryTaskStore (02), builder/core integration (03). 759 tests passing.
+Last session: 2026-03-21T02:40:25Z
+Stopped at: Completed 56-01-PLAN.md
+Resume: Phase 56 Plan 01 complete. AllowedOrigins, DnsRebindingLayer, SecurityHeadersLayer created in src/server/tower_layers/. 21 new tests, 975 total passing. Plan 02 (Axum router integration) next.
