@@ -594,10 +594,12 @@ Plans:
 **Goal:** Expand pmcp-macros crate with `#[mcp_tool]` attribute macro that eliminates `Box::pin(async move {})` boilerplate on tool definitions. Accepts `async fn(input: T, extra: RequestHandlerExtra) -> Result<Output>` directly. Handles Arc state injection for composition scenarios (eliminates the foundation cloning ceremony). Auto-derives input/output JSON schema from types.
 **Requirements**: TOOL-MACRO, STATE-INJECTION
 **Depends on:** Phase 54
-**Plans:** 2 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 58 to break down)
+- [ ] 58-01-PLAN.md — State<T> type, parameter classification, standalone #[mcp_tool] macro
+- [ ] 58-02-PLAN.md — #[mcp_server] impl-block macro with McpServer trait and builder extension
+- [ ] 58-03-PLAN.md — Integration tests, compile-fail tests, and example 63
 
 ### Phase 59: TypedPrompt with Auto-Deserialization
 
