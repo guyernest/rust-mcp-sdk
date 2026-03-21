@@ -137,6 +137,10 @@ pub mod resource_watcher;
 pub mod roots;
 #[cfg(all(not(target_arch = "wasm32"), feature = "streamable-http"))]
 pub mod streamable_http_server;
+/// Tower middleware layers for MCP HTTP security (DNS rebinding, security headers).
+#[cfg(feature = "streamable-http")]
+#[cfg_attr(docsrs, doc(cfg(feature = "streamable-http")))]
+pub mod tower_layers;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod subscriptions;
 #[cfg(not(target_arch = "wasm32"))]
