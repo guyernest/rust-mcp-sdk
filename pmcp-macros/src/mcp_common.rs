@@ -7,6 +7,17 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{FnArg, GenericParam, Generics, Type, TypePath};
 
+/// Parameter slot for call-site argument ordering.
+///
+/// Used by `#[mcp_tool]`, `#[mcp_prompt]`, and `#[mcp_server]` to track
+/// the user's declared parameter order and generate correct call-site code.
+#[derive(Debug, Clone, Copy)]
+pub enum ParamSlot {
+    Args,
+    State,
+    Extra,
+}
+
 /// Role of a function parameter in an `#[mcp_tool]` function.
 #[derive(Debug)]
 pub enum ParamRole {

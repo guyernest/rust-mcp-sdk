@@ -165,20 +165,11 @@ pub fn expand_mcp_prompt(args: TokenStream, input: ItemFn) -> syn::Result<TokenS
         quote! { #struct_name {} }
     };
 
-    // Generate args deserialization in handle().
-    // Prompts receive HashMap<String, String>, not serde_json::Value.
+    // Generate args deserialization using shared runtime helper.
     let args_deser = if let Some(ref at) = args_type {
         let prompt_name_for_err = &prompt_name;
         quote! {
-            let value = serde_json::Value::Object(
-                args.into_iter()
-                    .map(|(k, v)| (k, serde_json::Value::String(v)))
-                    .collect()
-            );
-            let typed_args: #at = serde_json::from_value(value)
-                .map_err(|e| pmcp::Error::invalid_params(
-                    format!("Invalid arguments for prompt '{}': {}", #prompt_name_for_err, e)
-                ))?;
+            let typed_args: #at = pmcp::server::typed_prompt::deserialize_prompt_args(args, #prompt_name_for_err)?;
         }
     } else {
         quote! {}
@@ -236,7 +227,7 @@ pub fn expand_mcp_prompt(args: TokenStream, input: ItemFn) -> syn::Result<TokenS
 
     // Generate metadata() body.
     let metadata_body = if let Some(ref at) = args_type {
-        // Generate argument extraction from JsonSchema.
+        // Generate argument extraction using shared runtime helper.
         quote! {
             fn metadata(&self) -> Option<pmcp::types::PromptInfo> {
                 let mut info = pmcp::types::PromptInfo::new(#prompt_name)
@@ -244,24 +235,7 @@ pub fn expand_mcp_prompt(args: TokenStream, input: ItemFn) -> syn::Result<TokenS
 
                 let schema = schemars::schema_for!(#at);
                 let json_schema = serde_json::to_value(&schema).unwrap_or_default();
-                let arguments = {
-                    let properties = json_schema.get("properties").and_then(|p| p.as_object());
-                    let required_fields: Vec<String> = json_schema.get("required")
-                        .and_then(|r| r.as_array())
-                        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                        .unwrap_or_default();
-                    let Some(props) = properties else { return Some(info); };
-                    props.iter().map(|(name, prop)| {
-                        let mut arg = pmcp::types::PromptArgument::new(name);
-                        if let Some(desc) = prop.get("description").and_then(|d| d.as_str()) {
-                            arg = arg.with_description(desc);
-                        }
-                        if required_fields.contains(name) {
-                            arg = arg.required();
-                        }
-                        arg
-                    }).collect::<Vec<_>>()
-                };
+                let arguments = pmcp::server::typed_prompt::extract_prompt_arguments_from_schema(&json_schema);
                 if !arguments.is_empty() {
                     info = info.with_arguments(arguments);
                 }

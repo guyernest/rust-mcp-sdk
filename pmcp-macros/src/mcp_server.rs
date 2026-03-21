@@ -39,12 +39,7 @@ use quote::{format_ident, quote};
 use syn::parse::Parser;
 use syn::{ImplItem, ImplItemFn, ItemImpl, ReturnType, Type};
 
-/// Parameter role for call-site argument ordering.
-#[derive(Debug, Clone, Copy)]
-enum ParamSlot {
-    Args,
-    Extra,
-}
+use mcp_common::ParamSlot;
 
 /// Information collected from a single `#[mcp_tool]`-annotated method.
 struct ToolMethodInfo {
@@ -144,9 +139,11 @@ pub fn expand_mcp_server(_args: TokenStream, mut input: ItemImpl) -> syn::Result
         };
 
         // Build call arguments in the user's declared parameter order.
+        // State variant is never pushed for #[mcp_server] (rejected at collection time).
         let call_args: Vec<TokenStream> = method_info.param_order.iter().map(|slot| match slot {
             ParamSlot::Args => quote! { typed_args },
             ParamSlot::Extra => quote! { extra },
+            ParamSlot::State => unreachable!("#[mcp_server] uses &self, not State<T>"),
         }).collect();
 
         // Generate function call (async vs sync).
@@ -232,20 +229,11 @@ pub fn expand_mcp_server(_args: TokenStream, mut input: ItemImpl) -> syn::Result
         let prompt_name = &prompt_info.prompt_name;
         let description = &prompt_info.description;
 
-        // Generate args deserialization for prompts.
-        // Prompts receive HashMap<String, String>, converted to JSON Value for deserialization.
+        // Generate args deserialization using shared runtime helper.
         let args_deser = if let Some(ref at) = prompt_info.args_type {
             let prompt_name_err = prompt_name;
             quote! {
-                let value = serde_json::Value::Object(
-                    args.into_iter()
-                        .map(|(k, v)| (k, serde_json::Value::String(v)))
-                        .collect()
-                );
-                let typed_args: #at = serde_json::from_value(value)
-                    .map_err(|e| pmcp::Error::invalid_params(
-                        format!("Invalid arguments for prompt '{}': {}", #prompt_name_err, e)
-                    ))?;
+                let typed_args: #at = pmcp::server::typed_prompt::deserialize_prompt_args(args, #prompt_name_err)?;
             }
         } else {
             quote! {}
@@ -258,6 +246,7 @@ pub fn expand_mcp_server(_args: TokenStream, mut input: ItemImpl) -> syn::Result
             .map(|slot| match slot {
                 ParamSlot::Args => quote! { typed_args },
                 ParamSlot::Extra => quote! { extra },
+                ParamSlot::State => unreachable!("#[mcp_server] uses &self, not State<T>"),
             })
             .collect();
 
@@ -285,24 +274,7 @@ pub fn expand_mcp_server(_args: TokenStream, mut input: ItemImpl) -> syn::Result
 
                     let schema = schemars::schema_for!(#at);
                     let json_schema = serde_json::to_value(&schema).unwrap_or_default();
-                    let arguments = {
-                        let properties = json_schema.get("properties").and_then(|p| p.as_object());
-                        let required_fields: Vec<String> = json_schema.get("required")
-                            .and_then(|r| r.as_array())
-                            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                            .unwrap_or_default();
-                        let Some(props) = properties else { return Some(info); };
-                        props.iter().map(|(name, prop)| {
-                            let mut arg = pmcp::types::PromptArgument::new(name);
-                            if let Some(desc) = prop.get("description").and_then(|d| d.as_str()) {
-                                arg = arg.with_description(desc);
-                            }
-                            if required_fields.contains(name) {
-                                arg = arg.required();
-                            }
-                            arg
-                        }).collect::<Vec<_>>()
-                    };
+                    let arguments = pmcp::server::typed_prompt::extract_prompt_arguments_from_schema(&json_schema);
                     if !arguments.is_empty() {
                         info = info.with_arguments(arguments);
                     }

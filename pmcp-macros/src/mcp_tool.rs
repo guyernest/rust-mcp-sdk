@@ -101,9 +101,7 @@ pub fn expand_mcp_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStr
     let mut state_inner_ty: Option<Type> = None;
     let mut has_extra = false;
 
-    // Track parameter order for correct call-site argument passing.
-    #[derive(Debug, Clone, Copy)]
-    enum ParamSlot { Args, State, Extra }
+    use mcp_common::ParamSlot;
     let mut param_order: Vec<ParamSlot> = Vec::new();
 
     for param in &input.sig.inputs {

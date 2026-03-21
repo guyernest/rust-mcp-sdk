@@ -149,21 +149,7 @@ where
         args: HashMap<String, String>,
         extra: RequestHandlerExtra,
     ) -> Result<GetPromptResult> {
-        // Convert HashMap<String, String> to serde_json::Value::Object
-        // where each value becomes a Value::String (MCP prompt args are string-only).
-        let value = serde_json::Value::Object(
-            args.into_iter()
-                .map(|(k, v)| (k, serde_json::Value::String(v)))
-                .collect(),
-        );
-
-        let typed_args: T = serde_json::from_value(value).map_err(|e| {
-            crate::Error::invalid_params(format!(
-                "Invalid arguments for prompt '{}': {}",
-                self.name, e
-            ))
-        })?;
-
+        let typed_args: T = deserialize_prompt_args(args, &self.name)?;
         (self.handler)(typed_args, extra).await
     }
 
@@ -179,18 +165,32 @@ where
     }
 }
 
-#[cfg(feature = "schema-generation")]
-/// Extract `PromptArgument` entries from a type's `JsonSchema` implementation.
+/// Deserialize MCP prompt arguments from string-only HashMap into a typed struct.
 ///
-/// Iterates over the schema's `properties` object and creates a `PromptArgument`
-/// for each entry, including description and required status.
-fn extract_prompt_arguments<T: JsonSchema>() -> Vec<PromptArgument> {
-    let schema = schemars::schema_for!(T);
-    let json_schema = match serde_json::to_value(&schema) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
+/// Converts each value to `serde_json::Value::String` then uses `serde_json::from_value`
+/// for deserialization. Used by `TypedPrompt`, `#[mcp_prompt]`, and `#[mcp_server]`.
+pub fn deserialize_prompt_args<T: DeserializeOwned>(
+    args: HashMap<String, String>,
+    prompt_name: &str,
+) -> Result<T> {
+    let value = serde_json::Value::Object(
+        args.into_iter()
+            .map(|(k, v)| (k, serde_json::Value::String(v)))
+            .collect(),
+    );
+    serde_json::from_value(value).map_err(|e| {
+        crate::Error::invalid_params(format!(
+            "Invalid arguments for prompt '{}': {}",
+            prompt_name, e
+        ))
+    })
+}
 
+/// Extract `PromptArgument` entries from a JSON Schema value.
+///
+/// Walks the schema's `properties` and `required` fields to build
+/// argument metadata. Used by both runtime `TypedPrompt` and macro-generated code.
+pub fn extract_prompt_arguments_from_schema(json_schema: &serde_json::Value) -> Vec<PromptArgument> {
     let properties = match json_schema.get("properties").and_then(|p| p.as_object()) {
         Some(props) => props,
         None => return Vec::new(),
@@ -219,6 +219,16 @@ fn extract_prompt_arguments<T: JsonSchema>() -> Vec<PromptArgument> {
             arg
         })
         .collect()
+}
+
+#[cfg(feature = "schema-generation")]
+fn extract_prompt_arguments<T: JsonSchema>() -> Vec<PromptArgument> {
+    let schema = schemars::schema_for!(T);
+    let json_schema = match serde_json::to_value(&schema) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    extract_prompt_arguments_from_schema(&json_schema)
 }
 
 #[cfg(all(test, feature = "schema-generation"))]
