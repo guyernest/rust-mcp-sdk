@@ -23,7 +23,7 @@ pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
 /// [`LATEST_PROTOCOL_VERSION`] -- the caller should treat this as
 /// "unsupported version" and may return a JSON-RPC error with the
 /// supported versions list.
-pub fn negotiate_protocol_version<'a>(client_version: &'a str) -> &'a str {
+pub fn negotiate_protocol_version(client_version: &str) -> &str {
     if SUPPORTED_PROTOCOL_VERSIONS.contains(&client_version) {
         client_version
     } else {

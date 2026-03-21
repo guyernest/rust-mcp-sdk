@@ -436,6 +436,7 @@ impl CompletionResult {
 /// Client request types.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method", content = "params", rename_all = "camelCase")]
+#[allow(clippy::large_enum_variant)]
 pub enum ClientRequest {
     /// Initialize the connection
     #[serde(rename = "initialize")]

@@ -93,7 +93,15 @@ impl std::error::Error for TaskStoreError {}
 
 impl From<TaskStoreError> for crate::error::Error {
     fn from(err: TaskStoreError) -> Self {
-        crate::error::Error::internal(err.to_string())
+        match &err {
+            TaskStoreError::NotFound { .. } => crate::error::Error::not_found(err.to_string()),
+            TaskStoreError::InvalidTransition { .. } => {
+                crate::error::Error::validation(err.to_string())
+            }
+            // Expired uses NotFound to avoid leaking existence of expired tasks
+            TaskStoreError::Expired { .. } => crate::error::Error::not_found(err.to_string()),
+            TaskStoreError::Internal { .. } => crate::error::Error::internal(err.to_string()),
+        }
     }
 }
 
@@ -269,6 +277,23 @@ impl InMemoryTaskStore {
             config,
         }
     }
+
+    /// Validate owner and expiration for a task record.
+    fn validate_access(record: &TaskRecord, task_id: &str, owner_id: &str) -> Result<(), TaskStoreError> {
+        if record.owner_id != owner_id {
+            return Err(TaskStoreError::NotFound {
+                task_id: task_id.to_string(),
+            });
+        }
+        if let Some(expires_at) = record.expires_at {
+            if Instant::now() > expires_at {
+                return Err(TaskStoreError::Expired {
+                    task_id: task_id.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Default for InMemoryTaskStore {
@@ -284,11 +309,15 @@ impl TaskStore for InMemoryTaskStore {
         owner_id: &str,
         ttl: Option<u64>,
     ) -> Result<Task, TaskStoreError> {
-        // Enforce max_tasks_per_owner
+        // Enforce max_tasks_per_owner (excludes expired tasks)
+        let now = Instant::now();
         let owner_count = self
             .records
             .iter()
-            .filter(|entry| entry.value().owner_id == owner_id)
+            .filter(|entry| {
+                let v = entry.value();
+                v.owner_id == owner_id && v.expires_at.is_none_or(|e| now <= e)
+            })
             .count();
         if owner_count >= self.config.max_tasks_per_owner {
             return Err(TaskStoreError::Internal {
@@ -345,26 +374,8 @@ impl TaskStore for InMemoryTaskStore {
                 task_id: task_id.to_string(),
             }
         })?;
-
-        let record = entry.value();
-
-        // Owner isolation: mismatch looks like not found
-        if record.owner_id != owner_id {
-            return Err(TaskStoreError::NotFound {
-                task_id: task_id.to_string(),
-            });
-        }
-
-        // Check expiration
-        if let Some(expires_at) = record.expires_at {
-            if Instant::now() > expires_at {
-                return Err(TaskStoreError::Expired {
-                    task_id: task_id.to_string(),
-                });
-            }
-        }
-
-        Ok(record.task.clone())
+        Self::validate_access(entry.value(), task_id, owner_id)?;
+        Ok(entry.value().task.clone())
     }
 
     async fn update_status(
@@ -381,22 +392,7 @@ impl TaskStore for InMemoryTaskStore {
         })?;
 
         let record = entry.value_mut();
-
-        // Owner isolation
-        if record.owner_id != owner_id {
-            return Err(TaskStoreError::NotFound {
-                task_id: task_id.to_string(),
-            });
-        }
-
-        // Check expiration
-        if let Some(expires_at) = record.expires_at {
-            if Instant::now() > expires_at {
-                return Err(TaskStoreError::Expired {
-                    task_id: task_id.to_string(),
-                });
-            }
-        }
+        Self::validate_access(record, task_id, owner_id)?;
 
         // Validate state machine transition
         if !record.task.status.can_transition_to(&status) {
@@ -420,10 +416,14 @@ impl TaskStore for InMemoryTaskStore {
         owner_id: &str,
         cursor: Option<&str>,
     ) -> Result<(Vec<Task>, Option<String>), TaskStoreError> {
+        let now = Instant::now();
         let mut tasks: Vec<Task> = self
             .records
             .iter()
-            .filter(|entry| entry.value().owner_id == owner_id)
+            .filter(|entry| {
+                let v = entry.value();
+                v.owner_id == owner_id && v.expires_at.is_none_or(|e| now <= e)
+            })
             .map(|entry| entry.value().task.clone())
             .collect();
 
@@ -437,11 +437,10 @@ impl TaskStore for InMemoryTaskStore {
             }
         }
 
-        // Page size of 20
-        let page_size = 20;
-        if tasks.len() > page_size {
-            let next_cursor = tasks[page_size - 1].task_id.clone();
-            tasks.truncate(page_size);
+        const PAGE_SIZE: usize = 20;
+        if tasks.len() > PAGE_SIZE {
+            let next_cursor = tasks[PAGE_SIZE - 1].task_id.clone();
+            tasks.truncate(PAGE_SIZE);
             Ok((tasks, Some(next_cursor)))
         } else {
             Ok((tasks, None))
@@ -459,25 +458,10 @@ impl TaskStore for InMemoryTaskStore {
 
     async fn cleanup_expired(&self) -> Result<usize, TaskStoreError> {
         let now = Instant::now();
-        let expired_keys: Vec<String> = self
-            .records
-            .iter()
-            .filter_map(|entry| {
-                if let Some(expires_at) = entry.value().expires_at {
-                    if now > expires_at {
-                        return Some(entry.key().clone());
-                    }
-                }
-                None
-            })
-            .collect();
-
-        let count = expired_keys.len();
-        for key in expired_keys {
-            self.records.remove(&key);
-        }
-
-        Ok(count)
+        let before = self.records.len();
+        self.records
+            .retain(|_, record| record.expires_at.is_none_or(|e| now <= e));
+        Ok(before - self.records.len())
     }
 
     fn config(&self) -> &StoreConfig {

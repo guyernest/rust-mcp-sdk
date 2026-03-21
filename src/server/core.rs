@@ -767,13 +767,30 @@ impl ServerCore {
     /// Returns `None` if no task router is configured. When a task router is
     /// available, it delegates to [`TaskRouter::resolve_owner`] which uses
     /// the priority chain: OAuth subject > client ID > session ID > "local".
+    /// When only a [`TaskStore`] is configured (no [`TaskRouter`]), derives
+    /// the owner from the auth context directly.
     #[cfg(not(target_arch = "wasm32"))]
     fn resolve_task_owner(&self, auth_context: Option<&AuthContext>) -> Option<String> {
-        let router = self.task_router.as_ref()?;
-        Some(match auth_context {
-            Some(ctx) => router.resolve_owner(Some(&ctx.subject), ctx.client_id.as_deref(), None),
-            None => router.resolve_owner(None, None, None),
-        })
+        // Legacy path: TaskRouter has its own resolve_owner logic
+        if let Some(ref router) = self.task_router {
+            return Some(match auth_context {
+                Some(ctx) => {
+                    router.resolve_owner(Some(&ctx.subject), ctx.client_id.as_deref(), None)
+                }
+                None => router.resolve_owner(None, None, None),
+            });
+        }
+        // Standard path: derive owner from auth context when task_store is configured
+        if self.task_store.is_some() {
+            return Some(match auth_context {
+                Some(ctx) => ctx
+                    .client_id
+                    .clone()
+                    .unwrap_or_else(|| ctx.subject.clone()),
+                None => "local".to_string(),
+            });
+        }
+        None
     }
 
     /// Internal request handler without middleware processing.
@@ -961,7 +978,7 @@ impl ServerCore {
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
                                 .handle_tasks_get(
-                                    serde_json::to_value(&params).unwrap_or_default(),
+                                    serde_json::to_value(params).unwrap_or_default(),
                                     &owner_id,
                                 )
                                 .await
@@ -982,7 +999,7 @@ impl ServerCore {
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
                                 .handle_tasks_result(
-                                    serde_json::to_value(&params).unwrap_or_default(),
+                                    serde_json::to_value(params).unwrap_or_default(),
                                     &owner_id,
                                 )
                                 .await
@@ -1024,7 +1041,7 @@ impl ServerCore {
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
                                 .handle_tasks_list(
-                                    serde_json::to_value(&params).unwrap_or_default(),
+                                    serde_json::to_value(params).unwrap_or_default(),
                                     &owner_id,
                                 )
                                 .await
@@ -1059,7 +1076,7 @@ impl ServerCore {
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
                                 .handle_tasks_cancel(
-                                    serde_json::to_value(&params).unwrap_or_default(),
+                                    serde_json::to_value(params).unwrap_or_default(),
                                     &owner_id,
                                 )
                                 .await
