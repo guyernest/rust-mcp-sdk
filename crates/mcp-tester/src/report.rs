@@ -31,6 +31,7 @@ pub enum TestCategory {
     Performance,
     Compatibility,
     Apps,
+    Tasks,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -270,12 +271,14 @@ impl TestReport {
         let mut protocol_failures = 0;
         let mut tool_failures = 0;
         let mut core_failures = 0;
+        let mut task_failures = 0;
 
         for test in &failed_tests {
             match test.category {
                 TestCategory::Protocol => protocol_failures += 1,
                 TestCategory::Tools => tool_failures += 1,
                 TestCategory::Core => core_failures += 1,
+                TestCategory::Tasks => task_failures += 1,
                 _ => {},
             }
         }
@@ -298,6 +301,13 @@ impl TestReport {
             println!("    - Verify tool registration and handlers");
             println!("    - Check input validation and error handling");
             println!("    - Review tool response formats");
+        }
+
+        if task_failures > 0 {
+            println!("  - Debug task implementations");
+            println!("    - Verify task capability is advertised in ServerCapabilities");
+            println!("    - Check task lifecycle state machine (working -> completed/failed)");
+            println!("    - Ensure tasks/get and tasks/list return valid Task structures");
         }
 
         println!();

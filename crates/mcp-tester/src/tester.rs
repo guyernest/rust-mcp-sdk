@@ -2688,6 +2688,18 @@ impl ServerTester {
         self.tools.as_ref()
     }
 
+    /// Get the full server capabilities from the last initialize response.
+    /// Populated after `test_initialize()` completes successfully.
+    pub fn server_capabilities(&self) -> Option<&ServerCapabilities> {
+        self.server_capabilities.as_ref()
+    }
+
+    /// Get the full initialize result (server info, capabilities, protocol version).
+    /// Populated after `test_initialize()` completes successfully.
+    pub fn server_info(&self) -> Option<&InitializeResult> {
+        self.server_info.as_ref()
+    }
+
     pub fn get_server_name(&self) -> Option<String> {
         self.server_info
             .as_ref()
