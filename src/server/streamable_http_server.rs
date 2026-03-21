@@ -231,15 +231,43 @@ struct SessionInfo {
     protocol_version: Option<String>,
 }
 
-/// Server state shared across routes
+/// Server state shared across routes.
 #[derive(Clone)]
-struct ServerState {
+pub(crate) struct ServerState {
     server: Arc<tokio::sync::Mutex<Server>>,
     config: Arc<StreamableHttpServerConfig>,
     /// Active SSE streams by session ID
     sse_streams: Arc<RwLock<HashMap<String, mpsc::UnboundedSender<TransportMessage>>>>,
     /// Session tracking (session ID -> session info)
     sessions: Arc<RwLock<HashMap<String, SessionInfo>>>,
+}
+
+/// Build the base MCP Router without any Tower layers applied.
+///
+/// Used by both [`StreamableHttpServer::start()`] and `pmcp::axum::router()`.
+pub(crate) fn build_mcp_router(state: ServerState) -> Router<()> {
+    Router::new()
+        .route("/", post(handle_post_request))
+        .route("/", get(handle_get_sse))
+        .route("/", delete(handle_delete_session))
+        .route("/", axum::routing::options(handle_options))
+        .with_state(state)
+}
+
+/// Create a [`ServerState`] for the MCP router.
+///
+/// Used by `pmcp::axum::router()` to construct state without a full
+/// [`StreamableHttpServer`].
+pub(crate) fn make_server_state(
+    server: Arc<tokio::sync::Mutex<Server>>,
+    config: StreamableHttpServerConfig,
+) -> ServerState {
+    ServerState {
+        server,
+        config: Arc::new(config),
+        sse_streams: Arc::new(RwLock::new(HashMap::new())),
+        sessions: Arc::new(RwLock::new(HashMap::new())),
+    }
 }
 
 /// A streamable HTTP server for MCP.
@@ -297,12 +325,7 @@ impl StreamableHttpServer {
 
     /// Starts the server and returns the bound address and a task handle.
     pub async fn start(self) -> Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
-        let app = Router::new()
-            .route("/", post(handle_post_request))
-            .route("/", get(handle_get_sse))
-            .route("/", delete(handle_delete_session))
-            .route("/", axum::routing::options(handle_options))
-            .with_state(self.state);
+        let app = build_mcp_router(self.state);
 
         let listener = tokio::net::TcpListener::bind(self.addr).await?;
         let local_addr = listener.local_addr()?;

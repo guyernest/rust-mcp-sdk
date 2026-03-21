@@ -141,6 +141,10 @@ pub mod streamable_http_server;
 #[cfg(feature = "streamable-http")]
 #[cfg_attr(docsrs, doc(cfg(feature = "streamable-http")))]
 pub mod tower_layers;
+/// Axum Router convenience function for secure MCP server hosting.
+#[cfg(feature = "streamable-http")]
+#[cfg_attr(docsrs, doc(cfg(feature = "streamable-http")))]
+pub mod axum_router;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod subscriptions;
 #[cfg(not(target_arch = "wasm32"))]
