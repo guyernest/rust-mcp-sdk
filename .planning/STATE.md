@@ -1,7 +1,7 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.6
-milestone_name: CLI DX Overhaul
+milestone: v2.0
+milestone_name: Protocol Modernization
 status: in-progress
 stopped_at: Completed 57-02-PLAN.md
 last_updated: "2026-03-21T13:51:00Z"

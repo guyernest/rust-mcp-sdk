@@ -88,7 +88,8 @@ See phase details in `.planning/phases/25-*` and `.planning/phases/26-*`
 
 </details>
 
-### v1.6 CLI DX Overhaul (In Progress)
+<details>
+<summary>v1.6 CLI DX Overhaul (In Progress — paused for v2.0)</summary>
 
 **Milestone Goal:** Normalize the cargo pmcp CLI for consistency and developer experience ahead of course recording -- fix flag inconsistencies, propagate auth to all server-facing commands, surface mcp-tester via `cargo pmcp test`, and add doctor/completions commands.
 
@@ -99,12 +100,21 @@ See phase details in `.planning/phases/25-*` and `.planning/phases/26-*`
 - [ ] **Phase 31: New Commands** - Add cargo pmcp doctor and cargo pmcp completions commands
 - [ ] **Phase 32: Help Text Polish** - Consistent help text format with descriptions and usage examples across all commands
 
-### v1.7 SDK Maturation (Complete)
+See phase details in `.planning/phases/27-*` through `.planning/phases/32-*`
+
+</details>
+
+<details>
+<summary>v1.7 SDK Maturation — SHIPPED 2026-03-20</summary>
 
 **Milestone Goal:** Reduce dependency footprint and produce gap analysis against TypeScript SDK v2.
 
 - [x] **Phase 52: Reduce transitive dependencies** - Feature-gate reqwest and tracing-subscriber, slim tokio/hyper/chrono (completed 2026-03-18)
 - [x] **Phase 53: Review TypeScript SDK Updates** - Gap analysis comparing TypeScript v2 against Rust SDK (completed 2026-03-20)
+
+See phase details in `.planning/phases/52-*` and `.planning/phases/53-*`
+
+</details>
 
 ### v2.0 Protocol Modernization (In Progress)
 
@@ -119,6 +129,9 @@ See phase details in `.planning/phases/25-*` and `.planning/phases/26-*`
 - [ ] **Phase 59: TypedPrompt with Auto-Deserialization** - Typed prompt equivalent of TypedToolWithOutput. Prompt arguments deserialize from HashMap<String, String> into a typed struct automatically via JsonSchema + serde, matching the tool DX pattern.
 
 ## Phase Details
+
+<details>
+<summary>Phases 27-53 (v1.6 + v1.7 — prior milestones)</summary>
 
 ### Phase 27: Global Flag Infrastructure
 **Goal**: Every cargo pmcp invocation supports --no-color and --quiet for scripting and CI use
@@ -236,7 +249,7 @@ Plans:
 | 31. New Commands | v1.6 | 0/? | Not started | - |
 | 32. Help Text Polish | v1.6 | 0/? | Not started | - |
 
-### Phase 33: Fix mcp-tester failure with v1.12.0
+### Phase 33: Fix mcp-tester compatibility failure
 
 **Goal:** Bump mcp-tester to 0.2.2 and cargo-pmcp to 0.3.4, publish both to crates.io so `cargo install cargo-pmcp` works without `--locked`
 **Requirements**: None (hotfix)
@@ -500,6 +513,8 @@ Plans:
 Plans:
 - [x] 53-01-PLAN.md — Deep verification of TypeScript vs Rust SDK source differences across 6 domains
 - [x] 53-02-PLAN.md — Gap analysis report with prioritized recommendations and proposed implementation phases
+
+</details>
 
 ### Phase 54: Protocol Version 2025-11-25 + Type Cleanup
 
