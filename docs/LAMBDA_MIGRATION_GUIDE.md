@@ -2,6 +2,35 @@
 
 This guide is for teams running MCP servers on AWS Lambda using the `StreamableHttpServer` + reqwest proxy pattern. The v2.0 SDK eliminates most of this boilerplate with `pmcp::axum::router()` and built-in security layers.
 
+## Breaking Change: StreamableHttpServerConfig
+
+**This will break your build immediately on upgrade.** `StreamableHttpServerConfig` has a new `allowed_origins` field. Since the struct is not `#[non_exhaustive]`, every struct literal in your codebase that doesn't use `..Default::default()` will fail to compile.
+
+**Quick fix** — use `..Default::default()` instead of listing every field:
+
+```rust
+// Before (breaks on v2.0 — missing allowed_origins field)
+let config = StreamableHttpServerConfig {
+    session_id_generator: None,
+    enable_json_response: true,
+    event_store: None,
+    on_session_initialized: None,
+    on_session_closed: None,
+    http_middleware: Some(Arc::new(middleware_chain)),
+};
+
+// After (forward-compatible — survives future field additions)
+let config = StreamableHttpServerConfig {
+    enable_json_response: true,
+    http_middleware: Some(Arc::new(middleware_chain)),
+    ..Default::default()
+};
+```
+
+This pattern works because `StreamableHttpServerConfig` implements `Default`. Only specify the fields you're changing from the default. **Apply this fix to every server-common crate before doing anything else** — if you have multiple copies (calculator, arithmetics, combinatorics), all of them need the same one-line fix.
+
+> **Note on server-common duplication:** If you have 3+ identical copies of server-common, consider extracting it as a shared workspace crate or absorbing it into your project's common library. Every SDK upgrade currently requires the same fix applied N times.
+
 ## What Changes
 
 | Before (v1.x) | After (v2.0) | Impact |
@@ -16,7 +45,7 @@ This guide is for teams running MCP servers on AWS Lambda using the `StreamableH
 
 ## Migration Path 1: Simplify server-common (minimal change)
 
-If you want to keep the `StreamableHttpServer` pattern but pick up the security improvements, just add the `allowed_origins` field:
+If you want to keep the `StreamableHttpServer` pattern but pick up the security improvements, switch to `..Default::default()`:
 
 ### Before (server-common/src/lib.rs)
 
@@ -35,22 +64,25 @@ let config = StreamableHttpServerConfig {
 
 ```rust
 let config = StreamableHttpServerConfig {
-    session_id_generator: None,
     enable_json_response: true,
-    event_store: None,
-    on_session_initialized: None,
-    on_session_closed: None,
     http_middleware: Some(Arc::new(middleware_chain)),
-    allowed_origins: None, // auto-detects from bind address
+    ..Default::default()
 };
 ```
+
+This is the same fix from the breaking change section above. By using `..Default::default()`, you:
+- Pick up `allowed_origins: None` (auto-detects from bind address)
+- Drop 5 explicit `None` fields that match the default anyway
+- Future-proof against the next field addition
 
 The `start()` method now automatically applies:
 - `DnsRebindingLayer` — validates Host and Origin headers
 - `SecurityHeadersLayer` — adds X-Content-Type-Options, X-Frame-Options, Cache-Control
 - `CorsLayer` — origin-locked CORS (no more wildcard `*`)
 
-**That's it.** One field addition. Your existing `ServerHttpMiddleware` (logging, OAuth) continues to work — Tower layers wrap outside, custom middleware runs inside.
+**That's it.** Your existing `ServerHttpMiddleware` (logging, OAuth) continues to work — Tower layers wrap outside, custom middleware runs inside.
+
+**Apply this to all server-common copies** (calculator, arithmetics, combinatorics). If you have 3 identical copies, this is 3 identical one-line fixes — a strong signal to consolidate into a shared crate.
 
 ## Migration Path 2: Replace Lambda proxy with pmcp::axum::router() (recommended)
 
@@ -135,6 +167,8 @@ ENV PORT=8080
 
 The Lambda Web Adapter forwards Lambda events to your Axum server's HTTP port. No reqwest proxy needed.
 
+**Important:** Keep `[[bin]] name = "bootstrap"` in your Cargo.toml even though `lambda_http` is gone. The Lambda Web Adapter still expects the binary at `/var/task/bootstrap` by default. Your Dockerfile should still `COPY target/release/bootstrap /var/task/bootstrap`.
+
 ### With custom allowed origins (production)
 
 ```rust
@@ -149,7 +183,9 @@ let app = router_with_config(server, RouterConfig {
 
 ## Migration Path 3: Simplify server-common/run_http() (container/ECS)
 
-For the non-Lambda path (containers, ECS, direct binary), `run_http()` in server-common can also use `pmcp::axum::router()`:
+For the non-Lambda path (containers, ECS, direct binary), `run_http()` in server-common can also use `pmcp::axum::router()`.
+
+**If you have multiple copies of server-common** (calculator, arithmetics, combinatorics all have identical 486-line copies), this is the right time to consolidate. Extract server-common as a shared workspace crate, apply this migration once, and delete the duplicates.
 
 ### Before: server-common run_http() (~100 lines)
 
@@ -278,10 +314,18 @@ The wildcard `access-control-allow-origin: *` that your Lambda handlers currentl
 
 ## Checklist
 
-- [ ] Add `allowed_origins: None` to `StreamableHttpServerConfig` struct literals (or use `..Default::default()`)
+**Must do (build will fail without these):**
+- [ ] Switch all `StreamableHttpServerConfig` struct literals to `..Default::default()` pattern (fixes missing `allowed_origins` field)
+- [ ] Apply to ALL copies of server-common (calculator, arithmetics, combinatorics)
+
+**Should do (security):**
 - [ ] Delete hand-rolled `access-control-allow-origin: *` headers from Lambda handlers
 - [ ] Delete hand-rolled OPTIONS handler from Lambda handlers
-- [ ] (Optional) Replace reqwest proxy with `pmcp::axum::router()` + Lambda Web Adapter
-- [ ] (Optional) Migrate type construction to `::new()` + `.with_*()` pattern
-- [ ] (Optional) Replace `run_http()` internals with `router_with_config()` + `axum::serve()`
 - [ ] Verify: `grep -r "access-control-allow-origin.*\*"` returns zero matches
+
+**Recommended (simplification):**
+- [ ] Replace reqwest proxy with `pmcp::axum::router()` + Lambda Web Adapter
+- [ ] Keep `[[bin]] name = "bootstrap"` in Cargo.toml (Lambda Web Adapter requires it)
+- [ ] Consolidate server-common into a single shared crate (eliminate N identical copies)
+- [ ] Migrate type construction to `::new()` + `.with_*()` pattern
+- [ ] Replace `run_http()` internals with `router_with_config()` + `axum::serve()`
