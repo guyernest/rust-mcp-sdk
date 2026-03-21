@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: in-progress
-stopped_at: Completed 56-03-PLAN.md
-last_updated: "2026-03-21T03:52:00Z"
-last_activity: 2026-03-21 -- Phase 56 Plan 03 complete (gap closure -- Tower layers in start(), single CORS)
+stopped_at: Completed 57-01-PLAN.md
+last_updated: "2026-03-21T13:42:00Z"
+last_activity: 2026-03-21 -- Phase 57 Plan 01 complete (conformance scenario engine with 5 domains, 19 scenarios)
 progress:
   total_phases: 34
   completed_phases: 24
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
-**Current focus:** v2.0 Protocol Modernization -- Phase 56 complete (all 3 plans). Tower middleware with DNS rebinding protection, security headers, unified CORS, and Axum router API shipped.
+**Current focus:** v2.0 Protocol Modernization -- Phase 57 in progress (conformance test suite). Plan 01 complete: 19-scenario conformance engine with 5 domain groups.
 
 ## Current Position
 
-Phase: 56 (tower-middleware-dns-rebinding-protection)
-Plan: 3 of 3 complete
-Status: Phase 56 fully complete. Tower layers in both start() and router() paths. Single CORS via CorsLayer. 790 lib tests passing.
-Last activity: 2026-03-21 -- Phase 56 Plan 03 complete (gap closure -- Tower layers in start(), single CORS)
+Phase: 57 (conformance-test-suite)
+Plan: 1 of 2 complete
+Status: Plan 01 shipped conformance scenario engine. ConformanceRunner with 5 domains (Core, Tools, Resources, Prompts, Tasks), capability-conditional testing, domain filtering.
+Last activity: 2026-03-21 -- Phase 57 Plan 01 complete (conformance scenario engine with 5 domains, 19 scenarios)
 
 Progress: [##########] 100%
 
@@ -47,7 +47,7 @@ Progress: [##########] 100%
 
 **Velocity:**
 
-- Total plans completed: 75 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 10)
+- Total plans completed: 76 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 11)
 - Total phases completed: 29
 
 ## Accumulated Context
@@ -158,6 +158,11 @@ v1.6 decisions:
 - [Phase 56-03]: CorsLayer handles all CORS including preflight OPTIONS -- hand-rolled add_cors_headers deleted (13 call sites)
 - [Phase 56-03]: Handler signatures simplified by removing allowed_origins/request_origin params -- Tower layers handle CORS at middleware level
 - [Phase 56-03]: StreamableHttpServer::with_config() delegates to make_server_state() -- single construction path
+- [Phase 57-01]: Module name core_domain (not core) to avoid shadowing Rust core prelude
+- [Phase 57-01]: Capability-conditional testing: each non-core domain returns Skipped when capability absent
+- [Phase 57-01]: Core domain always runs first (handles initialize) -- other domains skip if core fails
+- [Phase 57-01]: Prompts/get with empty args returns Warning not Failed (prompts may require arguments)
+- [Phase 57-01]: Tasks domain uses _meta.task.ttl for task creation via tools/call
 
 ### Roadmap Evolution
 
@@ -193,6 +198,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-21T03:52:00Z
-Stopped at: Completed 56-03-PLAN.md
-Resume: Phase 56 fully complete (all 3 plans). Plan 01 created Tower layers, Plan 02 wired axum_router + origin-locked CORS, Plan 03 closed gaps (Tower layers in start(), single CORS, pre-resolved origins). 790 lib tests passing. Next phase TBD.
+Last session: 2026-03-21T13:42:00Z
+Stopped at: Completed 57-01-PLAN.md
+Resume: Phase 57 Plan 01 complete. Conformance scenario engine with 5 domains (Core 6, Tools 4, Resources 3, Prompts 3, Tasks 4 = 19 total scenarios). ConformanceRunner with domain filtering and strict mode. Plan 02 next (CLI integration and advanced scenarios).
