@@ -1,8 +1,9 @@
 //! Integration tests for `#[mcp_server]` impl blocks.
 //!
-//! These tests verify that `#[mcp_server]` correctly generates per-tool handler
-//! structs, a `McpServer` impl with `register_tools()`, and that the generated
-//! handlers dispatch correctly through `ToolHandler::handle()`.
+//! These tests verify that `#[mcp_server]` correctly generates per-tool and
+//! per-prompt handler structs, a `McpServer` impl with `register()`, and that
+//! the generated handlers dispatch correctly through `ToolHandler::handle()`
+//! and `PromptHandler::handle()`.
 
 use pmcp_macros::mcp_server;
 use schemars::JsonSchema;
@@ -44,13 +45,13 @@ impl Calculator {
 }
 
 #[test]
-fn test_register_tools() {
+fn test_register() {
     let calc = Calculator;
     let builder = pmcp::ServerBuilder::new()
         .name("test")
         .version("1.0.0")
         .mcp_server(calc);
-    // If this compiles, McpServer is implemented and register_tools works
+    // If this compiles, McpServer is implemented and register() works
     drop(builder);
 }
 
