@@ -390,29 +390,128 @@ src/types/
   completable.rs      # CompletionReference, CompleteRequest/Result
 ```
 
+## `#[non_exhaustive]` Struct Literal Breakage (Most Common Issue)
+
+The most common v2.0 compile errors come from `#[non_exhaustive]` on protocol types.
+Every struct literal constructed outside the crate will fail. Here is the full list
+of affected types and their constructor replacements:
+
+| Type | v1.x (struct literal) | v2.0 (constructor) |
+|------|----------------------|-------------------|
+| `ResourceInfo` | `ResourceInfo { uri, name, ... }` | `ResourceInfo::new(uri, name)` |
+| `Content::Resource` | `Content::Resource { uri, text, ... }` | `Content::resource(uri)` or `Content::resource_with_text(uri, text, mime)` |
+| `ReadResourceResult` | `ReadResourceResult { contents }` | `ReadResourceResult::new(contents)` |
+| `ListResourcesResult` | `ListResourcesResult { resources, ... }` | `ListResourcesResult::new(resources)` |
+| `ServerCapabilities` | `ServerCapabilities { tools, ... }` | See mutation pattern below |
+| `Implementation` | `Implementation { name, version }` | `Implementation::new(name, version)` |
+| `PromptInfo` | `PromptInfo { name, ... }` | `PromptInfo::new(name)` |
+| `PromptArgument` | `PromptArgument { name, ... }` | `PromptArgument::new(name)` |
+| `ToolInfo` | `ToolInfo { name, ... }` | `ToolInfo::new(name, desc, schema)` |
+| `Content::Text` | `Content::Text { text: "...".to_string() }` | `Content::text("...")` |
+
+### ServerCapabilities Migration
+
+`ServerCapabilities` is `#[non_exhaustive]` with `Default`. Use mutation:
+
+```rust
+// v1.x
+let caps = ServerCapabilities {
+    tools: Some(Default::default()),
+    resources: Some(Default::default()),
+    prompts: Some(Default::default()),
+    ..Default::default()
+};
+
+// v2.0
+let mut caps = ServerCapabilities::default();
+caps.tools = Some(Default::default());
+caps.resources = Some(Default::default());
+caps.prompts = Some(Default::default());
+
+// Or use convenience constructors:
+let caps = ServerCapabilities::tools_only();
+let caps = ServerCapabilities::tools_and_resources();
+```
+
+### Helper Pattern for Resource-Heavy Servers
+
+If your server constructs many resources, extract helpers to cut repetition:
+
+```rust
+fn json_content(text: impl Into<String>) -> Content {
+    Content::resource_with_text("", Some(text.into()), Some("application/json".into()))
+}
+
+fn json_resource(uri: &str, name: &str, desc: &str) -> ResourceInfo {
+    ResourceInfo::new(uri, name)
+        .with_description(desc)
+        .with_mime_type("application/json")
+}
+```
+
+## Migration Paths for HTTP Servers
+
+### Path 1a: Minimal (fix compile errors only)
+
+Apply the type constructor replacements above. No architecture changes.
+
+### Path 1b: Intermediate (recommended for servers with async setup)
+
+Keep your existing reqwest proxy or custom HTTP setup, but adopt v2.0 patterns:
+
+1. Switch to `StreamableHttpServer::stateless()` (removes session management overhead)
+2. Remove manual `Access-Control-Allow-Origin` headers from response builders — Tower CORS layer handles this
+3. Simplify `start_http_in_background()` using the new server config
+4. Drop unused dependencies: `server-common`, `anyhow` (if only used for server setup)
+
+### Path 2: Full (adopt axum::router)
+
+Use `pmcp::axum::router(server)` for a one-line secure server with Tower middleware.
+See `examples/22_streamable_http_server_stateful.rs`.
+
 ## Quick Migration Checklist
 
+### Type construction (required for ALL servers)
+- [ ] Replace ALL struct literals for `#[non_exhaustive]` types with constructors (see table above)
+- [ ] Use `Content::text("...")` instead of `Content::Text { text: "...".to_string() }`
+- [ ] Use `Content::resource(uri)` instead of `Content::Resource { uri, ... }`
+- [ ] Use `ResourceInfo::new(uri, name)` instead of `ResourceInfo { uri, name, ... }`
+- [ ] Use `ServerCapabilities` mutation pattern instead of struct literal
+
+### Import paths
 - [ ] Replace `pmcp::types::protocol::` with `pmcp::types::` everywhere
 - [ ] Replace `crate::types::protocol::` with `crate::types::` in library code
+
+### Type renames
 - [ ] Replace removed type aliases with canonical names (see table above)
-- [ ] Add `title: None, icons: None, annotations: None` to `ResourceInfo` struct literals
-- [ ] Add `title: None, icons: None, meta: None` to `PromptInfo` struct literals
-- [ ] Add `title: None, icons: None, annotations: None, meta: None` to `ResourceTemplate` struct literals
 - [ ] Use `Implementation::new(name, version)` instead of struct literals
-- [ ] Add `tasks: None` to `ClientCapabilities` struct literals
+
+### New fields
 - [ ] Add wildcard or new arms to `Content` pattern matches (Audio, ResourceLink)
 - [ ] Add wildcard or new arms to `LoggingLevel` pattern matches (Notice, Alert, Emergency, Critical)
 - [ ] Update `SamplingMessage.content` usage from `Content` to `SamplingMessageContent`
+
+### HTTP servers
+- [ ] Remove manual `Access-Control-Allow-Origin` headers from ALL response builders (not just health checks)
 - [ ] Rewrite elicitation code using `ElicitRequestParams` / `ElicitResult`
 - [ ] Update protocol version references from 2024 to 2025
 
-## Construction DX (v2.0)
+### Diagnostic tip
+
+Run `cargo check 2>&1 | grep "error\[E" | sort | uniq -c | sort -rn` to see
+which error types dominate. Most v2.0 migrations are 90%+ struct literal errors
+(E0639) that are fixed mechanically with the constructor table above.
+
+## Construction DX (v2.0) — Required for Resource Servers
 
 All protocol structs now use the uniform construction pattern:
 `#[non_exhaustive]` + `Default` + `::new(required_fields)` + `.with_*(optional_field)`
 
-This means:
-- **Struct literal syntax from outside the crate no longer works** (due to `#[non_exhaustive]`)
+This is **not optional cleanup** — any server that constructs protocol types
+(resources, prompts, tool results) **must** migrate from struct literals to
+constructors. Struct literal syntax from outside the crate no longer compiles.
+
+Benefits of the new pattern:
 - **New optional fields in future versions won't break your code** (constructor defaults them to `None`)
 - **Upgrades are painless** -- just bump the version, constructors handle new fields
 
