@@ -50,13 +50,24 @@ Expand pmcp-macros crate with `#[mcp_tool]` attribute macro that eliminates `Box
 - **D-22:** Input schema via `schemars::schema_for!` — same as TypedTool/TypedToolWithOutput today
 - **D-23:** MCP standard annotations supported: `annotations(read_only, destructive, idempotent, open_world)`
 
+### Team feedback — P1 (must-have)
+- **D-24:** `ui = "uri"` attribute on `#[mcp_tool]` for widget attachment — e.g., `#[mcp_tool(description = "Add", ui = CALCULATOR_WIDGET_URI)]`. Without this, MCP Apps servers cannot migrate to the macro.
+- **D-25:** Generic impl blocks on `#[mcp_server]` must work — `#[mcp_server] impl<F: FoundationClient + 'static> Server<F>` is the natural pattern for composition servers using generic foundation clients. Proc macro must preserve type parameters and trait bounds.
+
+### Team feedback — P2/P3 (should-have)
+- **D-26:** Auto-detect sync vs async from `fn` vs `async fn` — drop the `sync` flag. If the method is `fn`, it's sync. If `async fn`, it's async. Redundant flags are a DX anti-pattern.
+- **D-27:** Auto-validate inputs if the args type implements `validator::Validate` — call `.validate()` before passing args to the handler, return validation error automatically. Optional enhancement, not blocking.
+- **D-28:** Document the "thin wrapper" migration pattern for existing standalone async functions — annotating existing functions directly isn't supported; wrap them in `#[mcp_server]` impl methods. This is the expected path, not a limitation.
+
 ### Claude's Discretion
 - Internal codegen details (how Box::pin is hidden, how State<T> is resolved)
 - Error message quality for macro misuse (wrong parameter types, missing derives)
 - Whether to generate `#[cfg(feature = "schema-generation")]` guards or always include schemas
-- Exact trait bounds and lifetime handling
+- Exact trait bounds and lifetime handling for generic impl blocks
 - Test strategy for the macro itself (trybuild, compile-fail tests)
 - Whether `#[mcp_server]` generates a single `tools()` method or per-tool metadata
+- How `ui` attribute value gets wired to `.with_ui()` in generated code
+- Whether `validator` integration requires a feature flag or is always checked
 
 </decisions>
 

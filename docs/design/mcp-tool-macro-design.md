@@ -241,9 +241,80 @@ For `#[mcp_server]` on an impl block:
 | `State<T>` extractor pattern | Familiar from Axum/Actix; avoids manual Arc ceremony |
 | `extra` optional | Most tools don't need cancellation/progress — don't force the import |
 | Typed output encouraged | Generates `outputSchema` for server-to-server composition |
-| Sync via `sync` flag | Explicit opt-in; async is the default for MCP tools |
+| Sync auto-detected from `fn` vs `async fn` | No redundant flags — the function signature is the source of truth |
+| `ui = "..."` attribute | MCP Apps servers need widget attachment at the tool level |
+| Generic impl blocks supported | Composition servers use `impl<F: Trait> Server<F>` |
 | `#[mcp_server]` separate from `#[mcp_tool]` | Clear separation between single-tool and multi-tool patterns |
 | Function name = tool name | Convention over configuration; override with `name = "..."` |
+
+### UI Widget Attachment
+
+MCP Apps servers attach HTML widget UIs to tools. The macro supports this via the `ui` attribute:
+
+```rust
+#[mcp_tool(description = "Add two numbers", ui = CALCULATOR_WIDGET_URI)]
+fn add(&self, args: AddInput) -> Result<ArithmeticResult> {
+    // ...
+}
+```
+
+The generated code calls `.with_ui(CALCULATOR_WIDGET_URI)` on the tool's metadata. Constants, string literals, and expressions are all valid `ui` values.
+
+### Generic Impl Blocks
+
+Composition servers use generic foundation clients. `#[mcp_server]` preserves type parameters and trait bounds:
+
+```rust
+struct ArithmeticsServer<F: FoundationClient> {
+    foundation: Arc<F>,
+}
+
+#[mcp_server]
+impl<F: FoundationClient + 'static> ArithmeticsServer<F> {
+    #[mcp_tool(description = "Calculate discriminant")]
+    async fn discriminant(&self, args: DiscriminantInput) -> Result<DiscriminantResult> {
+        calculate_discriminant(self.foundation.as_ref(), args).await
+    }
+}
+```
+
+### Auto-Validation
+
+If the input type implements `validator::Validate`, the macro auto-calls `.validate()` before invoking the handler:
+
+```rust
+#[derive(Deserialize, JsonSchema, Validate)]
+struct SqrtInput {
+    #[validate(range(min = 0.0))]
+    value: f64,
+}
+
+#[mcp_tool(description = "Square root")]
+fn sqrt(&self, args: SqrtInput) -> Result<SqrtResult> {
+    // args.validate() already called — invalid input never reaches here
+    Ok(SqrtResult { result: args.value.sqrt() })
+}
+```
+
+### Migration Pattern for Existing Functions
+
+Existing standalone async functions can't be directly annotated with `#[mcp_tool]` (the macro needs a specific signature). The expected migration path is thin wrappers in an `#[mcp_server]` impl:
+
+```rust
+// Existing function — unchanged
+pub async fn calculate_discriminant<F: FoundationClient>(
+    foundation: &F, input: DiscriminantInput
+) -> Result<DiscriminantResult> { /* ... */ }
+
+// Migration: thin wrapper in #[mcp_server]
+#[mcp_server]
+impl<F: FoundationClient + 'static> ArithmeticsServer<F> {
+    #[mcp_tool(description = "Calculate discriminant")]
+    async fn discriminant(&self, args: DiscriminantInput) -> Result<DiscriminantResult> {
+        calculate_discriminant(self.foundation.as_ref(), args).await
+    }
+}
+```
 
 ### Migration Path
 
@@ -257,13 +328,31 @@ The existing `TypedTool`, `TypedToolWithOutput`, and `TypedSyncTool` APIs remain
 - Hot-reload of tool definitions
 - WASM target support for macros (existing `#[tool]` doesn't support WASM either)
 
-## Questions for Team Feedback
+## Team Feedback (Resolved)
 
-1. **Does the `State<T>` pattern feel natural?** Or would you prefer `&self` always (requiring `#[mcp_server]` for state)?
-2. **Is `description` being mandatory annoying or helpful?** Every MCP tool needs one for LLM discoverability.
-3. **Should `#[mcp_server]` be the primary pattern?** Or do you use mostly standalone tools?
-4. **What's your most painful tool definition today?** (Share the code — we'll show the macro version.)
-5. **Do you use `RequestHandlerExtra` in most tools?** This determines whether it should be opt-in (current design) or always injected.
+| Question | Team Answer |
+|---|---|
+| Does `State<T>` feel natural? | Yes for standalone. For composition servers, `#[mcp_server]` with `&self` is the natural fit. Generic impl blocks (`impl<F: Trait>`) are critical. |
+| Is mandatory description annoying? | Helpful. All 9 tools already have descriptions. Compile-time enforcement is correct. |
+| Should `#[mcp_server]` be primary? | Yes for 3+ tools. Eliminates 6x `TypedToolWithOutput::new(...)` boilerplate. "Killer feature." |
+| Do you use `RequestHandlerExtra`? | Zero of 9 tools use it. Opt-in is absolutely correct. |
+
+### Issues Raised
+
+| Issue | Priority | Resolution |
+|---|---|---|
+| No `.with_ui()` equivalent | P1 | Added `ui = "..."` attribute on `#[mcp_tool]` |
+| Generic impl blocks | P1 | Confirmed — macro preserves type params and bounds |
+| No annotation on existing functions | P2 | Documented thin-wrapper migration pattern |
+| Auto-validate inputs | P3 | Added auto-`.validate()` if type implements `Validate` |
+| Redundant `sync` flag | P3 | Removed — auto-detect from `fn` vs `async fn` |
+
+### Expected Migration Impact
+
+| Server | Today | After | Reduction |
+|---|---|---|---|
+| Calculator (6 sync tools + UI) | 106 lines | ~30 lines | 70% |
+| Arithmetics (3 async, generic state) | 50 lines + 4 Arc clones | ~15 lines, 0 clones | 70% |
 
 ---
 
