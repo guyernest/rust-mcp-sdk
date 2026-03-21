@@ -25,6 +25,53 @@ pub enum TaskStatus {
     Cancelled,
 }
 
+impl std::fmt::Display for TaskStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Working => write!(f, "working"),
+            Self::InputRequired => write!(f, "input_required"),
+            Self::Completed => write!(f, "completed"),
+            Self::Failed => write!(f, "failed"),
+            Self::Cancelled => write!(f, "cancelled"),
+        }
+    }
+}
+
+impl TaskStatus {
+    /// Returns `true` if this status is terminal (no further transitions allowed).
+    ///
+    /// Terminal states are `Completed`, `Failed`, and `Cancelled`.
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+
+    /// Returns `true` if transitioning from this status to `next` is valid.
+    ///
+    /// The MCP spec defines these valid transitions:
+    /// - `Working` -> `InputRequired`, `Completed`, `Failed`, `Cancelled`
+    /// - `InputRequired` -> `Working`, `Completed`, `Failed`, `Cancelled`
+    /// - Terminal states -> no transitions allowed
+    ///
+    /// Self-transitions (e.g., `Working` -> `Working`) are rejected per spec.
+    pub fn can_transition_to(&self, next: &Self) -> bool {
+        if self == next {
+            return false;
+        }
+
+        match self {
+            Self::Working => matches!(
+                next,
+                Self::InputRequired | Self::Completed | Self::Failed | Self::Cancelled
+            ),
+            Self::InputRequired => matches!(
+                next,
+                Self::Working | Self::Completed | Self::Failed | Self::Cancelled
+            ),
+            Self::Completed | Self::Failed | Self::Cancelled => false,
+        }
+    }
+}
+
 /// A task resource representing an in-progress or completed operation.
 ///
 /// # Backward Compatibility
@@ -49,8 +96,8 @@ pub struct Task {
     pub task_id: String,
     /// Current task status
     pub status: TaskStatus,
-    /// Time-to-live in milliseconds
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Time-to-live in milliseconds. Required but nullable per MCP spec:
+    /// `None` serializes as `null` (unlimited TTL), `Some(ms)` as a number.
     pub ttl: Option<u64>,
     /// ISO 8601 creation timestamp
     pub created_at: String,
@@ -116,8 +163,8 @@ impl Task {
 #[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct TaskCreationParams {
-    /// Time-to-live in milliseconds
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Time-to-live in milliseconds. Required but nullable per MCP spec:
+    /// `None` serializes as `null` (unlimited TTL), `Some(ms)` as a number.
     pub ttl: Option<u64>,
     /// Suggested polling interval in milliseconds
     #[serde(skip_serializing_if = "Option::is_none")]
