@@ -63,7 +63,6 @@ pub struct ServerTester {
     #[allow(dead_code)]
     force_transport: Option<String>,
     server_info: Option<InitializeResult>,
-    server_capabilities: Option<ServerCapabilities>,
     tools: Option<Vec<ToolInfo>>,
     resources: Option<Vec<ResourceInfo>>,
     prompts: Option<Vec<PromptInfo>>,
@@ -216,7 +215,6 @@ impl ServerTester {
             api_key: api_key.map(|s| s.to_string()),
             force_transport: force_transport.map(|s| s.to_string()),
             server_info: None,
-            server_capabilities: None,
             tools: None,
             resources: None,
             prompts: None,
@@ -402,7 +400,7 @@ impl ServerTester {
             }
 
             // Resources discovery and testing if advertised
-            if let Some(caps) = &self.server_capabilities {
+            if let Some(caps) = &self.server_capabilities() {
                 if caps.resources.is_some() {
                     let resources_result = self.test_resources_list().await;
                     report.add_test(resources_result.clone());
@@ -410,7 +408,7 @@ impl ServerTester {
             }
 
             // Prompts discovery and testing if advertised
-            if let Some(caps) = &self.server_capabilities {
+            if let Some(caps) = &self.server_capabilities() {
                 if caps.prompts.is_some() {
                     let prompts_result = self.test_prompts_list().await;
                     report.add_test(prompts_result.clone());
@@ -522,7 +520,7 @@ impl ServerTester {
         }
 
         // Check if resources are advertised
-        if let Some(caps) = &self.server_capabilities {
+        if let Some(caps) = &self.server_capabilities() {
             if caps.resources.is_none() {
                 report.add_test(TestResult {
                     name: "Resources support".to_string(),
@@ -582,7 +580,7 @@ impl ServerTester {
         }
 
         // Check if prompts are advertised
-        if let Some(caps) = &self.server_capabilities {
+        if let Some(caps) = &self.server_capabilities() {
             if caps.prompts.is_none() {
                 report.add_test(TestResult {
                     name: "Prompts support".to_string(),
@@ -1060,7 +1058,6 @@ impl ServerTester {
         match result {
             Ok(result) => {
                 self.server_info = Some(result.clone());
-                self.server_capabilities = Some(result.capabilities.clone());
 
                 TestResult {
                     name,
@@ -2718,9 +2715,9 @@ impl ServerTester {
     }
 
     /// Get the full server capabilities from the last initialize response.
-    /// Populated after `test_initialize()` completes successfully.
+    /// Derived from `server_info` -- no separate cached field.
     pub fn server_capabilities(&self) -> Option<&ServerCapabilities> {
-        self.server_capabilities.as_ref()
+        self.server_info.as_ref().map(|info| &info.capabilities)
     }
 
     /// Get the full initialize result (server info, capabilities, protocol version).

@@ -44,6 +44,75 @@ pub struct TestResult {
     pub details: Option<String>,
 }
 
+impl TestResult {
+    /// Create a passing test result.
+    pub fn passed(
+        name: impl Into<String>,
+        category: TestCategory,
+        duration: Duration,
+        details: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            category,
+            status: TestStatus::Passed,
+            duration,
+            error: None,
+            details: Some(details.into()),
+        }
+    }
+
+    /// Create a failing test result.
+    pub fn failed(
+        name: impl Into<String>,
+        category: TestCategory,
+        duration: Duration,
+        error: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            category,
+            status: TestStatus::Failed,
+            duration,
+            error: Some(error.into()),
+            details: None,
+        }
+    }
+
+    /// Create a warning test result.
+    pub fn warning(
+        name: impl Into<String>,
+        category: TestCategory,
+        duration: Duration,
+        details: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            category,
+            status: TestStatus::Warning,
+            duration,
+            error: None,
+            details: Some(details.into()),
+        }
+    }
+
+    /// Create a skipped test result.
+    pub fn skipped(
+        name: impl Into<String>,
+        category: TestCategory,
+        details: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            category,
+            status: TestStatus::Skipped,
+            duration: Duration::from_secs(0),
+            error: None,
+            details: Some(details.into()),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestReport {
     pub tests: Vec<TestResult>,

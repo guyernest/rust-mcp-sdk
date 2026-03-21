@@ -11,8 +11,9 @@ pub(crate) mod resources;
 pub(crate) mod tasks;
 pub(crate) mod tools;
 
-use crate::report::TestReport;
+use crate::report::{TestCategory, TestReport, TestResult};
 use crate::tester::ServerTester;
+use pmcp::types::ServerCapabilities;
 use std::time::Instant;
 
 /// MCP protocol domain for conformance filtering.
@@ -38,15 +39,27 @@ impl ConformanceDomain {
         }
     }
 
-    /// All domains in execution order.
-    pub fn all() -> Vec<Self> {
-        vec![
-            Self::Core,
-            Self::Tools,
-            Self::Resources,
-            Self::Prompts,
-            Self::Tasks,
-        ]
+}
+
+/// Check if a server advertises a capability. Returns `Some(skip_result)` if
+/// the capability is absent, `None` if present.
+pub(crate) fn check_capability(
+    tester: &ServerTester,
+    domain_name: &str,
+    category: TestCategory,
+    has_capability: impl FnOnce(&ServerCapabilities) -> bool,
+) -> Option<Vec<TestResult>> {
+    let has = tester
+        .server_capabilities()
+        .map_or(false, |caps| has_capability(caps));
+    if !has {
+        Some(vec![TestResult::skipped(
+            format!("{domain_name}: capability not advertised"),
+            category,
+            format!("Server does not advertise {domain_name} capability"),
+        )])
+    } else {
+        None
     }
 }
 
