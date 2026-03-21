@@ -7,6 +7,7 @@
 use crate::types::{GetPromptResult, PromptArgument, PromptInfo};
 use crate::Result;
 use async_trait::async_trait;
+#[cfg(feature = "schema-generation")]
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -61,7 +62,7 @@ use super::PromptHandler;
 /// ```
 pub struct TypedPrompt<T, F>
 where
-    T: DeserializeOwned + JsonSchema + Send + Sync + 'static,
+    T: DeserializeOwned + Send + Sync + 'static,
     F: Fn(T, RequestHandlerExtra) -> Pin<Box<dyn Future<Output = Result<GetPromptResult>> + Send>>
         + Send
         + Sync,
@@ -75,7 +76,7 @@ where
 
 impl<T, F> fmt::Debug for TypedPrompt<T, F>
 where
-    T: DeserializeOwned + JsonSchema + Send + Sync + 'static,
+    T: DeserializeOwned + Send + Sync + 'static,
     F: Fn(T, RequestHandlerExtra) -> Pin<Box<dyn Future<Output = Result<GetPromptResult>> + Send>>
         + Send
         + Sync,
@@ -91,21 +92,38 @@ where
 
 impl<T, F> TypedPrompt<T, F>
 where
-    T: DeserializeOwned + JsonSchema + Send + Sync + 'static,
+    T: DeserializeOwned + Send + Sync + 'static,
     F: Fn(T, RequestHandlerExtra) -> Pin<Box<dyn Future<Output = Result<GetPromptResult>> + Send>>
         + Send
         + Sync,
 {
     /// Create a new typed prompt with automatic argument schema generation.
     ///
-    /// Extracts `PromptArgument` entries from `T`'s `JsonSchema` implementation,
-    /// including descriptions and required-ness derived from the schema properties.
-    pub fn new(name: impl Into<String>, handler: F) -> Self {
+    /// When the `schema-generation` feature is enabled, extracts `PromptArgument`
+    /// entries from `T`'s `JsonSchema` implementation. Without the feature,
+    /// no argument metadata is generated.
+    #[cfg(feature = "schema-generation")]
+    pub fn new(name: impl Into<String>, handler: F) -> Self
+    where
+        T: JsonSchema,
+    {
         let arguments = extract_prompt_arguments::<T>();
         Self {
             name: name.into(),
             description: None,
             arguments,
+            handler,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Create a new typed prompt (without schema generation).
+    #[cfg(not(feature = "schema-generation"))]
+    pub fn new(name: impl Into<String>, handler: F) -> Self {
+        Self {
+            name: name.into(),
+            description: None,
+            arguments: Vec::new(),
             handler,
             _phantom: PhantomData,
         }
@@ -121,7 +139,7 @@ where
 #[async_trait]
 impl<T, F> PromptHandler for TypedPrompt<T, F>
 where
-    T: DeserializeOwned + JsonSchema + Send + Sync + 'static,
+    T: DeserializeOwned + Send + Sync + 'static,
     F: Fn(T, RequestHandlerExtra) -> Pin<Box<dyn Future<Output = Result<GetPromptResult>> + Send>>
         + Send
         + Sync,
@@ -161,6 +179,7 @@ where
     }
 }
 
+#[cfg(feature = "schema-generation")]
 /// Extract `PromptArgument` entries from a type's `JsonSchema` implementation.
 ///
 /// Iterates over the schema's `properties` object and creates a `PromptArgument`
@@ -202,7 +221,7 @@ fn extract_prompt_arguments<T: JsonSchema>() -> Vec<PromptArgument> {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "schema-generation"))]
 #[allow(clippy::used_underscore_binding)]
 mod tests {
     use super::*;
