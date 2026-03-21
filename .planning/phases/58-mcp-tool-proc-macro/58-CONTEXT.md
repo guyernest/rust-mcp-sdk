@@ -56,7 +56,6 @@ Expand pmcp-macros crate with `#[mcp_tool]` attribute macro that eliminates `Box
 
 ### Team feedback — P2/P3 (should-have)
 - **D-26:** Auto-detect sync vs async from `fn` vs `async fn` — drop the `sync` flag. If the method is `fn`, it's sync. If `async fn`, it's async. Redundant flags are a DX anti-pattern.
-- **D-27:** Auto-validate inputs if the args type implements `validator::Validate` — call `.validate()` before passing args to the handler, return validation error automatically. Optional enhancement, not blocking.
 - **D-28:** Document the "thin wrapper" migration pattern for existing standalone async functions — annotating existing functions directly isn't supported; wrap them in `#[mcp_server]` impl methods. This is the expected path, not a limitation.
 
 ### Claude's Discretion
@@ -67,7 +66,6 @@ Expand pmcp-macros crate with `#[mcp_tool]` attribute macro that eliminates `Box
 - Test strategy for the macro itself (trybuild, compile-fail tests)
 - Whether `#[mcp_server]` generates a single `tools()` method or per-tool metadata
 - How `ui` attribute value gets wired to `.with_ui()` in generated code
-- Whether `validator` integration requires a feature flag or is always checked
 
 </decisions>
 
@@ -118,8 +116,8 @@ Expand pmcp-macros crate with `#[mcp_tool]` attribute macro that eliminates `Box
 
 ### Integration Points
 - `pmcp-macros/src/lib.rs` — Add `#[mcp_tool]` and `#[mcp_server]` proc macro entry points
-- `src/server/builder.rs` — May need `.mcp_server()` method for impl-block registration
-- `src/lib.rs` — Re-export `State<T>` type and `#[mcp_tool]`/`#[mcp_server]` macros
+- `src/server/mod.rs` — Add McpServer trait and `.mcp_server()` method on ServerBuilder
+- `src/lib.rs` — Re-export `State<T>` type and `McpServer` trait
 
 </code_context>
 
@@ -141,6 +139,7 @@ Expand pmcp-macros crate with `#[mcp_tool]` attribute macro that eliminates `Box
 - WASM target support for macros
 - Auto-discovery / compile-time tool inventory
 - Hot-reload of tool definitions
+- **D-27:** Auto-validate inputs if args type implements `validator::Validate` — P3 nice-to-have, deferred to avoid scope creep. Can be added as feature-flagged enhancement in a future phase.
 
 </deferred>
 
