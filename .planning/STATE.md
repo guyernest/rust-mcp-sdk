@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.6
 milestone_name: CLI DX Overhaul
 status: in-progress
-stopped_at: Completed 57-01-PLAN.md
-last_updated: "2026-03-21T13:42:00Z"
-last_activity: 2026-03-21 -- Phase 57 Plan 01 complete (conformance scenario engine with 5 domains, 19 scenarios)
+stopped_at: Completed 57-02-PLAN.md
+last_updated: "2026-03-21T13:51:00Z"
+last_activity: 2026-03-21 -- Phase 57 Plan 02 complete (CLI integration for conformance test suite)
 progress:
   total_phases: 34
   completed_phases: 24
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
-**Current focus:** v2.0 Protocol Modernization -- Phase 57 in progress (conformance test suite). Plan 01 complete: 19-scenario conformance engine with 5 domain groups.
+**Current focus:** v2.0 Protocol Modernization -- Phase 57 complete (conformance test suite). Both plans shipped: 19-scenario conformance engine with CLI integration.
 
 ## Current Position
 
 Phase: 57 (conformance-test-suite)
-Plan: 1 of 2 complete
-Status: Plan 01 shipped conformance scenario engine. ConformanceRunner with 5 domains (Core, Tools, Resources, Prompts, Tasks), capability-conditional testing, domain filtering.
-Last activity: 2026-03-21 -- Phase 57 Plan 01 complete (conformance scenario engine with 5 domains, 19 scenarios)
+Plan: 2 of 2 complete
+Status: Phase 57 complete. Plan 02 wired conformance suite into both CLI entry points (mcp-tester conformance, cargo pmcp test conformance) with --strict, --domain flags and per-domain CI summary line.
+Last activity: 2026-03-21 -- Phase 57 Plan 02 complete (CLI integration for conformance test suite)
 
 Progress: [##########] 100%
 
@@ -163,6 +163,8 @@ v1.6 decisions:
 - [Phase 57-01]: Core domain always runs first (handles initialize) -- other domains skip if core fails
 - [Phase 57-01]: Prompts/get with empty args returns Warning not Failed (prompts may require arguments)
 - [Phase 57-01]: Tasks domain uses _meta.task.ttl for task creation via tools/call
+- [Phase 57-02]: TestCategory gets PartialEq/Eq derive for domain summary filtering
+- [Phase 57-02]: Old run_compliance_tests preserved as deprecated wrapper for backward compat
 
 ### Roadmap Evolution
 
@@ -198,6 +200,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-21T13:42:00Z
-Stopped at: Completed 57-01-PLAN.md
-Resume: Phase 57 Plan 01 complete. Conformance scenario engine with 5 domains (Core 6, Tools 4, Resources 3, Prompts 3, Tasks 4 = 19 total scenarios). ConformanceRunner with domain filtering and strict mode. Plan 02 next (CLI integration and advanced scenarios).
+Last session: 2026-03-21T13:51:00Z
+Stopped at: Completed 57-02-PLAN.md
+Resume: Phase 57 complete. Both plans shipped: Plan 01 (19-scenario conformance engine with 5 domains) and Plan 02 (CLI integration -- mcp-tester conformance and cargo pmcp test conformance with --strict/--domain flags and per-domain CI summary).
