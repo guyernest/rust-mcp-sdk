@@ -436,26 +436,6 @@
       display: block;
     }
 
-    /* Console */
-    .console-log {
-      font-family: 'Monaco', 'Menlo', monospace;
-      font-size: 11px;
-    }
-
-    .console-entry {
-      padding: 4px 0;
-      border-bottom: 1px solid var(--border-color);
-    }
-
-    .console-entry.log { color: var(--text-primary); }
-    .console-entry.warn { color: var(--warning-color); }
-    .console-entry.error { color: var(--error-color); }
-
-    .console-time {
-      color: var(--text-secondary);
-      margin-right: 8px;
-    }
-
     /* Network Log */
     .network-entry {
       padding: 8px;
@@ -495,6 +475,11 @@
       padding: 4px 0;
       font-size: 11px;
       border-bottom: 1px solid var(--border-color);
+    }
+
+    .event-time {
+      color: var(--text-secondary);
+      margin-right: 8px;
     }
 
     .event-type {
@@ -1123,23 +1108,13 @@
     <!-- DevTools Panel -->
     <aside class="devtools-panel">
       <div class="devtools-tabs">
-        <button class="devtools-tab active" data-tab="console">Console</button>
-        <button class="devtools-tab" data-tab="network">Network</button>
+        <button class="devtools-tab active" data-tab="network">Network</button>
         <button class="devtools-tab" data-tab="events">Events</button>
         <button class="devtools-tab" data-tab="protocol">Protocol</button>
         <button class="devtools-tab" data-tab="bridge">Bridge</button>
       </div>
       <div class="devtools-content">
-        <div class="devtools-section active" id="tab-console">
-          <div class="devtools-btn-group">
-            <button class="copy-btn" data-copy="console">Copy</button>
-            <button class="clear-btn" data-clear="console">Clear</button>
-          </div>
-          <div class="console-log" id="console-log">
-            <div class="empty-state">Console output will appear here</div>
-          </div>
-        </div>
-        <div class="devtools-section" id="tab-network">
+        <div class="devtools-section active" id="tab-network">
           <div class="devtools-btn-group">
             <button class="copy-btn" data-copy="network">Copy</button>
             <button class="clear-btn" data-clear="network">Clear</button>
@@ -1965,10 +1940,7 @@
         document.querySelectorAll('.clear-btn').forEach(btn => {
           btn.addEventListener('click', () => {
             const target = btn.dataset.clear;
-            if (target === 'console') {
-              document.getElementById('console-log').innerHTML =
-                '<div class="empty-state">Console output will appear here</div>';
-            } else if (target === 'network') {
+            if (target === 'network') {
               document.getElementById('network-log').innerHTML =
                 '<div class="empty-state">Network requests will appear here</div>';
               this.networkUnreadCount = 0;
@@ -2072,7 +2044,6 @@
           return `Network Log (${entries.length} entries):\n${'='.repeat(60)}\n${lines.join('\n' + '-'.repeat(60) + '\n')}`;
         }
 
-        if (tab === 'console') return this.collectDomLog('#console-log', 'console-entry', 'Console Log');
         if (tab === 'events') return this.collectDomLog('#events-log', 'event-entry', 'Events Log');
 
         if (tab === 'protocol') {
@@ -2147,7 +2118,7 @@
         try {
           args = JSON.parse(argsText);
         } catch (e) {
-          this.logConsole('error', `Invalid JSON: ${e.message}`);
+          this.logEvent('error', { message: `Invalid JSON: ${e.message}` });
           return;
         }
 
@@ -2173,11 +2144,8 @@
 
           if (result.success && result.content) {
             await this.handleToolResponse(result);
-          } else if (result.error) {
-            this.logConsole('error', result.error);
           }
         } catch (e) {
-          this.logConsole('error', `Request failed: ${e.message}`);
           this.logNetwork('response', this.selectedTool.name, { error: e.message }, 0, false);
         }
       }
@@ -2277,7 +2245,7 @@
           // Check for text content
           const textContent = result.content.find(c => c.type === 'text');
           if (textContent) {
-            this.logConsole('log', `Tool returned: ${textContent.text}`);
+            // Text content is displayed in the preview area; no separate DevTools logging needed
           }
         }
 
@@ -2292,7 +2260,6 @@
       createToolCallHandler() {
         const runtime = this;
         return async (name, args) => {
-          runtime.logConsole('log', 'callTool: ' + name);
           runtime.logEvent('bridgeCall', { method: 'callTool', name, args });
 
           const startTime = Date.now();
@@ -2479,30 +2446,14 @@
 ${openaiStub}
 ${bridgeScript}
   <script type="module">
-    // Console capture for DevTools
-    const preview = window.parent.previewRuntime;
-    if (preview) {
-      const originalConsole = { ...console };
-      ['log', 'warn', 'error', 'info'].forEach(method => {
-        console[method] = (...cArgs) => {
-          originalConsole[method](...cArgs);
-          try {
-            preview.logConsole(method, cArgs.map(a =>
-              typeof a === 'object' ? JSON.stringify(a) : String(a)
-            ).join(' '));
-          } catch (e) { /* parent access may fail */ }
-        };
-      });
-
-      // Listen for globals updates from host
-      window.addEventListener('message', (e) => {
-        if (e.data && e.data.type === 'openai/setGlobals') {
-          window.dispatchEvent(new CustomEvent('openai/setGlobals', {
-            detail: e.data
-          }));
-        }
-      });
-    }
+    // Listen for globals updates from host
+    window.addEventListener('message', (e) => {
+      if (e.data && e.data.type === 'openai/setGlobals') {
+        window.dispatchEvent(new CustomEvent('openai/setGlobals', {
+          detail: e.data
+        }));
+      }
+    });
 
     // Signal ready — always sent so the host resolves readyPromise
     // regardless of whether the wrapper or the widget handled the handshake.
@@ -2638,20 +2589,6 @@ ${html}
         }
       }
 
-      logConsole(level, message) {
-        const container = document.getElementById('console-log');
-        if (container.querySelector('.empty-state')) {
-          container.innerHTML = '';
-        }
-
-        const time = new Date().toLocaleTimeString();
-        const entry = document.createElement('div');
-        entry.className = `console-entry ${level}`;
-        entry.innerHTML = `<span class="console-time">${time}</span>${message}`;
-        container.appendChild(entry);
-        container.scrollTop = container.scrollHeight;
-      }
-
       logNetwork(type, method, data, duration = 0, success = true) {
         const container = document.getElementById('network-log');
         if (container.querySelector('.empty-state')) {
@@ -2682,7 +2619,7 @@ ${html}
         const entry = document.createElement('div');
         entry.className = 'event-entry';
         entry.innerHTML = `
-          <span class="console-time">${time}</span>
+          <span class="event-time">${time}</span>
           <span class="event-type">${type}</span>
           ${Object.keys(data).length > 0 ? ` - ${JSON.stringify(data)}` : ''}
         `;
@@ -2726,7 +2663,6 @@ ${html}
       // =========================================================================
 
       async handleWidgetToolCall(name, args) {
-        this.logConsole('log', `[ChatGPT] callTool from widget: ${name}`);
         this.logEvent('chatgptCallTool', { name, args });
 
         try {
@@ -2741,7 +2677,7 @@ ${html}
           }
           throw new Error(result.error || 'Tool call failed');
         } catch (e) {
-          this.logConsole('error', `[ChatGPT] callTool failed: ${e.message}`);
+          this.logEvent('chatgptCallToolError', { message: e.message });
           throw e;
         }
       }
