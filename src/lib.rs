@@ -292,11 +292,11 @@ pub use async_trait::async_trait;
 /// let is_supported = SUPPORTED_PROTOCOL_VERSIONS.contains(&version_to_check);
 /// assert!(is_supported);
 ///
-/// // Exactly 3 supported versions
-/// assert_eq!(SUPPORTED_PROTOCOL_VERSIONS.len(), 3);
+/// // 4 supported versions (2025 + backward-compat 2024)
+/// assert_eq!(SUPPORTED_PROTOCOL_VERSIONS.len(), 4);
 ///
-/// // 2024 versions are no longer supported
-/// assert!(!SUPPORTED_PROTOCOL_VERSIONS.contains(&"2024-11-05"));
+/// // 2024-11-05 accepted for backward compatibility with existing clients
+/// assert!(SUPPORTED_PROTOCOL_VERSIONS.contains(&"2024-11-05"));
 /// ```
 pub use types::protocol::version::{
     negotiate_protocol_version, DEFAULT_PROTOCOL_VERSION, LATEST_PROTOCOL_VERSION,
