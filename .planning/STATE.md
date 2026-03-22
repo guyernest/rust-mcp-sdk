@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: unknown
-stopped_at: Completed 60-01-PLAN.md (awaiting human-verify checkpoint)
-last_updated: "2026-03-22T20:34:07.642Z"
+stopped_at: Completed 60-01-PLAN.md
+last_updated: "2026-03-22T20:49:05.683Z"
 progress:
   total_phases: 35
   completed_phases: 30
@@ -168,6 +168,7 @@ v1.6 decisions:
 - [Phase 59]: TypedPrompt requires JsonSchema bound unconditionally; string-only args documented; no annotations/ui on McpPromptArgs; prompts return GetPromptResult directly
 - [Phase 59]: mcp_prompt inside #[mcp_server] does not require separate import; register_tools renamed to register per D-15; PromptMethodInfo omits return_type/annotations
 - [Phase 60]: Renamed shared console-time CSS class to event-time after Console removal to fix orphaned styling
+- [Phase 60]: Renamed shared console-time CSS class to event-time after Console removal to fix orphaned styling
 
 ### Roadmap Evolution
 
@@ -204,6 +205,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-22T20:34:07.639Z
-Stopped at: Completed 60-01-PLAN.md (awaiting human-verify checkpoint)
+Last session: 2026-03-22T20:49:05.679Z
+Stopped at: Completed 60-01-PLAN.md
 Resume: Phase 57 complete. Both plans shipped: Plan 01 (19-scenario conformance engine with 5 domains) and Plan 02 (CLI integration -- mcp-tester conformance and cargo pmcp test conformance with --strict/--domain flags and per-domain CI summary).
