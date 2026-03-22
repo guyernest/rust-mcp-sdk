@@ -2,16 +2,14 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
-status: completed
-stopped_at: Completed 59-02-PLAN.md
-last_updated: "2026-03-21T21:16:45.175Z"
-last_activity: 2026-03-21
+status: unknown
+stopped_at: Completed 60-01-PLAN.md (awaiting human-verify checkpoint)
+last_updated: "2026-03-22T20:34:07.642Z"
 progress:
-  total_phases: 34
-  completed_phases: 29
-  total_plans: 69
-  completed_plans: 69
-  percent: 100
+  total_phases: 35
+  completed_phases: 30
+  total_plans: 70
+  completed_plans: 70
 ---
 
 # Project State
@@ -21,16 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
-**Current focus:** v2.0 Protocol Modernization -- Phase 57 complete (conformance test suite). Both plans shipped: 19-scenario conformance engine with CLI integration.
+**Current focus:** Phase 60 — clean-up-mcp-preview-side-tabs
 
 ## Current Position
 
-Phase: 57 (conformance-test-suite)
-Plan: 2 of 2 complete
-Status: Phase 57 complete. Plan 02 wired conformance suite into both CLI entry points (mcp-tester conformance, cargo pmcp test conformance) with --strict, --domain flags and per-domain CI summary line.
-Last activity: 2026-03-21
-
-Progress: [##########] 100%
+Phase: 60 (clean-up-mcp-preview-side-tabs) — EXECUTING
+Plan: 1 of 1
 
 ## Shipped Milestones
 
@@ -173,6 +167,7 @@ v1.6 decisions:
 - [Phase 58]: Fixed #[mcp_tool] name collision by renaming inner function to __fn_impl; UUID-based Default for RequestHandlerExtra; pmcp-macros as dev-dep for examples; TRYBUILD=overwrite for .stderr bootstrapping
 - [Phase 59]: TypedPrompt requires JsonSchema bound unconditionally; string-only args documented; no annotations/ui on McpPromptArgs; prompts return GetPromptResult directly
 - [Phase 59]: mcp_prompt inside #[mcp_server] does not require separate import; register_tools renamed to register per D-15; PromptMethodInfo omits return_type/annotations
+- [Phase 60]: Renamed shared console-time CSS class to event-time after Console removal to fix orphaned styling
 
 ### Roadmap Evolution
 
@@ -197,6 +192,7 @@ v1.6 decisions:
 - Phase 58 added: #[mcp_tool] proc macro (from composition team DX review)
 - Phase 59 added: TypedPrompt with auto-deserialization (from composition team DX review)
 - Phase 54.1 inserted after Phase 54: Protocol Type Construction DX — Default impls, builders, and constructors for all protocol types (URGENT)
+- Phase 60 added: Clean up mcp-preview side tabs
 
 ### Pending Todos
 
@@ -208,6 +204,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-21T21:16:45.171Z
-Stopped at: Completed 59-02-PLAN.md
+Last session: 2026-03-22T20:34:07.639Z
+Stopped at: Completed 60-01-PLAN.md (awaiting human-verify checkpoint)
 Resume: Phase 57 complete. Both plans shipped: Plan 01 (19-scenario conformance engine with 5 domains) and Plan 02 (CLI integration -- mcp-tester conformance and cargo pmcp test conformance with --strict/--domain flags and per-domain CI summary).
