@@ -35,11 +35,11 @@ Declared values (must be multiples of 4):
 |-------|-------|-------|
 | xs | 4px | Icon gaps, inline padding, gap between tab buttons and Clear All, gap between copy/clear buttons |
 | sm | 8px | Network entry margin-bottom, console-time margin-right, inner element spacing |
-| md | 12px | Header padding vertical, tab button padding, devtools-content padding |
-| lg | 20px | Header padding horizontal |
 | xl | 24px | Header icon size (24x24) |
 
 Exceptions:
+- **12px (header padding vertical, tab button padding, devtools-content padding):** Not in the standard scale {4, 8, 16, 24, 32, 48, 64}. This is a pre-existing value extracted from the current codebase CSS, not a value introduced by this phase. Changing it would alter the established visual rhythm of the DevTools panel.
+- **20px (header padding horizontal):** Not in the standard scale. This is a pre-existing value extracted from the current codebase CSS, not a value introduced by this phase. Changing it would alter the established header layout.
 - **Resize handle width: 6px** -- Not a multiple of 4. This is a drag target, not a spacing token. 6px provides adequate grab area without visible intrusion while matching the Chrome DevTools handle width.
 - **Touch target minimum: 44px** -- Not in the scale but required for the "Dev Tools" toggle button height per accessibility best practice. The existing button sizes (padding 6px 12px) already achieve this combined with font metrics.
 
@@ -52,18 +52,20 @@ Source: Existing spacing values extracted from `index.html` CSS. This phase does
 | Role | Size | Weight | Line Height | Font |
 |------|------|--------|-------------|------|
 | Body | 13px | 400 (regular) | 1.5 | System stack |
-| Label / Tab | 12px | 500 (medium) | 1.4 | System stack |
+| Label / Tab | 12px | 600 (semibold) | 1.4 | System stack |
 | Heading | 18px | 600 (semibold) | 1.2 | System stack |
 | Monospace | 11px | 400 (regular) | 1.4 | `Monaco, Menlo, monospace` |
+
+Font weights used: **2 total** -- 400 (regular) for body text and monospace, 600 (semibold) for headings, tab labels, and interactive controls.
 
 **New elements introduced by this phase:**
 
 | Element | Size | Weight | Line Height | Notes |
 |---------|------|--------|-------------|-------|
-| "Dev Tools" toggle button text | 13px | 500 (medium) | 1.0 | Matches `.status-indicator` font-size (line 77) |
+| "Dev Tools" toggle button text | 13px | 600 (semibold) | 1.0 | Interactive control -- uses semibold to match tab labels |
 | "Clear All" button text | 11px | 400 (regular) | 1.0 | Matches existing `.clear-btn` font-size (line 759) |
 
-Source: Extracted from existing CSS -- `.header h1` (18px/600), `.status-indicator` (13px), `.devtools-tab` (12px/500), `.clear-btn` (11px), `.console-log` (11px/monospace).
+Source: Extracted from existing CSS -- `.header h1` (18px/600), `.status-indicator` (13px), `.devtools-tab` (12px), `.clear-btn` (11px), `.console-log` (11px/monospace). Tab labels and toggle button consolidated to 600 weight (previously 500 in codebase; promoted to 600 for two-weight constraint).
 
 ---
 
@@ -243,7 +245,7 @@ The resize handle remains visible and functional even when the panel is collapse
   cursor: pointer;
   border-radius: 6px;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   transition: color 200ms ease;
 }
 
