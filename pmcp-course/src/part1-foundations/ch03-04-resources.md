@@ -68,16 +68,12 @@ pub struct SchemaResource {
 
 impl Resource for SchemaResource {
     fn info(&self) -> ResourceInfo {
-        ResourceInfo {
-            uri: "db://schema".to_string(),
-            name: "Database Schema".to_string(),
-            description: Some(
+        ResourceInfo::new("db://schema", "Database Schema")
+            .with_description(
                 "Complete database schema with tables, columns, types, and relationships. \
                  Use this to understand the database structure before writing queries."
-                    .to_string()
-            ),
-            mime_type: Some("application/json".to_string()),
-        }
+            )
+            .with_mime_type("application/json")
     }
 
     async fn read(&self, _uri: &str) -> Result<ResourceContent> {
@@ -197,15 +193,12 @@ pub struct TableSchemaResource {
 
 impl Resource for TableSchemaResource {
     fn info(&self) -> ResourceInfo {
-        ResourceInfo {
-            uri_template: "db://schema/{table_name}".to_string(),
-            name: "Table Schema".to_string(),
-            description: Some(
+        ResourceInfo::new("db://schema/{table_name}", "Table Schema")
+            .with_description(
                 "Detailed schema for a specific table including columns, \
-                 types, constraints, and example queries.".to_string()
-            ),
-            mime_type: Some("application/json".to_string()),
-        }
+                 types, constraints, and example queries."
+            )
+            .with_mime_type("application/json")
     }
 
     async fn read(&self, uri: &str) -> Result<ResourceContent> {
@@ -272,15 +265,12 @@ pub struct GenresResource {
 
 impl Resource for GenresResource {
     fn info(&self) -> ResourceInfo {
-        ResourceInfo {
-            uri: "db://reference/genres".to_string(),
-            name: "Music Genres".to_string(),
-            description: Some(
+        ResourceInfo::new("db://reference/genres", "Music Genres")
+            .with_description(
                 "List of all music genres in the database. \
-                 Use these values when filtering tracks by genre.".to_string()
-            ),
-            mime_type: Some("application/json".to_string()),
-        }
+                 Use these values when filtering tracks by genre."
+            )
+            .with_mime_type("application/json")
     }
 
     async fn read(&self, _uri: &str) -> Result<ResourceContent> {
@@ -301,15 +291,12 @@ pub struct MediaTypesResource {
 
 impl Resource for MediaTypesResource {
     fn info(&self) -> ResourceInfo {
-        ResourceInfo {
-            uri: "db://reference/media-types".to_string(),
-            name: "Media Types".to_string(),
-            description: Some(
+        ResourceInfo::new("db://reference/media-types", "Media Types")
+            .with_description(
                 "Available media formats (MP3, AAC, etc.). \
-                 Use when filtering or understanding track formats.".to_string()
-            ),
-            mime_type: Some("application/json".to_string()),
-        }
+                 Use when filtering or understanding track formats."
+            )
+            .with_mime_type("application/json")
     }
 
     async fn read(&self, _uri: &str) -> Result<ResourceContent> {
@@ -334,15 +321,12 @@ pub struct QueryExamplesResource;
 
 impl Resource for QueryExamplesResource {
     fn info(&self) -> ResourceInfo {
-        ResourceInfo {
-            uri: "db://help/query-examples".to_string(),
-            name: "Query Examples".to_string(),
-            description: Some(
+        ResourceInfo::new("db://help/query-examples", "Query Examples")
+            .with_description(
                 "Example SQL queries for common operations. \
-                 Reference these patterns when writing queries.".to_string()
-            ),
-            mime_type: Some("application/json".to_string()),
-        }
+                 Reference these patterns when writing queries."
+            )
+            .with_mime_type("application/json")
     }
 
     async fn read(&self, _uri: &str) -> Result<ResourceContent> {
@@ -495,16 +479,13 @@ impl FileDocumentationResource {
 
 impl Resource for FileDocumentationResource {
     fn info(&self) -> ResourceInfo {
-        ResourceInfo {
-            uri: "db://docs/tables/{table_name}".to_string(),
-            name: "Table Documentation".to_string(),
-            description: Some(
+        ResourceInfo::new("db://docs/tables/{table_name}", "Table Documentation")
+            .with_description(
                 "Human-written documentation for database tables. \
                  Includes column descriptions, business rules, and example queries. \
-                 Maintained by DBAs and data analysts.".to_string()
-            ),
-            mime_type: Some("text/markdown".to_string()),
-        }
+                 Maintained by DBAs and data analysts."
+            )
+            .with_mime_type("text/markdown")
     }
 
     async fn read(&self, uri: &str) -> Result<ResourceContent> {
@@ -542,15 +523,12 @@ pub struct DatabaseGuideResource {
 
 impl Resource for DatabaseGuideResource {
     fn info(&self) -> ResourceInfo {
-        ResourceInfo {
-            uri: "db://docs/guide".to_string(),
-            name: "Database Guide".to_string(),
-            description: Some(
+        ResourceInfo::new("db://docs/guide", "Database Guide")
+            .with_description(
                 "Comprehensive database guide written by the DBA team. \
-                 Includes naming conventions, relationships, and best practices.".to_string()
-            ),
-            mime_type: Some("text/markdown".to_string()),
-        }
+                 Includes naming conventions, relationships, and best practices."
+            )
+            .with_mime_type("text/markdown")
     }
 
     async fn read(&self, _uri: &str) -> Result<ResourceContent> {
@@ -573,14 +551,11 @@ pub struct TableDocsListResource {
 
 impl Resource for TableDocsListResource {
     fn info(&self) -> ResourceInfo {
-        ResourceInfo {
-            uri: "db://docs/tables".to_string(),
-            name: "Available Table Documentation".to_string(),
-            description: Some(
-                "Lists all tables that have documentation available.".to_string()
-            ),
-            mime_type: Some("application/json".to_string()),
-        }
+        ResourceInfo::new("db://docs/tables", "Available Table Documentation")
+            .with_description(
+                "Lists all tables that have documentation available."
+            )
+            .with_mime_type("application/json")
     }
 
     async fn read(&self, _uri: &str) -> Result<ResourceContent> {

@@ -779,7 +779,7 @@ const initResponse = await mf.dispatchFetch('http://localhost/mcp', {
     id: 1,
     method: 'initialize',
     params: {
-      protocolVersion: '2024-11-05',
+      protocolVersion: '2025-11-25',
       capabilities: {},
       clientInfo: { name: 'test', version: '1.0' }
     }
@@ -787,7 +787,7 @@ const initResponse = await mf.dispatchFetch('http://localhost/mcp', {
 });
 
 const result = await initResponse.json();
-console.assert(result.result.protocolVersion === '2024-11-05');
+console.assert(result.result.protocolVersion === '2025-11-25');
 console.log('Initialize test passed!');
 ```
 
@@ -1002,7 +1002,7 @@ async fn handle_mcp_request(mut req: Request, env: &Env) -> McpResult<Value> {
 
 fn handle_initialize(_params: &Value) -> McpResult<Value> {
     Ok(json!({
-        "protocolVersion": "2024-11-05",
+        "protocolVersion": "2025-11-25",
         "capabilities": {
             "tools": {}
         },

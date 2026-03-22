@@ -1186,7 +1186,7 @@ let config = JwtValidatorConfig::auth0("myapp.auth0.com", "https://myapi/");
 
 ```toml
 [dependencies]
-pmcp = { version = "1.8", features = ["jwt-auth"] }
+pmcp = { version = "2.0", features = ["jwt-auth"] }
 ```
 
 ### MockValidator: Development and Testing

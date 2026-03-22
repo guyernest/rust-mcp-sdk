@@ -87,6 +87,10 @@ pub struct CustomerSummary {
 
 Now create the tool with both schemas auto-generated:
 
+> **v2.0 Tip:** The `#[mcp_tool]` macro eliminates `Box::pin(async move { ... })` boilerplate.
+> Add `features = ["macros"]` to your pmcp dependency.
+> See [Macros Guide](../../docs/design/mcp-macros-guide.md) for migration examples.
+
 ```rust
 let top_customers_tool = TypedToolWithOutput::new(
     "sales_top_customers",

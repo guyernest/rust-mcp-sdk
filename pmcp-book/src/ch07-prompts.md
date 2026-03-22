@@ -9,7 +9,7 @@ Think of prompts as your MCP server's "quick actions"—common workflows that us
 Let's create a simple code review prompt:
 
 ```rust
-use pmcp::{Server, SyncPrompt, types::{GetPromptResult, PromptMessage, Role, MessageContent}};
+use pmcp::{Server, SyncPrompt, types::{GetPromptResult, PromptMessage, Role, Content}};
 use std::collections::HashMap;
 
 #[tokio::main]
@@ -22,15 +22,11 @@ async fn main() -> pmcp::Result<()> {
             vec![
                 PromptMessage {
                     role: Role::System,
-                    content: MessageContent::Text {
-                        text: "You are an expert code reviewer. Provide constructive feedback.".to_string(),
-                    },
+                    content: Content::text("You are an expert code reviewer. Provide constructive feedback."),
                 },
                 PromptMessage {
                     role: Role::User,
-                    content: MessageContent::Text {
-                        text: format!("Please review this code:\n\n```\n{}\n```", code),
-                    },
+                    content: Content::text(format!("Please review this code:\n\n```\n{}\n```", code)),
                 },
             ],
             Some("Code review prompt".to_string()),
@@ -181,15 +177,14 @@ fn get_arguments(args: &HashMap<String, String>) -> pmcp::Result<(String, String
 Create a structured conversation with different roles:
 
 ```rust
-use pmcp::types::{PromptMessage, Role, MessageContent};
+use pmcp::types::{PromptMessage, Role, Content};
 
 fn build_messages(topic: &str, style: &str, length: &str) -> Vec<PromptMessage> {
     vec![
         // System message: Instructions to the LLM
         PromptMessage {
             role: Role::System,
-            content: MessageContent::Text {
-                text: format!(
+            content: Content::text(format!(
                     "You are a professional blog post writer.\n\
                      \n\
                      TASK: Write a {} {} blog post about: {}\n\
@@ -212,29 +207,26 @@ fn build_messages(topic: &str, style: &str, length: &str) -> Vec<PromptMessage> 
                      \n\
                      FORMAT: Use Markdown with proper headings (# ## ###)",
                     length, style, topic
-                ),
-            },
+            )),
         },
 
         // Assistant message: Provide context or resources
         PromptMessage {
             role: Role::Assistant,
-            content: MessageContent::Resource {
-                uri: format!("resource://blog/style-guide/{}", style),
-                text: None,
-                mime_type: Some("text/markdown".to_string()),
-            },
+            content: Content::resource_with_text(
+                format!("resource://blog/style-guide/{}", style),
+                Some("text/markdown"),
+                None,
+            ),
         },
 
         // User message: The actual request
         PromptMessage {
             role: Role::User,
-            content: MessageContent::Text {
-                text: format!(
+            content: Content::text(format!(
                     "Please write a {} {} blog post about: {}",
                     length, style, topic
-                ),
-            },
+            )),
         },
     ]
 }
@@ -257,9 +249,7 @@ PMCP supports three content types for messages:
 #### Text Content (Most Common)
 
 ```rust
-MessageContent::Text {
-    text: "Your text here".to_string(),
-}
+Content::text("Your text here")
 ```
 
 Use for: Instructions, user requests, explanations
@@ -267,7 +257,7 @@ Use for: Instructions, user requests, explanations
 #### Image Content
 
 ```rust
-MessageContent::Image {
+Content::Image {
     data: base64_encoded_image, // Vec<u8> base64-encoded
     mime_type: "image/png".to_string(),
 }
@@ -282,7 +272,7 @@ let logo_base64 = base64::encode(logo_bytes);
 
 PromptMessage {
     role: Role::Assistant,
-    content: MessageContent::Image {
+    content: Content::Image {
         data: logo_base64,
         mime_type: "image/png".to_string(),
     },
@@ -292,11 +282,11 @@ PromptMessage {
 #### Resource References
 
 ```rust
-MessageContent::Resource {
-    uri: "resource://app/documentation".to_string(),
-    text: None, // Optional inline preview
-    mime_type: Some("text/markdown".to_string()),
-}
+Content::resource_with_text(
+    "resource://app/documentation",
+    Some("text/markdown"),
+    None, // Optional inline preview
+)
 ```
 
 Use for: Documentation, configuration files, templates, policies
@@ -337,8 +327,7 @@ fn create_blog_post_prompt() -> SyncPrompt<
             // System: Workflow instructions
             PromptMessage {
                 role: Role::System,
-                content: MessageContent::Text {
-                    text: format!(
+                content: Content::text(format!(
                         "You are a {} blog post writer. Write a {} post about: {}\n\
                          \n\
                          STRUCTURE:\n\
@@ -357,26 +346,23 @@ fn create_blog_post_prompt() -> SyncPrompt<
                             "long" => "2000",
                             _ => "1000",
                         }
-                    ),
-                },
+                )),
             },
 
             // Assistant: Style guide resource
             PromptMessage {
                 role: Role::Assistant,
-                content: MessageContent::Resource {
-                    uri: format!("resource://blog/style-guide/{}", style),
-                    text: None,
-                    mime_type: Some("text/markdown".to_string()),
-                },
+                content: Content::resource_with_text(
+                    format!("resource://blog/style-guide/{}", style),
+                    Some("text/markdown"),
+                    None,
+                ),
             },
 
             // User: The request
             PromptMessage {
                 role: Role::User,
-                content: MessageContent::Text {
-                    text: format!("Write a {} {} blog post about: {}", length, style, topic),
-                },
+                content: Content::text(format!("Write a {} {} blog post about: {}", length, style, topic)),
             },
         ];
 
@@ -450,19 +436,15 @@ fn create_code_review_prompt() -> SyncPrompt<
             vec![
                 PromptMessage {
                     role: Role::System,
-                    content: MessageContent::Text {
-                        text: format!(
+                    content: Content::text(format!(
                             "You are an expert {} code reviewer. Focus on {} aspects.\n\
                              Provide constructive feedback with specific suggestions.",
                             language, focus
-                        ),
-                    },
+                    )),
                 },
                 PromptMessage {
                     role: Role::User,
-                    content: MessageContent::Text {
-                        text: format!("Review this {} code:\n\n```{}\n{}\n```", language, language, code),
-                    },
+                    content: Content::text(format!("Review this {} code:\n\n```{}\n{}\n```", language, language, code)),
                 },
             ],
             Some(format!("Code review for {} focusing on {}", language, focus)),
@@ -499,8 +481,7 @@ fn create_docs_prompt() -> SyncPrompt<
             vec![
                 PromptMessage {
                     role: Role::System,
-                    content: MessageContent::Text {
-                        text: format!(
+                    content: Content::text(format!(
                             "Generate comprehensive documentation in {} format.\n\
                              \n\
                              Include:\n\
@@ -510,14 +491,11 @@ fn create_docs_prompt() -> SyncPrompt<
                              - Usage examples\n\
                              - Edge cases and error handling",
                             format
-                        ),
-                    },
+                    )),
                 },
                 PromptMessage {
                     role: Role::User,
-                    content: MessageContent::Text {
-                        text: format!("Document this code:\n\n```\n{}\n```", code),
-                    },
+                    content: Content::text(format!("Document this code:\n\n```\n{}\n```", code)),
                 },
             ],
             Some("Generate code documentation".to_string()),
@@ -549,8 +527,7 @@ fn create_task_prompt() -> SyncPrompt<
             vec![
                 PromptMessage {
                     role: Role::System,
-                    content: MessageContent::Text {
-                        text: format!(
+                    content: Content::text(format!(
                             "Create a task in project '{}' with priority '{}'.\n\
                              \n\
                              Task format:\n\
@@ -559,23 +536,20 @@ fn create_task_prompt() -> SyncPrompt<
                              - Acceptance criteria: Measurable completion conditions\n\
                              - Labels: Relevant tags for categorization",
                             project, priority
-                        ),
-                    },
+                    )),
                 },
                 // Reference project documentation
                 PromptMessage {
                     role: Role::Assistant,
-                    content: MessageContent::Resource {
-                        uri: format!("resource://projects/{}/guidelines", project),
-                        text: None,
-                        mime_type: Some("text/markdown".to_string()),
-                    },
+                    content: Content::resource_with_text(
+                        format!("resource://projects/{}/guidelines", project),
+                        Some("text/markdown"),
+                        None,
+                    ),
                 },
                 PromptMessage {
                     role: Role::User,
-                    content: MessageContent::Text {
-                        text: format!("Create a task: {}", title),
-                    },
+                    content: Content::text(format!("Create a task: {}", title)),
                 },
             ],
             Some(format!("Create task in {}", project)),
@@ -630,19 +604,17 @@ if !matches!(priority, "low" | "normal" | "high") {
 // ❌ Bad: Embed large policy doc in prompt
 PromptMessage {
     role: Role::Assistant,
-    content: MessageContent::Text {
-        text: five_thousand_line_policy_document, // Huge prompt!
-    },
+    content: Content::text(five_thousand_line_policy_document), // Huge prompt!
 }
 
 // ✅ Good: Reference resource (LLM fetches if needed)
 PromptMessage {
     role: Role::Assistant,
-    content: MessageContent::Resource {
-        uri: "resource://policies/refund-policy".to_string(),
-        text: None,
-        mime_type: Some("text/markdown".to_string()),
-    },
+    content: Content::resource_with_text(
+        "resource://policies/refund-policy",
+        Some("text/markdown"),
+        None,
+    ),
 }
 ```
 
@@ -704,9 +676,7 @@ let prompt = SyncPrompt::new("simple", |args| {
         vec![
             PromptMessage {
                 role: Role::System,
-                content: MessageContent::Text {
-                    text: format!("Talk about {}", topic),
-                },
+                content: Content::text(format!("Talk about {}", topic)),
             },
         ],
         None,
@@ -739,9 +709,12 @@ let prompt = SimplePrompt::new("async-example", Box::new(
 ));
 ```
 
+> **v2.0 Tip:** For new code, prefer `#[mcp_prompt]` over `SyncPrompt`/`SimplePrompt`. The macro handles async, argument parsing, and schema generation automatically. See the [Macros Guide](../design/mcp-macros-guide.md) for details.
+
 **When to use which:**
-- ✅ **SyncPrompt**: 95% of cases (simple message construction)
-- ✅ **SimplePrompt**: Database lookups, API calls, file I/O
+- ✅ **`#[mcp_prompt]`**: Recommended for new code (v2.0+)
+- ✅ **SyncPrompt**: Simple message construction (manual approach)
+- ✅ **SimplePrompt**: Database lookups, API calls, file I/O (manual approach)
 
 ## Listing Prompts
 
@@ -1058,12 +1031,10 @@ match workflow.validate() {
 // Traditional approach: Just return instructions
 PromptMessage {
     role: Role::System,
-    content: MessageContent::Text {
-        text: "Follow these steps:
+    content: Content::text("Follow these steps:
                 1. Call list_pages to get all pages
                 2. Find the best matching page for the project name
-                3. Call add_journal_task with the formatted task"
-    }
+                3. Call add_journal_task with the formatted task"),
 }
 ```
 

@@ -229,23 +229,17 @@ impl DynamicResourceProvider for TableResourceProvider {
                     &[table],
                 )
                 .await?;
-            Content::Text {
-                text: serde_json::to_string_pretty(&schema)?,
-            }
+            Content::text(serde_json::to_string_pretty(&schema)?)
         } else if uri.contains("/sample") {
             let sample = self.foundation
                 .query(&format!("SELECT * FROM {} LIMIT 10", table), &[])
                 .await?;
-            Content::Text {
-                text: serde_json::to_string_pretty(&sample)?,
-            }
+            Content::text(serde_json::to_string_pretty(&sample)?)
         } else if uri.contains("/count") {
             let count = self.foundation
                 .query(&format!("SELECT COUNT(*) as count FROM {}", table), &[])
                 .await?;
-            Content::Text {
-                text: serde_json::to_string_pretty(&count)?,
-            }
+            Content::text(serde_json::to_string_pretty(&count)?)
         } else {
             return Err(pmcp::Error::protocol(
                 pmcp::ErrorCode::INVALID_PARAMS,
@@ -366,6 +360,10 @@ impl FileSystemFoundation {
 ## Composing Foundations
 
 Domain servers compose multiple foundations:
+
+> **v2.0 Tip:** The `#[mcp_tool]` macro eliminates `Box::pin(async move { ... })` boilerplate.
+> Add `features = ["macros"]` to your pmcp dependency.
+> See [Macros Guide](../../docs/design/mcp-macros-guide.md) for migration examples.
 
 ```rust
 use pmcp::Server;

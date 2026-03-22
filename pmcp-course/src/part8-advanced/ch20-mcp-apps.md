@@ -135,7 +135,7 @@ MCP Apps requires the `mcp-apps` feature flag in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-pmcp = { version = "1.17", features = ["mcp-apps"] }
+pmcp = { version = "2.0", features = ["mcp-apps"] }
 ```
 
 The `full` feature also includes `mcp-apps`. If you scaffolded with `cargo pmcp app new`, this is already configured.

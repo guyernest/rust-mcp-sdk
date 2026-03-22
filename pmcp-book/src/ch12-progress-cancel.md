@@ -426,13 +426,11 @@ impl PromptHandler for AnalysisWorkflowPrompt {
         Ok(GetPromptResult::new(
             vec![PromptMessage {
                 role: Role::User,
-                content: Content::Text {
-                    text: format!(
+                content: Content::text(format!(
                         "Analysis Workflow Complete\n\nTopic: {}\n\nSteps:\n{}\n\nReady for review.",
                         topic,
                         results.join("\n")
-                    ),
-                },
+                )),
             }],
             Some(format!("Multi-step analysis workflow for: {}", topic)),
         ))

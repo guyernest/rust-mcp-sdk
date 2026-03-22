@@ -60,7 +60,7 @@ let cfg = HttpConfig {
 
 ```toml
 [dependencies]
-pmcp = { version = "1.7", features = ["http"] }
+pmcp = { version = "2.0", features = ["http"] }
 ```
 
 ## Notes

@@ -260,7 +260,7 @@ mcp-tester test http://localhost:8080
 mcp-tester test http://localhost:8080 --with-tools
 
 # Protocol compliance validation
-mcp-tester compliance http://localhost:8080 --strict
+mcp-tester conformance http://localhost:8080 --strict
 
 # List and validate tools
 mcp-tester tools http://localhost:8080 --test-all
@@ -1016,7 +1016,7 @@ cargo run --example 02_server_basic &
 mcp-tester quick http://localhost:8080
 
 # 2. Protocol compliance
-mcp-tester compliance http://localhost:8080 --strict
+mcp-tester conformance http://localhost:8080 --strict
 
 # 3. All capabilities
 mcp-tester test http://localhost:8080 --with-tools

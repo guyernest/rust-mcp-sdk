@@ -326,7 +326,7 @@ impl DynamicResourceProvider for FinanceResourceProvider {
             ));
         };
 
-        Ok(ReadResourceResult::new(vec![Content::Text { text: content }]))
+        Ok(ReadResourceResult::new(vec![Content::text(content)]))
     }
 
     fn priority(&self) -> i32 {
