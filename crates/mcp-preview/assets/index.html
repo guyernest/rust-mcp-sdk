@@ -393,12 +393,12 @@
     /* DevTools Panel */
     .devtools-panel {
       width: 350px;
-      min-width: 350px;
       background: var(--bg-secondary);
       border-left: 1px solid var(--border-color);
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      transition: width 200ms ease;
     }
 
     .devtools-tabs {
@@ -434,6 +434,77 @@
 
     .devtools-section.active {
       display: block;
+    }
+
+    /* Resize Handle */
+    .devtools-resize-handle {
+      width: 6px;
+      cursor: col-resize;
+      background: transparent;
+      position: relative;
+      flex-shrink: 0;
+      z-index: 10;
+    }
+
+    .devtools-resize-handle:hover,
+    .devtools-resize-handle.dragging {
+      background: var(--accent-color);
+    }
+
+    .devtools-resize-handle:hover {
+      opacity: 0.3;
+    }
+
+    .devtools-resize-handle.dragging {
+      opacity: 0.5;
+    }
+
+    /* DevTools Toggle */
+    .devtools-toggle {
+      padding: 6px 12px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      transition: color 200ms ease;
+    }
+
+    .devtools-toggle:hover {
+      color: var(--text-primary);
+    }
+
+    .devtools-toggle.panel-open {
+      color: var(--accent-color);
+    }
+
+    /* Clear All Button */
+    .devtools-clear-all {
+      margin-left: auto;
+      padding: 2px 8px;
+      border: 1px solid var(--border-color);
+      border-radius: 3px;
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+
+    .devtools-clear-all:hover {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+    }
+
+    .devtools-panel.collapsed {
+      width: 0;
+      border-left: none;
+    }
+
+    .devtools-panel.resizing {
+      transition: none;
     }
 
     /* Network Log */
@@ -1038,6 +1109,7 @@
       <button class="active" data-theme="light">Light</button>
       <button data-theme="dark">Dark</button>
     </div>
+    <button class="devtools-toggle panel-open" id="devtools-toggle">Dev Tools</button>
   </header>
 
   <main class="main">
@@ -1106,12 +1178,14 @@
     </section>
 
     <!-- DevTools Panel -->
+    <div class="devtools-resize-handle" id="devtools-resize-handle"></div>
     <aside class="devtools-panel">
       <div class="devtools-tabs">
         <button class="devtools-tab active" data-tab="network">Network</button>
         <button class="devtools-tab" data-tab="events">Events</button>
         <button class="devtools-tab" data-tab="protocol">Protocol</button>
         <button class="devtools-tab" data-tab="bridge">Bridge</button>
+        <button class="devtools-clear-all" id="clear-all-btn" title="Clear all tabs">Clear All</button>
       </div>
       <div class="devtools-content">
         <div class="devtools-section active" id="tab-network">
@@ -1967,6 +2041,64 @@
             await this.copyToClipboard(text);
             this.showCopyFeedback(btn);
           });
+        });
+
+        // Setup DevTools toggle button (D-01)
+        const toggleBtn = document.getElementById('devtools-toggle');
+        const devtoolsPanel = document.querySelector('.devtools-panel');
+        toggleBtn.addEventListener('click', () => {
+          if (devtoolsPanel.classList.contains('collapsed')) {
+            devtoolsPanel.style.width = '350px';
+            devtoolsPanel.classList.remove('collapsed');
+            toggleBtn.classList.add('panel-open');
+          } else {
+            devtoolsPanel.style.width = '0px';
+            devtoolsPanel.classList.add('collapsed');
+            toggleBtn.classList.remove('panel-open');
+          }
+        });
+
+        // Setup resize handle (D-02, D-03)
+        const resizeHandle = document.getElementById('devtools-resize-handle');
+        resizeHandle.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          const startX = e.clientX;
+          const startWidth = devtoolsPanel.getBoundingClientRect().width;
+          devtoolsPanel.classList.add('resizing');
+          resizeHandle.classList.add('dragging');
+          document.body.style.userSelect = 'none';
+          document.body.style.cursor = 'col-resize';
+
+          const onMouseMove = (e) => {
+            const delta = startX - e.clientX;
+            const maxWidth = window.innerWidth * 0.8;
+            const newWidth = Math.max(0, Math.min(maxWidth, startWidth + delta));
+            devtoolsPanel.style.width = newWidth + 'px';
+            if (newWidth === 0) {
+              devtoolsPanel.classList.add('collapsed');
+              toggleBtn.classList.remove('panel-open');
+            } else {
+              devtoolsPanel.classList.remove('collapsed');
+              toggleBtn.classList.add('panel-open');
+            }
+          };
+
+          const onMouseUp = () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            devtoolsPanel.classList.remove('resizing');
+            resizeHandle.classList.remove('dragging');
+            document.body.style.userSelect = '';
+            document.body.style.cursor = '';
+          };
+
+          document.addEventListener('mousemove', onMouseMove);
+          document.addEventListener('mouseup', onMouseUp);
+        });
+
+        // Setup global Clear All button (D-07)
+        document.getElementById('clear-all-btn').addEventListener('click', () => {
+          document.querySelectorAll('.clear-btn').forEach(btn => btn.click());
         });
       }
 
