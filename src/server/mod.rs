@@ -1676,6 +1676,10 @@ pub struct ServerBuilder {
     /// Host layers for MCP Apps metadata enrichment (e.g., `ChatGPT`)
     #[cfg(feature = "mcp-apps")]
     host_layers: Vec<crate::types::mcp_apps::HostType>,
+    /// Optional website URL for the server implementation (MCP 2025-11-25)
+    website_url: Option<String>,
+    /// Optional icons for the server implementation (MCP 2025-11-25)
+    icons: Option<Vec<crate::types::protocol::IconInfo>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1735,6 +1739,8 @@ impl ServerBuilder {
             http_middleware: None,
             #[cfg(feature = "mcp-apps")]
             host_layers: Vec::new(),
+            website_url: None,
+            icons: None,
         }
     }
 
@@ -1785,6 +1791,18 @@ impl ServerBuilder {
     /// ```
     pub fn version(mut self, version: impl Into<String>) -> Self {
         self.version = Some(version.into());
+        self
+    }
+
+    /// Set the website URL for the server implementation (MCP 2025-11-25).
+    pub fn website_url(mut self, url: impl Into<String>) -> Self {
+        self.website_url = Some(url.into());
+        self
+    }
+
+    /// Set icons for the server implementation (MCP 2025-11-25).
+    pub fn with_icons(mut self, icons: Vec<crate::types::protocol::IconInfo>) -> Self {
+        self.icons = Some(icons);
         self
     }
 
@@ -3135,7 +3153,16 @@ impl ServerBuilder {
         let uri_to_tool_meta = core::build_uri_to_tool_meta(&tool_infos);
 
         Ok(Server {
-            info: Implementation::new(name, version),
+            info: {
+                let mut info = Implementation::new(&name, &version);
+                if let Some(url) = self.website_url {
+                    info = info.with_website_url(url);
+                }
+                if let Some(icons) = self.icons {
+                    info = info.with_icons(icons);
+                }
+                info
+            },
             capabilities: self.capabilities,
             tools: self.tools,
             tool_infos,
