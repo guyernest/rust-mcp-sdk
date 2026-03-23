@@ -450,8 +450,7 @@ impl ServerCore {
             // Widget tool: structured data goes in structuredContent,
             // text is a brief summary to avoid duplication in `ChatGPT`
             let summary = summarize_structured_output(&value);
-            CallToolResult::new(vec![Content::text(summary)])
-                .with_widget_enrichment(info, value)
+            CallToolResult::new(vec![Content::text(summary)]).with_widget_enrichment(info, value)
         } else {
             let text = serde_json::to_string_pretty(&value)?;
             CallToolResult::new(vec![Content::text(text)])
@@ -776,17 +775,14 @@ impl ServerCore {
             return Some(match auth_context {
                 Some(ctx) => {
                     router.resolve_owner(Some(&ctx.subject), ctx.client_id.as_deref(), None)
-                }
+                },
                 None => router.resolve_owner(None, None, None),
             });
         }
         // Standard path: derive owner from auth context when task_store is configured
         if self.task_store.is_some() {
             return Some(match auth_context {
-                Some(ctx) => ctx
-                    .client_id
-                    .clone()
-                    .unwrap_or_else(|| ctx.subject.clone()),
+                Some(ctx) => ctx.client_id.clone().unwrap_or_else(|| ctx.subject.clone()),
                 None => "local".to_string(),
             });
         }
@@ -963,8 +959,7 @@ impl ServerCore {
                                 .unwrap_or_else(|| "local".to_string());
                             match store.get(&params.task_id, &owner_id).await {
                                 Ok(task) => {
-                                    let result =
-                                        crate::types::tasks::GetTaskResult::new(task);
+                                    let result = crate::types::tasks::GetTaskResult::new(task);
                                     Self::success_response(
                                         id,
                                         serde_json::to_value(result).unwrap(),
@@ -1061,8 +1056,7 @@ impl ServerCore {
                                 .unwrap_or_else(|| "local".to_string());
                             match store.cancel(&params.task_id, &owner_id).await {
                                 Ok(task) => {
-                                    let result =
-                                        crate::types::tasks::CancelTaskResult::new(task);
+                                    let result = crate::types::tasks::CancelTaskResult::new(task);
                                     Self::success_response(
                                         id,
                                         serde_json::to_value(result).unwrap(),

@@ -312,6 +312,7 @@ impl ServerTester {
         }
     }
 
+    #[allow(dead_code)]
     async fn send_json_rpc_request_with_client(
         &self,
         client: &Client,
@@ -463,6 +464,7 @@ impl ServerTester {
 
     /// Deprecated: Use `run_conformance_tests` instead.
     #[deprecated(note = "Use run_conformance_tests instead")]
+    #[allow(dead_code)]
     pub async fn run_compliance_tests(&mut self, strict: bool) -> Result<TestReport> {
         let mut report = TestReport::new();
         let start = Instant::now();
@@ -1091,6 +1093,7 @@ impl ServerTester {
     /// - Sends Accept: application/json, text/event-stream header (for streamable HTTP)
     /// - Sends spec-compliant client capabilities (sampling, elicitation, roots)
     /// - Does NOT send server-only capabilities (tools, prompts, resources)
+    #[allow(dead_code)]
     pub async fn test_cursor_compatibility(&self) -> TestResult {
         let start = Instant::now();
         let name = "Cursor IDE Compatibility".to_string();
@@ -2334,6 +2337,7 @@ impl ServerTester {
         }
     }
 
+    #[allow(dead_code)]
     async fn test_required_methods(&mut self) -> TestResult {
         let start = Instant::now();
         let name = "Required Methods".to_string();
@@ -2415,6 +2419,7 @@ impl ServerTester {
         }
     }
 
+    #[allow(dead_code)]
     async fn test_error_codes(&self) -> TestResult {
         let start = Instant::now();
         let name = "Error Code Compliance".to_string();
@@ -2430,6 +2435,7 @@ impl ServerTester {
         }
     }
 
+    #[allow(dead_code)]
     async fn test_json_rpc_compliance(&self) -> TestResult {
         let start = Instant::now();
         let name = "JSON-RPC 2.0 Compliance".to_string();
@@ -2733,6 +2739,7 @@ impl ServerTester {
     }
 
     /// Get the server version from the last initialize response.
+    #[allow(dead_code)]
     pub fn get_server_version(&self) -> Option<String> {
         self.server_info
             .as_ref()

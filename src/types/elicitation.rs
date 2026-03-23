@@ -125,7 +125,7 @@ mod tests {
             ElicitRequestParams::Form { message, .. } => {
                 assert_eq!(message, "Enter your name");
             },
-            _ => panic!("Expected Form variant"),
+            ElicitRequestParams::Url { .. } => panic!("Expected Form variant"),
         }
     }
 
@@ -147,7 +147,7 @@ mod tests {
             ElicitRequestParams::Url { elicitation_id, .. } => {
                 assert_eq!(elicitation_id, "auth-123");
             },
-            _ => panic!("Expected Url variant"),
+            ElicitRequestParams::Form { .. } => panic!("Expected Url variant"),
         }
     }
 

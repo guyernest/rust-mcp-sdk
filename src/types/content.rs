@@ -105,7 +105,7 @@ pub enum Content {
         meta: Option<serde_json::Map<String, Value>>,
     },
     /// Resource link content (MCP 2025-11-25).
-    /// Boxed to avoid inflating the Content enum size — ResourceLink has ~264 bytes
+    /// Boxed to avoid inflating the Content enum size — `ResourceLink` has ~264 bytes
     /// of fields while Text has ~24 bytes.
     #[serde(rename = "resource_link")]
     ResourceLink(Box<ResourceLinkContent>),
@@ -120,9 +120,7 @@ impl Content {
     /// let c = Content::text("Hello, world!");
     /// ```
     pub fn text(text: impl Into<String>) -> Self {
-        Self::Text {
-            text: text.into(),
-        }
+        Self::Text { text: text.into() }
     }
 
     /// Create image content from base64-encoded data.
@@ -323,6 +321,7 @@ impl std::fmt::Display for Role {
 /// discriminator. The SDK reuses [`Content`] (a tagged enum) for convenience,
 /// so this module strips the `type` tag on serialization and tolerates its
 /// absence on deserialization.
+#[allow(clippy::redundant_pub_crate)]
 pub(crate) mod resource_contents_serde {
     use super::Content;
     use serde::ser::SerializeSeq;
@@ -366,9 +365,9 @@ pub(crate) mod resource_contents_serde {
                     }
                     seq.serialize_element(&Tc { text })?;
                 },
-                other @ Content::Image { .. }
-                | other @ Content::Audio { .. }
-                | other @ Content::ResourceLink { .. } => {
+                other @ (Content::Image { .. }
+                | Content::Audio { .. }
+                | Content::ResourceLink { .. }) => {
                     seq.serialize_element(other)?;
                 },
             }
@@ -577,7 +576,12 @@ mod tests {
     fn test_content_resource_helper() {
         let c = Content::resource("file://test.txt");
         match c {
-            Content::Resource { uri, text, mime_type, meta } => {
+            Content::Resource {
+                uri,
+                text,
+                mime_type,
+                meta,
+            } => {
                 assert_eq!(uri, "file://test.txt");
                 assert!(text.is_none());
                 assert!(mime_type.is_none());
@@ -591,7 +595,12 @@ mod tests {
     fn test_content_audio_helper() {
         let c = Content::audio("audiodata==", "audio/wav");
         match c {
-            Content::Audio { data, mime_type, annotations, meta } => {
+            Content::Audio {
+                data,
+                mime_type,
+                annotations,
+                meta,
+            } => {
                 assert_eq!(data, "audiodata==");
                 assert_eq!(mime_type, "audio/wav");
                 assert!(annotations.is_none());

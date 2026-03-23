@@ -230,7 +230,7 @@ impl StreamableHttpServerConfig {
     /// Create a stateless configuration for serverless/Lambda deployments.
     ///
     /// Uses [`AllowedOrigins::any()`] because stateless servers are behind
-    /// a reverse proxy (API Gateway, CloudFront) that handles CORS and
+    /// a reverse proxy (API Gateway, `CloudFront`) that handles CORS and
     /// origin validation at the edge. DNS rebinding protection adds no
     /// security value when the MCP server is only reachable via loopback
     /// within a Lambda sandbox or container.
@@ -900,11 +900,9 @@ async fn handle_post_fast_path(
 
     // Validate protocol version for non-init requests
     if !is_init_request {
-        if let Err(error_response) = validate_protocol_version(
-            &state,
-            session_id.as_ref(),
-            protocol_version.as_ref(),
-        ) {
+        if let Err(error_response) =
+            validate_protocol_version(&state, session_id.as_ref(), protocol_version.as_ref())
+        {
             return error_response;
         }
     }
@@ -1118,11 +1116,9 @@ async fn handle_post_with_middleware(
 
     // Validate protocol version for non-init requests
     if !is_init_request {
-        if let Err(error_response) = validate_protocol_version(
-            &state,
-            session_id.as_ref(),
-            protocol_version.as_ref(),
-        ) {
+        if let Err(error_response) =
+            validate_protocol_version(&state, session_id.as_ref(), protocol_version.as_ref())
+        {
             // Call error hooks for protocol version validation failures
             let version_error = crate::Error::protocol_msg("Protocol version validation failed");
             let _ = http_middleware
@@ -1407,4 +1403,3 @@ async fn handle_delete_session(
         create_error_response(StatusCode::NOT_FOUND, -32600, "No session ID provided")
     }
 }
-

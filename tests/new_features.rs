@@ -38,7 +38,7 @@ async fn test_http_transport() {
 #[tokio::test]
 async fn test_sampling_client_method() {
     use pmcp::types::{SamplingMessage, SamplingMessageContent};
-    use pmcp::{Client, Content, CreateMessageParams, Role, StdioTransport};
+    use pmcp::{Client, CreateMessageParams, Role, StdioTransport};
 
     let transport = StdioTransport::new();
     let _client = Client::new(transport);

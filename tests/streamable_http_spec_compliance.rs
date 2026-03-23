@@ -33,7 +33,7 @@ mod spec_compliance_tests {
                 .build()
                 .map_err(box_err)?,
         ));
-        let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
         let http_server = StreamableHttpServer::new(addr, server);
         let (server_addr, server_task) = http_server.start().await.map_err(box_err)?;
 
@@ -90,7 +90,7 @@ mod spec_compliance_tests {
                 .build()
                 .map_err(box_err)?,
         ));
-        let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
         let http_server = StreamableHttpServer::new(addr, server);
         let (server_addr, server_task) = http_server.start().await.map_err(box_err)?;
 
@@ -148,7 +148,7 @@ mod spec_compliance_tests {
                 .build()
                 .map_err(box_err)?,
         ));
-        let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
         let http_server = StreamableHttpServer::new(addr, server);
         let (server_addr, server_task) = http_server.start().await.map_err(box_err)?;
 
@@ -225,7 +225,7 @@ mod spec_compliance_tests {
                 .build()
                 .map_err(box_err)?,
         ));
-        let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
         let http_server = StreamableHttpServer::new(addr, server);
         let (server_addr, server_task) = http_server.start().await.map_err(box_err)?;
 
@@ -299,7 +299,7 @@ mod spec_compliance_tests {
                 .build()
                 .map_err(box_err)?,
         ));
-        let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
         let http_server = StreamableHttpServer::new(addr, server);
         let (server_addr, server_task) = http_server.start().await.map_err(box_err)?;
 
@@ -388,7 +388,7 @@ mod spec_compliance_tests {
                 .build()
                 .map_err(box_err)?,
         ));
-        let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
         // Explicitly use stateful mode (default)
         let http_server = StreamableHttpServer::new(addr, server);
         let (server_addr, server_task) = http_server.start().await.map_err(box_err)?;
@@ -436,7 +436,7 @@ mod spec_compliance_tests {
                 .build()
                 .map_err(box_err)?,
         ));
-        let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
         let http_server = StreamableHttpServer::new(addr, server);
         let (server_addr, server_task) = http_server.start().await.map_err(box_err)?;
 
@@ -509,7 +509,7 @@ mod spec_compliance_tests {
                 .build()
                 .map_err(box_err)?,
         ));
-        let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
         let config = StreamableHttpServerConfig {
             session_id_generator: None, // Stateless mode
             enable_json_response: false,

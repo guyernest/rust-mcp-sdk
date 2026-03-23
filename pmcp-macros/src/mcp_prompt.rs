@@ -25,7 +25,7 @@
 //! // Register: server_builder.prompt("code_review", code_review())
 //! ```
 
-use crate::mcp_common;
+use crate::mcp_common::{self, ParamSlot};
 use darling::FromMeta;
 use heck::ToUpperCamelCase;
 use proc_macro2::{Ident, TokenStream};
@@ -44,7 +44,7 @@ pub struct McpPromptArgs {
 }
 
 /// Expand `#[mcp_prompt]` attribute macro on a standalone function.
-pub fn expand_mcp_prompt(args: TokenStream, input: ItemFn) -> syn::Result<TokenStream> {
+pub fn expand_mcp_prompt(args: TokenStream, input: &ItemFn) -> syn::Result<TokenStream> {
     // Parse macro attributes via darling.
     let nested_metas = if args.is_empty() {
         return Err(syn::Error::new_spanned(
@@ -82,12 +82,6 @@ pub fn expand_mcp_prompt(args: TokenStream, input: ItemFn) -> syn::Result<TokenS
     let mut has_extra = false;
 
     // Track parameter order for correct call-site argument passing.
-    #[derive(Debug, Clone, Copy)]
-    enum ParamSlot {
-        Args,
-        State,
-        Extra,
-    }
     let mut param_order: Vec<ParamSlot> = Vec::new();
 
     for param in &input.sig.inputs {
@@ -102,7 +96,7 @@ pub fn expand_mcp_prompt(args: TokenStream, input: ItemFn) -> syn::Result<TokenS
                 }
                 args_type = Some(ty);
                 param_order.push(ParamSlot::Args);
-            }
+            },
             mcp_common::ParamRole::State { inner_ty, .. } => {
                 if state_inner_ty.is_some() {
                     return Err(syn::Error::new_spanned(
@@ -112,7 +106,7 @@ pub fn expand_mcp_prompt(args: TokenStream, input: ItemFn) -> syn::Result<TokenS
                 }
                 state_inner_ty = Some(inner_ty);
                 param_order.push(ParamSlot::State);
-            }
+            },
             mcp_common::ParamRole::Extra => {
                 if has_extra {
                     return Err(syn::Error::new_spanned(
@@ -122,19 +116,18 @@ pub fn expand_mcp_prompt(args: TokenStream, input: ItemFn) -> syn::Result<TokenS
                 }
                 has_extra = true;
                 param_order.push(ParamSlot::Extra);
-            }
+            },
             mcp_common::ParamRole::SelfRef => {
                 return Err(syn::Error::new_spanned(
                     param,
                     "standalone #[mcp_prompt] functions cannot have &self -- use #[mcp_server] for impl block prompts",
                 ));
-            }
+            },
         }
     }
 
     // Generate struct fields.
-    let struct_fields = if state_inner_ty.is_some() {
-        let inner = state_inner_ty.as_ref().unwrap();
+    let struct_fields = if let Some(ref inner) = state_inner_ty {
         quote! { state: Option<std::sync::Arc<#inner>>, }
     } else {
         quote! {}

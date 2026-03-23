@@ -54,7 +54,7 @@ pub fn classify_param(param: &FnArg) -> syn::Result<ParamRole> {
             } else {
                 Ok(ParamRole::Args(ty.clone()))
             }
-        }
+        },
     }
 }
 
@@ -62,10 +62,7 @@ pub fn classify_param(param: &FnArg) -> syn::Result<ParamRole> {
 /// Handles qualified paths like `pmcp::State<T>` by checking only the final segment.
 pub fn type_name_matches(ty: &Type, name: &str) -> bool {
     if let Type::Path(TypePath { path, .. }) = ty {
-        path.segments
-            .last()
-            .map(|s| s.ident == name)
-            .unwrap_or(false)
+        path.segments.last().is_some_and(|s| s.ident == name)
     } else {
         false
     }
@@ -194,7 +191,7 @@ mod tests {
             ParamRole::State { inner_ty, .. } => {
                 let inner_str = quote!(#inner_ty).to_string();
                 assert_eq!(inner_str, "Database");
-            }
+            },
             _ => panic!("Expected ParamRole::State, got {:?}", role),
         }
     }
@@ -214,7 +211,7 @@ mod tests {
             ParamRole::Args(ty) => {
                 let ty_str = quote!(#ty).to_string();
                 assert_eq!(ty_str, "CalculatorArgs");
-            }
+            },
             _ => panic!("Expected ParamRole::Args, got {:?}", role),
         }
     }

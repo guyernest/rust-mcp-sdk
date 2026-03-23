@@ -140,11 +140,15 @@ pub fn expand_mcp_server(_args: TokenStream, mut input: ItemImpl) -> syn::Result
 
         // Build call arguments in the user's declared parameter order.
         // State variant is never pushed for #[mcp_server] (rejected at collection time).
-        let call_args: Vec<TokenStream> = method_info.param_order.iter().map(|slot| match slot {
-            ParamSlot::Args => quote! { typed_args },
-            ParamSlot::Extra => quote! { extra },
-            ParamSlot::State => unreachable!("#[mcp_server] uses &self, not State<T>"),
-        }).collect();
+        let call_args: Vec<TokenStream> = method_info
+            .param_order
+            .iter()
+            .map(|slot| match slot {
+                ParamSlot::Args => quote! { typed_args },
+                ParamSlot::Extra => quote! { extra },
+                ParamSlot::State => unreachable!("#[mcp_server] uses &self, not State<T>"),
+            })
+            .collect();
 
         // Generate function call (async vs sync).
         let fn_call = if method_info.is_async {
@@ -168,15 +172,15 @@ pub fn expand_mcp_server(_args: TokenStream, mut input: ItemImpl) -> syn::Result
         };
 
         // Generate output schema code.
-        let output_schema_code = generate_method_output_schema(method_info)?;
+        let output_schema_code = generate_method_output_schema(method_info);
 
         // Generate ToolInfo construction (branching on annotations).
         let tool_info_code = crate::mcp_tool::generate_tool_info_code(
             tool_name,
             description,
-            &method_info.annotations,
-            &method_info.ui,
-        )?;
+            method_info.annotations.as_ref(),
+            method_info.ui.as_ref(),
+        );
 
         // Generate the handler struct and ToolHandler impl.
         let handler_struct = quote! {
@@ -382,7 +386,7 @@ fn collect_tool_methods(impl_block: &ItemImpl) -> syn::Result<Vec<ToolMethodInfo
             match role {
                 ParamRole::SelfRef => {
                     has_self = true;
-                }
+                },
                 ParamRole::Args(ty) => {
                     if args_type.is_some() {
                         return Err(syn::Error::new_spanned(
@@ -392,7 +396,7 @@ fn collect_tool_methods(impl_block: &ItemImpl) -> syn::Result<Vec<ToolMethodInfo
                     }
                     args_type = Some(ty);
                     param_order.push(ParamSlot::Args);
-                }
+                },
                 ParamRole::Extra => {
                     if has_extra {
                         return Err(syn::Error::new_spanned(
@@ -402,13 +406,13 @@ fn collect_tool_methods(impl_block: &ItemImpl) -> syn::Result<Vec<ToolMethodInfo
                     }
                     has_extra = true;
                     param_order.push(ParamSlot::Extra);
-                }
+                },
                 ParamRole::State { .. } => {
                     return Err(syn::Error::new_spanned(
                         param,
                         "#[mcp_server] methods use &self for state access, not State<T>",
                     ));
-                }
+                },
             }
         }
 
@@ -452,13 +456,13 @@ fn parse_mcp_tool_attr(attr: &syn::Attribute, method: &ImplItemFn) -> syn::Resul
                 &method.sig.ident,
                 "mcp_tool requires at least `description = \"...\"` attribute",
             ));
-        }
+        },
         syn::Meta::NameValue(_) => {
             return Err(syn::Error::new_spanned(
                 attr,
                 "mcp_tool requires parenthesized arguments: #[mcp_tool(description = \"...\")]",
             ));
-        }
+        },
     };
 
     let parser =
@@ -476,19 +480,19 @@ fn parse_mcp_tool_attr(attr: &syn::Attribute, method: &ImplItemFn) -> syn::Resul
 ///
 /// Returns `None` (as tokens) for `Result<Value>` or no return type.
 /// Returns `Some(schema)` (as tokens) for `Result<TypedStruct>`.
-fn generate_method_output_schema(method_info: &ToolMethodInfo) -> syn::Result<TokenStream> {
+fn generate_method_output_schema(method_info: &ToolMethodInfo) -> TokenStream {
     let Some(ref return_type) = method_info.return_type else {
-        return Ok(quote! { None });
+        return quote! { None };
     };
 
     if let Some(ok_type) = mcp_common::extract_result_ok_type(return_type) {
         if mcp_common::is_value_type(&ok_type) {
-            Ok(quote! { None })
+            quote! { None }
         } else {
-            Ok(mcp_common::generate_output_schema_code(&ok_type))
+            mcp_common::generate_output_schema_code(&ok_type)
         }
     } else {
-        Ok(quote! { None })
+        quote! { None }
     }
 }
 
@@ -529,7 +533,7 @@ fn collect_prompt_methods(impl_block: &ItemImpl) -> syn::Result<Vec<PromptMethod
             match role {
                 ParamRole::SelfRef => {
                     has_self = true;
-                }
+                },
                 ParamRole::Args(ty) => {
                     if args_type.is_some() {
                         return Err(syn::Error::new_spanned(
@@ -539,7 +543,7 @@ fn collect_prompt_methods(impl_block: &ItemImpl) -> syn::Result<Vec<PromptMethod
                     }
                     args_type = Some(ty);
                     param_order.push(ParamSlot::Args);
-                }
+                },
                 ParamRole::Extra => {
                     if has_extra {
                         return Err(syn::Error::new_spanned(
@@ -549,13 +553,13 @@ fn collect_prompt_methods(impl_block: &ItemImpl) -> syn::Result<Vec<PromptMethod
                     }
                     has_extra = true;
                     param_order.push(ParamSlot::Extra);
-                }
+                },
                 ParamRole::State { .. } => {
                     return Err(syn::Error::new_spanned(
                         param,
                         "#[mcp_server] methods use &self for state access, not State<T>",
                     ));
-                }
+                },
             }
         }
 
@@ -582,10 +586,7 @@ fn collect_prompt_methods(impl_block: &ItemImpl) -> syn::Result<Vec<PromptMethod
 }
 
 /// Parse `#[mcp_prompt(...)]` attribute into `McpPromptArgs`.
-fn parse_mcp_prompt_attr(
-    attr: &syn::Attribute,
-    method: &ImplItemFn,
-) -> syn::Result<McpPromptArgs> {
+fn parse_mcp_prompt_attr(attr: &syn::Attribute, method: &ImplItemFn) -> syn::Result<McpPromptArgs> {
     let tokens = match &attr.meta {
         syn::Meta::List(list) => list.tokens.clone(),
         syn::Meta::Path(_) => {
@@ -593,13 +594,13 @@ fn parse_mcp_prompt_attr(
                 &method.sig.ident,
                 "mcp_prompt requires at least `description = \"...\"` attribute",
             ));
-        }
+        },
         syn::Meta::NameValue(_) => {
             return Err(syn::Error::new_spanned(
                 attr,
                 "mcp_prompt requires parenthesized arguments: #[mcp_prompt(description = \"...\")]",
             ));
-        }
+        },
     };
 
     let parser =
@@ -716,7 +717,7 @@ mod tests {
                     "Expected State<T> rejection error, got: {}",
                     err_msg
                 );
-            }
+            },
             Ok(_) => panic!("Expected error for State<T> in #[mcp_server] method"),
         }
     }
@@ -772,10 +773,7 @@ mod tests {
         // The #[mcp_prompt] attr should also be removed.
         if let ImplItem::Fn(method) = &impl_block.items[1] {
             assert!(
-                !method
-                    .attrs
-                    .iter()
-                    .any(|a| a.path().is_ident("mcp_prompt")),
+                !method.attrs.iter().any(|a| a.path().is_ident("mcp_prompt")),
                 "mcp_prompt attribute should be stripped"
             );
         } else {
@@ -803,7 +801,7 @@ mod tests {
                     "Expected &self requirement error, got: {}",
                     err_msg
                 );
-            }
+            },
             Ok(_) => panic!("Expected error for method without &self"),
         }
     }

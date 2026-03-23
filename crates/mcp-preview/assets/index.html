@@ -404,11 +404,17 @@
     .devtools-tabs {
       display: flex;
       border-bottom: 1px solid var(--border-color);
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    .devtools-tabs::-webkit-scrollbar {
+      display: none;
     }
 
     .devtools-tab {
-      flex: 1;
-      padding: 10px;
+      flex: none;
+      padding: 8px 12px;
       border: none;
       background: transparent;
       color: var(--text-secondary);
@@ -480,22 +486,10 @@
       color: var(--accent-color);
     }
 
-    /* Clear All Button */
+    /* Clear All Button — base styles shared via .clear-btn selector above */
     .devtools-clear-all {
       margin-left: auto;
-      padding: 2px 8px;
-      border: 1px solid var(--border-color);
-      border-radius: 3px;
-      background: transparent;
-      color: var(--text-secondary);
-      cursor: pointer;
-      font-size: 11px;
       flex-shrink: 0;
-    }
-
-    .devtools-clear-all:hover {
-      background: var(--bg-tertiary);
-      color: var(--text-primary);
     }
 
     .devtools-panel.collapsed {
@@ -805,7 +799,7 @@
       z-index: 1;
     }
 
-    .clear-btn, .copy-btn {
+    .clear-btn, .copy-btn, .devtools-clear-all {
       padding: 2px 8px;
       border: 1px solid var(--border-color);
       border-radius: 3px;
@@ -815,7 +809,7 @@
       font-size: 11px;
     }
 
-    .clear-btn:hover, .copy-btn:hover {
+    .clear-btn:hover, .copy-btn:hover, .devtools-clear-all:hover {
       background: var(--bg-tertiary);
       color: var(--text-primary);
     }
@@ -2043,47 +2037,52 @@
           });
         });
 
-        // Setup DevTools toggle button (D-01)
+        // DevTools panel state
         const toggleBtn = document.getElementById('devtools-toggle');
         const devtoolsPanel = document.querySelector('.devtools-panel');
+        const resizeHandle = document.getElementById('devtools-resize-handle');
+
+        const setDevToolsWidth = (px) => {
+          devtoolsPanel.style.width = px + 'px';
+          devtoolsPanel.classList.toggle('collapsed', px === 0);
+          toggleBtn.classList.toggle('panel-open', px !== 0);
+        };
+
+        // Toggle button
         toggleBtn.addEventListener('click', () => {
-          if (devtoolsPanel.classList.contains('collapsed')) {
-            devtoolsPanel.style.width = '350px';
-            devtoolsPanel.classList.remove('collapsed');
-            toggleBtn.classList.add('panel-open');
-          } else {
-            devtoolsPanel.style.width = '0px';
-            devtoolsPanel.classList.add('collapsed');
-            toggleBtn.classList.remove('panel-open');
-          }
+          setDevToolsWidth(devtoolsPanel.classList.contains('collapsed') ? 350 : 0);
         });
 
-        // Setup resize handle (D-02, D-03)
-        const resizeHandle = document.getElementById('devtools-resize-handle');
+        // Resize handle
         resizeHandle.addEventListener('mousedown', (e) => {
           e.preventDefault();
           const startX = e.clientX;
           const startWidth = devtoolsPanel.getBoundingClientRect().width;
+          const maxWidth = window.innerWidth * 0.8;
+          let rafId = 0;
+          let isCollapsed = startWidth === 0;
           devtoolsPanel.classList.add('resizing');
           resizeHandle.classList.add('dragging');
           document.body.style.userSelect = 'none';
           document.body.style.cursor = 'col-resize';
 
           const onMouseMove = (e) => {
-            const delta = startX - e.clientX;
-            const maxWidth = window.innerWidth * 0.8;
-            const newWidth = Math.max(0, Math.min(maxWidth, startWidth + delta));
-            devtoolsPanel.style.width = newWidth + 'px';
-            if (newWidth === 0) {
-              devtoolsPanel.classList.add('collapsed');
-              toggleBtn.classList.remove('panel-open');
-            } else {
-              devtoolsPanel.classList.remove('collapsed');
-              toggleBtn.classList.add('panel-open');
-            }
+            cancelAnimationFrame(rafId);
+            rafId = requestAnimationFrame(() => {
+              const delta = startX - e.clientX;
+              const newWidth = Math.max(0, Math.min(maxWidth, startWidth + delta));
+              devtoolsPanel.style.width = newWidth + 'px';
+              const nowCollapsed = newWidth === 0;
+              if (nowCollapsed !== isCollapsed) {
+                isCollapsed = nowCollapsed;
+                devtoolsPanel.classList.toggle('collapsed', nowCollapsed);
+                toggleBtn.classList.toggle('panel-open', !nowCollapsed);
+              }
+            });
           };
 
           const onMouseUp = () => {
+            cancelAnimationFrame(rafId);
             document.removeEventListener('mousemove', onMouseMove);
             document.removeEventListener('mouseup', onMouseUp);
             devtoolsPanel.classList.remove('resizing');
@@ -2096,7 +2095,7 @@
           document.addEventListener('mouseup', onMouseUp);
         });
 
-        // Setup global Clear All button (D-07)
+        // Global Clear All
         document.getElementById('clear-all-btn').addEventListener('click', () => {
           document.querySelectorAll('.clear-btn').forEach(btn => btn.click());
         });
@@ -2276,6 +2275,8 @@
 
           if (result.success && result.content) {
             await this.handleToolResponse(result);
+          } else if (result.error) {
+            this.logEvent('error', { message: result.error });
           }
         } catch (e) {
           this.logNetwork('response', this.selectedTool.name, { error: e.message }, 0, false);
@@ -2373,13 +2374,8 @@
 
         if (widgetContent && widgetContent.text) {
           this.loadWidget(widgetContent.text);
-        } else {
-          // Check for text content
-          const textContent = result.content.find(c => c.type === 'text');
-          if (textContent) {
-            // Text content is displayed in the preview area; no separate DevTools logging needed
-          }
         }
+        // Non-widget text content is rendered in the preview area; no separate DevTools logging needed.
 
         this.logEvent('toolResponse', { tool: this.selectedTool.name });
       }

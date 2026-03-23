@@ -10,8 +10,8 @@ use pmcp::shared::streamable_http::{StreamableHttpTransport, StreamableHttpTrans
 use pmcp::shared::{Transport, TransportMessage};
 use pmcp::types::capabilities::ServerCapabilities;
 use pmcp::types::{
-    ClientNotification, ClientRequest, Implementation, InitializeRequest, Notification,
-    ProtocolVersion, Request, RequestId,
+    ClientNotification, ClientRequest, Implementation, InitializeRequest, Notification, Request,
+    RequestId,
 };
 use std::sync::Arc;
 use tokio::sync::Mutex;

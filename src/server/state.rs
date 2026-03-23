@@ -30,7 +30,7 @@ pub struct State<T>(pub Arc<T>);
 // Manual Clone impl avoids requiring T: Clone (Arc<T> is always Clone).
 impl<T> Clone for State<T> {
     fn clone(&self) -> Self {
-        State(Arc::clone(&self.0))
+        Self(Arc::clone(&self.0))
     }
 }
 
@@ -43,13 +43,13 @@ impl<T> Deref for State<T> {
 
 impl<T> From<Arc<T>> for State<T> {
     fn from(arc: Arc<T>) -> Self {
-        State(arc)
+        Self(arc)
     }
 }
 
 impl<T> From<T> for State<T> {
     fn from(val: T) -> Self {
-        State(Arc::new(val))
+        Self(Arc::new(val))
     }
 }
 

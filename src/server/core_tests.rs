@@ -8,8 +8,8 @@ mod tests {
     use crate::server::cancellation::RequestHandlerExtra;
     use crate::server::core::{ProtocolHandler, ServerCore};
     use crate::server::{PromptHandler, ResourceHandler, ToolHandler};
+    use crate::types::ResourceInfo;
     use crate::types::*;
-    use crate::types::{ResourceInfo, Role};
     use async_trait::async_trait;
     use serde_json::{json, Value};
     use std::collections::HashMap;
@@ -618,9 +618,11 @@ mod tests {
         let server = create_test_server();
 
         // Send a notification
-        let notification = Notification::Progress(
-            ProgressNotification::new(ProgressToken::String("test".to_string()), 50.0, Some("Processing".to_string())),
-        );
+        let notification = Notification::Progress(ProgressNotification::new(
+            ProgressToken::String("test".to_string()),
+            50.0,
+            Some("Processing".to_string()),
+        ));
 
         // Should handle without error
         let result = server.handle_notification(notification).await;

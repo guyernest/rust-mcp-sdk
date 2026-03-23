@@ -27,7 +27,7 @@ use super::PromptHandler;
 ///
 /// # String-Only Arguments
 ///
-/// MCP prompt arguments are transmitted as `HashMap<String, String>`. TypedPrompt
+/// MCP prompt arguments are transmitted as `HashMap<String, String>`. `TypedPrompt`
 /// converts each value to `serde_json::Value::String` before deserializing into `T`.
 /// This means struct fields **must** be `String` or `Option<String>` types. Non-string
 /// field types (e.g., `i32`, `bool`, `f64`) will fail deserialization because
@@ -165,7 +165,7 @@ where
     }
 }
 
-/// Deserialize MCP prompt arguments from string-only HashMap into a typed struct.
+/// Deserialize MCP prompt arguments from string-only `HashMap` into a typed struct.
 ///
 /// MCP sends prompt arguments as `HashMap<String, String>`. This function
 /// coerces string values to their natural JSON types before deserialization:
@@ -202,7 +202,7 @@ fn coerce_string_to_value(s: String) -> serde_json::Value {
     // serde_json::from_str is strict: "42" → Number, "true" → Bool,
     // but "hello" → Err (not valid JSON), so we fall back to String.
     match serde_json::from_str::<serde_json::Value>(&s) {
-        Ok(v) if !v.is_string() => v, // Number, Bool, Null, Array, Object
+        Ok(v) if !v.is_string() => v,      // Number, Bool, Null, Array, Object
         _ => serde_json::Value::String(s), // Plain text stays as String
     }
 }
@@ -211,10 +211,11 @@ fn coerce_string_to_value(s: String) -> serde_json::Value {
 ///
 /// Walks the schema's `properties` and `required` fields to build
 /// argument metadata. Used by both runtime `TypedPrompt` and macro-generated code.
-pub fn extract_prompt_arguments_from_schema(json_schema: &serde_json::Value) -> Vec<PromptArgument> {
-    let properties = match json_schema.get("properties").and_then(|p| p.as_object()) {
-        Some(props) => props,
-        None => return Vec::new(),
+pub fn extract_prompt_arguments_from_schema(
+    json_schema: &serde_json::Value,
+) -> Vec<PromptArgument> {
+    let Some(properties) = json_schema.get("properties").and_then(|p| p.as_object()) else {
+        return Vec::new();
     };
 
     let required_fields: Vec<String> = json_schema
@@ -245,9 +246,8 @@ pub fn extract_prompt_arguments_from_schema(json_schema: &serde_json::Value) -> 
 #[cfg(feature = "schema-generation")]
 fn extract_prompt_arguments<T: JsonSchema>() -> Vec<PromptArgument> {
     let schema = schemars::schema_for!(T);
-    let json_schema = match serde_json::to_value(&schema) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
+    let Ok(json_schema) = serde_json::to_value(&schema) else {
+        return Vec::new();
     };
     extract_prompt_arguments_from_schema(&json_schema)
 }
@@ -259,6 +259,7 @@ mod tests {
     use crate::types::Content;
 
     #[derive(Debug, serde::Deserialize, JsonSchema)]
+    #[allow(dead_code)]
     struct ReviewArgs {
         /// The programming language to review
         language: String,
@@ -270,12 +271,7 @@ mod tests {
     #[tokio::test]
     async fn test_typed_prompt_metadata() {
         let prompt = TypedPrompt::new("code_review", |_args: ReviewArgs, _extra| {
-            Box::pin(async move {
-                Ok(GetPromptResult::new(
-                    vec![],
-                    Some("Review".to_string()),
-                ))
-            })
+            Box::pin(async move { Ok(GetPromptResult::new(vec![], Some("Review".to_string()))) })
         })
         .with_description("Review code for quality");
 
@@ -327,9 +323,7 @@ mod tests {
     #[tokio::test]
     async fn test_typed_prompt_handle_missing_required_field() {
         let prompt = TypedPrompt::new("code_review", |_args: ReviewArgs, _extra| {
-            Box::pin(async move {
-                Ok(GetPromptResult::new(vec![], None))
-            })
+            Box::pin(async move { Ok(GetPromptResult::new(vec![], None)) })
         });
 
         // Missing required "language" field
@@ -341,9 +335,7 @@ mod tests {
     #[tokio::test]
     async fn test_typed_prompt_debug() {
         let prompt = TypedPrompt::new("test", |_args: ReviewArgs, _extra| {
-            Box::pin(async move {
-                Ok(GetPromptResult::new(vec![], None))
-            })
+            Box::pin(async move { Ok(GetPromptResult::new(vec![], None)) })
         })
         .with_description("A test prompt");
 
@@ -358,9 +350,7 @@ mod tests {
     #[tokio::test]
     async fn test_typed_prompt_no_arguments() {
         let prompt = TypedPrompt::new("simple", |_args: EmptyArgs, _extra| {
-            Box::pin(async move {
-                Ok(GetPromptResult::new(vec![], Some("Simple".to_string())))
-            })
+            Box::pin(async move { Ok(GetPromptResult::new(vec![], Some("Simple".to_string()))) })
         });
 
         let info = prompt.metadata().unwrap();
@@ -379,15 +369,33 @@ mod tests {
     fn test_coerce_string_to_value_types() {
         // Numbers
         assert_eq!(coerce_string_to_value("42".into()), serde_json::json!(42));
-        assert_eq!(coerce_string_to_value("3.14".into()), serde_json::json!(3.14));
+        assert_eq!(
+            coerce_string_to_value("1.25".into()),
+            serde_json::json!(1.25)
+        );
         // Bools
-        assert_eq!(coerce_string_to_value("true".into()), serde_json::json!(true));
-        assert_eq!(coerce_string_to_value("false".into()), serde_json::json!(false));
+        assert_eq!(
+            coerce_string_to_value("true".into()),
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            coerce_string_to_value("false".into()),
+            serde_json::json!(false)
+        );
         // Null
-        assert_eq!(coerce_string_to_value("null".into()), serde_json::json!(null));
+        assert_eq!(
+            coerce_string_to_value("null".into()),
+            serde_json::json!(null)
+        );
         // Plain strings stay as strings
-        assert_eq!(coerce_string_to_value("hello".into()), serde_json::json!("hello"));
-        assert_eq!(coerce_string_to_value("not a number".into()), serde_json::json!("not a number"));
+        assert_eq!(
+            coerce_string_to_value("hello".into()),
+            serde_json::json!("hello")
+        );
+        assert_eq!(
+            coerce_string_to_value("not a number".into()),
+            serde_json::json!("not a number")
+        );
     }
 
     #[tokio::test]

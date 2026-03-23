@@ -19,7 +19,7 @@ use pmcp::error::Result;
 use pmcp::server::cancellation::RequestHandlerExtra;
 use pmcp::server::{PromptHandler, Server};
 use pmcp::types::{
-    Content, GetPromptRequest, GetPromptResult, ProgressToken, PromptMessage, RequestMeta, Role,
+    Content, GetPromptRequest, GetPromptResult, ProgressToken, PromptMessage, RequestMeta,
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -144,7 +144,9 @@ async fn main() -> Result<()> {
     let request = GetPromptRequest {
         name: "analysis_workflow".to_string(),
         arguments: HashMap::from([("topic".to_string(), "Machine Learning".to_string())]),
-        _meta: Some(RequestMeta::new().with_progress_token(ProgressToken::String("workflow-1".to_string()))),
+        _meta: Some(
+            RequestMeta::new().with_progress_token(ProgressToken::String("workflow-1".to_string())),
+        ),
     };
 
     println!("Executing workflow with progress token 'workflow-1'...\n");
@@ -167,7 +169,9 @@ async fn main() -> Result<()> {
     let request = GetPromptRequest {
         name: "analysis_workflow".to_string(),
         arguments: HashMap::from([("topic".to_string(), "Data Science".to_string())]),
-        _meta: Some(RequestMeta::new().with_progress_token(ProgressToken::String("workflow-2".to_string()))),
+        _meta: Some(
+            RequestMeta::new().with_progress_token(ProgressToken::String("workflow-2".to_string())),
+        ),
     };
 
     println!("Executing workflow with cancellation after 2.5 seconds...\n");

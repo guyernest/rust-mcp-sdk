@@ -38,7 +38,6 @@ impl ConformanceDomain {
             _ => None,
         }
     }
-
 }
 
 /// Check if a server advertises a capability. Returns `Some(skip_result)` if
@@ -49,9 +48,7 @@ pub(crate) fn check_capability(
     category: TestCategory,
     has_capability: impl FnOnce(&ServerCapabilities) -> bool,
 ) -> Option<Vec<TestResult>> {
-    let has = tester
-        .server_capabilities()
-        .map_or(false, |caps| has_capability(caps));
+    let has = tester.server_capabilities().is_some_and(has_capability);
     if !has {
         Some(vec![TestResult::skipped(
             format!("{domain_name}: capability not advertised"),
@@ -125,8 +122,6 @@ impl ConformanceRunner {
     }
 
     fn should_run(&self, domain: ConformanceDomain) -> bool {
-        self.domains
-            .as_ref()
-            .map_or(true, |d| d.contains(&domain))
+        self.domains.as_ref().is_none_or(|d| d.contains(&domain))
     }
 }

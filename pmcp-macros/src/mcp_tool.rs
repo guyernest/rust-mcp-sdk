@@ -64,7 +64,9 @@ pub struct McpToolAnnotations {
 }
 
 /// Expand `#[mcp_tool]` attribute macro on a standalone function.
-pub fn expand_mcp_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStream> {
+pub fn expand_mcp_tool(args: TokenStream, input: &ItemFn) -> syn::Result<TokenStream> {
+    use mcp_common::ParamSlot;
+
     // Parse macro attributes via darling.
     let nested_metas = if args.is_empty() {
         return Err(syn::Error::new_spanned(
@@ -100,8 +102,6 @@ pub fn expand_mcp_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStr
     let mut args_type: Option<Type> = None;
     let mut state_inner_ty: Option<Type> = None;
     let mut has_extra = false;
-
-    use mcp_common::ParamSlot;
     let mut param_order: Vec<ParamSlot> = Vec::new();
 
     for param in &input.sig.inputs {
@@ -116,7 +116,7 @@ pub fn expand_mcp_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStr
                 }
                 args_type = Some(ty);
                 param_order.push(ParamSlot::Args);
-            }
+            },
             mcp_common::ParamRole::State { inner_ty, .. } => {
                 if state_inner_ty.is_some() {
                     return Err(syn::Error::new_spanned(
@@ -126,7 +126,7 @@ pub fn expand_mcp_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStr
                 }
                 state_inner_ty = Some(inner_ty);
                 param_order.push(ParamSlot::State);
-            }
+            },
             mcp_common::ParamRole::Extra => {
                 if has_extra {
                     return Err(syn::Error::new_spanned(
@@ -136,19 +136,18 @@ pub fn expand_mcp_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStr
                 }
                 has_extra = true;
                 param_order.push(ParamSlot::Extra);
-            }
+            },
             mcp_common::ParamRole::SelfRef => {
                 return Err(syn::Error::new_spanned(
                     param,
                     "standalone #[mcp_tool] functions cannot have &self — use #[mcp_server] for impl block tools",
                 ));
-            }
+            },
         }
     }
 
     // Generate struct fields.
-    let struct_fields = if state_inner_ty.is_some() {
-        let inner = state_inner_ty.as_ref().unwrap();
+    let struct_fields = if let Some(ref inner) = state_inner_ty {
         quote! { state: Option<std::sync::Arc<#inner>>, }
     } else {
         quote! {}
@@ -258,11 +257,15 @@ pub fn expand_mcp_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStr
 
     // Generate output schema code for metadata().
     // Extract return type and check if it's Result<T> where T is not Value.
-    let output_schema_code = extract_output_schema_code(&input)?;
+    let output_schema_code = extract_output_schema_code(input);
 
     // Generate ToolInfo construction (branching on annotations presence).
-    let tool_info_code =
-        generate_tool_info_code(&tool_name, description, &macro_args.annotations, &macro_args.ui)?;
+    let tool_info_code = generate_tool_info_code(
+        &tool_name,
+        description,
+        macro_args.annotations.as_ref(),
+        macro_args.ui.as_ref(),
+    );
 
     // Assemble everything.
     let expanded = quote! {
@@ -326,25 +329,25 @@ pub fn expand_mcp_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStr
 ///
 /// Extract output schema code from a function's return type.
 /// Delegates to `mcp_common::output_schema_tokens`.
-fn extract_output_schema_code(input: &ItemFn) -> syn::Result<TokenStream> {
+fn extract_output_schema_code(input: &ItemFn) -> TokenStream {
     let return_type = match &input.sig.output {
         ReturnType::Default => None,
         ReturnType::Type(_, ty) => Some(ty.as_ref()),
     };
-    Ok(mcp_common::output_schema_tokens(return_type))
+    mcp_common::output_schema_tokens(return_type)
 }
 
 /// Generate `ToolInfo` construction code, branching on annotations presence.
 ///
-/// Per the plan: ToolInfo has NO `set_annotations()` method, so we must branch:
+/// Per the plan: `ToolInfo` has NO `set_annotations()` method, so we must branch:
 /// - With annotations: `ToolInfo::with_annotations(...)`
 /// - Without annotations: `ToolInfo::new(...)`
-pub(crate) fn generate_tool_info_code(
+pub fn generate_tool_info_code(
     tool_name: &str,
     description: &str,
-    annotations: &Option<McpToolAnnotations>,
-    ui: &Option<syn::Expr>,
-) -> syn::Result<TokenStream> {
+    annotations: Option<&McpToolAnnotations>,
+    ui: Option<&syn::Expr>,
+) -> TokenStream {
     let base_info = match annotations {
         Some(ann) => {
             // Build annotations chain.
@@ -375,7 +378,7 @@ pub(crate) fn generate_tool_info_code(
                     )
                 }
             }
-        }
+        },
         None => {
             quote! {
                 pmcp::types::ToolInfo::new(
@@ -384,12 +387,12 @@ pub(crate) fn generate_tool_info_code(
                     input_schema,
                 )
             }
-        }
+        },
     };
 
     // If ui attribute is present, set _meta for widget attachment.
     if let Some(ui_expr) = ui {
-        Ok(quote! {
+        quote! {
             {
                 let mut info = #base_info;
                 info._meta = Some(pmcp::types::ui::ToolUIMetadata::build_meta_map(
@@ -397,8 +400,8 @@ pub(crate) fn generate_tool_info_code(
                 ));
                 info
             }
-        })
+        }
     } else {
-        Ok(base_info)
+        base_info
     }
 }

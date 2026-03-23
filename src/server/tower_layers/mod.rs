@@ -38,6 +38,7 @@ pub(crate) fn build_mcp_cors_layer(allowed: &AllowedOrigins) -> CorsLayer {
 
 /// Shared test utilities for tower layer tests.
 #[cfg(test)]
+#[allow(clippy::redundant_pub_crate)]
 pub(crate) mod test_util {
     use axum::body::Body;
     use http::{Request, Response, StatusCode};
@@ -46,12 +47,12 @@ pub(crate) mod test_util {
     use std::pin::Pin;
     use tower::Service;
 
-    pub fn ok_service() -> impl Service<
-        Request<Body>,
-        Response = Response<Body>,
-        Error = Infallible,
-        Future = Pin<Box<dyn Future<Output = Result<Response<Body>, Infallible>> + Send>>,
-    > + Clone
+    /// Pinned boxed future for service responses.
+    type BoxFut = Pin<Box<dyn Future<Output = Result<Response<Body>, Infallible>> + Send>>;
+
+    pub(crate) fn ok_service(
+    ) -> impl Service<Request<Body>, Response = Response<Body>, Error = Infallible, Future = BoxFut>
+           + Clone
            + Send
            + 'static {
         tower::service_fn(|_req: Request<Body>| {
@@ -62,8 +63,7 @@ pub(crate) mod test_util {
                         .body(Body::from("ok"))
                         .unwrap(),
                 )
-            })
-                as Pin<Box<dyn Future<Output = Result<Response<Body>, Infallible>> + Send>>
+            }) as BoxFut
         })
     }
 }

@@ -177,7 +177,7 @@ pub enum SamplingMessageContent {
     /// Tool result content -- result of a tool call
     #[serde(rename = "tool_result", rename_all = "camelCase")]
     ToolResult {
-        /// Correlates with tool_use id
+        /// Correlates with `tool_use` id
         tool_use_id: String,
         /// Result content items
         content: Vec<super::content::Content>,
@@ -344,7 +344,7 @@ pub struct CreateMessageResultWithTools {
     pub stop_reason: Option<String>,
     /// Role of the generated message
     pub role: Role,
-    /// Array of content items (text, image, audio, tool_use, tool_result)
+    /// Array of content items (text, image, audio, `tool_use`, `tool_result`)
     pub content: Vec<SamplingMessageContent>,
     /// Optional metadata
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
@@ -355,11 +355,7 @@ impl CreateMessageResultWithTools {
     /// Create a sampling result with tool support.
     ///
     /// `stop_reason` and `meta` default to `None`.
-    pub fn new(
-        model: impl Into<String>,
-        role: Role,
-        content: Vec<SamplingMessageContent>,
-    ) -> Self {
+    pub fn new(model: impl Into<String>, role: Role, content: Vec<SamplingMessageContent>) -> Self {
         Self {
             model: model.into(),
             stop_reason: None,

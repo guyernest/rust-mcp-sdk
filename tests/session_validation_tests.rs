@@ -22,7 +22,7 @@ mod session_validation_tests {
                 .build()
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         ));
-        let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
         let http_server = StreamableHttpServer::new(addr, server);
         http_server
             .start()

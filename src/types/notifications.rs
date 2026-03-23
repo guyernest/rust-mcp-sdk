@@ -246,13 +246,11 @@ mod tests {
 
     #[test]
     fn test_all_notification_types() {
-        let progress = ServerNotification::Progress(
-            ProgressNotification::new(
-                ProgressToken::String("token123".to_string()),
-                50.0,
-                Some("Processing...".to_string()),
-            ),
-        );
+        let progress = ServerNotification::Progress(ProgressNotification::new(
+            ProgressToken::String("token123".to_string()),
+            50.0,
+            Some("Processing...".to_string()),
+        ));
         let json = serde_json::to_value(&progress).unwrap();
         assert_eq!(json["method"], "notifications/progress");
 

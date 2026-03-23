@@ -11,7 +11,9 @@ use std::time::Instant;
 /// Run all resources conformance scenarios.
 /// Skipped if server does not advertise resources capability.
 pub async fn run_resources_conformance(tester: &mut ServerTester) -> Vec<TestResult> {
-    if let Some(skip) = check_capability(tester, "Resources", TestCategory::Resources, |caps| caps.resources.is_some()) {
+    if let Some(skip) = check_capability(tester, "Resources", TestCategory::Resources, |caps| {
+        caps.resources.is_some()
+    }) {
         return skip;
     }
 
@@ -38,24 +40,52 @@ async fn test_resources_list(tester: &mut ServerTester) -> (TestResult, Option<S
     match tester.list_resources().await {
         Ok(result) => {
             let resources = &result.resources;
-            let invalid: Vec<_> = resources.iter()
+            let invalid: Vec<_> = resources
+                .iter()
                 .filter(|r| r.name.is_empty() || r.uri.is_empty())
                 .map(|r| r.name.clone())
                 .collect();
             let first_uri = resources.first().map(|r| r.uri.clone());
 
             if invalid.is_empty() {
-                (TestResult::passed(name, TestCategory::Resources, start.elapsed(), format!("Found {} resources", resources.len())), first_uri)
+                (
+                    TestResult::passed(
+                        name,
+                        TestCategory::Resources,
+                        start.elapsed(),
+                        format!("Found {} resources", resources.len()),
+                    ),
+                    first_uri,
+                )
             } else {
-                (TestResult::failed(name, TestCategory::Resources, start.elapsed(), format!("Resources with empty name/uri: {:?}", invalid)), first_uri)
+                (
+                    TestResult::failed(
+                        name,
+                        TestCategory::Resources,
+                        start.elapsed(),
+                        format!("Resources with empty name/uri: {:?}", invalid),
+                    ),
+                    first_uri,
+                )
             }
         },
-        Err(e) => (TestResult::failed(name, TestCategory::Resources, start.elapsed(), format!("resources/list failed: {e}")), None),
+        Err(e) => (
+            TestResult::failed(
+                name,
+                TestCategory::Resources,
+                start.elapsed(),
+                format!("resources/list failed: {e}"),
+            ),
+            None,
+        ),
     }
 }
 
 /// R-02: Read the first resource and verify the response contains a contents array.
-async fn test_read_first_resource(tester: &mut ServerTester, first_uri: Option<&str>) -> TestResult {
+async fn test_read_first_resource(
+    tester: &mut ServerTester,
+    first_uri: Option<&str>,
+) -> TestResult {
     let start = Instant::now();
     let name = "Resources: read first resource";
 
@@ -64,8 +94,18 @@ async fn test_read_first_resource(tester: &mut ServerTester, first_uri: Option<&
     };
 
     match tester.read_resource(uri).await {
-        Ok(_) => TestResult::passed(name, TestCategory::Resources, start.elapsed(), format!("Successfully read resource: {uri}")),
-        Err(e) => TestResult::failed(name, TestCategory::Resources, start.elapsed(), format!("resources/read failed: {e}")),
+        Ok(_) => TestResult::passed(
+            name,
+            TestCategory::Resources,
+            start.elapsed(),
+            format!("Successfully read resource: {uri}"),
+        ),
+        Err(e) => TestResult::failed(
+            name,
+            TestCategory::Resources,
+            start.elapsed(),
+            format!("resources/read failed: {e}"),
+        ),
     }
 }
 
@@ -74,8 +114,21 @@ async fn test_read_invalid_uri(tester: &mut ServerTester) -> TestResult {
     let start = Instant::now();
     let name = "Resources: read invalid URI returns error";
 
-    match tester.read_resource("___nonexistent_resource_conformance_test___").await {
-        Ok(_) => TestResult::warning(name, TestCategory::Resources, start.elapsed(), "Server returned success for nonexistent resource URI"),
-        Err(_) => TestResult::passed(name, TestCategory::Resources, start.elapsed(), "Server correctly rejected invalid URI"),
+    match tester
+        .read_resource("___nonexistent_resource_conformance_test___")
+        .await
+    {
+        Ok(_) => TestResult::warning(
+            name,
+            TestCategory::Resources,
+            start.elapsed(),
+            "Server returned success for nonexistent resource URI",
+        ),
+        Err(_) => TestResult::passed(
+            name,
+            TestCategory::Resources,
+            start.elapsed(),
+            "Server correctly rejected invalid URI",
+        ),
     }
 }

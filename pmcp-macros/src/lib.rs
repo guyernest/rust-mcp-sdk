@@ -93,12 +93,15 @@ mod utils;
 ///     Ok(a + b)
 /// }
 /// ```
-#[deprecated(since = "0.3.0", note = "Use #[mcp_tool] instead — better DX with State<T> injection, async auto-detection, and mandatory descriptions")]
+#[deprecated(
+    since = "0.3.0",
+    note = "Use #[mcp_tool] instead — better DX with State<T> injection, async auto-detection, and mandatory descriptions"
+)]
 #[proc_macro_attribute]
 pub fn tool(args: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemFn);
 
-    tool::expand_tool(args.into(), input)
+    tool::expand_tool(args.into(), &input)
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }
@@ -155,7 +158,7 @@ pub fn tool(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn mcp_tool(args: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemFn);
-    mcp_tool::expand_mcp_tool(args.into(), input)
+    mcp_tool::expand_mcp_tool(args.into(), &input)
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }
@@ -228,7 +231,7 @@ pub fn mcp_server(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn mcp_prompt(args: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemFn);
-    mcp_prompt::expand_mcp_prompt(args.into(), input)
+    mcp_prompt::expand_mcp_prompt(args.into(), &input)
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }

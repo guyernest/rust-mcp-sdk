@@ -31,8 +31,8 @@
 //! }
 //! ```
 
-use heck::ToUpperCamelCase;
 use darling::FromMeta;
+use heck::ToUpperCamelCase;
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use syn::parse::Parser;
@@ -95,7 +95,7 @@ struct ToolAnnotations {
 }
 
 /// Expands the #[tool] attribute macro  
-pub fn expand_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStream> {
+pub fn expand_tool(args: TokenStream, input: &ItemFn) -> syn::Result<TokenStream> {
     // Parse macro arguments from TokenStream
     let nested_metas = if args.is_empty() {
         vec![]
@@ -116,10 +116,10 @@ pub fn expand_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStream>
     let description = args.description;
 
     // Extract function parameters
-    let params = extract_parameters(&input)?;
+    let params = extract_parameters(input);
 
     // Extract return type
-    let return_type = extract_return_type(&input)?;
+    let return_type = extract_return_type(input);
 
     // Generate the wrapper struct and implementation
     let wrapper_name = Ident::new(
@@ -132,15 +132,15 @@ pub fn expand_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStream>
     let await_token = if is_async { quote!(.await) } else { quote!() };
 
     // Generate parameter extraction code
-    let param_extraction = generate_param_extraction(&params)?;
+    let param_extraction = generate_param_extraction(&params);
     let param_names: Vec<_> = params.iter().map(|p| &p.name).collect();
 
     // Generate result conversion
-    let result_conversion = generate_result_conversion(&return_type)?;
+    let result_conversion = generate_result_conversion(&return_type);
 
     // Generate annotations and definition code
     let (annotations_code, definition_code) =
-        generate_definition_code(&tool_name, &description, &args.annotations)?;
+        generate_definition_code(&tool_name, &description, args.annotations.as_ref());
 
     // Build the handler implementation
     let expanded = quote! {
@@ -196,8 +196,8 @@ pub fn expand_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStream>
 fn generate_definition_code(
     tool_name: &str,
     description: &str,
-    annotations: &Option<ToolAnnotations>,
-) -> syn::Result<(TokenStream, TokenStream)> {
+    annotations: Option<&ToolAnnotations>,
+) -> (TokenStream, TokenStream) {
     match annotations {
         None => {
             // No annotations - simple ToolInfo::new()
@@ -208,7 +208,7 @@ fn generate_definition_code(
                     Self::input_schema(),
                 )
             };
-            Ok((quote!(), definition))
+            (quote!(), definition)
         },
         Some(ann) => {
             // Build annotations with builder pattern
@@ -303,7 +303,7 @@ fn generate_definition_code(
                 (quote!(), def)
             };
 
-            Ok((output_schema_code, definition))
+            (output_schema_code, definition)
         },
     }
 }
@@ -316,14 +316,13 @@ struct ParamInfo {
 }
 
 /// Extract parameters from function signature
-fn extract_parameters(func: &ItemFn) -> syn::Result<Vec<ParamInfo>> {
+fn extract_parameters(func: &ItemFn) -> Vec<ParamInfo> {
     let mut params = Vec::new();
 
     for arg in &func.sig.inputs {
         match arg {
             FnArg::Receiver(_) => {
                 // Skip self parameter
-                continue;
             },
             FnArg::Typed(PatType { pat, ty, .. }) => {
                 if let Pat::Ident(pat_ident) = pat.as_ref() {
@@ -337,19 +336,19 @@ fn extract_parameters(func: &ItemFn) -> syn::Result<Vec<ParamInfo>> {
         }
     }
 
-    Ok(params)
+    params
 }
 
 /// Extract return type information
-fn extract_return_type(func: &ItemFn) -> syn::Result<Type> {
+fn extract_return_type(func: &ItemFn) -> Type {
     match &func.sig.output {
-        ReturnType::Default => Ok(parse_quote!(())),
-        ReturnType::Type(_, ty) => Ok(ty.as_ref().clone()),
+        ReturnType::Default => parse_quote!(()),
+        ReturnType::Type(_, ty) => ty.as_ref().clone(),
     }
 }
 
 /// Generate parameter extraction code from JSON
-fn generate_param_extraction(params: &[ParamInfo]) -> syn::Result<TokenStream> {
+fn generate_param_extraction(params: &[ParamInfo]) -> TokenStream {
     let mut extractions = Vec::new();
 
     for param in params {
@@ -374,16 +373,16 @@ fn generate_param_extraction(params: &[ParamInfo]) -> syn::Result<TokenStream> {
         }
     }
 
-    Ok(quote! {
+    quote! {
         #(#extractions)*
-    })
+    }
 }
 
 /// Generate result conversion code
-fn generate_result_conversion(return_type: &Type) -> syn::Result<TokenStream> {
+fn generate_result_conversion(return_type: &Type) -> TokenStream {
     // Check if return type is Result<T, E>
     if crate::mcp_common::type_name_matches(return_type, "Result") {
-        Ok(quote! {
+        quote! {
             match result {
                 Ok(value) => {
                     let json_value = serde_json::to_value(value)
@@ -392,13 +391,13 @@ fn generate_result_conversion(return_type: &Type) -> syn::Result<TokenStream> {
                 }
                 Err(e) => Err(pmcp::Error::internal(format!("Tool error: {}", e)))
             }
-        })
+        }
     } else {
-        Ok(quote! {
+        quote! {
             let json_value = serde_json::to_value(result)
                 .map_err(|e| pmcp::Error::internal(e.to_string()))?;
             Ok(json_value)
-        })
+        }
     }
 }
 

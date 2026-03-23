@@ -506,8 +506,8 @@ mod tests {
         let watcher = ResourceWatcher::new("/tmp", WatchConfig::default(), tx);
 
         // Add resource
-        let info = ResourceInfo::new("file:///tmp/test.txt", "test.txt")
-            .with_mime_type("text/plain");
+        let info =
+            ResourceInfo::new("file:///tmp/test.txt", "test.txt").with_mime_type("text/plain");
 
         watcher
             .add_resource("file:///tmp/test.txt".to_string(), info.clone())

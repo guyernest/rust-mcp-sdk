@@ -31,7 +31,7 @@ prop_compose! {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 enum ClientAction {
-    Initialize(InitializeRequest),
+    Initialize(Box<InitializeRequest>),
     Ping,
     ListTools,
     CallTool(String),
@@ -51,7 +51,7 @@ prop_compose! {
         prompt_name in "[a-z_]+",
     ) -> ClientAction {
         match action_type {
-            0 => ClientAction::Initialize(init_params),
+            0 => ClientAction::Initialize(Box::new(init_params)),
             1 => ClientAction::Ping,
             2 => ClientAction::ListTools,
             3 => ClientAction::CallTool(tool_name),
@@ -216,13 +216,13 @@ proptest! {
         let mut state = ClientState::NotInitialized;
 
         // First init should succeed
-        let new_state = validate_client_state_transition(state, &ClientAction::Initialize(params1))
+        let new_state = validate_client_state_transition(state, &ClientAction::Initialize(Box::new(params1)))
             .expect("First init should succeed");
         prop_assert_eq!(new_state, ClientState::Initialized);
         state = new_state;
 
         // Second init should fail
-        let result = validate_client_state_transition(state, &ClientAction::Initialize(params2));
+        let result = validate_client_state_transition(state, &ClientAction::Initialize(Box::new(params2)));
         prop_assert!(result.is_err(), "Second init should fail");
     }
 

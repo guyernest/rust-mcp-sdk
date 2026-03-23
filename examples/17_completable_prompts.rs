@@ -5,7 +5,7 @@ use pmcp::error::Result as PmcpResult;
 use pmcp::server::{PromptHandler, Server};
 use pmcp::types::capabilities::ServerCapabilities;
 use pmcp::types::completable::completable;
-use pmcp::types::{Content, GetPromptResult, PromptArgument, PromptMessage, Role};
+use pmcp::types::{Content, GetPromptResult, PromptArgument, PromptMessage};
 use pmcp::RequestHandlerExtra;
 use serde_json::json;
 use std::collections::HashMap;
@@ -176,8 +176,7 @@ fn create_database_prompt_info() -> pmcp::types::PromptInfo {
             .unwrap(),
     );
 
-    let mut op_arg = PromptArgument::new("operation")
-        .with_description("Query operation");
+    let mut op_arg = PromptArgument::new("operation").with_description("Query operation");
     op_arg.completion = Some(
         completable("operation")
             .static_completions(vec![

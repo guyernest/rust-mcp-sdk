@@ -7,7 +7,7 @@
 //! - Prompt templates and formatting
 
 use pmcp::{
-    types::{capabilities::ServerCapabilities, Content, GetPromptResult, PromptMessage, Role},
+    types::{capabilities::ServerCapabilities, Content, GetPromptResult, PromptMessage},
     Server, SimplePrompt, SyncPrompt,
 };
 use std::collections::HashMap;
@@ -28,43 +28,55 @@ type AsyncPromptHandler = Box<
 fn create_code_review_prompt() -> SimplePrompt<AsyncPromptHandler> {
     SimplePrompt::new(
         "code_review",
-        Box::new(|args: HashMap<String, String>, _extra: pmcp::RequestHandlerExtra| {
-            Box::pin(async move {
-                let language = args
-                    .get("language")
-                    .map(|s| s.as_str())
-                    .unwrap_or("unknown");
-                let code = args
-                    .get("code")
-                    .ok_or_else(|| pmcp::Error::validation("code argument is required"))?;
-                let focus = args.get("focus").map(|s| s.as_str()).unwrap_or("general");
+        Box::new(
+            |args: HashMap<String, String>, _extra: pmcp::RequestHandlerExtra| {
+                Box::pin(async move {
+                    let language = args
+                        .get("language")
+                        .map(|s| s.as_str())
+                        .unwrap_or("unknown");
+                    let code = args
+                        .get("code")
+                        .ok_or_else(|| pmcp::Error::validation("code argument is required"))?;
+                    let focus = args.get("focus").map(|s| s.as_str()).unwrap_or("general");
 
-                let mut messages = vec![];
+                    let mut messages = vec![];
 
-                // System message
-                messages.push(PromptMessage::system(Content::text(format!(
-                    "You are an expert {} code reviewer. Focus on {} aspects of the code. \
+                    // System message
+                    messages.push(PromptMessage::system(Content::text(format!(
+                        "You are an expert {} code reviewer. Focus on {} aspects of the code. \
                      Provide constructive feedback with specific suggestions for improvement.",
-                    language, focus
-                ))));
-
-                // User message with the code
-                messages.push(PromptMessage::user(Content::text(format!(
-                    "Please review this {} code:\n\n```{}\n{}\n```",
-                    language, language, code
-                ))));
-
-                Ok(GetPromptResult::new(messages, Some(format!(
-                        "Code review for {} code focusing on {}",
                         language, focus
-                    ))))
-            }) as std::pin::Pin<Box<dyn std::future::Future<Output = pmcp::Result<GetPromptResult>> + Send>>
-        }) as AsyncPromptHandler,
+                    ))));
+
+                    // User message with the code
+                    messages.push(PromptMessage::user(Content::text(format!(
+                        "Please review this {} code:\n\n```{}\n{}\n```",
+                        language, language, code
+                    ))));
+
+                    Ok(GetPromptResult::new(
+                        messages,
+                        Some(format!(
+                            "Code review for {} code focusing on {}",
+                            language, focus
+                        )),
+                    ))
+                })
+                    as std::pin::Pin<
+                        Box<dyn std::future::Future<Output = pmcp::Result<GetPromptResult>> + Send>,
+                    >
+            },
+        ) as AsyncPromptHandler,
     )
     .with_description("Generate a code review prompt for the provided code")
     .with_argument("language", "Programming language of the code", false)
     .with_argument("code", "The code to review", true)
-    .with_argument("focus", "Specific aspect to focus on (e.g., performance, security, style)", false)
+    .with_argument(
+        "focus",
+        "Specific aspect to focus on (e.g., performance, security, style)",
+        false,
+    )
 }
 
 // Create data analysis prompt using SyncPrompt

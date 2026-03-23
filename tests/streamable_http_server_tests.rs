@@ -24,7 +24,7 @@ mod streamable_http_server_tests {
                 .build()
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         ));
-        let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
         let http_server = StreamableHttpServer::new(addr, server);
         let (server_addr, server_task) = http_server
             .start()
@@ -84,7 +84,7 @@ mod streamable_http_server_tests {
                 .build()
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         ));
-        let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
         let http_server = StreamableHttpServer::new(addr, server);
         let (server_addr, server_task) = http_server
             .start()
@@ -132,7 +132,7 @@ mod streamable_http_server_tests {
                 .build()
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         ));
-        let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
 
         let config = StreamableHttpServerConfig {
             session_id_generator: None, // Stateless mode
@@ -218,7 +218,7 @@ mod streamable_http_server_tests {
                 .build()
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         ));
-        let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
         let http_server = StreamableHttpServer::new(addr, server);
         let (server_addr, server_task) = http_server
             .start()

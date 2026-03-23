@@ -43,7 +43,7 @@ pub use crate::server::tower_layers::AllowedOrigins;
 ///
 /// Controls allowed origins, security headers, and underlying streamable
 /// HTTP settings (sessions, middleware, etc.).
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct RouterConfig {
     /// Allowed origins for DNS rebinding protection and CORS.
     /// Defaults to localhost aliases when `None`.
@@ -52,16 +52,6 @@ pub struct RouterConfig {
     pub security_headers: SecurityHeadersLayer,
     /// Streamable HTTP server configuration (sessions, middleware, etc.)
     pub server_config: StreamableHttpServerConfig,
-}
-
-impl Default for RouterConfig {
-    fn default() -> Self {
-        Self {
-            allowed_origins: None,
-            security_headers: SecurityHeadersLayer::default(),
-            server_config: StreamableHttpServerConfig::default(),
-        }
-    }
 }
 
 /// Create a secure MCP Axum Router with default localhost protection.

@@ -60,10 +60,7 @@ async fn greet(args: GreetArgs, config: State<AppConfig>) -> pmcp::Result<Value>
 }
 
 /// Sync tool -- auto-detected from `fn` (not `async fn`).
-#[mcp_tool(
-    description = "Get server version",
-    annotations(read_only = true)
-)]
+#[mcp_tool(description = "Get server version", annotations(read_only = true))]
 fn version() -> pmcp::Result<Value> {
     Ok(json!({ "version": env!("CARGO_PKG_VERSION") }))
 }
@@ -85,10 +82,7 @@ impl MathServer {
         })
     }
 
-    #[mcp_tool(
-        description = "Health check",
-        annotations(read_only = true)
-    )]
+    #[mcp_tool(description = "Health check", annotations(read_only = true))]
     async fn health(&self) -> pmcp::Result<Value> {
         Ok(json!({ "status": "ok" }))
     }

@@ -13,7 +13,7 @@ use syn::{parse_quote, Attribute, ImplItem, ImplItemFn, ItemImpl, Visibility};
 /// Tool router macro arguments
 #[derive(Debug, Default, FromMeta)]
 struct ToolRouterArgs {
-    /// Name of the generated router field (defaults to "tool_router")
+    /// Name of the generated router field (defaults to "`tool_router`")
     #[darling(default = "default_router_name")]
     router: String,
 
@@ -34,7 +34,7 @@ struct ToolMethod {
     is_async: bool,
 }
 
-/// Expands the #[tool_router] attribute macro
+/// Expands the #[`tool_router`] attribute macro
 pub fn expand_tool_router(args: TokenStream, mut input: ItemImpl) -> syn::Result<TokenStream> {
     // Parse macro arguments from TokenStream
     let nested_metas = if args.is_empty() {
@@ -64,7 +64,7 @@ pub fn expand_tool_router(args: TokenStream, mut input: ItemImpl) -> syn::Result
     let _router_field = Ident::new(&args.router, proc_macro2::Span::call_site());
 
     // Generate visibility
-    let vis = parse_visibility(&args.vis)?;
+    let vis = parse_visibility(args.vis.as_ref())?;
 
     // Generate tool definitions method
     let tools_method = generate_tools_method(&tool_methods, &vis);
@@ -155,7 +155,7 @@ fn parse_tool_attribute(attr: &Attribute) -> syn::Result<ToolInfo> {
     })
 }
 
-/// Generate the tools() method that returns all tool definitions
+/// Generate the `tools()` method that returns all tool definitions
 fn generate_tools_method(methods: &[ToolMethod], vis: &Visibility) -> ImplItemFn {
     let tool_definitions: Vec<_> = methods
         .iter()
@@ -185,7 +185,7 @@ fn generate_tools_method(methods: &[ToolMethod], vis: &Visibility) -> ImplItemFn
     }
 }
 
-/// Generate the handle_tool() method for routing tool calls
+/// Generate the `handle_tool()` method for routing tool calls
 fn generate_handle_tool_method(methods: &[ToolMethod], vis: &Visibility) -> ImplItemFn {
     let match_arms: Vec<_> = methods
         .iter()
@@ -225,8 +225,8 @@ fn generate_handle_tool_method(methods: &[ToolMethod], vis: &Visibility) -> Impl
     }
 }
 
-/// Parse visibility string into syn::Visibility
-fn parse_visibility(vis_str: &Option<String>) -> syn::Result<Visibility> {
+/// Parse visibility string into `syn::Visibility`
+fn parse_visibility(vis_str: Option<&String>) -> syn::Result<Visibility> {
     match vis_str {
         None => Ok(parse_quote!(pub)),
         Some(s) if s == "pub" => Ok(parse_quote!(pub)),
@@ -246,9 +246,12 @@ mod tests {
 
     #[test]
     fn test_parse_visibility() {
-        assert!(parse_visibility(&None).is_ok());
-        assert!(parse_visibility(&Some("pub".to_string())).is_ok());
-        assert!(parse_visibility(&Some("pub(crate)".to_string())).is_ok());
-        assert!(parse_visibility(&Some("invalid".to_string())).is_err());
+        assert!(parse_visibility(None).is_ok());
+        let pub_str = "pub".to_string();
+        assert!(parse_visibility(Some(&pub_str)).is_ok());
+        let crate_str = "pub(crate)".to_string();
+        assert!(parse_visibility(Some(&crate_str)).is_ok());
+        let invalid_str = "invalid".to_string();
+        assert!(parse_visibility(Some(&invalid_str)).is_err());
     }
 }

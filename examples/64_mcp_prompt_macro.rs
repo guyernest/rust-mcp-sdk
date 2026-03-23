@@ -85,7 +85,11 @@ async fn summarize(args: SummarizeArgs, config: State<AppConfig>) -> pmcp::Resul
         .max_length
         .map(|l| format!(" (max {l} words)"))
         .unwrap_or_default();
-    let format_hint = if args.bullet_points { " Use bullet points." } else { "" };
+    let format_hint = if args.bullet_points {
+        " Use bullet points."
+    } else {
+        ""
+    };
     Ok(GetPromptResult::new(
         vec![PromptMessage::user(Content::text(format!(
             "{} style summary{}{format_hint}:\n\n{}",
@@ -173,7 +177,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Call the prompt directly
     let mut args = HashMap::new();
     args.insert("language".to_string(), "rust".to_string());
-    args.insert("code".to_string(), "fn main() { println!(\"hello\"); }".to_string());
+    args.insert(
+        "code".to_string(),
+        "fn main() { println!(\"hello\"); }".to_string(),
+    );
     let result = prompt
         .handle(args, pmcp::RequestHandlerExtra::default())
         .await?;

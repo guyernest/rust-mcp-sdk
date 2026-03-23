@@ -250,7 +250,7 @@ impl RequestHandlerExtra {
 impl Default for RequestHandlerExtra {
     /// Create a default `RequestHandlerExtra` for testing and simple tool invocations.
     ///
-    /// Uses a generated UUID as request_id and an uncancellable (never-cancelled)
+    /// Uses a generated UUID as `request_id` and an uncancellable (never-cancelled)
     /// `CancellationToken`. Not suitable for production use where cancellation
     /// tracking is needed.
     fn default() -> Self {

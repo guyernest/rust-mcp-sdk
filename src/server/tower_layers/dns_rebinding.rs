@@ -58,7 +58,7 @@ impl AllowedOrigins {
                 IpAddr::V6(v6) => format!("[{}]", v6),
                 IpAddr::V4(v4) => v4.to_string(),
             };
-            let hostnames: HashSet<String> = [ip_str.clone()].into_iter().collect();
+            let hostnames: HashSet<String> = std::iter::once(ip_str.clone()).collect();
             let origins = vec![
                 format!("http://{}:{}", ip_str, port),
                 format!("https://{}:{}", ip_str, port),
@@ -92,7 +92,7 @@ impl AllowedOrigins {
     /// Allow all origins — disables Host and Origin validation.
     ///
     /// Use this for servers behind a reverse proxy that handles CORS at
-    /// the edge (e.g., API Gateway + Lambda, CloudFront, nginx). In these
+    /// the edge (e.g., API Gateway + Lambda, `CloudFront`, nginx). In these
     /// deployments, DNS rebinding protection adds no security value because
     /// the MCP server is only reachable via loopback within the sandbox.
     ///
@@ -326,8 +326,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::test_util::ok_service;
+    use super::*;
     use tower::ServiceExt;
 
     // -- AllowedOrigins unit tests --

@@ -55,7 +55,7 @@ pub fn generate_unique_ident(prefix: &str) -> Ident {
     )
 }
 
-/// Convert snake_case to PascalCase
+/// Convert `snake_case` to `PascalCase`
 pub fn to_pascal_case(s: &str) -> String {
     s.split('_')
         .map(|word| {
@@ -68,7 +68,7 @@ pub fn to_pascal_case(s: &str) -> String {
         .collect()
 }
 
-/// Convert PascalCase to snake_case
+/// Convert `PascalCase` to `snake_case`
 pub fn to_snake_case(s: &str) -> String {
     let mut result = String::new();
     let mut prev_is_uppercase = false;
@@ -146,7 +146,7 @@ pub fn extract_doc_comment(attrs: &[syn::Attribute]) -> Option<String> {
         if attr.path().is_ident("doc") {
             // Simple extraction from doc comments
             let attr_str = quote!(#attr).to_string();
-            if let Some(doc_start) = attr_str.find("\"") {
+            if let Some(doc_start) = attr_str.find('"') {
                 let doc_start = doc_start + 1;
                 if let Some(doc_end) = attr_str[doc_start..].find('"') {
                     let line = &attr_str[doc_start..doc_start + doc_end];
@@ -175,7 +175,7 @@ pub fn generate_error_conversion(error_type: &Type) -> TokenStream {
     }
 }
 
-/// Check if a type is pmcp::Error
+/// Check if a type is `pmcp::Error`
 fn is_pmcp_error(ty: &Type) -> bool {
     if let Type::Path(TypePath { path, .. }) = ty {
         if let Some(segment) = path.segments.last() {

@@ -99,6 +99,7 @@ impl ScenarioGenerator {
     ///
     /// Unlike [`generate()`](Self::generate), this does not write to a file or print to stdout,
     /// making it suitable for programmatic use (e.g., from an MCP tool handler).
+    #[allow(dead_code)]
     pub async fn create_scenario_struct(&self, tester: &mut ServerTester) -> Result<TestScenario> {
         // Initialize to get server info (same as generate() but without println!)
         let init_result = tester.test_initialize().await;

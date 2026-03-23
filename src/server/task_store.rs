@@ -24,14 +24,14 @@
 //!
 //! # Examples
 //!
-//! ```
+//! ```no_run
 //! use pmcp::server::task_store::{InMemoryTaskStore, TaskStore, StoreConfig};
 //!
-//! # tokio_test::block_on(async {
+//! # async fn example() {
 //! let store = InMemoryTaskStore::new();
 //! let task = store.create("session-abc", None).await.unwrap();
 //! assert_eq!(task.status, pmcp::types::tasks::TaskStatus::Working);
-//! # });
+//! # }
 //! ```
 
 use async_trait::async_trait;
@@ -78,10 +78,7 @@ impl std::fmt::Display for TaskStoreError {
         match self {
             Self::NotFound { task_id } => write!(f, "task not found: {task_id}"),
             Self::InvalidTransition { task_id, from, to } => {
-                write!(
-                    f,
-                    "invalid transition for task {task_id}: {from} -> {to}"
-                )
+                write!(f, "invalid transition for task {task_id}: {from} -> {to}")
             },
             Self::Expired { task_id } => write!(f, "task expired: {task_id}"),
             Self::Internal { message } => write!(f, "internal error: {message}"),
@@ -94,13 +91,11 @@ impl std::error::Error for TaskStoreError {}
 impl From<TaskStoreError> for crate::error::Error {
     fn from(err: TaskStoreError) -> Self {
         match &err {
-            TaskStoreError::NotFound { .. } => crate::error::Error::not_found(err.to_string()),
-            TaskStoreError::InvalidTransition { .. } => {
-                crate::error::Error::validation(err.to_string())
-            }
+            TaskStoreError::NotFound { .. } => Self::not_found(err.to_string()),
+            TaskStoreError::InvalidTransition { .. } => Self::validation(err.to_string()),
             // Expired uses NotFound to avoid leaking existence of expired tasks
-            TaskStoreError::Expired { .. } => crate::error::Error::not_found(err.to_string()),
-            TaskStoreError::Internal { .. } => crate::error::Error::internal(err.to_string()),
+            TaskStoreError::Expired { .. } => Self::not_found(err.to_string()),
+            TaskStoreError::Internal { .. } => Self::internal(err.to_string()),
         }
     }
 }
@@ -148,9 +143,9 @@ pub struct StoreConfig {
 impl Default for StoreConfig {
     fn default() -> Self {
         Self {
-            default_ttl_ms: Some(3_600_000),    // 1 hour
-            max_ttl_ms: Some(86_400_000),       // 24 hours
-            default_poll_interval_ms: 5000,     // 5 seconds
+            default_ttl_ms: Some(3_600_000), // 1 hour
+            max_ttl_ms: Some(86_400_000),    // 24 hours
+            default_poll_interval_ms: 5000,  // 5 seconds
             max_tasks_per_owner: 100,
         }
     }
@@ -176,18 +171,10 @@ pub trait TaskStore: Send + Sync {
     /// Create a new task in the `Working` state.
     ///
     /// If `ttl` is `None`, the store's `default_ttl_ms` is applied.
-    async fn create(
-        &self,
-        owner_id: &str,
-        ttl: Option<u64>,
-    ) -> Result<Task, TaskStoreError>;
+    async fn create(&self, owner_id: &str, ttl: Option<u64>) -> Result<Task, TaskStoreError>;
 
     /// Retrieve a task by ID, scoped to the given owner.
-    async fn get(
-        &self,
-        task_id: &str,
-        owner_id: &str,
-    ) -> Result<Task, TaskStoreError>;
+    async fn get(&self, task_id: &str, owner_id: &str) -> Result<Task, TaskStoreError>;
 
     /// Transition a task to a new status with an optional status message.
     ///
@@ -211,11 +198,7 @@ pub trait TaskStore: Send + Sync {
     ) -> Result<(Vec<Task>, Option<String>), TaskStoreError>;
 
     /// Cancel a task (transition to `Cancelled`).
-    async fn cancel(
-        &self,
-        task_id: &str,
-        owner_id: &str,
-    ) -> Result<Task, TaskStoreError>;
+    async fn cancel(&self, task_id: &str, owner_id: &str) -> Result<Task, TaskStoreError>;
 
     /// Remove expired tasks. Returns the count of tasks removed.
     async fn cleanup_expired(&self) -> Result<usize, TaskStoreError>;
@@ -243,7 +226,7 @@ struct TaskRecord {
 /// Thread-safe in-memory task store using [`DashMap`].
 ///
 /// Suitable for development and testing. For production use, see the
-/// `pmcp-tasks` crate which provides DynamoDB and Redis backends.
+/// `pmcp-tasks` crate which provides `DynamoDB` and Redis backends.
 ///
 /// # Examples
 ///
@@ -279,7 +262,11 @@ impl InMemoryTaskStore {
     }
 
     /// Validate owner and expiration for a task record.
-    fn validate_access(record: &TaskRecord, task_id: &str, owner_id: &str) -> Result<(), TaskStoreError> {
+    fn validate_access(
+        record: &TaskRecord,
+        task_id: &str,
+        owner_id: &str,
+    ) -> Result<(), TaskStoreError> {
         if record.owner_id != owner_id {
             return Err(TaskStoreError::NotFound {
                 task_id: task_id.to_string(),
@@ -304,11 +291,7 @@ impl Default for InMemoryTaskStore {
 
 #[async_trait]
 impl TaskStore for InMemoryTaskStore {
-    async fn create(
-        &self,
-        owner_id: &str,
-        ttl: Option<u64>,
-    ) -> Result<Task, TaskStoreError> {
+    async fn create(&self, owner_id: &str, ttl: Option<u64>) -> Result<Task, TaskStoreError> {
         // Enforce max_tasks_per_owner (excludes expired tasks)
         let now = Instant::now();
         let owner_count = self
@@ -340,9 +323,8 @@ impl TaskStore for InMemoryTaskStore {
             (t, _) => t,
         };
 
-        let expires_at = effective_ttl.map(|ms| {
-            Instant::now() + std::time::Duration::from_millis(ms)
-        });
+        let expires_at =
+            effective_ttl.map(|ms| Instant::now() + std::time::Duration::from_millis(ms));
 
         let task = Task::new(&task_id, TaskStatus::Working)
             .with_timestamps(&now_str, &now_str)
@@ -364,16 +346,13 @@ impl TaskStore for InMemoryTaskStore {
         Ok(task)
     }
 
-    async fn get(
-        &self,
-        task_id: &str,
-        owner_id: &str,
-    ) -> Result<Task, TaskStoreError> {
-        let entry = self.records.get(task_id).ok_or_else(|| {
-            TaskStoreError::NotFound {
+    async fn get(&self, task_id: &str, owner_id: &str) -> Result<Task, TaskStoreError> {
+        let entry = self
+            .records
+            .get(task_id)
+            .ok_or_else(|| TaskStoreError::NotFound {
                 task_id: task_id.to_string(),
-            }
-        })?;
+            })?;
         Self::validate_access(entry.value(), task_id, owner_id)?;
         Ok(entry.value().task.clone())
     }
@@ -385,11 +364,12 @@ impl TaskStore for InMemoryTaskStore {
         status: TaskStatus,
         message: Option<String>,
     ) -> Result<Task, TaskStoreError> {
-        let mut entry = self.records.get_mut(task_id).ok_or_else(|| {
-            TaskStoreError::NotFound {
+        let mut entry = self
+            .records
+            .get_mut(task_id)
+            .ok_or_else(|| TaskStoreError::NotFound {
                 task_id: task_id.to_string(),
-            }
-        })?;
+            })?;
 
         let record = entry.value_mut();
         Self::validate_access(record, task_id, owner_id)?;
@@ -416,6 +396,7 @@ impl TaskStore for InMemoryTaskStore {
         owner_id: &str,
         cursor: Option<&str>,
     ) -> Result<(Vec<Task>, Option<String>), TaskStoreError> {
+        const PAGE_SIZE: usize = 20;
         let now = Instant::now();
         let mut tasks: Vec<Task> = self
             .records
@@ -437,7 +418,6 @@ impl TaskStore for InMemoryTaskStore {
             }
         }
 
-        const PAGE_SIZE: usize = 20;
         if tasks.len() > PAGE_SIZE {
             let next_cursor = tasks[PAGE_SIZE - 1].task_id.clone();
             tasks.truncate(PAGE_SIZE);
@@ -447,11 +427,7 @@ impl TaskStore for InMemoryTaskStore {
         }
     }
 
-    async fn cancel(
-        &self,
-        task_id: &str,
-        owner_id: &str,
-    ) -> Result<Task, TaskStoreError> {
+    async fn cancel(&self, task_id: &str, owner_id: &str) -> Result<Task, TaskStoreError> {
         self.update_status(task_id, owner_id, TaskStatus::Cancelled, None)
             .await
     }
@@ -643,7 +619,12 @@ mod tests {
 
         // Complete the task first
         store
-            .update_status(&created.task_id, "owner-1", TaskStatus::Completed, Some("Done".to_string()))
+            .update_status(
+                &created.task_id,
+                "owner-1",
+                TaskStatus::Completed,
+                Some("Done".to_string()),
+            )
             .await
             .unwrap();
 
@@ -662,7 +643,12 @@ mod tests {
         let store = InMemoryTaskStore::new();
         let created = store.create("owner-1", None).await.unwrap();
         let updated = store
-            .update_status(&created.task_id, "owner-1", TaskStatus::Completed, Some("Done".to_string()))
+            .update_status(
+                &created.task_id,
+                "owner-1",
+                TaskStatus::Completed,
+                Some("Done".to_string()),
+            )
             .await
             .unwrap();
         assert_eq!(updated.status, TaskStatus::Completed);

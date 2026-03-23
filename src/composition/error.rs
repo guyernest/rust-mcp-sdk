@@ -169,6 +169,6 @@ impl From<crate::Error> for CompositionError {
 
 impl From<CompositionError> for crate::Error {
     fn from(err: CompositionError) -> Self {
-        crate::Error::internal(err.to_string())
+        Self::internal(err.to_string())
     }
 }

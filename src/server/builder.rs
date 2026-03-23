@@ -785,14 +785,18 @@ impl ServerCoreBuilder {
                 workflow::TaskWorkflowPromptHandler::new(handler, task_router.clone(), workflow);
             let prompt_handler: Arc<dyn PromptHandler> = Arc::new(task_handler);
             // Cache metadata at registration time
-            let mut info = prompt_handler.metadata().unwrap_or_else(|| PromptInfo::new(&name));
+            let mut info = prompt_handler
+                .metadata()
+                .unwrap_or_else(|| PromptInfo::new(&name));
             info.name.clone_from(&name);
             self.prompt_infos.insert(name.clone(), info);
             self.prompts.insert(name, prompt_handler);
         } else {
             let prompt_handler: Arc<dyn PromptHandler> = Arc::new(handler);
             // Cache metadata at registration time
-            let mut info = prompt_handler.metadata().unwrap_or_else(|| PromptInfo::new(&name));
+            let mut info = prompt_handler
+                .metadata()
+                .unwrap_or_else(|| PromptInfo::new(&name));
             info.name.clone_from(&name);
             self.prompt_infos.insert(name.clone(), info);
             self.prompts.insert(name, prompt_handler);
@@ -1150,10 +1154,7 @@ mod tests {
         let tasks_cap = builder.capabilities.tasks.as_ref().unwrap();
         assert!(tasks_cap.list.is_some(), "tasks.list should be set");
         assert!(tasks_cap.cancel.is_some(), "tasks.cancel should be set");
-        assert!(
-            tasks_cap.requests.is_some(),
-            "tasks.requests should be set"
-        );
+        assert!(tasks_cap.requests.is_some(), "tasks.requests should be set");
         // Verify task_store field is populated
         assert!(
             builder.task_store.is_some(),

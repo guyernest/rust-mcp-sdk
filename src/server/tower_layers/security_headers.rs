@@ -80,7 +80,7 @@ impl<S> Layer<S> for SecurityHeadersLayer {
     fn layer(&self, inner: S) -> Self::Service {
         SecurityHeadersService {
             inner,
-            config: self.clone(),
+            config: *self,
         }
     }
 }
@@ -111,7 +111,7 @@ where
     }
 
     fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
-        let config = self.config.clone();
+        let config = self.config;
         let mut inner = self.inner.clone();
         std::mem::swap(&mut inner, &mut self.inner);
 
@@ -143,8 +143,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::test_util::ok_service;
+    use super::*;
     use http::StatusCode;
     use std::convert::Infallible;
     use std::future::Future;

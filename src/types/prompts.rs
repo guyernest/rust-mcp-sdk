@@ -212,7 +212,10 @@ impl PromptArgument {
     }
 
     /// Set the completion configuration.
-    pub fn with_completion(mut self, completion: crate::types::completable::CompletionConfig) -> Self {
+    pub fn with_completion(
+        mut self,
+        completion: crate::types::completable::CompletionConfig,
+    ) -> Self {
         self.completion = Some(completion);
         self
     }
@@ -391,17 +394,14 @@ impl PromptMessage {
 mod tests {
     use super::*;
     use crate::types::content::Content;
-    use serde_json::json;
 
     #[test]
     fn test_prompt_types() {
         let prompt = PromptInfo::new("test_prompt")
             .with_description("A test prompt")
-            .with_arguments(vec![
-                PromptArgument::new("arg1")
-                    .with_description("First argument")
-                    .required(),
-            ]);
+            .with_arguments(vec![PromptArgument::new("arg1")
+                .with_description("First argument")
+                .required()]);
 
         let json = serde_json::to_value(&prompt).unwrap();
         assert_eq!(json["name"], "test_prompt");

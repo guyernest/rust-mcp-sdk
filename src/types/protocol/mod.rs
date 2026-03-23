@@ -69,7 +69,7 @@ pub struct IconInfo {
     /// Icon MIME type
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
-    /// Icon sizes (e.g., ["16x16", "32x32"])
+    /// Icon sizes (e.g., `["16x16", "32x32"]`)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sizes: Option<Vec<String>>,
     /// Icon theme preference
@@ -80,7 +80,7 @@ pub struct IconInfo {
 impl IconInfo {
     /// Create an `IconInfo` with just the source URL.
     ///
-    /// Optional fields (mime_type, sizes, theme) default to `None`.
+    /// Optional fields (`mime_type`, sizes, theme) default to `None`.
     pub fn new(src: impl Into<String>) -> Self {
         Self {
             src: src.into(),
@@ -481,7 +481,7 @@ pub enum ClientRequest {
     #[serde(rename = "ping")]
     Ping,
     /// Create message (sampling).
-    /// Boxed to match ServerRequest::CreateMessage and avoid inflating the enum.
+    /// Boxed to match `ServerRequest::CreateMessage` and avoid inflating the enum.
     #[serde(rename = "sampling/createMessage")]
     CreateMessage(Box<super::sampling::CreateMessageParams>),
     /// Get task status (MCP 2025-11-25 Tasks).
@@ -527,7 +527,6 @@ pub enum Request {
 #[allow(clippy::used_underscore_binding)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn serialize_client_request() {
