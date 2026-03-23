@@ -250,15 +250,11 @@ fn client_request_to_jsonrpc(req: ClientRequest) -> (String, Option<Value>) {
         ClientRequest::CreateMessage(params) => {
             create_method_params("sampling/createMessage", params)
         },
-        // Elicitation response
-        ClientRequest::ElicitInputResponse(params) => {
-            create_method_params("elicitation/response", params)
-        },
-        // Task requests (experimental MCP Tasks)
-        ClientRequest::TasksGet(params) => ("tasks/get".to_string(), Some(params)),
-        ClientRequest::TasksResult(params) => ("tasks/result".to_string(), Some(params)),
-        ClientRequest::TasksList(params) => ("tasks/list".to_string(), Some(params)),
-        ClientRequest::TasksCancel(params) => ("tasks/cancel".to_string(), Some(params)),
+        // Task requests (MCP 2025-11-25)
+        ClientRequest::TasksGet(params) => create_method_params("tasks/get", params),
+        ClientRequest::TasksResult(params) => create_method_params("tasks/result", params),
+        ClientRequest::TasksList(params) => create_method_params("tasks/list", params),
+        ClientRequest::TasksCancel(params) => create_method_params("tasks/cancel", params),
     }
 }
 
@@ -277,8 +273,8 @@ fn server_request_to_jsonrpc(req: ServerRequest) -> (String, Option<Value>) {
             Some(serde_json::to_value(params).unwrap()),
         ),
         ServerRequest::ListRoots => ("roots/list".to_string(), None),
-        ServerRequest::ElicitInput(params) => (
-            "elicitation/input".to_string(),
+        ServerRequest::ElicitationCreate(params) => (
+            "elicitation/create".to_string(),
             Some(serde_json::to_value(params).unwrap()),
         ),
     }
@@ -323,6 +319,10 @@ fn server_notification_to_jsonrpc(notif: ServerNotification) -> (String, Option<
         ),
         ServerNotification::LogMessage(params) => (
             "notifications/message".to_string(),
+            Some(serde_json::to_value(params).unwrap()),
+        ),
+        ServerNotification::TaskStatus(params) => (
+            "notifications/tasks/status".to_string(),
             Some(serde_json::to_value(params).unwrap()),
         ),
     }
@@ -385,8 +385,8 @@ mod tests {
         CallToolRequest, CancelledNotification, ClientCapabilities, CompleteRequest,
         CompletionArgument, CompletionReference, GetPromptRequest, Implementation,
         InitializeRequest, ListPromptsRequest, ListResourceTemplatesRequest, ListResourcesRequest,
-        ListToolsRequest, LoggingLevel, Progress, ProgressNotification, ProgressToken,
-        ReadResourceRequest, SubscribeRequest, UnsubscribeRequest,
+        ListToolsRequest, LoggingLevel, ProgressNotification, ProgressToken, ReadResourceRequest,
+        SubscribeRequest, UnsubscribeRequest,
     };
     use serde_json::json;
 
@@ -602,10 +602,7 @@ mod tests {
         let request = Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest {
             protocol_version: "2024-11-05".to_string(),
             capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            client_info: Implementation::new("test-client", "1.0.0"),
         })));
 
         let jsonrpc_request = create_request(id.clone(), request);
@@ -671,15 +668,17 @@ mod tests {
     fn test_create_server_request_create_message() {
         let id = RequestId::from(6i64);
         let request = Request::Server(Box::new(ServerRequest::CreateMessage(Box::new(
-            crate::types::protocol::CreateMessageParams {
+            crate::types::CreateMessageParams {
                 messages: vec![],
                 model_preferences: None,
                 system_prompt: None,
-                include_context: crate::types::protocol::IncludeContext::None,
+                include_context: crate::types::IncludeContext::None,
                 temperature: None,
                 max_tokens: None,
                 stop_sequences: None,
                 metadata: None,
+                tools: None,
+                tool_choice: None,
             },
         ))));
 
@@ -707,12 +706,11 @@ mod tests {
 
     #[test]
     fn test_create_notification_progress() {
-        let progress = ProgressNotification {
-            progress_token: ProgressToken::String("test".to_string()),
-            progress: 75.0,
-            total: None,
-            message: Some("Almost done".to_string()),
-        };
+        let progress = ProgressNotification::new(
+            ProgressToken::String("test".to_string()),
+            75.0,
+            Some("Almost done".to_string()),
+        );
         let notification = Notification::Progress(progress);
         let jsonrpc_notif = create_notification(notification);
         assert_eq!(jsonrpc_notif.method, "notifications/progress");
@@ -721,10 +719,8 @@ mod tests {
 
     #[test]
     fn test_create_notification_cancelled() {
-        let cancelled = CancelledNotification {
-            request_id: RequestId::String("test-req".to_string()),
-            reason: Some("Timeout".to_string()),
-        };
+        let cancelled = CancelledNotification::new(RequestId::String("test-req".to_string()))
+            .with_reason("Timeout");
         let notification = Notification::Cancelled(cancelled);
         let jsonrpc_notif = create_notification(notification);
         assert_eq!(jsonrpc_notif.method, "notifications/cancelled");
@@ -821,16 +817,9 @@ mod tests {
 
     #[test]
     fn test_client_notification_to_jsonrpc_all_variants() {
-        let cancelled = CancelledNotification {
-            request_id: RequestId::String("test".to_string()),
-            reason: None,
-        };
-        let progress = ProgressNotification {
-            progress_token: ProgressToken::String("test".to_string()),
-            progress: 50.0,
-            total: None,
-            message: None,
-        };
+        let cancelled = CancelledNotification::new(RequestId::String("test".to_string()));
+        let progress =
+            ProgressNotification::new(ProgressToken::String("test".to_string()), 50.0, None);
 
         let test_cases = vec![
             (
@@ -854,21 +843,10 @@ mod tests {
 
     #[test]
     fn test_server_notification_to_jsonrpc_all_variants() {
-        let progress = Progress {
-            progress_token: ProgressToken::String("test".to_string()),
-            progress: 25.0,
-            total: None,
-            message: None,
-        };
-        let resource_updated = crate::types::protocol::ResourceUpdatedParams {
-            uri: "test://uri".to_string(),
-        };
-        let log_message = crate::types::protocol::LogMessageParams {
-            level: crate::types::protocol::LogLevel::Info,
-            message: String::new(),
-            logger: None,
-            data: None,
-        };
+        let progress =
+            ProgressNotification::new(ProgressToken::String("test".to_string()), 25.0, None);
+        let resource_updated = crate::types::ResourceUpdatedParams::new("test://uri");
+        let log_message = crate::types::LogMessageParams::new(crate::types::LoggingLevel::Info, "");
 
         let test_cases = vec![
             (

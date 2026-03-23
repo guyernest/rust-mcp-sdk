@@ -63,7 +63,6 @@ pub struct ServerTester {
     #[allow(dead_code)]
     force_transport: Option<String>,
     server_info: Option<InitializeResult>,
-    server_capabilities: Option<ServerCapabilities>,
     tools: Option<Vec<ToolInfo>>,
     resources: Option<Vec<ResourceInfo>>,
     prompts: Option<Vec<PromptInfo>>,
@@ -216,7 +215,6 @@ impl ServerTester {
             api_key: api_key.map(|s| s.to_string()),
             force_transport: force_transport.map(|s| s.to_string()),
             server_info: None,
-            server_capabilities: None,
             tools: None,
             resources: None,
             prompts: None,
@@ -314,6 +312,7 @@ impl ServerTester {
         }
     }
 
+    #[allow(dead_code)]
     async fn send_json_rpc_request_with_client(
         &self,
         client: &Client,
@@ -402,7 +401,7 @@ impl ServerTester {
             }
 
             // Resources discovery and testing if advertised
-            if let Some(caps) = &self.server_capabilities {
+            if let Some(caps) = &self.server_capabilities() {
                 if caps.resources.is_some() {
                     let resources_result = self.test_resources_list().await;
                     report.add_test(resources_result.clone());
@@ -410,7 +409,7 @@ impl ServerTester {
             }
 
             // Prompts discovery and testing if advertised
-            if let Some(caps) = &self.server_capabilities {
+            if let Some(caps) = &self.server_capabilities() {
                 if caps.prompts.is_some() {
                     let prompts_result = self.test_prompts_list().await;
                     report.add_test(prompts_result.clone());
@@ -436,6 +435,36 @@ impl ServerTester {
         Ok(report)
     }
 
+    /// Run MCP protocol conformance tests against the server.
+    ///
+    /// Validates the server against the MCP spec (2025-11-25) across 5 domains:
+    /// Core, Tools, Resources, Prompts, Tasks. Each domain reports independently.
+    ///
+    /// # Arguments
+    /// * `strict` - If true, warnings are promoted to failures
+    /// * `domains` - Optional list of domain name strings to filter (e.g., ["tools", "resources"])
+    pub async fn run_conformance_tests(
+        &mut self,
+        strict: bool,
+        domains: Option<Vec<String>>,
+    ) -> Result<TestReport> {
+        use crate::conformance::{ConformanceDomain, ConformanceRunner};
+
+        // Parse domain filter strings into ConformanceDomain values
+        let parsed_domains = domains.map(|ds| {
+            ds.iter()
+                .filter_map(|s| ConformanceDomain::from_str_loose(s))
+                .collect::<Vec<_>>()
+        });
+
+        let runner = ConformanceRunner::new(strict, parsed_domains);
+        let report = runner.run(self).await;
+        Ok(report)
+    }
+
+    /// Deprecated: Use `run_conformance_tests` instead.
+    #[deprecated(note = "Use run_conformance_tests instead")]
+    #[allow(dead_code)]
     pub async fn run_compliance_tests(&mut self, strict: bool) -> Result<TestReport> {
         let mut report = TestReport::new();
         let start = Instant::now();
@@ -493,7 +522,7 @@ impl ServerTester {
         }
 
         // Check if resources are advertised
-        if let Some(caps) = &self.server_capabilities {
+        if let Some(caps) = &self.server_capabilities() {
             if caps.resources.is_none() {
                 report.add_test(TestResult {
                     name: "Resources support".to_string(),
@@ -553,7 +582,7 @@ impl ServerTester {
         }
 
         // Check if prompts are advertised
-        if let Some(caps) = &self.server_capabilities {
+        if let Some(caps) = &self.server_capabilities() {
             if caps.prompts.is_none() {
                 report.add_test(TestResult {
                     name: "Prompts support".to_string(),
@@ -930,12 +959,7 @@ impl ServerTester {
         let start = Instant::now();
         let name = "Initialize".to_string();
 
-        let capabilities = ClientCapabilities {
-            sampling: Some(Default::default()),
-            elicitation: Some(Default::default()),
-            roots: Some(Default::default()),
-            ..Default::default()
-        };
+        let capabilities = ClientCapabilities::full();
 
         let result = match self.transport_type {
             TransportType::Http => {
@@ -1036,7 +1060,6 @@ impl ServerTester {
         match result {
             Ok(result) => {
                 self.server_info = Some(result.clone());
-                self.server_capabilities = Some(result.capabilities.clone());
 
                 TestResult {
                     name,
@@ -1070,6 +1093,7 @@ impl ServerTester {
     /// - Sends Accept: application/json, text/event-stream header (for streamable HTTP)
     /// - Sends spec-compliant client capabilities (sampling, elicitation, roots)
     /// - Does NOT send server-only capabilities (tools, prompts, resources)
+    #[allow(dead_code)]
     pub async fn test_cursor_compatibility(&self) -> TestResult {
         let start = Instant::now();
         let name = "Cursor IDE Compatibility".to_string();
@@ -1790,6 +1814,18 @@ impl ServerTester {
                                         println!("      Text: {}", preview);
                                     }
                                 },
+                                pmcp::types::Content::Audio {
+                                    mime_type, data, ..
+                                } => {
+                                    println!("      Content type: Audio");
+                                    println!("      MIME type: {}", mime_type);
+                                    println!("      Data size: {} bytes (base64)", data.len());
+                                },
+                                pmcp::types::Content::ResourceLink(rl) => {
+                                    println!("      Content type: ResourceLink");
+                                    println!("      URI: {}", rl.uri);
+                                    println!("      Name: {}", rl.name);
+                                },
                             }
                         }
 
@@ -1860,6 +1896,30 @@ impl ServerTester {
                                             resource.name, list_mime, content_mime
                                         ));
                                     }
+                                }
+                            },
+                            pmcp::types::Content::Audio {
+                                data, mime_type, ..
+                            } => {
+                                if data.is_empty() {
+                                    warnings.push(format!(
+                                        "Resource '{}' has empty audio data",
+                                        resource.name
+                                    ));
+                                }
+                                if !mime_type.starts_with("audio/") {
+                                    warnings.push(format!(
+                                        "Resource '{}' has non-audio MIME type '{}' for audio content",
+                                        resource.name, mime_type
+                                    ));
+                                }
+                            },
+                            pmcp::types::Content::ResourceLink(rl) => {
+                                if rl.uri.is_empty() {
+                                    warnings.push(format!(
+                                        "Resource '{}' link has empty URI",
+                                        resource.name
+                                    ));
                                 }
                             },
                         }
@@ -2229,13 +2289,9 @@ impl ServerTester {
                             )))
                         } else {
                             // Should have returned an error for non-existent tool
-                            Ok(pmcp::types::CallToolResult {
-                                content: vec![pmcp::types::Content::Text {
-                                    text: "Unexpected success".to_string(),
-                                }],
-                                is_error: false,
-                                ..Default::default()
-                            })
+                            Ok(pmcp::types::CallToolResult::new(vec![
+                                pmcp::types::Content::text("Unexpected success"),
+                            ]))
                         }
                     },
                     Err(e) => Err(pmcp::Error::Transport(
@@ -2281,6 +2337,7 @@ impl ServerTester {
         }
     }
 
+    #[allow(dead_code)]
     async fn test_required_methods(&mut self) -> TestResult {
         let start = Instant::now();
         let name = "Required Methods".to_string();
@@ -2362,6 +2419,7 @@ impl ServerTester {
         }
     }
 
+    #[allow(dead_code)]
     async fn test_error_codes(&self) -> TestResult {
         let start = Instant::now();
         let name = "Error Code Compliance".to_string();
@@ -2377,6 +2435,7 @@ impl ServerTester {
         }
     }
 
+    #[allow(dead_code)]
     async fn test_json_rpc_compliance(&self) -> TestResult {
         let start = Instant::now();
         let name = "JSON-RPC 2.0 Compliance".to_string();
@@ -2661,6 +2720,18 @@ impl ServerTester {
         self.tools.as_ref()
     }
 
+    /// Get the full server capabilities from the last initialize response.
+    /// Derived from `server_info` -- no separate cached field.
+    pub fn server_capabilities(&self) -> Option<&ServerCapabilities> {
+        self.server_info.as_ref().map(|info| &info.capabilities)
+    }
+
+    /// Get the full initialize result (server info, capabilities, protocol version).
+    /// Populated after `test_initialize()` completes successfully.
+    pub fn server_info(&self) -> Option<&InitializeResult> {
+        self.server_info.as_ref()
+    }
+
     pub fn get_server_name(&self) -> Option<String> {
         self.server_info
             .as_ref()
@@ -2668,6 +2739,7 @@ impl ServerTester {
     }
 
     /// Get the server version from the last initialize response.
+    #[allow(dead_code)]
     pub fn get_server_version(&self) -> Option<String> {
         self.server_info
             .as_ref()

@@ -89,8 +89,8 @@ async fn main() -> Result<()> {
             _extra: pmcp::RequestHandlerExtra,
         ) -> Result<ReadResourceResult> {
             match uri {
-                "docs://logseq/task-format" => Ok(ReadResourceResult::new(vec![Content::Text {
-                    text: r#"Logseq Task Formatting Guide
+                "docs://logseq/task-format" => Ok(ReadResourceResult::new(vec![Content::text(
+                    r#"Logseq Task Formatting Guide
 ================================
 
 Task Format:
@@ -107,9 +107,8 @@ Best Practices:
 - Always use lowercase, hyphenated page names
 - Be specific in task descriptions
 - Link to the relevant project page
-"#
-                    .to_string(),
-                }])),
+"#,
+                )])),
                 _ => Err(pmcp::Error::validation(format!(
                     "Unknown resource: {}",
                     uri
@@ -122,13 +121,12 @@ Best Practices:
             _cursor: Option<String>,
             _extra: pmcp::RequestHandlerExtra,
         ) -> Result<ListResourcesResult> {
-            Ok(ListResourcesResult::new(vec![pmcp::ResourceInfo {
-                uri: "docs://logseq/task-format".to_string(),
-                name: "Logseq Task Formatting Guide".to_string(),
-                description: Some("Guide for formatting tasks in Logseq".to_string()),
-                mime_type: Some("text/plain".to_string()),
-                meta: None,
-            }]))
+            Ok(ListResourcesResult::new(vec![pmcp::ResourceInfo::new(
+                "docs://logseq/task-format",
+                "Logseq Task Formatting Guide",
+            )
+            .with_description("Guide for formatting tasks in Logseq")
+            .with_mime_type("text/plain")]))
         }
     }
 
@@ -197,7 +195,7 @@ Best Practices:
 
     for (i, msg) in result.messages.iter().enumerate() {
         println!("Message {} [{:?}]:", i + 1, msg.role);
-        if let pmcp::types::MessageContent::Text { text } = &msg.content {
+        if let pmcp::types::Content::Text { text } = &msg.content {
             println!("{}\n", text);
         }
     }

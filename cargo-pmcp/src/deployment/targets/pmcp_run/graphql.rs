@@ -2,12 +2,25 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-// Production default for GraphQL API
-const DEFAULT_GRAPHQL_URL: &str = "https://api.pmcp.run/graphql";
+use super::auth::{load_cached_config, DEFAULT_GRAPHQL_URL};
 
-// GraphQL URL - reads from environment variable or uses default
+/// Resolve GraphQL URL with priority: env var > discovery cache > default.
+/// This is sync to avoid an async call on every GraphQL request.
 fn get_graphql_url() -> String {
-    std::env::var("PMCP_RUN_GRAPHQL_URL").unwrap_or_else(|_| DEFAULT_GRAPHQL_URL.to_string())
+    // 1. Legacy env var (highest priority)
+    if let Ok(url) = std::env::var("PMCP_RUN_GRAPHQL_URL") {
+        return url;
+    }
+
+    // 2. Discovery cache (sync read, no network)
+    if let Some(config) = load_cached_config() {
+        if let Some(url) = config.graphql_url {
+            return url;
+        }
+    }
+
+    // 3. Default
+    DEFAULT_GRAPHQL_URL.to_string()
 }
 
 #[derive(Debug, Serialize)]

@@ -266,7 +266,7 @@ async fn main() -> Result<()> {
 
     for (i, msg) in result.messages.iter().enumerate() {
         println!("Message {} [{:?}]:", i + 1, msg.role);
-        if let pmcp::types::MessageContent::Text { text } = &msg.content {
+        if let pmcp::types::Content::Text { text } = &msg.content {
             // Truncate long messages for display
             let display_text = if text.len() > 200 {
                 format!("{}... (truncated)", &text[..200])
@@ -407,7 +407,7 @@ mod tests {
         assert_eq!(result.messages[1].role, pmcp::types::Role::Assistant);
 
         // Verify tool results are present
-        if let pmcp::types::MessageContent::Text { text } = &result.messages[3].content {
+        if let pmcp::types::Content::Text { text } = &result.messages[3].content {
             assert!(text.contains("Tool result"));
         }
     }

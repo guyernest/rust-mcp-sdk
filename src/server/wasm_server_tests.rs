@@ -217,34 +217,18 @@ mod tests {
         struct TestResource;
         impl WasmResource for TestResource {
             fn read(&self, _uri: &str) -> Result<ReadResourceResult> {
-                Ok(ReadResourceResult {
-                    contents: vec![Content::Text {
-                        text: "test".to_string(),
-                    }],
-                })
+                Ok(ReadResourceResult::new(vec![Content::text("test")]))
             }
 
             fn list(&self, cursor: Option<String>) -> Result<ListResourcesResult> {
                 if cursor.is_none() {
                     Ok(ListResourcesResult {
-                        resources: vec![ResourceInfo {
-                            uri: "test://1".to_string(),
-                            name: Some("Resource 1".to_string()),
-                            mime_type: None,
-                            description: None,
-                            meta: None,
-                        }],
+                        resources: vec![ResourceInfo::new("test://1", "Resource 1")],
                         next_cursor: Some("page2".to_string()),
                     })
                 } else {
                     Ok(ListResourcesResult {
-                        resources: vec![ResourceInfo {
-                            uri: "test://2".to_string(),
-                            name: Some("Resource 2".to_string()),
-                            mime_type: None,
-                            description: None,
-                            meta: None,
-                        }],
+                        resources: vec![ResourceInfo::new("test://2", "Resource 2")],
                         next_cursor: None,
                     })
                 }

@@ -20,8 +20,8 @@ use async_trait::async_trait;
 use pmcp::server::workflow::dsl::field;
 use pmcp::server::workflow::{SequentialWorkflow, ToolHandle, WorkflowStep};
 use pmcp::{
-    Content, ListResourcesResult, MessageContent, ReadResourceResult, RequestHandlerExtra,
-    ResourceHandler, ResourceInfo, Result, Server, SimpleTool,
+    Content, ListResourcesResult, ReadResourceResult, RequestHandlerExtra, ResourceHandler,
+    ResourceInfo, Result, Server, SimpleTool,
 };
 use serde_json::json;
 
@@ -32,8 +32,8 @@ struct WalkthroughResources;
 impl ResourceHandler for WalkthroughResources {
     async fn read(&self, uri: &str, _extra: RequestHandlerExtra) -> Result<ReadResourceResult> {
         match uri {
-            "if://walkthrough/zork1" => Ok(ReadResourceResult::new(vec![Content::Text {
-                text: r#"
+            "if://walkthrough/zork1" => Ok(ReadResourceResult::new(vec![Content::text(
+                r#"
 # Zork I Walkthrough
 
 ## West of House
@@ -49,12 +49,11 @@ You are standing in an open field west of a white house, with a boarded front do
 - Opening the mailbox: +5 points
 - Entering the house: +10 points
 - Finding the lamp: +10 points
-"#
-                .to_string(),
-            }])),
-            "if://walkthrough/planetfall" => Ok(ReadResourceResult::new(vec![Content::Text {
-                text: "# Planetfall Walkthrough\n\nYour adventure in space...".to_string(),
-            }])),
+"#,
+            )])),
+            "if://walkthrough/planetfall" => Ok(ReadResourceResult::new(vec![Content::text(
+                "# Planetfall Walkthrough\n\nYour adventure in space...",
+            )])),
             _ => Err(pmcp::Error::validation(format!(
                 "Unknown resource: {}",
                 uri
@@ -68,20 +67,12 @@ You are standing in an open field west of a white house, with a boarded front do
         _extra: RequestHandlerExtra,
     ) -> Result<ListResourcesResult> {
         Ok(ListResourcesResult::new(vec![
-            ResourceInfo {
-                uri: "if://walkthrough/zork1".to_string(),
-                name: "Zork I Walkthrough".to_string(),
-                description: Some("Complete walkthrough for Zork I".to_string()),
-                mime_type: Some("text/markdown".to_string()),
-                meta: None,
-            },
-            ResourceInfo {
-                uri: "if://walkthrough/planetfall".to_string(),
-                name: "Planetfall Walkthrough".to_string(),
-                description: Some("Complete walkthrough for Planetfall".to_string()),
-                mime_type: Some("text/markdown".to_string()),
-                meta: None,
-            },
+            ResourceInfo::new("if://walkthrough/zork1", "Zork I Walkthrough")
+                .with_description("Complete walkthrough for Zork I")
+                .with_mime_type("text/markdown"),
+            ResourceInfo::new("if://walkthrough/planetfall", "Planetfall Walkthrough")
+                .with_description("Complete walkthrough for Planetfall")
+                .with_mime_type("text/markdown"),
         ]))
     }
 }
@@ -173,7 +164,7 @@ async fn main() -> Result<()> {
             for (i, message) in result.messages.iter().enumerate() {
                 println!("\n[Message {}] Role: {:?}", i + 1, message.role);
                 match &message.content {
-                    MessageContent::Text { text } => {
+                    Content::Text { text } => {
                         // Truncate very long text for display
                         let display_text = if text.len() > 300 {
                             format!(
@@ -186,11 +177,14 @@ async fn main() -> Result<()> {
                         };
                         println!("{}", display_text);
                     },
-                    MessageContent::Image { .. } => {
+                    Content::Image { .. } => {
                         println!("[Image content]");
                     },
-                    MessageContent::Resource { .. } => {
+                    Content::Resource { .. } => {
                         println!("[Resource content]");
+                    },
+                    _ => {
+                        println!("[Other content]");
                     },
                 }
             }

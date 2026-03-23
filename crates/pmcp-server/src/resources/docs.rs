@@ -88,12 +88,10 @@ impl pmcp::server::ResourceHandler for DocsResourceHandler {
     ) -> pmcp::Result<ListResourcesResult> {
         let resources = DOC_RESOURCES
             .iter()
-            .map(|(uri, name, description)| ResourceInfo {
-                uri: (*uri).to_string(),
-                name: (*name).to_string(),
-                description: Some((*description).to_string()),
-                mime_type: Some("text/markdown".to_string()),
-                meta: None,
+            .map(|(uri, name, description)| {
+                ResourceInfo::new(*uri, *name)
+                    .with_description(*description)
+                    .with_mime_type("text/markdown")
             })
             .collect();
         Ok(ListResourcesResult::new(resources))

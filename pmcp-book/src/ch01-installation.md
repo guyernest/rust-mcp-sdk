@@ -24,7 +24,7 @@ Add PMCP to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-pmcp = "1.4.1"
+pmcp = "2.0"
 ```
 
 Or use `cargo add`:
@@ -62,7 +62,7 @@ PMCP uses feature flags to minimize binary size. Choose the features you need:
 
 ```toml
 [dependencies]
-pmcp = { version = "1.4.1", features = ["full"] }
+pmcp = { version = "2.0", features = ["full"] }
 ```
 
 ### Available Features
@@ -83,17 +83,17 @@ pmcp = { version = "1.4.1", features = ["full"] }
 
 **Minimal client:**
 ```toml
-pmcp = { version = "1.4.1", features = ["validation"] }
+pmcp = { version = "2.0", features = ["validation"] }
 ```
 
 **WebSocket server:**
 ```toml  
-pmcp = { version = "1.4.1", features = ["websocket", "validation"] }
+pmcp = { version = "2.0", features = ["websocket", "validation"] }
 ```
 
 **Production server:**
 ```toml
-pmcp = { version = "1.4.1", features = ["full"] }
+pmcp = { version = "2.0", features = ["full"] }
 ```
 
 ## Development Environment Setup
@@ -143,7 +143,7 @@ cd pmcp-test
 Add to `Cargo.toml`:
 ```toml
 [dependencies]
-pmcp = "1.4.1"
+pmcp = "2.0"
 tokio = { version = "1.0", features = ["full"] }
 ```
 
@@ -176,7 +176,7 @@ cargo run
 
 Expected output:
 ```
-PMCP version: 1.4.1
+PMCP version: 2.0.0
 ✅ PMCP client created successfully!
 Client name: test-client
 ```
@@ -223,12 +223,12 @@ error[E0432]: unresolved import `pmcp::WebSocketTransport`
 
 **Solution**: Enable required features:
 ```toml
-pmcp = { version = "1.4.1", features = ["websocket"] }
+pmcp = { version = "2.0", features = ["websocket"] }
 ```
 
 **Issue**: MSRV (Minimum Supported Rust Version)
 ```
-error: package `pmcp v1.4.1` cannot be built because it requires rustc 1.82 or newer
+error: package `pmcp v2.0.0` cannot be built because it requires rustc 1.82 or newer
 ```
 
 **Solution**: Update Rust:

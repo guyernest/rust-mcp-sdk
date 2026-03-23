@@ -229,10 +229,12 @@ where
     fn metadata(&self) -> Option<ToolInfo> {
         Some(ToolInfo {
             name: self.name.clone(),
+            title: None,
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
             output_schema: None,
             annotations: self.annotations.clone(),
+            icons: None,
             _meta: crate::types::ui::build_ui_meta(self.ui_resource_uri.as_deref()),
             execution: None,
         })
@@ -392,10 +394,12 @@ where
     fn metadata(&self) -> Option<ToolInfo> {
         Some(ToolInfo {
             name: self.name.clone(),
+            title: None,
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
             output_schema: None,
             annotations: self.annotations.clone(),
+            icons: None,
             _meta: crate::types::ui::build_ui_meta(self.ui_resource_uri.as_deref()),
             execution: None,
         })
@@ -708,6 +712,7 @@ where
 
         Some(ToolInfo {
             name: self.name.clone(),
+            title: None,
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
             output_schema: self.output_schema.clone(),
@@ -716,6 +721,7 @@ where
             } else {
                 None
             },
+            icons: None,
             _meta: crate::types::ui::build_ui_meta(self.ui_resource_uri.as_deref()),
             execution: None,
         })

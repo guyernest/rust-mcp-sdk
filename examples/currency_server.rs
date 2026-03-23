@@ -315,19 +315,13 @@ impl ToolHandler for GetRatesTool {
             .await
             .map_err(|e| pmcp::Error::internal(format!("Failed to fetch rates: {}", e)))?;
 
-        let result = CallToolResult {
-            content: vec![Content::Text {
-                text: format!(
-                    "Current exchange rates for {} on {}:\n\n{}",
-                    params.base,
-                    rates["date"].as_str().unwrap_or("unknown"),
-                    serde_json::to_string_pretty(&rates["rates"])
-                        .unwrap_or_else(|_| "Error formatting rates".to_string())
-                ),
-            }],
-            is_error: false,
-            ..Default::default()
-        };
+        let result = CallToolResult::new(vec![Content::text(format!(
+            "Current exchange rates for {} on {}:\n\n{}",
+            params.base,
+            rates["date"].as_str().unwrap_or("unknown"),
+            serde_json::to_string_pretty(&rates["rates"])
+                .unwrap_or_else(|_| "Error formatting rates".to_string())
+        ))]);
 
         Ok(serde_json::to_value(result)?)
     }
@@ -446,11 +440,7 @@ impl ToolHandler for AnalyzeTrendTool {
             }
         );
 
-        let result = CallToolResult {
-            content: vec![Content::Text { text: analysis }],
-            is_error: false,
-            ..Default::default()
-        };
+        let result = CallToolResult::new(vec![Content::text(analysis)]);
 
         Ok(serde_json::to_value(result)?)
     }
@@ -465,17 +455,11 @@ impl ToolHandler for ListCurrenciesTool {
     async fn handle(&self, _args: Value, _extra: pmcp::RequestHandlerExtra) -> pmcp::Result<Value> {
         let server = self.server.clone();
 
-        let result = CallToolResult {
-            content: vec![Content::Text {
-                text: format!(
-                    "Supported Currencies ({} total):\n\n{}",
-                    server.supported_currencies.len(),
-                    server.supported_currencies.join(", ")
-                ),
-            }],
-            is_error: false,
-            ..Default::default()
-        };
+        let result = CallToolResult::new(vec![Content::text(format!(
+            "Supported Currencies ({} total):\n\n{}",
+            server.supported_currencies.len(),
+            server.supported_currencies.join(", ")
+        ))]);
 
         Ok(serde_json::to_value(result)?)
     }
@@ -512,19 +496,13 @@ impl ToolHandler for GetHistoricalTool {
                 pmcp::Error::internal(format!("Failed to fetch historical data: {}", e))
             })?;
 
-        let result = CallToolResult {
-            content: vec![Content::Text {
-                text: format!(
-                    "Historical exchange rates for {} (last {} days):\n\n{}",
-                    params.base,
-                    params.days,
-                    serde_json::to_string_pretty(&historical)
-                        .unwrap_or_else(|_| "Error formatting historical data".to_string())
-                ),
-            }],
-            is_error: false,
-            ..Default::default()
-        };
+        let result = CallToolResult::new(vec![Content::text(format!(
+            "Historical exchange rates for {} (last {} days):\n\n{}",
+            params.base,
+            params.days,
+            serde_json::to_string_pretty(&historical)
+                .unwrap_or_else(|_| "Error formatting historical data".to_string())
+        ))]);
 
         Ok(serde_json::to_value(result)?)
     }

@@ -1144,7 +1144,7 @@ cargo pmcp test run --format junit --output results.xml
 
 ## App Metadata Validation
 
-**Learning objective:** After this section, you will be able to validate MCP App metadata compliance using `mcp-tester apps` and `cargo pmcp test apps`.
+**Learning objective:** After this section, you will be able to validate MCP App metadata conformance using `mcp-tester apps` and `cargo pmcp test apps`.
 
 ### Why App Metadata Validation Matters
 

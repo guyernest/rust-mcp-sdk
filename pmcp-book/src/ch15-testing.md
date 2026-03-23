@@ -242,7 +242,7 @@ Summary: 12 passed, 0 failed, 1 warning in 725ms
 Validate strict protocol compliance:
 
 ```bash
-mcp-tester compliance http://localhost:8080 --strict
+mcp-tester conformance http://localhost:8080 --strict
 
 # Validates:
 # - JSON-RPC 2.0 format
@@ -889,13 +889,13 @@ jobs:
         working-directory: examples/26-server-tester
         run: cargo build --release
 
-      - name: Run protocol compliance tests
+      - name: Run protocol conformance tests
         run: |
           examples/26-server-tester/target/release/mcp-tester \
-            compliance http://localhost:8080 \
+            conformance http://localhost:8080 \
             --format json \
             --strict \
-            > compliance-results.json
+            > conformance-results.json
 
       - name: Run tool validation tests
         run: |
@@ -919,7 +919,7 @@ jobs:
         with:
           name: test-results
           path: |
-            compliance-results.json
+            conformance-results.json
             tool-results.json
             scenario-results.json
 
@@ -1008,9 +1008,9 @@ pipeline {
                     steps {
                         sh '''
                             examples/26-server-tester/target/release/mcp-tester \
-                                compliance ${SERVER_URL} \
+                                conformance ${SERVER_URL} \
                                 --format json \
-                                > compliance.json
+                                > conformance.json
                         '''
                     }
                 }

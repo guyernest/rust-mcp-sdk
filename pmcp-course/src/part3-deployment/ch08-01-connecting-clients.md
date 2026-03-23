@@ -407,7 +407,7 @@ async function main() {
 
   // Initialize
   const serverInfo = await client.initialize({
-    protocolVersion: '2024-11-05',
+    protocolVersion: '2025-11-25',
     capabilities: {},
     clientInfo: { name: 'my-app', version: '1.0.0' },
   });
@@ -478,7 +478,7 @@ curl -X POST https://abc123.execute-api.us-east-1.amazonaws.com/mcp \
     "jsonrpc": "2.0",
     "method": "initialize",
     "params": {
-      "protocolVersion": "2024-11-05",
+      "protocolVersion": "2025-11-25",
       "capabilities": {},
       "clientInfo": {"name": "curl", "version": "1.0"}
     },

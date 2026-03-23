@@ -1,13 +1,13 @@
 //! Conversion from internal types to protocol types
 //!
 //! Handles expansion happens here - internal handles are converted to protocol-compliant
-//! `MessageContent` at the edge.
+//! `Content` at the edge.
 
 use super::{
     error::WorkflowError,
     prompt_content::{InternalPromptMessage, PromptContent},
 };
-use crate::types::{MessageContent, PromptMessage};
+use crate::types::{Content, PromptMessage};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -44,24 +44,16 @@ pub struct ExpansionContext<'a> {
 }
 
 impl PromptContent {
-    /// Convert to protocol `MessageContent`
+    /// Convert to protocol `Content`
     /// Expands handles using server registry
-    pub fn to_protocol(&self, ctx: &ExpansionContext<'_>) -> Result<MessageContent, WorkflowError> {
+    pub fn to_protocol(&self, ctx: &ExpansionContext<'_>) -> Result<Content, WorkflowError> {
         match self {
             // Loose mode - direct passthrough
-            Self::Text(text) => Ok(MessageContent::Text { text: text.clone() }),
+            Self::Text(text) => Ok(Content::text(text)),
 
-            Self::Image { data, mime_type } => Ok(MessageContent::Image {
-                data: data.clone(),
-                mime_type: mime_type.clone(),
-            }),
+            Self::Image { data, mime_type } => Ok(Content::image(data, mime_type)),
 
-            Self::ResourceUri(uri) => Ok(MessageContent::Resource {
-                uri: uri.clone(),
-                text: None,
-                mime_type: None,
-                meta: None,
-            }),
+            Self::ResourceUri(uri) => Ok(Content::resource(uri)),
 
             // Strict mode - expand handles
             Self::ToolHandle(handle) => {
@@ -75,15 +67,13 @@ impl PromptContent {
                         })?;
 
                 // Embed tool schema as text (LLM can read it)
-                Ok(MessageContent::Text {
-                    text: format!(
-                        "Tool: {}\nDescription: {}\nSchema: {}",
-                        handle.name(),
-                        tool_info.description,
-                        serde_json::to_string_pretty(&tool_info.input_schema)
-                            .unwrap_or_else(|_| "{}".to_string())
-                    ),
-                })
+                Ok(Content::text(format!(
+                    "Tool: {}\nDescription: {}\nSchema: {}",
+                    handle.name(),
+                    tool_info.description,
+                    serde_json::to_string_pretty(&tool_info.input_schema)
+                        .unwrap_or_else(|_| "{}".to_string())
+                )))
             },
 
             Self::ResourceHandle(handle) => {
@@ -96,12 +86,7 @@ impl PromptContent {
                 }
 
                 // Return as resource reference (LLM will fetch)
-                Ok(MessageContent::Resource {
-                    uri: handle.uri().to_string(),
-                    text: None,
-                    mime_type: None,
-                    meta: None,
-                })
+                Ok(Content::resource(handle.uri()))
             },
 
             Self::Multi(parts) => {
@@ -109,13 +94,11 @@ impl PromptContent {
                 let mut text_parts = Vec::new();
                 for part in parts {
                     let protocol = part.as_ref().to_protocol(ctx)?;
-                    if let MessageContent::Text { text } = protocol {
+                    if let Content::Text { text } = protocol {
                         text_parts.push(text);
                     }
                 }
-                Ok(MessageContent::Text {
-                    text: text_parts.join("\n\n"),
-                })
+                Ok(Content::text(text_parts.join("\n\n")))
             },
         }
     }
@@ -125,10 +108,10 @@ impl InternalPromptMessage {
     /// Convert to protocol `PromptMessage`
     /// Expands handles using server registry
     pub fn to_protocol(&self, ctx: &ExpansionContext<'_>) -> Result<PromptMessage, WorkflowError> {
-        Ok(PromptMessage {
-            role: self.role,
-            content: self.content.to_protocol(ctx)?,
-        })
+        Ok(PromptMessage::new(
+            self.role,
+            self.content.to_protocol(ctx)?,
+        ))
     }
 }
 
@@ -178,7 +161,7 @@ mod tests {
         let content = PromptContent::Text("Hello".to_string());
         let protocol = content.to_protocol(&ctx).unwrap();
 
-        assert!(matches!(protocol, MessageContent::Text { .. }));
+        assert!(matches!(protocol, Content::Text { .. }));
     }
 
     #[test]
@@ -193,7 +176,7 @@ mod tests {
         let content = PromptContent::ToolHandle(handle);
         let protocol = content.to_protocol(&ctx).unwrap();
 
-        if let MessageContent::Text { text } = protocol {
+        if let Content::Text { text } = protocol {
             assert!(text.contains("Tool: greet"));
             assert!(text.contains("Greet someone"));
         } else {
@@ -232,7 +215,7 @@ mod tests {
         let content = PromptContent::ResourceHandle(handle);
         let protocol = content.to_protocol(&ctx).unwrap();
 
-        assert!(matches!(protocol, MessageContent::Resource { .. }));
+        assert!(matches!(protocol, Content::Resource { .. }));
     }
 
     #[test]
@@ -247,6 +230,6 @@ mod tests {
         let protocol = msg.to_protocol(&ctx).unwrap();
 
         assert!(matches!(protocol.role, Role::User));
-        assert!(matches!(protocol.content, MessageContent::Text { .. }));
+        assert!(matches!(protocol.content, Content::Text { .. }));
     }
 }

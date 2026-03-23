@@ -8,7 +8,7 @@ mod tests {
     use crate::server::cancellation::RequestHandlerExtra;
     use crate::server::core::{ProtocolHandler, ServerCore};
     use crate::server::{PromptHandler, ResourceHandler, ToolHandler};
-    use crate::types::protocol::{ResourceInfo, Role};
+    use crate::types::ResourceInfo;
     use crate::types::*;
     use async_trait::async_trait;
     use serde_json::{json, Value};
@@ -90,12 +90,10 @@ mod tests {
             self.invocation_count.fetch_add(1, Ordering::SeqCst);
             Ok(GetPromptResult {
                 description: Some("Test prompt".to_string()),
-                messages: vec![PromptMessage {
-                    role: Role::User,
-                    content: Content::Text {
-                        text: format!("Prompt with args: {:?}", args),
-                    },
-                }],
+                messages: vec![PromptMessage::user(Content::text(format!(
+                    "Prompt with args: {:?}",
+                    args
+                )))],
                 _meta: None,
             })
         }
@@ -109,13 +107,9 @@ mod tests {
     impl MockResourceHandler {
         fn new() -> Self {
             Self {
-                resources: vec![ResourceInfo {
-                    uri: "test://resource1".to_string(),
-                    name: "Resource 1".to_string(),
-                    description: Some("Test resource 1".to_string()),
-                    mime_type: Some("text/plain".to_string()),
-                    meta: None,
-                }],
+                resources: vec![ResourceInfo::new("test://resource1", "Resource 1")
+                    .with_description("Test resource 1")
+                    .with_mime_type("text/plain")],
             }
         }
     }
@@ -124,11 +118,9 @@ mod tests {
     impl ResourceHandler for MockResourceHandler {
         async fn read(&self, uri: &str, _extra: RequestHandlerExtra) -> Result<ReadResourceResult> {
             if uri == "test://resource1" {
-                Ok(ReadResourceResult {
-                    contents: vec![Content::Text {
-                        text: "Resource content".to_string(),
-                    }],
-                })
+                Ok(ReadResourceResult::new(vec![Content::text(
+                    "Resource content",
+                )]))
             } else {
                 Err(Error::internal(format!("Resource not found: {}", uri)))
             }
@@ -157,13 +149,10 @@ mod tests {
     }
 
     fn create_init_request() -> Request {
-        Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-            protocol_version: "2024-11-05".to_string(),
+        Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest {
+            protocol_version: "2025-06-18".to_string(),
             capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            client_info: Implementation::new("test-client", "1.0.0"),
         })))
     }
 
@@ -188,7 +177,7 @@ mod tests {
                 let init_result: InitializeResult = serde_json::from_value(result).unwrap();
                 assert_eq!(
                     init_result.protocol_version,
-                    ProtocolVersion("2024-11-05".to_string())
+                    ProtocolVersion("2025-06-18".to_string())
                 );
                 assert_eq!(init_result.server_info.name, "test-server");
                 assert_eq!(init_result.server_info.version, "1.0.0");
@@ -206,7 +195,7 @@ mod tests {
         let server = create_test_server();
 
         // Try to call a tool before initialization
-        let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsParams {
+        let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
         })));
 
@@ -243,7 +232,7 @@ mod tests {
             .await;
 
         // List tools
-        let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsParams {
+        let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
         })));
 
@@ -298,7 +287,7 @@ mod tests {
             .await;
 
         // List tools
-        let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsParams {
+        let request = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
         })));
 
@@ -358,7 +347,7 @@ mod tests {
             .await;
 
         // Call the tool
-        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
             name: "calculator".to_string(),
             arguments: json!({
                 "operation": "add",
@@ -396,7 +385,7 @@ mod tests {
             .await;
 
         // Call non-existent tool
-        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
             name: "nonexistent".to_string(),
             arguments: json!({}),
             _meta: None,
@@ -432,7 +421,7 @@ mod tests {
             .await;
 
         // Call the failing tool
-        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
             name: "failing_tool".to_string(),
             arguments: json!({}),
             _meta: None,
@@ -469,7 +458,7 @@ mod tests {
 
         // List prompts
         let list_request =
-            Request::Client(Box::new(ClientRequest::ListPrompts(ListPromptsParams {
+            Request::Client(Box::new(ClientRequest::ListPrompts(ListPromptsRequest {
                 cursor: None,
             })));
 
@@ -487,7 +476,7 @@ mod tests {
         }
 
         // Get prompt
-        let get_request = Request::Client(Box::new(ClientRequest::GetPrompt(GetPromptParams {
+        let get_request = Request::Client(Box::new(ClientRequest::GetPrompt(GetPromptRequest {
             name: "test_prompt".to_string(),
             arguments: HashMap::from([("key".to_string(), "value".to_string())]),
             _meta: None,
@@ -525,7 +514,7 @@ mod tests {
 
         // List resources
         let list_request = Request::Client(Box::new(ClientRequest::ListResources(
-            ListResourcesParams { cursor: None },
+            ListResourcesRequest { cursor: None },
         )));
 
         let list_response = server
@@ -543,7 +532,7 @@ mod tests {
 
         // Read resource
         let read_request =
-            Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceParams {
+            Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceRequest {
                 uri: "test://resource1".to_string(),
                 _meta: None,
             })));
@@ -580,7 +569,7 @@ mod tests {
             .await;
 
         // Read non-existent resource
-        let request = Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceParams {
+        let request = Request::Client(Box::new(ClientRequest::ReadResource(ReadResourceRequest {
             uri: "test://nonexistent".to_string(),
             _meta: None,
         })));
@@ -629,12 +618,11 @@ mod tests {
         let server = create_test_server();
 
         // Send a notification
-        let notification = Notification::Progress(ProgressNotification {
-            progress_token: ProgressToken::String("test".to_string()),
-            progress: 50.0,
-            total: None,
-            message: Some("Processing".to_string()),
-        });
+        let notification = Notification::Progress(ProgressNotification::new(
+            ProgressToken::String("test".to_string()),
+            50.0,
+            Some("Processing".to_string()),
+        ));
 
         // Should handle without error
         let result = server.handle_notification(notification).await;
@@ -667,7 +655,7 @@ mod tests {
         for i in 1..=10 {
             let server_clone = server.clone();
             let future = async move {
-                let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
+                let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
                     name: "concurrent_tool".to_string(),
                     arguments: json!({ "id": i }),
                     _meta: None,
@@ -726,6 +714,7 @@ mod tests {
             logging: None,
             completions: None,
             sampling: None,
+            tasks: None,
             experimental: None,
         };
 

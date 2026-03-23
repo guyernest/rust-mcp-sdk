@@ -6,7 +6,7 @@ use pmcp::error::Result as PmcpResult;
 use pmcp::server::resource_watcher::{ResourceWatcher, ResourceWatcherBuilder};
 use pmcp::server::{ResourceHandler, Server};
 use pmcp::types::capabilities::ServerCapabilities;
-use pmcp::types::protocol::{Content, ListResourcesResult, ReadResourceResult, ResourceInfo};
+use pmcp::types::{Content, ListResourcesResult, ReadResourceResult, ResourceInfo};
 use pmcp::RequestHandlerExtra;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -38,7 +38,7 @@ impl FileSystemResourceHandler {
     #[allow(dead_code)]
     async fn start_watching(
         &self,
-        notification_tx: mpsc::Sender<pmcp::types::protocol::Notification>,
+        notification_tx: mpsc::Sender<pmcp::types::Notification>,
     ) -> PmcpResult<()> {
         let (tx, mut rx) = mpsc::channel(100);
 
@@ -46,7 +46,7 @@ impl FileSystemResourceHandler {
         let notification_tx_clone = notification_tx.clone();
         tokio::spawn(async move {
             while let Some(server_notif) = rx.recv().await {
-                let notif = pmcp::types::protocol::Notification::Server(server_notif);
+                let notif = pmcp::types::Notification::Server(server_notif);
                 let _ = notification_tx_clone.send(notif).await;
             }
         });
@@ -94,13 +94,11 @@ impl FileSystemResourceHandler {
                         };
 
                         let uri = format!("file://{}", path.display());
-                        let info = ResourceInfo {
-                            uri: uri.clone(),
-                            name: name.to_string(),
-                            description: Some(format!("File resource: {}", name)),
-                            mime_type,
-                            meta: None,
-                        };
+                        let mut info = ResourceInfo::new(&uri, name)
+                            .with_description(format!("File resource: {}", name));
+                        if let Some(mime) = &mime_type {
+                            info = info.with_mime_type(mime);
+                        }
 
                         resources.push(info.clone());
                         resource_map.insert(uri.clone(), info.clone());
@@ -145,9 +143,7 @@ impl ResourceHandler for FileSystemResourceHandler {
             })
             .unwrap_or("text/plain");
 
-        Ok(ReadResourceResult::new(vec![Content::Text {
-            text: content,
-        }]))
+        Ok(ReadResourceResult::new(vec![Content::text(content)]))
     }
 
     async fn list(
@@ -184,13 +180,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = Server::builder()
         .name("resource-watcher-example")
         .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            resources: Some(pmcp::types::capabilities::ResourceCapabilities {
-                subscribe: Some(true),
-                list_changed: Some(true),
-            }),
-            ..Default::default()
-        })
+        .capabilities(ServerCapabilities::resources_only())
         .resources(handler)
         .build()?;
 

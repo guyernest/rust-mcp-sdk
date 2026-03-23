@@ -195,11 +195,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = Server::builder()
         .name("conference-map-server")
         .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            resources: Some(Default::default()),
-            tools: Some(Default::default()),
-            ..Default::default()
-        })
+        .capabilities(ServerCapabilities::default())
         .resources(resources)
         .tool("get_conference_venues", get_venues_tool)
         .build()?;

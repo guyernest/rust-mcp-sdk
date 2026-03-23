@@ -209,7 +209,7 @@ cargo pmcp deploy outputs --target cloudflare-workers
 # Test the endpoint
 curl -X POST https://my-mcp-server.username.workers.dev/mcp \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}},"id":1}'
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}},"id":1}'
 ```
 
 ## Worker Entry Point

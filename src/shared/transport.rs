@@ -33,12 +33,11 @@ use std::fmt::Debug;
 /// let response_msg = TransportMessage::Response(response);
 ///
 /// // Create a notification message
-/// let notification = Notification::Progress(ProgressNotification {
-///     progress_token: ProgressToken::String("task-123".to_string()),
-///     progress: 75.0,
-///     total: None,
-///     message: Some("Processing nearly complete".to_string()),
-/// });
+/// let notification = Notification::Progress(ProgressNotification::new(
+///     ProgressToken::String("task-123".to_string()),
+///     75.0,
+///     Some("Processing nearly complete".to_string()),
+/// ));
 /// let notification_msg = TransportMessage::Notification(notification);
 ///
 /// // Pattern matching on messages
@@ -177,12 +176,11 @@ pub enum MessagePriority {
 ///     async fn receive(&mut self) -> pmcp::Result<TransportMessage> {
 ///         // Receive implementation  
 ///         Ok(TransportMessage::Notification(
-///             pmcp::types::Notification::Progress(pmcp::types::ProgressNotification {
-///                 progress_token: pmcp::types::ProgressToken::String("example".to_string()),
-///                 progress: 50.0,
-///                 total: None,
-///                 message: Some("Processing...".to_string()),
-///             })
+///             pmcp::types::Notification::Progress(pmcp::types::ProgressNotification::new(
+///                 pmcp::types::ProgressToken::String("example".to_string()),
+///                 50.0,
+///                 Some("Processing...".to_string()),
+///             ))
 ///         ))
 ///     }
 ///

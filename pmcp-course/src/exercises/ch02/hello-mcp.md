@@ -30,6 +30,10 @@ doing:
 - When Claude or another AI calls a tool, what information does it need?
 :::
 
+> **v2.0 Tip:** The `#[mcp_tool]` macro eliminates `Box::pin(async move { ... })` boilerplate.
+> Add `features = ["macros"]` to your pmcp dependency.
+> See [Macros Guide](../../docs/design/mcp-macros-guide.md) for migration examples.
+
 ::: starter file="src/main.rs"
 ```rust
 //! Your First MCP Server

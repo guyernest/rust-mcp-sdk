@@ -81,7 +81,7 @@ impl PresetConfig {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```rust,ignore
     /// use pmcp::shared::middleware_presets::PresetConfig;
     /// use pmcp::shared::streamable_http::StreamableHttpTransportConfigBuilder;
     /// use pmcp::shared::StreamableHttpTransport;

@@ -118,6 +118,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             data.len()
                         );
                     },
+                    _ => {
+                        println!("   [Other content type]");
+                    },
                 }
             }
         },

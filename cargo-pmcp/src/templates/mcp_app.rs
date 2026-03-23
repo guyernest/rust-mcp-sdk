@@ -91,8 +91,7 @@ use pmcp::server::mcp_apps::{{ChatGptAdapter, UIAdapter, WidgetDir}};
 use pmcp::server::streamable_http_server::{{StreamableHttpServer, StreamableHttpServerConfig}};
 use pmcp::server::ServerBuilder;
 use pmcp::types::mcp_apps::{{ExtendedUIMimeType, WidgetMeta}};
-use pmcp::types::protocol::Content;
-use pmcp::types::{{ListResourcesResult, ReadResourceResult, ResourceInfo}};
+use pmcp::types::{{Content, ListResourcesResult, ReadResourceResult, ResourceInfo}};
 use pmcp::{{RequestHandlerExtra, ResourceHandler, Result, TypedSyncTool}};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -202,12 +201,10 @@ impl ResourceHandler for AppResources {{
         let entries = self.widget_dir.discover().unwrap_or_default();
         let resources = entries
             .into_iter()
-            .map(|entry| ResourceInfo {{
-                uri: entry.uri,
-                name: entry.filename.clone(),
-                description: Some(format!("Interactive {{}} widget", entry.filename)),
-                mime_type: Some(ExtendedUIMimeType::HtmlMcpApp.to_string()),
-                meta: None,
+            .map(|entry| {{
+                ResourceInfo::new(&entry.uri, &entry.filename)
+                    .with_description(format!("Interactive {{}} widget", entry.filename))
+                    .with_mime_type(ExtendedUIMimeType::HtmlMcpApp.to_string())
             }})
             .collect();
 

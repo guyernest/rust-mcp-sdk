@@ -462,7 +462,7 @@ impl McpServer {
 
     fn handle_initialize(&self, _params: &Value) -> Result<Value, McpError> {
         Ok(json!({
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": "2025-11-25",
             "capabilities": {
                 "tools": {},
                 "resources": {}

@@ -150,7 +150,9 @@ jobs:
             if [[ "$example_name" == "29_connection_pool" ]] || \
                [[ "$example_name" == "30_enhanced_middleware" ]] || \
                [[ "$example_name" == "31_advanced_error_recovery" ]] || \
-               [[ "$example_name" == "49_tool_with_sampling_server" ]]; then
+               [[ "$example_name" == "49_tool_with_sampling_server" ]] || \
+               [[ "$example_name" == "63_mcp_tool_macro" ]] || \
+               [[ "$example_name" == "64_mcp_prompt_macro" ]]; then
               echo "Skipping example: $example_name (requires full feature)"
               continue
             fi

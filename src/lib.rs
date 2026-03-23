@@ -91,20 +91,37 @@ pub mod utils;
 #[cfg(feature = "simd")]
 pub mod simd;
 
+/// Axum Router convenience API for secure MCP server hosting.
+///
+/// Re-exports [`router()`](axum::router), [`router_with_config()`](axum::router_with_config),
+/// [`RouterConfig`](axum::RouterConfig), and [`AllowedOrigins`](axum::AllowedOrigins)
+/// for ergonomic usage: `pmcp::axum::router(server)`.
+#[cfg(feature = "streamable-http")]
+#[cfg_attr(docsrs, doc(cfg(feature = "streamable-http")))]
+pub mod axum {
+    pub use crate::server::axum_router::{
+        router, router_with_config, AllowedOrigins, RouterConfig,
+    };
+}
+
 // Re-export commonly used types
 pub use client::{Client, ClientBuilder};
 pub use error::{Error, ErrorCode, Result};
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::cancellation::RequestHandlerExtra;
 #[cfg(not(target_arch = "wasm32"))]
+pub use server::task_store::{InMemoryTaskStore, StoreConfig, TaskStore, TaskStoreError};
+#[cfg(not(target_arch = "wasm32"))]
 pub use server::{
     auth,
     simple_prompt::{SimplePrompt, SyncPrompt},
     simple_resources::{DynamicResourceHandler, ResourceCollection, StaticResource},
     simple_tool::{SimpleTool, SyncTool},
+    state::State,
+    typed_prompt::TypedPrompt,
     typed_tool::{SimpleToolExt, SyncToolExt, TypedSyncTool, TypedTool, TypedToolWithOutput},
     ui::UIResourceBuilder,
-    PromptHandler, ResourceHandler, SamplingHandler, Server, ServerBuilder, ToolHandler,
+    McpServer, PromptHandler, ResourceHandler, SamplingHandler, Server, ServerBuilder, ToolHandler,
 };
 #[cfg(target_arch = "wasm32")]
 pub use server::{
@@ -118,8 +135,18 @@ pub use server::{
 pub use server::wasm_server::{WasmMcpServer as Server, WasmMcpServerBuilder as ServerBuilder};
 #[cfg(target_arch = "wasm32")]
 pub use server::wasm_typed_tool::WasmTypedTool as TypedTool;
+// Re-export proc macros from pmcp-macros so users can write `use pmcp::{mcp_tool, mcp_server}`
+// instead of adding pmcp-macros as a separate dependency.
+#[cfg(feature = "macros")]
+pub use pmcp_macros::{mcp_prompt, mcp_server, mcp_tool};
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use shared::StdioTransport;
+
+/// Tower middleware layers for MCP HTTP security.
+#[cfg(feature = "streamable-http")]
+pub use server::tower_layers::{AllowedOrigins, DnsRebindingLayer, SecurityHeadersLayer};
+
 pub use shared::{
     batch::{BatchRequest, BatchResponse},
     uri_template::UriTemplate,
@@ -140,12 +167,12 @@ pub use shared::{HttpConfig, HttpTransport};
 pub use types::{
     AuthInfo, AuthScheme, CallToolRequest, CallToolResult, ClientCapabilities, ClientNotification,
     ClientRequest, CompleteRequest, CompleteResult, CompletionArgument, CompletionReference,
-    Content, CreateMessageParams, CreateMessageRequest, CreateMessageResult, GetPromptResult,
-    Implementation, IncludeContext, ListResourcesResult, ListToolsResult, LoggingLevel,
-    MessageContent, ModelPreferences, ProgressNotification, ProgressToken, PromptMessage,
-    ProtocolVersion, ReadResourceResult, RequestId, ResourceInfo, Role, RootsCapabilities,
-    SamplingCapabilities, SamplingMessage, ServerCapabilities, ServerNotification, ServerRequest,
-    TokenUsage, ToolCapabilities, ToolInfo, UIMimeType, UIResource, UIResourceContents,
+    Content, CreateMessageParams, CreateMessageResult, GetPromptResult, Implementation,
+    IncludeContext, ListResourcesResult, ListToolsResult, LoggingLevel, ModelPreferences,
+    ProgressNotification, ProgressToken, PromptMessage, ProtocolVersion, ReadResourceResult,
+    RequestId, ResourceInfo, Role, RootsCapabilities, SamplingCapabilities, SamplingMessage,
+    ServerCapabilities, ServerNotification, ServerRequest, TokenUsage, ToolCapabilities, ToolInfo,
+    UIMimeType, UIResource, UIResourceContents,
 };
 
 /// Type alias for [`CallToolResult`] - provides convenient access to tool execution results
@@ -162,13 +189,7 @@ pub use types::{
 /// use pmcp::{ToolResult, Content};
 ///
 /// // Create a successful tool result
-/// let result = ToolResult {
-///     content: vec![Content::Text {
-///         text: "Operation completed successfully".to_string(),
-///     }],
-///     is_error: false,
-///     ..Default::default()
-/// };
+/// let result = ToolResult::new(vec![Content::text("Operation completed successfully")]);
 ///
 /// assert_eq!(result.content.len(), 1);
 /// assert!(!result.is_error);
@@ -180,13 +201,9 @@ pub use types::{
 /// use pmcp::{ToolResult, Content};
 ///
 /// // Create an error result
-/// let error_result = ToolResult {
-///     content: vec![Content::Text {
-///         text: "Tool execution failed: Invalid input parameter".to_string(),
-///     }],
-///     is_error: true,
-///     ..Default::default()
-/// };
+/// let error_result = ToolResult::error(vec![
+///     Content::text("Tool execution failed: Invalid input parameter"),
+/// ]);
 ///
 /// assert!(error_result.is_error);
 /// ```
@@ -197,16 +214,9 @@ pub use types::{
 /// use pmcp::{ToolResult, Content};
 ///
 /// // Tool result with resource content
-/// let resource_result = ToolResult {
-///     content: vec![Content::Resource {
-///         uri: "file:///tmp/output.txt".to_string(),
-///         text: Some("File contents here...".to_string()),
-///         mime_type: Some("text/plain".to_string()),
-///         meta: None,
-///     }],
-///     is_error: false,
-///     ..Default::default()
-/// };
+/// let resource_result = ToolResult::new(vec![
+///     Content::resource_with_text("file:///tmp/output.txt", "File contents here...", "text/plain"),
+/// ]);
 ///
 /// match &resource_result.content[0] {
 ///     Content::Resource { uri, mime_type, .. } => {
@@ -223,13 +233,7 @@ pub use types::{
 /// use pmcp::{ToolResult, Content};
 /// use serde_json;
 ///
-/// let result = ToolResult {
-///     content: vec![Content::Text {
-///         text: "Hello, MCP!".to_string(),
-///     }],
-///     is_error: false,
-///     ..Default::default()
-/// };
+/// let result = ToolResult::new(vec![Content::text("Hello, MCP!")]);
 ///
 /// // Serialize to JSON
 /// let json_str = serde_json::to_string(&result).unwrap();
@@ -258,10 +262,9 @@ pub use async_trait::async_trait;
 /// println!("Using MCP protocol version: {}", protocol_version);
 ///
 /// // Check if a version is the latest
-/// assert_eq!(LATEST_PROTOCOL_VERSION, "2025-06-18");
+/// assert_eq!(LATEST_PROTOCOL_VERSION, "2025-11-25");
 /// ```
-pub const LATEST_PROTOCOL_VERSION: &str = "2025-06-18";
-
+///
 /// Default protocol version to use for negotiation
 ///
 /// # Examples
@@ -276,8 +279,7 @@ pub const LATEST_PROTOCOL_VERSION: &str = "2025-06-18";
 /// // This is typically used internally by the SDK
 /// assert_eq!(DEFAULT_PROTOCOL_VERSION, "2025-03-26");
 /// ```
-pub const DEFAULT_PROTOCOL_VERSION: &str = "2025-03-26";
-
+///
 /// List of all protocol versions supported by this SDK
 ///
 /// # Examples
@@ -290,37 +292,16 @@ pub const DEFAULT_PROTOCOL_VERSION: &str = "2025-03-26";
 /// let is_supported = SUPPORTED_PROTOCOL_VERSIONS.contains(&version_to_check);
 /// assert!(is_supported);
 ///
-/// // List all supported versions
-/// println!("Supported MCP protocol versions:");
-/// for version in SUPPORTED_PROTOCOL_VERSIONS {
-///     println!("  - {}", version);
-/// }
+/// // 4 supported versions (2025 + backward-compat 2024)
+/// assert_eq!(SUPPORTED_PROTOCOL_VERSIONS.len(), 4);
 ///
-/// // Use in version negotiation
-/// fn negotiate_version(client_version: &str) -> Option<&'static str> {
-///     SUPPORTED_PROTOCOL_VERSIONS.iter()
-///         .find(|&&v| v == client_version)
-///         .copied()
-/// }
+/// // 2024-11-05 accepted for backward compatibility with existing clients
+/// assert!(SUPPORTED_PROTOCOL_VERSIONS.contains(&"2024-11-05"));
 /// ```
-pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
-    LATEST_PROTOCOL_VERSION,
-    "2025-03-26",
-    "2024-11-05",
-    "2024-10-07",
-];
-
-/// Negotiate the protocol version for the MCP session.
-///
-/// If the client's requested version is in [`SUPPORTED_PROTOCOL_VERSIONS`],
-/// echo it back. Otherwise fall back to [`DEFAULT_PROTOCOL_VERSION`].
-pub fn negotiate_protocol_version(client_version: &str) -> String {
-    if SUPPORTED_PROTOCOL_VERSIONS.contains(&client_version) {
-        client_version.to_string()
-    } else {
-        DEFAULT_PROTOCOL_VERSION.to_string()
-    }
-}
+pub use types::protocol::version::{
+    negotiate_protocol_version, DEFAULT_PROTOCOL_VERSION, LATEST_PROTOCOL_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
+};
 
 /// Default request timeout in milliseconds
 ///

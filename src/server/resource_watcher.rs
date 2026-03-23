@@ -1,7 +1,7 @@
 //! Resource watcher for monitoring file system changes.
 
 use crate::error::{Error, ErrorCode, Result};
-use crate::types::protocol::{ResourceInfo, ServerNotification};
+use crate::types::{ResourceInfo, ServerNotification};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -155,7 +155,7 @@ async fn process_events(
 
                 // Send resource update notification
                 let notification = ServerNotification::ResourceUpdated(
-                    crate::types::protocol::ResourceUpdatedParams { uri: uri.clone() },
+                    crate::types::ResourceUpdatedParams::new(&uri),
                 );
 
                 if let Err(e) = notification_tx.send(notification).await {
@@ -506,13 +506,8 @@ mod tests {
         let watcher = ResourceWatcher::new("/tmp", WatchConfig::default(), tx);
 
         // Add resource
-        let info = ResourceInfo {
-            uri: "file:///tmp/test.txt".to_string(),
-            name: "test.txt".to_string(),
-            description: None,
-            mime_type: Some("text/plain".to_string()),
-            meta: None,
-        };
+        let info =
+            ResourceInfo::new("file:///tmp/test.txt", "test.txt").with_mime_type("text/plain");
 
         watcher
             .add_resource("file:///tmp/test.txt".to_string(), info.clone())

@@ -6,7 +6,7 @@ use crate::shared::{
 };
 use crate::types::{
     CallToolRequest, CallToolResult, CancelledNotification, ClientCapabilities, ClientNotification,
-    ClientRequest, CompleteRequest, CompleteResult, CreateMessageRequest, CreateMessageResult,
+    ClientRequest, CompleteRequest, CompleteResult, CreateMessageParams, CreateMessageResult,
     GetPromptRequest, GetPromptResult, Implementation, InitializeRequest, InitializeResult,
     ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
     ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
@@ -82,10 +82,7 @@ impl<T: Transport> Client<T> {
     pub fn new(transport: T) -> Self {
         Self::with_info(
             transport,
-            Implementation {
-                name: "pmcp-client".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-            },
+            Implementation::new("pmcp-client", env!("CARGO_PKG_VERSION")),
         )
     }
 
@@ -100,10 +97,7 @@ impl<T: Transport> Client<T> {
     /// use pmcp::{Client, StdioTransport, Implementation};
     ///
     /// let transport = StdioTransport::new();
-    /// let client_info = Implementation {
-    ///     name: "my-custom-client".to_string(),
-    ///     version: "2.1.0".to_string(),
-    /// };
+    /// let client_info = Implementation::new("my-custom-client", "2.1.0");
     /// let client = Client::with_info(transport, client_info);
     /// ```
     pub fn with_info(transport: T, client_info: Implementation) -> Self {
@@ -140,10 +134,7 @@ impl<T: Transport> Client<T> {
     /// };
     ///
     /// let transport = StdioTransport::new();
-    /// let client_info = Implementation {
-    ///     name: "high-throughput-client".to_string(),
-    ///     version: "1.0.0".to_string(),
-    /// };
+    /// let client_info = Implementation::new("high-throughput-client", "1.0.0");
     ///
     /// let client = Client::with_options(transport, client_info, options);
     /// ```
@@ -953,7 +944,7 @@ impl<T: Transport> Client<T> {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use pmcp::{Client, StdioTransport, ClientCapabilities, CreateMessageRequest, SamplingMessage};
+    /// use pmcp::{Client, StdioTransport, ClientCapabilities, CreateMessageParams, SamplingMessage};
     ///
     /// # async fn example() -> pmcp::Result<()> {
     /// let mut capabilities = ClientCapabilities::default();
@@ -964,32 +955,24 @@ impl<T: Transport> Client<T> {
     /// client.initialize(capabilities).await?;
     ///
     /// // Create a message with the LLM
-    /// let request = CreateMessageRequest {
-    ///     messages: vec![
-    ///         SamplingMessage {
-    ///             role: pmcp::types::Role::User,
-    ///             content: pmcp::types::Content::Text {
-    ///                 text: "Explain how to implement a binary search tree".to_string(),
-    ///             },
-    ///         },
-    ///     ],
-    ///     model_preferences: Some(pmcp::types::ModelPreferences {
-    ///         hints: Some(vec![
-    ///             pmcp::types::ModelHint {
-    ///                 name: Some("gpt-4".to_string()),
-    ///             },
-    ///         ]),
-    ///         cost_priority: Some(0.5),
-    ///         speed_priority: Some(0.3),
-    ///         intelligence_priority: Some(0.2),
-    ///     }),
-    ///     system_prompt: Some("You are a helpful programming assistant".to_string()),
-    ///     include_context: pmcp::types::IncludeContext::ThisServerOnly,
-    ///     temperature: Some(0.7),
-    ///     max_tokens: Some(1000),
-    ///     stop_sequences: None,
-    ///     metadata: Default::default(),
-    /// };
+    /// let msg = SamplingMessage::new(
+    ///     pmcp::types::Role::User,
+    ///     pmcp::types::SamplingMessageContent::Text {
+    ///         text: "Explain how to implement a binary search tree".to_string(),
+    ///         meta: None,
+    ///     },
+    /// );
+    /// let prefs = pmcp::types::ModelPreferences::new()
+    ///     .with_hints(vec![pmcp::types::ModelHint::new("gpt-4")])
+    ///     .with_cost_priority(0.5)
+    ///     .with_speed_priority(0.3)
+    ///     .with_intelligence_priority(0.2);
+    /// let mut request = CreateMessageParams::new(vec![msg])
+    ///     .with_model_preferences(prefs)
+    ///     .with_system_prompt("You are a helpful programming assistant")
+    ///     .with_temperature(0.7)
+    ///     .with_max_tokens(1000);
+    /// request.include_context = pmcp::types::IncludeContext::ThisServer;
     ///
     /// let result = client.create_message(request).await?;
     /// println!("Model: {}", result.model);
@@ -1005,14 +988,11 @@ impl<T: Transport> Client<T> {
     /// - The server doesn't support sampling
     /// - The request parameters are invalid
     /// - Network or protocol errors occur
-    pub async fn create_message(
-        &self,
-        params: CreateMessageRequest,
-    ) -> Result<CreateMessageResult> {
+    pub async fn create_message(&self, params: CreateMessageParams) -> Result<CreateMessageResult> {
         self.ensure_initialized()?;
         self.assert_capability("sampling", "sampling/createMessage")?;
 
-        let request = Request::Client(Box::new(ClientRequest::CreateMessage(params)));
+        let request = Request::Client(Box::new(ClientRequest::CreateMessage(Box::new(params))));
         let request_id = RequestId::String(Uuid::new_v4().to_string());
         let response = self.send_request(request_id, request).await?;
 
@@ -1172,10 +1152,10 @@ impl<T: Transport> Client<T> {
     /// - Network or protocol errors occur while sending the cancellation
     pub async fn cancel_request(&self, request_id: &RequestId) -> Result<()> {
         // Send cancellation notification
-        self.send_notification(Notification::Cancelled(CancelledNotification {
-            request_id: request_id.clone(),
-            reason: Some("User requested cancellation".to_string()),
-        }))
+        self.send_notification(Notification::Cancelled(
+            CancelledNotification::new(request_id.clone())
+                .with_reason("User requested cancellation"),
+        ))
         .await?;
 
         // Cancel any local tracking
@@ -1207,12 +1187,11 @@ impl<T: Transport> Client<T> {
     /// client.initialize(ClientCapabilities::default()).await?;
     ///
     /// // Send progress update for a file processing operation
-    /// let progress = ProgressNotification {
-    ///     progress_token: pmcp::ProgressToken::String("file-processing".to_string()),
-    ///     progress: 75.0,
-    ///     total: None,
-    ///     message: Some("Processing files...".to_string()),
-    /// };
+    /// let progress = ProgressNotification::new(
+    ///     pmcp::ProgressToken::String("file-processing".to_string()),
+    ///     75.0,
+    ///     Some("Processing files...".to_string()),
+    /// );
     ///
     /// client.send_progress(progress).await?;
     /// # Ok(())
@@ -1543,10 +1522,7 @@ impl<T: Transport> ClientBuilder<T> {
     pub fn build(self) -> Client<T> {
         let mut client = Client::with_options(
             self.transport,
-            Implementation {
-                name: "pmcp-client".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-            },
+            Implementation::new("pmcp-client", env!("CARGO_PKG_VERSION")),
             self.options,
         );
         // Replace the default middleware chain with the configured one
@@ -1644,10 +1620,7 @@ mod tests {
     #[test]
     fn test_client_with_info() {
         let transport = MockTransport::new();
-        let info = Implementation {
-            name: "test-client".to_string(),
-            version: "1.0.0".to_string(),
-        };
+        let info = Implementation::new("test-client", "1.0.0");
         let client = Client::with_info(transport, info);
         assert_eq!(client.info.name, "test-client");
         assert_eq!(client.info.version, "1.0.0");
@@ -1675,7 +1648,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: RequestId::from(1i64),
             payload: ResponsePayload::Result(json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-06-18",
                 "capabilities": {
                     "tools": {}
                 },
@@ -1703,7 +1676,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: RequestId::from(1i64),
             payload: ResponsePayload::Result(json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-06-18",
                 "capabilities": {},
                 "serverInfo": {
                     "name": "test-server",
@@ -1735,7 +1708,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: RequestId::from(1i64),
             payload: ResponsePayload::Result(json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-06-18",
                 "capabilities": {
                     "tools": {}
                 },
@@ -1778,7 +1751,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: RequestId::from(1i64),
             payload: ResponsePayload::Result(json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-06-18",
                 "capabilities": {
                     "tools": {}
                 },
@@ -1828,7 +1801,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: RequestId::from(1i64),
             payload: ResponsePayload::Result(json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-06-18",
                 "capabilities": {
                     // No tools capability
                 },
@@ -1857,7 +1830,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: RequestId::from(1i64),
             payload: ResponsePayload::Result(json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-06-18",
                 "capabilities": {},
                 "serverInfo": {
                     "name": "test-server",
@@ -1873,12 +1846,11 @@ mod tests {
         let _ = client.initialize(ClientCapabilities::default()).await;
 
         // Send progress
-        let progress = ProgressNotification {
-            progress_token: ProgressToken::String("test".to_string()),
-            progress: 50.0,
-            total: None,
-            message: Some("Halfway done".to_string()),
-        };
+        let progress = ProgressNotification::new(
+            ProgressToken::String("test".to_string()),
+            50.0,
+            Some("Halfway done".to_string()),
+        );
 
         let result = client.send_progress(progress).await;
         assert!(result.is_ok());
@@ -1890,7 +1862,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: RequestId::from(1i64),
             payload: ResponsePayload::Result(json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-06-18",
                 "capabilities": {
                     "completions": {}
                 },
@@ -1938,7 +1910,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: RequestId::from(1i64),
             payload: ResponsePayload::Result(json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": "2025-06-18",
                 "capabilities": {
                     "resources": {}
                 },

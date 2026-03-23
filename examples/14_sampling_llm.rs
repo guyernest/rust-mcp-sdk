@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use pmcp::{
     types::{
-        capabilities::ServerCapabilities,
-        protocol::{Content, CreateMessageParams, CreateMessageResult, TokenUsage},
+        capabilities::ServerCapabilities, Content, CreateMessageParams, CreateMessageResult,
+        SamplingMessageContent, TokenUsage,
     },
     SamplingHandler, Server,
 };
@@ -33,25 +33,22 @@ impl SamplingHandler for MockLLM {
                 .messages
                 .last()
                 .map(|m| match &m.content {
-                    Content::Text { text } => text.as_str(),
-                    Content::Image { .. } => "[image]",
-                    Content::Resource { .. } => "[resource]",
+                    SamplingMessageContent::Text { text, .. } => text.as_str(),
+                    SamplingMessageContent::Image { .. } => "[image]",
+                    _ => "[other]",
                 })
                 .unwrap_or("empty")
         );
 
-        Ok(CreateMessageResult {
-            content: Content::Text {
-                text: response_text,
-            },
-            model: self.model_name.clone(),
-            usage: Some(TokenUsage {
-                input_tokens: params.messages.len() as u32 * 10,
-                output_tokens: 20,
-                total_tokens: params.messages.len() as u32 * 10 + 20,
-            }),
-            stop_reason: Some("end_of_text".to_string()),
-        })
+        Ok(
+            CreateMessageResult::new(Content::text(response_text), &self.model_name)
+                .with_usage(TokenUsage::new(
+                    params.messages.len() as u32 * 10,
+                    20,
+                    params.messages.len() as u32 * 10 + 20,
+                ))
+                .with_stop_reason("end_of_text"),
+        )
     }
 }
 
@@ -64,9 +61,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = Server::builder()
         .name("mock-llm-server")
         .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            sampling: Some(Default::default()),
-            ..Default::default()
+        .capabilities({
+            let mut caps = ServerCapabilities::default();
+            caps.sampling = Some(Default::default());
+            caps
         })
         .sampling(MockLLM {
             model_name: "mock-gpt-4".to_string(),

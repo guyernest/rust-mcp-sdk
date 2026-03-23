@@ -166,9 +166,7 @@ PMCP supports three content types:
 use pmcp::types::Content;
 
 // 1. Text content (most common)
-let text_content = Content::Text {
-    text: "# Refund Policy\n\nRefunds are allowed within 30 days...".to_string()
-};
+let text_content = Content::text("# Refund Policy\n\nRefunds are allowed within 30 days...");
 
 // 2. Image content (base64-encoded)
 let image_content = Content::Image {
@@ -177,11 +175,11 @@ let image_content = Content::Image {
 };
 
 // 3. Resource content (with metadata)
-let resource_content = Content::Resource {
-    uri: "docs://policies/refunds".to_string(),
-    mime_type: Some("text/markdown".to_string()),
-    text: Some("# Refund Policy...".to_string()),
-};
+let resource_content = Content::resource_with_text(
+    "docs://policies/refunds",
+    Some("text/markdown"),
+    Some("# Refund Policy..."),
+);
 ```
 
 **Most resources use `Content::Text`** with appropriate MIME types to indicate format.
@@ -213,24 +211,13 @@ struct AnnotatedResource {
 /// Metadata for refund policy resource
 fn refund_policy_resource() -> AnnotatedResource {
     AnnotatedResource {
-        info: ResourceInfo {
-            /// Stable URI - don't change this across versions
-            uri: "docs://policies/refunds".to_string(),
-
-            /// Human-readable name
-            name: "Refund Policy".to_string(),
-
-            /// Description embedding priority and update info for agents
-            description: Some(
+        info: ResourceInfo::new("docs://policies/refunds", "Refund Policy")
+            .with_description(
                 "[PRIORITY: HIGH] Customer refund policy. \
                  Covers time limits (30 days), amount thresholds ($500), \
                  and approval requirements. Updated on 2025-01-15."
-                    .to_string()
-            ),
-
-            /// MIME type - MUST match Content type in read()
-            mime_type: Some("text/markdown".to_string()),
-        },
+            )
+            .with_mime_type("text/markdown"),
 
         annotations: ResourceAnnotations {
             priority: 0.9,  // Must-read policy
@@ -286,45 +273,36 @@ impl DocumentationResources {
         Self {
             resources: vec![
                 AnnotatedResource {
-                    info: ResourceInfo {
-                        uri: "docs://policies/refunds".to_string(),
-                        name: "Refund Policy".to_string(),
-                        Some(
+                    info: ResourceInfo::new("docs://policies/refunds", "Refund Policy")
+                        .with_description(
                             "[PRIORITY: HIGH] Customer refund rules. \
-                             Updated on 2025-01-15.".to_string()
-                        ),
-                        mime_type: Some("text/markdown".to_string()),
-                    },
+                             Updated on 2025-01-15."
+                        )
+                        .with_mime_type("text/markdown"),
                     annotations: ResourceAnnotations {
                         priority: 0.9,
                         modified_at: "2025-01-15T10:30:00Z".to_string(),
                     },
                 },
                 AnnotatedResource {
-                    info: ResourceInfo {
-                        uri: "docs://policies/shipping".to_string(),
-                        name: "Shipping Policy".to_string(),
-                        Some(
+                    info: ResourceInfo::new("docs://policies/shipping", "Shipping Policy")
+                        .with_description(
                             "[PRIORITY: NORMAL] Shipping timeframes and costs. \
-                             Updated on 2025-01-10.".to_string()
-                        ),
-                        mime_type: Some("text/markdown".to_string()),
-                    },
+                             Updated on 2025-01-10."
+                        )
+                        .with_mime_type("text/markdown"),
                     annotations: ResourceAnnotations {
                         priority: 0.5,
                         modified_at: "2025-01-10T14:00:00Z".to_string(),
                     },
                 },
                 AnnotatedResource {
-                    info: ResourceInfo {
-                        uri: "config://app/settings.json".to_string(),
-                        name: "App Settings".to_string(),
-                        Some(
+                    info: ResourceInfo::new("config://app/settings.json", "App Settings")
+                        .with_description(
                             "[PRIORITY: HIGH] Application configuration. \
-                             Updated on 2025-01-20.".to_string()
-                        ),
-                        mime_type: Some("application/json".to_string()),
-                    },
+                             Updated on 2025-01-20."
+                        )
+                        .with_mime_type("application/json"),
                     annotations: ResourceAnnotations {
                         priority: 0.8,
                         modified_at: "2025-01-20T09:15:00Z".to_string(),
@@ -434,8 +412,7 @@ impl ResourceHandler for DocumentationResources {
             "docs://policies/refunds" => {
                 // mime_type in list() = "text/markdown"
                 // So return text content (client will parse as markdown)
-                Content::Text {
-                    text: r#"# Refund Policy
+                Content::text(r#"# Refund Policy
 
 ## Timeframe
 - Refunds allowed within 30 days of purchase
@@ -449,14 +426,12 @@ impl ResourceHandler for DocumentationResources {
 1. Customer requests refund via support ticket
 2. Verify purchase date and amount
 3. Process or escalate based on amount
-"#.to_string()
-                }
+"#)
             },
 
             "docs://policies/shipping" => {
                 // mime_type in list() = "text/markdown"
-                Content::Text {
-                    text: r#"# Shipping Policy
+                Content::text(r#"# Shipping Policy
 
 ## Domestic Shipping
 - Standard: 5-7 business days ($5.99)
@@ -465,15 +440,13 @@ impl ResourceHandler for DocumentationResources {
 
 ## International
 - Contact support for rates and timeframes
-"#.to_string()
-                }
+"#)
             },
 
             "config://app/settings.json" => {
                 // mime_type in list() = "application/json"
                 // Return JSON as text - client will parse based on MIME type
-                Content::Text {
-                    text: r#"{
+                Content::text(r#"{
   "theme": "dark",
   "language": "en",
   "features": {
@@ -485,8 +458,7 @@ impl ResourceHandler for DocumentationResources {
     "max_refund_auto_approve": 500,
     "refund_window_days": 30
   }
-}"#.to_string()
-                }
+}"#)
             },
 
             _ => {
@@ -527,9 +499,7 @@ The `mime_type` field in `list()` tells clients how to parse the content from `r
 mime_type: Some("application/json".to_string())
 
 // In read():
-Content::Text {
-    text: r#"{"key": "value"}"#.to_string()  // JSON string
-}
+Content::text(r#"{"key": "value"}"#)  // JSON string
 
 // ✅ Client sees mime_type and parses text as JSON
 // ❌ If mime_type was "text/plain", client wouldn't parse JSON structure
@@ -741,11 +711,15 @@ impl ResourceHandler for DatabaseResources {
         .await
         .map_err(|e| Error::internal(format!("Database error: {}", e)))?;
 
-        let resources = products.iter().map(|p| ResourceInfo {
-            uri: format!("products://{}", p.id),
-            name: p.name.clone(),
-            description: p.description.clone(),
-            mime_type: Some("application/json".to_string()),
+        let resources = products.iter().map(|p| {
+            let mut info = ResourceInfo::new(
+                format!("products://{}", p.id),
+                p.name.clone(),
+            ).with_mime_type("application/json");
+            if let Some(desc) = &p.description {
+                info = info.with_description(desc.clone());
+            }
+            info
         }).collect();
 
         Ok(ListResourcesResult::new(resources))
@@ -783,9 +757,9 @@ impl ResourceHandler for DatabaseResources {
             "stock": product.stock,
         });
 
-        Ok(ReadResourceResult::new(vec![Content::Text {
-                text: serde_json::to_string_pretty(&json)?,
-            }]))
+        Ok(ReadResourceResult::new(vec![Content::text(
+                serde_json::to_string_pretty(&json)?
+            )]))
     }
 }
 ```
@@ -830,7 +804,7 @@ impl ResourceHandler for ApiResources {
         let body = response.text().await
             .map_err(|e| Error::internal(format!("Failed to read response: {}", e)))?;
 
-        Ok(ReadResourceResult::new(vec![Content::Text { text: body }]))
+        Ok(ReadResourceResult::new(vec![Content::text(body)]))
     }
 
     async fn list(
@@ -841,12 +815,9 @@ impl ResourceHandler for ApiResources {
         // Could query API for available endpoints
         Ok(ListResourcesResult::new(
             vec![
-                ResourceInfo {
-                    uri: "api://users/{id}".to_string(),
-                    name: "User API".to_string(),
-                    Some("Fetch user data by ID".to_string()),
-                    mime_type: Some("application/json".to_string()),
-                },
+                ResourceInfo::new("api://users/{id}", "User API")
+                    .with_description("Fetch user data by ID")
+                    .with_mime_type("application/json"),
             ])
     }
 }
@@ -888,9 +859,7 @@ impl ResourceHandler for TemplateResources {
                     format!("User '{}' not found", user_id)
                 ))?;
 
-            return Ok(ReadResourceResult::new(vec![Content::Text {
-                    text: data.clone(),
-                }]));
+            return Ok(ReadResourceResult::new(vec![Content::text(data.clone())]));
         }
 
         Err(Error::protocol(
@@ -906,12 +875,9 @@ impl ResourceHandler for TemplateResources {
     ) -> Result<ListResourcesResult> {
         // List template pattern
         Ok(ListResourcesResult::new(
-            vec![ResourceInfo {
-                uri: "users://{userId}".to_string(),
-                name: "User Template".to_string(),
-                Some("User data by ID".to_string()),
-                mime_type: Some("application/json".to_string()),
-            }])
+            vec![ResourceInfo::new("users://{userId}", "User Template")
+                .with_description("User data by ID")
+                .with_mime_type("application/json")])
     }
 }
 ```
@@ -983,7 +949,7 @@ impl ResourceHandler for FileSystemResources {
                 format!("Failed to read file: {}", e)
             ))?;
 
-        Ok(ReadResourceResult::new(vec![Content::Text { text: content }]))
+        Ok(ReadResourceResult::new(vec![Content::text(content)]))
     }
 
     async fn list(
@@ -1003,12 +969,14 @@ impl ResourceHandler for FileSystemResources {
         {
             if entry.file_type().await?.is_file() {
                 if let Some(name) = entry.file_name().to_str() {
-                    resources.push(ResourceInfo {
-                        uri: format!("file://{}", name),
-                        name: name.to_string(),
-                        Some(format!("File: {}", name)),
-                        mime_type: guess_mime_type(name),
-                    });
+                    let mut info = ResourceInfo::new(
+                        format!("file://{}", name),
+                        name,
+                    ).with_description(format!("File: {}", name));
+                    if let Some(mt) = guess_mime_type(name) {
+                        info = info.with_mime_type(mt);
+                    }
+                    resources.push(info);
                 }
             }
         }
@@ -1241,14 +1209,9 @@ Prefer **stable URIs with evolving content** over versioned URIs:
 ```rust
 // ✅ Preferred: Stable URI, update content + modified_at
 AnnotatedResource {
-    info: ResourceInfo {
-        uri: "docs://ordering/policies".to_string(),  // Stable URI
-        name: "Ordering Policies".to_string(),
-        Some(
-            "[PRIORITY: HIGH] Updated on 2025-01-20 with new fraud rules.".to_string()
-        ),
-        mime_type: Some("text/markdown".to_string()),
-    },
+    info: ResourceInfo::new("docs://ordering/policies", "Ordering Policies")
+        .with_description("[PRIORITY: HIGH] Updated on 2025-01-20 with new fraud rules.")
+        .with_mime_type("text/markdown"),
     annotations: ResourceAnnotations {
         priority: 0.9,
         modified_at: "2025-01-20T10:00:00Z".to_string(),  // Shows recency
@@ -1257,15 +1220,12 @@ AnnotatedResource {
 
 // ⚠️ Only for breaking changes: Create new versioned URI
 AnnotatedResource {
-    info: ResourceInfo {
-        uri: "docs://ordering/policies/v2".to_string(),  // New URI for breaking change
-        name: "Ordering Policies (v2)".to_string(),
-        Some(
+    info: ResourceInfo::new("docs://ordering/policies/v2", "Ordering Policies (v2)")
+        .with_description(
             "[PRIORITY: CRITICAL] New 2025 policy framework. Replaces v1. \
-             Updated on 2025-01-20.".to_string()
-        ),
-        mime_type: Some("text/markdown".to_string()),
-    },
+             Updated on 2025-01-20."
+        )
+        .with_mime_type("text/markdown"),
     annotations: ResourceAnnotations {
         priority: 1.0,  // Highest priority for new policy
         modified_at: "2025-01-20T10:00:00Z".to_string(),
@@ -1274,15 +1234,12 @@ AnnotatedResource {
 
 // Keep v1 available with deprecated flag (in description)
 AnnotatedResource {
-    info: ResourceInfo {
-        uri: "docs://ordering/policies/v1".to_string(),
-        name: "Ordering Policies (v1 - Deprecated)".to_string(),
-        Some(
+    info: ResourceInfo::new("docs://ordering/policies/v1", "Ordering Policies (v1 - Deprecated)")
+        .with_description(
             "[DEPRECATED] Use v2. Kept for historical reference. \
-             Last updated 2024-12-01.".to_string()
-        ),
-        mime_type: Some("text/markdown".to_string()),
-    },
+             Last updated 2024-12-01."
+        )
+        .with_mime_type("text/markdown"),
     annotations: ResourceAnnotations {
         priority: 0.1,  // Low priority (archived)
         modified_at: "2024-12-01T15:00:00Z".to_string(),
@@ -1508,8 +1465,7 @@ Help agents traverse context by linking related URIs:
 
 ```rust
 // Refund policy references related policies
-Content::Text {
-    text: r#"# Refund Policy
+Content::text(r#"# Refund Policy
 
 ## See Also
 - [Shipping Policy](docs://policies/shipping) - Return shipping costs
@@ -1521,8 +1477,7 @@ Content::Text {
 1. Review [Eligibility Rules](docs://policies/refunds#eligibility)
 2. Check [Amount Limits](docs://policies/refunds#amount-limits)
 3. Follow [Approval Workflow](docs://workflows/refund-approval)
-"#.to_string()
-}
+"#)
 ```
 
 **Benefits:**
@@ -1534,27 +1489,15 @@ Content::Text {
 
 ```rust
 // ❌ Bad: One giant "policies.md" (10,000 lines)
-ResourceInfo {
-    uri: "docs://policies".to_string(),
-    name: "All Company Policies".to_string(),
-    // Too large, hard to rank, slow to parse
-}
+ResourceInfo::new("docs://policies", "All Company Policies")
+// Too large, hard to rank, slow to parse
 
 // ✅ Good: Multiple focused resources
 vec![
-    ResourceInfo {
-        uri: "docs://policies/refunds".to_string(),
-        name: "Refund Policy".to_string(),
-        // 50-200 lines, focused, fast to read
-    },
-    ResourceInfo {
-        uri: "docs://policies/shipping".to_string(),
-        name: "Shipping Policy".to_string(),
-    },
-    ResourceInfo {
-        uri: "docs://policies/exchanges".to_string(),
-        name: "Exchange Policy".to_string(),
-    },
+    ResourceInfo::new("docs://policies/refunds", "Refund Policy"),
+    // 50-200 lines, focused, fast to read
+    ResourceInfo::new("docs://policies/shipping", "Shipping Policy"),
+    ResourceInfo::new("docs://policies/exchanges", "Exchange Policy"),
 ]
 ```
 

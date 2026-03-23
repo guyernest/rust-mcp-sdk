@@ -148,9 +148,7 @@ mod capability_properties {
             }
 
             if sampling_support {
-                capabilities.sampling = Some(SamplingCapabilities {
-                    models: Some(vec![]),
-                });
+                capabilities.sampling = Some(SamplingCapabilities::default());
             }
 
             // Test serialization round-trip

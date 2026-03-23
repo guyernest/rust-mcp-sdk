@@ -37,27 +37,20 @@ async fn test_http_transport() {
 
 #[tokio::test]
 async fn test_sampling_client_method() {
-    use pmcp::{Client, Content, CreateMessageRequest, Role, SamplingMessage, StdioTransport};
+    use pmcp::types::{SamplingMessage, SamplingMessageContent};
+    use pmcp::{Client, CreateMessageParams, Role, StdioTransport};
 
     let transport = StdioTransport::new();
     let _client = Client::new(transport);
 
     // Would need initialized client to actually test
-    let request = CreateMessageRequest {
-        messages: vec![SamplingMessage {
-            role: Role::User,
-            content: Content::Text {
-                text: "Test message".to_string(),
-            },
-        }],
-        model_preferences: None,
-        system_prompt: None,
-        include_context: pmcp::types::IncludeContext::default(),
-        temperature: None,
-        max_tokens: None,
-        stop_sequences: None,
-        metadata: None,
-    };
+    let request = CreateMessageParams::new(vec![SamplingMessage::new(
+        Role::User,
+        SamplingMessageContent::Text {
+            text: "Test message".to_string(),
+            meta: None,
+        },
+    )]);
 
     // Verify request can be created
     assert_eq!(request.messages.len(), 1);
@@ -79,18 +72,10 @@ async fn test_sampling_server_handler() {
             _params: CreateMessageParams,
             _extra: pmcp::RequestHandlerExtra,
         ) -> pmcp::Result<CreateMessageResult> {
-            Ok(CreateMessageResult {
-                content: Content::Text {
-                    text: "Test response".to_string(),
-                },
-                model: "test-model".to_string(),
-                usage: Some(TokenUsage {
-                    input_tokens: 10,
-                    output_tokens: 5,
-                    total_tokens: 15,
-                }),
-                stop_reason: None,
-            })
+            Ok(
+                CreateMessageResult::new(Content::text("Test response"), "test-model")
+                    .with_usage(TokenUsage::new(10, 5, 15)),
+            )
         }
     }
 

@@ -113,7 +113,7 @@ When you first connect, Inspector shows the main dashboard:
 │                                                                     │
 │  Connection: ● Connected to http://localhost:3000/mcp               │
 │  Server: db-explorer v1.0.0                                         │
-│  Protocol: MCP 2024-11-05                                           │
+│  Protocol: MCP 2025-11-25                                           │
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │  CAPABILITIES                                                │   │
@@ -215,7 +215,7 @@ Track all protocol messages in the Messages tab:
 │      Client info, capabilities request                              │
 │                                                                     │
 │  #2 [10:23:45] ← initialize (success)                               │
-│      Server: db-explorer v1.0.0, Protocol: 2024-11-05               │
+│      Server: db-explorer v1.0.0, Protocol: 2025-11-25               │
 │                                                                     │
 │  #3 [10:23:46] → tools/list                                         │
 │      List available tools                                           │
@@ -288,7 +288,7 @@ curl http://localhost:3000/health
 # Check MCP endpoint responds
 curl -X POST http://localhost:3000/mcp \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}},"id":1}'
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}},"id":1}'
 
 # Expected: JSON response with server info
 

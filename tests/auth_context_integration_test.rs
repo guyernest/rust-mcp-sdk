@@ -13,7 +13,7 @@ use pmcp::server::builder::ServerCoreBuilder;
 use pmcp::server::cancellation::RequestHandlerExtra;
 use pmcp::server::core::ProtocolHandler;
 use pmcp::server::tool_middleware::{ToolContext, ToolMiddleware};
-use pmcp::types::{CallToolParams, ClientRequest, Request, RequestId};
+use pmcp::types::{CallToolRequest, ClientRequest, InitializeRequest, Request, RequestId};
 use pmcp::{Error, Result, ToolHandler};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -168,16 +168,11 @@ async fn test_auth_context_flows_from_transport_to_tools() {
     let auth_provider = TestOAuthProvider;
 
     // Initialize server
-    let init_request = Request::Client(Box::new(ClientRequest::Initialize(
-        pmcp::types::InitializeParams {
-            protocol_version: pmcp::DEFAULT_PROTOCOL_VERSION.to_string(),
-            capabilities: pmcp::types::ClientCapabilities::default(),
-            client_info: pmcp::types::Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
-        },
-    )));
+    let init_request =
+        Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+            pmcp::types::Implementation::new("test-client", "1.0.0"),
+            pmcp::types::ClientCapabilities::default(),
+        ))));
 
     server
         .handle_request(RequestId::from(0i64), init_request, None)
@@ -191,12 +186,10 @@ async fn test_auth_context_flows_from_transport_to_tools() {
         .unwrap();
 
     // Call tool with auth_context
-    let tool_request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
-        name: "test_tool".to_string(),
-        arguments: json!({"action": "query"}),
-        _meta: None,
-        task: None,
-    })));
+    let tool_request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest::new(
+        "test_tool",
+        json!({"action": "query"}),
+    ))));
 
     let response = server
         .handle_request(RequestId::from(1i64), tool_request, auth_context)
@@ -250,28 +243,21 @@ async fn test_missing_auth_context_fails_in_tool() {
         .unwrap();
 
     // Initialize server
-    let init_request = Request::Client(Box::new(ClientRequest::Initialize(
-        pmcp::types::InitializeParams {
-            protocol_version: pmcp::DEFAULT_PROTOCOL_VERSION.to_string(),
-            capabilities: pmcp::types::ClientCapabilities::default(),
-            client_info: pmcp::types::Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
-        },
-    )));
+    let init_request =
+        Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+            pmcp::types::Implementation::new("test-client", "1.0.0"),
+            pmcp::types::ClientCapabilities::default(),
+        ))));
 
     server
         .handle_request(RequestId::from(0i64), init_request, None)
         .await;
 
     // Call tool WITHOUT auth_context
-    let tool_request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
-        name: "secure_tool".to_string(),
-        arguments: json!({}),
-        _meta: None,
-        task: None,
-    })));
+    let tool_request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest::new(
+        "secure_tool",
+        json!({}),
+    ))));
 
     let response = server
         .handle_request(RequestId::from(1i64), tool_request, None)

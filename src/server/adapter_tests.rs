@@ -120,13 +120,10 @@ mod tests {
     fn create_init_request() -> TransportMessage {
         TransportMessage::Request {
             id: RequestId::from(1i64),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest {
                 protocol_version: "2024-11-05".to_string(),
                 capabilities: ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
+                client_info: Implementation::new("test-client", "1.0.0"),
             }))),
         }
     }
@@ -134,7 +131,7 @@ mod tests {
     fn create_tool_call_request(id: i64, tool_name: &str) -> TransportMessage {
         TransportMessage::Request {
             id: RequestId::from(id),
-            request: Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
+            request: Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
                 name: tool_name.to_string(),
                 arguments: json!({ "test": "data" }),
                 _meta: None,
@@ -204,12 +201,11 @@ mod tests {
 
         // Add a notification message
         let notification =
-            TransportMessage::Notification(Notification::Progress(ProgressNotification {
-                progress_token: ProgressToken::String("test".to_string()),
-                progress: 50.0,
-                total: None,
-                message: Some("Processing".to_string()),
-            }));
+            TransportMessage::Notification(Notification::Progress(ProgressNotification::new(
+                ProgressToken::String("test".to_string()),
+                50.0,
+                Some("Processing".to_string()),
+            )));
         transport.add_message_to_receive(notification).await;
 
         let adapter = GenericTransportAdapter::new(transport);
@@ -384,12 +380,11 @@ mod tests {
 
         // Create a notification body
         let notification =
-            TransportMessage::Notification(Notification::Progress(ProgressNotification {
-                progress_token: ProgressToken::String("test".to_string()),
-                progress: 50.0,
-                total: None,
-                message: Some("Processing".to_string()),
-            }));
+            TransportMessage::Notification(Notification::Progress(ProgressNotification::new(
+                ProgressToken::String("test".to_string()),
+                50.0,
+                Some("Processing".to_string()),
+            )));
         let notification_body = serde_json::to_string(&notification).unwrap();
 
         // Handle the notification
@@ -465,7 +460,7 @@ mod tests {
                 .await;
 
             for i in 2..=5 {
-                let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolParams {
+                let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
                     name: "echo".to_string(),
                     arguments: json!({ "id": i }),
                     _meta: None,
@@ -507,7 +502,7 @@ mod tests {
 
             for id in &ids {
                 let request =
-                    Request::Client(Box::new(ClientRequest::ListTools(ListToolsParams {
+                    Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
                         cursor: None,
                     })));
                 adapter.add_request(RequestId::from(*id), request).await;

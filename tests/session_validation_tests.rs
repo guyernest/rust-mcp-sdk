@@ -5,7 +5,7 @@ mod session_validation_tests {
     use pmcp::shared::streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig};
     use pmcp::shared::{Transport, TransportMessage};
     use pmcp::types::{
-        ClientCapabilities, ClientRequest, Implementation, InitializeParams, Request,
+        ClientCapabilities, ClientRequest, Implementation, InitializeRequest, Request,
     };
     // Use boxed error for tests to satisfy clippy
     type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -22,7 +22,7 @@ mod session_validation_tests {
                 .build()
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         ));
-        let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
         let http_server = StreamableHttpServer::new(addr, server);
         http_server
             .start()
@@ -52,14 +52,10 @@ mod session_validation_tests {
         // First initialization - should succeed
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         client1
@@ -183,14 +179,10 @@ mod session_validation_tests {
         // Initialize
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         client
@@ -291,14 +283,10 @@ mod session_validation_tests {
         // Initialize to get session and negotiated version
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         client
@@ -371,14 +359,10 @@ mod session_validation_tests {
         // Initialize
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         client
@@ -480,14 +464,10 @@ mod session_validation_tests {
 
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         init_client
@@ -571,14 +551,10 @@ mod session_validation_tests {
 
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         client

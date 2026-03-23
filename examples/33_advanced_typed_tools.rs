@@ -237,10 +237,7 @@ async fn main() -> Result<()> {
     let server = ServerBuilder::new()
         .name("advanced-typed-tools")
         .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            tools: Some(pmcp::types::ToolCapabilities::default()),
-            ..Default::default()
-        })
+        .capabilities(ServerCapabilities::tools_only())
         // User registration with validation
         .tool(
             "register_user",

@@ -84,7 +84,7 @@ See `examples/27_websocket_server_enhanced.rs` for a multi‑client demo and add
 
 ```toml
 [dependencies]
-pmcp = { version = "1.7", features = ["websocket"] }
+pmcp = { version = "2.0", features = ["websocket"] }
 ```
 
 ## When to Use WebSocket

@@ -9,9 +9,8 @@ use pmcp::server::Server;
 use pmcp::shared::streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig};
 use pmcp::shared::{Transport, TransportMessage};
 use pmcp::types::capabilities::ServerCapabilities;
-use pmcp::types::protocol::ProtocolVersion;
 use pmcp::types::{
-    ClientNotification, ClientRequest, Implementation, InitializeParams, Notification, Request,
+    ClientNotification, ClientRequest, Implementation, InitializeRequest, Notification, Request,
     RequestId,
 };
 use std::sync::Arc;
@@ -41,6 +40,7 @@ async fn test_streamable_http_stateless_mode() {
         on_session_initialized: None,
         on_session_closed: None,
         http_middleware: None,
+        allowed_origins: None,
     };
 
     let server_instance =
@@ -64,14 +64,10 @@ async fn test_streamable_http_stateless_mode() {
     // Send initialization request
     let init_request = TransportMessage::Request {
         id: RequestId::from(1i64),
-        request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-            protocol_version: ProtocolVersion::default().0,
-            capabilities: Default::default(),
-            client_info: Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
-        }))),
+        request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+            Implementation::new("test-client", "1.0.0"),
+            Default::default(),
+        )))),
     };
 
     transport.send(init_request).await.unwrap();
@@ -119,6 +115,7 @@ async fn test_streamable_http_stateful_mode() {
             });
         })),
         http_middleware: None,
+        allowed_origins: None,
     };
 
     let server_instance =
@@ -142,14 +139,10 @@ async fn test_streamable_http_stateful_mode() {
     // Send initialization request
     let init_request = TransportMessage::Request {
         id: RequestId::from(1i64),
-        request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-            protocol_version: ProtocolVersion::default().0,
-            capabilities: Default::default(),
-            client_info: Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
-        }))),
+        request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+            Implementation::new("test-client", "1.0.0"),
+            Default::default(),
+        )))),
     };
 
     transport.send(init_request).await.unwrap();
@@ -217,6 +210,7 @@ async fn test_transport_send_receive_multiple() {
         on_session_initialized: None,
         on_session_closed: None,
         http_middleware: None,
+        allowed_origins: None,
     };
 
     let server_instance =
@@ -241,14 +235,10 @@ async fn test_transport_send_receive_multiple() {
     for i in 1..=3 {
         let request = TransportMessage::Request {
             id: RequestId::from(i as i64),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: ProtocolVersion::default().0,
-                capabilities: Default::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                Default::default(),
+            )))),
         };
 
         transport.send(request).await.unwrap();
@@ -322,14 +312,10 @@ async fn test_transport_with_headers() {
     // Send request
     let request = TransportMessage::Request {
         id: RequestId::from(1i64),
-        request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-            protocol_version: ProtocolVersion::default().0,
-            capabilities: Default::default(),
-            client_info: Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
-        }))),
+        request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+            Implementation::new("test-client", "1.0.0"),
+            Default::default(),
+        )))),
     };
 
     transport.send(request).await.unwrap();

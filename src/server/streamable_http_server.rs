@@ -4,6 +4,7 @@ use crate::server::http_middleware::{
     adapters::{from_axum, into_axum},
     ServerHttpContext, ServerHttpMiddlewareChain, ServerHttpResponse,
 };
+use crate::server::tower_layers::{AllowedOrigins, DnsRebindingLayer, SecurityHeadersLayer};
 use crate::server::Server;
 use crate::shared::http_constants::{
     APPLICATION_JSON, LAST_EVENT_ID, MCP_PROTOCOL_VERSION, MCP_SESSION_ID, TEXT_EVENT_STREAM,
@@ -147,6 +148,7 @@ type SessionCallback = Box<dyn Fn(&str) + Send + Sync>;
 ///     on_session_initialized: None,
 ///     on_session_closed: None,
 ///     http_middleware: None,
+///     allowed_origins: None,
 /// };
 ///
 /// // Stateful configuration with custom session IDs
@@ -163,6 +165,7 @@ type SessionCallback = Box<dyn Fn(&str) + Send + Sync>;
 ///         println!("Session ended: {}", session_id);
 ///     })),
 ///     http_middleware: None,
+///     allowed_origins: None,
 /// };
 /// ```
 pub struct StreamableHttpServerConfig {
@@ -178,6 +181,16 @@ pub struct StreamableHttpServerConfig {
     pub on_session_closed: Option<SessionCallback>,
     /// HTTP middleware chain for request/response processing
     pub http_middleware: Option<Arc<ServerHttpMiddlewareChain>>,
+    /// Allowed origins for CORS responses.
+    ///
+    /// When `Some`, replaces wildcard `*` with origin-locked CORS that
+    /// reflects the request's `Origin` only when it appears in this set.
+    /// When `None`, defaults to [`AllowedOrigins::localhost()`] at runtime.
+    ///
+    /// Used by the `StreamableHttpServer` path. The `pmcp::axum::router()`
+    /// path uses [`crate::server::axum_router::RouterConfig::allowed_origins`]
+    /// instead.
+    pub allowed_origins: Option<AllowedOrigins>,
 }
 
 impl std::fmt::Debug for StreamableHttpServerConfig {
@@ -192,6 +205,7 @@ impl std::fmt::Debug for StreamableHttpServerConfig {
             )
             .field("on_session_closed", &self.on_session_closed.is_some())
             .field("http_middleware", &self.http_middleware.is_some())
+            .field("allowed_origins", &self.allowed_origins)
             .finish()
     }
 }
@@ -205,6 +219,33 @@ impl Default for StreamableHttpServerConfig {
             on_session_initialized: None,
             on_session_closed: None,
             http_middleware: None,
+            allowed_origins: None,
+        }
+    }
+}
+
+impl StreamableHttpServerConfig {
+    /// Create a stateless configuration — no sessions, JSON responses.
+    /// Ideal for Lambda and serverless deployments.
+    /// Create a stateless configuration for serverless/Lambda deployments.
+    ///
+    /// Uses [`AllowedOrigins::any()`] because stateless servers are behind
+    /// a reverse proxy (API Gateway, `CloudFront`) that handles CORS and
+    /// origin validation at the edge. DNS rebinding protection adds no
+    /// security value when the MCP server is only reachable via loopback
+    /// within a Lambda sandbox or container.
+    ///
+    /// For servers directly exposed to the internet, use `Default::default()`
+    /// instead (which defaults to `AllowedOrigins::localhost()`).
+    pub fn stateless() -> Self {
+        Self {
+            session_id_generator: None,
+            enable_json_response: true,
+            event_store: None,
+            on_session_initialized: None,
+            on_session_closed: None,
+            http_middleware: None,
+            allowed_origins: Some(AllowedOrigins::any()),
         }
     }
 }
@@ -216,15 +257,49 @@ struct SessionInfo {
     protocol_version: Option<String>,
 }
 
-/// Server state shared across routes
+/// Server state shared across routes.
 #[derive(Clone)]
-struct ServerState {
+pub(crate) struct ServerState {
     server: Arc<tokio::sync::Mutex<Server>>,
     config: Arc<StreamableHttpServerConfig>,
+    /// Pre-resolved allowed origins for CORS and DNS rebinding protection.
+    allowed_origins: AllowedOrigins,
     /// Active SSE streams by session ID
     sse_streams: Arc<RwLock<HashMap<String, mpsc::UnboundedSender<TransportMessage>>>>,
     /// Session tracking (session ID -> session info)
     sessions: Arc<RwLock<HashMap<String, SessionInfo>>>,
+}
+
+/// Build the base MCP Router without any Tower layers applied.
+///
+/// Used by both [`StreamableHttpServer::start()`] and `pmcp::axum::router()`.
+pub(crate) fn build_mcp_router(state: ServerState) -> Router<()> {
+    Router::new()
+        .route("/", post(handle_post_request))
+        .route("/", get(handle_get_sse))
+        .route("/", delete(handle_delete_session))
+        .with_state(state)
+}
+
+/// Create a [`ServerState`] for the MCP router.
+///
+/// Used by `pmcp::axum::router()` to construct state without a full
+/// [`StreamableHttpServer`].
+pub(crate) fn make_server_state(
+    server: Arc<tokio::sync::Mutex<Server>>,
+    config: StreamableHttpServerConfig,
+) -> ServerState {
+    let allowed_origins = config
+        .allowed_origins
+        .clone()
+        .unwrap_or_else(AllowedOrigins::localhost);
+    ServerState {
+        server,
+        config: Arc::new(config),
+        allowed_origins,
+        sse_streams: Arc::new(RwLock::new(HashMap::new())),
+        sessions: Arc::new(RwLock::new(HashMap::new())),
+    }
 }
 
 /// A streamable HTTP server for MCP.
@@ -242,7 +317,10 @@ impl std::fmt::Debug for StreamableHttpServer {
     }
 }
 
-/// Helper function to create JSON-RPC error response
+/// Helper function to create JSON-RPC error response.
+///
+/// CORS headers are added by the `CorsLayer` Tower middleware, so this
+/// function no longer needs to handle them.
 fn create_error_response(status: StatusCode, code: i32, message: &str) -> Response {
     let error_body = json!({
         "jsonrpc": "2.0",
@@ -253,9 +331,7 @@ fn create_error_response(status: StatusCode, code: i32, message: &str) -> Respon
         "id": null
     });
 
-    let mut resp = (status, Json(error_body)).into_response();
-    add_cors_headers(resp.headers_mut());
-    resp
+    (status, Json(error_body)).into_response()
 }
 
 impl StreamableHttpServer {
@@ -270,24 +346,26 @@ impl StreamableHttpServer {
         server: Arc<tokio::sync::Mutex<Server>>,
         config: StreamableHttpServerConfig,
     ) -> Self {
-        let state = ServerState {
-            server,
-            config: Arc::new(config),
-            sse_streams: Arc::new(RwLock::new(HashMap::new())),
-            sessions: Arc::new(RwLock::new(HashMap::new())),
-        };
-
+        let state = make_server_state(server, config);
         Self { addr, state }
     }
 
     /// Starts the server and returns the bound address and a task handle.
+    ///
+    /// Applies the same Tower layer security stack as
+    /// [`pmcp::axum::router()`](crate::server::axum_router::router):
+    /// - [`CorsLayer`] -- origin-locked CORS (no wildcard `*`)
+    /// - [`DnsRebindingLayer`] -- Host/Origin header validation
+    /// - [`SecurityHeadersLayer`] -- nosniff, DENY, no-store
     pub async fn start(self) -> Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
-        let app = Router::new()
-            .route("/", post(handle_post_request))
-            .route("/", get(handle_get_sse))
-            .route("/", delete(handle_delete_session))
-            .route("/", axum::routing::options(handle_options))
-            .with_state(self.state);
+        let allowed = self.state.allowed_origins.clone();
+        let cors = crate::server::tower_layers::build_mcp_cors_layer(&allowed);
+
+        // Layer ordering: CORS (outermost) -> DnsRebinding -> SecurityHeaders -> handler
+        let app = build_mcp_router(self.state)
+            .layer(SecurityHeadersLayer::default())
+            .layer(DnsRebindingLayer::new(allowed))
+            .layer(cors);
 
         let listener = tokio::net::TcpListener::bind(self.addr).await?;
         let local_addr = listener.local_addr()?;
@@ -299,7 +377,7 @@ impl StreamableHttpServer {
     }
 }
 
-/// Validate request headers and return appropriate error response
+/// Validate request headers and return appropriate error response.
 fn validate_headers(headers: &HeaderMap, method: &str) -> std::result::Result<(), Response> {
     match method {
         "POST" => {
@@ -365,7 +443,7 @@ fn validate_headers(headers: &HeaderMap, method: &str) -> std::result::Result<()
     Ok(())
 }
 
-/// Process session for initialization request
+/// Process session for initialization request.
 fn process_init_session(
     state: &ServerState,
     session_id: Option<String>,
@@ -409,7 +487,7 @@ fn process_init_session(
     }
 }
 
-/// Validate session for non-initialization request
+/// Validate session for non-initialization request.
 fn validate_non_init_session(
     state: &ServerState,
     session_id: Option<String>,
@@ -474,7 +552,7 @@ fn update_session_after_init(
     }
 }
 
-/// Build response with appropriate format (JSON or SSE)
+/// Build response with appropriate format (JSON or SSE).
 fn build_response(
     state: &ServerState,
     response: TransportMessage,
@@ -519,9 +597,7 @@ fn build_response(
             "HTTP response (JSON mode)"
         );
 
-        let mut resp = (StatusCode::OK, Json(json_value)).into_response();
-        add_cors_headers(resp.headers_mut());
-        resp
+        (StatusCode::OK, Json(json_value)).into_response()
     } else {
         // SSE streaming mode
         if let Some(sid) = session_id {
@@ -584,7 +660,7 @@ fn build_response(
     }
 }
 
-/// Validate protocol version for non-init requests
+/// Validate protocol version for non-init requests.
 fn validate_protocol_version(
     state: &ServerState,
     session_id: Option<&String>,
@@ -640,7 +716,7 @@ async fn handle_post_request(
     handle_post_with_middleware(state, request).await
 }
 
-/// Extract and validate authentication from headers
+/// Extract and validate authentication from headers.
 async fn extract_and_validate_auth(
     state: &ServerState,
     headers: &HeaderMap,
@@ -908,15 +984,9 @@ async fn handle_post_fast_path(
         },
         TransportMessage::Notification { .. } => {
             // Notifications get 202 Accepted
-            let mut resp = StatusCode::ACCEPTED.into_response();
-            add_cors_headers(resp.headers_mut());
-            resp
+            StatusCode::ACCEPTED.into_response()
         },
-        TransportMessage::Response(_) => {
-            let mut resp = StatusCode::ACCEPTED.into_response();
-            add_cors_headers(resp.headers_mut());
-            resp
-        },
+        TransportMessage::Response(_) => StatusCode::ACCEPTED.into_response(),
     }
 }
 
@@ -934,6 +1004,7 @@ async fn handle_post_with_middleware(
 
     // Convert from axum request
     let (parts, body) = request.into_parts();
+
     let mut server_request = match from_axum(parts, body).await {
         Ok(req) => req,
         Err(e) => {
@@ -1155,7 +1226,6 @@ async fn handle_post_with_middleware(
             };
 
             response_headers.insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
-            add_cors_headers(&mut response_headers);
 
             // Create ServerHttpResponse
             let mut server_response =
@@ -1172,16 +1242,8 @@ async fn handle_post_with_middleware(
             // Convert back to axum response
             into_axum(server_response)
         },
-        TransportMessage::Notification { .. } => {
-            let mut resp = StatusCode::ACCEPTED.into_response();
-            add_cors_headers(resp.headers_mut());
-            resp
-        },
-        TransportMessage::Response(_) => {
-            let mut resp = StatusCode::ACCEPTED.into_response();
-            add_cors_headers(resp.headers_mut());
-            resp
-        },
+        TransportMessage::Notification { .. } => StatusCode::ACCEPTED.into_response(),
+        TransportMessage::Response(_) => StatusCode::ACCEPTED.into_response(),
     }
 }
 
@@ -1286,9 +1348,6 @@ async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) ->
 
     let mut response = sse.into_response();
 
-    // Add CORS headers
-    add_cors_headers(response.headers_mut());
-
     // Add session ID header
     response
         .headers_mut()
@@ -1338,39 +1397,9 @@ async fn handle_delete_session(
             callback(&sid);
         }
 
-        let mut resp = (StatusCode::OK, Json(json!({"status": "ok"}))).into_response();
-        add_cors_headers(resp.headers_mut());
-        resp
+        (StatusCode::OK, Json(json!({"status": "ok"}))).into_response()
     } else {
         // No session to delete
         create_error_response(StatusCode::NOT_FOUND, -32600, "No session ID provided")
     }
-}
-
-/// Add CORS headers to a `HeaderMap`
-fn add_cors_headers(headers: &mut HeaderMap) {
-    headers.insert("Access-Control-Allow-Origin", HeaderValue::from_static("*"));
-    headers.insert(
-        "Access-Control-Allow-Methods",
-        HeaderValue::from_static("GET, POST, DELETE, OPTIONS"),
-    );
-    headers.insert(
-        "Access-Control-Allow-Headers",
-        HeaderValue::from_static(
-            "Content-Type, Accept, mcp-session-id, mcp-protocol-version, last-event-id",
-        ),
-    );
-    headers.insert(
-        "Access-Control-Expose-Headers",
-        HeaderValue::from_static("mcp-session-id, mcp-protocol-version"),
-    );
-}
-
-/// Handle OPTIONS request for CORS preflight
-async fn handle_options() -> impl IntoResponse {
-    let mut headers = HeaderMap::new();
-    add_cors_headers(&mut headers);
-    headers.insert("Access-Control-Max-Age", HeaderValue::from_static("86400"));
-
-    (StatusCode::OK, headers, "")
 }

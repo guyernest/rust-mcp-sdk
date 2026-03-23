@@ -74,10 +74,7 @@ async fn main() -> Result<()> {
     let server = ServerBuilder::new()
         .name("typed-tool-example")
         .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            tools: Some(pmcp::types::ToolCapabilities::default()),
-            ..Default::default()
-        })
+        .capabilities(ServerCapabilities::tools_only())
         // Math calculator with full input/output typing
         .tool_typed_with_output_and_description::<MathInput, MathOutput>(
             "calculator",

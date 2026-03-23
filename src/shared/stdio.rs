@@ -268,10 +268,7 @@ mod tests {
                 crate::types::ClientRequest::Initialize(crate::types::InitializeRequest {
                     protocol_version: "2025-06-18".to_string(),
                     capabilities: crate::types::ClientCapabilities::default(),
-                    client_info: crate::types::Implementation {
-                        name: "test".to_string(),
-                        version: "1.0.0".to_string(),
-                    },
+                    client_info: crate::types::Implementation::new("test", "1.0.0"),
                 }),
             )),
         };

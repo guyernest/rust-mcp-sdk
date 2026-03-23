@@ -5,7 +5,7 @@ mod streamable_http_server_tests {
     use pmcp::shared::streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig};
     use pmcp::shared::{Transport, TransportMessage};
     use pmcp::types::{
-        ClientCapabilities, ClientRequest, Implementation, InitializeParams, Request,
+        ClientCapabilities, ClientRequest, Implementation, InitializeRequest, Request,
     };
     // Use boxed error for tests to satisfy clippy
     type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -24,7 +24,7 @@ mod streamable_http_server_tests {
                 .build()
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         ));
-        let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
         let http_server = StreamableHttpServer::new(addr, server);
         let (server_addr, server_task) = http_server
             .start()
@@ -49,14 +49,10 @@ mod streamable_http_server_tests {
         // Send initialization without session ID
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         client
@@ -88,7 +84,7 @@ mod streamable_http_server_tests {
                 .build()
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         ));
-        let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
         let http_server = StreamableHttpServer::new(addr, server);
         let (server_addr, server_task) = http_server
             .start()
@@ -136,7 +132,7 @@ mod streamable_http_server_tests {
                 .build()
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         ));
-        let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
 
         let config = StreamableHttpServerConfig {
             session_id_generator: None, // Stateless mode
@@ -145,6 +141,7 @@ mod streamable_http_server_tests {
             on_session_initialized: None,
             on_session_closed: None,
             http_middleware: None,
+            allowed_origins: None,
         };
 
         let http_server = StreamableHttpServer::with_config(addr, server, config);
@@ -171,14 +168,10 @@ mod streamable_http_server_tests {
         // Send initialization
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         client
@@ -225,7 +218,7 @@ mod streamable_http_server_tests {
                 .build()
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
         ));
-        let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 0);
+        let addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 0);
         let http_server = StreamableHttpServer::new(addr, server);
         let (server_addr, server_task) = http_server
             .start()
@@ -250,14 +243,10 @@ mod streamable_http_server_tests {
         // Send initialization
         let init_message = TransportMessage::Request {
             id: 1i64.into(),
-            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
-                protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
-            }))),
+            request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("test-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )))),
         };
 
         client

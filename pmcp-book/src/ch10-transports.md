@@ -166,13 +166,13 @@ Transport implementations are feature-gated. Enable them in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-pmcp = { version = "1.7", features = ["streamable-http", "http", "websocket"] }
+pmcp = { version = "2.0", features = ["streamable-http", "http", "websocket"] }
 
 # For minimal stdio-only deployment:
-pmcp = { version = "1.7", default-features = false }
+pmcp = { version = "2.0", default-features = false }
 
 # For WebAssembly targets:
-pmcp = { version = "1.7", features = ["wasm"] }
+pmcp = { version = "2.0", features = ["wasm"] }
 ```
 
 **Available features:**
@@ -569,7 +569,7 @@ let (bound_addr, handle) = http_server.start().await?;
 
 The Streamable HTTP server enforces MCP-specific headers:
 
-- **`mcp-protocol-version`**: Protocol version header (e.g., `2024-11-05`)
+- **`mcp-protocol-version`**: Protocol version header (e.g., `2025-11-25`)
 - **`mcp-session-id`**: Session identifier (stateful mode only)
 - **`Accept`**: Must include `application/json` or `text/event-stream`
   - `Accept: application/json` → Simple JSON responses

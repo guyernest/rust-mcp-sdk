@@ -107,12 +107,11 @@ impl Transport for MockTransport {
     async fn receive(&mut self) -> Result<TransportMessage> {
         tokio::time::sleep(Duration::from_millis(50)).await;
         Ok(TransportMessage::Notification(Notification::Progress(
-            ProgressNotification {
-                progress_token: ProgressToken::String(format!("mock-{}", self.id)),
-                progress: 50.0,
-                total: None,
-                message: Some(format!("Mock message from transport {}", self.id)),
-            },
+            ProgressNotification::new(
+                ProgressToken::String(format!("mock-{}", self.id)),
+                50.0,
+                Some(format!("Mock message from transport {}", self.id)),
+            ),
         )))
     }
 
@@ -246,12 +245,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
         // Test message processing
         let test_message =
-            TransportMessage::Notification(Notification::Progress(ProgressNotification {
-                progress_token: ProgressToken::String(format!("progress-{}", i + 1)),
-                progress: 25.0 * (i + 1) as f64,
-                total: None,
-                message: Some(format!("Processing request {}", i + 1)),
-            }));
+            TransportMessage::Notification(Notification::Progress(ProgressNotification::new(
+                ProgressToken::String(format!("progress-{}", i + 1)),
+                25.0 * (i + 1) as f64,
+                Some(format!("Processing request {}", i + 1)),
+            )));
 
         if let Err(e) = chain
             .process_send_with_context(&test_message, context)

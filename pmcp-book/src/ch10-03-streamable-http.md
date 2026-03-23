@@ -70,7 +70,7 @@ let http = StreamableHttpServer::with_config(addr, server, cfg);
 ## Protocol Details
 
 Headers enforced by the server:
-- `mcp-protocol-version`: Protocol version (e.g., `2024-11-05`)
+- `mcp-protocol-version`: Protocol version (e.g., `2025-11-25`)
 - `Accept`: Must include `application/json` or `text/event-stream`
 - `mcp-session-id`: Present in stateful mode
 - `Last-Event-Id`: For SSE resumption
@@ -163,6 +163,6 @@ See [Chapter 11: Middleware](ch11-middleware.md#http-level-middleware) for compl
 
 ```toml
 [dependencies]
-pmcp = { version = "1.7", features = ["streamable-http"] }
+pmcp = { version = "2.0", features = ["streamable-http"] }
 ```
 

@@ -98,11 +98,12 @@ fn bench_server_creation(c: &mut Criterion) {
                     .tool("simple_tool", BenchmarkTool)
                     .tool("complex_tool", ComplexBenchmarkTool)
                     .tool("another_tool", BenchmarkTool)
-                    .capabilities(ServerCapabilities {
-                        tools: Some(ToolCapabilities {
+                    .capabilities({
+                        let mut caps = ServerCapabilities::default();
+                        caps.tools = Some(ToolCapabilities {
                             list_changed: Some(true),
-                        }),
-                        ..Default::default()
+                        });
+                        caps
                     })
                     .build()
                     .unwrap(),
@@ -123,39 +124,31 @@ fn bench_request_processing(c: &mut Criterion) {
         ("ping", ClientRequest::Ping),
         (
             "list_tools",
-            ClientRequest::ListTools(ListToolsParams { cursor: None }),
+            ClientRequest::ListTools(ListToolsRequest::default()),
         ),
         (
             "simple_call_tool",
-            ClientRequest::CallTool(CallToolParams {
-                name: "simple_tool".to_string(),
-                arguments: json!({"input": "test"}),
-                _meta: None,
-                task: None,
-            }),
+            ClientRequest::CallTool(CallToolRequest::new(
+                "simple_tool",
+                json!({"input": "test"}),
+            )),
         ),
         (
             "complex_call_tool",
-            ClientRequest::CallTool(CallToolParams {
-                name: "complex_tool".to_string(),
-                arguments: json!({
+            ClientRequest::CallTool(CallToolRequest::new(
+                "complex_tool",
+                json!({
                     "data": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
                     "operation": "average"
                 }),
-                _meta: None,
-                task: None,
-            }),
+            )),
         ),
         (
             "initialize",
-            ClientRequest::Initialize(InitializeParams {
-                protocol_version: "2024-11-05".to_string(),
-                capabilities: ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "benchmark-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
-            }),
+            ClientRequest::Initialize(InitializeRequest::new(
+                Implementation::new("benchmark-client", "1.0.0"),
+                ClientCapabilities::default(),
+            )),
         ),
     ];
 
@@ -229,14 +222,9 @@ fn bench_response_generation(c: &mut Criterion) {
                 jsonrpc: "2.0".to_string(),
                 id: RequestId::Number(3),
                 payload: pmcp::types::jsonrpc::ResponsePayload::Result(
-                    serde_json::to_value(CallToolResult {
-                        content: vec![Content::Text {
-                            text: "This is the result of a tool call with substantial output data."
-                                .to_string(),
-                        }],
-                        is_error: false,
-                        ..Default::default()
-                    })
+                    serde_json::to_value(CallToolResult::new(vec![Content::text(
+                        "This is the result of a tool call with substantial output data.",
+                    )]))
                     .unwrap(),
                 ),
             },
@@ -275,12 +263,10 @@ fn bench_response_generation(c: &mut Criterion) {
 fn bench_capabilities(c: &mut Criterion) {
     let mut group = c.benchmark_group("capabilities");
 
-    let full_client_capabilities = ClientCapabilities {
-        sampling: Some(SamplingCapabilities { models: None }),
-        elicitation: Some(ElicitationCapabilities::default()),
-        roots: Some(RootsCapabilities { list_changed: true }),
-        experimental: None,
-    };
+    let mut full_client_capabilities = ClientCapabilities::default();
+    full_client_capabilities.sampling = Some(SamplingCapabilities::default());
+    full_client_capabilities.elicitation = Some(ElicitationCapabilities::default());
+    full_client_capabilities.roots = Some(RootsCapabilities { list_changed: true });
 
     group.bench_function("serialize_full_client_capabilities", |b| {
         b.iter(|| {
@@ -289,22 +275,18 @@ fn bench_capabilities(c: &mut Criterion) {
         })
     });
 
-    let full_server_capabilities = ServerCapabilities {
-        tools: Some(ToolCapabilities {
-            list_changed: Some(true),
-        }),
-        prompts: Some(PromptCapabilities {
-            list_changed: Some(true),
-        }),
-        resources: Some(ResourceCapabilities {
-            subscribe: Some(true),
-            list_changed: Some(true),
-        }),
-        logging: Some(LoggingCapabilities { levels: None }),
-        sampling: None,
-        completions: None,
-        experimental: None,
-    };
+    let mut full_server_capabilities = ServerCapabilities::default();
+    full_server_capabilities.tools = Some(ToolCapabilities {
+        list_changed: Some(true),
+    });
+    full_server_capabilities.prompts = Some(PromptCapabilities {
+        list_changed: Some(true),
+    });
+    full_server_capabilities.resources = Some(ResourceCapabilities {
+        subscribe: Some(true),
+        list_changed: Some(true),
+    });
+    full_server_capabilities.logging = Some(LoggingCapabilities { levels: None });
 
     group.bench_function("serialize_full_server_capabilities", |b| {
         b.iter(|| {
@@ -331,19 +313,18 @@ fn bench_notifications(c: &mut Criterion) {
     let notifications = vec![
         (
             "progress",
-            Notification::Progress(ProgressNotification {
-                progress_token: ProgressToken::String("task_123".to_string()),
-                progress: 75.0,
-                total: None,
-                message: Some("Processing data...".to_string()),
-            }),
+            Notification::Progress(ProgressNotification::new(
+                ProgressToken::String("task_123".to_string()),
+                75.0,
+                Some("Processing data...".to_string()),
+            )),
         ),
         (
             "cancelled",
-            Notification::Cancelled(CancelledNotification {
-                request_id: RequestId::Number(42),
-                reason: Some("User requested cancellation".to_string()),
-            }),
+            Notification::Cancelled(
+                CancelledNotification::new(RequestId::Number(42))
+                    .with_reason("User requested cancellation"),
+            ),
         ),
         (
             "client_initialized",
@@ -378,16 +359,14 @@ fn bench_batch_operations(c: &mut Criterion) {
     // Create a batch of tool call requests
     let tool_calls: Vec<ClientRequest> = (0..50)
         .map(|i| {
-            ClientRequest::CallTool(CallToolParams {
-                name: "batch_tool".to_string(),
-                arguments: json!({
+            ClientRequest::CallTool(CallToolRequest::new(
+                "batch_tool",
+                json!({
                     "id": i,
                     "data": format!("Batch item {}", i),
                     "index": i
                 }),
-                _meta: None,
-                task: None,
-            })
+            ))
         })
         .collect();
 
@@ -404,12 +383,11 @@ fn bench_batch_operations(c: &mut Criterion) {
 
     // Create a batch of responses
     let responses: Vec<CallToolResult> = (0..50)
-        .map(|i| CallToolResult {
-            content: vec![Content::Text {
-                text: format!("Result for batch item {}: processed successfully", i),
-            }],
-            is_error: false,
-            ..Default::default()
+        .map(|i| {
+            CallToolResult::new(vec![Content::text(format!(
+                "Result for batch item {}: processed successfully",
+                i
+            ))])
         })
         .collect();
 

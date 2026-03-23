@@ -174,9 +174,8 @@ impl SubscriptionManager {
             if subscriber_count > 0 {
                 // Send notification if sender is available
                 if let Some(sender) = &self.notification_sender {
-                    let notification = ServerNotification::ResourceUpdated(ResourceUpdatedParams {
-                        uri: uri.clone(),
-                    });
+                    let notification =
+                        ServerNotification::ResourceUpdated(ResourceUpdatedParams::new(&*uri));
                     sender(notification);
                 }
                 // Return count regardless of whether notification was sent

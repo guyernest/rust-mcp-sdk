@@ -5,17 +5,11 @@ use pmcp::PromptHandler;
 
 #[test]
 fn test_prompt_info_serializes_all_fields() {
-    let prompt = PromptInfo {
-        name: "test_prompt".to_string(),
-        description: Some("A test prompt description".to_string()),
-        arguments: Some(vec![PromptArgument {
-            name: "arg1".to_string(),
-            description: Some("First argument".to_string()),
-            required: true,
-            completion: None,
-            arg_type: None,
-        }]),
-    };
+    let prompt = PromptInfo::new("test_prompt")
+        .with_description("A test prompt description")
+        .with_arguments(vec![PromptArgument::new("arg1")
+            .with_description("First argument")
+            .required()]);
 
     let json = serde_json::to_value(&prompt).expect("Should serialize");
 
@@ -38,11 +32,7 @@ fn test_prompt_info_serializes_all_fields() {
 
 #[test]
 fn test_prompt_info_with_none_fields() {
-    let prompt = PromptInfo {
-        name: "minimal_prompt".to_string(),
-        description: None,
-        arguments: None,
-    };
+    let prompt = PromptInfo::new("minimal_prompt");
 
     let json = serde_json::to_value(&prompt).expect("Should serialize");
 

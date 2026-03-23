@@ -148,6 +148,10 @@ The PMCP SDK provides full annotation support directly on `TypedTool`, `TypedSyn
 
 ### TypedTool with Annotations
 
+> **v2.0 Tip:** The `#[mcp_tool]` macro eliminates `Box::pin(async move { ... })` boilerplate.
+> Add `features = ["macros"]` to your pmcp dependency.
+> See [Macros Guide](../../docs/design/mcp-macros-guide.md) for migration examples.
+
 ```rust
 use pmcp::server::typed_tool::TypedTool;
 use pmcp::types::ToolAnnotations;

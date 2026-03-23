@@ -39,6 +39,8 @@ mcp-tester test stdio --tool echo --args '{"message": "Hello!"}'
 
 That's it! You've created, registered, and tested an MCP tool. Now let's understand how it works and make it production-ready.
 
+> **v2.0 Tip:** For new code, prefer `#[mcp_tool]` over `TypedTool`. See the [Macros Guide](../design/mcp-macros-guide.md) for details. The examples below show both approaches.
+
 ## The Tool Analogy: Forms with Type Safety
 
 Continuing the website analogy from Chapter 4, tools are like web forms—but with Rust's compile-time guarantees.
@@ -1156,7 +1158,7 @@ result.results.map(r => r.url)  // Extract all URLs
 > Enable in production with:
 > ```toml
 > [dependencies]
-> pmcp = { version = "1.5", features = ["simd"] }
+> pmcp = { version = "2.0", features = ["simd"] }
 > ```
 >
 > Most beneficial for: large arguments (>10KB), batch operations, high-throughput servers.

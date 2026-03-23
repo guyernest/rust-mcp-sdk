@@ -13,31 +13,26 @@ fn bench_request_serialization(c: &mut Criterion) {
     let mut group = c.benchmark_group("request_serialization");
 
     // Initialize request
-    let init_request = ClientRequest::Initialize(InitializeParams {
-        protocol_version: "2024-11-05".to_string(),
-        capabilities: ClientCapabilities::default(),
-        client_info: Implementation {
-            name: "benchmark-client".to_string(),
-            version: "1.0.0".to_string(),
-        },
-    });
+    let init_request = ClientRequest::Initialize(InitializeRequest::new(
+        Implementation::new("benchmark-client", "1.0.0"),
+        ClientCapabilities::default(),
+    ));
 
     group.bench_function("initialize_request", |b| {
         b.iter(|| serde_json::to_string(&black_box(&init_request)).unwrap())
     });
 
     // List tools request
-    let list_tools = ClientRequest::ListTools(ListToolsParams { cursor: None });
+    let list_tools = ClientRequest::ListTools(ListToolsRequest::default());
 
     group.bench_function("list_tools_request", |b| {
         b.iter(|| serde_json::to_string(&black_box(&list_tools)).unwrap())
     });
 
     // Call tool request with complex arguments
-    let call_tool = ClientRequest::CallTool(CallToolParams {
-        name: "complex_tool".to_string(),
-        task: None,
-        arguments: json!({
+    let call_tool = ClientRequest::CallTool(CallToolRequest::new(
+        "complex_tool",
+        json!({
             "query": "rust programming language",
             "filters": {
                 "type": "documentation",
@@ -50,8 +45,7 @@ fn bench_request_serialization(c: &mut Criterion) {
                 "format": "markdown"
             }
         }),
-        _meta: None,
-    });
+    ));
 
     group.bench_function("call_tool_request", |b| {
         b.iter(|| serde_json::to_string(&black_box(&call_tool)).unwrap())
@@ -68,7 +62,7 @@ fn bench_request_deserialization(c: &mut Criterion) {
     let init_json = r#"{
         "method": "initialize",
         "params": {
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": "2025-03-26",
             "capabilities": {
                 "tools": {}
             },
@@ -123,16 +117,11 @@ fn bench_request_deserialization(c: &mut Criterion) {
 fn bench_response_serialization(c: &mut Criterion) {
     let mut group = c.benchmark_group("response_serialization");
 
-    // Initialize response
-    let init_response = InitializeResult {
-        protocol_version: pmcp::ProtocolVersion("2024-11-05".to_string()),
-        capabilities: ServerCapabilities::default(),
-        server_info: Implementation {
-            name: "benchmark-server".to_string(),
-            version: "1.0.0".to_string(),
-        },
-        instructions: Some("A high-performance MCP server for benchmarking".to_string()),
-    };
+    // Initialize response — use Default + field assignment since InitializeResult is #[non_exhaustive]
+    let mut init_response = InitializeResult::default();
+    init_response.protocol_version = pmcp::ProtocolVersion("2025-03-26".to_string());
+    init_response.server_info = Implementation::new("benchmark-server", "1.0.0");
+    init_response.instructions = Some("A high-performance MCP server for benchmarking".to_string());
 
     group.bench_function("initialize_response", |b| {
         b.iter(|| serde_json::to_string(&black_box(&init_response)).unwrap())
@@ -180,18 +169,10 @@ fn bench_response_serialization(c: &mut Criterion) {
     });
 
     // Call tool response with complex content
-    let call_tool_response = CallToolResult {
-        content: vec![
-            Content::Text {
-                text: "This is a comprehensive analysis of the data provided. The results show significant patterns in user behavior across multiple dimensions.".to_string(),
-            },
-            Content::Text {
-                text: "Additional insights reveal performance improvements of up to 40% when using the optimized algorithms.".to_string(),
-            },
-        ],
-        is_error: false,
-        ..Default::default()
-    };
+    let call_tool_response = CallToolResult::new(vec![
+        Content::text("This is a comprehensive analysis of the data provided. The results show significant patterns in user behavior across multiple dimensions."),
+        Content::text("Additional insights reveal performance improvements of up to 40% when using the optimized algorithms."),
+    ]);
 
     group.bench_function("call_tool_response", |b| {
         b.iter(|| serde_json::to_string(&black_box(&call_tool_response)).unwrap())
@@ -266,16 +247,10 @@ fn bench_large_messages(c: &mut Criterion) {
 
     // Create a large tool response with lots of content
     let large_content: Vec<Content> = (0..1000)
-        .map(|i| Content::Text {
-            text: format!("This is content item number {} with some additional text to make it realistic. It contains information about data processing, analysis results, and performance metrics that would typically be found in a real MCP response.", i),
-        })
+        .map(|i| Content::text(format!("This is content item number {} with some additional text to make it realistic. It contains information about data processing, analysis results, and performance metrics that would typically be found in a real MCP response.", i)))
         .collect();
 
-    let large_response = CallToolResult {
-        content: large_content,
-        is_error: false,
-        ..Default::default()
-    };
+    let large_response = CallToolResult::new(large_content);
 
     group.bench_function("large_tool_response_serialize", |b| {
         b.iter(|| serde_json::to_string(&black_box(&large_response)).unwrap())
@@ -283,24 +258,26 @@ fn bench_large_messages(c: &mut Criterion) {
 
     // Create a large list of tools
     let many_tools: Vec<ToolInfo> = (0..100)
-        .map(|i| ToolInfo::new(
-            format!("tool_{}", i),
-            Some(format!("Description for tool number {} with comprehensive details about its functionality and usage patterns.", i)),
-            json!({
-                "type": "object",
-                "properties": {
-                    "input": {"type": "string", "description": format!("Input parameter for tool {}", i)},
-                    "options": {
-                        "type": "object",
-                        "properties": {
-                            "format": {"type": "string"},
-                            "limit": {"type": "number"},
-                            "detailed": {"type": "boolean"}
+        .map(|i| {
+            ToolInfo::new(
+                format!("tool_{}", i),
+                Some(format!("Description for tool number {} with comprehensive details about its functionality and usage patterns.", i)),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "input": {"type": "string", "description": format!("Input parameter for tool {}", i)},
+                        "options": {
+                            "type": "object",
+                            "properties": {
+                                "format": {"type": "string"},
+                                "limit": {"type": "number"},
+                                "detailed": {"type": "boolean"}
+                            }
                         }
                     }
-                }
-            }),
-        ))
+                }),
+            )
+        })
         .collect();
 
     let large_tools_response =

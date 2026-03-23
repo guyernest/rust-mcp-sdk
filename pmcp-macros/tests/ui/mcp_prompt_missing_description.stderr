@@ -1,0 +1,5 @@
+error: mcp_prompt requires at least `description = "..."` attribute
+ --> tests/ui/mcp_prompt_missing_description.rs:4:10
+  |
+4 | async fn bad_prompt() -> pmcp::Result<pmcp::types::GetPromptResult> {
+  |          ^^^^^^^^^^

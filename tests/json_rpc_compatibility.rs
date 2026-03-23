@@ -13,14 +13,10 @@ use pmcp::types::{
 #[test]
 fn test_serialize_to_json_rpc_2_0_format() {
     // Create an initialize request using internal types
-    let init_params = InitializeRequest {
-        protocol_version: "2025-06-18".to_string(),
-        capabilities: ClientCapabilities::default(),
-        client_info: Implementation {
-            name: "test-client".to_string(),
-            version: "1.0.0".to_string(),
-        },
-    };
+    let init_params = InitializeRequest::new(
+        Implementation::new("test-client", "1.0.0"),
+        ClientCapabilities::default(),
+    );
 
     let request = Request::Client(Box::new(ClientRequest::Initialize(init_params)));
     let transport_msg = TransportMessage::Request {
@@ -37,10 +33,10 @@ fn test_serialize_to_json_rpc_2_0_format() {
     assert!(json_str.contains(r#""id":1"#));
     assert!(json_str.contains(r#""method":"initialize""#));
     assert!(json_str.contains(r#""params":{"#));
-    assert!(json_str.contains(r#""protocolVersion":"2025-06-18""#));
+    assert!(json_str.contains(r#""protocolVersion":"2025-11-25""#));
 
     // Full format check
-    let expected = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}"#;
+    let expected = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}"#;
     assert_eq!(json_str, expected);
 }
 
@@ -75,14 +71,10 @@ fn test_deserialize_typescript_sdk_format() {
 #[test]
 fn test_roundtrip_compatibility() {
     // Create message, serialize, then deserialize
-    let init_params = InitializeRequest {
-        protocol_version: "2025-06-18".to_string(),
-        capabilities: ClientCapabilities::default(),
-        client_info: Implementation {
-            name: "test-client".to_string(),
-            version: "1.0.0".to_string(),
-        },
-    };
+    let init_params = InitializeRequest::new(
+        Implementation::new("test-client", "1.0.0"),
+        ClientCapabilities::default(),
+    );
 
     let request = Request::Client(Box::new(ClientRequest::Initialize(init_params.clone())));
     let original = TransportMessage::Request {
@@ -221,14 +213,10 @@ fn test_issue_38_json_rpc_compatibility() {
     // But this test proves it actually uses standard JSON-RPC 2.0:
     // {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {...}}
 
-    let init_params = InitializeRequest {
-        protocol_version: "2025-06-18".to_string(),
-        capabilities: ClientCapabilities::default(),
-        client_info: Implementation {
-            name: "claude-code".to_string(),
-            version: "1.0.0".to_string(),
-        },
-    };
+    let init_params = InitializeRequest::new(
+        Implementation::new("claude-code", "1.0.0"),
+        ClientCapabilities::default(),
+    );
 
     let request = Request::Client(Box::new(ClientRequest::Initialize(init_params)));
     let transport_msg = TransportMessage::Request {
@@ -241,7 +229,7 @@ fn test_issue_38_json_rpc_compatibility() {
     let json_str = String::from_utf8(serialized.clone()).unwrap();
 
     // This is the standard JSON-RPC 2.0 format expected by Claude Code
-    let expected = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"claude-code","version":"1.0.0"}}}"#;
+    let expected = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"claude-code","version":"1.0.0"}}}"#;
     assert_eq!(json_str, expected, "Output format is not JSON-RPC 2.0");
 
     // Verify we can also parse TypeScript SDK messages

@@ -363,13 +363,10 @@ mod tests {
             message: TransportMessage::Request {
                 id: RequestId::String("req-1".to_string()),
                 request: crate::types::Request::Client(Box::new(
-                    crate::types::ClientRequest::Initialize(crate::types::InitializeParams {
+                    crate::types::ClientRequest::Initialize(crate::types::InitializeRequest {
                         protocol_version: crate::DEFAULT_PROTOCOL_VERSION.to_string(),
                         capabilities: crate::types::ClientCapabilities::default(),
-                        client_info: crate::types::Implementation {
-                            name: "test".to_string(),
-                            version: "1.0.0".to_string(),
-                        },
+                        client_info: crate::types::Implementation::new("test", "1.0.0"),
                     }),
                 )),
             },
@@ -402,13 +399,10 @@ mod tests {
         let msg = TransportMessage::Request {
             id: RequestId::String("req-1".to_string()),
             request: crate::types::Request::Client(Box::new(
-                crate::types::ClientRequest::Initialize(crate::types::InitializeParams {
+                crate::types::ClientRequest::Initialize(crate::types::InitializeRequest {
                     protocol_version: "2024-11-05".to_string(),
                     capabilities: crate::types::ClientCapabilities::default(),
-                    client_info: crate::types::Implementation {
-                        name: "test".to_string(),
-                        version: "1.0.0".to_string(),
-                    },
+                    client_info: crate::types::Implementation::new("test", "1.0.0"),
                 }),
             )),
         };

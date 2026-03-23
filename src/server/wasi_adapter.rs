@@ -348,10 +348,7 @@ mod tests {
             request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest {
                 protocol_version: "2024-11-05".to_string(),
                 capabilities: crate::types::ClientCapabilities::default(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
+                client_info: Implementation::new("test-client", "1.0.0"),
             }))),
         };
 
@@ -381,10 +378,9 @@ mod tests {
 
         // Create a notification
         let notification = TransportMessage::Notification(crate::types::Notification::Server(
-            crate::types::ServerNotification::Cancelled(crate::types::CancelledNotification {
-                request_id: RequestId::from(1i64),
-                reason: "test".to_string(),
-            }),
+            crate::types::ServerNotification::Cancelled(
+                crate::types::CancelledNotification::new(RequestId::from(1i64)).with_reason("test"),
+            ),
         ));
 
         let request_body = serde_json::to_string(&notification).unwrap();

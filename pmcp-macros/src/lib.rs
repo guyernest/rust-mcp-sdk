@@ -55,6 +55,10 @@
 use proc_macro::TokenStream;
 use syn::{parse_macro_input, ItemFn, ItemImpl};
 
+mod mcp_common;
+mod mcp_prompt;
+mod mcp_server;
+mod mcp_tool;
 mod tool;
 mod tool_router;
 #[allow(dead_code)]
@@ -89,11 +93,145 @@ mod utils;
 ///     Ok(a + b)
 /// }
 /// ```
+#[deprecated(
+    since = "0.3.0",
+    note = "Use #[mcp_tool] instead — better DX with State<T> injection, async auto-detection, and mandatory descriptions"
+)]
 #[proc_macro_attribute]
 pub fn tool(args: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemFn);
 
-    tool::expand_tool(args.into(), input)
+    tool::expand_tool(args.into(), &input)
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
+}
+
+/// Defines an MCP tool with automatic schema generation and state injection.
+///
+/// Generates a struct implementing `ToolHandler` from an annotated standalone
+/// async or sync function. Eliminates `Box::pin` boilerplate and provides
+/// automatic input/output schema generation, `State<T>` injection, and
+/// MCP annotation support.
+///
+/// # Attributes
+///
+/// - `description` - Tool description (required, enforced at compile time)
+/// - `name` - Override tool name (defaults to function name)
+/// - `annotations(...)` - MCP standard annotations (`read_only`, `destructive`,
+///   `idempotent`, `open_world`)
+/// - `ui = "..."` - Widget resource URI for MCP Apps
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// #[mcp_tool(description = "Add two numbers")]
+/// async fn add(args: AddArgs) -> Result<AddResult> {
+///     Ok(AddResult { sum: args.a + args.b })
+/// }
+///
+/// // Register: server_builder.tool("add", add())
+/// ```
+///
+/// With state injection:
+///
+/// ```rust,ignore
+/// #[mcp_tool(description = "Query database")]
+/// async fn query(args: QueryArgs, db: State<Database>) -> Result<Value> {
+///     let rows = db.execute(&args.sql).await?;
+///     Ok(json!({ "rows": rows }))
+/// }
+///
+/// // Register: server_builder.tool("query", query().with_state(shared_db))
+/// ```
+///
+/// With annotations:
+///
+/// ```rust,ignore
+/// #[mcp_tool(
+///     description = "Delete a record",
+///     annotations(destructive = true, idempotent = false),
+/// )]
+/// async fn delete(args: DeleteArgs) -> Result<Value> {
+///     // ...
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn mcp_tool(args: TokenStream, input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ItemFn);
+    mcp_tool::expand_mcp_tool(args.into(), &input)
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
+}
+
+/// Collects `#[mcp_tool]` methods from an impl block and generates tool handlers.
+///
+/// Processes an impl block to find all methods annotated with `#[mcp_tool(...)]`,
+/// generates per-tool `ToolHandler` structs using `Arc<ServerType>` for shared
+/// `&self` access, and implements `McpServer` for bulk registration.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// #[mcp_server]
+/// impl MyServer {
+///     #[mcp_tool(description = "Query database")]
+///     async fn query(&self, args: QueryArgs) -> Result<QueryResult> {
+///         self.db.execute(&args.sql).await
+///     }
+/// }
+///
+/// // Register all tools at once:
+/// let builder = ServerBuilder::new()
+///     .mcp_server(my_server);
+/// ```
+#[proc_macro_attribute]
+pub fn mcp_server(args: TokenStream, input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ItemImpl);
+    mcp_server::expand_mcp_server(args.into(), input)
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
+}
+
+/// Defines a prompt handler with automatic argument schema generation.
+///
+/// Generates a struct implementing `PromptHandler` from an annotated standalone
+/// async or sync function. Eliminates boilerplate and provides automatic
+/// argument schema generation from `JsonSchema` and `State<T>` injection.
+///
+/// # Attributes
+///
+/// - `description` - Prompt description (required, enforced at compile time)
+/// - `name` - Override prompt name (defaults to function name)
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// #[mcp_prompt(description = "Review code for quality issues")]
+/// async fn code_review(args: ReviewArgs) -> Result<GetPromptResult> {
+///     Ok(GetPromptResult::new(
+///         vec![PromptMessage::user(Content::text(format!("Review {}", args.language)))],
+///         None,
+///     ))
+/// }
+///
+/// // Register: server_builder.prompt("code_review", code_review())
+/// ```
+///
+/// With state injection:
+///
+/// ```rust,ignore
+/// #[mcp_prompt(description = "Suggest improvements")]
+/// async fn suggest(args: SuggestArgs, db: State<Database>) -> Result<GetPromptResult> {
+///     let context = db.get_context(&args.topic).await?;
+///     Ok(GetPromptResult::new(vec![PromptMessage::user(Content::text(context))], None))
+/// }
+///
+/// // Register: server_builder.prompt("suggest", suggest().with_state(shared_db))
+/// ```
+#[proc_macro_attribute]
+pub fn mcp_prompt(args: TokenStream, input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ItemFn);
+    mcp_prompt::expand_mcp_prompt(args.into(), &input)
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }

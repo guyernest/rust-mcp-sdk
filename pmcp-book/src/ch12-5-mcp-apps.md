@@ -32,7 +32,7 @@ This chapter covers the server-side Rust APIs, the widget-side JavaScript patter
 
 ```toml
 [dependencies]
-pmcp = { version = "1.17", features = ["mcp-apps"] }
+pmcp = { version = "2.0", features = ["mcp-apps"] }
 ```
 
 ---

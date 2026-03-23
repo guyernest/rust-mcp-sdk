@@ -201,7 +201,7 @@ cargo pmcp deploy outputs
 # Test the endpoint
 curl -X POST https://abc123.execute-api.us-east-1.amazonaws.com/prod/mcp \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}},"id":1}'
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}},"id":1}'
 ```
 
 ## CDK Stack Details

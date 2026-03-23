@@ -25,7 +25,7 @@ Add dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
-pmcp = { version = "1.4.1", features = ["full"] }
+pmcp = { version = "2.0", features = ["full"] }
 tokio = { version = "1.0", features = ["full"] }
 serde_json = "1.0"
 async-trait = "0.1"

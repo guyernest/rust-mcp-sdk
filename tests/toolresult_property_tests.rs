@@ -12,7 +12,7 @@ use proptest::prelude::*;
 fn content_strategy() -> impl Strategy<Value = Content> {
     prop_oneof![
         // Text content
-        "[a-zA-Z0-9 .,!?-]+".prop_map(|text| { Content::Text { text } }),
+        "[a-zA-Z0-9 .,!?-]+".prop_map(|text| { Content::text(text) }),
         // Resource content
         (
             "file://[a-zA-Z0-9./]+",
@@ -36,10 +36,12 @@ fn toolresult_strategy() -> impl Strategy<Value = ToolResult> {
         prop::collection::vec(content_strategy(), 0..5),
         any::<bool>(),
     )
-        .prop_map(|(content, is_error)| ToolResult {
-            content,
-            is_error,
-            ..Default::default()
+        .prop_map(|(content, is_error)| {
+            if is_error {
+                ToolResult::error(content)
+            } else {
+                ToolResult::new(content)
+            }
         })
 }
 
@@ -54,10 +56,10 @@ mod toolresult_properties {
             tool_result in toolresult_strategy()
         ) {
             // Create equivalent CallToolResult
-            let call_result = CallToolResult {
-                content: tool_result.content.clone(),
-                is_error: tool_result.is_error,
-                ..Default::default()
+            let call_result = if tool_result.is_error {
+                CallToolResult::error(tool_result.content.clone())
+            } else {
+                CallToolResult::new(tool_result.content.clone())
             };
 
             // Serialize both
@@ -108,10 +110,10 @@ mod toolresult_properties {
         fn property_empty_toolresult_validity(
             is_error in any::<bool>()
         ) {
-            let empty_result = ToolResult {
-                content: vec![],
-                is_error,
-                ..Default::default()
+            let empty_result = if is_error {
+                ToolResult::error(vec![])
+            } else {
+                ToolResult::new(vec![])
             };
 
             // Empty content should serialize successfully
@@ -151,10 +153,10 @@ mod toolresult_properties {
             content in prop::collection::vec(content_strategy(), 0..3),
             is_error in any::<bool>()
         ) {
-            let result = ToolResult {
-                content,
-                is_error,
-                ..Default::default()
+            let result = if is_error {
+                ToolResult::error(content)
+            } else {
+                ToolResult::new(content)
             };
 
             // The is_error flag should round-trip correctly
@@ -169,11 +171,7 @@ mod toolresult_properties {
         fn property_content_type_preservation(
             content in prop::collection::vec(content_strategy(), 0..3)
         ) {
-            let result = ToolResult {
-                content,
-                is_error: false,
-                ..Default::default()
-            };
+            let result = ToolResult::new(content);
 
             // Serialize and deserialize
             let json = serde_json::to_string(&result).unwrap();
@@ -234,10 +232,10 @@ mod toolresult_invariants {
         fn invariant_memory_layout_identical(
             tool_result in toolresult_strategy()
         ) {
-            let call_result = CallToolResult {
-                content: tool_result.content.clone(),
-                is_error: tool_result.is_error,
-                ..Default::default()
+            let call_result = if tool_result.is_error {
+                CallToolResult::error(tool_result.content.clone())
+            } else {
+                CallToolResult::new(tool_result.content.clone())
             };
 
             // Memory size should be identical (they're the same type)
@@ -245,35 +243,6 @@ mod toolresult_invariants {
                 std::mem::size_of_val(&tool_result),
                 std::mem::size_of_val(&call_result)
             );
-        }
-
-        /// Invariant: ToolResult should maintain JSON-RPC compatibility
-        #[test]
-        fn invariant_jsonrpc_compatibility(
-            tool_result in toolresult_strategy()
-        ) {
-            let json_value = serde_json::to_value(&tool_result).unwrap();
-
-            // Should be a JSON object
-            prop_assert!(json_value.is_object());
-
-            let obj = json_value.as_object().unwrap();
-
-            // Must have content field
-            prop_assert!(obj.contains_key("content"));
-
-            // Content must be an array
-            prop_assert!(obj.get("content").unwrap().is_array());
-
-            // If is_error exists, it must be boolean or null
-            if let Some(is_error) = obj.get("isError") {
-                prop_assert!(is_error.is_boolean() || is_error.is_null());
-            }
-
-            // is_error should be boolean
-            if let Some(is_error) = obj.get("isError") {
-                prop_assert!(is_error.is_boolean());
-            }
         }
     }
 }

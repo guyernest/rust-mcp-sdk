@@ -9,6 +9,8 @@
 - ✅ **v1.4 Book & Course Update** — Phases 20-24 (shipped 2026-02-28)
 - ✅ **v1.5 Cloud Load Testing Upload** — Phases 25-26 (shipped 2026-03-01)
 - **v1.6 CLI DX Overhaul** — Phases 27-32 (in progress)
+- ✅ **v1.7 SDK Maturation** — Phases 52-53 (shipped 2026-03-20)
+- **v2.0 Protocol Modernization** — Phases 54-59 (in progress)
 
 ## Phases
 
@@ -86,7 +88,8 @@ See phase details in `.planning/phases/25-*` and `.planning/phases/26-*`
 
 </details>
 
-### v1.6 CLI DX Overhaul (In Progress)
+<details>
+<summary>v1.6 CLI DX Overhaul (In Progress — paused for v2.0)</summary>
 
 **Milestone Goal:** Normalize the cargo pmcp CLI for consistency and developer experience ahead of course recording -- fix flag inconsistencies, propagate auth to all server-facing commands, surface mcp-tester via `cargo pmcp test`, and add doctor/completions commands.
 
@@ -97,7 +100,38 @@ See phase details in `.planning/phases/25-*` and `.planning/phases/26-*`
 - [ ] **Phase 31: New Commands** - Add cargo pmcp doctor and cargo pmcp completions commands
 - [ ] **Phase 32: Help Text Polish** - Consistent help text format with descriptions and usage examples across all commands
 
+See phase details in `.planning/phases/27-*` through `.planning/phases/32-*`
+
+</details>
+
+<details>
+<summary>v1.7 SDK Maturation — SHIPPED 2026-03-20</summary>
+
+**Milestone Goal:** Reduce dependency footprint and produce gap analysis against TypeScript SDK v2.
+
+- [x] **Phase 52: Reduce transitive dependencies** - Feature-gate reqwest and tracing-subscriber, slim tokio/hyper/chrono (completed 2026-03-18)
+- [x] **Phase 53: Review TypeScript SDK Updates** - Gap analysis comparing TypeScript v2 against Rust SDK (completed 2026-03-20)
+
+See phase details in `.planning/phases/52-*` and `.planning/phases/53-*`
+
+</details>
+
+### v2.0 Protocol Modernization (In Progress)
+
+**Milestone Goal:** Upgrade to MCP protocol 2025-11-25 with massive type cleanup, add Tasks with polling, Tower middleware with DNS rebinding protection, and conformance testing. Focus on streamable HTTP and stateless calls. SSE, elicitations, and notifications are de-prioritized — Tasks with status polling is the primary async pattern. This is a semver major bump enabling breaking changes for a cleaner API surface.
+
+- [x] **Phase 54: Protocol Version 2025-11-25 + Type Cleanup** - Add all 2025-11-25 types (TaskSchema, IconSchema, AudioContent, ResourceLink), expanded capabilities, version negotiation for latest 3 versions. Breaking change: clean up legacy type aliases and deprecated fields. (completed 2026-03-20)
+- [x] **Phase 54.1: Protocol Type Construction DX** - Default impls, builders, and constructors for all protocol types. Fix inconsistent construction patterns that break downstream on every upgrade. (INSERTED) (completed 2026-03-20)
+- [x] **Phase 55: Tasks with Polling** - Task capability negotiation, TaskStore trait, in-memory + DynamoDB backends, task status polling via streamable HTTP. No SSE-based notifications — polling is the pattern. (completed 2026-03-21)
+- [x] **Phase 56: Tower Middleware + DNS Rebinding Protection** - Tower Layer for MCP protocol concerns (host validation, DNS rebinding protection, session management, JSON-RPC routing). Axum convenience adapter. Enterprise security focus.
+- [x] **Phase 57: Conformance Test Suite** - mcp-tester conformance command with core protocol, tools, resources, prompts, and tasks scenarios. Validates any MCP server against the spec. (completed 2026-03-21)
+- [ ] **Phase 58: #[mcp_tool] Proc Macro** - Eliminate Box::pin(async move {}) boilerplate on every tool definition. Expand pmcp-macros crate with #[mcp_tool] attribute that accepts async fn directly, handles Arc state injection, and auto-derives input/output schema. Also addresses the foundation Arc cloning ceremony.
+- [ ] **Phase 59: TypedPrompt with Auto-Deserialization** - Typed prompt equivalent of TypedToolWithOutput. Prompt arguments deserialize from HashMap<String, String> into a typed struct automatically via JsonSchema + serde, matching the tool DX pattern.
+
 ## Phase Details
+
+<details>
+<summary>Phases 27-53 (v1.6 + v1.7 — prior milestones)</summary>
 
 ### Phase 27: Global Flag Infrastructure
 **Goal**: Every cargo pmcp invocation supports --no-color and --quiet for scripting and CI use
@@ -215,7 +249,7 @@ Plans:
 | 31. New Commands | v1.6 | 0/? | Not started | - |
 | 32. Help Text Polish | v1.6 | 0/? | Not started | - |
 
-### Phase 33: Fix mcp-tester failure with v1.12.0
+### Phase 33: Fix mcp-tester compatibility failure
 
 **Goal:** Bump mcp-tester to 0.2.2 and cargo-pmcp to 0.3.4, publish both to crates.io so `cargo install cargo-pmcp` works without `--locked`
 **Requirements**: None (hotfix)
@@ -241,7 +275,7 @@ Plans:
 **Goal:** Align SDK types, bridge protocol, and scaffold template with ChatGPT's official MCP Apps protocol -- add _meta to Content::Resource, fix MIME type, update bridge method names, fix scaffold
 **Requirements**: P41-01, P41-02, P41-03, P41-04, P41-05
 **Depends on:** Phase 34
-**Plans:** 3 plans
+**Plans:** 4 plans
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 35 to break down)
@@ -457,3 +491,133 @@ Plans:
 - [ ] 51-03-PLAN.md — Build tools: scaffold (code templates) and schema_export (schema discovery)
 - [ ] 51-04-PLAN.md — Embedded content, documentation resources handler, workflow prompt handlers
 - [ ] 51-05-PLAN.md — Wire all tools/resources/prompts into server builder, CI workflow updates
+
+### Phase 52: Reduce transitive dependencies
+
+**Goal:** Reduce pmcp crate's transitive dependency count from ~249 to ~150-185 by removing unused deps, slimming feature flags, making reqwest optional behind `http-client` feature, and making tracing-subscriber optional behind `logging` feature
+**Requirements**: DEP-REDUCE-01, DEP-REDUCE-02, DEP-REDUCE-03, DEP-REDUCE-04, DEP-REDUCE-05, DEP-REDUCE-06, DEP-REDUCE-07
+**Depends on:** Phase 51
+**Plans:** 2 plans — Complete (2026-03-18)
+
+Plans:
+- [x] 52-01-PLAN.md — Cargo.toml: remove unused deps, slim features, make reqwest/tracing-subscriber optional
+- [x] 52-02-PLAN.md — Source code: cfg gates for optional deps, full feature matrix verification
+
+### Phase 53: Review TypeScript SDK Updates
+
+**Goal:** Compare TypeScript MCP SDK v2 against Rust SDK v1.20.0 to identify gaps worth adopting. Produce gap analysis with prioritized recommendations covering protocol negotiation, conformance testing, MCP Apps, Tasks, and framework adapters.
+**Requirements**: GAP-ANALYSIS
+**Depends on:** Phase 52
+**Plans:** 2/2 plans complete
+
+Plans:
+- [x] 53-01-PLAN.md — Deep verification of TypeScript vs Rust SDK source differences across 6 domains
+- [x] 53-02-PLAN.md — Gap analysis report with prioritized recommendations and proposed implementation phases
+
+</details>
+
+### Phase 54: Protocol Version 2025-11-25 + Type Cleanup
+
+**Goal:** Upgrade Rust SDK to MCP protocol 2025-11-25 with version negotiation (latest 3 versions). Add 20+ new types (TaskSchema, IconSchema, AudioContent, ResourceLink, expanded ServerCapabilities/ClientCapabilities). Clean up legacy type aliases and deprecated fields. Breaking change — part of the v2.0.0 semver bump.
+**Requirements**: PROTO-2025-11-25, VERSION-NEGOTIATION, TYPE-CLEANUP
+**Depends on:** Phase 53
+**Plans:** 4/4 plans complete
+
+Plans:
+- [x] 54-01-PLAN.md — Module split (protocol.rs -> 7 domain sub-modules) + version negotiation update to 2025-11-25
+- [ ] 54-02-PLAN.md — Add 33 new types (task, content, sampling, elicitation, capabilities) + fix IncludeContext, LogLevel bugs
+- [ ] 54-03-PLAN.md — Fix internal src/ imports, remove 11 legacy type aliases
+- [ ] 54-04-PLAN.md — Fix external imports (examples/tests/workspace), write MIGRATION.md
+
+### Phase 54.1: Protocol Type Construction DX (INSERTED)
+
+**Goal:** Add Default impls, builder methods, and constructors for all protocol types so downstream users can construct types without specifying every Optional field. Fix the inconsistency where some types have constructors, some don't, and enum variants have neither. Prevents painful migration breaks when new fields are added.
+**Requirements**: PROTO-TYPE-DX
+**Depends on:** Phase 54
+**Plans:** 3/3 plans complete
+
+Plans:
+- [x] 54.1-01-PLAN.md — Add constructors/Default/#[non_exhaustive]/.with_*() to resources.rs, prompts.rs, content.rs (Content enum helpers)
+- [x] 54.1-02-PLAN.md — Add constructors/Default/#[non_exhaustive]/.with_*() to protocol/mod.rs, tasks.rs, sampling.rs, notifications.rs, capabilities.rs, tools.rs
+- [x] 54.1-03-PLAN.md — Migrate all external consumers (src/, tests/, examples/, workspace crates) to constructors, update MIGRATION.md
+
+### Phase 55: Tasks with Polling
+
+**Goal:** Reconcile SDK task types as canonical source, add TaskStore trait with InMemoryTaskStore to SDK, wire into server builder and request dispatch with ServerCapabilities.tasks capability negotiation. Polling-only async pattern -- no SSE notifications.
+**Requirements**: TASKS-POLLING, TASK-STORE, TASK-CAPABILITIES
+**Depends on:** Phase 54.1
+**Success Criteria** (what must be TRUE):
+  1. SDK TaskStatus has is_terminal() and can_transition_to() utility methods matching pmcp-tasks
+  2. Task.ttl serializes as null (not omitted) when None, per MCP spec
+  3. SDK defines TaskStore trait with create/get/list/cancel/update_status/cleanup_expired
+  4. InMemoryTaskStore provides dev/test implementation with owner isolation, state machine, TTL
+  5. Builder.task_store() registers Arc<dyn TaskStore> and auto-configures ServerCapabilities.tasks
+  6. Server dispatches tasks/get, tasks/list, tasks/cancel through TaskStore
+**Plans:** 3/3 plans executed
+
+Plans:
+- [x] 55-01-PLAN.md — SDK task type reconciliation: add utility methods, fix TTL serialization
+- [x] 55-02-PLAN.md — TaskStore trait + InMemoryTaskStore in SDK core
+- [x] 55-03-PLAN.md — Server builder integration, core dispatch, capability negotiation, re-exports
+
+### Phase 56: Tower Middleware + DNS Rebinding Protection
+
+**Goal:** Build a Tower Layer stack for MCP server hosting: DNS rebinding protection (Host + Origin header validation against allowed origins), security response headers, and origin-locked CORS. Axum convenience adapter (`pmcp::axum::router()`) for the 90% case. Enterprise security focus -- fix CVE-pattern wildcard CORS and achieve MCP spec 2025-03-26 Origin validation compliance.
+**Requirements**: TOWER-MIDDLEWARE, DNS-REBINDING, AXUM-ADAPTER
+**Depends on:** Phase 54
+**Success Criteria** (what must be TRUE):
+  1. DnsRebindingLayer validates Host header (always) and Origin header (when present), returns 403 on mismatch
+  2. SecurityHeadersLayer adds X-Content-Type-Options: nosniff, X-Frame-Options: DENY, Cache-Control: no-store
+  3. `pmcp::axum::router(server)` returns axum::Router with DNS rebinding + security headers + origin-locked CORS
+  4. StreamableHttpServer no longer uses wildcard `Access-Control-Allow-Origin: *`
+  5. Example 55 (ServerHttpMiddleware) still compiles unchanged
+**Plans:** 3/3 plans complete
+
+Plans:
+- [x] 56-01-PLAN.md -- Tower deps, AllowedOrigins config, DnsRebindingLayer, SecurityHeadersLayer with unit tests (completed 2026-03-21)
+- [x] 56-02-PLAN.md -- Axum router convenience function, StreamableHttpServer CORS fix, lib.rs re-exports (completed 2026-03-21)
+- [ ] 56-03-PLAN.md -- Gap closure: apply Tower layers in StreamableHttpServer::start(), delete add_cors_headers, pre-resolve AllowedOrigins in ServerState
+
+### Phase 57: Conformance Test Suite
+
+**Goal:** Add `mcp-tester conformance <url>` command that validates any MCP server against the protocol spec. Core scenarios: initialize handshake, tools CRUD, resources CRUD, prompts CRUD, task lifecycle. Modeled after TypeScript SDK's @modelcontextprotocol/conformance infrastructure.
+**Requirements**: CONFORMANCE-CLI, CONFORMANCE-SCENARIOS
+**Depends on:** Phase 55
+**Plans:** 2/2 plans complete
+
+Plans:
+- [x] 57-01-PLAN.md — Conformance module with ConformanceRunner orchestrator and 5 domain scenario groups (Core, Tools, Resources, Prompts, Tasks) (completed 2026-03-21)
+- [x] 57-02-PLAN.md — CLI integration: replace Compliance with Conformance in mcp-tester, add cargo pmcp test conformance (completed 2026-03-21)
+
+### Phase 58: #[mcp_tool] Proc Macro
+
+**Goal:** Expand pmcp-macros crate with `#[mcp_tool]` attribute macro that eliminates `Box::pin(async move {})` boilerplate on tool definitions. Accepts `async fn(input: T, extra: RequestHandlerExtra) -> Result<Output>` directly. Handles Arc state injection for composition scenarios (eliminates the foundation cloning ceremony). Auto-derives input/output JSON schema from types.
+**Requirements**: TOOL-MACRO, STATE-INJECTION
+**Depends on:** Phase 54
+**Plans:** 3/3 plans complete
+
+Plans:
+- [x] 58-01-PLAN.md — State<T> type, parameter classification, standalone #[mcp_tool] macro
+- [x] 58-02-PLAN.md — #[mcp_server] impl-block macro with McpServer trait and builder extension
+- [x] 58-03-PLAN.md — Integration tests, compile-fail tests, and example 63
+
+### Phase 59: TypedPrompt with Auto-Deserialization
+
+**Goal:** Add `TypedPrompt` analogous to `TypedToolWithOutput` for prompts. Prompt arguments deserialize from `HashMap<String, String>` into a typed struct via JsonSchema + serde, eliminating the manual `args.get("x").ok_or()?.parse()?` pattern on every prompt. Builder-friendly registration via `.prompt("name", TypedPrompt::new(handler))`.
+**Requirements**: TYPED-PROMPT, PROMPT-SCHEMA
+**Depends on:** Phase 54
+**Plans:** 2/2 plans complete
+
+Plans:
+- [x] 59-01-PLAN.md — TypedPrompt runtime type and standalone #[mcp_prompt] attribute macro
+- [x] 59-02-PLAN.md — #[mcp_server] prompt extension, integration tests, compile-fail tests, and example 64
+
+### Phase 60: Clean up mcp-preview side tabs
+
+**Goal:** Clean up the mcp-preview DevTools side panel: remove the Console tab, make the panel resizable and collapsible with a draggable left boundary and header toggle button, and add a global Clear All button.
+**Requirements**: D-01, D-02, D-03, D-04, D-05, D-06, D-07, D-08, D-09, D-10, D-11, D-12, D-13
+**Depends on:** Phase 59
+**Plans:** 1/1 plans complete
+
+Plans:
+- [x] 60-01-PLAN.md — Remove Console tab, add resizable/collapsible panel with toggle button and global Clear All

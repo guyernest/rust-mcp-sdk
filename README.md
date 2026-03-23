@@ -13,8 +13,8 @@
 [![Crates.io](https://img.shields.io/crates/v/pmcp.svg)](https://crates.io/crates/pmcp)
 [![Documentation](https://docs.rs/pmcp/badge.svg)](https://docs.rs/pmcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Rust 1.82+](https://img.shields.io/badge/rust-1.82+-orange.svg)](https://www.rust-lang.org)
-[![MCP Compatible](https://img.shields.io/badge/MCP-v2024--10--07-blue.svg)](https://modelcontextprotocol.io)
+[![Rust 1.83+](https://img.shields.io/badge/rust-1.83+-orange.svg)](https://www.rust-lang.org)
+[![MCP Compatible](https://img.shields.io/badge/MCP-v2025--03--26-blue.svg)](https://modelcontextprotocol.io)
 
 > **Production-grade Rust implementation of the [Model Context Protocol](https://modelcontextprotocol.io) (MCP) - 16x faster than TypeScript, built with Toyota Way quality principles**
 
@@ -137,7 +137,7 @@ Use the pmcp crate directly for maximum control:
 **Installation:**
 ```toml
 [dependencies]
-pmcp = "1.8"
+pmcp = "2.0"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 schemars = "0.8"  # For type-safe tools
@@ -211,12 +211,15 @@ High-performance Rust implementation of the MCP protocol.
 **Key Features:**
 - **Type-Safe Tools**: Automatic JSON schema generation from Rust types
 - **Multiple Transports**: stdio, HTTP/SSE, WebSocket, WASM
-- **OAuth Support**: Full auth context pass-through (v1.8.0+)
+- **OAuth Support**: Full auth context pass-through
 - **Workflows**: Multi-step orchestration with array indexing support
+- **MCP Apps**: Rich HTML UI widgets with live preview and browser DevTools
+- **MCP Tasks**: Shared client/server state with task lifecycle management
+- **Tower Middleware**: DNS rebinding protection, CORS, security headers
 - **Performance**: 16x faster than TypeScript, SIMD-accelerated parsing
 - **Quality**: Zero `unwrap()`, comprehensive error handling
 
-**Latest Version:** `pmcp = "1.8.3"`
+**Latest Version:** `pmcp = "2.0"`
 
 **Documentation:**
 - [API Reference](https://docs.rs/pmcp)
@@ -384,19 +387,18 @@ cargo pmcp app build --url https://my-server.example.com
 
 ---
 
-## Latest Release: v1.11.0
+## Latest Release: v2.0.0
 
-**v1.3 MCP Apps Developer Experience (2026-02-26):**
-- **🎨 MCP Apps Preview**: Live widget preview with dual proxy/WASM bridge modes
-- **📦 Widget Authoring**: File-based widgets, `cargo pmcp app new` scaffolding, hot-reload
-- **🚀 Publishing Pipeline**: ChatGPT manifest generation and standalone demo landing pages
-- **🧪 E2E Testing**: 20 chromiumoxide CDP browser tests across 3 widget suites
-- **🔗 Shared Bridge Library**: TypeScript App/PostMessageTransport/AppBridge classes
+**PMCP v2.0 — aligned with the MCP TypeScript SDK v2.0 release (2026-03-22):**
 
-**Previous highlights:**
-- **🔐 OAuth Auth Context**: Full token pass-through from transport → middleware → tools
-- **🔧 Type-Safe Tools**: Production-ready typed tools with schema generation
-- **⚡ Performance**: SIMD-accelerated parsing (10.3x speedup)
+- **Protocol v2025-03-26**: Full alignment with the latest MCP specification, backward compatible with `2024-11-05`
+- **MCP Apps**: Rich interactive HTML UI widgets served from MCP servers — works with ChatGPT, Claude Desktop, and other MCP clients. Live preview with browser-style DevTools (resizable panel, network/events/protocol/bridge tabs)
+- **MCP Tasks**: Experimental shared client/server state with DynamoDB-backed task lifecycle management and task variables
+- **Conformance Test Suite**: 19-scenario conformance engine across 5 domains with `cargo pmcp test conformance` and `mcp-tester conformance` CLI integration
+- **Tower Middleware**: DNS rebinding protection, CORS with origin-locked headers, configurable security headers — production-ready HTTP stack
+- **PMCP Server**: MCP server exposing SDK developer tools (test, scaffold, schema export) via Streamable HTTP, deployed on AWS Lambda
+- **Uniform Constructor DX**: Default impls, builders, and constructors for all protocol types — dramatically improved ergonomics
+- **60+ Examples**: Comprehensive coverage of all SDK features
 
 **Full changelog**: [CHANGELOG.md](CHANGELOG.md)
 
@@ -608,7 +610,7 @@ make cloudflare-sdk-deploy
 ## Development
 
 ### Prerequisites
-- Rust 1.82.0 or later
+- Rust 1.83.0 or later
 - Git
 
 ### Setup
@@ -647,15 +649,17 @@ We welcome contributions! Please:
 
 ## Compatibility
 
-| Feature | TypeScript SDK | PMCP (Rust) |
-|---------|---------------|-------------|
-| Protocol Version | 2024-10-07+ | 2024-10-07+ |
+| Feature | TypeScript SDK v2.0 | PMCP v2.0 (Rust) |
+|---------|---------------------|------------------|
+| Protocol Version | 2025-03-26 | 2025-03-26 (+ 2024-11-05 compat) |
 | Transports | stdio, SSE, WebSocket | stdio, SSE, WebSocket, WASM |
 | Authentication | OAuth 2.0, Bearer | OAuth 2.0, Bearer, OIDC |
-| Tools | ✓ | ✓ (Type-safe) |
+| Tools | ✓ | ✓ (Type-safe + outputSchema) |
 | Prompts | ✓ | ✓ (Workflows) |
 | Resources | ✓ | ✓ (Subscriptions) |
 | Sampling | ✓ | ✓ |
+| MCP Apps | ✓ | ✓ (Preview + DevTools) |
+| Tower Middleware | N/A | ✓ (DNS rebinding, CORS, security headers) |
 | Performance | 1x | 16x faster |
 | Memory | Baseline | 50x lower |
 

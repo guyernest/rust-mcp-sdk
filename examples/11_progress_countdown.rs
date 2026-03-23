@@ -101,15 +101,10 @@ async fn main() -> Result<()> {
     // Simulate client request with progress token
     println!("--- Example 1: Countdown from 5 with progress tracking ---\n");
 
-    let request = CallToolRequest {
-        name: "countdown".to_string(),
-        arguments: json!({ "from": 5 }),
-        _meta: Some(RequestMeta {
-            progress_token: Some(ProgressToken::String("countdown-1".to_string())),
-            _task_id: None,
-        }),
-        task: None,
-    };
+    let mut request = CallToolRequest::new("countdown", json!({ "from": 5 }));
+    request._meta = Some(
+        RequestMeta::new().with_progress_token(ProgressToken::String("countdown-1".to_string())),
+    );
 
     println!("Calling countdown tool with progress token 'countdown-1'...\n");
 
@@ -131,15 +126,10 @@ async fn main() -> Result<()> {
     // Demonstrate cancellation
     println!("--- Example 2: Countdown with cancellation ---\n");
 
-    let request = CallToolRequest {
-        name: "countdown".to_string(),
-        arguments: json!({ "from": 10 }),
-        _meta: Some(RequestMeta {
-            progress_token: Some(ProgressToken::String("countdown-2".to_string())),
-            _task_id: None,
-        }),
-        task: None,
-    };
+    let mut request = CallToolRequest::new("countdown", json!({ "from": 10 }));
+    request._meta = Some(
+        RequestMeta::new().with_progress_token(ProgressToken::String("countdown-2".to_string())),
+    );
 
     println!("Calling countdown from 10 with cancellation after 3 seconds...\n");
 

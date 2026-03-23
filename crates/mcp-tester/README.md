@@ -1,24 +1,26 @@
 # MCP Tester
 
-The Swiss Army knife for testing MCP servers. Validate protocol compliance, test tools, generate scenarios, and diagnose connection issues — all from a single binary.
+The Swiss Army knife for testing MCP servers. Validate protocol conformance, test tools, generate scenarios, and diagnose connection issues — all from a single binary.
 
 ```
 $ mcp-tester test http://localhost:3000
 
   MCP Server Test Report
   ══════════════════════════════════════════════════════
-  Server: my-server v1.0.0 | Protocol: 2025-06-18
+  Server: my-server v1.0.0 | Protocol: 2025-11-25
 
   Core
     ✓ Initialize          Server responded with valid capabilities
-    ✓ Tools Discovery     Found 5 tools
-    ✓ Resources           Found 2 resources
-    ✓ Prompts             Found 1 prompt
+    ✓ Protocol Version    Protocol version: 2025-11-25
+    ✓ Server Info         my-server v1.0.0
+    ✓ Capabilities        tools, resources, prompts
 
-  Protocol Compliance
-    ✓ JSON-RPC 2.0        Valid framing
-    ✓ Error Codes         Standard error codes implemented
-    ✓ Capabilities        All declared capabilities functional
+  Tools
+    ✓ List                Found 5 tools
+    ✓ Schema              All 5 tool schemas valid
+
+  Resources
+    ✓ List                Found 2 resources
 
   Summary: 7 passed, 0 failed, 0 warnings in 1.23s
 ```
@@ -75,6 +77,30 @@ mcp-tester quick https://api.example.com/mcp \
 cargo pmcp test check http://localhost:3000
 ```
 
+## Protocol Conformance
+
+Validate any MCP server against the protocol spec (2025-11-25). Tests 5 domains: Core, Tools, Resources, Prompts, Tasks. Each domain reports independently — a server with no resources still passes.
+
+```bash
+# Full conformance check
+mcp-tester conformance http://localhost:3000
+
+# Strict mode (warnings → failures)
+mcp-tester conformance http://localhost:3000 --strict
+
+# Test specific domains only
+mcp-tester conformance http://localhost:3000 --domain core,tools
+
+# Via cargo-pmcp
+cargo pmcp test conformance http://localhost:3000
+```
+
+Output includes a per-domain CI summary line:
+
+```
+Conformance: Core=PASS Tools=PASS Resources=SKIP Prompts=PASS Tasks=SKIP
+```
+
 ## Generate Test Scenarios
 
 Auto-generate test scenarios from your server's capabilities. The generator discovers all tools, analyzes their JSON schemas, and creates YAML scenario files with smart placeholder values:
@@ -124,7 +150,7 @@ cargo pmcp test run --server my-server --scenarios tests/
 |---------|-------------|
 | `test` | Full test suite — protocol, tools, resources, prompts |
 | `quick` | Fast connectivity and protocol check |
-| `compliance` | Protocol compliance validation |
+| `conformance` | MCP protocol conformance validation (19 scenarios across 5 domains) |
 | `tools` | Discover tools and validate schemas |
 | `resources` | Test resource discovery and reading |
 | `prompts` | Validate prompt templates and arguments |

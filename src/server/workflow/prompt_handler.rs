@@ -30,9 +30,9 @@ use crate::error::Result;
 use crate::server::cancellation::RequestHandlerExtra;
 use crate::server::middleware_executor::MiddlewareExecutor;
 use crate::server::{PromptHandler, ResourceHandler, ToolHandler};
-use crate::types::{
-    Content, GetPromptResult, MessageContent, PromptArgument, PromptInfo, PromptMessage, Role,
-};
+#[cfg(test)]
+use crate::types::Role;
+use crate::types::{Content, GetPromptResult, PromptArgument, PromptInfo, PromptMessage};
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -383,24 +383,17 @@ impl WorkflowPromptHandler {
             match self.fetch_resource_content(&interpolated_uri, extra).await {
                 Ok(content) => {
                     // Embed resource content as user message
-                    messages.push(PromptMessage {
-                        role: Role::User,
-                        content: MessageContent::Text {
-                            text: format!(
-                                "Resource content from {}:\n{}",
-                                interpolated_uri, content
-                            ),
-                        },
-                    });
+                    messages.push(PromptMessage::user(Content::text(format!(
+                        "Resource content from {}:\n{}",
+                        interpolated_uri, content
+                    ))));
                 },
                 Err(e) => {
                     // Resource fetch failed - add error message
-                    messages.push(PromptMessage {
-                        role: Role::User,
-                        content: MessageContent::Text {
-                            text: format!("Error fetching resource {}: {}", interpolated_uri, e),
-                        },
-                    });
+                    messages.push(PromptMessage::user(Content::text(format!(
+                        "Error fetching resource {}: {}",
+                        interpolated_uri, e
+                    ))));
                     return Err(e);
                 },
             }
@@ -426,12 +419,10 @@ impl WorkflowPromptHandler {
             )
         };
 
-        PromptMessage {
-            role: Role::User,
-            content: MessageContent::Text {
-                text: format!("I want to {}.{}", description, args_display),
-            },
-        }
+        PromptMessage::user(Content::text(format!(
+            "I want to {}.{}",
+            description, args_display
+        )))
     }
 
     /// Create assistant plan message listing all workflow steps
@@ -467,10 +458,7 @@ impl WorkflowPromptHandler {
             }
         }
 
-        Ok(PromptMessage {
-            role: Role::Assistant,
-            content: MessageContent::Text { text: plan },
-        })
+        Ok(PromptMessage::assistant(Content::text(plan)))
     }
 
     /// Create assistant message announcing the tool call with resolved parameters
@@ -489,17 +477,11 @@ impl WorkflowPromptHandler {
 
         let params = self.resolve_tool_parameters(step, args, ctx)?;
 
-        Ok(PromptMessage {
-            role: Role::Assistant,
-            content: MessageContent::Text {
-                text: format!(
-                    "Calling tool '{}' with parameters:\n{}",
-                    tool_handle.name(),
-                    serde_json::to_string_pretty(&params)
-                        .unwrap_or_else(|_| format!("{:?}", params))
-                ),
-            },
-        })
+        Ok(PromptMessage::assistant(Content::text(format!(
+            "Calling tool '{}' with parameters:\n{}",
+            tool_handle.name(),
+            serde_json::to_string_pretty(&params).unwrap_or_else(|_| format!("{:?}", params))
+        ))))
     }
 
     /// Fetch a resource and extract its text content
@@ -543,8 +525,8 @@ impl WorkflowPromptHandler {
                         text_content.push_str(&format!("[Resource: {}]", uri));
                     }
                 },
-                Content::Image { .. } => {
-                    // Skip image content - we only embed text
+                Content::Image { .. } | Content::Audio { .. } | Content::ResourceLink { .. } => {
+                    // Skip non-text content - we only embed text
                 },
             }
         }
@@ -820,12 +802,7 @@ impl PromptHandler for WorkflowPromptHandler {
             // Guidance helps LLM understand the step's intent, especially for hybrid execution
             if let Some(guidance_template) = step.guidance() {
                 let guidance_text = Self::substitute_arguments(guidance_template, &args);
-                messages.push(PromptMessage {
-                    role: Role::Assistant,
-                    content: MessageContent::Text {
-                        text: guidance_text,
-                    },
-                });
+                messages.push(PromptMessage::assistant(Content::text(guidance_text)));
             }
 
             // Fetch resources that DON'T depend on step outputs (pre-tool phase)
@@ -853,12 +830,10 @@ impl PromptHandler for WorkflowPromptHandler {
             if step.is_resource_only() {
                 // For resource-only steps, just fetch resources (already done above or will be done below)
                 // Add an assistant message to explain what we're doing
-                messages.push(PromptMessage {
-                    role: Role::Assistant,
-                    content: MessageContent::Text {
-                        text: format!("I'll fetch the required resources for {}...", step.name()),
-                    },
-                });
+                messages.push(PromptMessage::assistant(Content::text(format!(
+                    "I'll fetch the required resources for {}...",
+                    step.name()
+                ))));
 
                 // If resources depend on step outputs, fetch them now
                 if fetch_resources_after_tool
@@ -917,16 +892,11 @@ impl PromptHandler for WorkflowPromptHandler {
                     {
                         Ok(result) => {
                             // User message with successful result
-                            messages.push(PromptMessage {
-                                role: Role::User,
-                                content: MessageContent::Text {
-                                    text: format!(
-                                        "Tool result:\n{}",
-                                        serde_json::to_string_pretty(&result)
-                                            .unwrap_or_else(|_| format!("{:?}", result))
-                                    ),
-                                },
-                            });
+                            messages.push(PromptMessage::user(Content::text(format!(
+                                "Tool result:\n{}",
+                                serde_json::to_string_pretty(&result)
+                                    .unwrap_or_else(|_| format!("{:?}", result))
+                            ))));
 
                             // Store binding for next steps
                             if let Some(binding) = step.binding() {
@@ -953,12 +923,10 @@ impl PromptHandler for WorkflowPromptHandler {
                         },
                         Err(e) => {
                             // Execution error - STOP with error
-                            messages.push(PromptMessage {
-                                role: Role::User,
-                                content: MessageContent::Text {
-                                    text: format!("Error executing tool: {}", e),
-                                },
-                            });
+                            messages.push(PromptMessage::user(Content::text(format!(
+                                "Error executing tool: {}",
+                                e
+                            ))));
                             break; // Let LLM handle recovery
                         },
                     }
@@ -999,22 +967,27 @@ impl PromptHandler for WorkflowPromptHandler {
                 self.workflow
                     .arguments()
                     .iter()
-                    .map(|(name, spec)| PromptArgument {
-                        name: name.to_string(),
-                        description: Some(spec.description.clone()),
-                        required: spec.required,
-                        completion: None,
-                        arg_type: spec.arg_type,
+                    .map(|(name, spec)| {
+                        let mut arg = PromptArgument::new(name.to_string())
+                            .with_description(&spec.description);
+                        if spec.required {
+                            arg = arg.required();
+                        }
+                        if let Some(arg_type) = spec.arg_type {
+                            arg.arg_type = Some(arg_type);
+                        }
+                        arg
                     })
                     .collect(),
             )
         };
 
-        Some(PromptInfo {
-            name: self.workflow.name().to_string(),
-            description: Some(self.workflow.description().to_string()),
-            arguments,
-        })
+        let mut info =
+            PromptInfo::new(self.workflow.name()).with_description(self.workflow.description());
+        if let Some(args) = arguments {
+            info = info.with_arguments(args);
+        }
+        Some(info)
     }
 }
 
@@ -1099,7 +1072,7 @@ mod tests {
 
         // First message: user intent
         assert_eq!(result.messages[0].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[0].content {
+        if let Content::Text { text } = &result.messages[0].content {
             assert!(text.contains("add a task to a project"));
             assert!(text.contains("Website"));
             assert!(text.contains("Fix bug"));
@@ -1107,20 +1080,20 @@ mod tests {
 
         // Second message: assistant plan
         assert_eq!(result.messages[1].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[1].content {
+        if let Content::Text { text } = &result.messages[1].content {
             assert!(text.contains("Here's my plan"));
             assert!(text.contains("list_pages"));
         }
 
         // Third message: assistant tool call announcement
         assert_eq!(result.messages[2].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[2].content {
+        if let Content::Text { text } = &result.messages[2].content {
             assert!(text.contains("Calling tool 'list_pages'"));
         }
 
         // Fourth message: user tool result
         assert_eq!(result.messages[3].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[3].content {
+        if let Content::Text { text } = &result.messages[3].content {
             assert!(text.contains("Tool result"));
             assert!(text.contains("Website"));
             assert!(text.contains("Mobile"));
@@ -1289,7 +1262,7 @@ mod tests {
 
         // Verify message 1: User intent
         assert_eq!(result.messages[0].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[0].content {
+        if let Content::Text { text } = &result.messages[0].content {
             assert!(text.contains("add a task to a project"));
             assert!(text.contains("Website"));
             assert!(text.contains("Fix login bug"));
@@ -1297,7 +1270,7 @@ mod tests {
 
         // Verify message 2: Assistant plan
         assert_eq!(result.messages[1].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[1].content {
+        if let Content::Text { text } = &result.messages[1].content {
             assert!(text.contains("Here's my plan"));
             assert!(text.contains("list_pages"));
             assert!(text.contains("verify_project"));
@@ -1306,7 +1279,7 @@ mod tests {
 
         // Verify message 8: Final result contains data from all steps
         assert_eq!(result.messages[7].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[7].content {
+        if let Content::Text { text } = &result.messages[7].content {
             assert!(text.contains("Tool result"));
             assert!(text.contains("success"));
             assert!(text.contains("task-123"));
@@ -1389,7 +1362,7 @@ mod tests {
 
         // Verify message 3: Tool call should NOT include priority parameter
         assert_eq!(result.messages[2].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[2].content {
+        if let Content::Text { text } = &result.messages[2].content {
             assert!(text.contains("add_task"));
             assert!(text.contains("Fix bug"));
             // Priority should NOT be in parameters since it wasn't provided
@@ -1398,7 +1371,7 @@ mod tests {
 
         // Verify message 4: Result should show priority as null
         assert_eq!(result.messages[3].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[3].content {
+        if let Content::Text { text } = &result.messages[3].content {
             assert!(text.contains("Tool result"));
             assert!(text.contains("success"));
         }
@@ -1414,7 +1387,7 @@ mod tests {
             .expect("Should execute successfully with optional arg provided");
 
         // Verify message 3: Tool call SHOULD include priority parameter
-        if let MessageContent::Text { text } = &result2.messages[2].content {
+        if let Content::Text { text } = &result2.messages[2].content {
             assert!(text.contains("add_task"));
             assert!(text.contains("Write docs"));
             assert!(text.contains("priority"));
@@ -1495,7 +1468,7 @@ mod tests {
             Role::User,
             "Tool execution error should appear as user message"
         );
-        if let MessageContent::Text { text } = &result.messages[3].content {
+        if let Content::Text { text } = &result.messages[3].content {
             assert!(
                 text.contains("Error executing tool"),
                 "Error message should indicate tool execution error"
@@ -1625,7 +1598,7 @@ mod tests {
 
         // Verify message 1: User intent
         assert_eq!(result.messages[0].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[0].content {
+        if let Content::Text { text } = &result.messages[0].content {
             assert!(text.contains("add a task to a Logseq project"));
             assert!(text.contains("MCP Tester"));
             assert!(text.contains("Fix workflow bug"));
@@ -1633,13 +1606,13 @@ mod tests {
 
         // Verify message 2: Assistant plan
         assert_eq!(result.messages[1].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[1].content {
+        if let Content::Text { text } = &result.messages[1].content {
             assert!(text.contains("Here's my plan"));
         }
 
         // Verify message 3: Guidance for step 1
         assert_eq!(result.messages[2].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[2].content {
+        if let Content::Text { text } = &result.messages[2].content {
             assert_eq!(
                 text, "I'll first get all available page names from Logseq",
                 "Guidance should be rendered as-is"
@@ -1648,13 +1621,13 @@ mod tests {
 
         // Verify message 4: Tool call announcement
         assert_eq!(result.messages[3].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[3].content {
+        if let Content::Text { text } = &result.messages[3].content {
             assert!(text.contains("list_pages"));
         }
 
         // Verify message 5: Tool result
         assert_eq!(result.messages[4].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[4].content {
+        if let Content::Text { text } = &result.messages[4].content {
             assert!(text.contains("Tool result"));
             assert!(text.contains("mcp-tester"));
             assert!(text.contains("MCP Rust SDK"));
@@ -1662,7 +1635,7 @@ mod tests {
 
         // Verify message 6: Guidance for step 2 (with argument substitution)
         assert_eq!(result.messages[5].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[5].content {
+        if let Content::Text { text } = &result.messages[5].content {
             assert!(
                 text.contains(
                     "Find the page name from the list above that best matches 'MCP Tester'"
@@ -1743,7 +1716,7 @@ mod tests {
 
         // Verify guidance has substituted arguments
         assert_eq!(result.messages[2].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[2].content {
+        if let Content::Text { text } = &result.messages[2].content {
             assert_eq!(
                 text, "Processing 'login' for user 'Alice'",
                 "All argument placeholders should be substituted"
@@ -1810,13 +1783,13 @@ mod tests {
 
         // Verify message 3 is guidance
         assert_eq!(result.messages[2].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[2].content {
+        if let Content::Text { text } = &result.messages[2].content {
             assert_eq!(text, "I'll greet the user 'Bob'");
         }
 
         // Verify execution completed
         assert_eq!(result.messages[4].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[4].content {
+        if let Content::Text { text } = &result.messages[4].content {
             assert!(text.contains("Hello, Bob!"));
         }
     }
@@ -1899,7 +1872,7 @@ mod tests {
 
         // Message 3: Guidance (NOT an error)
         assert_eq!(result.messages[2].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[2].content {
+        if let Content::Text { text } = &result.messages[2].content {
             assert!(
                 text.contains("Process the data"),
                 "Last message should be guidance"
@@ -1988,7 +1961,7 @@ mod tests {
 
         // Last message should be guidance, not error
         assert_eq!(result.messages[2].role, Role::Assistant);
-        if let MessageContent::Text { text } = &result.messages[2].content {
+        if let Content::Text { text } = &result.messages[2].content {
             assert!(text.contains("Process data"));
             assert!(!text.contains("Error"));
         }
@@ -2011,11 +1984,9 @@ mod tests {
                 _extra: crate::server::cancellation::RequestHandlerExtra,
             ) -> Result<ReadResourceResult> {
                 if uri == "docs://task-format" {
-                    Ok(ReadResourceResult {
-                        contents: vec![Content::Text {
-                            text: "Task Format Guide:\n- Use [[page-name]] for links\n- Add TASK prefix for action items".to_string(),
-                        }],
-                    })
+                    Ok(ReadResourceResult::new(vec![Content::text(
+                        "Task Format Guide:\n- Use [[page-name]] for links\n- Add TASK prefix for action items",
+                    )]))
                 } else {
                     Err(crate::Error::validation(format!(
                         "Unknown resource: {}",
@@ -2124,7 +2095,7 @@ mod tests {
 
         // Check resource was embedded
         assert_eq!(result.messages[3].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[3].content {
+        if let Content::Text { text } = &result.messages[3].content {
             assert!(text.contains("Resource content from docs://task-format"));
             assert!(text.contains("Task Format Guide"));
             assert!(text.contains("[[page-name]]"));
@@ -2150,17 +2121,12 @@ mod tests {
                 _extra: crate::server::cancellation::RequestHandlerExtra,
             ) -> Result<ReadResourceResult> {
                 match uri {
-                    "docs://format" => Ok(ReadResourceResult {
-                        contents: vec![Content::Text {
-                            text: "Format: [[link]]".to_string(),
-                        }],
-                    }),
-                    "docs://examples" => Ok(ReadResourceResult {
-                        contents: vec![Content::Text {
-                            text: "Examples:\n- [[project]] Task 1\n- [[project]] Task 2"
-                                .to_string(),
-                        }],
-                    }),
+                    "docs://format" => Ok(ReadResourceResult::new(vec![Content::text(
+                        "Format: [[link]]",
+                    )])),
+                    "docs://examples" => Ok(ReadResourceResult::new(vec![Content::text(
+                        "Examples:\n- [[project]] Task 1\n- [[project]] Task 2",
+                    )])),
                     _ => Err(crate::Error::validation(format!(
                         "Unknown resource: {}",
                         uri
@@ -2271,7 +2237,7 @@ mod tests {
 
         // Check both resources were embedded
         assert_eq!(result.messages[3].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[3].content {
+        if let Content::Text { text } = &result.messages[3].content {
             assert!(text.contains("docs://format"));
             assert!(text.contains("Format: [[link]]"));
         } else {
@@ -2279,7 +2245,7 @@ mod tests {
         }
 
         assert_eq!(result.messages[4].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[4].content {
+        if let Content::Text { text } = &result.messages[4].content {
             assert!(text.contains("docs://examples"));
             assert!(text.contains("Examples:"));
         } else {
@@ -2382,7 +2348,7 @@ mod tests {
 
         // Last message should be error
         assert_eq!(result.messages[3].role, Role::User);
-        if let MessageContent::Text { text } = &result.messages[3].content {
+        if let Content::Text { text } = &result.messages[3].content {
             assert!(text.contains("Error fetching resource"));
             assert!(text.contains("docs://missing"));
         } else {

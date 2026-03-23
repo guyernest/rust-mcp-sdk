@@ -24,8 +24,6 @@ fn bench_content_length_parsing(c: &mut Criterion) {
     for (name, header) in test_cases {
         group.bench_with_input(BenchmarkId::new("parse", name), &header, |b, header| {
             b.iter(|| {
-                // This benchmarks the internal parsing logic that would be used
-                // by the transport layer. We'll simulate the parsing operation.
                 let lines: Vec<&str> = black_box(header).lines().collect();
                 for line in lines {
                     if line.starts_with("Content-Length:") {
@@ -47,23 +45,20 @@ fn bench_message_formatting(c: &mut Criterion) {
 
     // Create different sized messages
     let small_message = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
-    let medium_message = serde_json::to_string(&ClientRequest::Initialize(InitializeParams {
-        protocol_version: "2024-11-05".to_string(),
-        capabilities: ClientCapabilities::default(),
-        client_info: Implementation {
-            name: "benchmark-client".to_string(),
-            version: "1.0.0".to_string(),
-        },
-    }))
+    let medium_message = serde_json::to_string(&ClientRequest::Initialize(InitializeRequest::new(
+        Implementation::new("benchmark-client", "1.0.0"),
+        ClientCapabilities::default(),
+    )))
     .unwrap();
 
-    let large_message = serde_json::to_string(&CallToolResult {
-        content: (0..100).map(|i| Content::Text {
-            text: format!("This is a long piece of content for item {} that simulates a realistic response from an MCP tool with substantial data.", i),
-        }).collect(),
-        is_error: false,
-        ..Default::default()
-    }).unwrap();
+    let large_message = serde_json::to_string(&CallToolResult::new(
+        (0..100)
+            .map(|i| {
+                Content::text(format!("This is a long piece of content for item {} that simulates a realistic response from an MCP tool with substantial data.", i))
+            })
+            .collect(),
+    ))
+    .unwrap();
 
     let test_messages = [
         ("small", small_message),
@@ -74,7 +69,6 @@ fn bench_message_formatting(c: &mut Criterion) {
     for (name, message) in test_messages.iter() {
         group.bench_with_input(BenchmarkId::new("format", name), message, |b, message| {
             b.iter(|| {
-                // Simulate the stdio transport message formatting
                 let content_length = black_box(message).len();
                 let formatted = format!("Content-Length: {}\r\n\r\n{}", content_length, message);
                 black_box(formatted)
@@ -89,10 +83,7 @@ fn bench_message_formatting(c: &mut Criterion) {
 fn bench_message_sizes(c: &mut Criterion) {
     let mut group = c.benchmark_group("message_sizes");
 
-    // Test different content types and sizes
-    let text_content = Content::Text {
-        text: "A".repeat(1000), // 1KB of text
-    };
+    let text_content = Content::text("A".repeat(1000)); // 1KB of text
 
     let image_content = Content::Image {
         data: "A".repeat(10000), // 10KB of base64 data
@@ -132,38 +123,33 @@ fn bench_message_sizes(c: &mut Criterion) {
 fn bench_protocol_helpers(c: &mut Criterion) {
     let mut group = c.benchmark_group("protocol_helpers");
 
-    // Benchmark request creation
     group.bench_function("create_list_tools_request", |b| {
         b.iter(|| {
-            let request = black_box(ClientRequest::ListTools(ListToolsParams { cursor: None }));
+            let request = black_box(ClientRequest::ListTools(ListToolsRequest::default()));
             black_box(request)
         })
     });
 
     group.bench_function("create_call_tool_request", |b| {
         b.iter(|| {
-            let request = black_box(ClientRequest::CallTool(CallToolParams {
-                name: "test_tool".to_string(),
-                arguments: serde_json::json!({
+            let request = black_box(ClientRequest::CallTool(CallToolRequest::new(
+                "test_tool",
+                serde_json::json!({
                     "input": "test data",
                     "options": {"format": "json"}
                 }),
-                _meta: None,
-                task: None,
-            }));
+            )));
             black_box(request)
         })
     });
 
-    // Benchmark notification creation
     group.bench_function("create_progress_notification", |b| {
         b.iter(|| {
-            let notification = black_box(ProgressNotification {
-                progress_token: ProgressToken::String("task_123".to_string()),
-                progress: 75.0,
-                total: None,
-                message: Some("Processing...".to_string()),
-            });
+            let notification = black_box(ProgressNotification::new(
+                ProgressToken::String("task_123".to_string()),
+                75.0,
+                Some("Processing...".to_string()),
+            ));
             black_box(notification)
         })
     });
@@ -175,7 +161,6 @@ fn bench_protocol_helpers(c: &mut Criterion) {
 fn bench_error_handling(c: &mut Criterion) {
     let mut group = c.benchmark_group("error_handling");
 
-    // Test error creation and serialization
     let json_error = JSONRPCError {
         code: -32600,
         message: "Invalid Request".to_string(),
@@ -204,7 +189,6 @@ fn bench_error_handling(c: &mut Criterion) {
         })
     });
 
-    // Test error response formatting
     group.bench_function("create_error_response", |b| {
         b.iter(|| {
             let response: pmcp::types::JSONRPCResponse<serde_json::Value> =
@@ -224,18 +208,15 @@ fn bench_error_handling(c: &mut Criterion) {
 fn bench_concurrent_processing(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent_processing");
 
-    // Simulate processing multiple messages concurrently
     let messages: Vec<String> = (0..100)
         .map(|i| {
-            serde_json::to_string(&ClientRequest::CallTool(CallToolParams {
-                name: format!("tool_{}", i),
-                arguments: serde_json::json!({
+            serde_json::to_string(&ClientRequest::CallTool(CallToolRequest::new(
+                format!("tool_{}", i),
+                serde_json::json!({
                     "id": i,
                     "data": format!("Message data for request {}", i)
                 }),
-                _meta: None,
-                task: None,
-            }))
+            )))
             .unwrap()
         })
         .collect();
@@ -249,15 +230,12 @@ fn bench_concurrent_processing(c: &mut Criterion) {
         })
     });
 
-    // Benchmark batch serialization
     let requests: Vec<ClientRequest> = (0..100)
         .map(|i| {
-            ClientRequest::CallTool(CallToolParams {
-                name: format!("tool_{}", i),
-                arguments: serde_json::json!({"id": i}),
-                _meta: None,
-                task: None,
-            })
+            ClientRequest::CallTool(CallToolRequest::new(
+                format!("tool_{}", i),
+                serde_json::json!({"id": i}),
+            ))
         })
         .collect();
 

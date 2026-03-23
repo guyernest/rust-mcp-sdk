@@ -39,7 +39,7 @@ impl ToolHandler for TestCheckTool {
         let mut tester = create_tester(&params.url, params.timeout)?;
 
         let report = tester
-            .run_compliance_tests(params.strict)
+            .run_conformance_tests(params.strict, None)
             .await
             .map_err(internal_err)?;
 

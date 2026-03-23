@@ -5,7 +5,7 @@
 //! state changes.
 
 use crate::error::Result;
-use crate::types::protocol::ServerNotification;
+use crate::types::ServerNotification;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -405,7 +405,7 @@ impl std::fmt::Debug for NotificationBatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::protocol::ProgressNotification;
+    use crate::types::ProgressNotification;
 
     #[tokio::test]
     async fn test_notification_debouncing() {
@@ -422,12 +422,11 @@ mod tests {
         // Send multiple notifications quickly with the same token
         for i in 0..5 {
             debouncer
-                .submit(ServerNotification::Progress(ProgressNotification {
-                    progress_token: crate::types::ProgressToken::String("test-token".to_string()),
-                    progress: i as f64 * 20.0,
-                    total: None,
-                    message: Some(format!("Progress {}", i)),
-                }))
+                .submit(ServerNotification::Progress(ProgressNotification::new(
+                    crate::types::ProgressToken::String("test-token".to_string()),
+                    i as f64 * 20.0,
+                    Some(format!("Progress {}", i)),
+                )))
                 .await
                 .unwrap();
             sleep(Duration::from_millis(20)).await;
@@ -469,12 +468,11 @@ mod tests {
         // Add notifications with the same key for batching
         for i in 0..5 {
             batcher
-                .add(ServerNotification::Progress(ProgressNotification {
-                    progress_token: crate::types::ProgressToken::String("batch-token".to_string()),
-                    progress: i as f64 * 20.0,
-                    total: None,
-                    message: Some(format!("Progress {}", i)),
-                }))
+                .add(ServerNotification::Progress(ProgressNotification::new(
+                    crate::types::ProgressToken::String("batch-token".to_string()),
+                    i as f64 * 20.0,
+                    Some(format!("Progress {}", i)),
+                )))
                 .await
                 .unwrap();
         }

@@ -25,16 +25,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Note: Client capabilities indicate what the CLIENT can do (handle sampling requests,
     // provide user input). Server capabilities (tools, prompts, resources) are advertised
     // by servers, not clients.
-    let capabilities = ClientCapabilities {
-        // Client can handle sampling/LLM requests
-        sampling: Some(pmcp::types::capabilities::SamplingCapabilities::default()),
-        // Client can provide user input when requested
-        elicitation: Some(pmcp::types::capabilities::ElicitationCapabilities::default()),
-        // Client supports roots notifications
-        roots: Some(pmcp::types::capabilities::RootsCapabilities::default()),
-        // No experimental features
-        experimental: None,
-    };
+    // ClientCapabilities::full() enables sampling, elicitation, and roots
+    let capabilities = ClientCapabilities::full();
 
     println!("Initializing connection with capabilities:");
     println!("{:#?}\n", capabilities);

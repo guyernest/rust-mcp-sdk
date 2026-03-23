@@ -5,7 +5,7 @@ use pmcp::error::Result as PmcpResult;
 use pmcp::server::{PromptHandler, Server};
 use pmcp::types::capabilities::ServerCapabilities;
 use pmcp::types::completable::completable;
-use pmcp::types::protocol::{Content, GetPromptResult, PromptArgument, PromptMessage, Role};
+use pmcp::types::{Content, GetPromptResult, PromptArgument, PromptMessage};
 use pmcp::RequestHandlerExtra;
 use serde_json::json;
 use std::collections::HashMap;
@@ -37,18 +37,8 @@ impl PromptHandler for DatabaseQueryPrompt {
 
         Ok(GetPromptResult::new(
             vec![
-                PromptMessage {
-                    role: Role::System,
-                    content: Content::Text {
-                        text: format!("You are a database assistant. Execute the following query on database '{}' table '{}':", database, table)
-                    },
-                },
-                PromptMessage {
-                    role: Role::User,
-                    content: Content::Text {
-                        text: query
-                    },
-                },
+                PromptMessage::system(Content::text(format!("You are a database assistant. Execute the following query on database '{}' table '{}':", database, table))),
+                PromptMessage::user(Content::text(query)),
             ],
             Some(format!(
                 "Database query for {} on {}.{}",
@@ -97,19 +87,9 @@ impl PromptHandler for DeploymentPrompt {
 
         Ok(GetPromptResult::new(
             vec![
-                PromptMessage {
-                    role: Role::System,
-                    content: Content::Text {
-                        text: "You are a deployment assistant. Generate a deployment configuration based on the following parameters:".to_string()
-                    },
-                },
-                PromptMessage {
-                    role: Role::User,
-                    content: Content::Text {
-                        text: format!("Deploy service '{}' version '{}' to '{}' environment with configuration: {}",
-                            service, version, environment, serde_json::to_string_pretty(&config).unwrap())
-                    },
-                },
+                PromptMessage::system(Content::text("You are a deployment assistant. Generate a deployment configuration based on the following parameters:")),
+                PromptMessage::user(Content::text(format!("Deploy service '{}' version '{}' to '{}' environment with configuration: {}",
+                    service, version, environment, serde_json::to_string_pretty(&config).unwrap()))),
             ],
             Some(format!(
                 "Deploy {} version {} to {}",
@@ -130,10 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = Server::builder()
         .name("completable-prompts-example")
         .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            prompts: Some(Default::default()),
-            ..Default::default()
-        })
+        .capabilities(ServerCapabilities::prompts_only())
         // Add database query prompt
         .prompt("database_query", DatabaseQueryPrompt)
         // Add deployment prompt
@@ -167,63 +144,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Helper to create prompt info with completable arguments.
 /// This would be used during server registration to define prompts with completions.
 #[allow(dead_code)]
-fn create_database_prompt_info() -> pmcp::types::protocol::PromptInfo {
-    pmcp::types::protocol::PromptInfo {
-        name: "database_query".to_string(),
-        description: Some("Generate database queries with auto-completion".to_string()),
-        arguments: Some(vec![
-            PromptArgument {
-                name: "database".to_string(),
-                description: Some("Target database".to_string()),
-                required: true,
-                completion: Some(
-                    completable("database")
-                        .static_completions(vec![
-                            "main".to_string(),
-                            "analytics".to_string(),
-                            "archive".to_string(),
-                        ])
-                        .build()
-                        .completion
-                        .unwrap(),
-                ),
-                arg_type: None,
-            },
-            PromptArgument {
-                name: "table".to_string(),
-                description: Some("Table name".to_string()),
-                required: true,
-                completion: Some(
-                    completable("table")
-                        .static_completions(vec![
-                            "users".to_string(),
-                            "orders".to_string(),
-                            "products".to_string(),
-                            "logs".to_string(),
-                        ])
-                        .build()
-                        .completion
-                        .unwrap(),
-                ),
-                arg_type: None,
-            },
-            PromptArgument {
-                name: "operation".to_string(),
-                description: Some("Query operation".to_string()),
-                required: false,
-                completion: Some(
-                    completable("operation")
-                        .static_completions(vec![
-                            "select".to_string(),
-                            "count".to_string(),
-                            "describe".to_string(),
-                        ])
-                        .build()
-                        .completion
-                        .unwrap(),
-                ),
-                arg_type: None,
-            },
-        ]),
-    }
+fn create_database_prompt_info() -> pmcp::types::PromptInfo {
+    let mut db_arg = PromptArgument::new("database")
+        .with_description("Target database")
+        .required();
+    db_arg.completion = Some(
+        completable("database")
+            .static_completions(vec![
+                "main".to_string(),
+                "analytics".to_string(),
+                "archive".to_string(),
+            ])
+            .build()
+            .completion
+            .unwrap(),
+    );
+
+    let mut table_arg = PromptArgument::new("table")
+        .with_description("Table name")
+        .required();
+    table_arg.completion = Some(
+        completable("table")
+            .static_completions(vec![
+                "users".to_string(),
+                "orders".to_string(),
+                "products".to_string(),
+                "logs".to_string(),
+            ])
+            .build()
+            .completion
+            .unwrap(),
+    );
+
+    let mut op_arg = PromptArgument::new("operation").with_description("Query operation");
+    op_arg.completion = Some(
+        completable("operation")
+            .static_completions(vec![
+                "select".to_string(),
+                "count".to_string(),
+                "describe".to_string(),
+            ])
+            .build()
+            .completion
+            .unwrap(),
+    );
+
+    pmcp::types::PromptInfo::new("database_query")
+        .with_description("Generate database queries with auto-completion")
+        .with_arguments(vec![db_arg, table_arg, op_arg])
 }

@@ -300,14 +300,12 @@ async fn main() -> Result<()> {
     // Scenario 1: Authenticated request with valid token
     println!("=== Scenario 1: Authenticated Request (Valid Token) ===\n");
     let request1 = McpRequest::Client(Box::new(ClientRequest::CallTool(
-        pmcp::types::CallToolParams {
-            name: "call_backend_api".to_string(),
-            arguments: json!({
+        pmcp::types::CallToolRequest::new(
+            "call_backend_api",
+            json!({
                 "endpoint": "/api/users"
             }),
-            _meta: None,
-            task: None,
-        },
+        ),
     )));
 
     let response1 = simulate_transport_request(
@@ -325,14 +323,12 @@ async fn main() -> Result<()> {
     // Scenario 2: Unauthenticated request (no token)
     println!("=== Scenario 2: Unauthenticated Request (No Token) ===\n");
     let request2 = McpRequest::Client(Box::new(ClientRequest::CallTool(
-        pmcp::types::CallToolParams {
-            name: "call_backend_api".to_string(),
-            arguments: json!({
+        pmcp::types::CallToolRequest::new(
+            "call_backend_api",
+            json!({
                 "endpoint": "/api/public"
             }),
-            _meta: None,
-            task: None,
-        },
+        ),
     )));
 
     let response2 = simulate_transport_request(
@@ -350,14 +346,12 @@ async fn main() -> Result<()> {
     // Scenario 3: Invalid token (should fail)
     println!("=== Scenario 3: Invalid Token (Should Fail) ===\n");
     let request3 = McpRequest::Client(Box::new(ClientRequest::CallTool(
-        pmcp::types::CallToolParams {
-            name: "call_backend_api".to_string(),
-            arguments: json!({
+        pmcp::types::CallToolRequest::new(
+            "call_backend_api",
+            json!({
                 "endpoint": "/api/data"
             }),
-            _meta: None,
-            task: None,
-        },
+        ),
     )));
 
     let response3 = simulate_transport_request(

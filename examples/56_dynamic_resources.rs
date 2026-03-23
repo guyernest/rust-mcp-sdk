@@ -124,24 +124,15 @@ impl DatasetResourceProvider {
 impl DynamicResourceProvider for DatasetResourceProvider {
     fn templates(&self) -> Vec<ResourceTemplate> {
         vec![
-            ResourceTemplate {
-                uri_template: "datasets://{id}/schema".to_string(),
-                name: "Dataset Schema".to_string(),
-                description: Some("Schema definition for a dataset".to_string()),
-                mime_type: Some("application/json".to_string()),
-            },
-            ResourceTemplate {
-                uri_template: "datasets://{id}/preview".to_string(),
-                name: "Dataset Preview".to_string(),
-                description: Some("Preview of dataset contents (first 10 rows)".to_string()),
-                mime_type: Some("text/plain".to_string()),
-            },
-            ResourceTemplate {
-                uri_template: "datasets://{id}/stats".to_string(),
-                name: "Dataset Statistics".to_string(),
-                description: Some("Statistical summary of dataset".to_string()),
-                mime_type: Some("application/json".to_string()),
-            },
+            ResourceTemplate::new("datasets://{id}/schema", "Dataset Schema")
+                .with_description("Schema definition for a dataset")
+                .with_mime_type("application/json"),
+            ResourceTemplate::new("datasets://{id}/preview", "Dataset Preview")
+                .with_description("Preview of dataset contents (first 10 rows)")
+                .with_mime_type("text/plain"),
+            ResourceTemplate::new("datasets://{id}/stats", "Dataset Statistics")
+                .with_description("Statistical summary of dataset")
+                .with_mime_type("application/json"),
         ]
     }
 
@@ -172,9 +163,7 @@ impl DynamicResourceProvider for DatasetResourceProvider {
                 }).collect::<Vec<_>>(),
             });
 
-            Content::Text {
-                text: serde_json::to_string_pretty(&schema).unwrap(),
-            }
+            Content::text(serde_json::to_string_pretty(&schema).unwrap())
         } else if uri.contains("/preview") {
             // Return preview
             let preview = format!(
@@ -186,7 +175,7 @@ impl DynamicResourceProvider for DatasetResourceProvider {
                 dataset.columns.join(" | ")
             );
 
-            Content::Text { text: preview }
+            Content::text(preview)
         } else if uri.contains("/stats") {
             // Return statistics
             let stats = serde_json::json!({
@@ -233,12 +222,8 @@ impl FileSystemProvider {
 #[async_trait]
 impl DynamicResourceProvider for FileSystemProvider {
     fn templates(&self) -> Vec<ResourceTemplate> {
-        vec![ResourceTemplate {
-            uri_template: "file://{path}".to_string(),
-            name: "File Resource".to_string(),
-            description: Some("Access to local files".to_string()),
-            mime_type: None,
-        }]
+        vec![ResourceTemplate::new("file://{path}", "File Resource")
+            .with_description("Access to local files")]
     }
 
     async fn fetch(
@@ -254,9 +239,7 @@ impl DynamicResourceProvider for FileSystemProvider {
         // In a real application, read the file here
         let content = format!("File contents from: {}/{}", self.base_path, path);
 
-        Ok(ReadResourceResult::new(vec![Content::Text {
-            text: content,
-        }]))
+        Ok(ReadResourceResult::new(vec![Content::text(content)]))
     }
 
     fn priority(&self) -> i32 {

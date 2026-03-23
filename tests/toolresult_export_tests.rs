@@ -11,15 +11,7 @@ fn test_toolresult_import() {
     // This test verifies the fix for GitHub issue #37
     // ToolResult should be importable as: use pmcp::ToolResult;
 
-    let content = vec![Content::Text {
-        text: "test result".to_string(),
-    }];
-
-    let result: ToolResult = ToolResult {
-        content,
-        is_error: false,
-        ..Default::default()
-    };
+    let result: ToolResult = ToolResult::new(vec![Content::text("test result")]);
 
     assert_eq!(result.content.len(), 1);
     assert!(!result.is_error);
@@ -28,23 +20,11 @@ fn test_toolresult_import() {
 /// Test that `ToolResult` is identical to `CallToolResult`
 #[test]
 fn test_toolresult_type_equivalence() {
-    let content = vec![Content::Text {
-        text: "equivalent test".to_string(),
-    }];
-
     // Create using CallToolResult
-    let call_result = CallToolResult {
-        content: content.clone(),
-        is_error: false,
-        ..Default::default()
-    };
+    let call_result = CallToolResult::new(vec![Content::text("equivalent test")]);
 
     // Create using ToolResult alias
-    let tool_result: ToolResult = ToolResult {
-        content,
-        is_error: false,
-        ..Default::default()
-    };
+    let tool_result: ToolResult = ToolResult::new(vec![Content::text("equivalent test")]);
 
     // They should serialize identically
     let call_json = serde_json::to_value(&call_result).unwrap();
@@ -57,25 +37,14 @@ fn test_toolresult_type_equivalence() {
 #[test]
 fn test_toolresult_content_types() {
     // Test with text content
-    let text_result = ToolResult {
-        content: vec![Content::Text {
-            text: "text content".to_string(),
-        }],
-        is_error: false,
-        ..Default::default()
-    };
+    let text_result = ToolResult::new(vec![Content::text("text content")]);
 
     // Test with resource content
-    let resource_result = ToolResult {
-        content: vec![Content::Resource {
-            uri: "file://test.txt".to_string(),
-            text: Some("resource content".to_string()),
-            mime_type: Some("text/plain".to_string()),
-            meta: None,
-        }],
-        is_error: false,
-        ..Default::default()
-    };
+    let resource_result = ToolResult::new(vec![Content::resource_with_text(
+        "file://test.txt",
+        "resource content",
+        "text/plain",
+    )]);
 
     assert!(!text_result.content.is_empty());
     assert!(!resource_result.content.is_empty());
@@ -84,13 +53,7 @@ fn test_toolresult_content_types() {
 /// Test `ToolResult` error handling
 #[test]
 fn test_toolresult_error_cases() {
-    let error_result = ToolResult {
-        content: vec![Content::Text {
-            text: "An error occurred".to_string(),
-        }],
-        is_error: true,
-        ..Default::default()
-    };
+    let error_result = ToolResult::error(vec![Content::text("An error occurred")]);
 
     assert!(error_result.is_error);
 }
@@ -98,13 +61,7 @@ fn test_toolresult_error_cases() {
 /// Test `ToolResult` serialization and deserialization
 #[test]
 fn test_toolresult_serde() {
-    let original = ToolResult {
-        content: vec![Content::Text {
-            text: "serialization test".to_string(),
-        }],
-        is_error: false,
-        ..Default::default()
-    };
+    let original = ToolResult::new(vec![Content::text("serialization test")]);
 
     // Serialize to JSON
     let json_str = serde_json::to_string(&original).unwrap();
@@ -123,13 +80,7 @@ fn test_toolresult_function_compatibility() {
         !result.content.is_empty()
     }
 
-    let tool_result = ToolResult {
-        content: vec![Content::Text {
-            text: "compatibility test".to_string(),
-        }],
-        is_error: false,
-        ..Default::default()
-    };
+    let tool_result = ToolResult::new(vec![Content::text("compatibility test")]);
 
     // This should work because ToolResult is an alias for CallToolResult
     assert!(process_result(&tool_result));
@@ -138,11 +89,7 @@ fn test_toolresult_function_compatibility() {
 /// Test default construction of `ToolResult`
 #[test]
 fn test_toolresult_default() {
-    let default_result = ToolResult {
-        content: vec![],
-        is_error: false,
-        ..Default::default()
-    };
+    let default_result = ToolResult::default();
 
     assert!(default_result.content.is_empty());
     assert!(!default_result.is_error);
@@ -155,13 +102,7 @@ fn test_toolresult_generic() {
         value
     }
 
-    let result = ToolResult {
-        content: vec![Content::Text {
-            text: "generic test".to_string(),
-        }],
-        is_error: false,
-        ..Default::default()
-    };
+    let result = ToolResult::new(vec![Content::text("generic test")]);
 
     let wrapped = wrap_in_option(result);
     // Test that the wrapping function works

@@ -49,9 +49,7 @@ impl ResourceHandler for TestResourceHandler {
     ) -> PmcpResult<pmcp::types::ReadResourceResult> {
         if uri == "test://example.txt" {
             Ok(pmcp::types::ReadResourceResult::new(vec![
-                pmcp::types::Content::Text {
-                    text: "Hello from Rust server!".to_string(),
-                },
+                pmcp::types::Content::text("Hello from Rust server!"),
             ]))
         } else {
             Err(Error::not_found(uri))
@@ -64,13 +62,9 @@ impl ResourceHandler for TestResourceHandler {
         _extra: pmcp::RequestHandlerExtra,
     ) -> PmcpResult<pmcp::types::ListResourcesResult> {
         Ok(pmcp::types::ListResourcesResult::new(vec![
-            pmcp::types::ResourceInfo {
-                uri: "test://example.txt".to_string(),
-                name: "Example Text File".to_string(),
-                description: Some("A test resource from Rust".to_string()),
-                mime_type: Some("text/plain".to_string()),
-                meta: None,
-            },
+            pmcp::types::ResourceInfo::new("test://example.txt", "Example Text File")
+                .with_description("A test resource from Rust")
+                .with_mime_type("text/plain"),
         ]))
     }
 }
@@ -89,12 +83,9 @@ impl PromptHandler for TestPromptHandler {
         let name = args.get("name").map_or("User", |s| s.as_str());
 
         Ok(pmcp::types::GetPromptResult::new(
-            vec![pmcp::types::PromptMessage {
-                role: pmcp::types::Role::User,
-                content: pmcp::types::Content::Text {
-                    text: format!("Please greet {}", name),
-                },
-            }],
+            vec![pmcp::types::PromptMessage::user(
+                pmcp::types::Content::text(format!("Please greet {}", name)),
+            )],
             Some(format!("Greeting for {}", name)),
         ))
     }
@@ -203,19 +194,7 @@ async fn test_typescript_client_rust_server() -> Result<(), Box<dyn std::error::
     let server = ServerBuilder::new()
         .name("rust-test-server")
         .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            tools: Some(pmcp::types::ToolCapabilities {
-                list_changed: Some(false),
-            }),
-            resources: Some(pmcp::types::ResourceCapabilities {
-                subscribe: Some(false),
-                list_changed: Some(false),
-            }),
-            prompts: Some(pmcp::types::PromptCapabilities {
-                list_changed: Some(false),
-            }),
-            ..Default::default()
-        })
+        .capabilities(ServerCapabilities::default())
         .tool("echo", TestToolHandler)
         .tool("add", TestToolHandler)
         .resources(TestResourceHandler)

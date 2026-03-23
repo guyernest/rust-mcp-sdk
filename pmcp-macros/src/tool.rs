@@ -31,12 +31,12 @@
 //! }
 //! ```
 
-use crate::utils::to_pascal_case;
 use darling::FromMeta;
+use heck::ToUpperCamelCase;
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use syn::parse::Parser;
-use syn::{parse_quote, FnArg, ItemFn, Pat, PatType, ReturnType, Type, TypePath};
+use syn::{parse_quote, FnArg, ItemFn, Pat, PatType, ReturnType, Type};
 
 /// Tool macro arguments
 #[derive(Debug, FromMeta)]
@@ -95,7 +95,7 @@ struct ToolAnnotations {
 }
 
 /// Expands the #[tool] attribute macro  
-pub fn expand_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStream> {
+pub fn expand_tool(args: TokenStream, input: &ItemFn) -> syn::Result<TokenStream> {
     // Parse macro arguments from TokenStream
     let nested_metas = if args.is_empty() {
         vec![]
@@ -116,14 +116,14 @@ pub fn expand_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStream>
     let description = args.description;
 
     // Extract function parameters
-    let params = extract_parameters(&input)?;
+    let params = extract_parameters(input);
 
     // Extract return type
-    let return_type = extract_return_type(&input)?;
+    let return_type = extract_return_type(input);
 
     // Generate the wrapper struct and implementation
     let wrapper_name = Ident::new(
-        &format!("{}ToolHandler", to_pascal_case(&fn_name.to_string())),
+        &format!("{}ToolHandler", fn_name.to_string().to_upper_camel_case()),
         fn_name.span(),
     );
 
@@ -132,15 +132,15 @@ pub fn expand_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStream>
     let await_token = if is_async { quote!(.await) } else { quote!() };
 
     // Generate parameter extraction code
-    let param_extraction = generate_param_extraction(&params)?;
+    let param_extraction = generate_param_extraction(&params);
     let param_names: Vec<_> = params.iter().map(|p| &p.name).collect();
 
     // Generate result conversion
-    let result_conversion = generate_result_conversion(&return_type)?;
+    let result_conversion = generate_result_conversion(&return_type);
 
     // Generate annotations and definition code
     let (annotations_code, definition_code) =
-        generate_definition_code(&tool_name, &description, &args.annotations)?;
+        generate_definition_code(&tool_name, &description, args.annotations.as_ref());
 
     // Build the handler implementation
     let expanded = quote! {
@@ -196,8 +196,8 @@ pub fn expand_tool(args: TokenStream, input: ItemFn) -> syn::Result<TokenStream>
 fn generate_definition_code(
     tool_name: &str,
     description: &str,
-    annotations: &Option<ToolAnnotations>,
-) -> syn::Result<(TokenStream, TokenStream)> {
+    annotations: Option<&ToolAnnotations>,
+) -> (TokenStream, TokenStream) {
     match annotations {
         None => {
             // No annotations - simple ToolInfo::new()
@@ -208,7 +208,7 @@ fn generate_definition_code(
                     Self::input_schema(),
                 )
             };
-            Ok((quote!(), definition))
+            (quote!(), definition)
         },
         Some(ann) => {
             // Build annotations with builder pattern
@@ -303,7 +303,7 @@ fn generate_definition_code(
                 (quote!(), def)
             };
 
-            Ok((output_schema_code, definition))
+            (output_schema_code, definition)
         },
     }
 }
@@ -316,20 +316,19 @@ struct ParamInfo {
 }
 
 /// Extract parameters from function signature
-fn extract_parameters(func: &ItemFn) -> syn::Result<Vec<ParamInfo>> {
+fn extract_parameters(func: &ItemFn) -> Vec<ParamInfo> {
     let mut params = Vec::new();
 
     for arg in &func.sig.inputs {
         match arg {
             FnArg::Receiver(_) => {
                 // Skip self parameter
-                continue;
             },
             FnArg::Typed(PatType { pat, ty, .. }) => {
                 if let Pat::Ident(pat_ident) = pat.as_ref() {
                     let name = pat_ident.ident.clone();
                     let ty = ty.as_ref().clone();
-                    let optional = is_option_type(&ty);
+                    let optional = crate::mcp_common::type_name_matches(&ty, "Option");
 
                     params.push(ParamInfo { name, ty, optional });
                 }
@@ -337,19 +336,19 @@ fn extract_parameters(func: &ItemFn) -> syn::Result<Vec<ParamInfo>> {
         }
     }
 
-    Ok(params)
+    params
 }
 
 /// Extract return type information
-fn extract_return_type(func: &ItemFn) -> syn::Result<Type> {
+fn extract_return_type(func: &ItemFn) -> Type {
     match &func.sig.output {
-        ReturnType::Default => Ok(parse_quote!(())),
-        ReturnType::Type(_, ty) => Ok(ty.as_ref().clone()),
+        ReturnType::Default => parse_quote!(()),
+        ReturnType::Type(_, ty) => ty.as_ref().clone(),
     }
 }
 
 /// Generate parameter extraction code from JSON
-fn generate_param_extraction(params: &[ParamInfo]) -> syn::Result<TokenStream> {
+fn generate_param_extraction(params: &[ParamInfo]) -> TokenStream {
     let mut extractions = Vec::new();
 
     for param in params {
@@ -374,16 +373,16 @@ fn generate_param_extraction(params: &[ParamInfo]) -> syn::Result<TokenStream> {
         }
     }
 
-    Ok(quote! {
+    quote! {
         #(#extractions)*
-    })
+    }
 }
 
 /// Generate result conversion code
-fn generate_result_conversion(return_type: &Type) -> syn::Result<TokenStream> {
+fn generate_result_conversion(return_type: &Type) -> TokenStream {
     // Check if return type is Result<T, E>
-    if is_result_type(return_type) {
-        Ok(quote! {
+    if crate::mcp_common::type_name_matches(return_type, "Result") {
+        quote! {
             match result {
                 Ok(value) => {
                     let json_value = serde_json::to_value(value)
@@ -392,62 +391,36 @@ fn generate_result_conversion(return_type: &Type) -> syn::Result<TokenStream> {
                 }
                 Err(e) => Err(pmcp::Error::internal(format!("Tool error: {}", e)))
             }
-        })
+        }
     } else {
-        Ok(quote! {
+        quote! {
             let json_value = serde_json::to_value(result)
                 .map_err(|e| pmcp::Error::internal(e.to_string()))?;
             Ok(json_value)
-        })
-    }
-}
-
-/// Check if a type is Option<T>
-fn is_option_type(ty: &Type) -> bool {
-    if let Type::Path(TypePath { path, .. }) = ty {
-        if let Some(segment) = path.segments.last() {
-            return segment.ident == "Option";
         }
     }
-    false
-}
-
-/// Check if a type is Result<T, E>
-fn is_result_type(ty: &Type) -> bool {
-    if let Type::Path(TypePath { path, .. }) = ty {
-        if let Some(segment) = path.segments.last() {
-            return segment.ident == "Result";
-        }
-    }
-    false
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::mcp_common;
+    use syn::{parse_quote, Type};
 
     #[test]
-    fn test_to_pascal_case() {
-        assert_eq!(to_pascal_case("hello_world"), "HelloWorld");
-        assert_eq!(to_pascal_case("add_numbers"), "AddNumbers");
-        assert_eq!(to_pascal_case("simple"), "Simple");
-    }
-
-    #[test]
-    fn test_is_option_type() {
+    fn test_type_name_matches_option() {
         let opt_type: Type = parse_quote!(Option<String>);
-        assert!(is_option_type(&opt_type));
+        assert!(mcp_common::type_name_matches(&opt_type, "Option"));
 
         let non_opt_type: Type = parse_quote!(String);
-        assert!(!is_option_type(&non_opt_type));
+        assert!(!mcp_common::type_name_matches(&non_opt_type, "Option"));
     }
 
     #[test]
-    fn test_is_result_type() {
+    fn test_type_name_matches_result() {
         let result_type: Type = parse_quote!(Result<String, Error>);
-        assert!(is_result_type(&result_type));
+        assert!(mcp_common::type_name_matches(&result_type, "Result"));
 
         let non_result_type: Type = parse_quote!(String);
-        assert!(!is_result_type(&non_result_type));
+        assert!(!mcp_common::type_name_matches(&non_result_type, "Result"));
     }
 }

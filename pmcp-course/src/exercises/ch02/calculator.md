@@ -35,6 +35,10 @@ doing:
 - Should a calculator tool accept 'two plus three' or just '2 + 3'?
 :::
 
+> **v2.0 Tip:** The `#[mcp_tool]` macro eliminates `Box::pin(async move { ... })` boilerplate.
+> Add `features = ["macros"]` to your pmcp dependency.
+> See [Macros Guide](../../docs/design/mcp-macros-guide.md) for migration examples.
+
 ::: starter file="src/main.rs"
 ```rust
 //! Calculator MCP Server

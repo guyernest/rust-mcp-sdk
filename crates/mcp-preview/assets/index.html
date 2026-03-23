@@ -393,22 +393,28 @@
     /* DevTools Panel */
     .devtools-panel {
       width: 350px;
-      min-width: 350px;
       background: var(--bg-secondary);
       border-left: 1px solid var(--border-color);
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      transition: width 200ms ease;
     }
 
     .devtools-tabs {
       display: flex;
       border-bottom: 1px solid var(--border-color);
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    .devtools-tabs::-webkit-scrollbar {
+      display: none;
     }
 
     .devtools-tab {
-      flex: 1;
-      padding: 10px;
+      flex: none;
+      padding: 8px 12px;
       border: none;
       background: transparent;
       color: var(--text-secondary);
@@ -436,24 +442,63 @@
       display: block;
     }
 
-    /* Console */
-    .console-log {
-      font-family: 'Monaco', 'Menlo', monospace;
-      font-size: 11px;
+    /* Resize Handle */
+    .devtools-resize-handle {
+      width: 6px;
+      cursor: col-resize;
+      background: transparent;
+      position: relative;
+      flex-shrink: 0;
+      z-index: 10;
     }
 
-    .console-entry {
-      padding: 4px 0;
-      border-bottom: 1px solid var(--border-color);
+    .devtools-resize-handle:hover,
+    .devtools-resize-handle.dragging {
+      background: var(--accent-color);
     }
 
-    .console-entry.log { color: var(--text-primary); }
-    .console-entry.warn { color: var(--warning-color); }
-    .console-entry.error { color: var(--error-color); }
+    .devtools-resize-handle:hover {
+      opacity: 0.3;
+    }
 
-    .console-time {
+    .devtools-resize-handle.dragging {
+      opacity: 0.5;
+    }
+
+    /* DevTools Toggle */
+    .devtools-toggle {
+      padding: 6px 12px;
+      border: none;
+      background: transparent;
       color: var(--text-secondary);
-      margin-right: 8px;
+      cursor: pointer;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      transition: color 200ms ease;
+    }
+
+    .devtools-toggle:hover {
+      color: var(--text-primary);
+    }
+
+    .devtools-toggle.panel-open {
+      color: var(--accent-color);
+    }
+
+    /* Clear All Button — base styles shared via .clear-btn selector above */
+    .devtools-clear-all {
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+
+    .devtools-panel.collapsed {
+      width: 0;
+      border-left: none;
+    }
+
+    .devtools-panel.resizing {
+      transition: none;
     }
 
     /* Network Log */
@@ -495,6 +540,11 @@
       padding: 4px 0;
       font-size: 11px;
       border-bottom: 1px solid var(--border-color);
+    }
+
+    .event-time {
+      color: var(--text-secondary);
+      margin-right: 8px;
     }
 
     .event-type {
@@ -749,7 +799,7 @@
       z-index: 1;
     }
 
-    .clear-btn, .copy-btn {
+    .clear-btn, .copy-btn, .devtools-clear-all {
       padding: 2px 8px;
       border: 1px solid var(--border-color);
       border-radius: 3px;
@@ -759,7 +809,7 @@
       font-size: 11px;
     }
 
-    .clear-btn:hover, .copy-btn:hover {
+    .clear-btn:hover, .copy-btn:hover, .devtools-clear-all:hover {
       background: var(--bg-tertiary);
       color: var(--text-primary);
     }
@@ -1053,6 +1103,7 @@
       <button class="active" data-theme="light">Light</button>
       <button data-theme="dark">Dark</button>
     </div>
+    <button class="devtools-toggle panel-open" id="devtools-toggle">Dev Tools</button>
   </header>
 
   <main class="main">
@@ -1121,25 +1172,17 @@
     </section>
 
     <!-- DevTools Panel -->
+    <div class="devtools-resize-handle" id="devtools-resize-handle"></div>
     <aside class="devtools-panel">
       <div class="devtools-tabs">
-        <button class="devtools-tab active" data-tab="console">Console</button>
-        <button class="devtools-tab" data-tab="network">Network</button>
+        <button class="devtools-tab active" data-tab="network">Network</button>
         <button class="devtools-tab" data-tab="events">Events</button>
         <button class="devtools-tab" data-tab="protocol">Protocol</button>
         <button class="devtools-tab" data-tab="bridge">Bridge</button>
+        <button class="devtools-clear-all" id="clear-all-btn" title="Clear all tabs">Clear All</button>
       </div>
       <div class="devtools-content">
-        <div class="devtools-section active" id="tab-console">
-          <div class="devtools-btn-group">
-            <button class="copy-btn" data-copy="console">Copy</button>
-            <button class="clear-btn" data-clear="console">Clear</button>
-          </div>
-          <div class="console-log" id="console-log">
-            <div class="empty-state">Console output will appear here</div>
-          </div>
-        </div>
-        <div class="devtools-section" id="tab-network">
+        <div class="devtools-section active" id="tab-network">
           <div class="devtools-btn-group">
             <button class="copy-btn" data-copy="network">Copy</button>
             <button class="clear-btn" data-clear="network">Clear</button>
@@ -1965,10 +2008,7 @@
         document.querySelectorAll('.clear-btn').forEach(btn => {
           btn.addEventListener('click', () => {
             const target = btn.dataset.clear;
-            if (target === 'console') {
-              document.getElementById('console-log').innerHTML =
-                '<div class="empty-state">Console output will appear here</div>';
-            } else if (target === 'network') {
+            if (target === 'network') {
               document.getElementById('network-log').innerHTML =
                 '<div class="empty-state">Network requests will appear here</div>';
               this.networkUnreadCount = 0;
@@ -1995,6 +2035,69 @@
             await this.copyToClipboard(text);
             this.showCopyFeedback(btn);
           });
+        });
+
+        // DevTools panel state
+        const toggleBtn = document.getElementById('devtools-toggle');
+        const devtoolsPanel = document.querySelector('.devtools-panel');
+        const resizeHandle = document.getElementById('devtools-resize-handle');
+
+        const setDevToolsWidth = (px) => {
+          devtoolsPanel.style.width = px + 'px';
+          devtoolsPanel.classList.toggle('collapsed', px === 0);
+          toggleBtn.classList.toggle('panel-open', px !== 0);
+        };
+
+        // Toggle button
+        toggleBtn.addEventListener('click', () => {
+          setDevToolsWidth(devtoolsPanel.classList.contains('collapsed') ? 350 : 0);
+        });
+
+        // Resize handle
+        resizeHandle.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          const startX = e.clientX;
+          const startWidth = devtoolsPanel.getBoundingClientRect().width;
+          const maxWidth = window.innerWidth * 0.8;
+          let rafId = 0;
+          let isCollapsed = startWidth === 0;
+          devtoolsPanel.classList.add('resizing');
+          resizeHandle.classList.add('dragging');
+          document.body.style.userSelect = 'none';
+          document.body.style.cursor = 'col-resize';
+
+          const onMouseMove = (e) => {
+            cancelAnimationFrame(rafId);
+            rafId = requestAnimationFrame(() => {
+              const delta = startX - e.clientX;
+              const newWidth = Math.max(0, Math.min(maxWidth, startWidth + delta));
+              devtoolsPanel.style.width = newWidth + 'px';
+              const nowCollapsed = newWidth === 0;
+              if (nowCollapsed !== isCollapsed) {
+                isCollapsed = nowCollapsed;
+                devtoolsPanel.classList.toggle('collapsed', nowCollapsed);
+                toggleBtn.classList.toggle('panel-open', !nowCollapsed);
+              }
+            });
+          };
+
+          const onMouseUp = () => {
+            cancelAnimationFrame(rafId);
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            devtoolsPanel.classList.remove('resizing');
+            resizeHandle.classList.remove('dragging');
+            document.body.style.userSelect = '';
+            document.body.style.cursor = '';
+          };
+
+          document.addEventListener('mousemove', onMouseMove);
+          document.addEventListener('mouseup', onMouseUp);
+        });
+
+        // Global Clear All
+        document.getElementById('clear-all-btn').addEventListener('click', () => {
+          document.querySelectorAll('.clear-btn').forEach(btn => btn.click());
         });
       }
 
@@ -2072,7 +2175,6 @@
           return `Network Log (${entries.length} entries):\n${'='.repeat(60)}\n${lines.join('\n' + '-'.repeat(60) + '\n')}`;
         }
 
-        if (tab === 'console') return this.collectDomLog('#console-log', 'console-entry', 'Console Log');
         if (tab === 'events') return this.collectDomLog('#events-log', 'event-entry', 'Events Log');
 
         if (tab === 'protocol') {
@@ -2147,7 +2249,7 @@
         try {
           args = JSON.parse(argsText);
         } catch (e) {
-          this.logConsole('error', `Invalid JSON: ${e.message}`);
+          this.logEvent('error', { message: `Invalid JSON: ${e.message}` });
           return;
         }
 
@@ -2174,10 +2276,9 @@
           if (result.success && result.content) {
             await this.handleToolResponse(result);
           } else if (result.error) {
-            this.logConsole('error', result.error);
+            this.logEvent('error', { message: result.error });
           }
         } catch (e) {
-          this.logConsole('error', `Request failed: ${e.message}`);
           this.logNetwork('response', this.selectedTool.name, { error: e.message }, 0, false);
         }
       }
@@ -2273,13 +2374,8 @@
 
         if (widgetContent && widgetContent.text) {
           this.loadWidget(widgetContent.text);
-        } else {
-          // Check for text content
-          const textContent = result.content.find(c => c.type === 'text');
-          if (textContent) {
-            this.logConsole('log', `Tool returned: ${textContent.text}`);
-          }
         }
+        // Non-widget text content is rendered in the preview area; no separate DevTools logging needed.
 
         this.logEvent('toolResponse', { tool: this.selectedTool.name });
       }
@@ -2292,7 +2388,6 @@
       createToolCallHandler() {
         const runtime = this;
         return async (name, args) => {
-          runtime.logConsole('log', 'callTool: ' + name);
           runtime.logEvent('bridgeCall', { method: 'callTool', name, args });
 
           const startTime = Date.now();
@@ -2479,30 +2574,14 @@
 ${openaiStub}
 ${bridgeScript}
   <script type="module">
-    // Console capture for DevTools
-    const preview = window.parent.previewRuntime;
-    if (preview) {
-      const originalConsole = { ...console };
-      ['log', 'warn', 'error', 'info'].forEach(method => {
-        console[method] = (...cArgs) => {
-          originalConsole[method](...cArgs);
-          try {
-            preview.logConsole(method, cArgs.map(a =>
-              typeof a === 'object' ? JSON.stringify(a) : String(a)
-            ).join(' '));
-          } catch (e) { /* parent access may fail */ }
-        };
-      });
-
-      // Listen for globals updates from host
-      window.addEventListener('message', (e) => {
-        if (e.data && e.data.type === 'openai/setGlobals') {
-          window.dispatchEvent(new CustomEvent('openai/setGlobals', {
-            detail: e.data
-          }));
-        }
-      });
-    }
+    // Listen for globals updates from host
+    window.addEventListener('message', (e) => {
+      if (e.data && e.data.type === 'openai/setGlobals') {
+        window.dispatchEvent(new CustomEvent('openai/setGlobals', {
+          detail: e.data
+        }));
+      }
+    });
 
     // Signal ready — always sent so the host resolves readyPromise
     // regardless of whether the wrapper or the widget handled the handshake.
@@ -2638,20 +2717,6 @@ ${html}
         }
       }
 
-      logConsole(level, message) {
-        const container = document.getElementById('console-log');
-        if (container.querySelector('.empty-state')) {
-          container.innerHTML = '';
-        }
-
-        const time = new Date().toLocaleTimeString();
-        const entry = document.createElement('div');
-        entry.className = `console-entry ${level}`;
-        entry.innerHTML = `<span class="console-time">${time}</span>${message}`;
-        container.appendChild(entry);
-        container.scrollTop = container.scrollHeight;
-      }
-
       logNetwork(type, method, data, duration = 0, success = true) {
         const container = document.getElementById('network-log');
         if (container.querySelector('.empty-state')) {
@@ -2682,7 +2747,7 @@ ${html}
         const entry = document.createElement('div');
         entry.className = 'event-entry';
         entry.innerHTML = `
-          <span class="console-time">${time}</span>
+          <span class="event-time">${time}</span>
           <span class="event-type">${type}</span>
           ${Object.keys(data).length > 0 ? ` - ${JSON.stringify(data)}` : ''}
         `;
@@ -2726,7 +2791,6 @@ ${html}
       // =========================================================================
 
       async handleWidgetToolCall(name, args) {
-        this.logConsole('log', `[ChatGPT] callTool from widget: ${name}`);
         this.logEvent('chatgptCallTool', { name, args });
 
         try {
@@ -2741,7 +2805,7 @@ ${html}
           }
           throw new Error(result.error || 'Tool call failed');
         } catch (e) {
-          this.logConsole('error', `[ChatGPT] callTool failed: ${e.message}`);
+          this.logEvent('chatgptCallToolError', { message: e.message });
           throw e;
         }
       }

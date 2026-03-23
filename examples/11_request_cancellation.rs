@@ -29,10 +29,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("⚠️  Cancellation requested!");
 
                 // Create a cancellation notification
-                let cancellation = CancelledNotification {
-                    request_id: request_id.clone(),
-                    reason: Some("User requested cancellation".to_string()),
-                };
+                let cancellation = CancelledNotification::new(request_id.clone())
+                    .with_reason("User requested cancellation");
 
                 println!("📢 Cancellation notification: {:?}", cancellation);
                 return Err("Operation cancelled");

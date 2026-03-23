@@ -51,12 +51,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Send a notification
     let notification = TransportMessage::Notification(pmcp::types::Notification::Progress(
-        pmcp::types::ProgressNotification {
-            progress_token: pmcp::types::ProgressToken::String("task-001".to_string()),
-            progress: 25.0,
-            total: None,
-            message: Some("Processing started".to_string()),
-        },
+        pmcp::types::ProgressNotification::new(
+            pmcp::types::ProgressToken::String("task-001".to_string()),
+            25.0,
+            Some("Processing started".to_string()),
+        ),
     ));
 
     if let Err(e) = transport.send(notification).await {
@@ -82,12 +81,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for i in 0..10 {
         let progress_msg = TransportMessage::Notification(pmcp::types::Notification::Progress(
-            pmcp::types::ProgressNotification {
-                progress_token: pmcp::types::ProgressToken::String(format!("batch-{}", i)),
-                progress: (i as f64 * 10.0),
-                total: None,
-                message: Some(format!("Batch message {}", i)),
-            },
+            pmcp::types::ProgressNotification::new(
+                pmcp::types::ProgressToken::String(format!("batch-{}", i)),
+                i as f64 * 10.0,
+                Some(format!("Batch message {}", i)),
+            ),
         ));
 
         if let Err(e) = transport.send(progress_msg).await {

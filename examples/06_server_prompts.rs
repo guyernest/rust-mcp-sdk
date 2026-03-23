@@ -7,9 +7,7 @@
 //! - Prompt templates and formatting
 
 use pmcp::{
-    types::{
-        capabilities::ServerCapabilities, GetPromptResult, MessageContent, PromptMessage, Role,
-    },
+    types::{capabilities::ServerCapabilities, Content, GetPromptResult, PromptMessage},
     Server, SimplePrompt, SyncPrompt,
 };
 use std::collections::HashMap;
@@ -30,53 +28,55 @@ type AsyncPromptHandler = Box<
 fn create_code_review_prompt() -> SimplePrompt<AsyncPromptHandler> {
     SimplePrompt::new(
         "code_review",
-        Box::new(|args: HashMap<String, String>, _extra: pmcp::RequestHandlerExtra| {
-            Box::pin(async move {
-                let language = args
-                    .get("language")
-                    .map(|s| s.as_str())
-                    .unwrap_or("unknown");
-                let code = args
-                    .get("code")
-                    .ok_or_else(|| pmcp::Error::validation("code argument is required"))?;
-                let focus = args.get("focus").map(|s| s.as_str()).unwrap_or("general");
+        Box::new(
+            |args: HashMap<String, String>, _extra: pmcp::RequestHandlerExtra| {
+                Box::pin(async move {
+                    let language = args
+                        .get("language")
+                        .map(|s| s.as_str())
+                        .unwrap_or("unknown");
+                    let code = args
+                        .get("code")
+                        .ok_or_else(|| pmcp::Error::validation("code argument is required"))?;
+                    let focus = args.get("focus").map(|s| s.as_str()).unwrap_or("general");
 
-                let mut messages = vec![];
+                    let mut messages = vec![];
 
-                // System message
-                messages.push(PromptMessage {
-                    role: Role::System,
-                    content: MessageContent::Text {
-                        text: format!(
-                            "You are an expert {} code reviewer. Focus on {} aspects of the code. \
-                             Provide constructive feedback with specific suggestions for improvement.",
-                            language, focus
-                        ),
-                    },
-                });
-
-                // User message with the code
-                messages.push(PromptMessage {
-                    role: Role::User,
-                    content: MessageContent::Text {
-                        text: format!(
-                            "Please review this {} code:\n\n```{}\n{}\n```",
-                            language, language, code
-                        ),
-                    },
-                });
-
-                Ok(GetPromptResult::new(messages, Some(format!(
-                        "Code review for {} code focusing on {}",
+                    // System message
+                    messages.push(PromptMessage::system(Content::text(format!(
+                        "You are an expert {} code reviewer. Focus on {} aspects of the code. \
+                     Provide constructive feedback with specific suggestions for improvement.",
                         language, focus
-                    ))))
-            }) as std::pin::Pin<Box<dyn std::future::Future<Output = pmcp::Result<GetPromptResult>> + Send>>
-        }) as AsyncPromptHandler,
+                    ))));
+
+                    // User message with the code
+                    messages.push(PromptMessage::user(Content::text(format!(
+                        "Please review this {} code:\n\n```{}\n{}\n```",
+                        language, language, code
+                    ))));
+
+                    Ok(GetPromptResult::new(
+                        messages,
+                        Some(format!(
+                            "Code review for {} code focusing on {}",
+                            language, focus
+                        )),
+                    ))
+                })
+                    as std::pin::Pin<
+                        Box<dyn std::future::Future<Output = pmcp::Result<GetPromptResult>> + Send>,
+                    >
+            },
+        ) as AsyncPromptHandler,
     )
     .with_description("Generate a code review prompt for the provided code")
     .with_argument("language", "Programming language of the code", false)
     .with_argument("code", "The code to review", true)
-    .with_argument("focus", "Specific aspect to focus on (e.g., performance, security, style)", false)
+    .with_argument(
+        "focus",
+        "Specific aspect to focus on (e.g., performance, security, style)",
+        false,
+    )
 }
 
 // Create data analysis prompt using SyncPrompt
@@ -96,16 +96,11 @@ fn create_data_analysis_prompt(
         let mut messages = vec![];
 
         // System message
-        messages.push(PromptMessage {
-            role: Role::System,
-            content: MessageContent::Text {
-                text: format!(
-                    "You are a data analyst expert. Analyze the provided {} data and \
-                         provide insights in {} format. Be thorough and precise.",
-                    data_type, output_format
-                ),
-            },
-        });
+        messages.push(PromptMessage::system(Content::text(format!(
+            "You are a data analyst expert. Analyze the provided {} data and \
+                 provide insights in {} format. Be thorough and precise.",
+            data_type, output_format
+        ))));
 
         // User message with data
         let mut user_text = format!("Here is the {} data:\n\n{}\n\n", data_type, data);
@@ -116,10 +111,7 @@ fn create_data_analysis_prompt(
             user_text.push_str("Please provide a comprehensive analysis of this data.");
         }
 
-        messages.push(PromptMessage {
-            role: Role::User,
-            content: MessageContent::Text { text: user_text },
-        });
+        messages.push(PromptMessage::user(Content::text(user_text)));
 
         Ok(GetPromptResult::new(
             messages,
@@ -159,24 +151,17 @@ fn create_writing_assistant_prompt(
             let mut messages = vec![];
 
             // System message
-            messages.push(PromptMessage {
-                role: Role::System,
-                content: MessageContent::Text {
-                    text: format!(
-                        "You are a skilled writing assistant. Write in a {} style for a {} audience. \
-                         The content should be {} in length. Ensure clarity, engagement, and appropriate tone.",
-                        style, audience, length
-                    ),
-                },
-            });
+            messages.push(PromptMessage::system(Content::text(format!(
+                "You are a skilled writing assistant. Write in a {} style for a {} audience. \
+                 The content should be {} in length. Ensure clarity, engagement, and appropriate tone.",
+                style, audience, length
+            ))));
 
             // User message
-            messages.push(PromptMessage {
-                role: Role::User,
-                content: MessageContent::Text {
-                    text: format!("Write about: {}", topic),
-                },
-            });
+            messages.push(PromptMessage::user(Content::text(format!(
+                "Write about: {}",
+                topic
+            ))));
 
             Ok(GetPromptResult::new(messages, Some(format!(
                     "Writing assistance for '{}' in {} style",

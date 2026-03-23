@@ -66,6 +66,9 @@ pub mod simple_resources;
 /// Simple tool implementations with schema support.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simple_tool;
+/// SDK-level task store trait and in-memory implementation.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod task_store;
 /// Task routing trait for MCP Tasks integration.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tasks;
@@ -80,9 +83,17 @@ pub mod observability;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod workflow;
 
+/// State extractor for `#[mcp_tool]` shared state injection.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod state;
+
 /// Typed tool implementations with automatic schema generation.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod typed_tool;
+
+/// Typed prompt implementations with automatic argument schema generation.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod typed_prompt;
 
 /// UI resource implementations for MCP Apps Extension (SEP-1865).
 #[cfg(not(target_arch = "wasm32"))]
@@ -122,6 +133,10 @@ pub mod cancellation {
     #[derive(Debug, Clone, Default)]
     pub struct RequestHandlerExtra;
 }
+/// Axum Router convenience function for secure MCP server hosting.
+#[cfg(feature = "streamable-http")]
+#[cfg_attr(docsrs, doc(cfg(feature = "streamable-http")))]
+pub mod axum_router;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod dynamic;
 #[cfg(not(target_arch = "wasm32"))]
@@ -136,6 +151,10 @@ pub mod roots;
 pub mod streamable_http_server;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod subscriptions;
+/// Tower middleware layers for MCP HTTP security (DNS rebinding, security headers).
+#[cfg(feature = "streamable-http")]
+#[cfg_attr(docsrs, doc(cfg(feature = "streamable-http")))]
+pub mod tower_layers;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod transport;
 
@@ -472,12 +491,11 @@ impl Server {
     ///     .build()?;
     ///
     /// // Send a progress notification
-    /// let progress = ProgressNotification {
-    ///     progress_token: ProgressToken::String("task-123".to_string()),
-    ///     progress: 50.0,
-    ///     total: None,
-    ///     message: Some("Processing...".to_string()),
-    /// };
+    /// let progress = ProgressNotification::new(
+    ///     ProgressToken::String("task-123".to_string()),
+    ///     50.0,
+    ///     Some("Processing...".to_string()),
+    /// );
     ///
     /// server.send_notification(ServerNotification::Progress(progress)).await;
     /// # Ok(())
@@ -808,17 +826,17 @@ impl Server {
 
     /// Log an error message.
     async fn log_error(message: &str) {
-        crate::log(crate::types::protocol::LogLevel::Error, message, None).await;
+        crate::log(crate::types::LogLevel::Error, message, None).await;
     }
 
     /// Log a warning message.
     async fn log_warning(message: &str) {
-        crate::log(crate::types::protocol::LogLevel::Warning, message, None).await;
+        crate::log(crate::types::LogLevel::Warning, message, None).await;
     }
 
     /// Log a debug message.
     async fn log_debug(message: &str) {
-        crate::log(crate::types::protocol::LogLevel::Debug, message, None).await;
+        crate::log(crate::types::LogLevel::Debug, message, None).await;
     }
 
     /// Run the main event loop.
@@ -849,7 +867,7 @@ impl Server {
                     crate::negotiate_protocol_version(&init_req.protocol_version);
 
                 let result = InitializeResult {
-                    protocol_version: ProtocolVersion(negotiated_version),
+                    protocol_version: ProtocolVersion(negotiated_version.to_string()),
                     capabilities: self.capabilities.clone(),
                     server_info: self.info.clone(),
                     instructions: None,
@@ -928,14 +946,10 @@ impl Server {
             | ClientRequest::Complete(_)
             | ClientRequest::SetLoggingLevel { level: _ }
             | ClientRequest::Ping => Ok(serde_json::json!({})),
-            ClientRequest::CreateMessage(req) => self.handle_create_message(request_id, req).await,
-            ClientRequest::ElicitInputResponse(response) => {
-                // Handle elicitation response if we have a manager
-                if let Some(elicitation_manager) = &self.elicitation_manager {
-                    elicitation_manager.handle_response(response).await?;
-                }
-                Ok(serde_json::json!({}))
-            },
+            ClientRequest::CreateMessage(req) => self.handle_create_message(request_id, *req).await,
+            // Note: Elicitation responses are now handled as the response to
+            // ServerRequest::ElicitationCreate in the JSON-RPC response flow,
+            // not as a separate client request variant.
             // Task requests (experimental MCP Tasks) -- routing handled in Plan 02
             ClientRequest::TasksGet(_)
             | ClientRequest::TasksResult(_)
@@ -1111,7 +1125,7 @@ impl Server {
         }?;
         // Build CallToolResult, adding structured_content for widget tools
         let text = result.to_string();
-        let mut call_result = CallToolResult::new(vec![crate::types::Content::Text { text }]);
+        let mut call_result = CallToolResult::new(vec![crate::types::Content::text(text)]);
 
         if let Some(info) = self.tool_infos.get(&req.name) {
             call_result = call_result.with_widget_enrichment(info, result);
@@ -1131,11 +1145,7 @@ impl Server {
                     info.name.clone_from(name);
                     info
                 } else {
-                    crate::types::PromptInfo {
-                        name: name.clone(),
-                        description: None,
-                        arguments: None,
-                    }
+                    crate::types::PromptInfo::new(name)
                 }
             })
             .collect::<Vec<_>>();
@@ -1313,7 +1323,7 @@ impl Server {
         // Merge tool descriptor keys into content _meta for widget resources
         if !self.uri_to_tool_meta.is_empty() {
             for content in &mut result.contents {
-                if let crate::types::protocol::Content::Resource { uri, meta, .. } = content {
+                if let crate::types::Content::Resource { uri, meta, .. } = content {
                     if let Some(tool_meta) = self.uri_to_tool_meta.get(uri.as_str()) {
                         let content_meta = meta.get_or_insert_with(serde_json::Map::new);
                         crate::types::ui::deep_merge(content_meta, tool_meta.clone());
@@ -1335,7 +1345,7 @@ impl Server {
     async fn handle_create_message(
         &self,
         request_id: RequestId,
-        req: crate::types::CreateMessageRequest,
+        req: crate::types::CreateMessageParams,
     ) -> Result<Value> {
         let handler = self
             .sampling
@@ -1607,6 +1617,36 @@ impl Server {
     }
 }
 
+/// Trait for types annotated with `#[mcp_server]`.
+///
+/// Generated by the `#[mcp_server]` proc macro. Provides bulk registration of
+/// tools and prompts via `register()`. Users should call `.mcp_server(instance)`
+/// on the builder instead of implementing this trait manually.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use pmcp::ServerBuilder;
+///
+/// #[mcp_server]
+/// impl MyServer {
+///     #[mcp_tool(description = "Query data")]
+///     async fn query(&self, args: QueryArgs) -> Result<Value> { /* ... */ }
+///
+///     #[mcp_prompt(description = "Generate query")]
+///     async fn query_prompt(&self, args: PromptArgs) -> Result<GetPromptResult> { /* ... */ }
+/// }
+///
+/// let server = MyServer { db };
+/// let builder = ServerBuilder::new()
+///     .mcp_server(server);
+/// ```
+#[cfg(not(target_arch = "wasm32"))]
+pub trait McpServer {
+    /// Register all tools and prompts from this server on the builder.
+    fn register(self, builder: ServerBuilder) -> ServerBuilder;
+}
+
 /// Builder for creating servers.
 #[cfg(not(target_arch = "wasm32"))]
 pub struct ServerBuilder {
@@ -1762,12 +1802,10 @@ impl ServerBuilder {
     /// ```rust,no_run
     /// use pmcp::{Server, ServerCapabilities, ToolCapabilities};
     ///
-    /// let capabilities = ServerCapabilities {
-    ///     tools: Some(ToolCapabilities {
-    ///         list_changed: Some(true),
-    ///     }),
-    ///     ..Default::default()
-    /// };
+    /// let mut capabilities = ServerCapabilities::default();
+    /// capabilities.tools = Some(ToolCapabilities {
+    ///     list_changed: Some(true),
+    /// });
     ///
     /// let server = Server::builder()
     ///     .name("advanced-server")
@@ -1828,6 +1866,35 @@ impl ServerBuilder {
         }
 
         self
+    }
+
+    /// Register all tools and prompts from an `#[mcp_server]` annotated type.
+    ///
+    /// This is the ergonomic counterpart to individually registering tools and
+    /// prompts. The server instance provides shared state via `&self` to all
+    /// tool and prompt methods.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use pmcp::ServerBuilder;
+    ///
+    /// #[mcp_server]
+    /// impl MyServer {
+    ///     #[mcp_tool(description = "Query data")]
+    ///     async fn query(&self, args: QueryArgs) -> Result<Value> { /* ... */ }
+    ///
+    ///     #[mcp_prompt(description = "Generate query")]
+    ///     async fn query_prompt(&self, args: PromptArgs) -> Result<GetPromptResult> { /* ... */ }
+    /// }
+    ///
+    /// let server = MyServer { db };
+    /// let builder = ServerBuilder::new()
+    ///     .name("my-server")
+    ///     .mcp_server(server);
+    /// ```
+    pub fn mcp_server<T: McpServer>(self, server: T) -> Self {
+        server.register(self)
     }
 
     /// Add a type-safe tool handler with automatic schema generation.
@@ -2274,7 +2341,7 @@ impl ServerBuilder {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use pmcp::{Server, PromptHandler, GetPromptResult, PromptMessage, MessageContent};
+    /// use pmcp::{Server, PromptHandler, GetPromptResult, PromptMessage, Content};
     /// use async_trait::async_trait;
     /// use std::collections::HashMap;
     ///
@@ -2285,12 +2352,10 @@ impl ServerBuilder {
     ///     async fn handle(&self, args: HashMap<String, String>, _extra: pmcp::RequestHandlerExtra) -> pmcp::Result<GetPromptResult> {
     ///         let language = args.get("language").map(|s| s.as_str()).unwrap_or("unknown");
     ///         Ok(GetPromptResult::new(
-    ///             vec![PromptMessage {
-    ///                 role: pmcp::Role::User,
-    ///                 content: pmcp::Content::Text {
-    ///                     text: format!("Please review this {} code:", language),
-    ///                 },
-    ///             }],
+    ///             vec![PromptMessage::user(pmcp::Content::text(format!(
+    ///                 "Please review this {} code:",
+    ///                 language
+    ///             )))],
     ///             Some(format!("Code review prompt for {}", language)),
     ///         ))
     ///     }
@@ -2440,19 +2505,15 @@ impl ServerBuilder {
     /// impl ResourceHandler for FileResourceHandler {
     ///     async fn read(&self, uri: &str, _extra: pmcp::RequestHandlerExtra) -> pmcp::Result<ReadResourceResult> {
     ///         // Read file content...
-    ///         Ok(ReadResourceResult::new(vec![pmcp::Content::Text {
-    ///             text: "File content here".to_string(),
-    ///         }]))
+    ///         Ok(ReadResourceResult::new(vec![pmcp::Content::text("File content here")]))
     ///     }
     ///
     ///     async fn list(&self, _cursor: Option<String>, _extra: pmcp::RequestHandlerExtra) -> pmcp::Result<ListResourcesResult> {
-    ///         Ok(ListResourcesResult::new(vec![pmcp::ResourceInfo {
-    ///             uri: "file://example.txt".to_string(),
-    ///             name: "example.txt".to_string(),
-    ///             description: Some("Example file".to_string()),
-    ///             mime_type: Some("text/plain".to_string()),
-    ///             meta: None,
-    ///         }]))
+    ///         Ok(ListResourcesResult::new(vec![
+    ///             pmcp::ResourceInfo::new("file://example.txt", "example.txt")
+    ///                 .with_description("Example file")
+    ///                 .with_mime_type("text/plain"),
+    ///         ]))
     ///     }
     /// }
     ///
@@ -2499,18 +2560,9 @@ impl ServerBuilder {
     /// impl SamplingHandler for MockLLM {
     ///     async fn create_message(&self, params: CreateMessageParams, _extra: pmcp::RequestHandlerExtra) -> pmcp::Result<CreateMessageResult> {
     ///         // Process the messages and generate a response
-    ///         Ok(CreateMessageResult {
-    ///             content: pmcp::MessageContent::Text {
-    ///                 text: "Generated response".to_string(),
-    ///             },
-    ///             model: "mock-llm-v1".to_string(),
-    ///             usage: Some(pmcp::TokenUsage {
-    ///                 input_tokens: 10,
-    ///                 output_tokens: 5,
-    ///                 total_tokens: 15,
-    ///             }),
-    ///             stop_reason: Some("end_of_text".to_string()),
-    ///         })
+    ///         Ok(CreateMessageResult::new(pmcp::Content::text("Generated response"), "mock-llm-v1")
+    ///             .with_usage(pmcp::TokenUsage::new(10, 5, 15))
+    ///             .with_stop_reason("end_of_text"))
     ///     }
     /// }
     ///
@@ -3083,7 +3135,7 @@ impl ServerBuilder {
         let uri_to_tool_meta = core::build_uri_to_tool_meta(&tool_infos);
 
         Ok(Server {
-            info: Implementation { name, version },
+            info: Implementation::new(name, version),
             capabilities: self.capabilities,
             tools: self.tools,
             tool_infos,
@@ -3311,10 +3363,7 @@ mod tests {
             request: Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest {
                 protocol_version: "2024-11-05".to_string(),
                 capabilities: ClientCapabilities::minimal(),
-                client_info: Implementation {
-                    name: "test-client".to_string(),
-                    version: "1.0.0".to_string(),
-                },
+                client_info: Implementation::new("test-client", "1.0.0"),
             }))),
         };
 
@@ -3370,11 +3419,10 @@ mod tests {
             _meta: None,
         };
 
-        let resource_content = crate::types::ReadResourceResult {
-            contents: vec![crate::types::Content::Text {
-                text: "Hello, world!".to_string(),
-            }],
-        };
+        let resource_content =
+            crate::types::ReadResourceResult::new(vec![crate::types::Content::text(
+                "Hello, world!",
+            )]);
 
         let server = Server::builder()
             .name("test-server")
@@ -3404,10 +3452,7 @@ mod tests {
         let request = Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest {
             protocol_version: "2024-11-05".to_string(),
             capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            client_info: Implementation::new("test-client", "1.0.0"),
         })));
 
         let response = server
@@ -3575,11 +3620,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_list_resources() {
-        let resource_content = crate::types::ReadResourceResult {
-            contents: vec![crate::types::Content::Text {
-                text: "Hello, world!".to_string(),
-            }],
-        };
+        let resource_content =
+            crate::types::ReadResourceResult::new(vec![crate::types::Content::text(
+                "Hello, world!",
+            )]);
 
         let server = Server::builder()
             .name("test-server")
@@ -3608,11 +3652,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_read_resource() {
-        let resource_content = crate::types::ReadResourceResult {
-            contents: vec![crate::types::Content::Text {
-                text: "Hello, world!".to_string(),
-            }],
-        };
+        let resource_content =
+            crate::types::ReadResourceResult::new(vec![crate::types::Content::text(
+                "Hello, world!",
+            )]);
 
         let server = Server::builder()
             .name("test-server")
@@ -3699,15 +3742,17 @@ mod tests {
             .unwrap();
 
         let request = Request::Server(Box::new(crate::types::ServerRequest::CreateMessage(
-            Box::new(crate::types::protocol::CreateMessageParams {
+            Box::new(crate::types::CreateMessageParams {
                 messages: vec![],
                 model_preferences: None,
                 system_prompt: None,
-                include_context: crate::types::protocol::IncludeContext::None,
+                include_context: crate::types::IncludeContext::None,
                 temperature: None,
                 max_tokens: None,
                 stop_sequences: None,
                 metadata: None,
+                tools: None,
+                tool_choice: None,
             }),
         )));
         let response = server

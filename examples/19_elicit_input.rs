@@ -1,19 +1,20 @@
 //! Example showing user input elicitation in tools.
+//!
+//! Uses the MCP 2025-11-25 spec-compliant elicitation API with JSON Schema
+//! for form-based user input.
 
 use async_trait::async_trait;
 use pmcp::error::Result as PmcpResult;
 use pmcp::server::elicitation::{ElicitInput, ElicitationContext, ElicitationManager};
 use pmcp::server::{Server, ToolHandler};
 use pmcp::types::capabilities::ServerCapabilities;
-use pmcp::types::elicitation::{
-    elicit_boolean, elicit_number, elicit_select, elicit_text, InputType, SelectOption,
-};
+use pmcp::types::elicitation::{ElicitAction, ElicitRequestParams, ElicitResult};
 use pmcp::RequestHandlerExtra;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::info;
 
-/// Tool that demonstrates various input elicitation types
+/// Tool that demonstrates form-based elicitation using JSON Schema.
 struct InteractiveConfigTool {
     elicitation: Arc<ElicitationContext>,
 }
@@ -23,135 +24,64 @@ impl ToolHandler for InteractiveConfigTool {
     async fn handle(&self, _args: Value, _extra: RequestHandlerExtra) -> PmcpResult<Value> {
         info!("Starting interactive configuration...");
 
-        // Elicit project name
-        let name_response = self
-            .elicitation
-            .elicit_input(
-                elicit_text("What is the name of your project?")
-                    .description("This will be used as the package name")
-                    .required()
-                    .min(3.0)
-                    .max(50.0)
-                    .pattern("^[a-z][a-z0-9-]*$")
-                    .build(),
-            )
-            .await?;
-
-        if name_response.cancelled {
-            return Ok(
-                json!({"status": "cancelled", "message": "Configuration cancelled by user"}),
-            );
-        }
-
-        let project_name = name_response
-            .value
-            .and_then(|v| v.as_str().map(String::from))
-            .unwrap_or_else(|| "my-project".to_string());
-
-        // Elicit project type
-        let type_options = vec![
-            SelectOption {
-                value: json!("library"),
-                label: "Library".to_string(),
-                description: Some("A reusable library/package".to_string()),
-                disabled: false,
+        // Elicit project configuration via JSON Schema form
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Project name (used as the package name)",
+                    "minLength": 3,
+                    "maxLength": 50,
+                    "pattern": "^[a-z][a-z0-9-]*$"
+                },
+                "project_type": {
+                    "type": "string",
+                    "description": "Type of project",
+                    "enum": ["library", "application", "cli"]
+                },
+                "version": {
+                    "type": "string",
+                    "description": "Semantic version (e.g., 0.1.0)",
+                    "default": "0.1.0"
+                },
+                "include_tests": {
+                    "type": "boolean",
+                    "description": "Include test setup",
+                    "default": true
+                }
             },
-            SelectOption {
-                value: json!("application"),
-                label: "Application".to_string(),
-                description: Some("A standalone application".to_string()),
-                disabled: false,
-            },
-            SelectOption {
-                value: json!("cli"),
-                label: "CLI Tool".to_string(),
-                description: Some("A command-line interface tool".to_string()),
-                disabled: false,
-            },
-        ];
-
-        let type_response = self
-            .elicitation
-            .elicit_input(
-                elicit_select("What type of project is this?", type_options)
-                    .default(json!("application"))
-                    .build(),
-            )
-            .await?;
-
-        let project_type = type_response
-            .value
-            .and_then(|v| v.as_str().map(String::from))
-            .unwrap_or_else(|| "application".to_string());
-
-        // Elicit version number
-        let version_response = self
-            .elicitation
-            .elicit_input(
-                elicit_text("Initial version number?")
-                    .description("Semantic version (e.g., 0.1.0)")
-                    .default(json!("0.1.0"))
-                    .pattern(r"^\d+\.\d+\.\d+(-\w+)?$")
-                    .build(),
-            )
-            .await?;
-
-        let version = version_response
-            .value
-            .and_then(|v| v.as_str().map(String::from))
-            .unwrap_or_else(|| "0.1.0".to_string());
-
-        // Elicit whether to include tests
-        let tests_response = self
-            .elicitation
-            .elicit_input(
-                elicit_boolean("Include test setup?")
-                    .description("This will add a testing framework and example tests")
-                    .default(json!(true))
-                    .build(),
-            )
-            .await?;
-
-        let include_tests = tests_response
-            .value
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-
-        // Elicit number of worker threads (for applications)
-        let mut config = json!({
-            "name": project_name,
-            "type": project_type,
-            "version": version,
-            "include_tests": include_tests,
+            "required": ["name"]
         });
 
-        if project_type == "application" {
-            let threads_response = self
-                .elicitation
-                .elicit_input(
-                    elicit_number("Number of worker threads?")
-                        .description("For concurrent processing (1-16)")
-                        .default(json!(4))
-                        .min(1.0)
-                        .max(16.0)
-                        .build(),
-                )
-                .await?;
+        let request = ElicitRequestParams::Form {
+            message: "Configure your new project".to_string(),
+            requested_schema: schema,
+        };
 
-            let threads = threads_response.value.and_then(|v| v.as_u64()).unwrap_or(4);
+        let response: ElicitResult = self.elicitation.elicit_input(request).await?;
 
-            config["worker_threads"] = json!(threads);
+        match response.action {
+            ElicitAction::Accept => {
+                let content = response.content.unwrap_or_default();
+                let name = content
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("my-project");
+                Ok(json!({
+                    "status": "success",
+                    "configuration": content,
+                    "message": format!("Project '{}' configured successfully", name)
+                }))
+            },
+            ElicitAction::Decline | ElicitAction::Cancel => {
+                Ok(json!({"status": "cancelled", "message": "Configuration cancelled by user"}))
+            },
         }
-
-        Ok(json!({
-            "status": "success",
-            "configuration": config,
-            "message": format!("Project '{}' configured successfully", project_name)
-        }))
     }
 }
 
-/// Tool that demonstrates handling cancellation and errors
+/// Tool that demonstrates confirmation elicitation.
 struct SensitiveDataTool {
     elicitation: Arc<ElicitationContext>,
 }
@@ -164,66 +94,52 @@ impl ToolHandler for SensitiveDataTool {
             .and_then(|v| v.as_str())
             .unwrap_or("read");
 
-        // Always confirm sensitive operations
-        let confirm_response = self
-            .elicitation
-            .elicit_input(
-                elicit_boolean(format!(
-                    "Are you sure you want to {} sensitive data?",
-                    operation
-                ))
-                .description("This operation cannot be undone")
-                .default(json!(false))
-                .build(),
-            )
-            .await?;
+        // Confirm sensitive operation via form elicitation
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "confirmed": {
+                    "type": "boolean",
+                    "description": "This operation cannot be undone"
+                }
+            },
+            "required": ["confirmed"]
+        });
 
-        if confirm_response.cancelled {
-            return Ok(json!({
+        let request = ElicitRequestParams::Form {
+            message: format!("Are you sure you want to {} sensitive data?", operation),
+            requested_schema: schema,
+        };
+
+        let response = self.elicitation.elicit_input(request).await?;
+
+        match response.action {
+            ElicitAction::Accept => {
+                let confirmed = response
+                    .content
+                    .as_ref()
+                    .and_then(|c| c.get("confirmed"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                if !confirmed {
+                    return Ok(json!({
+                        "status": "aborted",
+                        "message": "Operation not confirmed"
+                    }));
+                }
+
+                Ok(json!({
+                    "status": "success",
+                    "operation": operation,
+                    "message": format!("Sensitive {} operation completed", operation)
+                }))
+            },
+            ElicitAction::Decline | ElicitAction::Cancel => Ok(json!({
                 "status": "cancelled",
                 "message": "Operation cancelled by user"
-            }));
+            })),
         }
-
-        let confirmed = confirm_response
-            .value
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        if !confirmed {
-            return Ok(json!({
-                "status": "aborted",
-                "message": "Operation not confirmed"
-            }));
-        }
-
-        // If confirmed, request credentials
-        let password_response = self
-            .elicitation
-            .elicit_input(
-                pmcp::types::elicitation::ElicitInputBuilder::new(
-                    InputType::Password,
-                    "Enter admin password:",
-                )
-                .description("Required for sensitive operations")
-                .required()
-                .build(),
-            )
-            .await?;
-
-        if password_response.cancelled {
-            return Ok(json!({
-                "status": "cancelled",
-                "message": "Authentication cancelled"
-            }));
-        }
-
-        // Simulate operation
-        Ok(json!({
-            "status": "success",
-            "operation": operation,
-            "message": format!("Sensitive {} operation completed", operation)
-        }))
     }
 }
 
@@ -242,38 +158,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let server = Server::builder()
         .name("elicit-input-example")
         .version("1.0.0")
-        .capabilities(ServerCapabilities {
-            tools: Some(Default::default()),
-            ..Default::default()
-        })
-        // Add interactive configuration tool
-        .tool("configure_project", InteractiveConfigTool {
-            elicitation: elicitation_ctx.clone(),
-        })
-        // Add sensitive data tool
-        .tool("sensitive_operation", SensitiveDataTool {
-            elicitation: elicitation_ctx.clone(),
-        })
+        .capabilities(ServerCapabilities::tools_only())
+        .tool(
+            "configure_project",
+            InteractiveConfigTool {
+                elicitation: elicitation_ctx.clone(),
+            },
+        )
+        .tool(
+            "sensitive_operation",
+            SensitiveDataTool {
+                elicitation: elicitation_ctx.clone(),
+            },
+        )
         .build()?;
 
     info!("Starting server with input elicitation examples...");
     info!("\nAvailable tools:");
     info!("1. configure_project - Interactive project configuration");
-    info!("   Demonstrates: text, select, boolean, and number inputs");
+    info!("   Uses JSON Schema form for name, type, version, tests");
     info!("\n2. sensitive_operation - Operations requiring confirmation");
-    info!("   Arguments:");
-    info!("   - operation: Operation type (read, write, delete)");
-    info!("   Demonstrates: boolean confirmation and password input");
+    info!("   Arguments: operation (read, write, delete)");
 
-    info!("\nInput elicitation features:");
-    info!("- Request various types of input from users");
-    info!("- Validation rules (min/max, patterns, required)");
-    info!("- Default values and descriptions");
-    info!("- Cancellation handling");
-    info!("- Timeout support");
-
-    info!("\nNote: This example demonstrates the API, but requires");
-    info!("a client that supports the elicitation protocol to work fully.");
+    info!("\nElicitation features (MCP 2025-11-25):");
+    info!("- Form mode: JSON Schema-based input forms");
+    info!("- Accept/decline/cancel actions");
+    info!("- Structured content responses");
 
     // Run server
     server.run_stdio().await?;

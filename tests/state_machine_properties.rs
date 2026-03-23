@@ -10,7 +10,7 @@ prop_compose! {
         version_idx in 0..3usize,
         client_name in "[a-zA-Z][a-zA-Z0-9_-]{0,20}",
         client_version in "[0-9]{1,2}\\.[0-9]{1,2}\\.[0-9]{1,2}",
-    ) -> InitializeParams {
+    ) -> InitializeRequest {
         let versions = ["2024-11-05", "2024-10-15", "2024-09-01"];
 
         // Note: Client capabilities are what the CLIENT supports (sampling, elicitation, roots)
@@ -18,14 +18,12 @@ prop_compose! {
         // For property testing, we just use minimal capabilities
         let capabilities = ClientCapabilities::minimal();
 
-        InitializeParams {
-            protocol_version: versions[version_idx % versions.len()].to_string(),
+        let mut req = InitializeRequest::new(
+            Implementation::new(client_name, client_version),
             capabilities,
-            client_info: Implementation {
-                name: client_name,
-                version: client_version,
-            },
-        }
+        );
+        req.protocol_version = versions[version_idx % versions.len()].to_string();
+        req
     }
 }
 
@@ -33,7 +31,7 @@ prop_compose! {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 enum ClientAction {
-    Initialize(InitializeParams),
+    Initialize(Box<InitializeRequest>),
     Ping,
     ListTools,
     CallTool(String),
@@ -53,7 +51,7 @@ prop_compose! {
         prompt_name in "[a-z_]+",
     ) -> ClientAction {
         match action_type {
-            0 => ClientAction::Initialize(init_params),
+            0 => ClientAction::Initialize(Box::new(init_params)),
             1 => ClientAction::Ping,
             2 => ClientAction::ListTools,
             3 => ClientAction::CallTool(tool_name),
@@ -218,13 +216,13 @@ proptest! {
         let mut state = ClientState::NotInitialized;
 
         // First init should succeed
-        let new_state = validate_client_state_transition(state, &ClientAction::Initialize(params1))
+        let new_state = validate_client_state_transition(state, &ClientAction::Initialize(Box::new(params1)))
             .expect("First init should succeed");
         prop_assert_eq!(new_state, ClientState::Initialized);
         state = new_state;
 
         // Second init should fail
-        let result = validate_client_state_transition(state, &ClientAction::Initialize(params2));
+        let result = validate_client_state_transition(state, &ClientAction::Initialize(Box::new(params2)));
         prop_assert!(result.is_err(), "Second init should fail");
     }
 

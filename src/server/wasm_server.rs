@@ -5,11 +5,11 @@
 
 use crate::error::{Error, Result};
 use crate::types::{
-    CallToolParams, CallToolResult, ClientRequest, Content, GetPromptParams, GetPromptResult,
-    Implementation, InitializeParams, InitializeResult, JSONRPCError, JSONRPCResponse,
-    ListPromptsParams, ListPromptsResult, ListResourcesParams, ListResourcesResult,
-    ListToolsParams, ListToolsResult, PromptInfo, ReadResourceParams, ReadResourceResult, Request,
-    RequestId, ResourceInfo, ServerCapabilities, ToolInfo,
+    CallToolRequest, CallToolResult, ClientRequest, Content, GetPromptRequest, GetPromptResult,
+    Implementation, InitializeRequest, InitializeResult, JSONRPCError, JSONRPCResponse,
+    ListPromptsRequest, ListPromptsResult, ListResourcesRequest, ListResourcesResult,
+    ListToolsRequest, ListToolsResult, PromptInfo, ReadResourceRequest, ReadResourceResult,
+    Request, RequestId, ResourceInfo, ServerCapabilities, ToolInfo,
 };
 use crate::{ErrorCode, SUPPORTED_PROTOCOL_VERSIONS};
 use serde_json::json;
@@ -123,11 +123,11 @@ impl WasmMcpServer {
         }
     }
 
-    fn handle_initialize(&self, params: InitializeParams) -> Result<Value> {
+    fn handle_initialize(&self, params: InitializeRequest) -> Result<Value> {
         let negotiated_version = crate::negotiate_protocol_version(&params.protocol_version);
 
         let result = InitializeResult {
-            protocol_version: crate::types::ProtocolVersion(negotiated_version),
+            protocol_version: crate::types::ProtocolVersion(negotiated_version.to_string()),
             capabilities: self.capabilities.clone(),
             server_info: self.info.clone(),
             instructions: None,
@@ -135,7 +135,7 @@ impl WasmMcpServer {
         serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
     }
 
-    fn handle_list_tools(&self, _params: ListToolsParams) -> Result<Value> {
+    fn handle_list_tools(&self, _params: ListToolsRequest) -> Result<Value> {
         let tools: Vec<ToolInfo> = self.tool_infos.values().cloned().collect();
 
         let result = ListToolsResult {
@@ -145,7 +145,7 @@ impl WasmMcpServer {
         serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
     }
 
-    fn handle_call_tool(&self, params: CallToolParams) -> Result<Value> {
+    fn handle_call_tool(&self, params: CallToolRequest) -> Result<Value> {
         let tool = self.tools.get(&params.name).ok_or_else(|| {
             Error::protocol(
                 ErrorCode::METHOD_NOT_FOUND,
@@ -158,42 +158,28 @@ impl WasmMcpServer {
             Ok(result_value) => {
                 // Determine content type based on the result structure
                 let content = if let Some(text) = result_value.as_str() {
-                    vec![Content::Text {
-                        text: text.to_string(),
-                    }]
+                    vec![Content::text(text)]
                 } else if result_value.is_object() {
                     // For structured data, wrap in a content type that preserves structure
-                    vec![Content::Text {
-                        text: serde_json::to_string_pretty(&result_value)
+                    vec![Content::text(
+                        serde_json::to_string_pretty(&result_value)
                             .unwrap_or_else(|_| "{}".to_string()),
-                    }]
+                    )]
                 } else {
-                    vec![Content::Text {
-                        text: result_value.to_string(),
-                    }]
+                    vec![Content::text(result_value.to_string())]
                 };
 
-                let result = CallToolResult {
-                    content,
-                    is_error: false,
-                    ..Default::default()
-                };
+                let result = CallToolResult::new(content);
                 serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
             },
             Err(e) => {
-                let result = CallToolResult {
-                    content: vec![Content::Text {
-                        text: format!("Error: {}", e),
-                    }],
-                    is_error: true,
-                    ..Default::default()
-                };
+                let result = CallToolResult::error(vec![Content::text(format!("Error: {}", e))]);
                 serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
             },
         }
     }
 
-    fn handle_list_resources(&self, params: ListResourcesParams) -> Result<Value> {
+    fn handle_list_resources(&self, params: ListResourcesRequest) -> Result<Value> {
         // Aggregate resources from all providers with cursor support
         let mut all_resources = Vec::new();
         let mut next_cursor = None;
@@ -244,7 +230,7 @@ impl WasmMcpServer {
         serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
     }
 
-    fn handle_read_resource(&self, params: ReadResourceParams) -> Result<Value> {
+    fn handle_read_resource(&self, params: ReadResourceRequest) -> Result<Value> {
         // Find the first resource that can handle this URI
         for resource in self.resources.values() {
             if let Ok(result) = resource.read(&params.uri) {
@@ -257,7 +243,7 @@ impl WasmMcpServer {
         ))
     }
 
-    fn handle_list_prompts(&self, _params: ListPromptsParams) -> Result<Value> {
+    fn handle_list_prompts(&self, _params: ListPromptsRequest) -> Result<Value> {
         let prompts: Vec<PromptInfo> = self.prompt_infos.values().cloned().collect();
 
         let result = ListPromptsResult {
@@ -267,7 +253,7 @@ impl WasmMcpServer {
         serde_json::to_value(result).map_err(|e| Error::internal(&e.to_string()))
     }
 
-    fn handle_get_prompt(&self, params: GetPromptParams) -> Result<Value> {
+    fn handle_get_prompt(&self, params: GetPromptRequest) -> Result<Value> {
         let prompt = self.prompts.get(&params.name).ok_or_else(|| {
             Error::protocol(
                 ErrorCode::METHOD_NOT_FOUND,
@@ -363,10 +349,7 @@ impl WasmMcpServerBuilder {
     /// Build the server.
     pub fn build(self) -> WasmMcpServer {
         WasmMcpServer {
-            info: Implementation {
-                name: self.name,
-                version: self.version,
-            },
+            info: Implementation::new(self.name, self.version),
             capabilities: self.capabilities,
             tools: self.tools,
             resources: self.resources,

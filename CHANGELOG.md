@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-03-22
+
+### PMCP v2.0 — Aligned with the MCP TypeScript SDK v2.0
+
+This is the first major version bump, marking full alignment with the MCP protocol v2025-03-26 and the TypeScript SDK v2.0 release. PMCP v2.0 brings MCP Apps, MCP Tasks, a conformance test suite, production-grade HTTP security, and improved developer ergonomics across the board.
+
+### Added
+- **MCP Protocol v2025-03-26**: Full support for the latest protocol specification with backward compatibility for `2024-11-05`
+- **MCP Tasks** (`pmcp-tasks` crate): Experimental shared client/server task state with DynamoDB backend
+  - Task lifecycle management (create, update, complete, cancel)
+  - Task variables for shared client/server state
+  - In-memory backend for dev/tests
+- **Conformance Test Suite**: 19-scenario engine across 5 domains (initialize, tools, resources, prompts, notifications)
+  - `cargo pmcp test conformance` CLI command with `--strict` and `--domain` flags
+  - `mcp-tester conformance` with per-domain CI summary
+- **Tower Middleware Stack**: Production-ready HTTP security
+  - DNS rebinding protection with configurable allowed origins
+  - CORS with origin-locked headers (no wildcard in production)
+  - Configurable security headers layer
+  - `AllowedOrigins` configuration (localhost, any, custom list)
+- **Uniform Constructor DX**: Default impls, builders, and constructors for all protocol types
+- **MCP Apps DevTools improvements**: Resizable/collapsible DevTools panel, "Dev Tools" toggle button, global "Clear All", Console tab removed (browser DevTools sufficient)
+- **PMCP Server**: MCP server crate exposing SDK developer tools via Streamable HTTP
+  - Protocol compliance testing, scenario generation, MCP Apps validation
+  - Schema export, code scaffolding, documentation resources
+  - Deployed on AWS Lambda at `https://pmcp-server.us-east.true-mcp.com/mcp`
+
+### Changed
+- Bumped `pmcp` to 2.0.0
+- Bumped `mcp-tester` to 0.4.0
+- Bumped `mcp-preview` to 0.3.0
+- Bumped `cargo-pmcp` to 0.5.0
+- Protocol version negotiation accepts both `2025-03-26` and `2024-11-05`
+- `RouterConfig` and `StreamableHttpServerConfig` now include `allowed_origins` field
+
+### Fixed
+- Clippy warnings across workspace (derivable_impls, clone_on_copy, map_or patterns)
+- Lambda server missing `allowed_origins` field in `StreamableHttpServerConfig`
+
 ## [1.19.0] - 2026-03-14
 
 ### Added

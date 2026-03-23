@@ -6,9 +6,16 @@
 pub mod auth;
 pub mod capabilities;
 pub mod completable;
+pub mod content;
 pub mod elicitation;
 pub mod jsonrpc;
+pub mod notifications;
+pub mod prompts;
 pub mod protocol;
+pub mod resources;
+pub mod sampling;
+pub mod tasks;
+pub mod tools;
 
 /// UI resources for MCP Apps Extension (SEP-1865)
 pub mod ui;
@@ -24,29 +31,22 @@ pub use crate::shared::transport::TransportMessage;
 // Re-export protocol version constants
 pub use crate::{DEFAULT_PROTOCOL_VERSION, LATEST_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS};
 
-// Re-export commonly used types
+// Re-export commonly used types for flat access.
+// protocol/mod.rs re-exports all domain module types, so a single
+// `pub use protocol::*` provides `types::X` for every type.
+pub use protocol::*;
+
 pub use auth::{AuthInfo, AuthScheme};
 pub use capabilities::{
-    ClientCapabilities, CompletionCapabilities, LoggingCapabilities, PromptCapabilities,
-    ResourceCapabilities, RootsCapabilities, SamplingCapabilities, ServerCapabilities,
+    ClientCapabilities, ClientTasksCapability, CompletionCapabilities, ElicitationCapabilities,
+    FormElicitationCapability, LoggingCapabilities, PromptCapabilities, ResourceCapabilities,
+    RootsCapabilities, SamplingCapabilities, ServerCapabilities, ServerTasksCapability,
     ToolCapabilities,
 };
-pub use jsonrpc::{JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, RequestId};
-pub use protocol::{
-    CallToolParams, CallToolRequest, CallToolResult, CancelledNotification, CancelledParams,
-    ClientNotification, ClientRequest, CompleteRequest, CompleteResult, CompletionArgument,
-    CompletionReference, CompletionResult, Content, CreateMessageParams, CreateMessageRequest,
-    CreateMessageResult, GetPromptParams, GetPromptRequest, GetPromptResult, Implementation,
-    IncludeContext, InitializeParams, InitializeRequest, InitializeResult, ListPromptsParams,
-    ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
-    ListResourceTemplatesResult, ListResourcesParams, ListResourcesRequest, ListResourcesResult,
-    ListToolsParams, ListToolsRequest, ListToolsResult, LoggingLevel, MessageContent, ModelHint,
-    ModelPreferences, Notification, Progress, ProgressNotification, ProgressToken, PromptArgument,
-    PromptArgumentType, PromptInfo, PromptMessage, ProtocolVersion, ReadResourceParams,
-    ReadResourceRequest, ReadResourceResult, Request, RequestMeta, ResourceInfo, ResourceTemplate,
-    Role, SamplingMessage, ServerNotification, ServerRequest, SubscribeRequest, TokenUsage,
-    ToolAnnotations, ToolInfo, UnsubscribeRequest,
+pub use elicitation::{
+    ElicitAction, ElicitRequestParams, ElicitResult, ElicitationCompleteNotification,
 };
+pub use jsonrpc::{JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse, RequestId};
 pub use ui::{ToolUIMetadata, UIMimeType, UIResource, UIResourceContents};
 
 // MCP Apps Extension re-exports

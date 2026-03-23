@@ -9,11 +9,11 @@ use crate::shared::middleware::{EnhancedMiddlewareChain, MiddlewareContext};
 use crate::shared::protocol_helpers::{create_notification, create_request};
 use crate::types::jsonrpc::ResponsePayload;
 use crate::types::{
-    CallToolParams, CallToolResult, ClientCapabilities, ClientRequest, Content, GetPromptParams,
-    GetPromptResult, Implementation, InitializeParams, InitializeResult, JSONRPCError,
-    JSONRPCResponse, ListPromptsParams, ListPromptsResult, ListResourceTemplatesRequest,
-    ListResourceTemplatesResult, ListResourcesParams, ListResourcesResult, ListToolsParams,
-    ListToolsResult, Notification, PromptInfo, ProtocolVersion, ReadResourceParams,
+    CallToolRequest, CallToolResult, ClientCapabilities, ClientRequest, Content, GetPromptRequest,
+    GetPromptResult, Implementation, InitializeRequest, InitializeResult, JSONRPCError,
+    JSONRPCResponse, ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
+    ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
+    ListToolsResult, Notification, PromptInfo, ProtocolVersion, ReadResourceRequest,
     ReadResourceResult, Request, RequestId, ServerCapabilities, ToolInfo,
 };
 use async_trait::async_trait;
@@ -252,6 +252,10 @@ pub struct ServerCore {
     #[cfg(not(target_arch = "wasm32"))]
     task_router: Option<Arc<dyn TaskRouter>>,
 
+    /// Task store for MCP Tasks with polling (standard capability path)
+    #[cfg(not(target_arch = "wasm32"))]
+    task_store: Option<Arc<dyn crate::server::task_store::TaskStore>>,
+
     /// Stateless mode flag for serverless deployments
     ///
     /// When true, the server skips initialization state checking, allowing
@@ -281,6 +285,9 @@ impl ServerCore {
         protocol_middleware: Arc<RwLock<EnhancedMiddlewareChain>>,
         #[cfg(not(target_arch = "wasm32"))] tool_middleware: Arc<RwLock<ToolMiddlewareChain>>,
         #[cfg(not(target_arch = "wasm32"))] task_router: Option<Arc<dyn TaskRouter>>,
+        #[cfg(not(target_arch = "wasm32"))] task_store: Option<
+            Arc<dyn crate::server::task_store::TaskStore>,
+        >,
         stateless_mode: bool,
     ) -> Self {
         let uri_to_tool_meta = build_uri_to_tool_meta(&tool_infos);
@@ -306,6 +313,8 @@ impl ServerCore {
             tool_middleware,
             #[cfg(not(target_arch = "wasm32"))]
             task_router,
+            #[cfg(not(target_arch = "wasm32"))]
+            task_store,
             stateless_mode,
         }
     }
@@ -321,7 +330,7 @@ impl ServerCore {
     }
 
     /// Handle initialization request.
-    async fn handle_initialize(&self, init_req: &InitializeParams) -> Result<InitializeResult> {
+    async fn handle_initialize(&self, init_req: &InitializeRequest) -> Result<InitializeResult> {
         // Store client capabilities
         *self.client_capabilities.write().await = Some(init_req.capabilities.clone());
         *self.initialized.write().await = true;
@@ -329,7 +338,7 @@ impl ServerCore {
         let negotiated_version = crate::negotiate_protocol_version(&init_req.protocol_version);
 
         Ok(InitializeResult {
-            protocol_version: ProtocolVersion(negotiated_version),
+            protocol_version: ProtocolVersion(negotiated_version.to_string()),
             capabilities: self.capabilities.clone(),
             server_info: self.info.clone(),
             instructions: None,
@@ -337,7 +346,7 @@ impl ServerCore {
     }
 
     /// Handle list tools request.
-    async fn handle_list_tools(&self, _req: &ListToolsParams) -> Result<ListToolsResult> {
+    async fn handle_list_tools(&self, _req: &ListToolsRequest) -> Result<ListToolsResult> {
         let tools: Vec<ToolInfo> = self.tool_infos.values().cloned().collect();
 
         Ok(ListToolsResult {
@@ -349,7 +358,7 @@ impl ServerCore {
     /// Handle call tool request.
     async fn handle_call_tool(
         &self,
-        req: &CallToolParams,
+        req: &CallToolRequest,
         auth_context: Option<AuthContext>,
     ) -> Result<CallToolResult> {
         let handler = self
@@ -441,18 +450,17 @@ impl ServerCore {
             // Widget tool: structured data goes in structuredContent,
             // text is a brief summary to avoid duplication in `ChatGPT`
             let summary = summarize_structured_output(&value);
-            CallToolResult::new(vec![Content::Text { text: summary }])
-                .with_widget_enrichment(info, value)
+            CallToolResult::new(vec![Content::text(summary)]).with_widget_enrichment(info, value)
         } else {
             let text = serde_json::to_string_pretty(&value)?;
-            CallToolResult::new(vec![Content::Text { text }])
+            CallToolResult::new(vec![Content::text(text)])
         };
 
         Ok(call_result)
     }
 
     /// Handle list prompts request.
-    async fn handle_list_prompts(&self, _req: &ListPromptsParams) -> Result<ListPromptsResult> {
+    async fn handle_list_prompts(&self, _req: &ListPromptsRequest) -> Result<ListPromptsResult> {
         let prompts: Vec<PromptInfo> = self.prompt_infos.values().cloned().collect();
 
         tracing::debug!(
@@ -470,7 +478,7 @@ impl ServerCore {
     /// Handle get prompt request.
     async fn handle_get_prompt(
         &self,
-        req: &GetPromptParams,
+        req: &GetPromptRequest,
         auth_context: Option<AuthContext>,
     ) -> Result<GetPromptResult> {
         let handler = self
@@ -494,7 +502,7 @@ impl ServerCore {
     /// Handle list resources request.
     async fn handle_list_resources(
         &self,
-        req: &ListResourcesParams,
+        req: &ListResourcesRequest,
         auth_context: Option<AuthContext>,
     ) -> Result<ListResourcesResult> {
         let mut result = match &self.resources {
@@ -534,7 +542,7 @@ impl ServerCore {
     /// Handle read resource request.
     async fn handle_read_resource(
         &self,
-        req: &ReadResourceParams,
+        req: &ReadResourceRequest,
         auth_context: Option<AuthContext>,
     ) -> Result<ReadResourceResult> {
         let handler = self.resources.as_ref().ok_or_else(|| {
@@ -758,13 +766,27 @@ impl ServerCore {
     /// Returns `None` if no task router is configured. When a task router is
     /// available, it delegates to [`TaskRouter::resolve_owner`] which uses
     /// the priority chain: OAuth subject > client ID > session ID > "local".
+    /// When only a [`TaskStore`] is configured (no [`TaskRouter`]), derives
+    /// the owner from the auth context directly.
     #[cfg(not(target_arch = "wasm32"))]
     fn resolve_task_owner(&self, auth_context: Option<&AuthContext>) -> Option<String> {
-        let router = self.task_router.as_ref()?;
-        Some(match auth_context {
-            Some(ctx) => router.resolve_owner(Some(&ctx.subject), ctx.client_id.as_deref(), None),
-            None => router.resolve_owner(None, None, None),
-        })
+        // Legacy path: TaskRouter has its own resolve_owner logic
+        if let Some(ref router) = self.task_router {
+            return Some(match auth_context {
+                Some(ctx) => {
+                    router.resolve_owner(Some(&ctx.subject), ctx.client_id.as_deref(), None)
+                },
+                None => router.resolve_owner(None, None, None),
+            });
+        }
+        // Standard path: derive owner from auth context when task_store is configured
+        if self.task_store.is_some() {
+            return Some(match auth_context {
+                Some(ctx) => ctx.client_id.clone().unwrap_or_else(|| ctx.subject.clone()),
+                None => "local".to_string(),
+            });
+        }
+        None
     }
 
     /// Internal request handler without middleware processing.
@@ -815,8 +837,11 @@ impl ServerCore {
                                 .tool_infos
                                 .get(&req.name)
                                 .and_then(|m| m.execution.as_ref());
-                            let needs_task = req.task.is_some()
-                                || task_router.tool_requires_task(&req.name, tool_execution);
+                            let needs_task = req.task.is_some() || {
+                                let exec_value =
+                                    tool_execution.and_then(|e| serde_json::to_value(e).ok());
+                                task_router.tool_requires_task(&req.name, exec_value.as_ref())
+                            };
                             if needs_task {
                                 let owner_id = self
                                     .resolve_task_owner(auth_context.as_ref())
@@ -925,15 +950,32 @@ impl ServerCore {
                             Err(e) => Self::error_response(id, -32603, e.to_string()),
                         }
                     },
-                    // Task endpoint routing (experimental MCP Tasks)
+                    // Task endpoint routing (TaskStore preferred, TaskRouter fallback)
                     #[cfg(not(target_arch = "wasm32"))]
                     ClientRequest::TasksGet(params) => {
-                        if let Some(ref task_router) = self.task_router {
+                        if let Some(ref store) = self.task_store {
+                            let owner_id = self
+                                .resolve_task_owner(auth_context.as_ref())
+                                .unwrap_or_else(|| "local".to_string());
+                            match store.get(&params.task_id, &owner_id).await {
+                                Ok(task) => {
+                                    let result = crate::types::tasks::GetTaskResult::new(task);
+                                    Self::success_response(
+                                        id,
+                                        serde_json::to_value(result).unwrap(),
+                                    )
+                                },
+                                Err(e) => Self::error_response(id, -32603, e.to_string()),
+                            }
+                        } else if let Some(ref task_router) = self.task_router {
                             let owner_id = self
                                 .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
-                                .handle_tasks_get(params.clone(), &owner_id)
+                                .handle_tasks_get(
+                                    serde_json::to_value(params).unwrap_or_default(),
+                                    &owner_id,
+                                )
                                 .await
                             {
                                 Ok(result) => Self::success_response(id, result),
@@ -945,29 +987,58 @@ impl ServerCore {
                     },
                     #[cfg(not(target_arch = "wasm32"))]
                     ClientRequest::TasksResult(params) => {
+                        // tasks/result is a PMCP extension -- delegate to TaskRouter only
                         if let Some(ref task_router) = self.task_router {
                             let owner_id = self
                                 .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
-                                .handle_tasks_result(params.clone(), &owner_id)
+                                .handle_tasks_result(
+                                    serde_json::to_value(params).unwrap_or_default(),
+                                    &owner_id,
+                                )
                                 .await
                             {
                                 Ok(result) => Self::success_response(id, result),
                                 Err(e) => Self::error_response(id, -32603, e.to_string()),
                             }
                         } else {
-                            Self::error_response(id, -32601, "Tasks not enabled".to_string())
+                            Self::error_response(
+                                id,
+                                -32601,
+                                "tasks/result not supported".to_string(),
+                            )
                         }
                     },
                     #[cfg(not(target_arch = "wasm32"))]
                     ClientRequest::TasksList(params) => {
-                        if let Some(ref task_router) = self.task_router {
+                        if let Some(ref store) = self.task_store {
+                            let owner_id = self
+                                .resolve_task_owner(auth_context.as_ref())
+                                .unwrap_or_else(|| "local".to_string());
+                            match store.list(&owner_id, params.cursor.as_deref()).await {
+                                Ok((tasks, next_cursor)) => {
+                                    let mut result =
+                                        crate::types::tasks::ListTasksResult::new(tasks);
+                                    if let Some(cursor) = next_cursor {
+                                        result = result.with_next_cursor(cursor);
+                                    }
+                                    Self::success_response(
+                                        id,
+                                        serde_json::to_value(result).unwrap(),
+                                    )
+                                },
+                                Err(e) => Self::error_response(id, -32603, e.to_string()),
+                            }
+                        } else if let Some(ref task_router) = self.task_router {
                             let owner_id = self
                                 .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
-                                .handle_tasks_list(params.clone(), &owner_id)
+                                .handle_tasks_list(
+                                    serde_json::to_value(params).unwrap_or_default(),
+                                    &owner_id,
+                                )
                                 .await
                             {
                                 Ok(result) => Self::success_response(id, result),
@@ -979,12 +1050,29 @@ impl ServerCore {
                     },
                     #[cfg(not(target_arch = "wasm32"))]
                     ClientRequest::TasksCancel(params) => {
-                        if let Some(ref task_router) = self.task_router {
+                        if let Some(ref store) = self.task_store {
+                            let owner_id = self
+                                .resolve_task_owner(auth_context.as_ref())
+                                .unwrap_or_else(|| "local".to_string());
+                            match store.cancel(&params.task_id, &owner_id).await {
+                                Ok(task) => {
+                                    let result = crate::types::tasks::CancelTaskResult::new(task);
+                                    Self::success_response(
+                                        id,
+                                        serde_json::to_value(result).unwrap(),
+                                    )
+                                },
+                                Err(e) => Self::error_response(id, -32603, e.to_string()),
+                            }
+                        } else if let Some(ref task_router) = self.task_router {
                             let owner_id = self
                                 .resolve_task_owner(auth_context.as_ref())
                                 .unwrap_or_else(|| "local".to_string());
                             match task_router
-                                .handle_tasks_cancel(params.clone(), &owner_id)
+                                .handle_tasks_cancel(
+                                    serde_json::to_value(params).unwrap_or_default(),
+                                    &owner_id,
+                                )
                                 .await
                             {
                                 Ok(result) => Self::success_response(id, result),
@@ -1096,10 +1184,7 @@ mod tests {
         let tool_infos = build_tool_infos(&tools);
 
         let server = ServerCore::new(
-            Implementation {
-                name: "test-server".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            Implementation::new("test-server", "1.0.0"),
             ServerCapabilities::tools_only(),
             tools,
             HashMap::new(),
@@ -1112,18 +1197,16 @@ mod tests {
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             Arc::new(RwLock::new(ToolMiddlewareChain::new())),
             None,  // task_router
+            None,  // task_store
             false, // stateless_mode
         );
 
         assert!(!server.is_initialized().await);
 
-        let init_req = Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
+        let init_req = Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest {
             protocol_version: crate::DEFAULT_PROTOCOL_VERSION.to_string(),
             capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            client_info: Implementation::new("test-client", "1.0.0"),
         })));
 
         let response = server
@@ -1148,10 +1231,7 @@ mod tests {
         let tool_infos = build_tool_infos(&tools);
 
         let server = ServerCore::new(
-            Implementation {
-                name: "test-server".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            Implementation::new("test-server", "1.0.0"),
             ServerCapabilities::tools_only(),
             tools,
             HashMap::new(),
@@ -1164,24 +1244,22 @@ mod tests {
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             Arc::new(RwLock::new(ToolMiddlewareChain::new())),
             None,  // task_router
+            None,  // task_store
             false, // stateless_mode
         );
 
         // Initialize first
-        let init_req = Request::Client(Box::new(ClientRequest::Initialize(InitializeParams {
+        let init_req = Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest {
             protocol_version: crate::DEFAULT_PROTOCOL_VERSION.to_string(),
             capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "test-client".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            client_info: Implementation::new("test-client", "1.0.0"),
         })));
         server
             .handle_request(RequestId::from(1i64), init_req, None)
             .await;
 
         // List tools
-        let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsParams {
+        let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
         })));
         let response = server
@@ -1209,10 +1287,7 @@ mod tests {
         let tool_infos = build_tool_infos(&tools);
 
         let server = ServerCore::new(
-            Implementation {
-                name: "test-server".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            Implementation::new("test-server", "1.0.0"),
             ServerCapabilities::tools_only(),
             tools,
             HashMap::new(),
@@ -1225,11 +1300,12 @@ mod tests {
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             Arc::new(RwLock::new(ToolMiddlewareChain::new())),
             None, // task_router
+            None, // task_store
             true, // stateless_mode enabled
         );
 
         // Try to list tools WITHOUT initializing first
-        let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsParams {
+        let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
         })));
         let response = server
@@ -1261,10 +1337,7 @@ mod tests {
         let tool_infos = build_tool_infos(&tools);
 
         let server = ServerCore::new(
-            Implementation {
-                name: "test-server".to_string(),
-                version: "1.0.0".to_string(),
-            },
+            Implementation::new("test-server", "1.0.0"),
             ServerCapabilities::tools_only(),
             tools,
             HashMap::new(),
@@ -1277,11 +1350,12 @@ mod tests {
             Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
             Arc::new(RwLock::new(ToolMiddlewareChain::new())),
             None,  // task_router
+            None,  // task_store
             false, // stateless_mode disabled (normal mode)
         );
 
         // Try to list tools WITHOUT initializing first
-        let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsParams {
+        let list_req = Request::Client(Box::new(ClientRequest::ListTools(ListToolsRequest {
             cursor: None,
         })));
         let response = server

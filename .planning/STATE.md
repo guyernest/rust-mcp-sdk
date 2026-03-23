@@ -1,17 +1,15 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.6
-milestone_name: CLI DX Overhaul
-status: completed
-stopped_at: Completed 51-05-PLAN.md
-last_updated: "2026-03-14T05:00:09.695Z"
-last_activity: 2026-03-14 -- server wiring and release workflow updates
+milestone: v2.0
+milestone_name: Protocol Modernization
+status: unknown
+stopped_at: Completed 60-01-PLAN.md
+last_updated: "2026-03-22T20:49:05.683Z"
 progress:
-  total_phases: 25
-  completed_phases: 21
-  total_plans: 47
-  completed_plans: 47
-  percent: 100
+  total_phases: 35
+  completed_phases: 30
+  total_plans: 70
+  completed_plans: 70
 ---
 
 # Project State
@@ -20,17 +18,13 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-03-03)
 
-**Core value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording -- every command follows the same conventions for URLs, flags, auth, and output.
-**Current focus:** Phase 51 -- PMCP MCP Server
+**Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
+**Current focus:** Phase 60 — clean-up-mcp-preview-side-tabs
 
 ## Current Position
 
-Phase: 51 (pmcp-mcp-server) -- COMPLETE
-Plan: 5 of 5 (51-05 complete)
-Status: Phase 51 complete -- PMCP MCP Server fully wired with CI/CD pipeline
-Last activity: 2026-03-14 -- server wiring and release workflow updates
-
-Progress: [██████████] 100%
+Phase: 60 (clean-up-mcp-preview-side-tabs) — EXECUTING
+Plan: 1 of 1
 
 ## Shipped Milestones
 
@@ -46,7 +40,8 @@ Progress: [██████████] 100%
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 63 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, misc: 2)
+
+- Total plans completed: 76 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 11)
 - Total phases completed: 29
 
 ## Accumulated Context
@@ -56,6 +51,7 @@ Progress: [██████████] 100%
 See PROJECT.md Key Decisions table for full history.
 
 v1.6 decisions:
+
 - 6 phases derived from 5 requirement categories: global flags, flag normalization, auth propagation, tester integration, new commands, help polish
 - Phase 31 (New Commands) depends on Phase 28 (not 30) since doctor/completions don't need tester or auth
 - Help polish is last phase since it touches every command and benefits from all prior changes being stable
@@ -113,6 +109,66 @@ v1.6 decisions:
 - [Phase 51-04]: Const DOC_RESOURCES lookup table for URI routing avoids duplication between list() and read()
 - [Phase 51-04]: One struct per prompt handler for cleaner PromptHandler trait impl and independent metadata
 - [Phase 51-05]: Omitted explicit capabilities() since builder auto-sets on handler registration; publish order widget-utils->pmcp->mcp-tester->mcp-preview->pmcp-server->cargo-pmcp
+- [Phase 53]: [Phase 53-01]: Verified Rust missing 2025-11-25 protocol version (20+ new types including TaskSchema, IconSchema, AudioContent, ResourceLink, expanded capabilities)
+- [Phase 53]: [Phase 53-01]: Confirmed Rust ahead in MCP Apps (full adapter stack) but behind in Tasks capability negotiation (no ServerCapabilities.tasks/ClientCapabilities.tasks)
+- [Phase 53-02]: Proposed 4 follow-up phases: Protocol 2025-11-25 (P0), Conformance Tests (P1), Tower Middleware (P2), Advanced Conformance (P2)
+- [Phase 53-02]: 35 gaps identified across 6 domains; 15 areas where Rust leads TypeScript
+- [Phase 53-02]: Deferred WebSocket transport, WASM cross-runtime, auth conformance, TaskMessageQueue per CONTEXT.md
+- [Phase 54-01]: Protocol/mod.rs re-exports all domain types preserving crate::types::protocol::X paths; types/mod.rs uses single pub use protocol::* for flat access
+- [Phase 54-01]: negotiate_protocol_version returns LATEST_PROTOCOL_VERSION (not DEFAULT) for unsupported versions; 3-version rolling window drops 2024 versions
+- [Phase 54-01]: Domain module split pattern: types split by MCP domain (tools, resources, prompts, content, sampling, notifications) with re-export chain
+- [Phase 54-02]: Implementation::new(name, version) constructor for backward-compat; 25+ struct literal sites unchanged
+- [Phase 54-02]: ElicitRequestParams uses per-variant serde rename_all (not enum-level) for correct internally-tagged serialization
+- [Phase 54-02]: SamplingMessageContent consolidates SamplingResultContent -- single enum for SamplingMessage and CreateMessageResultWithTools
+- [Phase 54-02]: LogLevel kept as deprecated type alias; LoggingLevel is canonical 8-value enum with Notice, Alert, Emergency
+- [Phase 54-02]: TaskRouter trait kept Value params -- typed params converted at call sites to avoid breaking pmcp-tasks interface
+- [Phase 54-03]: LogLevel kept as deprecated alias (not removed) per Plan 02 decision for v2.0 backward compat
+- [Phase 54-03]: types-internal IconInfo references use super::protocol::IconInfo for clean module-local paths
+- [Phase 54-03]: ClientRequest enum variants now use canonical names (ListToolsRequest, CallToolRequest, etc.)
+- [Phase 54-03]: PromptMessage.content field type changed from MessageContent to Content (canonical name)
+- [Phase 54]: Used Implementation::new() across all test files instead of adding 4 optional fields to each struct literal
+- [Phase 54]: Rewrote elicitation example 19 using spec-compliant ElicitRequestParams instead of disabling
+- [Phase 54]: Added task type re-exports to protocol/mod.rs for flat pmcp::types:: access
+- [Phase 54.1]: Content enum variants keep struct literal syntax; #[non_exhaustive] only on structs per D-08
+- [Phase 54.1]: PromptMessage does not derive Default (both role and content required); uses ::new(role, content) + convenience ::user() ::assistant() ::system()
+- [Phase 54.1-02]: TaskStatus Default variant is Working (most common initial state for task creation)
+- [Phase 54.1-02]: Task::new() sets timestamps to empty strings -- .with_timestamps() sets both at once
+- [Phase 54.1-02]: ToolChoice uses static factory methods (auto/required/none) not ::new() since it wraps single enum field
+- [Phase 54.1-02]: CreateMessageParams has no Default (messages required) -- ::new(messages) only
+- [Phase 54.1]: Content enum variant syntax preserved per D-08 but replaced with Content::text()/resource() helpers where available for consistency
+- [Phase 55-01]: TTL serialization fixed -- removed skip_serializing_if from Task.ttl and TaskCreationParams.ttl so None serializes as null per MCP spec
+- [Phase 55-01]: TaskStatus utility methods (is_terminal, can_transition_to) replicate pmcp-tasks behavior for SDK canonical source of truth
+- [Phase 55-02]: Simplified TaskStore trait vs pmcp-tasks (no variables/result/request_method); returns Task wire type; TTL clamped not rejected; Instant-based expiration
+- [Phase 55-03]: TaskStore checked before TaskRouter in dispatch for tasks/get, tasks/list, tasks/cancel; tasks/result remains TaskRouter-only (PMCP extension)
+- [Phase 55-03]: ServerCapabilities.tasks (standard field) used for TaskStore path; experimental.tasks kept for TaskRouter backward compat
+- [Phase 56-01]: AllowedOrigins auto-detects localhost/127.0.0.1/[::1] for loopback and unspecified bind addresses
+- [Phase 56-01]: Missing Origin header permitted (non-browser clients like curl omit it); present but disallowed Origin returns 403
+- [Phase 56-01]: No HSTS header per D-12 (transport-layer concern for reverse proxies)
+- [Phase 56-01]: tower and tower-http gated behind existing streamable-http feature (no new feature flags)
+- [Phase 56-02]: Extracted build_mcp_router() and make_server_state() as pub(crate) for shared use by axum_router
+- [Phase 56-02]: Origin-locked CORS reflects request Origin when allowed, omits Access-Control-Allow-Origin for disallowed/missing
+- [Phase 56-02]: handle_options takes State+HeaderMap for CORS preflight; AllowedOrigins defaults to localhost() when None
+- [Phase 56-03]: AllowedOrigins resolved once in make_server_state(), stored as ServerState field -- zero per-request allocation
+- [Phase 56-03]: CorsLayer handles all CORS including preflight OPTIONS -- hand-rolled add_cors_headers deleted (13 call sites)
+- [Phase 56-03]: Handler signatures simplified by removing allowed_origins/request_origin params -- Tower layers handle CORS at middleware level
+- [Phase 56-03]: StreamableHttpServer::with_config() delegates to make_server_state() -- single construction path
+- [Phase 57-01]: Module name core_domain (not core) to avoid shadowing Rust core prelude
+- [Phase 57-01]: Capability-conditional testing: each non-core domain returns Skipped when capability absent
+- [Phase 57-01]: Core domain always runs first (handles initialize) -- other domains skip if core fails
+- [Phase 57-01]: Prompts/get with empty args returns Warning not Failed (prompts may require arguments)
+- [Phase 57-01]: Tasks domain uses _meta.task.ttl for task creation via tools/call
+- [Phase 57-02]: TestCategory gets PartialEq/Eq derive for domain summary filtering
+- [Phase 57-02]: Old run_compliance_tests preserved as deprecated wrapper for backward compat
+- [Phase 58]: Manual Clone impl on State<T> to avoid requiring T: Clone (Arc<T> is always Clone)
+- [Phase 58]: Unconditional schema generation in #[mcp_tool] -- schema IS the macro value proposition, no feature flag guard
+- [Phase 58]: Branching ToolInfo constructors (with_annotations vs new) since ToolInfo has no set_annotations method
+- [Phase 58]: Clone server_type before mutable strip to satisfy borrow checker in mcp_server expansion
+- [Phase 58-02]: McpToolArgs/McpToolAnnotations fields made pub(crate) for cross-module reuse; generate_tool_info_code shared between mcp_tool and mcp_server
+- [Phase 58]: Fixed #[mcp_tool] name collision by renaming inner function to __fn_impl; UUID-based Default for RequestHandlerExtra; pmcp-macros as dev-dep for examples; TRYBUILD=overwrite for .stderr bootstrapping
+- [Phase 59]: TypedPrompt requires JsonSchema bound unconditionally; string-only args documented; no annotations/ui on McpPromptArgs; prompts return GetPromptResult directly
+- [Phase 59]: mcp_prompt inside #[mcp_server] does not require separate import; register_tools renamed to register per D-15; PromptMethodInfo omits return_type/annotations
+- [Phase 60]: Renamed shared console-time CSS class to event-time after Console removal to fix orphaned styling
+- [Phase 60]: Renamed shared console-time CSS class to event-time after Console removal to fix orphaned styling
 
 ### Roadmap Evolution
 
@@ -131,6 +187,13 @@ v1.6 decisions:
 - Phase 49 added: Bump dependencies (reqwest 0.13, jsonschema 0.45)
 - Phase 50 added: Improve Binary Release
 - Phase 51 added: PMCP MCP Server
+- Phase 52 added: Reduce transitive dependencies
+- Phase 53 added: Review TypeScript SDK Updates
+- Phases 54-57 added: Protocol 2025-11-25 Support, Conformance Test Infrastructure, Tower Middleware, Conformance Extension (from Phase 53 gap analysis)
+- Phase 58 added: #[mcp_tool] proc macro (from composition team DX review)
+- Phase 59 added: TypedPrompt with auto-deserialization (from composition team DX review)
+- Phase 54.1 inserted after Phase 54: Protocol Type Construction DX — Default impls, builders, and constructors for all protocol types (URGENT)
+- Phase 60 added: Clean up mcp-preview side tabs
 
 ### Pending Todos
 
@@ -142,6 +205,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-14T04:55:11Z
-Stopped at: Completed 51-05-PLAN.md
-Resume: Phase 51 complete -- PMCP MCP Server fully functional with all tools, resources, prompts wired and CI/CD pipeline ready.
+Last session: 2026-03-22T20:49:05.679Z
+Stopped at: Completed 60-01-PLAN.md
+Resume: Phase 57 complete. Both plans shipped: Plan 01 (19-scenario conformance engine with 5 domains) and Plan 02 (CLI integration -- mcp-tester conformance and cargo pmcp test conformance with --strict/--domain flags and per-domain CI summary).

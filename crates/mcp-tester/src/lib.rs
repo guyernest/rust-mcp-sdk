@@ -47,6 +47,7 @@
 
 // Re-export key modules
 pub mod app_validator;
+pub mod conformance;
 pub mod diagnostics;
 pub mod report;
 pub mod scenario;
@@ -57,9 +58,10 @@ pub mod validators;
 
 // OAuth support -- re-exported from core SDK
 pub use app_validator::{AppValidationMode, AppValidator};
+pub use conformance::{ConformanceDomain, ConformanceRunner};
 pub use pmcp::client::oauth;
 pub use pmcp::client::oauth::{OAuthConfig, OAuthHelper};
-pub use report::{OutputFormat, TestReport, TestResult, TestStatus};
+pub use report::{OutputFormat, TestCategory, TestReport, TestResult, TestStatus};
 pub use scenario::TestScenario;
 pub use scenario_executor::ScenarioExecutor;
 pub use scenario_generator::ScenarioGenerator;
