@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: unknown
-stopped_at: Completed 55.1-01-PLAN.md
-last_updated: "2026-03-23T04:59:05.459Z"
+stopped_at: Completed 55.1-02-PLAN.md
+last_updated: "2026-03-23T05:06:11.814Z"
 progress:
   total_phases: 37
-  completed_phases: 30
+  completed_phases: 31
   total_plans: 74
-  completed_plans: 71
+  completed_plans: 72
 ---
 
 # Project State
@@ -170,6 +170,7 @@ v1.6 decisions:
 - [Phase 60]: Renamed shared console-time CSS class to event-time after Console removal to fix orphaned styling
 - [Phase 60]: Renamed shared console-time CSS class to event-time after Console removal to fix orphaned styling
 - [Phase 55.1]: ToolExecution stored as Option<ToolExecution> and cloned in metadata/info -- matches existing annotations pattern
+- [Phase 55.1]: ToolCallOutcome enum at module scope for bifurcated task/result dispatch; task detection requires declared taskSupport + task_store (shape alone insufficient per D-06)
 
 ### Roadmap Evolution
 
@@ -208,6 +209,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-23T04:59:05.455Z
-Stopped at: Completed 55.1-01-PLAN.md
+Last session: 2026-03-23T05:06:11.810Z
+Stopped at: Completed 55.1-02-PLAN.md
 Resume: Phase 57 complete. Both plans shipped: Plan 01 (19-scenario conformance engine with 5 domains) and Plan 02 (CLI integration -- mcp-tester conformance and cargo pmcp test conformance with --strict/--domain flags and per-domain CI summary).
