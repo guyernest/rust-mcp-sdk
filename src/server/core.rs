@@ -35,6 +35,10 @@ use super::subscriptions::SubscriptionManager;
 use super::tasks::TaskRouter;
 #[cfg(not(target_arch = "wasm32"))]
 use super::tool_middleware::{ToolContext, ToolMiddlewareChain};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::types::tasks::{RelatedTaskMetadata, RELATED_TASK_META_KEY};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::types::tools::TaskSupport;
 use super::{PromptHandler, ResourceHandler, SamplingHandler, ToolHandler};
 
 /// Protocol-agnostic request handler trait.
@@ -268,6 +272,15 @@ pub struct ServerCore {
     stateless_mode: bool,
 }
 
+/// Outcome of a tool handler call -- either a normal result or a task creation.
+enum ToolCallOutcome {
+    /// Standard tool result wrapped as CallToolResult
+    Result(CallToolResult),
+    /// Tool returned a Task value -- should be returned as CreateTaskResult
+    #[cfg(not(target_arch = "wasm32"))]
+    TaskCreated(Value),
+}
+
 impl ServerCore {
     /// Create a new `ServerCore` with the given configuration.
     #[allow(clippy::too_many_arguments)]
@@ -360,7 +373,7 @@ impl ServerCore {
         &self,
         req: &CallToolRequest,
         auth_context: Option<AuthContext>,
-    ) -> Result<CallToolResult> {
+    ) -> Result<ToolCallOutcome> {
         let handler = self
             .tools
             .get(&req.name)
@@ -442,6 +455,33 @@ impl ServerCore {
         // Convert result to CallToolResult
         let value = result?;
 
+        // Task detection: if tool declares taskSupport and task_store is configured,
+        // check if the returned Value is Task-shaped (has taskId + status fields).
+        // Per D-06: detection requires declared execution.taskSupport, not just shape matching.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let has_task_support = self.task_store.is_some()
+                && self
+                    .tool_infos
+                    .get(&req.name)
+                    .and_then(|info| info.execution.as_ref())
+                    .and_then(|exec| exec.task_support.as_ref())
+                    .is_some_and(|ts| matches!(ts, TaskSupport::Required | TaskSupport::Optional));
+
+            if has_task_support {
+                // Verify the Value is actually Task-shaped before converting
+                if value.get("taskId").is_some() && value.get("status").is_some() {
+                    return Ok(ToolCallOutcome::TaskCreated(value));
+                }
+                // If tool declares task support but didn't return a Task, fall through to normal path.
+                // This handles the "optional" case where the tool might not create a task.
+                tracing::debug!(
+                    tool = req.name.as_str(),
+                    "Tool declares taskSupport but returned non-Task value; using normal CallToolResult path"
+                );
+            }
+        }
+
         let call_result = if let Some(info) = self
             .tool_infos
             .get(&req.name)
@@ -456,7 +496,7 @@ impl ServerCore {
             CallToolResult::new(vec![Content::text(text)])
         };
 
-        Ok(call_result)
+        Ok(ToolCallOutcome::Result(call_result))
     }
 
     /// Handle list prompts request.
@@ -880,34 +920,71 @@ impl ServerCore {
                             .map(|task_id| (task_id, req.name.clone()));
 
                         match self.handle_call_tool(req, auth_context.clone()).await {
-                            Ok(result) => {
-                                // Fire-and-forget workflow continuation recording
+                            Ok(outcome) => match outcome {
                                 #[cfg(not(target_arch = "wasm32"))]
-                                if let (Some((task_id, tool_name)), Some(ref task_router)) =
-                                    (continuation_ctx, &self.task_router)
-                                {
-                                    let owner_id = self
-                                        .resolve_task_owner(auth_context.as_ref())
-                                        .unwrap_or_else(|| "local".to_string());
-                                    let tool_result_value =
-                                        serde_json::to_value(&result).unwrap_or_default();
-                                    if let Err(e) = task_router
-                                        .handle_workflow_continuation(
-                                            &task_id,
-                                            &tool_name,
-                                            tool_result_value,
-                                            &owner_id,
-                                        )
-                                        .await
-                                    {
-                                        tracing::warn!(
-                                            "Workflow continuation recording failed for task {}: {}",
-                                            task_id,
-                                            e
-                                        );
+                                ToolCallOutcome::TaskCreated(task_value) => {
+                                    // Build CreateTaskResult with _meta per D-08, D-09
+                                    let task_id = task_value
+                                        .get("taskId")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
+
+                                    // Construct CreateTaskResult
+                                    let mut result_value = serde_json::json!({
+                                        "task": task_value
+                                    });
+
+                                    // Add _meta with related-task reference per D-08, D-09
+                                    if !task_id.is_empty() {
+                                        let related_meta = RelatedTaskMetadata {
+                                            task_id: task_id.clone(),
+                                        };
+                                        if let Ok(meta_value) =
+                                            serde_json::to_value(&related_meta)
+                                        {
+                                            result_value["_meta"] = serde_json::json!({
+                                                RELATED_TASK_META_KEY: meta_value
+                                            });
+                                        }
                                     }
+
+                                    Self::success_response(id, result_value)
                                 }
-                                Self::success_response(id, serde_json::to_value(result).unwrap())
+                                ToolCallOutcome::Result(result) => {
+                                    // Fire-and-forget workflow continuation recording
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    if let (
+                                        Some((task_id, tool_name)),
+                                        Some(ref task_router),
+                                    ) = (continuation_ctx, &self.task_router)
+                                    {
+                                        let owner_id = self
+                                            .resolve_task_owner(auth_context.as_ref())
+                                            .unwrap_or_else(|| "local".to_string());
+                                        let tool_result_value =
+                                            serde_json::to_value(&result).unwrap_or_default();
+                                        if let Err(e) = task_router
+                                            .handle_workflow_continuation(
+                                                &task_id,
+                                                &tool_name,
+                                                tool_result_value,
+                                                &owner_id,
+                                            )
+                                            .await
+                                        {
+                                            tracing::warn!(
+                                                "Workflow continuation recording failed for task {}: {}",
+                                                task_id,
+                                                e
+                                            );
+                                        }
+                                    }
+                                    Self::success_response(
+                                        id,
+                                        serde_json::to_value(result).unwrap(),
+                                    )
+                                }
                             },
                             Err(e) => Self::error_response(id, -32603, e.to_string()),
                         }
