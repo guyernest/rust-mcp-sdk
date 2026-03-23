@@ -1,0 +1,29 @@
+# Audit configuration for cargo-audit
+# https://docs.rs/cargo-audit/latest/cargo_audit/
+
+[advisories]
+# All advisories below are in transitive dependencies from the AWS SDK chain.
+# We don't control these dependency versions — they're pulled in by
+# aws-smithy-http-client, aws-lc-sys, and rustls 0.21.
+# Tracking: waiting for AWS SDK to update to rustls 0.23+ and patched aws-lc-sys.
+
+ignore = [
+    # rustls-webpki 0.101.7: CRL Distribution Point matching logic error
+    # Path: aws-smithy-http-client -> rustls 0.21 -> rustls-webpki 0.101
+    "RUSTSEC-2026-0049",
+
+    # aws-lc-sys: Timing side-channel in AES-CCM tag verification
+    "RUSTSEC-2026-0045",
+
+    # aws-lc-sys: X.509 Name Constraints bypass via wildcard/Unicode CN
+    "RUSTSEC-2026-0044",
+
+    # aws-lc-sys: CRL Distribution Point scope check logic error
+    "RUSTSEC-2026-0048",
+
+    # aws-lc-sys: PKCS7_verify signature validation bypass
+    "RUSTSEC-2026-0047",
+
+    # aws-lc-sys: PKCS7_verify certificate chain validation bypass
+    "RUSTSEC-2026-0046",
+]
