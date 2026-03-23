@@ -8,7 +8,7 @@
 //! due to async constraints and cancellation token compatibility.
 
 use crate::server::wasm_server::{WasmMcpServerBuilder, WasmTool};
-use crate::types::ToolInfo;
+use crate::types::{ToolExecution, ToolInfo};
 use crate::{Error, Result};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -28,6 +28,7 @@ where
     description: Option<String>,
     input_schema: Value,
     ui_resource_uri: Option<String>,
+    execution: Option<ToolExecution>,
     handler: F,
     _phantom: PhantomData<T>,
 }
@@ -49,6 +50,7 @@ where
             description: None,
             input_schema: schema,
             ui_resource_uri: None,
+            execution: None,
             handler,
             _phantom: PhantomData,
         }
@@ -61,6 +63,7 @@ where
             description: None,
             input_schema: schema,
             ui_resource_uri: None,
+            execution: None,
             handler,
             _phantom: PhantomData,
         }
@@ -87,6 +90,14 @@ where
         self.ui_resource_uri = Some(ui_resource_uri.into());
         self
     }
+
+    /// Declare execution metadata for this tool (MCP 2025-11-25).
+    ///
+    /// See `TypedTool::with_execution` in the native API for detailed documentation.
+    pub fn with_execution(mut self, execution: ToolExecution) -> Self {
+        self.execution = Some(execution);
+        self
+    }
 }
 
 impl<T, F> WasmTool for WasmTypedTool<T, F>
@@ -107,12 +118,14 @@ where
     fn info(&self) -> ToolInfo {
         ToolInfo {
             name: self.name.clone(),
+            title: None,
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
             output_schema: None,
             annotations: None,
+            icons: None,
             _meta: crate::types::ui::build_ui_meta(self.ui_resource_uri.as_deref()),
-            execution: None,
+            execution: self.execution.clone(),
         }
     }
 }
@@ -203,10 +216,12 @@ where
     fn info(&self) -> ToolInfo {
         ToolInfo {
             name: self.name.clone(),
+            title: None,
             description: self.description.clone(),
             input_schema: self.input_schema.clone(),
             output_schema: None,
             annotations: None,
+            icons: None,
             _meta: None,
             execution: None,
         }

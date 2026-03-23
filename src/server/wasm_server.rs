@@ -404,10 +404,12 @@ where
     fn info(&self) -> ToolInfo {
         ToolInfo {
             name: self.name.clone(),
+            title: None,
             description: Some(self.description.clone()),
             input_schema: self.input_schema.clone(),
             output_schema: None,
             annotations: None,
+            icons: None,
             _meta: None,
             execution: None,
         }
