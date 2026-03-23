@@ -112,20 +112,11 @@ fn print_domain_summary(report: &TestReport) {
 
         let status = if domain_tests.is_empty() {
             "N/A"
-        } else if domain_tests
-            .iter()
-            .any(|t| t.status == TestStatus::Failed)
-        {
+        } else if domain_tests.iter().any(|t| t.status == TestStatus::Failed) {
             "FAIL"
-        } else if domain_tests
-            .iter()
-            .all(|t| t.status == TestStatus::Skipped)
-        {
+        } else if domain_tests.iter().all(|t| t.status == TestStatus::Skipped) {
             "SKIP"
-        } else if domain_tests
-            .iter()
-            .any(|t| t.status == TestStatus::Warning)
-        {
+        } else if domain_tests.iter().any(|t| t.status == TestStatus::Warning) {
             "WARN"
         } else {
             "PASS"

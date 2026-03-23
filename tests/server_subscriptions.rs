@@ -53,9 +53,7 @@ impl ResourceHandler for TestResourceHandler {
                     uri
                 )))
             },
-            |content| {
-                Ok(ReadResourceResult::new(vec![Content::text(content)]))
-            },
+            |content| Ok(ReadResourceResult::new(vec![Content::text(content)])),
         )
     }
 

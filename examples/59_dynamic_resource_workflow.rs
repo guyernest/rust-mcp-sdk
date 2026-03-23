@@ -32,7 +32,8 @@ struct WalkthroughResources;
 impl ResourceHandler for WalkthroughResources {
     async fn read(&self, uri: &str, _extra: RequestHandlerExtra) -> Result<ReadResourceResult> {
         match uri {
-            "if://walkthrough/zork1" => Ok(ReadResourceResult::new(vec![Content::text(r#"
+            "if://walkthrough/zork1" => Ok(ReadResourceResult::new(vec![Content::text(
+                r#"
 # Zork I Walkthrough
 
 ## West of House
@@ -48,7 +49,8 @@ You are standing in an open field west of a white house, with a boarded front do
 - Opening the mailbox: +5 points
 - Entering the house: +10 points
 - Finding the lamp: +10 points
-"#)])),
+"#,
+            )])),
             "if://walkthrough/planetfall" => Ok(ReadResourceResult::new(vec![Content::text(
                 "# Planetfall Walkthrough\n\nYour adventure in space...",
             )])),

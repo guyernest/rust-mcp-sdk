@@ -258,12 +258,11 @@ async fn test_server_protocol_middleware_integration() {
         .unwrap();
 
     // Send a request through the server (will trigger middleware)
-    let init_request = Request::Client(Box::new(ClientRequest::Initialize(
-        InitializeRequest::new(
+    let init_request =
+        Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
             pmcp::types::Implementation::new("test-client", "1.0.0"),
             pmcp::types::ClientCapabilities::default(),
-        ),
-    )));
+        ))));
 
     let _response = server
         .handle_request(RequestId::from(1i64), init_request, None)

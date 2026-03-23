@@ -39,7 +39,8 @@ struct GameResources;
 impl ResourceHandler for GameResources {
     async fn read(&self, uri: &str, _extra: RequestHandlerExtra) -> Result<ReadResourceResult> {
         match uri {
-            "if://walkthrough/zork1" => Ok(ReadResourceResult::new(vec![Content::text(r#"
+            "if://walkthrough/zork1" => Ok(ReadResourceResult::new(vec![Content::text(
+                r#"
 # Zork I Walkthrough
 
 ## West of House
@@ -60,8 +61,10 @@ Based on your progress, you're still in the early game. Focus on:
 - Exploring the house thoroughly
 - Collecting the brass lantern
 - Reading all available text carefully
-"#)])),
-            "if://walkthrough/planetfall" => Ok(ReadResourceResult::new(vec![Content::text(r#"
+"#,
+            )])),
+            "if://walkthrough/planetfall" => Ok(ReadResourceResult::new(vec![Content::text(
+                r#"
 # Planetfall Walkthrough
 
 ## Starting Area
@@ -74,8 +77,10 @@ You wake up in your bunk on the spaceship.
 4. Complete your assigned tasks
 
 Remember: Floyd is your friend!
-"#)])),
-            "if://help/general" => Ok(ReadResourceResult::new(vec![Content::text(r#"
+"#,
+            )])),
+            "if://help/general" => Ok(ReadResourceResult::new(vec![Content::text(
+                r#"
 # Interactive Fiction General Help
 
 ## Basic Commands
@@ -102,7 +107,8 @@ Remember: Floyd is your friend!
 3. Try to map out locations
 4. Experiment with different commands
 5. If stuck, try examining everything in detail
-"#)])),
+"#,
+            )])),
             _ => Err(pmcp::Error::validation(format!(
                 "Unknown resource: {}",
                 uri

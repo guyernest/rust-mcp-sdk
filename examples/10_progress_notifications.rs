@@ -19,10 +19,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Simulate some progress notifications
     let notifications = vec![
-        ProgressNotification::new(ProgressToken::String("task-1".to_string()), 10.0, Some("Starting task...".to_string())),
-        ProgressNotification::new(ProgressToken::String("task-1".to_string()), 25.0, Some("Processing data...".to_string())),
-        ProgressNotification::new(ProgressToken::String("task-1".to_string()), 50.0, Some("Halfway there...".to_string())),
-        ProgressNotification::new(ProgressToken::String("task-1".to_string()), 100.0, Some("Task completed!".to_string())),
+        ProgressNotification::new(
+            ProgressToken::String("task-1".to_string()),
+            10.0,
+            Some("Starting task...".to_string()),
+        ),
+        ProgressNotification::new(
+            ProgressToken::String("task-1".to_string()),
+            25.0,
+            Some("Processing data...".to_string()),
+        ),
+        ProgressNotification::new(
+            ProgressToken::String("task-1".to_string()),
+            50.0,
+            Some("Halfway there...".to_string()),
+        ),
+        ProgressNotification::new(
+            ProgressToken::String("task-1".to_string()),
+            100.0,
+            Some("Task completed!".to_string()),
+        ),
     ];
 
     println!("Simulating progress notifications:");

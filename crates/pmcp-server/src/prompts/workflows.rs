@@ -24,7 +24,11 @@ fn assistant_result(description: &str, text: String) -> pmcp::Result<GetPromptRe
 /// Build a prompt argument descriptor.
 fn arg(name: &str, description: &str, required: bool) -> PromptArgument {
     let a = PromptArgument::new(name).with_description(description);
-    if required { a.required() } else { a }
+    if required {
+        a.required()
+    } else {
+        a
+    }
 }
 
 // ---------------------------------------------------------------------------

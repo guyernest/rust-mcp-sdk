@@ -89,7 +89,8 @@ async fn main() -> Result<()> {
             _extra: pmcp::RequestHandlerExtra,
         ) -> Result<ReadResourceResult> {
             match uri {
-                "docs://logseq/task-format" => Ok(ReadResourceResult::new(vec![Content::text(r#"Logseq Task Formatting Guide
+                "docs://logseq/task-format" => Ok(ReadResourceResult::new(vec![Content::text(
+                    r#"Logseq Task Formatting Guide
 ================================
 
 Task Format:
@@ -106,7 +107,8 @@ Best Practices:
 - Always use lowercase, hyphenated page names
 - Be specific in task descriptions
 - Link to the relevant project page
-"#)])),
+"#,
+                )])),
                 _ => Err(pmcp::Error::validation(format!(
                     "Unknown resource: {}",
                     uri
@@ -119,11 +121,12 @@ Best Practices:
             _cursor: Option<String>,
             _extra: pmcp::RequestHandlerExtra,
         ) -> Result<ListResourcesResult> {
-            Ok(ListResourcesResult::new(vec![
-                pmcp::ResourceInfo::new("docs://logseq/task-format", "Logseq Task Formatting Guide")
-                    .with_description("Guide for formatting tasks in Logseq")
-                    .with_mime_type("text/plain"),
-            ]))
+            Ok(ListResourcesResult::new(vec![pmcp::ResourceInfo::new(
+                "docs://logseq/task-format",
+                "Logseq Task Formatting Guide",
+            )
+            .with_description("Guide for formatting tasks in Logseq")
+            .with_mime_type("text/plain")]))
         }
     }
 

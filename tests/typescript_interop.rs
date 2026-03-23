@@ -83,10 +83,9 @@ impl PromptHandler for TestPromptHandler {
         let name = args.get("name").map_or("User", |s| s.as_str());
 
         Ok(pmcp::types::GetPromptResult::new(
-            vec![pmcp::types::PromptMessage::user(pmcp::types::Content::text(format!(
-                "Please greet {}",
-                name
-            )))],
+            vec![pmcp::types::PromptMessage::user(
+                pmcp::types::Content::text(format!("Please greet {}", name)),
+            )],
             Some(format!("Greeting for {}", name)),
         ))
     }

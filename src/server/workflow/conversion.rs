@@ -108,7 +108,10 @@ impl InternalPromptMessage {
     /// Convert to protocol `PromptMessage`
     /// Expands handles using server registry
     pub fn to_protocol(&self, ctx: &ExpansionContext<'_>) -> Result<PromptMessage, WorkflowError> {
-        Ok(PromptMessage::new(self.role, self.content.to_protocol(ctx)?))
+        Ok(PromptMessage::new(
+            self.role,
+            self.content.to_protocol(ctx)?,
+        ))
     }
 }
 

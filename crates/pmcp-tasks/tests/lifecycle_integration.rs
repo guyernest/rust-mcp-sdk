@@ -144,8 +144,7 @@ fn task_call_request(tool_name: &str, args: Value, task_params: Value) -> Reques
 /// Build a tools/call request without task augmentation.
 fn normal_call_request(tool_name: &str, args: Value) -> Request {
     Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest::new(
-        tool_name,
-        args,
+        tool_name, args,
     ))))
 }
 
@@ -158,14 +157,18 @@ fn tasks_get_request(task_id: &str) -> Request {
 
 /// Build a tasks/result request.
 fn tasks_result_request(task_id: &str) -> Request {
-    Request::Client(Box::new(ClientRequest::TasksResult(GetTaskPayloadRequest {
-        task_id: task_id.to_string(),
-    })))
+    Request::Client(Box::new(ClientRequest::TasksResult(
+        GetTaskPayloadRequest {
+            task_id: task_id.to_string(),
+        },
+    )))
 }
 
 /// Build a tasks/list request.
 fn tasks_list_request() -> Request {
-    Request::Client(Box::new(ClientRequest::TasksList(ListTasksRequest::default())))
+    Request::Client(Box::new(ClientRequest::TasksList(
+        ListTasksRequest::default(),
+    )))
 }
 
 /// Build a tasks/cancel request.

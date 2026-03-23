@@ -818,11 +818,8 @@ mod tests {
     #[test]
     fn test_client_notification_to_jsonrpc_all_variants() {
         let cancelled = CancelledNotification::new(RequestId::String("test".to_string()));
-        let progress = ProgressNotification::new(
-            ProgressToken::String("test".to_string()),
-            50.0,
-            None,
-        );
+        let progress =
+            ProgressNotification::new(ProgressToken::String("test".to_string()), 50.0, None);
 
         let test_cases = vec![
             (
@@ -846,11 +843,8 @@ mod tests {
 
     #[test]
     fn test_server_notification_to_jsonrpc_all_variants() {
-        let progress = ProgressNotification::new(
-            ProgressToken::String("test".to_string()),
-            25.0,
-            None,
-        );
+        let progress =
+            ProgressNotification::new(ProgressToken::String("test".to_string()), 25.0, None);
         let resource_updated = crate::types::ResourceUpdatedParams::new("test://uri");
         let log_message = crate::types::LogMessageParams::new(crate::types::LoggingLevel::Info, "");
 

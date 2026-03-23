@@ -3,10 +3,10 @@
 //! These tests verify full macro expansion: compilation, argument schema generation,
 //! prompt handler implementation, and builder registration.
 
-use pmcp::PromptHandler;
-use pmcp_macros::mcp_prompt;
 use pmcp::types::{Content, GetPromptResult, PromptMessage};
+use pmcp::PromptHandler;
 use pmcp::State;
+use pmcp_macros::mcp_prompt;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -52,15 +52,15 @@ fn test_code_review_metadata() {
     let prompt = code_review();
     let meta = prompt.metadata().expect("metadata should exist");
     assert_eq!(meta.name, "code_review");
-    assert_eq!(
-        meta.description.as_deref(),
-        Some("Review code for issues")
-    );
+    assert_eq!(meta.description.as_deref(), Some("Review code for issues"));
     let arguments = meta.arguments.as_ref().expect("should have arguments");
     assert_eq!(arguments.len(), 2);
 
     let arg_names: Vec<&str> = arguments.iter().map(|a| a.name.as_str()).collect();
-    assert!(arg_names.contains(&"language"), "should have 'language' arg");
+    assert!(
+        arg_names.contains(&"language"),
+        "should have 'language' arg"
+    );
     assert!(arg_names.contains(&"code"), "should have 'code' arg");
 
     // Both fields are required (non-Option).
@@ -99,7 +99,10 @@ fn test_no_arg_prompt_metadata() {
     let prompt = system_status();
     let meta = prompt.metadata().expect("metadata should exist");
     assert_eq!(meta.name, "system_status");
-    assert!(meta.arguments.is_none(), "no-arg prompt should have no arguments");
+    assert!(
+        meta.arguments.is_none(),
+        "no-arg prompt should have no arguments"
+    );
 }
 
 // === Test 4: Optional arguments (Option<T> fields) ===
@@ -145,7 +148,10 @@ fn test_optional_arg_metadata() {
 #[mcp_prompt(name = "custom_name", description = "Custom named prompt")]
 async fn my_prompt(args: ReviewArgs) -> pmcp::Result<GetPromptResult> {
     Ok(GetPromptResult::new(
-        vec![PromptMessage::user(Content::text(format!("{}", args.language)))],
+        vec![PromptMessage::user(Content::text(format!(
+            "{}",
+            args.language
+        )))],
         None,
     ))
 }
@@ -205,7 +211,10 @@ async fn test_sync_prompt() {
 // === Test 8: RequestHandlerExtra opt-in (D-03) ===
 
 #[mcp_prompt(description = "With extra")]
-async fn with_extra(args: ReviewArgs, extra: pmcp::RequestHandlerExtra) -> pmcp::Result<GetPromptResult> {
+async fn with_extra(
+    args: ReviewArgs,
+    extra: pmcp::RequestHandlerExtra,
+) -> pmcp::Result<GetPromptResult> {
     let _ = extra;
     Ok(GetPromptResult::new(
         vec![PromptMessage::user(Content::text(args.language))],

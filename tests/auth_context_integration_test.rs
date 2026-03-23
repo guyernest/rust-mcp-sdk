@@ -168,12 +168,11 @@ async fn test_auth_context_flows_from_transport_to_tools() {
     let auth_provider = TestOAuthProvider;
 
     // Initialize server
-    let init_request = Request::Client(Box::new(ClientRequest::Initialize(
-        InitializeRequest::new(
+    let init_request =
+        Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
             pmcp::types::Implementation::new("test-client", "1.0.0"),
             pmcp::types::ClientCapabilities::default(),
-        ),
-    )));
+        ))));
 
     server
         .handle_request(RequestId::from(0i64), init_request, None)
@@ -244,12 +243,11 @@ async fn test_missing_auth_context_fails_in_tool() {
         .unwrap();
 
     // Initialize server
-    let init_request = Request::Client(Box::new(ClientRequest::Initialize(
-        InitializeRequest::new(
+    let init_request =
+        Request::Client(Box::new(ClientRequest::Initialize(InitializeRequest::new(
             pmcp::types::Implementation::new("test-client", "1.0.0"),
             pmcp::types::ClientCapabilities::default(),
-        ),
-    )));
+        ))));
 
     server
         .handle_request(RequestId::from(0i64), init_request, None)

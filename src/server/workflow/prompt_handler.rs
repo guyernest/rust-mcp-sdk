@@ -419,7 +419,10 @@ impl WorkflowPromptHandler {
             )
         };
 
-        PromptMessage::user(Content::text(format!("I want to {}.{}", description, args_display)))
+        PromptMessage::user(Content::text(format!(
+            "I want to {}.{}",
+            description, args_display
+        )))
     }
 
     /// Create assistant plan message listing all workflow steps
@@ -477,8 +480,7 @@ impl WorkflowPromptHandler {
         Ok(PromptMessage::assistant(Content::text(format!(
             "Calling tool '{}' with parameters:\n{}",
             tool_handle.name(),
-            serde_json::to_string_pretty(&params)
-                .unwrap_or_else(|_| format!("{:?}", params))
+            serde_json::to_string_pretty(&params).unwrap_or_else(|_| format!("{:?}", params))
         ))))
     }
 
@@ -980,8 +982,8 @@ impl PromptHandler for WorkflowPromptHandler {
             )
         };
 
-        let mut info = PromptInfo::new(self.workflow.name())
-            .with_description(self.workflow.description());
+        let mut info =
+            PromptInfo::new(self.workflow.name()).with_description(self.workflow.description());
         if let Some(args) = arguments {
             info = info.with_arguments(args);
         }
