@@ -566,10 +566,10 @@ Plans:
 **Goal:** Fix three SDK-side gaps that prevent the standard task_store path from returning proper CreateTaskResult wire format. Add execution/taskSupport to all TypedTool variants, wire task detection in ServerCore handle_call_tool, and add _meta with io.modelcontextprotocol/related-task to CreateTaskResult responses.
 **Requirements**: D-01, D-02, D-03, D-04, D-05, D-06, D-07, D-08, D-09
 **Depends on:** Phase 55
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
-- [ ] 55.1-01-PLAN.md — Add execution field and with_execution() to all TypedTool variants
+- [x] 55.1-01-PLAN.md — Add execution field and with_execution() to all TypedTool variants
 - [ ] 55.1-02-PLAN.md — Wire task detection in core.rs, return CreateTaskResult with _meta
 
 ### Phase 56: Tower Middleware + DNS Rebinding Protection
