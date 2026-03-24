@@ -64,8 +64,9 @@ impl std::fmt::Display for ProtocolVersion {
 #[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct IconInfo {
-    /// Icon source URL
-    pub src: String,
+    /// Icon URL
+    #[serde(alias = "src")]
+    pub url: String,
     /// Icon MIME type
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
@@ -78,12 +79,12 @@ pub struct IconInfo {
 }
 
 impl IconInfo {
-    /// Create an `IconInfo` with just the source URL.
+    /// Create an `IconInfo` with the icon URL.
     ///
     /// Optional fields (`mime_type`, sizes, theme) default to `None`.
-    pub fn new(src: impl Into<String>) -> Self {
+    pub fn new(url: impl Into<String>) -> Self {
         Self {
-            src: src.into(),
+            url: url.into(),
             mime_type: None,
             sizes: None,
             theme: None,

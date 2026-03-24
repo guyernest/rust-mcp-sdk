@@ -230,30 +230,29 @@ impl<T: Transport> Client<T> {
         // Parse initialize result
         match response.payload {
             crate::types::jsonrpc::ResponsePayload::Result(result) => {
-                if let Ok(init_result) = serde_json::from_value::<InitializeResult>(result) {
-                    // Validate protocol version
-                    if !crate::types::SUPPORTED_PROTOCOL_VERSIONS
-                        .contains(&init_result.protocol_version.as_str())
-                    {
-                        return Err(Error::protocol_msg(format!(
-                            "Server protocol version {} not supported",
-                            init_result.protocol_version
-                        )));
-                    }
+                let init_result = serde_json::from_value::<InitializeResult>(result)
+                    .map_err(|e| Error::parse(format!("Invalid initialize result: {e}")))?;
 
-                    self.server_capabilities = Some(init_result.capabilities.clone());
-                    self.server_version = Some(init_result.server_info.clone());
-                    self.instructions.clone_from(&init_result.instructions);
-                    self.initialized = true;
-
-                    // Send initialized notification
-                    self.send_notification(Notification::Client(ClientNotification::Initialized))
-                        .await?;
-
-                    Ok(init_result)
-                } else {
-                    Err(Error::parse("Invalid initialize result format"))
+                // Validate protocol version
+                if !crate::types::SUPPORTED_PROTOCOL_VERSIONS
+                    .contains(&init_result.protocol_version.as_str())
+                {
+                    return Err(Error::protocol_msg(format!(
+                        "Server protocol version {} not supported",
+                        init_result.protocol_version
+                    )));
                 }
+
+                self.server_capabilities = Some(init_result.capabilities.clone());
+                self.server_version = Some(init_result.server_info.clone());
+                self.instructions.clone_from(&init_result.instructions);
+                self.initialized = true;
+
+                // Send initialized notification
+                self.send_notification(Notification::Client(ClientNotification::Initialized))
+                    .await?;
+
+                Ok(init_result)
             },
             crate::types::jsonrpc::ResponsePayload::Error(error) => {
                 Err(Error::from_jsonrpc_error(error))
