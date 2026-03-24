@@ -134,6 +134,12 @@ dashmap = "6.1"  # Already in main deps but needed for examples
 pmcp-tasks = { path = "crates/pmcp-tasks" }  # For task examples (60_tasks_*)
 pmcp-macros = { path = "pmcp-macros" }  # For macro examples (63_mcp_tool_macro)
 
+# For durable MCP agent example (65_durable_mcp_agent)
+lambda-durable-execution-rust = { git = "https://github.com/guyernest/lambda-durable-execution-rust.git" }
+lambda_runtime = "1.0.1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
 [features]
 default = ["logging"]
 full = ["websocket", "http", "streamable-http", "sse", "validation", "resource-watcher", "rayon", "schema-generation", "jwt-auth", "composition", "mcp-apps", "http-client", "logging", "macros"]
@@ -423,6 +429,11 @@ required-features = ["full"]
 name = "64_mcp_prompt_macro"
 path = "examples/64_mcp_prompt_macro.rs"
 required-features = ["full"]
+
+[[example]]
+name = "65_durable_mcp_agent"
+path = "examples/65_durable_mcp_agent.rs"
+required-features = ["streamable-http"]
 
 [[bench]]
 name = "comprehensive_benchmarks"
