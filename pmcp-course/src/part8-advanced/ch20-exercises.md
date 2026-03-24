@@ -34,7 +34,7 @@ Before starting these exercises, ensure you have:
 
 ## Next Steps
 
-Congratulations! You've completed the PMCP course. Continue your learning:
+After completing these exercises, continue to:
+- [MCP Tasks: Long-Running Operations](./ch21-tasks.md) - Build task-enabled servers for operations that outlast request timeouts
 - [Template Gallery](../appendix/template-gallery.md) - Production templates
 - [Troubleshooting](../appendix/troubleshooting.md) - Common issues
-- Contribute to the PMCP SDK community

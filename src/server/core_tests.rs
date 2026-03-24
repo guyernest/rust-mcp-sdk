@@ -756,8 +756,8 @@ mod tests {
         .with_description("A task-creating tool")
         .with_execution(ToolExecution::new().with_task_support(TaskSupport::Required));
 
-        let task_store = Arc::new(InMemoryTaskStore::new())
-            as Arc<dyn crate::server::task_store::TaskStore>;
+        let task_store =
+            Arc::new(InMemoryTaskStore::new()) as Arc<dyn crate::server::task_store::TaskStore>;
 
         let server = ServerCoreBuilder::new()
             .name("test-server")
@@ -772,13 +772,10 @@ mod tests {
             .handle_request(RequestId::from(0i64), create_init_request(), None)
             .await;
 
-        // Call the task tool
-        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
-            name: "task_tool".to_string(),
-            arguments: json!({}),
-            _meta: None,
-            task: None,
-        })));
+        // Call the task tool WITH task field (client requests task-augmented response)
+        let mut call_req = CallToolRequest::new("task_tool", json!({}));
+        call_req.task = Some(json!({})); // Client signals task-augmented mode
+        let request = Request::Client(Box::new(ClientRequest::CallTool(call_req)));
 
         let response = server
             .handle_request(RequestId::from(1i64), request, None)
@@ -808,7 +805,7 @@ mod tests {
                 );
                 let related = &result["_meta"][RELATED_TASK_META_KEY];
                 assert_eq!(related["taskId"], "t-test-123");
-            }
+            },
             _ => panic!("Expected successful tool call with CreateTaskResult"),
         }
     }
@@ -823,8 +820,8 @@ mod tests {
             "status": "working"
         }));
 
-        let task_store = Arc::new(InMemoryTaskStore::new())
-            as Arc<dyn crate::server::task_store::TaskStore>;
+        let task_store =
+            Arc::new(InMemoryTaskStore::new()) as Arc<dyn crate::server::task_store::TaskStore>;
 
         let server = ServerCoreBuilder::new()
             .name("test-server")
@@ -840,12 +837,10 @@ mod tests {
             .await;
 
         // Call the tool
-        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
-            name: "normal_tool".to_string(),
-            arguments: json!({}),
-            _meta: None,
-            task: None,
-        })));
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest::new(
+            "normal_tool",
+            json!({}),
+        ))));
 
         let response = server
             .handle_request(RequestId::from(1i64), request, None)
@@ -862,7 +857,70 @@ mod tests {
                     result.get("task").is_none(),
                     "Should NOT be CreateTaskResult -- tool doesn't declare taskSupport"
                 );
-            }
+            },
+            _ => panic!("Expected successful tool call with CallToolResult"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_call_tool_with_task_support_but_no_task_field_returns_call_tool_result() {
+        use crate::server::task_store::InMemoryTaskStore;
+        use crate::server::typed_tool::TypedTool;
+        use crate::types::{TaskSupport, ToolExecution};
+
+        // Tool declares taskSupport=Required but client does NOT send task field
+        let task_tool = TypedTool::new_with_schema(
+            "task_tool",
+            json!({"type": "object"}),
+            |_args: serde_json::Value, _extra| {
+                Box::pin(async {
+                    Ok(json!({
+                        "taskId": "t-test-456",
+                        "status": "working"
+                    }))
+                })
+            },
+        )
+        .with_description("A task tool")
+        .with_execution(ToolExecution::new().with_task_support(TaskSupport::Required));
+
+        let task_store =
+            Arc::new(InMemoryTaskStore::new()) as Arc<dyn crate::server::task_store::TaskStore>;
+
+        let server = ServerCoreBuilder::new()
+            .name("test-server")
+            .version("1.0.0")
+            .tool("task_tool", task_tool)
+            .task_store(task_store)
+            .build()
+            .unwrap();
+
+        server
+            .handle_request(RequestId::from(0i64), create_init_request(), None)
+            .await;
+
+        // Call WITHOUT task field — client doesn't support task-augmented calls
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest::new(
+            "task_tool",
+            json!({}),
+        ))));
+
+        let response = server
+            .handle_request(RequestId::from(1i64), request, None)
+            .await;
+
+        match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(result) => {
+                // Should be CallToolResult (backward compat for non-task-aware clients)
+                assert!(
+                    result.get("content").is_some(),
+                    "Should be CallToolResult when client doesn't send task field"
+                );
+                assert!(
+                    result.get("task").is_none(),
+                    "Should NOT be CreateTaskResult — client didn't request task mode"
+                );
+            },
             _ => panic!("Expected successful tool call with CallToolResult"),
         }
     }
@@ -889,8 +947,8 @@ mod tests {
         .with_description("Forbidden task support")
         .with_execution(ToolExecution::new().with_task_support(TaskSupport::Forbidden));
 
-        let task_store = Arc::new(InMemoryTaskStore::new())
-            as Arc<dyn crate::server::task_store::TaskStore>;
+        let task_store =
+            Arc::new(InMemoryTaskStore::new()) as Arc<dyn crate::server::task_store::TaskStore>;
 
         let server = ServerCoreBuilder::new()
             .name("test-server")
@@ -906,12 +964,10 @@ mod tests {
             .await;
 
         // Call the tool
-        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
-            name: "forbidden_tool".to_string(),
-            arguments: json!({}),
-            _meta: None,
-            task: None,
-        })));
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest::new(
+            "forbidden_tool",
+            json!({}),
+        ))));
 
         let response = server
             .handle_request(RequestId::from(1i64), request, None)
@@ -919,15 +975,12 @@ mod tests {
 
         match response.payload {
             crate::types::jsonrpc::ResponsePayload::Result(result) => {
-                assert!(
-                    result.get("content").is_some(),
-                    "Should be CallToolResult"
-                );
+                assert!(result.get("content").is_some(), "Should be CallToolResult");
                 assert!(
                     result.get("task").is_none(),
                     "Should NOT detect task -- Forbidden"
                 );
-            }
+            },
             _ => panic!("Expected successful tool call with CallToolResult"),
         }
     }

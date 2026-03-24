@@ -35,11 +35,11 @@ use super::subscriptions::SubscriptionManager;
 use super::tasks::TaskRouter;
 #[cfg(not(target_arch = "wasm32"))]
 use super::tool_middleware::{ToolContext, ToolMiddlewareChain};
+use super::{PromptHandler, ResourceHandler, SamplingHandler, ToolHandler};
 #[cfg(not(target_arch = "wasm32"))]
-use crate::types::tasks::{RelatedTaskMetadata, RELATED_TASK_META_KEY};
+use crate::types::tasks::RELATED_TASK_META_KEY;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::types::tools::TaskSupport;
-use super::{PromptHandler, ResourceHandler, SamplingHandler, ToolHandler};
 
 /// Protocol-agnostic request handler trait.
 ///
@@ -272,13 +272,13 @@ pub struct ServerCore {
     stateless_mode: bool,
 }
 
-/// Outcome of a tool handler call -- either a normal result or a task creation.
+/// Outcome of a tool handler call — either a normal result or a task creation.
 enum ToolCallOutcome {
-    /// Standard tool result wrapped as CallToolResult
+    /// Standard tool result wrapped as `CallToolResult`
     Result(CallToolResult),
-    /// Tool returned a Task value -- should be returned as CreateTaskResult
+    /// Tool returned a Task-shaped value — returned as `CreateTaskResult` with `_meta`
     #[cfg(not(target_arch = "wasm32"))]
-    TaskCreated(Value),
+    TaskCreated { task_id: String, task_value: Value },
 }
 
 impl ServerCore {
@@ -391,7 +391,7 @@ impl ServerCore {
             }
         }
 
-        // Create request handler extra data with auth_context
+        // Create request handler extra data with auth_context and task request
         let request_id = format!("tool_{}", req.name);
         let mut extra = RequestHandlerExtra::new(
             request_id.clone(),
@@ -399,7 +399,8 @@ impl ServerCore {
                 .create_token(request_id.clone())
                 .await,
         )
-        .with_auth_context(auth_context);
+        .with_auth_context(auth_context)
+        .with_task_request(req.task.clone());
 
         // Execute tool with or without middleware depending on platform
         #[cfg(not(target_arch = "wasm32"))]
@@ -454,27 +455,47 @@ impl ServerCore {
 
         // Convert result to CallToolResult
         let value = result?;
+        let tool_info = self.tool_infos.get(&req.name);
 
-        // Task detection: if tool declares taskSupport and task_store is configured,
-        // check if the returned Value is Task-shaped (has taskId + status fields).
-        // Per D-06: detection requires declared execution.taskSupport, not just shape matching.
+        // Task detection: return CreateTaskResult only when ALL of:
+        // 1. task_store is configured
+        // 2. Tool declares taskSupport (Required or Optional)
+        // 3. Client sent `task` field in the request (explicit task-augmented call)
+        // 4. Tool returned a Task-shaped Value (has taskId + status)
+        // When the client doesn't send `task`, fall through to CallToolResult
+        // so non-task-aware clients (like ChatGPT) get normal tool output.
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let has_task_support = self.task_store.is_some()
-                && self
-                    .tool_infos
-                    .get(&req.name)
-                    .and_then(|info| info.execution.as_ref())
-                    .and_then(|exec| exec.task_support.as_ref())
+            let tool_task_support = tool_info
+                .as_ref()
+                .and_then(|info| info.execution.as_ref())
+                .and_then(|exec| exec.task_support.as_ref())
+                .copied();
+
+            // Warn when a Required tool is called without task-augmented request
+            if req.task.is_none() && matches!(tool_task_support, Some(TaskSupport::Required)) {
+                tracing::warn!(
+                    tool = req.name.as_str(),
+                    "Tool declares taskSupport=Required but client did not send task field; returning CallToolResult for compatibility"
+                );
+            }
+
+            let has_task_support = req.task.is_some()
+                && self.task_store.is_some()
+                && tool_task_support
                     .is_some_and(|ts| matches!(ts, TaskSupport::Required | TaskSupport::Optional));
 
             if has_task_support {
-                // Verify the Value is actually Task-shaped before converting
-                if value.get("taskId").is_some() && value.get("status").is_some() {
-                    return Ok(ToolCallOutcome::TaskCreated(value));
+                if let Some(task_id) = value.get("taskId").and_then(|v| v.as_str()) {
+                    if value.get("status").is_some() {
+                        return Ok(ToolCallOutcome::TaskCreated {
+                            task_id: task_id.to_string(),
+                            task_value: value,
+                        });
+                    }
                 }
-                // If tool declares task support but didn't return a Task, fall through to normal path.
-                // This handles the "optional" case where the tool might not create a task.
+                // Tool declares task support but didn't return a Task — fall through to normal path
+                // (handles the "optional" case where the tool might not create a task).
                 tracing::debug!(
                     tool = req.name.as_str(),
                     "Tool declares taskSupport but returned non-Task value; using normal CallToolResult path"
@@ -482,11 +503,7 @@ impl ServerCore {
             }
         }
 
-        let call_result = if let Some(info) = self
-            .tool_infos
-            .get(&req.name)
-            .filter(|i| i.widget_meta().is_some())
-        {
+        let call_result = if let Some(info) = tool_info.filter(|i| i.widget_meta().is_some()) {
             // Widget tool: structured data goes in structuredContent,
             // text is a brief summary to avoid duplication in `ChatGPT`
             let summary = summarize_structured_output(&value);
@@ -922,42 +939,23 @@ impl ServerCore {
                         match self.handle_call_tool(req, auth_context.clone()).await {
                             Ok(outcome) => match outcome {
                                 #[cfg(not(target_arch = "wasm32"))]
-                                ToolCallOutcome::TaskCreated(task_value) => {
-                                    // Build CreateTaskResult with _meta per D-08, D-09
-                                    let task_id = task_value
-                                        .get("taskId")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-
-                                    // Construct CreateTaskResult
-                                    let mut result_value = serde_json::json!({
-                                        "task": task_value
-                                    });
-
-                                    // Add _meta with related-task reference per D-08, D-09
-                                    if !task_id.is_empty() {
-                                        let related_meta = RelatedTaskMetadata {
-                                            task_id: task_id.clone(),
-                                        };
-                                        if let Ok(meta_value) =
-                                            serde_json::to_value(&related_meta)
-                                        {
-                                            result_value["_meta"] = serde_json::json!({
-                                                RELATED_TASK_META_KEY: meta_value
-                                            });
+                                ToolCallOutcome::TaskCreated {
+                                    task_id,
+                                    task_value,
+                                } => {
+                                    let result_value = serde_json::json!({
+                                        "task": task_value,
+                                        "_meta": {
+                                            RELATED_TASK_META_KEY: { "taskId": task_id }
                                         }
-                                    }
-
+                                    });
                                     Self::success_response(id, result_value)
-                                }
+                                },
                                 ToolCallOutcome::Result(result) => {
                                     // Fire-and-forget workflow continuation recording
                                     #[cfg(not(target_arch = "wasm32"))]
-                                    if let (
-                                        Some((task_id, tool_name)),
-                                        Some(ref task_router),
-                                    ) = (continuation_ctx, &self.task_router)
+                                    if let (Some((task_id, tool_name)), Some(ref task_router)) =
+                                        (continuation_ctx, &self.task_router)
                                     {
                                         let owner_id = self
                                             .resolve_task_owner(auth_context.as_ref())
@@ -984,7 +982,7 @@ impl ServerCore {
                                         id,
                                         serde_json::to_value(result).unwrap(),
                                     )
-                                }
+                                },
                             },
                             Err(e) => Self::error_response(id, -32603, e.to_string()),
                         }

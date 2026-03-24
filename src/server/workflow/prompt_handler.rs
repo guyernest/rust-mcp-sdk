@@ -1060,6 +1060,7 @@ mod tests {
             auth_context: None,
             metadata: std::collections::HashMap::new(),
             progress_reporter: None,
+            task_request: None,
         };
 
         let result = handler
@@ -1242,6 +1243,7 @@ mod tests {
             auth_context: None,
             metadata: std::collections::HashMap::new(),
             progress_reporter: None,
+            task_request: None,
         };
 
         let result = handler
@@ -1350,6 +1352,7 @@ mod tests {
             auth_context: None,
             metadata: std::collections::HashMap::new(),
             progress_reporter: None,
+            task_request: None,
         };
 
         let result = handler
@@ -1443,6 +1446,7 @@ mod tests {
             auth_context: None,
             metadata: std::collections::HashMap::new(),
             progress_reporter: None,
+            task_request: None,
         };
 
         let result = handler
@@ -1574,6 +1578,7 @@ mod tests {
             auth_context: None,
             metadata: std::collections::HashMap::new(),
             progress_reporter: None,
+            task_request: None,
         };
 
         let result = handler
@@ -1704,6 +1709,7 @@ mod tests {
             auth_context: None,
             metadata: std::collections::HashMap::new(),
             progress_reporter: None,
+            task_request: None,
         };
 
         let result = handler
@@ -1771,6 +1777,7 @@ mod tests {
             auth_context: None,
             metadata: std::collections::HashMap::new(),
             progress_reporter: None,
+            task_request: None,
         };
 
         let result = handler
@@ -1849,6 +1856,7 @@ mod tests {
             auth_context: None,
             metadata: std::collections::HashMap::new(),
             progress_reporter: None,
+            task_request: None,
         };
 
         let result = handler
@@ -1945,6 +1953,7 @@ mod tests {
             auth_context: None,
             metadata: std::collections::HashMap::new(),
             progress_reporter: None,
+            task_request: None,
         };
 
         let result = handler
@@ -2077,6 +2086,7 @@ mod tests {
             auth_context: None,
             metadata: std::collections::HashMap::new(),
             progress_reporter: None,
+            task_request: None,
         };
 
         let result = handler
@@ -2218,6 +2228,7 @@ mod tests {
             auth_context: None,
             metadata: std::collections::HashMap::new(),
             progress_reporter: None,
+            task_request: None,
         };
 
         let result = handler
@@ -2332,6 +2343,7 @@ mod tests {
             auth_context: None,
             metadata: std::collections::HashMap::new(),
             progress_reporter: None,
+            task_request: None,
         };
 
         let result = handler

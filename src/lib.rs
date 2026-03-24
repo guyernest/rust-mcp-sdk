@@ -105,7 +105,7 @@ pub mod axum {
 }
 
 // Re-export commonly used types
-pub use client::{Client, ClientBuilder};
+pub use client::{Client, ClientBuilder, ToolCallResponse};
 pub use error::{Error, ErrorCode, Result};
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::cancellation::RequestHandlerExtra;

@@ -160,6 +160,11 @@
   - [Example Walkthroughs](./part8-advanced/ch20-03-postmessage.md)
   - [Chapter 20 Exercises](./part8-advanced/ch20-exercises.md)
 
+- [MCP Tasks: Long-Running Operations](./part8-advanced/ch21-tasks.md)
+  - [Task Lifecycle and Polling](./part8-advanced/ch21-01-lifecycle.md)
+  - [Capability Negotiation](./part8-advanced/ch21-02-capability-negotiation.md)
+  - [Chapter 21 Exercises](./part8-advanced/ch21-exercises.md)
+
 ---
 
 # Appendices
