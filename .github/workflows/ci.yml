@@ -299,9 +299,8 @@ jobs:
       run: cargo check --all-features
 
   # Unified gate — single required check for org ruleset.
-  # The org ruleset requires exactly "unified / gate" as check context.
+  # Reports as "gate" to match the org ruleset's required status check.
   gate:
-    name: unified / gate
     runs-on: ubuntu-latest
     needs: [test, quality-gate]
     if: always()
