@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **`IconInfo.src` renamed to `IconInfo.url`** — matches MCP spec field name. Servers sending icons (like pmcp.run) caused `initialize` deserialization failure. `#[serde(alias = "src")]` added for backward compatibility.
 - **Initialize error reporting** — `Client::initialize()` now reports the actual serde deserialization error instead of a generic "Invalid initialize result format" message.
-- Bumped `mcp-tester` to 0.4.1 (picks up the SDK fix for conformance testing against servers with icons)
+- Bumped `mcp-tester` to 0.4.1, `mcp-preview` to 0.2.5, `pmcp-server` to 0.2.1, `cargo-pmcp` to 0.5.1 — all aligned to `pmcp` 2.0.2
 
 ## [2.0.1] - 2026-03-23
 
