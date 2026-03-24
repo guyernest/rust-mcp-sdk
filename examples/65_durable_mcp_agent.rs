@@ -53,8 +53,9 @@
 use lambda_durable_execution_rust::prelude::*;
 use lambda_durable_execution_rust::runtime::with_durable_execution_service;
 use pmcp::shared::streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig};
+use pmcp::types::tasks::{Task, TaskStatus};
 use pmcp::types::{CallToolResult, Content, Implementation, ToolInfo};
-use pmcp::{Client, ClientCapabilities};
+use pmcp::{Client, ClientCapabilities, ToolCallResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -397,13 +398,11 @@ async fn execute_iteration(
         .map(
             Some("tools"),
             tool_calls,
-            move |call: ToolCall, _item_ctx: DurableContextHandle, _idx: usize| {
+            move |call: ToolCall, item_ctx: DurableContextHandle, _idx: usize| {
                 let r = Arc::clone(&routing);
                 let c = clients.clone();
                 async move {
-                    execute_tool_call(&call, &r, &c)
-                        .await
-                        .map_err(|e| DurableError::Internal(e.to_string()))
+                    execute_tool_call(&call, &r, &c, &item_ctx).await
                 }
             },
             None,
@@ -599,11 +598,18 @@ fn translate_mcp_tool(tool_info: &ToolInfo, prefix: &str) -> serde_json::Value {
 // Tool execution
 // ---------------------------------------------------------------------------
 
-/// Execute a single tool call via the appropriate MCP server.
+/// Execute a single tool call via the appropriate MCP server, with
+/// automatic handling of both immediate results and long-running tasks.
 ///
 /// Resolves the prefixed tool name (e.g. "calc__multiply") back to the
 /// original name ("multiply") and server URL using the routing map, then
-/// calls the tool on the cached MCP client.
+/// calls the tool using `call_tool_with_task()`.
+///
+/// The response can be:
+/// - **`ToolCallResponse::Result`**: The tool completed immediately.
+///   Extract the text content and return it.
+/// - **`ToolCallResponse::Task`**: The tool started an async operation.
+///   Use `ctx.wait_for_condition()` to poll until completion (see below).
 ///
 /// MCP tool errors (is_error: true) are passed through as successful
 /// results -- the LLM decides how to recover from tool errors.
@@ -611,22 +617,144 @@ async fn execute_tool_call(
     call: &ToolCall,
     routing: &HashMap<String, String>,
     mcp_clients: &HashMap<String, Client<StreamableHttpTransport>>,
-) -> Result<ToolResult, Box<dyn std::error::Error + Send + Sync>> {
+    ctx: &DurableContextHandle,
+) -> DurableResult<ToolResult> {
     // Use split_once("__") to correctly handle tool names that contain "__"
     // (Pitfall 4). Only the first "__" separates prefix from original name.
-    let (server_url, original_name) = resolve_tool_name(&call.name, routing)?;
+    let (server_url, original_name) = resolve_tool_name(&call.name, routing)
+        .map_err(|e| DurableError::Internal(e.to_string()))?;
 
     let client = mcp_clients.get(&server_url).ok_or_else(|| {
-        format!("No cached MCP client for server URL: {server_url}")
+        DurableError::Internal(format!(
+            "No cached MCP client for server URL: {server_url}"
+        ))
     })?;
 
-    let result: CallToolResult = client
-        .call_tool(original_name.clone(), call.input.clone())
+    // Use call_tool_with_task to support both immediate and async results.
+    // This sends the `task` field in the request per D-08, signaling that
+    // this client can handle CreateTaskResult responses.
+    let response = client
+        .call_tool_with_task(original_name.clone(), call.input.clone())
         .await
-        .map_err(|e| format!("MCP call_tool failed for {original_name}: {e}"))?;
+        .map_err(|e| {
+            DurableError::Internal(format!("MCP call_tool failed for {original_name}: {e}"))
+        })?;
 
-    // Extract text content from the result.
-    let text: String = result
+    match response {
+        ToolCallResponse::Result(result) => {
+            // Immediate result -- extract text content and return.
+            let text = extract_text_content(&result);
+            Ok(ToolResult {
+                tool_use_id: call.id.clone(),
+                content: text,
+                is_error: result.is_error,
+            })
+        }
+
+        // --- MCP Tasks: Long-Running Tool Handling ---
+        //
+        // When an MCP server needs time to process a tool call, it returns a
+        // CreateTaskResult (wrapped as ToolCallResponse::Task) instead of an
+        // immediate CallToolResult. The task has a status (Working, Completed,
+        // Failed, etc.) and a suggested poll_interval.
+        //
+        // Traditional approach: tokio::sleep loop (wastes Lambda compute time)
+        // Durable approach: ctx.wait_for_condition() suspends the Lambda between
+        // polls. Zero compute cost during waits. The checkpoint system remembers
+        // where we are, and Lambda resumes when the delay expires.
+        //
+        // This is the key insight: Durable Lambda makes MCP Tasks practically
+        // free to poll, even for operations that take minutes or hours.
+        ToolCallResponse::Task(initial_task) => {
+            let task_id = initial_task.task_id.clone();
+            let poll_ms = initial_task.poll_interval.unwrap_or(5000);
+            // Convert milliseconds to seconds (minimum 1s). The durable SDK's
+            // Duration type operates at second granularity, which is fine for
+            // inter-poll delays -- sub-second polling would be wasteful anyway.
+            let poll_secs = std::cmp::max(1, (poll_ms / 1000) as u32);
+
+            info!(
+                task_id = %task_id,
+                poll_interval_ms = poll_ms,
+                poll_interval_secs = poll_secs,
+                "Tool returned task -- polling with wait_for_condition"
+            );
+
+            // Wait strategy: stop when the task reaches a terminal status
+            // (Completed, Failed, or Cancelled). Continue polling using the
+            // server's suggested poll_interval between checks.
+            let wait_strategy = Arc::new(move |task: &Task, _attempt: u32| {
+                if task.status.is_terminal() {
+                    WaitConditionDecision::Stop
+                } else {
+                    WaitConditionDecision::Continue {
+                        delay: Duration::seconds(poll_secs),
+                    }
+                }
+            });
+
+            let config = WaitConditionConfig::new(initial_task, wait_strategy)
+                .with_max_attempts(60); // Safety limit: ~5 min at default 5s intervals
+
+            // The check function polls tasks/get and returns the updated Task.
+            // Each poll is a durable step -- if Lambda suspends and resumes,
+            // already-completed polls are replayed from cache.
+            let client_clone = client.clone();
+            let tid = task_id.clone();
+            let final_task = ctx
+                .wait_for_condition(
+                    Some(&format!("poll-task-{}", &task_id)),
+                    move |_current: Task, _step_ctx: StepContext| {
+                        let c = client_clone.clone();
+                        let id = tid.clone();
+                        async move {
+                            c.tasks_get(&id)
+                                .await
+                                .map_err(|e| DurableError::Internal(e.to_string()))
+                        }
+                    },
+                    config,
+                )
+                .await?;
+
+            // Handle the terminal status.
+            match final_task.status {
+                TaskStatus::Completed => {
+                    // Retrieve the full result via tasks/result.
+                    let result = client
+                        .tasks_result(&final_task.task_id)
+                        .await
+                        .map_err(|e| DurableError::Internal(e.to_string()))?;
+                    let text = extract_text_content(&result);
+                    Ok(ToolResult {
+                        tool_use_id: call.id.clone(),
+                        content: text,
+                        is_error: result.is_error,
+                    })
+                }
+                status => {
+                    // Failed or Cancelled -- return as error result.
+                    // The LLM decides how to recover (retry, ask user, etc.)
+                    Ok(ToolResult {
+                        tool_use_id: call.id.clone(),
+                        content: format!(
+                            "Task {} ended with status: {}",
+                            final_task.task_id, status
+                        ),
+                        is_error: true,
+                    })
+                }
+            }
+        }
+    }
+}
+
+/// Extract text content from an MCP `CallToolResult`.
+///
+/// Filters for `Content::Text` blocks and joins them with newlines.
+/// Non-text content (images, resources, etc.) is silently skipped.
+fn extract_text_content(result: &CallToolResult) -> String {
+    result
         .content
         .iter()
         .filter_map(|c| match c {
@@ -634,13 +762,7 @@ async fn execute_tool_call(
             _ => None,
         })
         .collect::<Vec<_>>()
-        .join("\n");
-
-    Ok(ToolResult {
-        tool_use_id: call.id.clone(),
-        content: text,
-        is_error: result.is_error,
-    })
+        .join("\n")
 }
 
 /// Resolve a prefixed tool name to (server_url, original_name).
