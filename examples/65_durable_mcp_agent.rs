@@ -26,6 +26,10 @@
 //!   namespace for each loop iteration, ensuring deterministic replay
 //!   even when the number of iterations varies across invocations.
 //!
+//! - **`ctx.wait_for_condition()`**: Polls for a condition (e.g. MCP Task
+//!   completion) with Lambda suspension between polls. Zero compute cost
+//!   during waits -- the checkpoint system remembers where we are.
+//!
 //! ## Prerequisites
 //!
 //! - AWS Lambda with Durable Execution enabled
@@ -52,7 +56,9 @@
 
 use lambda_durable_execution_rust::prelude::*;
 use lambda_durable_execution_rust::runtime::with_durable_execution_service;
-use pmcp::shared::streamable_http::{StreamableHttpTransport, StreamableHttpTransportConfig};
+use pmcp::shared::streamable_http::{
+    StreamableHttpTransport, StreamableHttpTransportConfigBuilder,
+};
 use pmcp::types::tasks::{Task, TaskStatus};
 use pmcp::types::{CallToolResult, Content, Implementation, ToolInfo};
 use pmcp::{Client, ClientCapabilities, ToolCallResponse};
@@ -60,6 +66,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::info;
+
+const AGENT_NAME: &str = "durable-mcp-agent-example";
+const AGENT_VERSION: &str = "0.1.0";
+const MAX_TOKENS: u32 = 4096;
 
 // ---------------------------------------------------------------------------
 // Types -- simplified inline versions of the production agent types
@@ -90,15 +100,10 @@ fn default_max_iterations() -> u32 {
 /// Agent output returned as the Lambda result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AgentOutput {
-    /// The LLM's final text response.
     response: String,
-    /// Number of agent loop iterations executed.
     iterations: u32,
-    /// Cumulative input tokens across all LLM calls.
     total_input_tokens: u32,
-    /// Cumulative output tokens across all LLM calls.
     total_output_tokens: u32,
-    /// Tool names invoked (may contain duplicates showing full call history).
     tools_called: Vec<String>,
 }
 
@@ -118,8 +123,17 @@ struct AnthropicRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AnthropicResponse {
     content: Vec<ContentBlock>,
-    stop_reason: String,
+    stop_reason: StopReason,
     usage: Usage,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StopReason {
+    EndTurn,
+    ToolUse,
+    MaxTokens,
+    StopSequence,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,7 +155,6 @@ struct Usage {
     output_tokens: u32,
 }
 
-/// A single extracted tool call from the LLM response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ToolCall {
     id: String,
@@ -149,7 +162,6 @@ struct ToolCall {
     input: serde_json::Value,
 }
 
-/// Result of executing a single MCP tool call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ToolResult {
     tool_use_id: String,
@@ -160,9 +172,7 @@ struct ToolResult {
 /// Tools discovered from MCP servers, with a routing map for dispatch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ToolsWithRouting {
-    /// Tool schemas in Anthropic tool format (name, description, input_schema).
     tools: Vec<serde_json::Value>,
-    /// Maps prefixed tool name -> server URL for routing tool calls.
     routing: HashMap<String, String>,
 }
 
@@ -201,8 +211,8 @@ async fn agent_handler(
         "Starting durable MCP agent"
     );
 
-    // 1. Discover tools from MCP servers via a durable step.
-    //    On replay, this returns the cached discovery result.
+    // Discover tools from MCP servers via a durable step.
+    // On replay, this returns the cached discovery result.
     let server_urls = event.mcp_server_urls.clone();
     let tools_with_routing: ToolsWithRouting = ctx
         .step(
@@ -218,17 +228,20 @@ async fn agent_handler(
 
     info!(tools = tools_with_routing.tools.len(), "Tools discovered");
 
-    // 2. Establish MCP connections OUTSIDE durable steps.
-    //    Connections are ephemeral -- they are re-created on each Lambda
-    //    invocation. Putting them inside a step would cache the connection
-    //    object, which becomes stale on replay (Pitfall 1).
+    // Establish MCP connections OUTSIDE durable steps. Connections are
+    // ephemeral -- they die when Lambda suspends. Caching them inside a
+    // step would produce stale connection objects on replay.
     let mcp_clients = connect_mcp_clients(&event.mcp_server_urls)
         .await
         .map_err(|e| DurableError::Internal(e.to_string()))?;
 
-    // 3. Agent loop: LLM call -> tool execution -> repeat
+    // Wrap immutable data in Arc to avoid deep clones on each iteration.
+    let api_key = Arc::<str>::from(api_key);
+    let model = Arc::<str>::from(event.model.as_str());
+    let tools = Arc::new(tools_with_routing.tools);
+    let routing = Arc::new(tools_with_routing.routing);
+
     let http_client = reqwest::Client::new();
-    let model = event.model.clone();
     let mut messages: Vec<serde_json::Value> = vec![serde_json::json!({
         "role": "user",
         "content": event.prompt,
@@ -239,19 +252,18 @@ async fn agent_handler(
     let mut tools_called: Vec<String> = Vec::new();
 
     for i in 0..event.max_iterations {
-        // Each iteration gets its own child context so operation IDs
-        // (step-0, step-1, ...) restart from 0. This ensures deterministic
-        // replay even if earlier iterations produced different numbers of
-        // operations on a previous invocation.
+        // Each iteration gets its own child context so operation IDs restart
+        // from 0, ensuring deterministic replay even if earlier iterations
+        // produced different numbers of operations on a previous invocation.
         let client = http_client.clone();
-        let key = api_key.clone();
-        let mdl = model.clone();
+        let key = Arc::clone(&api_key);
+        let mdl = Arc::clone(&model);
         let msgs = messages.clone();
-        let tools = tools_with_routing.tools.clone();
-        let routing = tools_with_routing.routing.clone();
+        let tls = Arc::clone(&tools);
+        let rte = Arc::clone(&routing);
         let clients = mcp_clients.clone();
 
-        let (response, tool_results) = ctx
+        let (response, iteration_tool_calls, tool_results) = ctx
             .run_in_child_context(
                 Some(&format!("iteration-{i}")),
                 move |child_ctx| async move {
@@ -261,8 +273,8 @@ async fn agent_handler(
                         &key,
                         &mdl,
                         &msgs,
-                        &tools,
-                        &routing,
+                        &tls,
+                        &rte,
                         &clients,
                     )
                     .await
@@ -271,17 +283,13 @@ async fn agent_handler(
             )
             .await?;
 
-        // Accumulate token counts across iterations (SDK-03).
         total_input_tokens += response.usage.input_tokens;
         total_output_tokens += response.usage.output_tokens;
 
-        // Collect tool names for observability.
-        let iteration_tool_calls = extract_tool_calls(&response);
         for tc in &iteration_tool_calls {
             tools_called.push(tc.name.clone());
         }
 
-        // Structured logging per iteration (SDK-03).
         info!(
             iteration = i,
             input_tokens = response.usage.input_tokens,
@@ -292,11 +300,9 @@ async fn agent_handler(
             "Iteration complete"
         );
 
-        // Append assistant message to conversation history.
         messages.push(response_to_assistant_message(&response));
 
-        // If the LLM said "end_turn" or there are no tool calls, we're done.
-        if response.stop_reason == "end_turn" || iteration_tool_calls.is_empty() {
+        if response.stop_reason == StopReason::EndTurn || iteration_tool_calls.is_empty() {
             let final_text = extract_text(&response);
             return Ok(AgentOutput {
                 response: final_text,
@@ -307,7 +313,6 @@ async fn agent_handler(
             });
         }
 
-        // Append tool results as a user message.
         if let Some(results) = tool_results {
             let tool_result_blocks: Vec<serde_json::Value> = results
                 .into_iter()
@@ -330,7 +335,6 @@ async fn agent_handler(
         }
     }
 
-    // Max iterations exceeded -- return an error so the caller knows.
     Err(DurableError::Internal(format!(
         "Agent exceeded max iterations ({}) without completing",
         event.max_iterations
@@ -344,7 +348,7 @@ async fn agent_handler(
 /// Execute a single agent loop iteration:
 /// 1. Call the Anthropic API via a durable step (with retry).
 /// 2. If the response contains tool_use blocks, execute them via durable map.
-/// 3. Return the LLM response and any tool results.
+/// 3. Return the LLM response, extracted tool calls, and any tool results.
 async fn execute_iteration(
     ctx: &DurableContextHandle,
     http_client: &reqwest::Client,
@@ -354,8 +358,8 @@ async fn execute_iteration(
     tools: &[serde_json::Value],
     routing: &HashMap<String, String>,
     mcp_clients: &Arc<HashMap<String, Client<StreamableHttpTransport>>>,
-) -> DurableResult<(AnthropicResponse, Option<Vec<ToolResult>>)> {
-    // --- Durable LLM call with exponential backoff retry ---
+) -> DurableResult<(AnthropicResponse, Vec<ToolCall>, Option<Vec<ToolResult>>)> {
+    // Durable LLM call with exponential backoff retry.
     // On replay, this returns the cached response. On transient failures
     // (e.g. 429 rate limit), the durable SDK retries with backoff.
     let client = http_client.clone();
@@ -385,32 +389,30 @@ async fn execute_iteration(
         )
         .await?;
 
-    // --- Execute tool calls in parallel via durable map ---
     let tool_calls = extract_tool_calls(&response);
     if tool_calls.is_empty() {
-        return Ok((response, None));
+        return Ok((response, tool_calls, None));
     }
 
+    // Execute tool calls in parallel via durable map.
     let routing = Arc::new(routing.clone());
     let clients = mcp_clients.clone();
 
     let batch = ctx
         .map(
             Some("tools"),
-            tool_calls,
+            tool_calls.clone(),
             move |call: ToolCall, item_ctx: DurableContextHandle, _idx: usize| {
                 let r = Arc::clone(&routing);
                 let c = clients.clone();
-                async move {
-                    execute_tool_call(&call, &r, &c, &item_ctx).await
-                }
+                async move { execute_tool_call(&call, &r, &c, &item_ctx).await }
             },
             None,
         )
         .await?;
 
     let results: Vec<ToolResult> = batch.values();
-    Ok((response, Some(results)))
+    Ok((response, tool_calls, Some(results)))
 }
 
 // ---------------------------------------------------------------------------
@@ -419,7 +421,7 @@ async fn execute_iteration(
 
 /// Call the Anthropic Messages API directly via reqwest.
 ///
-/// This is intentionally simple -- no abstraction layers. The durable SDK's
+/// Intentionally simple -- no abstraction layers. The durable SDK's
 /// `ctx.step()` handles retry and caching; this function just makes the
 /// HTTP call.
 async fn call_anthropic(
@@ -431,7 +433,7 @@ async fn call_anthropic(
 ) -> Result<AnthropicResponse, Box<dyn std::error::Error + Send + Sync>> {
     let body = AnthropicRequest {
         model: model.to_string(),
-        max_tokens: 4096,
+        max_tokens: MAX_TOKENS,
         system: None,
         messages: messages.to_vec(),
         tools: if tools.is_empty() {
@@ -463,127 +465,125 @@ async fn call_anthropic(
 // MCP client setup and tool discovery
 // ---------------------------------------------------------------------------
 
-/// Discover tools from all configured MCP servers.
+/// Create an initialized MCP client for the given server URL.
+async fn create_mcp_client(
+    url_str: &str,
+) -> Result<Client<StreamableHttpTransport>, Box<dyn std::error::Error + Send + Sync>> {
+    let parsed = url::Url::parse(url_str)?;
+    let config = StreamableHttpTransportConfigBuilder::new(parsed).build();
+    let transport = StreamableHttpTransport::new(config);
+    let mut client = Client::with_info(
+        transport,
+        Implementation::new(AGENT_NAME, AGENT_VERSION),
+    );
+    client.initialize(ClientCapabilities::default()).await?;
+    Ok(client)
+}
+
+/// Discover tools from all configured MCP servers (in parallel).
 ///
-/// For each server URL: connect, call `list_tools()`, translate schemas
-/// to the Anthropic tool format, and build a routing map so tool calls
-/// can be dispatched to the correct server.
+/// For each server: connect, call `list_tools()`, translate schemas to the
+/// Anthropic tool format, and build a routing map for dispatch.
 ///
 /// Tool names are prefixed with a host identifier to avoid collisions
-/// across servers. E.g., a tool "multiply" on "calc.example.com" becomes
+/// across servers. E.g., "multiply" on "calc.example.com" becomes
 /// "calc__multiply".
 async fn discover_tools(
     server_urls: &[String],
 ) -> Result<ToolsWithRouting, Box<dyn std::error::Error + Send + Sync>> {
+    let futures: Vec<_> = server_urls
+        .iter()
+        .map(|url_str| async move {
+            let parsed = url::Url::parse(url_str)?;
+            let prefix = parsed
+                .host_str()
+                .unwrap_or("unknown")
+                .split('.')
+                .next()
+                .unwrap_or("unknown")
+                .to_string();
+
+            let client = create_mcp_client(url_str).await?;
+
+            let mut tools = Vec::new();
+            let mut routing = Vec::new();
+            let mut cursor: Option<String> = None;
+            loop {
+                let result = client.list_tools(cursor).await?;
+                for tool_info in &result.tools {
+                    let prefixed_name = format!("{prefix}__{}", tool_info.name);
+                    routing.push((prefixed_name, url_str.clone()));
+                    tools.push(translate_mcp_tool(tool_info, &prefix));
+                }
+                match result.next_cursor {
+                    Some(next) => cursor = Some(next),
+                    None => break,
+                }
+            }
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((tools, routing))
+        })
+        .collect();
+
+    let results = futures::future::join_all(futures).await;
+
     let mut all_tools = Vec::new();
-    let mut routing = HashMap::new();
-
-    for url_str in server_urls {
-        let parsed = url::Url::parse(url_str)?;
-        let prefix: String = parsed
-            .host_str()
-            .unwrap_or("unknown")
-            .split('.')
-            .next()
-            .unwrap_or("unknown")
-            .to_string();
-
-        // Create a temporary client for discovery only.
-        let config = StreamableHttpTransportConfig {
-            url: parsed,
-            extra_headers: vec![],
-            auth_provider: None,
-            session_id: None,
-            enable_json_response: false,
-            on_resumption_token: None,
-            http_middleware_chain: None,
-        };
-        let transport = StreamableHttpTransport::new(config);
-        let mut client = Client::with_info(
-            transport,
-            Implementation::new("durable-mcp-agent-example", "0.1.0"),
-        );
-        // Advertise full capabilities including Tasks support (D-08).
-        client.initialize(ClientCapabilities::full()).await?;
-
-        // Paginate through all tool pages.
-        let mut cursor: Option<String> = None;
-        loop {
-            let result = client.list_tools(cursor).await?;
-            for tool_info in &result.tools {
-                let translated = translate_mcp_tool(tool_info, &prefix);
-                let prefixed_name = format!("{prefix}__{}", tool_info.name);
-                routing.insert(prefixed_name, url_str.clone());
-                all_tools.push(translated);
-            }
-            match result.next_cursor {
-                Some(next) => cursor = Some(next),
-                None => break,
-            }
+    let mut all_routing = HashMap::new();
+    for result in results {
+        let (tools, routing) = result?;
+        all_tools.extend(tools);
+        for (name, url) in routing {
+            all_routing.insert(name, url);
         }
     }
 
     Ok(ToolsWithRouting {
         tools: all_tools,
-        routing,
+        routing: all_routing,
     })
 }
 
-/// Establish live MCP client connections for tool execution.
+/// Establish live MCP client connections for tool execution (in parallel).
 ///
 /// CRITICAL: This runs OUTSIDE any durable step. MCP connections are
-/// ephemeral -- they must be re-established on each Lambda invocation.
-/// If you put this inside `ctx.step()`, the connection object would be
-/// "replayed" from cache on resume, but the actual TCP/HTTP connection
-/// would be dead (Pitfall 1).
+/// ephemeral -- they die when Lambda suspends. Caching them inside a
+/// `ctx.step()` would produce stale connection objects on replay.
 async fn connect_mcp_clients(
     server_urls: &[String],
-) -> Result<Arc<HashMap<String, Client<StreamableHttpTransport>>>, Box<dyn std::error::Error + Send + Sync>>
-{
-    let mut clients = HashMap::new();
+) -> Result<
+    Arc<HashMap<String, Client<StreamableHttpTransport>>>,
+    Box<dyn std::error::Error + Send + Sync>,
+> {
+    let futures: Vec<_> = server_urls
+        .iter()
+        .map(|url_str| async move {
+            let client = create_mcp_client(url_str).await?;
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((url_str.clone(), client))
+        })
+        .collect();
 
-    for url_str in server_urls {
-        let parsed = url::Url::parse(url_str)?;
-        let config = StreamableHttpTransportConfig {
-            url: parsed,
-            extra_headers: vec![],
-            auth_provider: None,
-            session_id: None,
-            enable_json_response: false,
-            on_resumption_token: None,
-            http_middleware_chain: None,
-        };
-        let transport = StreamableHttpTransport::new(config);
-        let mut client = Client::with_info(
-            transport,
-            Implementation::new("durable-mcp-agent-example", "0.1.0"),
-        );
-        // Advertise full capabilities including Tasks support (D-08).
-        client.initialize(ClientCapabilities::full()).await?;
-        clients.insert(url_str.clone(), client);
+    let results = futures::future::join_all(futures).await;
+    let mut clients = HashMap::with_capacity(server_urls.len());
+    for result in results {
+        let (url, client) = result?;
+        clients.insert(url, client);
     }
 
     Ok(Arc::new(clients))
 }
 
 /// Translate an MCP `ToolInfo` into the Anthropic tool JSON format.
-///
-/// Ensures `input_schema` has `"type": "object"` (some MCP servers omit it)
-/// and strips empty `required` arrays that confuse the Anthropic API.
 fn translate_mcp_tool(tool_info: &ToolInfo, prefix: &str) -> serde_json::Value {
     let mut schema = tool_info.input_schema.clone();
 
-    // Ensure "type": "object" is present.
     if schema.get("type").is_none() {
         schema["type"] = serde_json::json!("object");
     }
 
-    // Strip empty "required" arrays.
     if let Some(req) = schema.get("required") {
         if req.as_array().is_some_and(|a| a.is_empty()) {
-            schema
-                .as_object_mut()
-                .map(|m| m.remove("required"));
+            if let Some(m) = schema.as_object_mut() {
+                m.remove("required");
+            }
         }
     }
 
@@ -601,26 +601,19 @@ fn translate_mcp_tool(tool_info: &ToolInfo, prefix: &str) -> serde_json::Value {
 /// Execute a single tool call via the appropriate MCP server, with
 /// automatic handling of both immediate results and long-running tasks.
 ///
-/// Resolves the prefixed tool name (e.g. "calc__multiply") back to the
-/// original name ("multiply") and server URL using the routing map, then
-/// calls the tool using `call_tool_with_task()`.
+/// Uses `call_tool_with_task()` to signal MCP Tasks support. The response
+/// is either an immediate `Result` or an async `Task` that requires polling.
 ///
-/// The response can be:
-/// - **`ToolCallResponse::Result`**: The tool completed immediately.
-///   Extract the text content and return it.
-/// - **`ToolCallResponse::Task`**: The tool started an async operation.
-///   Use `ctx.wait_for_condition()` to poll until completion (see below).
-///
-/// MCP tool errors (is_error: true) are passed through as successful
-/// results -- the LLM decides how to recover from tool errors.
+/// NOTE: The PMCP SDK provides `client.call_tool_and_poll()` for simple
+/// task polling using `tokio::sleep`. We use `ctx.wait_for_condition()`
+/// instead because it *suspends* the Lambda between polls (zero compute
+/// cost), while `call_tool_and_poll` keeps the Lambda running and billing.
 async fn execute_tool_call(
     call: &ToolCall,
     routing: &HashMap<String, String>,
     mcp_clients: &HashMap<String, Client<StreamableHttpTransport>>,
     ctx: &DurableContextHandle,
 ) -> DurableResult<ToolResult> {
-    // Use split_once("__") to correctly handle tool names that contain "__"
-    // (Pitfall 4). Only the first "__" separates prefix from original name.
     let (server_url, original_name) = resolve_tool_name(&call.name, routing)
         .map_err(|e| DurableError::Internal(e.to_string()))?;
 
@@ -630,9 +623,6 @@ async fn execute_tool_call(
         ))
     })?;
 
-    // Use call_tool_with_task to support both immediate and async results.
-    // This sends the `task` field in the request per D-08, signaling that
-    // this client can handle CreateTaskResult responses.
     let response = client
         .call_tool_with_task(original_name.clone(), call.input.clone())
         .await
@@ -642,7 +632,6 @@ async fn execute_tool_call(
 
     match response {
         ToolCallResponse::Result(result) => {
-            // Immediate result -- extract text content and return.
             let text = extract_text_content(&result);
             Ok(ToolResult {
                 tool_use_id: call.id.clone(),
@@ -651,38 +640,20 @@ async fn execute_tool_call(
             })
         }
 
-        // --- MCP Tasks: Long-Running Tool Handling ---
-        //
-        // When an MCP server needs time to process a tool call, it returns a
-        // CreateTaskResult (wrapped as ToolCallResponse::Task) instead of an
-        // immediate CallToolResult. The task has a status (Working, Completed,
-        // Failed, etc.) and a suggested poll_interval.
-        //
-        // Traditional approach: tokio::sleep loop (wastes Lambda compute time)
-        // Durable approach: ctx.wait_for_condition() suspends the Lambda between
-        // polls. Zero compute cost during waits. The checkpoint system remembers
-        // where we are, and Lambda resumes when the delay expires.
-        //
-        // This is the key insight: Durable Lambda makes MCP Tasks practically
-        // free to poll, even for operations that take minutes or hours.
+        // MCP Tasks: when an MCP server needs time to process, it returns a
+        // Task instead of an immediate result. We use ctx.wait_for_condition()
+        // to poll -- Lambda suspends between polls with zero compute cost.
         ToolCallResponse::Task(initial_task) => {
             let task_id = initial_task.task_id.clone();
             let poll_ms = initial_task.poll_interval.unwrap_or(5000);
-            // Convert milliseconds to seconds (minimum 1s). The durable SDK's
-            // Duration type operates at second granularity, which is fine for
-            // inter-poll delays -- sub-second polling would be wasteful anyway.
             let poll_secs = std::cmp::max(1, (poll_ms / 1000) as u32);
 
             info!(
                 task_id = %task_id,
-                poll_interval_ms = poll_ms,
                 poll_interval_secs = poll_secs,
                 "Tool returned task -- polling with wait_for_condition"
             );
 
-            // Wait strategy: stop when the task reaches a terminal status
-            // (Completed, Failed, or Cancelled). Continue polling using the
-            // server's suggested poll_interval between checks.
             let wait_strategy = Arc::new(move |task: &Task, _attempt: u32| {
                 if task.status.is_terminal() {
                     WaitConditionDecision::Stop
@@ -694,11 +665,10 @@ async fn execute_tool_call(
             });
 
             let config = WaitConditionConfig::new(initial_task, wait_strategy)
-                .with_max_attempts(60); // Safety limit: ~5 min at default 5s intervals
+                .with_max_attempts(60);
 
-            // The check function polls tasks/get and returns the updated Task.
-            // Each poll is a durable step -- if Lambda suspends and resumes,
-            // already-completed polls are replayed from cache.
+            // Each poll is a durable step -- already-completed polls are
+            // replayed from cache if Lambda suspends and resumes.
             let client_clone = client.clone();
             let tid = task_id.clone();
             let final_task = ctx
@@ -717,10 +687,8 @@ async fn execute_tool_call(
                 )
                 .await?;
 
-            // Handle the terminal status.
             match final_task.status {
                 TaskStatus::Completed => {
-                    // Retrieve the full result via tasks/result.
                     let result = client
                         .tasks_result(&final_task.task_id)
                         .await
@@ -733,8 +701,7 @@ async fn execute_tool_call(
                     })
                 }
                 status => {
-                    // Failed or Cancelled -- return as error result.
-                    // The LLM decides how to recover (retry, ask user, etc.)
+                    // Failed or Cancelled -- the LLM decides how to recover.
                     Ok(ToolResult {
                         tool_use_id: call.id.clone(),
                         content: format!(
@@ -750,25 +717,23 @@ async fn execute_tool_call(
 }
 
 /// Extract text content from an MCP `CallToolResult`.
-///
-/// Filters for `Content::Text` blocks and joins them with newlines.
-/// Non-text content (images, resources, etc.) is silently skipped.
 fn extract_text_content(result: &CallToolResult) -> String {
-    result
-        .content
-        .iter()
-        .filter_map(|c| match c {
-            Content::Text { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut out = String::new();
+    for c in &result.content {
+        if let Content::Text { text } = c {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(text);
+        }
+    }
+    out
 }
 
 /// Resolve a prefixed tool name to (server_url, original_name).
 ///
-/// Uses `split_once("__")` which splits at the first occurrence only,
-/// correctly handling tool names that themselves contain "__".
+/// Uses `split_once("__")` so tool names that themselves contain "__"
+/// are handled correctly -- only the first "__" is the separator.
 fn resolve_tool_name(
     prefixed_name: &str,
     routing: &HashMap<String, String>,
@@ -790,7 +755,6 @@ fn resolve_tool_name(
 // Response helpers
 // ---------------------------------------------------------------------------
 
-/// Extract tool_use blocks from an Anthropic response.
 fn extract_tool_calls(response: &AnthropicResponse) -> Vec<ToolCall> {
     response
         .content
@@ -806,20 +770,19 @@ fn extract_tool_calls(response: &AnthropicResponse) -> Vec<ToolCall> {
         .collect()
 }
 
-/// Extract the final text content from an Anthropic response.
 fn extract_text(response: &AnthropicResponse) -> String {
-    response
-        .content
-        .iter()
-        .filter_map(|block| match block {
-            ContentBlock::Text { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut out = String::new();
+    for block in &response.content {
+        if let ContentBlock::Text { text } = block {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(text);
+        }
+    }
+    out
 }
 
-/// Convert an Anthropic response to an assistant message for conversation history.
 fn response_to_assistant_message(response: &AnthropicResponse) -> serde_json::Value {
     let content: Vec<serde_json::Value> = response
         .content
