@@ -80,6 +80,10 @@ pub struct ServerCoreBuilder {
     /// Host-specific metadata layers (e.g., `ChatGpt` for openai/* keys)
     #[cfg(feature = "mcp-apps")]
     host_layers: Vec<crate::types::mcp_apps::HostType>,
+    /// Optional website URL for the server implementation (MCP 2025-11-25)
+    website_url: Option<String>,
+    /// Optional icons for the server implementation (MCP 2025-11-25)
+    icons: Option<Vec<crate::types::protocol::IconInfo>>,
 }
 
 impl Default for ServerCoreBuilder {
@@ -113,6 +117,8 @@ impl ServerCoreBuilder {
             stateless_mode: None, // Auto-detect by default
             #[cfg(feature = "mcp-apps")]
             host_layers: Vec::new(),
+            website_url: None,
+            icons: None,
         }
     }
 
@@ -129,6 +135,18 @@ impl ServerCoreBuilder {
     /// This is a required field that identifies the server version.
     pub fn version(mut self, version: impl Into<String>) -> Self {
         self.version = Some(version.into());
+        self
+    }
+
+    /// Set the website URL for the server implementation (MCP 2025-11-25).
+    pub fn website_url(mut self, url: impl Into<String>) -> Self {
+        self.website_url = Some(url.into());
+        self
+    }
+
+    /// Set icons for the server implementation (MCP 2025-11-25).
+    pub fn with_icons(mut self, icons: Vec<crate::types::protocol::IconInfo>) -> Self {
+        self.icons = Some(icons);
         self
     }
 
@@ -828,7 +846,13 @@ impl ServerCoreBuilder {
             .version
             .ok_or_else(|| Error::validation("Server version is required"))?;
 
-        let info = Implementation::new(name, version);
+        let mut info = Implementation::new(name, version);
+        if let Some(url) = self.website_url {
+            info = info.with_website_url(url);
+        }
+        if let Some(icons) = self.icons {
+            info = info.with_icons(icons);
+        }
 
         // Build tool middleware chain from accumulated middleware
         #[cfg(not(target_arch = "wasm32"))]

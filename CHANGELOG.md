@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-03-23
+
+### MCP Tasks — Client API and Server Fixes
+
+### Added
+- **Client task methods**: `call_tool_with_task()`, `tasks_get()`, `tasks_result()`, `tasks_list()`, `tasks_cancel()` on the MCP Client
+- **`call_tool_and_poll()`**: High-level convenience that calls a tool, auto-polls `tasks/get`, and returns the final `CallToolResult`
+- **`ToolCallResponse` enum**: Distinguishes sync results from async task creation on `call_tool_with_task`
+- **`RequestHandlerExtra.task_request`**: Tool handlers can check `extra.is_task_request()` to branch between sync and async paths
+- **`with_execution()` builder**: All TypedTool variants now support declaring `TaskSupport` via `.with_execution(ToolExecution::new().with_task_support(TaskSupport::Optional))`
+- **Task detection in `handle_call_tool`**: Standard `task_store` path returns `CreateTaskResult` with `_meta` related-task metadata when tool declares `taskSupport` and client sends `task` field
+- **MCP Tasks documentation**: Book chapter (Ch 12.7), course chapter (Ch 21 with exercises), and updated `docs/TASKS_WITH_POLLING.md`
+
+### Fixed
+- **Requestor-driven task detection**: `CreateTaskResult` only returned when client explicitly sends `task` field in `tools/call` — non-task-aware clients (ChatGPT) get `CallToolResult` for compatibility
+- **`tracing::warn!`** emitted when tool declares `TaskSupport::Required` but client doesn't send `task` field
+- **`call_tool_and_poll` robustness**: Handles `InputRequired` status, only falls back on method-not-found errors (not transport/auth), honors server-updated `poll_interval`
+- **Release workflow**: Added `pmcp-macros` publish step before `pmcp` to resolve crates.io dependency ordering
+
 ## [2.0.0] - 2026-03-22
 
 ### PMCP v2.0 — Aligned with the MCP TypeScript SDK v2.0

@@ -134,6 +134,16 @@ pub struct RequestHandlerExtra {
     /// Optional progress reporter for this request
     #[allow(dead_code)]
     pub progress_reporter: Option<Arc<dyn ProgressReporter>>,
+    /// Task augmentation request from the client (MCP Tasks).
+    ///
+    /// When `Some`, the client supports async task polling and requested
+    /// task-augmented behavior for this call. The tool handler can check
+    /// this to decide between a sync path (await and return results) or
+    /// an async path (create task, return immediately).
+    ///
+    /// When `None`, the client does not support tasks or did not request
+    /// task mode — the tool should return results synchronously.
+    pub task_request: Option<serde_json::Value>,
 }
 
 impl RequestHandlerExtra {
@@ -147,6 +157,7 @@ impl RequestHandlerExtra {
             auth_context: None,
             metadata: HashMap::new(),
             progress_reporter: None,
+            task_request: None,
         }
     }
 
@@ -178,6 +189,21 @@ impl RequestHandlerExtra {
     ) -> Self {
         self.progress_reporter = progress_reporter;
         self
+    }
+
+    /// Set the task request from the client's `tools/call` params.
+    ///
+    /// When present, the tool handler knows the client supports task-augmented
+    /// responses and can choose an async path (create task, return immediately)
+    /// instead of awaiting the full result.
+    pub fn with_task_request(mut self, task_request: Option<serde_json::Value>) -> Self {
+        self.task_request = task_request;
+        self
+    }
+
+    /// Returns `true` if the client requested task-augmented behavior.
+    pub fn is_task_request(&self) -> bool {
+        self.task_request.is_some()
     }
 
     /// Get the auth context if available.
@@ -262,6 +288,7 @@ impl Default for RequestHandlerExtra {
             auth_context: None,
             metadata: HashMap::new(),
             progress_reporter: None,
+            task_request: None,
         }
     }
 }
@@ -303,6 +330,7 @@ impl std::fmt::Debug for RequestHandlerExtra {
             .field("auth_info", &self.auth_info)
             .field("auth_context", &self.auth_context)
             .field("metadata", &redacted_metadata)
+            .field("task_request", &self.task_request.is_some())
             .finish()
     }
 }

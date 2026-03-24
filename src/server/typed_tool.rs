@@ -4,7 +4,7 @@
 //! input and output typing support. For WASM environments, see `wasm_typed_tool.rs`
 //! which provides input typing only due to async constraints.
 
-use crate::types::{ToolAnnotations, ToolInfo};
+use crate::types::{ToolAnnotations, ToolExecution, ToolInfo};
 use crate::{Error, Result};
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
@@ -34,6 +34,7 @@ where
     input_schema: Value,
     annotations: Option<ToolAnnotations>,
     ui_resource_uri: Option<String>,
+    execution: Option<ToolExecution>,
     handler: F,
     _phantom: PhantomData<T>,
 }
@@ -75,6 +76,7 @@ where
             input_schema: schema,
             annotations: None,
             ui_resource_uri: None,
+            execution: None,
             handler,
             _phantom: PhantomData,
         }
@@ -88,6 +90,7 @@ where
             input_schema: schema,
             annotations: None,
             ui_resource_uri: None,
+            execution: None,
             handler,
             _phantom: PhantomData,
         }
@@ -206,6 +209,37 @@ where
         self.ui_resource_uri = Some(ui_resource_uri.into());
         self
     }
+
+    /// Declare execution metadata for this tool (MCP 2025-11-25).
+    ///
+    /// Use this to advertise task support so clients know whether to send
+    /// a `task` field in `tools/call` requests.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # #[cfg(feature = "schema-generation")] {
+    /// use pmcp::server::typed_tool::TypedTool;
+    /// use pmcp::types::{ToolExecution, TaskSupport};
+    /// use serde::Deserialize;
+    /// use schemars::JsonSchema;
+    ///
+    /// #[derive(Debug, Deserialize, JsonSchema)]
+    /// struct AnalyzeArgs { region: String }
+    ///
+    /// let tool = TypedTool::new("analyze", |args: AnalyzeArgs, _extra| {
+    ///     Box::pin(async move {
+    ///         Ok(serde_json::json!({"taskId": "t-1", "status": "working"}))
+    ///     })
+    /// })
+    /// .with_description("Long-running analysis")
+    /// .with_execution(ToolExecution::new().with_task_support(TaskSupport::Required));
+    /// # }
+    /// ```
+    pub fn with_execution(mut self, execution: ToolExecution) -> Self {
+        self.execution = Some(execution);
+        self
+    }
 }
 
 #[async_trait]
@@ -236,7 +270,7 @@ where
             annotations: self.annotations.clone(),
             icons: None,
             _meta: crate::types::ui::build_ui_meta(self.ui_resource_uri.as_deref()),
-            execution: None,
+            execution: self.execution.clone(),
         })
     }
 }
@@ -252,6 +286,7 @@ where
     input_schema: Value,
     annotations: Option<ToolAnnotations>,
     ui_resource_uri: Option<String>,
+    execution: Option<ToolExecution>,
     handler: F,
     _phantom: PhantomData<T>,
 }
@@ -289,6 +324,7 @@ where
             input_schema: schema,
             annotations: None,
             ui_resource_uri: None,
+            execution: None,
             handler,
             _phantom: PhantomData,
         }
@@ -302,6 +338,7 @@ where
             input_schema: schema,
             annotations: None,
             ui_resource_uri: None,
+            execution: None,
             handler,
             _phantom: PhantomData,
         }
@@ -373,6 +410,14 @@ where
         self.ui_resource_uri = Some(ui_resource_uri.into());
         self
     }
+
+    /// Declare execution metadata for this tool (MCP 2025-11-25).
+    ///
+    /// See [`TypedTool::with_execution`] for detailed documentation.
+    pub fn with_execution(mut self, execution: ToolExecution) -> Self {
+        self.execution = Some(execution);
+        self
+    }
 }
 
 #[async_trait]
@@ -401,7 +446,7 @@ where
             annotations: self.annotations.clone(),
             icons: None,
             _meta: crate::types::ui::build_ui_meta(self.ui_resource_uri.as_deref()),
-            execution: None,
+            execution: self.execution.clone(),
         })
     }
 }
@@ -485,6 +530,7 @@ where
     output_schema: Option<Value>,
     annotations: Option<ToolAnnotations>,
     ui_resource_uri: Option<String>,
+    execution: Option<ToolExecution>,
     handler: F,
     _phantom: PhantomData<(TIn, TOut)>,
 }
@@ -534,6 +580,7 @@ where
             output_schema,
             annotations: None,
             ui_resource_uri: None,
+            execution: None,
             handler,
             _phantom: PhantomData,
         }
@@ -554,6 +601,7 @@ where
             output_schema: None,
             annotations: None,
             ui_resource_uri: None,
+            execution: None,
             handler,
             _phantom: PhantomData,
         }
@@ -573,6 +621,7 @@ where
             output_schema,
             annotations: None,
             ui_resource_uri: None,
+            execution: None,
             handler,
             _phantom: PhantomData,
         }
@@ -667,6 +716,14 @@ where
         self.ui_resource_uri = Some(ui_resource_uri.into());
         self
     }
+
+    /// Declare execution metadata for this tool (MCP 2025-11-25).
+    ///
+    /// See [`TypedTool::with_execution`] for detailed documentation.
+    pub fn with_execution(mut self, execution: ToolExecution) -> Self {
+        self.execution = Some(execution);
+        self
+    }
 }
 
 #[async_trait]
@@ -723,7 +780,7 @@ where
             },
             icons: None,
             _meta: crate::types::ui::build_ui_meta(self.ui_resource_uri.as_deref()),
-            execution: None,
+            execution: self.execution.clone(),
         })
     }
 }
@@ -894,5 +951,36 @@ mod tests {
 
         let info = tool.metadata().unwrap();
         assert!(info._meta.is_none(), "_meta should be None without UI");
+    }
+
+    #[test]
+    fn test_typed_tool_with_execution_metadata() {
+        use crate::types::{TaskSupport, ToolExecution};
+
+        let tool = TypedTool::new_with_schema(
+            "long_task",
+            json!({"type": "object"}),
+            |_args: serde_json::Value, _extra| Box::pin(async { Ok(json!({})) }),
+        )
+        .with_execution(ToolExecution::new().with_task_support(TaskSupport::Required));
+
+        let info = tool.metadata().unwrap();
+        let exec = info
+            .execution
+            .as_ref()
+            .expect("execution should be present");
+        assert_eq!(exec.task_support, Some(TaskSupport::Required));
+    }
+
+    #[test]
+    fn test_typed_tool_without_execution_returns_none() {
+        let tool = TypedTool::new_with_schema(
+            "simple_tool",
+            json!({"type": "object"}),
+            |_args: serde_json::Value, _extra| Box::pin(async { Ok(json!({})) }),
+        );
+
+        let info = tool.metadata().unwrap();
+        assert!(info.execution.is_none());
     }
 }

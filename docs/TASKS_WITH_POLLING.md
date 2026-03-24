@@ -1,34 +1,105 @@
 # Tasks with Polling
 
-MCP Tasks let servers manage long-running operations that outlive a single request/response cycle. Instead of SSE-based notifications, the client polls for status updates on a timer — stateless, simple, and compatible with serverless deployments.
+MCP Tasks let servers manage long-running operations that outlive a single request/response cycle. Instead of SSE-based notifications, the client polls for status updates on a timer -- stateless, simple, and compatible with serverless deployments.
+
+In v2.0, task detection is **requestor-driven**: the SDK returns `CreateTaskResult` only when the client sends a `task` field in the `tools/call` request. Without it, the tool result is wrapped as a normal `CallToolResult`. This is capability-based negotiation, not client sniffing.
 
 ## Quick Start
 
 ```rust
-use pmcp::{Server, InMemoryTaskStore};
+use pmcp::server::builder::ServerCoreBuilder;
+use pmcp::types::{ToolExecution, TaskSupport};
+use pmcp_tasks::{InMemoryTaskStore, TaskRouterImpl, TaskSecurityConfig};
 use std::sync::Arc;
 
-let store = Arc::new(InMemoryTaskStore::new());
-let server = Server::builder()
+let store = Arc::new(
+    InMemoryTaskStore::new()
+        .with_security(TaskSecurityConfig::default().with_allow_anonymous(true)),
+);
+let router = Arc::new(TaskRouterImpl::new(store.clone()));
+
+let server = ServerCoreBuilder::new()
     .name("my-server")
     .version("1.0.0")
-    .task_store(store.clone())
-    // ... register tools, prompts, resources ...
+    .with_task_store(router)
+    // ... register tools with .with_execution() ...
     .build()?;
 ```
 
-That's it. The builder:
+The builder:
 - Sets `ServerCapabilities.tasks` automatically (list, cancel, tools/call)
 - Dispatches `tasks/get`, `tasks/list`, `tasks/cancel` through your store
 - Resolves task owners from auth context for multi-tenant isolation
+- Returns `CreateTaskResult` or `CallToolResult` based on the client's request
+
+## Declaring Task Support on Tools
+
+Every tool that participates in the task lifecycle must declare its `TaskSupport` level via `ToolExecution`:
+
+```rust
+use pmcp::server::typed_tool::TypedTool;
+use pmcp::types::{ToolExecution, TaskSupport};
+use serde_json::json;
+
+// Required: tool MUST be called with task augmentation
+let tool = TypedTool::new_with_schema(
+    "long_analysis",
+    json!({"type": "object"}),
+    |args, extra| Box::pin(async move { /* ... */ Ok(json!({})) }),
+)
+.with_execution(ToolExecution::new().with_task_support(TaskSupport::Required));
+
+// Optional: tool works with or without task augmentation
+let tool = TypedTool::new_with_schema(
+    "flexible_query",
+    json!({"type": "object"}),
+    |args, extra| Box::pin(async move { /* ... */ Ok(json!({})) }),
+)
+.with_execution(ToolExecution::new().with_task_support(TaskSupport::Optional));
+
+// Forbidden: tool never creates tasks (default when execution is omitted)
+let tool = TypedTool::new_with_schema(
+    "quick_lookup",
+    json!({"type": "object"}),
+    |args, extra| Box::pin(async move { /* ... */ Ok(json!({})) }),
+)
+.with_execution(ToolExecution::new().with_task_support(TaskSupport::Forbidden));
+```
+
+The three levels:
+
+| TaskSupport | Meaning |
+|-------------|---------|
+| `Required` | Tool always produces a task. If the client omits the `task` field, the SDK logs a warning and falls through to `CallToolResult` for compatibility. |
+| `Optional` | Tool can work both ways. Use `extra.is_task_request()` in the handler to branch. |
+| `Forbidden` | Tool never creates tasks. The SDK ignores any `task` field on the request. |
+
+## Capability Negotiation
+
+An MCP server should not ask "who is the client?" It should ask "what capabilities has the client declared?"
+
+The `task` field in the `tools/call` request IS the per-request capability signal. No session state is needed, no capability handshake during `initialize`. The SDK enforces this with a four-part check before returning `CreateTaskResult`:
+
+1. `task_store` is configured on the server
+2. The tool declares `taskSupport` of `Required` or `Optional`
+3. The client sent a `task` field in the request (explicit task-augmented call)
+4. The tool handler returned a Task-shaped value (has `taskId` + `status`)
+
+When any condition is not met, the SDK falls through to `CallToolResult`. This means:
+- Task-aware clients (Claude Desktop, custom agents) get `CreateTaskResult` with polling
+- Non-task-aware clients (ChatGPT, older clients) get `CallToolResult` with text content
+
+The tool handler itself decides what to return based on `extra.is_task_request()`.
 
 ## How Polling Works
+
+### Task-Aware Client (sends `task` field)
 
 ```
 Client                              Server
   |                                    |
-  |-- tools/call (long-running) ------>|
-  |<-- 202 + Task { status: working } -|
+  |-- tools/call { task: {...} } ----->|
+  |<-- CreateTaskResult { task } ------|  (status: working)
   |                                    |
   |-- tasks/get { task_id } ---------->|  (poll every 2-5s)
   |<-- Task { status: working } -------|
@@ -39,25 +110,138 @@ Client                              Server
   |   (client stops polling)           |
 ```
 
+### Non-Task-Aware Client (no `task` field)
+
+```
+Client                              Server
+  |                                    |
+  |-- tools/call (no task field) ----->|
+  |<-- CallToolResult { text } --------|  (task_id embedded in text)
+  |                                    |
+  |-- tools/call get_task_result ----->|  (fallback polling tool)
+  |<-- CallToolResult { text } --------|  (status: working)
+  |                                    |
+  |-- tools/call get_task_result ----->|
+  |<-- CallToolResult { text } --------|  (status: completed + result)
+  |                                    |
+  |   (client stops polling)           |
+```
+
 The `Task` response includes `poll_interval` (milliseconds) to guide the client's polling frequency. Terminal statuses (`completed`, `failed`, `cancelled`) signal the client to stop polling.
+
+## Using `extra.is_task_request()` in a Tool Handler
+
+The `RequestHandlerExtra.is_task_request()` method is the primary tool for building dual-path handlers. It returns `true` when the client sent a `task` field in the request.
+
+```rust
+use pmcp::{TaskStore, RequestHandlerExtra};
+use pmcp_tasks::InMemoryTaskStore;
+use pmcp_tasks::task::TaskStatus;
+use serde_json::{json, Value};
+use std::sync::Arc;
+
+struct FlexibleTool {
+    task_store: Arc<InMemoryTaskStore>,
+}
+
+// Inside the tool's execute method:
+async fn execute(
+    &self,
+    args: Value,
+    extra: RequestHandlerExtra,
+) -> pmcp::Result<Value> {
+    if extra.is_task_request() {
+        // Async path: create task, spawn background work, return immediately
+        let task = self.task_store.create("local", Some(300_000)).await?;
+        let task_id = task.task_id.clone();
+        let store = self.task_store.clone();
+
+        tokio::spawn(async move {
+            // ... do expensive work ...
+            let _ = store.update_status(
+                &task_id, "local",
+                TaskStatus::Completed,
+                Some("Done processing".into()),
+            ).await;
+        });
+
+        // Return task-shaped value; SDK wraps as CreateTaskResult
+        Ok(json!({
+            "taskId": task.task_id,
+            "status": "working"
+        }))
+    } else {
+        // Sync path: do the work inline, return CallToolResult text
+        let result = do_work_inline(&args).await;
+        Ok(json!({ "result": result }))
+    }
+}
+```
+
+This pattern is the foundation for `TaskSupport::Optional` tools. The same tool serves both task-aware and non-task-aware clients without separate implementations.
+
+## Client Compatibility
+
+### The `get_task_result` Fallback Tool Pattern
+
+Non-task-aware clients (like ChatGPT) cannot send the `task` field or call `tasks/get`. For these clients, a recommended server-side pattern is to expose a fallback polling tool:
+
+```rust
+// This is a server-implemented pattern, NOT a built-in SDK feature.
+// The server registers a regular tool that wraps task store reads.
+
+fn get_task_result_tool(store: Arc<InMemoryTaskStore>) -> TypedTool {
+    TypedTool::new_with_schema(
+        "get_task_result",
+        json!({
+            "type": "object",
+            "properties": {
+                "task_id": { "type": "string", "description": "Task ID to check" }
+            },
+            "required": ["task_id"]
+        }),
+        move |args: Value, _extra| {
+            let store = store.clone();
+            Box::pin(async move {
+                let task_id = args["task_id"].as_str()
+                    .ok_or_else(|| pmcp::Error::validation("task_id required"))?;
+                let task = store.get(task_id, "local").await?;
+                Ok(serde_json::to_value(&task)?)
+            })
+        },
+    )
+    .with_description("Check the status and result of a background task")
+    // Forbidden: this tool itself should NOT create tasks
+    .with_execution(ToolExecution::new().with_task_support(TaskSupport::Forbidden))
+}
+```
+
+The dual-path flow for `TaskSupport::Optional` tools in serverless deployments:
+
+| Client sends `task` | Tool behavior | Response type |
+|---------------------|---------------|---------------|
+| Yes | Create task, return immediately | `CreateTaskResult` -- client polls `tasks/get` |
+| No | Create task anyway, return task info as text | `CallToolResult` -- client calls `get_task_result` tool |
+
+The SDK does not provide `get_task_result` as a built-in because it is a server policy decision (naming, access control, what fields to expose). Servers implement it as a regular tool.
 
 ## Task Status State Machine
 
 ```
-                 ┌──────────────┐
-                 │   Working    │
-                 └──────┬───────┘
-                   ┌────┼─────┬────────────┐
-                   │    │     │            │
-                   v    │     v            v
-          ┌────────────┐│  ┌────────┐  ┌───────────┐
-          │InputRequired││  │Completed│  │ Cancelled │
-          └──────┬─────┘│  └─────────┘  └───────────┘
-                 │      │                     ^
-                 └──────┘     ┌───────┐       │
-                              │ Failed │       │
-                              └────────┘       │
-                   InputRequired ──────────────┘
+                 +--------------+
+                 |   Working    |
+                 +------+-------+
+                   +----+-----+------------+
+                   |    |     |            |
+                   v    |     v            v
+          +------------+|  +--------+  +-----------+
+          |InputRequired||  |Completed|  | Cancelled |
+          +------+-----+|  +---------+  +-----------+
+                 |      |                     ^
+                 +------+     +-------+       |
+                              | Failed |       |
+                              +--------+       |
+                   InputRequired --------------+
 ```
 
 - **Working** -> InputRequired, Completed, Failed, Cancelled
@@ -71,41 +255,6 @@ use pmcp::types::tasks::TaskStatus;
 assert!(TaskStatus::Working.can_transition_to(&TaskStatus::Completed));
 assert!(!TaskStatus::Completed.can_transition_to(&TaskStatus::Working));
 assert!(TaskStatus::Failed.is_terminal());
-```
-
-## Using TaskStore in a Tool Handler
-
-A typical pattern: the tool creates a task, spawns background work, and returns the task immediately. The client polls `tasks/get` until completion.
-
-```rust
-use pmcp::{TaskStore, InMemoryTaskStore};
-use pmcp::types::tasks::TaskStatus;
-use std::sync::Arc;
-
-struct MyLongRunningTool {
-    task_store: Arc<InMemoryTaskStore>,
-}
-
-// Inside the tool's execute method:
-async fn execute(&self, owner_id: &str) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    // 1. Create a task
-    let task = self.task_store.create(owner_id, Some(300_000)).await?; // 5 min TTL
-    let task_id = task.task_id.clone();
-    let store = self.task_store.clone();
-
-    // 2. Spawn background work
-    tokio::spawn(async move {
-        // ... do expensive work ...
-        let _ = store.update_status(
-            &task_id, owner_id,
-            TaskStatus::Completed,
-            Some("Done processing".into()),
-        ).await;
-    });
-
-    // 3. Return the task immediately
-    Ok(serde_json::to_value(&task)?)
-}
 ```
 
 ## TaskStore Trait
@@ -222,30 +371,32 @@ When a request arrives, the server resolves the task owner from the auth context
 | OAuth token without `client_id` | `subject` (sub claim) |
 | No auth | `"local"` (single-tenant) |
 
-This means multi-tenant deployments with OAuth get automatic task isolation — User A cannot see or cancel User B's tasks.
+This means multi-tenant deployments with OAuth get automatic task isolation -- User A cannot see or cancel User B's tasks.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│                   pmcp (SDK)                     │
-│                                                  │
-│  types/tasks.rs     Task, TaskStatus (wire types)│
-│  server/task_store  TaskStore trait               │
-│                     InMemoryTaskStore (dev/test)  │
-│  server/builder     .task_store() integration     │
-│  server/core        Dispatch + capability neg.    │
-└─────────────────────────────────────────────────┘
-          │
-          │  (optional, for production)
++--------------------------------------------------+
+|                   pmcp (SDK)                      |
+|                                                   |
+|  types/tasks.rs     Task, TaskStatus (wire types) |
+|  types/tools.rs     ToolExecution, TaskSupport    |
+|  server/cancellation.rs  is_task_request()        |
+|  server/core        Dispatch + capability neg.    |
+|                     CreateTaskResult / CallToolResult
+|                     routing based on request       |
++--------------------------------------------------+
+          |
+          |  (optional, for production)
           v
-┌─────────────────────────────────────────────────┐
-│              pmcp-tasks (extension)               │
-│                                                  │
-│  DynamoDB backend    Redis backend               │
-│  Task variables      Task result storage         │
-│  Security config     Owner binding               │
-└─────────────────────────────────────────────────┘
++--------------------------------------------------+
+|              pmcp-tasks (extension)                |
+|                                                   |
+|  InMemoryTaskStore   TaskRouterImpl               |
+|  DynamoDB backend    Redis backend                |
+|  Task variables      Task result storage          |
+|  Security config     Owner binding                |
++--------------------------------------------------+
 ```
 
 The SDK provides everything needed for development and testing. Add `pmcp-tasks` when you need production persistence or PMCP extensions (task variables, result storage).

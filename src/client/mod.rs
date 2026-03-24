@@ -4,6 +4,10 @@ use crate::error::{Error, Result};
 use crate::shared::{
     EnhancedMiddlewareChain, MiddlewareContext, Protocol, ProtocolOptions, Transport,
 };
+use crate::types::tasks::{
+    CancelTaskRequest, CancelTaskResult, CreateTaskResult, GetTaskPayloadRequest, GetTaskRequest,
+    GetTaskResult, ListTasksRequest, ListTasksResult, Task, TaskStatus,
+};
 use crate::types::{
     CallToolRequest, CallToolResult, CancelledNotification, ClientCapabilities, ClientNotification,
     ClientRequest, CompleteRequest, CompleteResult, CreateMessageParams, CreateMessageResult,
@@ -36,6 +40,20 @@ pub mod http_middleware;
 pub mod oauth;
 pub mod oauth_middleware;
 pub mod transport;
+
+/// Response from a task-augmented `tools/call`.
+///
+/// When calling [`Client::call_tool_with_task`], the server may return either
+/// an async task (poll with `tasks/get`) or a synchronous result.
+#[derive(Debug, Clone)]
+pub enum ToolCallResponse {
+    /// The server returned a synchronous result (no task created).
+    Result(CallToolResult),
+    /// The server created an async task. Poll with [`Client::tasks_get`]
+    /// until the task reaches a terminal status, then call
+    /// [`Client::tasks_result`] to get the final `CallToolResult`.
+    Task(Task),
+}
 
 /// MCP client for connecting to servers.
 pub struct Client<T: Transport> {
@@ -422,6 +440,266 @@ impl<T: Transport> Client<T> {
             },
         }
     }
+
+    // =========================================================================
+    // MCP Tasks (2025-11-25)
+    // =========================================================================
+
+    /// Call a tool with task augmentation.
+    ///
+    /// Sends a `tools/call` request with the `task` field set, signaling to the
+    /// server that this client supports async task polling. The server may return
+    /// either a `CreateTaskResult` (async task created) or a `CallToolResult`
+    /// (sync result) depending on the tool's `taskSupport` declaration.
+    ///
+    /// Use [`call_tool`](Self::call_tool) instead if you don't need task support.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(ToolCallResponse::Task(task))` if the server created an async task.
+    ///   Poll with [`tasks_get`](Self::tasks_get) until the task reaches a
+    ///   terminal status.
+    /// - `Ok(ToolCallResponse::Result(result))` if the server returned the
+    ///   result synchronously.
+    pub async fn call_tool_with_task(
+        &self,
+        name: String,
+        arguments: serde_json::Value,
+    ) -> Result<ToolCallResponse> {
+        self.ensure_initialized()?;
+        self.assert_capability("tools", "tools/call")?;
+
+        let request = Request::Client(Box::new(ClientRequest::CallTool(CallToolRequest {
+            name,
+            arguments,
+            _meta: None,
+            task: Some(serde_json::json!({})),
+        })));
+        let request_id = RequestId::String(Uuid::new_v4().to_string());
+        let response = self.send_request(request_id, request).await?;
+
+        match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(result) => {
+                // Try CreateTaskResult first (more specific), fall back to CallToolResult.
+                // This avoids brittle key-name duck-typing.
+                if let Ok(task_result) = serde_json::from_value::<CreateTaskResult>(result.clone())
+                {
+                    Ok(ToolCallResponse::Task(task_result.task))
+                } else {
+                    let tool_result: CallToolResult =
+                        serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))?;
+                    Ok(ToolCallResponse::Result(tool_result))
+                }
+            },
+            crate::types::jsonrpc::ResponsePayload::Error(error) => {
+                Err(Error::from_jsonrpc_error(error))
+            },
+        }
+    }
+
+    /// Get the current status of a task.
+    ///
+    /// Polls the server for the task's current state. Call this repeatedly
+    /// (respecting `task.poll_interval`) until the task reaches a terminal
+    /// status (`Completed`, `Failed`, or `Cancelled`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The server doesn't support tasks
+    /// - The task ID doesn't exist or belongs to another owner
+    pub async fn tasks_get(&self, task_id: &str) -> Result<Task> {
+        self.ensure_initialized()?;
+        self.assert_capability("tasks", "tasks/get")?;
+
+        let request = Request::Client(Box::new(ClientRequest::TasksGet(GetTaskRequest {
+            task_id: task_id.to_string(),
+        })));
+        let request_id = RequestId::String(Uuid::new_v4().to_string());
+        let response = self.send_request(request_id, request).await?;
+
+        match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(result) => {
+                let task_result: GetTaskResult =
+                    serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))?;
+                Ok(task_result.task)
+            },
+            crate::types::jsonrpc::ResponsePayload::Error(error) => {
+                Err(Error::from_jsonrpc_error(error))
+            },
+        }
+    }
+
+    /// Get the final result of a completed task.
+    ///
+    /// For a task-augmented `tools/call`, this returns the `CallToolResult`
+    /// that the tool would have returned synchronously. Only valid when
+    /// the task status is `Completed`.
+    pub async fn tasks_result(&self, task_id: &str) -> Result<CallToolResult> {
+        self.ensure_initialized()?;
+        self.assert_capability("tasks", "tasks/result")?;
+
+        let request = Request::Client(Box::new(ClientRequest::TasksResult(
+            GetTaskPayloadRequest {
+                task_id: task_id.to_string(),
+            },
+        )));
+        let request_id = RequestId::String(Uuid::new_v4().to_string());
+        let response = self.send_request(request_id, request).await?;
+
+        match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(result) => {
+                serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))
+            },
+            crate::types::jsonrpc::ResponsePayload::Error(error) => {
+                Err(Error::from_jsonrpc_error(error))
+            },
+        }
+    }
+
+    /// List tasks owned by the current client.
+    pub async fn tasks_list(&self, cursor: Option<String>) -> Result<ListTasksResult> {
+        self.ensure_initialized()?;
+        self.assert_capability("tasks", "tasks/list")?;
+
+        let request = Request::Client(Box::new(ClientRequest::TasksList(ListTasksRequest {
+            cursor,
+        })));
+        let request_id = RequestId::String(Uuid::new_v4().to_string());
+        let response = self.send_request(request_id, request).await?;
+
+        match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(result) => {
+                serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))
+            },
+            crate::types::jsonrpc::ResponsePayload::Error(error) => {
+                Err(Error::from_jsonrpc_error(error))
+            },
+        }
+    }
+
+    /// Cancel a running task.
+    pub async fn tasks_cancel(&self, task_id: &str) -> Result<Task> {
+        self.ensure_initialized()?;
+        self.assert_capability("tasks", "tasks/cancel")?;
+
+        let request = Request::Client(Box::new(ClientRequest::TasksCancel(CancelTaskRequest {
+            task_id: task_id.to_string(),
+            result: None,
+        })));
+        let request_id = RequestId::String(Uuid::new_v4().to_string());
+        let response = self.send_request(request_id, request).await?;
+
+        match response.payload {
+            crate::types::jsonrpc::ResponsePayload::Result(result) => {
+                let cancel_result: CancelTaskResult =
+                    serde_json::from_value(result).map_err(|e| Error::parse(e.to_string()))?;
+                Ok(cancel_result.task)
+            },
+            crate::types::jsonrpc::ResponsePayload::Error(error) => {
+                Err(Error::from_jsonrpc_error(error))
+            },
+        }
+    }
+
+    /// Call a tool and automatically poll until the task completes.
+    ///
+    /// This is a high-level convenience method that encapsulates the full
+    /// task lifecycle:
+    #[cfg(not(target_arch = "wasm32"))]
+    /// 1. Calls the tool with task augmentation
+    /// 2. If the server returns a task, polls `tasks/get` until terminal status
+    /// 3. Returns the final `CallToolResult`
+    ///
+    /// If the server returns a sync result (no task), returns it immediately.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Tool name
+    /// * `arguments` - Tool arguments
+    /// * `max_polls` - Maximum number of poll attempts before giving up (0 = unlimited)
+    pub async fn call_tool_and_poll(
+        &self,
+        name: String,
+        arguments: serde_json::Value,
+        max_polls: usize,
+    ) -> Result<CallToolResult> {
+        /// Default polling interval when the server doesn't specify one.
+        const DEFAULT_POLL_INTERVAL_MS: u64 = 5000;
+
+        let response = self.call_tool_with_task(name, arguments).await?;
+
+        match response {
+            ToolCallResponse::Result(result) => Ok(result),
+            ToolCallResponse::Task(initial_task) => {
+                let task_id = initial_task.task_id.clone();
+                let mut poll_ms = initial_task
+                    .poll_interval
+                    .unwrap_or(DEFAULT_POLL_INTERVAL_MS);
+                let mut polls = 0;
+
+                loop {
+                    polls += 1;
+
+                    let task = self.tasks_get(&task_id).await?;
+
+                    if task.status == TaskStatus::InputRequired {
+                        return Err(Error::internal(format!(
+                            "Task {} requires input — handle interactively via tasks_get/tasks_cancel",
+                            task_id
+                        )));
+                    }
+
+                    if task.status.is_terminal() {
+                        if task.status == TaskStatus::Completed {
+                            // Try to get the full result via tasks/result
+                            match self.tasks_result(&task_id).await {
+                                Ok(result) => return Ok(result),
+                                // Only fall back for method-not-found (-32601); propagate real errors
+                                Err(Error::Protocol { code, .. })
+                                    if code == crate::error::ErrorCode::METHOD_NOT_FOUND =>
+                                {
+                                    let text = task
+                                        .status_message
+                                        .unwrap_or_else(|| "Task completed".to_string());
+                                    return Ok(CallToolResult::new(vec![
+                                        crate::types::Content::text(text),
+                                    ]));
+                                },
+                                Err(e) => return Err(e),
+                            }
+                        } else {
+                            // Failed or Cancelled
+                            let text = task
+                                .status_message
+                                .unwrap_or_else(|| format!("Task {}", task.status));
+                            return Ok(CallToolResult::error(vec![crate::types::Content::text(
+                                text,
+                            )]));
+                        }
+                    }
+
+                    if max_polls > 0 && polls >= max_polls {
+                        return Err(Error::internal(format!(
+                            "Task {} did not complete after {} polls",
+                            task_id, max_polls
+                        )));
+                    }
+
+                    // Honor updated poll_interval from server (e.g., exponential backoff)
+                    if let Some(interval) = task.poll_interval {
+                        poll_ms = interval;
+                    }
+
+                    tokio::time::sleep(std::time::Duration::from_millis(poll_ms)).await;
+                }
+            },
+        }
+    }
+
+    // =========================================================================
+    // Prompts
+    // =========================================================================
 
     /// List available prompts.
     ///
@@ -1239,6 +1517,10 @@ impl<T: Transport> Client<T> {
                 .server_capabilities
                 .as_ref()
                 .is_some_and(|c| c.completions.is_some()),
+            "tasks" => self
+                .server_capabilities
+                .as_ref()
+                .is_some_and(|c| c.tasks.is_some()),
             _ => false,
         };
 

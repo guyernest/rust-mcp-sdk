@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: unknown
-stopped_at: Completed 60-01-PLAN.md
-last_updated: "2026-03-22T20:49:05.683Z"
+stopped_at: Completed 55.1-02-PLAN.md
+last_updated: "2026-03-23T05:06:11.814Z"
 progress:
-  total_phases: 35
-  completed_phases: 30
-  total_plans: 70
-  completed_plans: 70
+  total_phases: 37
+  completed_phases: 31
+  total_plans: 74
+  completed_plans: 72
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
-**Current focus:** Phase 60 — clean-up-mcp-preview-side-tabs
+**Current focus:** Phase 55.1 — fix-mcp-tasks-support
 
 ## Current Position
 
-Phase: 60 (clean-up-mcp-preview-side-tabs) — EXECUTING
-Plan: 1 of 1
+Phase: 55.1 (fix-mcp-tasks-support) — EXECUTING
+Plan: 2 of 2
 
 ## Shipped Milestones
 
@@ -169,6 +169,8 @@ v1.6 decisions:
 - [Phase 59]: mcp_prompt inside #[mcp_server] does not require separate import; register_tools renamed to register per D-15; PromptMethodInfo omits return_type/annotations
 - [Phase 60]: Renamed shared console-time CSS class to event-time after Console removal to fix orphaned styling
 - [Phase 60]: Renamed shared console-time CSS class to event-time after Console removal to fix orphaned styling
+- [Phase 55.1]: ToolExecution stored as Option<ToolExecution> and cloned in metadata/info -- matches existing annotations pattern
+- [Phase 55.1]: ToolCallOutcome enum at module scope for bifurcated task/result dispatch; task detection requires declared taskSupport + task_store (shape alone insufficient per D-06)
 
 ### Roadmap Evolution
 
@@ -194,6 +196,8 @@ v1.6 decisions:
 - Phase 59 added: TypedPrompt with auto-deserialization (from composition team DX review)
 - Phase 54.1 inserted after Phase 54: Protocol Type Construction DX — Default impls, builders, and constructors for all protocol types (URGENT)
 - Phase 60 added: Clean up mcp-preview side tabs
+- Phase 61 added: Add OAuth support to mcp-preview
+- Phase 55.1 inserted after Phase 55: Fix MCP Tasks support (URGENT)
 
 ### Pending Todos
 
@@ -205,6 +209,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-22T20:49:05.679Z
-Stopped at: Completed 60-01-PLAN.md
+Last session: 2026-03-23T05:06:11.810Z
+Stopped at: Completed 55.1-02-PLAN.md
 Resume: Phase 57 complete. Both plans shipped: Plan 01 (19-scenario conformance engine with 5 domains) and Plan 02 (CLI integration -- mcp-tester conformance and cargo pmcp test conformance with --strict/--domain flags and per-domain CI summary).
