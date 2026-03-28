@@ -153,6 +153,11 @@ impl BinaryBuilder {
             // Disable jitter entropy: Zig rejects -U_FORTIFY_SOURCE preprocessor flag
             // that cmake adds. Lambda uses OS-provided entropy, not CPU jitter.
             .env("AWS_LC_SYS_NO_JITTER_ENTROPY", "1")
+            // Set CC to cargo-lambda's zigcc wrapper for ring and other cc-crate
+            // based builds. The cc crate appends --target=aarch64-unknown-linux-gnu
+            // which bare zig rejects (UnknownOperatingSystem), but the zigcc wrapper
+            // handles it by routing through `cargo-lambda zig cc` first.
+            .envs(Self::find_zigcc_env_vars())
             .status()
             .context("Failed to run cargo lambda build")?;
 
@@ -262,6 +267,68 @@ impl BinaryBuilder {
     /// Find the directory of the Lambda package for cd-based builds.
     ///
     /// Returns the absolute path to the Lambda package directory.
+    /// Find cargo-zigbuild's zigcc wrapper script and return CC/AR env vars.
+    ///
+    /// cargo-lambda caches zigcc wrappers in ~/Library/Caches/cargo-zigbuild/
+    /// (macOS) or ~/.cache/cargo-zigbuild/ (Linux). The wrapper correctly
+    /// handles the cc crate's --target flag that bare zig rejects.
+    fn find_zigcc_env_vars() -> Vec<(String, String)> {
+        let mut vars = Vec::new();
+
+        // Search known cache locations for the zigcc wrapper
+        let cache_dirs: Vec<PathBuf> = if cfg!(target_os = "macos") {
+            dirs::cache_dir()
+                .map(|d| vec![d.join("cargo-zigbuild")])
+                .unwrap_or_default()
+        } else {
+            dirs::cache_dir()
+                .map(|d| vec![d.join("cargo-zigbuild")])
+                .unwrap_or_default()
+        };
+
+        for cache_base in &cache_dirs {
+            if !cache_base.exists() {
+                continue;
+            }
+            // Find the most recent version directory
+            if let Ok(entries) = std::fs::read_dir(cache_base) {
+                let mut versions: Vec<_> = entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_dir())
+                    .collect();
+                versions.sort_by_key(|e| e.file_name());
+
+                if let Some(version_dir) = versions.last() {
+                    let dir = version_dir.path();
+                    // Find zigcc-aarch64-unknown-linux-gnu-*.sh
+                    if let Ok(files) = std::fs::read_dir(&dir) {
+                        for file in files.filter_map(|f| f.ok()) {
+                            let name = file.file_name().to_string_lossy().to_string();
+                            if name.starts_with("zigcc-aarch64-unknown-linux-gnu-")
+                                && name.ends_with(".sh")
+                            {
+                                vars.push((
+                                    "CC_aarch64_unknown_linux_gnu".to_string(),
+                                    file.path().to_string_lossy().to_string(),
+                                ));
+                            }
+                        }
+                    }
+                    // AR is just the plain 'ar' in the same directory
+                    let ar = dir.join("ar");
+                    if ar.exists() {
+                        vars.push((
+                            "AR_aarch64_unknown_linux_gnu".to_string(),
+                            ar.to_string_lossy().to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        vars
+    }
+
     fn find_lambda_package_dir(&self, server_name: &str) -> Result<PathBuf> {
         let preferred_package = format!("{}-lambda", server_name);
 
