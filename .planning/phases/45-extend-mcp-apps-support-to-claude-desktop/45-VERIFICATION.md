@@ -1,8 +1,9 @@
 ---
 phase: 45-extend-mcp-apps-support-to-claude-desktop
-verified: 2026-03-09T20:00:00Z
-status: human_needed
+verified: 2026-03-28T05:00:00Z
+status: passed
 score: 7/7 must-haves verified
+human_verified: 2026-03-28
 human_verification:
   - test: "Start chess example in standard preview mode and verify rendering"
     expected: "Chess board widget renders, pieces interactive, no console errors"

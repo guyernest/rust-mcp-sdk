@@ -1,15 +1,16 @@
 ---
 phase: 27-global-flag-infrastructure
-verified: 2026-03-04T05:00:00Z
-status: human_needed
+verified: 2026-03-28T05:00:00Z
+status: passed
 score: 5/5 must-haves verified
 re_verification: true
-  previous_status: gaps_found
-  previous_score: 4/5
+  previous_status: human_needed
+  previous_score: 5/5
   gaps_closed:
     - "All decorative output (banners, progress, success messages, warnings, informational text) is suppressed when --quiet is active — validate.rs now has PMCP_QUIET env var guards on all decorative println! calls (not_quiet used at 27 sites)"
   gaps_remaining: []
   regressions: []
+human_verified: 2026-03-28
 human_verification:
   - test: "Run cargo pmcp --no-color new test-workspace and inspect for ANSI escape codes"
     expected: "No color codes in output"
