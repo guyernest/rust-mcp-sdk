@@ -18,7 +18,10 @@ pub fn execute(url: Option<&str>, global_flags: &GlobalFlags) -> Result<()> {
 
     if !quiet {
         println!();
-        println!("  {} Workspace Diagnostics", "cargo pmcp doctor".bright_white().bold());
+        println!(
+            "  {} Workspace Diagnostics",
+            "cargo pmcp doctor".bright_white().bold()
+        );
         println!("  {}", "─".repeat(40).dimmed());
         println!();
     }
@@ -38,7 +41,10 @@ pub fn execute(url: Option<&str>, global_flags: &GlobalFlags) -> Result<()> {
             }
         } else {
             if !quiet {
-                println!("  {} No pmcp dependency found (not an MCP workspace?)", "!".yellow());
+                println!(
+                    "  {} No pmcp dependency found (not an MCP workspace?)",
+                    "!".yellow()
+                );
             }
         }
     } else {
@@ -49,34 +55,43 @@ pub fn execute(url: Option<&str>, global_flags: &GlobalFlags) -> Result<()> {
     }
 
     // 2. Check Rust toolchain
-    match std::process::Command::new("rustc").arg("--version").output() {
+    match std::process::Command::new("rustc")
+        .arg("--version")
+        .output()
+    {
         Ok(output) => {
             let version = String::from_utf8_lossy(&output.stdout);
             let version = version.trim();
             if !quiet {
                 println!("  {} {}", "✓".green(), version);
             }
-        }
+        },
         Err(_) => {
             if !quiet {
                 println!("  {} Rust toolchain not found", "✗".red());
             }
             issues += 1;
-        }
+        },
     }
 
     // 3. Check cargo fmt
-    match std::process::Command::new("rustfmt").arg("--version").output() {
+    match std::process::Command::new("rustfmt")
+        .arg("--version")
+        .output()
+    {
         Ok(output) if output.status.success() => {
             if !quiet {
                 println!("  {} rustfmt available", "✓".green());
             }
-        }
+        },
         _ => {
             if !quiet {
-                println!("  {} rustfmt not found (run: rustup component add rustfmt)", "!".yellow());
+                println!(
+                    "  {} rustfmt not found (run: rustup component add rustfmt)",
+                    "!".yellow()
+                );
             }
-        }
+        },
     }
 
     // 4. Check clippy
@@ -88,12 +103,15 @@ pub fn execute(url: Option<&str>, global_flags: &GlobalFlags) -> Result<()> {
             if !quiet {
                 println!("  {} clippy available", "✓".green());
             }
-        }
+        },
         _ => {
             if !quiet {
-                println!("  {} clippy not found (run: rustup component add clippy)", "!".yellow());
+                println!(
+                    "  {} clippy not found (run: rustup component add clippy)",
+                    "!".yellow()
+                );
             }
-        }
+        },
     }
 
     // 5. Server connectivity (optional)
@@ -145,11 +163,7 @@ pub fn execute(url: Option<&str>, global_flags: &GlobalFlags) -> Result<()> {
         if issues == 0 {
             println!("  {} All checks passed", "✓".green().bold());
         } else {
-            println!(
-                "  {} {} issue(s) found",
-                "!".yellow().bold(),
-                issues
-            );
+            println!("  {} {} issue(s) found", "!".yellow().bold(), issues);
         }
         println!();
     }

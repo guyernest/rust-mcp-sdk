@@ -1307,7 +1307,7 @@ var AppBridge = class {
         return await this._toolCallHandler(name, args);
       }
       case "ui/message":
-      case "ui/sendMessage": // backward compat with pre-spec widgets
+      case "ui/sendMessage":
         console.log("[AppBridge] Widget sent message:", params);
         return {};
       case "ui/update-model-context":
