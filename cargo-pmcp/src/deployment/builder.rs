@@ -118,10 +118,6 @@ impl BinaryBuilder {
         // Load config to get server name
         let config = crate::deployment::config::DeployConfig::load(&self.project_root)?;
 
-        // Find the actual Lambda package in the workspace
-        // First try {server_name}-lambda, then look for any *-lambda package with bootstrap binary
-        let lambda_package = self.find_lambda_package(&config.server.name)?;
-
         // Use cargo lambda build with --arm64 for cross-compilation.
         // ARM64 is cheaper and faster on Lambda than x86_64.
         //
