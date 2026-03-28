@@ -55,6 +55,8 @@ pub async fn execute(
         locale,
         widgets_dir: widgets_path,
         mode: preview_mode,
+        auth_header: None,
+        oauth_config: None,
     };
 
     // Open browser if requested
