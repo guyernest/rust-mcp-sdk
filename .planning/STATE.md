@@ -177,6 +177,10 @@ v1.6 decisions:
 - [Phase 62]: Worktree lacks AuthFlags -- PentestCommand uses inline --api-key flag; SARIF fingerprints via SHA-256 of id:endpoint:severity
 - [Phase 62]: Skip content array in marker echo detection to reduce false positives from normal tool echo
 - [Phase 62]: Known meta keys allowlist (ui, ui/resourceUri, pmcp:outputTypeName, annotations) for TP-02 unexpected key detection
+
+### Roadmap Evolution
+
+- Phase 63 added: Advanced pentest attack modules — transport, auth, data exfiltration, protocol abuse, deep fuzzing, --profile quick/deep
 - [Phase 62]: Raw reqwest over ServerTester for session header manipulation; Shannon entropy threshold 3.0 bits; proptest select() over regex strategies
 
 ### Roadmap Evolution

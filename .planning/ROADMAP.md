@@ -657,3 +657,13 @@ Plans:
 - [x] 62-01-PLAN.md -- Foundation: types, config, rate limiter, report (JSON/SARIF), discovery, payload library, CLI command skeleton
 - [ ] 62-02-PLAN.md -- Prompt injection (PI-01..PI-07) and tool poisoning (TP-01..TP-06) attack runners
 - [x] 62-03-PLAN.md -- Session security (SS-01..SS-06) attack runner and final integration verification
+
+### Phase 63: advanced-pentest-attack-modules
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 62
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 63 to break down)
