@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: unknown
-stopped_at: Completed 63-01-PLAN.md
-last_updated: "2026-03-28T19:21:59.688Z"
+stopped_at: Completed 63-02-PLAN.md
+last_updated: "2026-03-28T19:32:34.347Z"
 progress:
   total_phases: 40
   completed_phases: 33
   total_plans: 81
-  completed_plans: 79
+  completed_plans: 80
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 ## Current Position
 
 Phase: 63 (advanced-pentest-attack-modules) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Shipped Milestones
 
@@ -178,6 +178,9 @@ v1.6 decisions:
 - [Phase 62]: Skip content array in marker echo detection to reduce false positives from normal tool echo
 - [Phase 62]: Known meta keys allowlist (ui, ui/resourceUri, pmcp:outputTypeName, annotations) for TP-02 unexpected key detection
 - [Phase 63]: PentestProfile defaults to Quick (3 MCP-specific categories); explicit --category overrides profile selection
+- [Phase 63]: Deep fuzzing targets PI-01/PI-02 with 5 mutation functions (URL-encode, double-encode, base64, NFKC, case-swap)
+- [Phase 63]: Protocol abuse uses raw reqwest for malformed messages; data exfiltration probes both resources/read and tool URI arguments
+- [Phase 63]: Separated evaluate_cors_headers for testability; custom base64url instead of crate; AF-01/AF-02 destructive-gated
 
 ### Roadmap Evolution
 
@@ -222,6 +225,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-28T19:21:59.684Z
-Stopped at: Completed 63-01-PLAN.md
+Last session: 2026-03-28T19:32:34.344Z
+Stopped at: Completed 63-02-PLAN.md
 Resume: Phase 57 complete. Both plans shipped: Plan 01 (19-scenario conformance engine with 5 domains) and Plan 02 (CLI integration -- mcp-tester conformance and cargo pmcp test conformance with --strict/--domain flags and per-domain CI summary).
