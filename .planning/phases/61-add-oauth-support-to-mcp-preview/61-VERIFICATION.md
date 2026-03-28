@@ -1,20 +1,15 @@
 ---
 phase: 61-add-oauth-support-to-mcp-preview
 verified: 2026-03-27T00:00:00Z
-status: gaps_found
-score: 6/7 must-haves verified
-gaps:
-  - truth: "forward_mcp returns upstream 401/403 status codes instead of wrapping them as 502"
-    status: failed
-    reason: "forward_raw still uses check_response() which converts ALL non-2xx responses (including 401/403) into anyhow::Error. The forward_mcp handler matches Ok/Err and returns BAD_GATEWAY for all errors. The plan specified Result<RawForwardResult, ForwardError> but the implementation retained Result<RawForwardResult>."
-    artifacts:
-      - path: "crates/mcp-preview/src/proxy.rs"
-        issue: "forward_raw at line 544 returns Result<RawForwardResult> using check_response() at line 560, which bails on ANY non-2xx including 401/403 (line 168: anyhow::bail!)"
-      - path: "crates/mcp-preview/src/handlers/api.rs"
-        issue: "forward_mcp handler at line 414 matches only Ok/Err from forward_raw — Err arm returns StatusCode::BAD_GATEWAY for all errors including auth failures (line 452)"
-    missing:
-      - "forward_raw must detect 401/403 before calling check_response and return them separately (either via ForwardError or McpRequestError, consistent with send_request pattern)"
-      - "forward_mcp must match on auth-error variant and return the upstream status code (401 or 403) instead of BAD_GATEWAY"
+status: passed
+score: 7/7 must-haves verified
+re_verification:
+  previous_status: gaps_found
+  previous_score: 6/7
+  gaps_closed:
+    - "forward_mcp returns upstream 401/403 status codes instead of wrapping them as 502"
+  gaps_remaining: []
+  regressions: []
 human_verification:
   - test: "Full OAuth popup flow end-to-end"
     expected: "Login modal appears on 401/403, popup opens, code exchanges for token, session proceeds"
@@ -31,8 +26,8 @@ human_verification:
 
 **Phase Goal:** Add browser-based OAuth PKCE authentication to mcp-preview so developers can test MCP Apps against OAuth-protected servers on pmcp.run, with dynamic auth header updates, login modal, and CLI flag wiring.
 **Verified:** 2026-03-27
-**Status:** gaps_found — 6/7 must-haves verified; 1 gap blocks goal
-**Re-verification:** No — initial verification
+**Status:** passed — 7/7 must-haves verified
+**Re-verification:** Yes — after gap closure (plan 61-03)
 
 ---
 
@@ -47,10 +42,10 @@ human_verification:
 | 3  | GET /api/auth/callback serves a self-closing HTML page that posts authorization code to opener | VERIFIED  | handlers/auth.rs:106 `callback`; includes auth-callback.html via `include_str!`; postMessage at auth-callback.html:51 |
 | 4  | GET /api/auth/status returns JSON with authenticated boolean                                   | VERIFIED  | handlers/auth.rs:114 `status`; returns `{"authenticated": has_auth_header()}` |
 | 5  | GET /api/config includes oauth_config when configured                                          | VERIFIED  | handlers/api.rs:70-74 maps `OAuthPreviewConfig` to `OAuthConfigResponse`; added to `ConfigResponse` at :27 |
-| 6  | forward_mcp returns upstream 401/403 status codes instead of wrapping them as 502             | FAILED    | `forward_raw` uses `check_response()` which converts ALL non-2xx to `anyhow::Error`; `forward_mcp` returns `BAD_GATEWAY` for all Err variants |
+| 6  | forward_mcp returns upstream 401/403 status codes instead of wrapping them as 502             | VERIFIED  | `forward_raw` signature is `Result<RawForwardResult, McpRequestError>` (proxy.rs:551); detects 401/403 at :566-569 and returns `AuthRequired`; `forward_mcp` matches `AuthRequired` at api.rs:452-455 and returns upstream status; `BAD_GATEWAY` only in `Other` arm at :456 |
 | 7  | cargo pmcp preview --oauth-client-id triggers OAuthPreviewConfig creation                     | VERIFIED  | preview.rs:57-94 matches `AuthMethod::OAuth`, calls `discover_oauth_endpoints`, constructs `OAuthPreviewConfig` |
 
-**Score:** 6/7 truths verified
+**Score:** 7/7 truths verified
 
 ---
 
@@ -58,7 +53,7 @@ human_verification:
 
 | Artifact                                              | Expected                                                              | Status    | Details                                                                    |
 |-------------------------------------------------------|-----------------------------------------------------------------------|-----------|----------------------------------------------------------------------------|
-| `crates/mcp-preview/src/proxy.rs`                    | SyncRwLock auth_header + set/has methods + McpRequestError enum       | VERIFIED  | Lines 8, 203-217, 224, 248, 253. McpRequestError has AuthRequired(u16, String) and Other(anyhow::Error). |
+| `crates/mcp-preview/src/proxy.rs`                    | SyncRwLock auth_header + set/has methods + McpRequestError enum       | VERIFIED  | Lines 8, 203-217, 224, 248, 253. McpRequestError has AuthRequired(u16, String) and Other(anyhow::Error). forward_raw at :546 returns Result<RawForwardResult, McpRequestError> with 401/403 detection at :566-569. |
 | `crates/mcp-preview/src/handlers/auth.rs`            | token_exchange, callback, status HTTP handlers                        | VERIFIED  | All three handlers present and substantive. token_exchange calls set_auth_header after token response. |
 | `crates/mcp-preview/assets/auth-callback.html`       | OAuth popup callback page                                             | VERIFIED  | Contains `type: 'oauth-callback'`, `window.opener.postMessage`, closes popup after 1.5s |
 | `crates/mcp-preview/src/server.rs`                   | OAuthPreviewConfig struct, oauth_config field on PreviewConfig        | VERIFIED  | OAuthPreviewConfig at :25-34; oauth_config: Option<OAuthPreviewConfig> at :83; Default sets None at :97 |
@@ -76,7 +71,7 @@ human_verification:
 | `index.html` OAuthManager                   | `/api/auth/token-exchange`                | `fetch` POST in `_handleCallback`           | WIRED     | index.html:1736 `fetch('/api/auth/token-exchange', { method: 'POST' })` |
 | `index.html`                                | `/api/config`                             | fetch reads `oauth_config`                  | WIRED     | index.html:1949 `if (config.oauth_config) { this.oauth.setConfig(...) }` |
 | `cargo-pmcp/src/commands/preview.rs`        | `mcp_preview::OAuthPreviewConfig`         | config struct construction                  | WIRED     | preview.rs:74-79 constructs OAuthPreviewConfig; passed to PreviewConfig at :129 |
-| `handlers/api.rs` forward_mcp              | `proxy.rs` forward_raw                    | 401/403 propagation via ForwardError        | NOT WIRED | forward_raw returns `Result<RawForwardResult>` (anyhow); check_response bails on 401/403; forward_mcp returns BAD_GATEWAY |
+| `handlers/api.rs` forward_mcp              | `proxy.rs` forward_raw                    | 401/403 propagation via McpRequestError     | WIRED     | forward_raw returns `Result<RawForwardResult, McpRequestError>` (proxy.rs:551); 401/403 detection at :566-569; forward_mcp matches `AuthRequired` at api.rs:452-455; BAD_GATEWAY only in `Other` arm at :456 |
 
 ---
 
@@ -88,27 +83,27 @@ No requirement IDs were declared in plan frontmatter. Phase has no formal REQUIR
 
 ## Anti-Patterns Found
 
-| File                                        | Line | Pattern                                   | Severity | Impact                                                                  |
-|---------------------------------------------|------|-------------------------------------------|----------|-------------------------------------------------------------------------|
-| `crates/mcp-preview/src/proxy.rs`          | 164-171 | `check_response` converts 401/403 to anyhow::Error | Blocker | forward_raw silently converts auth failures to generic errors; forward_mcp returns 502 to WASM client |
-| `crates/mcp-preview/src/handlers/api.rs`   | 452  | `Err(e) => (StatusCode::BAD_GATEWAY, ...)` in forward_mcp | Blocker | WASM client path cannot detect 401/403 auth failures; browser receives 502 and cannot trigger re-login flow |
-| `crates/mcp-preview/src/proxy.rs`          | 229  | `pub fn new(base_url: &str)` dead_code warning | Warning | Compiler emits dead_code warning; not a runtime issue but violates zero-warning policy |
+| File | Line | Pattern | Severity | Impact |
+|------|------|---------|----------|--------|
+| (none) | — | — | — | All prior blockers resolved in plan 61-03 |
+
+The two blocker anti-patterns from initial verification are resolved:
+- `check_response` is no longer called for upstream responses in `forward_raw`; 401/403 are detected first and returned as `McpRequestError::AuthRequired`
+- `forward_mcp` no longer returns `BAD_GATEWAY` for all errors; only `McpRequestError::Other` triggers `BAD_GATEWAY`
+- `McpProxy::new()` carries `#[allow(dead_code)]` with comment at proxy.rs:229-230
+
+`cargo check -p mcp-preview` reports zero errors and zero warnings.
 
 ---
 
 ## Scope Note: WASM Path vs Non-WASM Path
 
-The 401/403 propagation gap only affects the WASM bridge path (`/api/mcp` via `forward_raw`/`forward_mcp`). The non-WASM paths work correctly:
+Both paths now handle 401/403 correctly:
 
-- `list_tools` (via `send_request`) → `MccRequestError::AuthRequired` → HTTP 401/403 to browser (VERIFIED)
-- `call_tool` (via `send_request`) → `McpRequestError::AuthRequired` → HTTP 401/403 to browser (VERIFIED)
-- `list_resources` (via `send_request`) → auth error handled (VERIFIED)
+- `list_tools` / `call_tool` / `list_resources` (via `send_request`) — `McpRequestError::AuthRequired` → HTTP 401/403 (VERIFIED, unchanged)
+- `forward_mcp` (via `forward_raw`) — `McpRequestError::AuthRequired` → HTTP 401/403 (NOW VERIFIED, gap closed in plan 61-03)
 
-The `forward_raw` path is used when the WASM client (embedded in the browser) sends raw JSON-RPC to `/api/mcp`. The 401/403 detection in `executeTool()` at index.html:2576 checks `response.status`, but since `forward_raw` → `check_response` converts 401 to an `anyhow::Error` and `forward_mcp` returns `BAD_GATEWAY (502)`, the browser will receive 502 — not 401/403 — and the auth detection condition will not trigger.
-
-The fix requires either:
-- Changing `forward_raw` to detect 401/403 before `check_response` and returning them as a typed error (analogous to `send_request`'s approach), OR
-- Changing `forward_mcp` to inspect the raw response status before delegating to `forward_raw`
+The `executeTool()` auth-detection condition at index.html:2576 (checking `response.status === 401 || response.status === 403`) will now correctly trigger on the WASM path.
 
 ---
 
@@ -134,25 +129,22 @@ The fix requires either:
 
 ---
 
-## Gaps Summary
+## Re-verification Summary
 
-One gap blocks full goal achievement:
+**Gap closed (plan 61-03):** The WASM bridge path (browser -> `/api/mcp` -> `forward_mcp` -> `forward_raw` -> MCP server) now correctly propagates 401/403 upstream status codes to the browser.
 
-**401/403 propagation for the WASM bridge path** — `forward_raw` uses `check_response()` which wraps all non-2xx responses (including 401/403) as generic `anyhow::Error`. The `forward_mcp` handler then returns `BAD_GATEWAY (502)` to the browser for all errors. This means the WASM client receives a 502 when the MCP server returns 401/403, and the `executeTool()` auth-detection condition at index.html:2576 (checking `response.status === 401 || response.status === 403`) will never trigger on this path.
+Changes verified in codebase:
+1. `forward_raw` signature changed to `Result<RawForwardResult, McpRequestError>` (proxy.rs:551)
+2. 401/403 detection before `check_response` at proxy.rs:566-569 — returns `McpRequestError::AuthRequired(status.as_u16(), text)`
+3. Non-auth HTTP errors return `McpRequestError::Other` at proxy.rs:571-574
+4. `forward_mcp` matches `McpRequestError::AuthRequired` at api.rs:452-455 and returns upstream status code
+5. `BAD_GATEWAY` used only for `McpRequestError::Other` at api.rs:456 — not as a catch-all
+6. `McpProxy::new()` has `#[allow(dead_code)]` annotation at proxy.rs:230
+7. `cargo check -p mcp-preview` — zero errors, zero warnings
 
-The fix is small and isolated to `proxy.rs` (`forward_raw`) and `handlers/api.rs` (`forward_mcp`) — analogous to how `send_request` already handles this correctly.
-
-All other must-haves are fully implemented and wired:
-- Dynamic `SyncRwLock` auth header with `set/has` methods
-- Three `/api/auth/*` endpoints (token-exchange, callback, status) — substantive and wired
-- Full browser-side `OAuthManager` PKCE flow (code_verifier, code_challenge, S256, popup, postMessage)
-- Login modal with Sign In button triggering popup
-- 401/403 detection in `initSession()` and `executeTool()` for the non-WASM path
-- Auth status indicator and re-login button in events panel
-- CLI OAuth flags wiring via `discover_oauth_endpoints` + `OAuthPreviewConfig`
-- Both crates compile (1 dead_code warning on `McpProxy::new`)
+All 7 must-haves are now verified. Phase goal is achieved.
 
 ---
 
-_Verified: 2026-03-27_
+_Verified: 2026-03-27 (re-verification after plan 61-03 gap closure)_
 _Verifier: Claude (gsd-verifier)_
