@@ -150,6 +150,9 @@ impl BinaryBuilder {
             .current_dir(&lambda_pkg_dir)
             // Force aws-lc-sys to use cmake builder (bypasses cc crate target conflict)
             .env("AWS_LC_SYS_CMAKE_BUILDER", "1")
+            // Disable jitter entropy: Zig rejects -U_FORTIFY_SOURCE preprocessor flag
+            // that cmake adds. Lambda uses OS-provided entropy, not CPU jitter.
+            .env("AWS_LC_SYS_NO_JITTER_ENTROPY", "1")
             .status()
             .context("Failed to run cargo lambda build")?;
 
