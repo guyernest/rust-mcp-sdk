@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod assets;
+pub mod auth;
 pub mod page;
 pub mod wasm;
 pub mod websocket;

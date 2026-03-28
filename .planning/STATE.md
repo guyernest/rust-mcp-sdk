@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: unknown
-stopped_at: Completed 55.1-02-PLAN.md
-last_updated: "2026-03-23T05:06:11.814Z"
+stopped_at: Completed 61-01-PLAN.md
+last_updated: "2026-03-28T03:38:07.101Z"
 progress:
-  total_phases: 37
+  total_phases: 38
   completed_phases: 31
   total_plans: 74
-  completed_plans: 72
+  completed_plans: 73
 ---
 
 # Project State
@@ -19,11 +19,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
-**Current focus:** Phase 55.1 — fix-mcp-tasks-support
+**Current focus:** Phase 61 — add-oauth-support-to-mcp-preview
 
 ## Current Position
 
-Phase: 55.1 (fix-mcp-tasks-support) — EXECUTING
+Phase: 61 (add-oauth-support-to-mcp-preview) — EXECUTING
 Plan: 2 of 2
 
 ## Shipped Milestones
@@ -171,6 +171,7 @@ v1.6 decisions:
 - [Phase 60]: Renamed shared console-time CSS class to event-time after Console removal to fix orphaned styling
 - [Phase 55.1]: ToolExecution stored as Option<ToolExecution> and cloned in metadata/info -- matches existing annotations pattern
 - [Phase 55.1]: ToolCallOutcome enum at module scope for bifurcated task/result dispatch; task detection requires declared taskSupport + task_store (shape alone insufficient per D-06)
+- [Phase 61]: Used McpRequestError enum (adapted from plan ForwardError) since forward_raw did not exist; all public McpProxy methods return McpRequestError for consistent auth error propagation
 
 ### Roadmap Evolution
 
@@ -198,6 +199,7 @@ v1.6 decisions:
 - Phase 60 added: Clean up mcp-preview side tabs
 - Phase 61 added: Add OAuth support to mcp-preview
 - Phase 55.1 inserted after Phase 55: Fix MCP Tasks support (URGENT)
+- Phase 62 added: MCP Pen Test — automated penetration testing for MCP endpoints (security attacks + general cyber attacks)
 
 ### Pending Todos
 
@@ -209,6 +211,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-23T05:06:11.810Z
-Stopped at: Completed 55.1-02-PLAN.md
+Last session: 2026-03-28T03:38:07.097Z
+Stopped at: Completed 61-01-PLAN.md
 Resume: Phase 57 complete. Both plans shipped: Plan 01 (19-scenario conformance engine with 5 domains) and Plan 02 (CLI integration -- mcp-tester conformance and cargo pmcp test conformance with --strict/--domain flags and per-domain CI summary).

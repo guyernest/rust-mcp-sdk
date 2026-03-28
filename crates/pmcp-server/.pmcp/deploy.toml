@@ -1,0 +1,67 @@
+[target]
+type = "pmcp-run"
+version = "1.0.0"
+
+[aws]
+region = "us-east-1"
+
+[server]
+name = "pmcp-server"
+memory_mb = 512
+timeout_seconds = 30
+
+[environment]
+RUST_LOG = "info"
+
+[secrets]
+
+[auth]
+enabled = false
+provider = "none"
+callback_urls = []
+
+[auth.dcr]
+enabled = true
+public_client_patterns = [
+    "claude",
+    "desktop",
+    "cursor",
+    "mcp-inspector",
+    "chatgpt",
+]
+default_scopes = [
+    "openid",
+    "email",
+    "mcp/read",
+]
+allowed_scopes = [
+    "openid",
+    "email",
+    "profile",
+    "mcp/read",
+    "mcp/write",
+]
+
+[auth.scopes.custom]
+
+[observability]
+log_retention_days = 30
+enable_xray = true
+create_dashboard = true
+
+[observability.alarms]
+error_threshold = 10
+latency_threshold_ms = 5000
+
+[assets]
+include = []
+exclude = [
+    "**/*.tmp",
+    "**/.DS_Store",
+    "**/Thumbs.db",
+]
+
+[composition]
+tier = "foundation"
+allow_composition = true
+internal_only = false

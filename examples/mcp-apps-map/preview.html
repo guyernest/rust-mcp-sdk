@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Map Widget Preview</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a1a;
+            color: #eee;
+            min-height: 100vh;
+        }
+        .dev-toolbar {
+            background: #1a1a2e;
+            padding: 12px 20px;
+            border-bottom: 1px solid #333;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        .dev-toolbar h1 {
+            font-size: 14px;
+            font-weight: 500;
+            color: #888;
+        }
+        .dev-toolbar .badge {
+            background: #2ecc71;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .dev-toolbar .log-toggle {
+            margin-left: auto;
+            background: #333;
+            border: none;
+            color: #aaa;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .dev-toolbar .log-toggle:hover { background: #444; }
+        .container {
+            display: flex;
+            height: calc(100vh - 50px);
+        }
+        .widget-frame {
+            flex: 1;
+            border: none;
+        }
+        .dev-panel {
+            width: 380px;
+            background: #16213e;
+            border-left: 1px solid #333;
+            display: flex;
+            flex-direction: column;
+            transition: width 0.3s ease;
+        }
+        .dev-panel.collapsed { width: 0; overflow: hidden; }
+        .dev-panel h2 {
+            font-size: 12px;
+            color: #888;
+            padding: 12px 16px;
+            border-bottom: 1px solid #333;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .data-section {
+            padding: 12px 16px;
+            border-bottom: 1px solid #333;
+        }
+        .data-section h3 {
+            font-size: 11px;
+            color: #666;
+            margin-bottom: 8px;
+        }
+        .city-count {
+            display: flex;
+            gap: 12px;
+        }
+        .city-count .stat {
+            background: #0f3460;
+            padding: 8px 12px;
+            border-radius: 6px;
+            text-align: center;
+        }
+        .city-count .stat .num {
+            font-size: 20px;
+            font-weight: 600;
+            color: #4a90d9;
+        }
+        .city-count .stat .label {
+            font-size: 10px;
+            color: #666;
+            margin-top: 2px;
+        }
+        .log-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
+        }
+        .log-entry {
+            background: #0f3460;
+            border-radius: 6px;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+            font-size: 12px;
+        }
+        .log-entry .tool-name {
+            color: #2ecc71;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .log-entry .timestamp {
+            float: right;
+            color: #555;
+            font-size: 10px;
+        }
+        .log-entry .args {
+            color: #888;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 10px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 80px;
+            overflow-y: auto;
+        }
+        .log-entry .result {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #333;
+            color: #6c6;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 10px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 80px;
+            overflow-y: auto;
+        }
+        .log-entry.error .result { color: #f66; }
+        .clear-btn {
+            margin: 8px;
+            padding: 8px;
+            background: #333;
+            border: none;
+            color: #888;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        .clear-btn:hover { background: #444; }
+    </style>
+</head>
+<body>
+    <div class="dev-toolbar">
+        <h1>PMCP Widget Preview</h1>
+        <span class="badge">WORLD MAP</span>
+        <button class="log-toggle" onclick="togglePanel()">Toggle Logs</button>
+    </div>
+
+    <div class="container">
+        <iframe id="widget" class="widget-frame" src="widget/map.html"></iframe>
+
+        <div id="devPanel" class="dev-panel">
+            <div class="data-section">
+                <h3>Mock Data Statistics</h3>
+                <div class="city-count">
+                    <div class="stat">
+                        <div class="num">10</div>
+                        <div class="label">Cities</div>
+                    </div>
+                    <div class="stat">
+                        <div class="num">5</div>
+                        <div class="label">Categories</div>
+                    </div>
+                    <div class="stat">
+                        <div class="num" id="callCount">0</div>
+                        <div class="label">API Calls</div>
+                    </div>
+                </div>
+            </div>
+
+            <h2>Tool Calls</h2>
+            <div id="logList" class="log-list"></div>
+            <button class="clear-btn" onclick="clearLogs()">Clear Logs</button>
+        </div>
+    </div>
+
+    <script>
+        const logList = document.getElementById('logList');
+        const devPanel = document.getElementById('devPanel');
+        const widgetFrame = document.getElementById('widget');
+        const callCountEl = document.getElementById('callCount');
+        let callCount = 0;
+
+        function togglePanel() {
+            devPanel.classList.toggle('collapsed');
+        }
+
+        function clearLogs() {
+            logList.innerHTML = '';
+            callCount = 0;
+            callCountEl.textContent = '0';
+        }
+
+        function addLog(toolName, args, result, isError = false) {
+            callCount++;
+            callCountEl.textContent = callCount;
+
+            const now = new Date();
+            const time = now.toLocaleTimeString('en-US', { hour12: false });
+
+            const entry = document.createElement('div');
+            entry.className = 'log-entry' + (isError ? ' error' : '');
+            entry.innerHTML = `
+                <div class="tool-name">${toolName}<span class="timestamp">${time}</span></div>
+                <div class="args">${JSON.stringify(args, null, 2)}</div>
+                <div class="result">${JSON.stringify(result, null, 2)}</div>
+            `;
+            logList.insertBefore(entry, logList.firstChild);
+        }
+
+        // Mock city database
+        const CITIES = [
+            {
+                id: "tokyo",
+                name: "Tokyo",
+                country: "Japan",
+                population: 37400000,
+                coordinates: { lat: 35.6762, lon: 139.6503 },
+                description: "World's largest metropolitan area, blending ultra-modern and traditional.",
+                category: "tech"
+            },
+            {
+                id: "paris",
+                name: "Paris",
+                country: "France",
+                population: 11000000,
+                coordinates: { lat: 48.8566, lon: 2.3522 },
+                description: "City of Light, renowned for art, fashion, and cuisine.",
+                category: "cultural"
+            },
+            {
+                id: "new-york",
+                name: "New York",
+                country: "United States",
+                population: 18800000,
+                coordinates: { lat: 40.7128, lon: -74.0060 },
+                description: "The Big Apple, global center of finance and culture.",
+                category: "financial"
+            },
+            {
+                id: "london",
+                name: "London",
+                country: "United Kingdom",
+                population: 9000000,
+                coordinates: { lat: 51.5074, lon: -0.1278 },
+                description: "Historic capital with world-class museums and diverse culture.",
+                category: "capital"
+            },
+            {
+                id: "sydney",
+                name: "Sydney",
+                country: "Australia",
+                population: 5300000,
+                coordinates: { lat: -33.8688, lon: 151.2093 },
+                description: "Harbor city famous for the Opera House and beaches.",
+                category: "cultural"
+            },
+            {
+                id: "rome",
+                name: "Rome",
+                country: "Italy",
+                population: 4300000,
+                coordinates: { lat: 41.9028, lon: 12.4964 },
+                description: "Eternal City with ancient ruins and Renaissance art.",
+                category: "historical"
+            },
+            {
+                id: "san-francisco",
+                name: "San Francisco",
+                country: "United States",
+                population: 4700000,
+                coordinates: { lat: 37.7749, lon: -122.4194 },
+                description: "Tech hub by the bay with iconic Golden Gate Bridge.",
+                category: "tech"
+            },
+            {
+                id: "beijing",
+                name: "Beijing",
+                country: "China",
+                population: 21500000,
+                coordinates: { lat: 39.9042, lon: 116.4074 },
+                description: "Ancient capital with the Forbidden City and Great Wall nearby.",
+                category: "capital"
+            },
+            {
+                id: "cairo",
+                name: "Cairo",
+                country: "Egypt",
+                population: 20500000,
+                coordinates: { lat: 30.0444, lon: 31.2357 },
+                description: "Gateway to ancient Egypt, home to the Great Pyramids.",
+                category: "historical"
+            },
+            {
+                id: "singapore",
+                name: "Singapore",
+                country: "Singapore",
+                population: 5900000,
+                coordinates: { lat: 1.3521, lon: 103.8198 },
+                description: "Modern city-state, global financial hub and tech center.",
+                category: "financial"
+            }
+        ];
+
+        // Haversine distance calculation
+        function haversineDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371; // Earth's radius in km
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                      Math.sin(dLon/2) * Math.sin(dLon/2);
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        }
+
+        // Mock MCP bridge
+        widgetFrame.onload = () => {
+            const widgetWindow = widgetFrame.contentWindow;
+
+            widgetWindow.mcpBridge = {
+                callTool: async (name, args) => {
+                    // Simulate network latency
+                    await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 200));
+
+                    let result;
+                    let isError = false;
+
+                    try {
+                        switch (name) {
+                            case 'search_cities': {
+                                let filtered = [...CITIES];
+
+                                // Apply category filter
+                                if (args.filter) {
+                                    filtered = filtered.filter(c => c.category === args.filter);
+                                }
+
+                                // Apply query filter
+                                if (args.query) {
+                                    const query = args.query.toLowerCase();
+                                    filtered = filtered.filter(c =>
+                                        c.name.toLowerCase().includes(query) ||
+                                        c.country.toLowerCase().includes(query)
+                                    );
+                                }
+
+                                result = {
+                                    count: filtered.length,
+                                    cities: filtered,
+                                    map_state: args.map_state || { center: { lat: 20, lon: 0 }, zoom: 2 }
+                                };
+                                break;
+                            }
+
+                            case 'get_city_details': {
+                                const city = CITIES.find(c => c.id === args.city_id);
+                                if (city) {
+                                    result = {
+                                        found: true,
+                                        city,
+                                        recommended_zoom: 12,
+                                        suggested_view: {
+                                            center: city.coordinates,
+                                            zoom: 12
+                                        }
+                                    };
+                                } else {
+                                    result = {
+                                        found: false,
+                                        error: `City not found: ${args.city_id}`
+                                    };
+                                }
+                                break;
+                            }
+
+                            case 'get_nearby_cities': {
+                                const nearby = CITIES
+                                    .map(city => ({
+                                        city,
+                                        distance_km: Math.round(
+                                            haversineDistance(
+                                                args.center.lat, args.center.lon,
+                                                city.coordinates.lat, city.coordinates.lon
+                                            ) * 10
+                                        ) / 10
+                                    }))
+                                    .filter(item => item.distance_km <= args.radius_km)
+                                    .sort((a, b) => a.distance_km - b.distance_km);
+
+                                result = {
+                                    center: args.center,
+                                    radius_km: args.radius_km,
+                                    count: nearby.length,
+                                    cities: nearby
+                                };
+                                break;
+                            }
+
+                            default:
+                                result = { error: `Unknown tool: ${name}` };
+                                isError = true;
+                        }
+                    } catch (e) {
+                        result = { error: e.message };
+                        isError = true;
+                    }
+
+                    addLog(name, args, result, isError);
+                    return result;
+                },
+
+                getState: () => {
+                    const saved = localStorage.getItem('map_state');
+                    return saved ? JSON.parse(saved) : {};
+                },
+
+                setState: (state) => {
+                    localStorage.setItem('map_state', JSON.stringify(state));
+                }
+            };
+
+            // Notify widget that bridge is ready
+            widgetWindow.dispatchEvent(new Event('mcpBridgeReady'));
+        };
+    </script>
+</body>
+</html>

@@ -1,0 +1,68 @@
+{
+  "/pmcp-server-stack/LambdaArn": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "LambdaArn"
+    }
+  ],
+  "/pmcp-server-stack/LambdaName": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "LambdaName"
+    }
+  ],
+  "/pmcp-server-stack/ApiUrl": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "ApiUrl"
+    }
+  ],
+  "/pmcp-server-stack/DashboardUrl": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "DashboardUrl"
+    }
+  ],
+  "/pmcp-server-stack/BootstrapVersion": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "BootstrapVersion"
+    }
+  ],
+  "/pmcp-server-stack/CheckBootstrapVersion": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "CheckBootstrapVersion"
+    }
+  ],
+  "/pmcp-server-stack/McpFunction/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "McpFunctionF370A1F8"
+    }
+  ],
+  "/pmcp-server-stack/LogGroup/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "LogGroupF5B46931"
+    }
+  ],
+  "/pmcp-server-stack/CDKMetadata/Default": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "CDKMetadata"
+    }
+  ],
+  "/pmcp-server-stack/McpFunction/ServiceRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "McpFunctionServiceRoleF37F17FC"
+    }
+  ],
+  "/pmcp-server-stack/McpFunction/ServiceRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "McpFunctionServiceRoleDefaultPolicy29310C43"
+    }
+  ]
+}

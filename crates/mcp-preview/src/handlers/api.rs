@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-use crate::proxy::{ToolCallResult, ToolInfo};
+use crate::proxy::{McpRequestError, ToolCallResult, ToolInfo};
 use crate::server::AppState;
 
 /// Configuration response
@@ -22,6 +22,17 @@ pub struct ConfigResponse {
     pub mode: String,
     pub descriptor_keys: Vec<String>,
     pub invocation_keys: Vec<String>,
+    /// OAuth configuration for browser-based PKCE flow (null when OAuth not configured).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oauth_config: Option<OAuthConfigResponse>,
+}
+
+/// OAuth configuration exposed to the browser.
+#[derive(Serialize)]
+pub struct OAuthConfigResponse {
+    pub client_id: String,
+    pub authorization_endpoint: String,
+    pub scopes: Vec<String>,
 }
 
 /// Get preview configuration
@@ -56,6 +67,12 @@ pub async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigRespon
         vec![]
     };
 
+    let oauth_config = state.config.oauth_config.as_ref().map(|oc| OAuthConfigResponse {
+        client_id: oc.client_id.clone(),
+        authorization_endpoint: oc.authorization_endpoint.clone(),
+        scopes: oc.scopes.clone(),
+    });
+
     Json(ConfigResponse {
         mcp_url: state.config.mcp_url.clone(),
         theme: state.config.theme.clone(),
@@ -64,6 +81,7 @@ pub async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigRespon
         mode: state.config.mode.to_string(),
         descriptor_keys,
         invocation_keys,
+        oauth_config,
     })
 }
 
@@ -81,6 +99,8 @@ pub struct ToolsResponse {
 /// derived from the standard `ui.resourceUri` nested key. This ensures
 /// mcp-preview validates the full ChatGPT protocol even when the server
 /// emits standard-only metadata.
+///
+/// Returns upstream 401/403 status codes instead of wrapping them.
 pub async fn list_tools(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ToolsResponse>, (StatusCode, String)> {
@@ -93,7 +113,11 @@ pub async fn list_tools(
             }
             Ok(Json(ToolsResponse { tools, error: None }))
         },
-        Err(e) => Ok(Json(ToolsResponse {
+        Err(McpRequestError::AuthRequired(status_code, body)) => {
+            let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::UNAUTHORIZED);
+            Err((status, body))
+        },
+        Err(McpRequestError::Other(e)) => Ok(Json(ToolsResponse {
             tools: vec![],
             error: Some(e.to_string()),
         })),
@@ -112,21 +136,27 @@ pub struct CallToolRequest {
 ///
 /// In ChatGPT mode, enriches the response `_meta` with invocation keys
 /// so the protocol tab validates correctly.
+///
+/// Returns upstream 401/403 status codes instead of wrapping them.
 pub async fn call_tool(
     State(state): State<Arc<AppState>>,
     Json(request): Json<CallToolRequest>,
 ) -> Result<Json<ToolCallResult>, (StatusCode, String)> {
-    let mut result = state
-        .proxy
-        .call_tool(&request.name, request.arguments)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    if state.config.mode == crate::server::PreviewMode::ChatGpt {
-        enrich_meta_for_chatgpt(&mut result.meta);
+    match state.proxy.call_tool(&request.name, request.arguments).await {
+        Ok(mut result) => {
+            if state.config.mode == crate::server::PreviewMode::ChatGpt {
+                enrich_meta_for_chatgpt(&mut result.meta);
+            }
+            Ok(Json(result))
+        },
+        Err(McpRequestError::AuthRequired(status_code, body)) => {
+            let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::UNAUTHORIZED);
+            Err((status, body))
+        },
+        Err(McpRequestError::Other(e)) => {
+            Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        },
     }
-
-    Ok(Json(result))
 }
 
 /// Query parameters for resource read requests
@@ -212,7 +242,14 @@ pub async fn list_resources(State(state): State<Arc<AppState>>) -> Json<Value> {
                 }
             }
         },
-        Err(e) => {
+        Err(McpRequestError::AuthRequired(_, _)) => {
+            // Auth errors from list_resources are non-fatal when widgets_dir provides resources
+            tracing::warn!("Proxy list_resources returned auth error (401/403)");
+            if all_resources.is_empty() {
+                return json_response(json!({ "resources": [], "error": "Authentication required" }));
+            }
+        },
+        Err(McpRequestError::Other(e)) => {
             tracing::warn!("Proxy list_resources failed: {}", e);
             if all_resources.is_empty() {
                 return json_response(json!({ "resources": [], "error": e.to_string() }));

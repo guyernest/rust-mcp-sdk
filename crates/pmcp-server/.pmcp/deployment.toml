@@ -1,0 +1,6 @@
+# Auto-generated deployment info for landing page integration
+# This file is created automatically when deploying to pmcp-run
+
+[deployment]
+server_id = "pmcp-server"
+endpoint = "https://pmcp-server.us-east.true-mcp.com/mcp"

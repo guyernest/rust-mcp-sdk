@@ -63,6 +63,7 @@ pub async fn execute(
         widgets_dir: widgets_path,
         mode: preview_mode,
         auth_header,
+        oauth_config: None,
     };
 
     // Open browser if requested
