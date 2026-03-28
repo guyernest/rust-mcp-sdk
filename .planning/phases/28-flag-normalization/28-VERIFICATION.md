@@ -1,22 +1,11 @@
 ---
 phase: 28-flag-normalization
-verified: 2026-03-12T23:05:32Z
-status: gaps_found
-score: 6/7 requirements verified
-gaps:
-  - truth: "All --format flags accept only text/json via type-enforced value_enum"
-    status: partial
-    reason: "secret/mod.rs and deploy/mod.rs Outputs subcommand still use format: String with no value_enum enforcement. Only test download uses FormatValue enum. Plans stated FLAG-06 as partial completion — secret and deploy were never addressed."
-    artifacts:
-      - path: "cargo-pmcp/src/commands/secret/mod.rs"
-        issue: "format field is String (line 33), not FormatValue enum. Accepts any string, not enforced to text/json."
-      - path: "cargo-pmcp/src/commands/deploy/mod.rs"
-        issue: "Outputs variant format field is String (line 187), not FormatValue enum. Accepts any string, not enforced to text/json."
-    missing:
-      - "Change secret SecretCommand.format from String to FormatValue with #[arg(long, value_enum, default_value = \"text\", global = true)]"
-      - "Change deploy DeployAction::Outputs.format from String to FormatValue with #[arg(long, value_enum, default_value = \"text\")]"
-      - "Update secret execute_async_with_quiet format comparison from string equality to FormatValue match"
-      - "Update deploy Outputs execute block from format.as_str() match to FormatValue match"
+verified: 2026-03-28T04:45:00Z
+status: passed
+score: 7/7 requirements verified
+re_verification: true
+re_verification_reason: "Gap resolved in subsequent phases — secret/mod.rs and deploy/mod.rs now use FormatValue enum"
+gaps: []
 ---
 
 # Phase 28: Flag Normalization Verification Report
