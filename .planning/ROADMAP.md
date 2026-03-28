@@ -651,9 +651,9 @@ Plans:
 **Goal:** Add automated penetration testing for MCP server endpoints via `cargo pmcp pentest <url>` -- probes for prompt injection, tool poisoning, and session security vulnerabilities with severity classification, rate limiting, and SARIF output for CI integration.
 **Requirements**: None (new feature, not tracked in REQUIREMENTS.md)
 **Depends on:** Phase 61
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 - [x] 62-01-PLAN.md -- Foundation: types, config, rate limiter, report (JSON/SARIF), discovery, payload library, CLI command skeleton
 - [ ] 62-02-PLAN.md -- Prompt injection (PI-01..PI-07) and tool poisoning (TP-01..TP-06) attack runners
-- [ ] 62-03-PLAN.md -- Session security (SS-01..SS-06) attack runner and final integration verification
+- [x] 62-03-PLAN.md -- Session security (SS-01..SS-06) attack runner and final integration verification

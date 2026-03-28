@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: unknown
-stopped_at: Completed 62-01-PLAN.md
-last_updated: "2026-03-28T14:28:28.410Z"
+stopped_at: Completed 62-03-PLAN.md
+last_updated: "2026-03-28T14:46:17.021Z"
 progress:
   total_phases: 38
   completed_phases: 32
   total_plans: 78
-  completed_plans: 76
+  completed_plans: 77
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-03)
 ## Current Position
 
 Phase: 62 (mcp-pen-test) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Shipped Milestones
 
@@ -175,6 +175,9 @@ v1.6 decisions:
 - [Phase 61]: OAuthManager instantiated unconditionally; activates only when oauth_config is set
 - [Phase 61]: oauth_config constructed before resolve_auth_header for graceful CLI-to-browser fallback
 - [Phase 62]: Worktree lacks AuthFlags -- PentestCommand uses inline --api-key flag; SARIF fingerprints via SHA-256 of id:endpoint:severity
+- [Phase 62]: Skip content array in marker echo detection to reduce false positives from normal tool echo
+- [Phase 62]: Known meta keys allowlist (ui, ui/resourceUri, pmcp:outputTypeName, annotations) for TP-02 unexpected key detection
+- [Phase 62]: Raw reqwest over ServerTester for session header manipulation; Shannon entropy threshold 3.0 bits; proptest select() over regex strategies
 
 ### Roadmap Evolution
 
@@ -214,6 +217,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-28T14:28:28.406Z
-Stopped at: Completed 62-01-PLAN.md
+Last session: 2026-03-28T14:46:17.016Z
+Stopped at: Completed 62-03-PLAN.md
 Resume: Phase 57 complete. Both plans shipped: Plan 01 (19-scenario conformance engine with 5 domains) and Plan 02 (CLI integration -- mcp-tester conformance and cargo pmcp test conformance with --strict/--domain flags and per-domain CI summary).
