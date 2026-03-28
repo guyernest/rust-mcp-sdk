@@ -639,12 +639,12 @@ Plans:
 **Goal:** Add browser-based OAuth PKCE authentication to mcp-preview so developers can test MCP Apps against OAuth-protected servers on pmcp.run, with dynamic auth header updates, login modal, and CLI flag wiring.
 **Requirements**: TBD
 **Depends on:** Phase 60
-**Plans:** 3 plans (2 complete, 1 gap closure)
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 61-01-PLAN.md -- Server-side OAuth infrastructure (RwLock proxy, auth handlers, callback page, config exposure, 401/403 propagation)
 - [x] 61-02-PLAN.md -- Browser-side OAuth popup flow (OAuthManager, PKCE, login modal) and CLI OAuth flag wiring
-- [ ] 61-03-PLAN.md -- Gap closure: fix forward_raw/forward_mcp 401/403 propagation for WASM bridge path
+- [x] 61-03-PLAN.md -- Gap closure: fix forward_raw/forward_mcp 401/403 propagation for WASM bridge path
 
 ### Phase 62: mcp-pen-test
 
