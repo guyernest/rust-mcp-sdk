@@ -127,22 +127,36 @@ impl BinaryBuilder {
 
         // Use cargo lambda build with --arm64 for cross-compilation.
         // ARM64 is cheaper and faster on Lambda than x86_64.
-        // --arm64 uses Zig for C cross-compilation, which correctly handles
-        // aws-lc-sys (pulled in by reqwest/rustls and aws-config).
-        // The previous --target aarch64-unknown-linux-gnu --output-format binary
-        // used ld.lld which cannot link aws-lc-sys C objects.
-        let status = Command::new("cargo")
-            .args(&[
-                "lambda",
-                "build",
-                "--release",
-                "--arm64",
-                "--package",
-                &lambda_package,
-                "--bin",
-                lambda_binary,
-            ])
-            .current_dir(&self.project_root)
+        //
+        // aws-lc-sys (pulled in by reqwest/rustls and aws-config) uses cmake
+        // internally to compile C code. cmake does NOT inherit cargo-lambda's
+        // Zig cross-compilation setup, so it produces host-arch (macOS) objects
+        // instead of target-arch (Linux ARM64) objects. This causes:
+        //   ld.lld: error: undefined symbol: aws_lc_0_39_1_*
+        //
+        // Fix: set CC/AR environment variables so cmake uses Zig for C
+        // cross-compilation, matching what cargo-lambda does for Rust code.
+        let mut cmd = Command::new("cargo");
+        cmd.args([
+            "lambda",
+            "build",
+            "--release",
+            "--arm64",
+            "--package",
+            &lambda_package,
+            "--bin",
+            lambda_binary,
+        ])
+        .current_dir(&self.project_root);
+
+        // Ensure aws-lc-sys cmake build cross-compiles with Zig
+        cmd.env(
+            "CC_aarch64_unknown_linux_gnu",
+            "zig cc -target aarch64-linux-gnu",
+        );
+        cmd.env("AR_aarch64_unknown_linux_gnu", "zig ar");
+
+        let status = cmd
             .status()
             .context("Failed to run cargo lambda build")?;
 
