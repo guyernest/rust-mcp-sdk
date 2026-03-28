@@ -67,11 +67,15 @@ pub async fn get_config(State(state): State<Arc<AppState>>) -> Json<ConfigRespon
         vec![]
     };
 
-    let oauth_config = state.config.oauth_config.as_ref().map(|oc| OAuthConfigResponse {
-        client_id: oc.client_id.clone(),
-        authorization_endpoint: oc.authorization_endpoint.clone(),
-        scopes: oc.scopes.clone(),
-    });
+    let oauth_config = state
+        .config
+        .oauth_config
+        .as_ref()
+        .map(|oc| OAuthConfigResponse {
+            client_id: oc.client_id.clone(),
+            authorization_endpoint: oc.authorization_endpoint.clone(),
+            scopes: oc.scopes.clone(),
+        });
 
     Json(ConfigResponse {
         mcp_url: state.config.mcp_url.clone(),
@@ -142,7 +146,11 @@ pub async fn call_tool(
     State(state): State<Arc<AppState>>,
     Json(request): Json<CallToolRequest>,
 ) -> Result<Json<ToolCallResult>, (StatusCode, String)> {
-    match state.proxy.call_tool(&request.name, request.arguments).await {
+    match state
+        .proxy
+        .call_tool(&request.name, request.arguments)
+        .await
+    {
         Ok(mut result) => {
             if state.config.mode == crate::server::PreviewMode::ChatGpt {
                 enrich_meta_for_chatgpt(&mut result.meta);
@@ -153,9 +161,7 @@ pub async fn call_tool(
             let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::UNAUTHORIZED);
             Err((status, body))
         },
-        Err(McpRequestError::Other(e)) => {
-            Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-        },
+        Err(McpRequestError::Other(e)) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     }
 }
 

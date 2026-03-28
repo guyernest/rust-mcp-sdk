@@ -174,7 +174,9 @@ async fn check_response(response: reqwest::Response) -> Result<reqwest::Response
 ///
 /// Unlike `check_response`, this returns `McpRequestError` so callers can
 /// distinguish auth failures from other HTTP errors.
-async fn check_mcp_response(response: reqwest::Response) -> Result<reqwest::Response, McpRequestError> {
+async fn check_mcp_response(
+    response: reqwest::Response,
+) -> Result<reqwest::Response, McpRequestError> {
     let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         let text = response.text().await.unwrap_or_default();
@@ -182,7 +184,11 @@ async fn check_mcp_response(response: reqwest::Response) -> Result<reqwest::Resp
     }
     if !status.is_success() {
         let text = response.text().await.unwrap_or_default();
-        return Err(McpRequestError::Other(anyhow::anyhow!("MCP server returned {}: {}", status, text)));
+        return Err(McpRequestError::Other(anyhow::anyhow!(
+            "MCP server returned {}: {}",
+            status,
+            text
+        )));
     }
     Ok(response)
 }
@@ -228,7 +234,9 @@ pub enum McpRequestError {
 impl std::fmt::Display for McpRequestError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::AuthRequired(status, body) => write!(f, "Auth required (HTTP {}): {}", status, body),
+            Self::AuthRequired(status, body) => {
+                write!(f, "Auth required (HTTP {}): {}", status, body)
+            },
             Self::Other(e) => write!(f, "{}", e),
         }
     }
@@ -389,7 +397,11 @@ impl McpProxy {
     ///
     /// Returns `McpRequestError::AuthRequired` for 401/403 responses so callers
     /// can propagate the upstream status to the browser (instead of wrapping as 502).
-    async fn send_request(&self, method: &str, params: Option<Value>) -> Result<Value, McpRequestError> {
+    async fn send_request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Value, McpRequestError> {
         let request = JsonRpcRequest {
             jsonrpc: "2.0",
             method: method.to_string(),
@@ -398,14 +410,21 @@ impl McpProxy {
         };
 
         let req_builder = self.attach_session_id(self.mcp_post().json(&request)).await;
-        let response = req_builder.send().await.map_err(|e| McpRequestError::Other(e.into()))?;
+        let response = req_builder
+            .send()
+            .await
+            .map_err(|e| McpRequestError::Other(e.into()))?;
         let response = check_mcp_response(response).await?;
 
-        let rpc_response: JsonRpcResponse = parse_rpc_response(response).await
+        let rpc_response: JsonRpcResponse = parse_rpc_response(response)
+            .await
             .map_err(|e| McpRequestError::Other(e))?;
 
         if let Some(error) = rpc_response.error {
-            return Err(McpRequestError::Other(anyhow::anyhow!("MCP error: {}", error.message)));
+            return Err(McpRequestError::Other(anyhow::anyhow!(
+                "MCP error: {}",
+                error.message
+            )));
         }
 
         Ok(rpc_response.result.unwrap_or(Value::Null))
@@ -446,7 +465,9 @@ impl McpProxy {
     ///
     /// Ensures the session is initialized before sending the request.
     pub async fn list_tools(&self) -> Result<Vec<ToolInfo>, McpRequestError> {
-        self.ensure_initialized().await.map_err(McpRequestError::Other)?;
+        self.ensure_initialized()
+            .await
+            .map_err(McpRequestError::Other)?;
 
         let result = self.send_request("tools/list", None).await?;
 
@@ -461,8 +482,14 @@ impl McpProxy {
     ///
     /// Ensures the session is initialized before sending the request.
     /// Returns `McpRequestError::AuthRequired` for upstream 401/403.
-    pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<ToolCallResult, McpRequestError> {
-        self.ensure_initialized().await.map_err(McpRequestError::Other)?;
+    pub async fn call_tool(
+        &self,
+        name: &str,
+        arguments: Value,
+    ) -> Result<ToolCallResult, McpRequestError> {
+        self.ensure_initialized()
+            .await
+            .map_err(McpRequestError::Other)?;
 
         let params = json!({
             "name": name,
@@ -511,7 +538,9 @@ impl McpProxy {
     /// Returns the full unfiltered list; callers (e.g., API handlers)
     /// are responsible for filtering to UI-only resources.
     pub async fn list_resources(&self) -> Result<Vec<ResourceInfo>, McpRequestError> {
-        self.ensure_initialized().await.map_err(McpRequestError::Other)?;
+        self.ensure_initialized()
+            .await
+            .map_err(McpRequestError::Other)?;
 
         let result = self.send_request("resources/list", None).await?;
 
@@ -530,7 +559,9 @@ impl McpProxy {
     ///
     /// Ensures the session is initialized before sending the request.
     pub async fn read_resource(&self, uri: &str) -> Result<ResourceReadResult, McpRequestError> {
-        self.ensure_initialized().await.map_err(McpRequestError::Other)?;
+        self.ensure_initialized()
+            .await
+            .map_err(McpRequestError::Other)?;
 
         let params = json!({ "uri": uri });
         let result = self.send_request("resources/read", Some(params)).await?;
@@ -572,14 +603,20 @@ impl McpProxy {
             req_builder = req_builder.header(MCP_PROTOCOL_VERSION, ver);
         }
 
-        let response = req_builder.send().await.map_err(|e| McpRequestError::Other(e.into()))?;
+        let response = req_builder
+            .send()
+            .await
+            .map_err(|e| McpRequestError::Other(e.into()))?;
         let response = check_mcp_response(response).await?;
 
         // Capture MCP session headers to forward back to the WASM client
         let session_id = extract_header(response.headers(), MCP_SESSION_ID);
         let protocol_version = extract_header(response.headers(), MCP_PROTOCOL_VERSION);
 
-        let body = response.text().await.map_err(|e| McpRequestError::Other(e.into()))?;
+        let body = response
+            .text()
+            .await
+            .map_err(|e| McpRequestError::Other(e.into()))?;
         Ok(RawForwardResult {
             body,
             session_id,

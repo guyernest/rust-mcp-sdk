@@ -197,10 +197,7 @@ async fn main() -> Result<(), lambda_runtime::Error> {
 /// The durable agent handler. Each side-effectful operation is wrapped in a
 /// durable primitive so that on Lambda replay (after suspension/resumption),
 /// cached results are returned instead of re-executing.
-async fn agent_handler(
-    event: AgentInput,
-    ctx: DurableContextHandle,
-) -> DurableResult<AgentOutput> {
+async fn agent_handler(event: AgentInput, ctx: DurableContextHandle) -> DurableResult<AgentOutput> {
     let api_key = std::env::var("ANTHROPIC_API_KEY")
         .map_err(|_| DurableError::Internal("ANTHROPIC_API_KEY not set".into()))?;
 
@@ -267,17 +264,8 @@ async fn agent_handler(
             .run_in_child_context(
                 Some(&format!("iteration-{i}")),
                 move |child_ctx| async move {
-                    execute_iteration(
-                        &child_ctx,
-                        &client,
-                        &key,
-                        &mdl,
-                        &msgs,
-                        &tls,
-                        &rte,
-                        &clients,
-                    )
-                    .await
+                    execute_iteration(&child_ctx, &client, &key, &mdl, &msgs, &tls, &rte, &clients)
+                        .await
                 },
                 None,
             )
@@ -374,8 +362,7 @@ async fn execute_iteration(
         .max_delay(Duration::seconds(30))
         .backoff_rate(2.0)
         .build();
-    let step_config =
-        StepConfig::<AnthropicResponse>::new().with_retry_strategy(Arc::new(retry));
+    let step_config = StepConfig::<AnthropicResponse>::new().with_retry_strategy(Arc::new(retry));
 
     let response: AnthropicResponse = ctx
         .step(
@@ -472,10 +459,7 @@ async fn create_mcp_client(
     let parsed = url::Url::parse(url_str)?;
     let config = StreamableHttpTransportConfigBuilder::new(parsed).build();
     let transport = StreamableHttpTransport::new(config);
-    let mut client = Client::with_info(
-        transport,
-        Implementation::new(AGENT_NAME, AGENT_VERSION),
-    );
+    let mut client = Client::with_info(transport, Implementation::new(AGENT_NAME, AGENT_VERSION));
     client.initialize(ClientCapabilities::default()).await?;
     Ok(client)
 }
@@ -618,9 +602,7 @@ async fn execute_tool_call(
         .map_err(|e| DurableError::Internal(e.to_string()))?;
 
     let client = mcp_clients.get(&server_url).ok_or_else(|| {
-        DurableError::Internal(format!(
-            "No cached MCP client for server URL: {server_url}"
-        ))
+        DurableError::Internal(format!("No cached MCP client for server URL: {server_url}"))
     })?;
 
     let response = client
@@ -638,7 +620,7 @@ async fn execute_tool_call(
                 content: text,
                 is_error: result.is_error,
             })
-        }
+        },
 
         // MCP Tasks: when an MCP server needs time to process, it returns a
         // Task instead of an immediate result. We use ctx.wait_for_condition()
@@ -664,8 +646,8 @@ async fn execute_tool_call(
                 }
             });
 
-            let config = WaitConditionConfig::new(initial_task, wait_strategy)
-                .with_max_attempts(60);
+            let config =
+                WaitConditionConfig::new(initial_task, wait_strategy).with_max_attempts(60);
 
             // Each poll is a durable step -- already-completed polls are
             // replayed from cache if Lambda suspends and resumes.
@@ -699,7 +681,7 @@ async fn execute_tool_call(
                         content: text,
                         is_error: result.is_error,
                     })
-                }
+                },
                 status => {
                     // Failed or Cancelled -- the LLM decides how to recover.
                     Ok(ToolResult {
@@ -710,9 +692,9 @@ async fn execute_tool_call(
                         ),
                         is_error: true,
                     })
-                }
+                },
             }
-        }
+        },
     }
 }
 
