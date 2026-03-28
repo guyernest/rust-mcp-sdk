@@ -25,6 +25,7 @@ use std::io::IsTerminal;
 mod commands;
 mod deployment;
 mod landing;
+mod pentest;
 mod publishing;
 mod secrets;
 mod templates;
@@ -173,6 +174,13 @@ enum Commands {
         #[command(subcommand)]
         command: commands::app::AppCommand,
     },
+
+    /// Run security penetration tests against MCP servers
+    ///
+    /// Probes MCP endpoints for protocol-specific vulnerabilities: prompt injection,
+    /// tool poisoning, and session security issues. Reports findings with severity
+    /// levels in text, JSON, or SARIF format.
+    Pentest(commands::pentest::PentestCommand),
 
     /// Preview MCP Apps widgets in browser
     ///
@@ -374,6 +382,9 @@ fn execute_command(command: Commands, global_flags: &GlobalFlags) -> Result<()> 
         },
         Commands::App { command } => {
             command.execute(global_flags)?;
+        },
+        Commands::Pentest(pentest_cmd) => {
+            pentest_cmd.execute(global_flags)?;
         },
         Commands::Preview {
             url,

@@ -6,6 +6,7 @@ pub mod dev;
 pub mod landing;
 pub mod loadtest;
 pub mod new;
+pub mod pentest;
 pub mod preview;
 pub mod schema;
 pub mod secret;
