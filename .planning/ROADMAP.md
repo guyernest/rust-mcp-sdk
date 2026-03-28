@@ -660,10 +660,12 @@ Plans:
 
 ### Phase 63: advanced-pentest-attack-modules
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Extend pentest with 4 new attack categories (transport, auth, data exfiltration, protocol abuse), --profile quick/deep flag, and deep fuzzing mutations -- 13 new attacks (TR-01..03, AF-01..03, DE-01..03, PA-01..04) across 32 total attack IDs.
+**Requirements**: None (new feature, not tracked in REQUIREMENTS.md)
 **Depends on:** Phase 62
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 63 to break down)
+- [ ] 63-01-PLAN.md -- Foundation: extend AttackCategory enum, add PentestProfile, --profile flag, 4 attack module stubs, SARIF rules, engine dispatch
+- [ ] 63-02-PLAN.md -- Transport security (TR-01..03) and auth flow (AF-01..03) attack runners
+- [ ] 63-03-PLAN.md -- Data exfiltration (DE-01..03), protocol abuse (PA-01..04) attack runners, deep fuzzing mode
