@@ -122,27 +122,17 @@ impl BinaryBuilder {
         // First try {server_name}-lambda, then look for any *-lambda package with bootstrap binary
         let lambda_package = self.find_lambda_package(&config.server.name)?;
 
-        // AWS Lambda Custom Runtime requires the binary to be named "bootstrap"
-        let lambda_binary = "bootstrap";
-
         // Use cargo lambda build with --arm64 for cross-compilation.
         // ARM64 is cheaper and faster on Lambda than x86_64.
         //
-        // IMPORTANT: We cd into the lambda package directory and run without
-        // --package/--bin. When cargo-lambda runs from the package root, it
-        // properly configures Zig cross-compilation wrappers for C build
-        // scripts (ring, aws-lc-sys).
+        // We cd into the lambda package directory and run without --package/--bin
+        // to ensure cargo-lambda configures Zig wrappers correctly for build scripts.
         //
-        // Additionally, we set CFLAGS_aarch64_unknown_linux_gnu to strip
-        // the --target flag that the cc crate injects. Zig 0.15+ cannot
-        // parse Rust-style target triples (aarch64-unknown-linux-gnu has
-        // "unknown" vendor which Zig rejects as UnknownOperatingSystem).
-        // The zigcc wrapper already passes the correct -target aarch64-linux-gnu,
-        // but the cc crate appends --target=aarch64-unknown-linux-gnu which
-        // overrides it. Setting CFLAGS with no --target prevents this.
-        //
-        // For aws-lc-sys specifically: force the cmake builder which handles
-        // cross-compilation without going through the cc crate's target injection.
+        // Three env vars fix Zig 0.15+ cross-compilation of C dependencies:
+        // - AWS_LC_SYS_CMAKE_BUILDER=1: aws-lc-sys uses cmake (not cc crate)
+        // - AWS_LC_SYS_NO_JITTER_ENTROPY=1: skip jitterentropy (Zig rejects -U flag)
+        // - CC_aarch64_unknown_linux_gnu=zigcc wrapper: ring's cc crate uses the
+        //   wrapper which handles the --target triple Zig can't parse
         let lambda_pkg_dir = self.find_lambda_package_dir(&config.server.name)?;
 
         let status = Command::new("cargo")
@@ -275,16 +265,10 @@ impl BinaryBuilder {
     fn find_zigcc_env_vars() -> Vec<(String, String)> {
         let mut vars = Vec::new();
 
-        // Search known cache locations for the zigcc wrapper
-        let cache_dirs: Vec<PathBuf> = if cfg!(target_os = "macos") {
-            dirs::cache_dir()
-                .map(|d| vec![d.join("cargo-zigbuild")])
-                .unwrap_or_default()
-        } else {
-            dirs::cache_dir()
-                .map(|d| vec![d.join("cargo-zigbuild")])
-                .unwrap_or_default()
-        };
+        // dirs::cache_dir() resolves to ~/Library/Caches (macOS) or ~/.cache (Linux)
+        let cache_dirs: Vec<PathBuf> = dirs::cache_dir()
+            .map(|d| vec![d.join("cargo-zigbuild")])
+            .unwrap_or_default();
 
         for cache_base in &cache_dirs {
             if !cache_base.exists() {
