@@ -19,7 +19,7 @@
 )]
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use std::io::IsTerminal;
 
 mod commands;
@@ -178,6 +178,25 @@ enum Commands {
     App {
         #[command(subcommand)]
         command: commands::app::AppCommand,
+    },
+
+    /// Diagnose workspace and server health
+    ///
+    /// Validates project structure (Cargo.toml, pmcp dependency), Rust toolchain,
+    /// development tools (rustfmt, clippy), and optionally tests MCP server connectivity.
+    Doctor {
+        /// Optional MCP server URL to test connectivity
+        url: Option<String>,
+    },
+
+    /// Generate shell completions
+    ///
+    /// Outputs shell completion scripts for bash, zsh, fish, or powershell.
+    /// Pipe to a file or source directly in your shell config.
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
     },
 
     /// Run security penetration tests against MCP servers
@@ -391,6 +410,13 @@ fn execute_command(command: Commands, global_flags: &GlobalFlags) -> Result<()> 
         },
         Commands::App { command } => {
             command.execute(global_flags)?;
+        },
+        Commands::Doctor { url } => {
+            commands::doctor::execute(url.as_deref(), global_flags)?;
+        },
+        Commands::Completions { shell } => {
+            let mut cmd = Cli::command();
+            clap_complete::generate(shell, &mut cmd, "cargo pmcp", &mut std::io::stdout());
         },
         Commands::Pentest(pentest_cmd) => {
             pentest_cmd.execute(global_flags)?;

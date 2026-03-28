@@ -4,6 +4,7 @@ pub mod auth;
 pub mod connect;
 pub mod deploy;
 pub mod dev;
+pub mod doctor;
 pub mod flags;
 pub mod landing;
 pub mod loadtest;
