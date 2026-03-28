@@ -128,35 +128,21 @@ impl BinaryBuilder {
         // Use cargo lambda build with --arm64 for cross-compilation.
         // ARM64 is cheaper and faster on Lambda than x86_64.
         //
-        // aws-lc-sys (pulled in by reqwest/rustls and aws-config) uses cmake
-        // internally to compile C code. cmake does NOT inherit cargo-lambda's
-        // Zig cross-compilation setup, so it produces host-arch (macOS) objects
-        // instead of target-arch (Linux ARM64) objects. This causes:
-        //   ld.lld: error: undefined symbol: aws_lc_0_39_1_*
+        // IMPORTANT: We cd into the lambda package directory and run without
+        // --package/--bin. When cargo-lambda runs from the package root, it
+        // properly configures Zig cross-compilation wrappers for C build
+        // scripts (ring, aws-lc-sys). With --package from a workspace root,
+        // the cc crate's build scripts receive conflicting --target flags
+        // (Zig's -target aarch64-linux-gnu vs cc's --target=aarch64-unknown-linux-gnu)
+        // causing "UnknownOperatingSystem" errors.
         //
-        // Fix: set CC/AR environment variables so cmake uses Zig for C
-        // cross-compilation, matching what cargo-lambda does for Rust code.
-        let mut cmd = Command::new("cargo");
-        cmd.args([
-            "lambda",
-            "build",
-            "--release",
-            "--arm64",
-            "--package",
-            &lambda_package,
-            "--bin",
-            lambda_binary,
-        ])
-        .current_dir(&self.project_root);
+        // This matches how the pmcp.run built-in servers build successfully:
+        //   cd servers/$INSTANCE && cargo lambda build --release --arm64
+        let lambda_pkg_dir = self.find_lambda_package_dir(&config.server.name)?;
 
-        // Ensure aws-lc-sys cmake build cross-compiles with Zig
-        cmd.env(
-            "CC_aarch64_unknown_linux_gnu",
-            "zig cc -target aarch64-linux-gnu",
-        );
-        cmd.env("AR_aarch64_unknown_linux_gnu", "zig ar");
-
-        let status = cmd
+        let status = Command::new("cargo")
+            .args(["lambda", "build", "--release", "--arm64"])
+            .current_dir(&lambda_pkg_dir)
             .status()
             .context("Failed to run cargo lambda build")?;
 
@@ -263,6 +249,47 @@ impl BinaryBuilder {
 
     /// Find the Lambda wrapper package in the workspace.
     /// First tries {server_name}-lambda, then looks for any *-lambda package with bootstrap binary.
+    /// Find the directory of the Lambda package for cd-based builds.
+    ///
+    /// Returns the absolute path to the Lambda package directory.
+    fn find_lambda_package_dir(&self, server_name: &str) -> Result<PathBuf> {
+        let preferred_package = format!("{}-lambda", server_name);
+
+        // Check if the preferred package exists as a direct subdirectory
+        let preferred_dir = self.project_root.join(&preferred_package);
+        if preferred_dir.exists() && preferred_dir.join("Cargo.toml").exists() {
+            return Ok(preferred_dir);
+        }
+
+        // Search workspace members for *-lambda packages
+        let binaries = crate::deployment::naming::detect_workspace_binaries(&self.project_root)?;
+
+        for binary in &binaries {
+            if binary.binary_name == "bootstrap" && binary.package_name.ends_with("-lambda") {
+                // Find the Cargo.toml for this package using cargo_metadata
+                let metadata = cargo_metadata::MetadataCommand::new()
+                    .current_dir(&self.project_root)
+                    .exec()
+                    .context("Failed to read workspace metadata")?;
+
+                if let Some(pkg) = metadata
+                    .packages
+                    .iter()
+                    .find(|p| p.name == binary.package_name)
+                {
+                    let pkg_dir = pkg.manifest_path.parent().expect("manifest has parent");
+                    return Ok(pkg_dir.into());
+                }
+            }
+        }
+
+        bail!(
+            "No Lambda wrapper package found. Expected '{}' or any '*-lambda' package with 'bootstrap' binary.\n\
+             Run 'cargo pmcp deploy init --target pmcp-run' to create one.",
+            preferred_package
+        );
+    }
+
     fn find_lambda_package(&self, server_name: &str) -> Result<String> {
         let preferred_package = format!("{}-lambda", server_name);
 
