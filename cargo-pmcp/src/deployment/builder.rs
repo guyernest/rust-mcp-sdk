@@ -125,21 +125,22 @@ impl BinaryBuilder {
         // AWS Lambda Custom Runtime requires the binary to be named "bootstrap"
         let lambda_binary = "bootstrap";
 
-        // Use cargo lambda build - it handles all cross-compilation
-        // ARM64 is cheaper and faster on Lambda than x86_64
+        // Use cargo lambda build with --arm64 for cross-compilation.
+        // ARM64 is cheaper and faster on Lambda than x86_64.
+        // --arm64 uses Zig for C cross-compilation, which correctly handles
+        // aws-lc-sys (pulled in by reqwest/rustls and aws-config).
+        // The previous --target aarch64-unknown-linux-gnu --output-format binary
+        // used ld.lld which cannot link aws-lc-sys C objects.
         let status = Command::new("cargo")
             .args(&[
                 "lambda",
                 "build",
                 "--release",
+                "--arm64",
                 "--package",
                 &lambda_package,
                 "--bin",
                 lambda_binary,
-                "--output-format",
-                "binary",
-                "--target",
-                "aarch64-unknown-linux-gnu",
             ])
             .current_dir(&self.project_root)
             .status()
