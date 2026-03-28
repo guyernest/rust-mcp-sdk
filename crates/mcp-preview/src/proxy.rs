@@ -226,6 +226,8 @@ pub struct McpProxy {
 
 impl McpProxy {
     /// Create a new MCP proxy targeting the given base URL (no authentication).
+    // Public API for consumers that don't need auth
+    #[allow(dead_code)]
     pub fn new(base_url: &str) -> Self {
         Self::new_with_auth(base_url, None)
     }
@@ -546,7 +548,7 @@ impl McpProxy {
         body: String,
         session_id: Option<&str>,
         protocol_version: Option<&str>,
-    ) -> Result<RawForwardResult> {
+    ) -> Result<RawForwardResult, McpRequestError> {
         let mut req_builder = self.mcp_post().body(body);
 
         // Forward MCP session headers from the WASM client
@@ -557,13 +559,25 @@ impl McpProxy {
             req_builder = req_builder.header(MCP_PROTOCOL_VERSION, ver);
         }
 
-        let response = check_response(req_builder.send().await?).await?;
+        let response = req_builder.send().await.map_err(|e| McpRequestError::Other(e.into()))?;
+        let status = response.status();
+
+        // Propagate 401/403 directly so the browser can detect auth failures
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            let text = response.text().await.unwrap_or_default();
+            return Err(McpRequestError::AuthRequired(status.as_u16(), text));
+        }
+
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(McpRequestError::Other(anyhow::anyhow!("MCP server returned {}: {}", status, text)));
+        }
 
         // Capture MCP session headers to forward back to the WASM client
         let session_id = extract_header(response.headers(), MCP_SESSION_ID);
         let protocol_version = extract_header(response.headers(), MCP_PROTOCOL_VERSION);
 
-        let body = response.text().await?;
+        let body = response.text().await.map_err(|e| McpRequestError::Other(e.into()))?;
         Ok(RawForwardResult {
             body,
             session_id,

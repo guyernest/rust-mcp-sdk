@@ -449,7 +449,11 @@ pub async fn forward_mcp(
             }
             (StatusCode::OK, headers, result.body).into_response()
         },
-        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Err(McpRequestError::AuthRequired(status_code, body)) => {
+            let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::UNAUTHORIZED);
+            (status, body).into_response()
+        },
+        Err(McpRequestError::Other(e)) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
     }
 }
 
