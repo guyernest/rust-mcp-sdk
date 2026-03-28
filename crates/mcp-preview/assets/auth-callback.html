@@ -30,6 +30,7 @@
     (function() {
       var params = new URLSearchParams(window.location.search);
       var code = params.get('code');
+      var state = params.get('state');
       var error = params.get('error');
       var errorDescription = params.get('error_description');
       var msgEl = document.getElementById('message');
@@ -48,7 +49,7 @@
 
       if (window.opener) {
         window.opener.postMessage(
-          { type: 'oauth-callback', code: code },
+          { type: 'oauth-callback', code: code, state: state },
           window.location.origin
         );
         msgEl.textContent = 'Authentication complete. This window will close.';

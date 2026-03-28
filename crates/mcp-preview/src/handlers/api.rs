@@ -246,13 +246,13 @@ pub async fn list_resources(State(state): State<Arc<AppState>>) -> Json<Value> {
             // Auth errors from list_resources are non-fatal when widgets_dir provides resources
             tracing::warn!("Proxy list_resources returned auth error (401/403)");
             if all_resources.is_empty() {
-                return json_response(json!({ "resources": [], "error": "Authentication required" }));
+                return Json(json!({ "resources": [], "error": "Authentication required" }));
             }
         },
         Err(McpRequestError::Other(e)) => {
             tracing::warn!("Proxy list_resources failed: {}", e);
             if all_resources.is_empty() {
-                return json_response(json!({ "resources": [], "error": e.to_string() }));
+                return Json(json!({ "resources": [], "error": e.to_string() }));
             }
         },
     }
@@ -264,7 +264,7 @@ pub async fn list_resources(State(state): State<Arc<AppState>>) -> Json<Value> {
         }
     }
 
-    json_response(json!({ "resources": all_resources }))
+    Json(json!({ "resources": all_resources }))
 }
 
 /// Read a resource by URI.
@@ -298,7 +298,7 @@ pub async fn read_resource(
                 },
             };
 
-            return json_response(json!({
+            return Json(json!({
                 "contents": [{
                     "uri": params.uri,
                     "text": html,
@@ -310,11 +310,11 @@ pub async fn read_resource(
 
     // Fall through to proxy for non-widget or non-configured resources
     match state.proxy.read_resource(&params.uri).await {
-        Ok(result) => json_response(json!({
+        Ok(result) => Json(json!({
             "contents": result.contents,
             "_meta": result.meta
         })),
-        Err(e) => json_response(json!({ "contents": null, "error": e.to_string() })),
+        Err(e) => Json(json!({ "contents": null, "error": e.to_string() })),
     }
 }
 
@@ -388,11 +388,11 @@ fn widget_error_html(name: &str, path: &std::path::Path, error: &str) -> String 
 pub async fn reconnect(State(state): State<Arc<AppState>>) -> Json<Value> {
     state.proxy.reset_session().await;
     match state.proxy.list_tools().await {
-        Ok(tools) => json_response(json!({
+        Ok(tools) => Json(json!({
             "success": true,
             "toolCount": tools.len()
         })),
-        Err(e) => json_response(json!({
+        Err(e) => Json(json!({
             "success": false,
             "error": e.to_string()
         })),
@@ -402,7 +402,7 @@ pub async fn reconnect(State(state): State<Arc<AppState>>) -> Json<Value> {
 /// Check whether the MCP session is currently connected.
 pub async fn status(State(state): State<Arc<AppState>>) -> Json<Value> {
     let connected = state.proxy.is_connected().await;
-    json_response(json!({ "connected": connected }))
+    Json(json!({ "connected": connected }))
 }
 
 /// Forward a raw JSON-RPC request to the MCP server.
@@ -457,72 +457,42 @@ pub async fn forward_mcp(
     }
 }
 
-/// Enrich a `_meta` value with ChatGPT-specific keys.
+/// Inject ChatGPT-specific keys into a `_meta` map.
 ///
 /// Derives `openai/outputTemplate` from `ui.resourceUri` (nested) or
 /// `ui/resourceUri` (flat legacy key). Also injects default invocation
 /// messages and `widgetAccessible`. Uses `entry().or_insert` so server-provided
 /// keys are never overwritten.
-fn enrich_meta_for_chatgpt(meta: &mut Option<Value>) {
-    let meta_obj = match meta {
-        Some(Value::Object(ref mut map)) => map,
-        _ => return,
-    };
-
-    // Extract resource URI from standard nested key or flat legacy key
-    let resource_uri = meta_obj
+fn enrich_chatgpt_meta_map(map: &mut serde_json::Map<String, Value>) {
+    let resource_uri = map
         .get("ui")
         .and_then(|ui| ui.get("resourceUri"))
         .and_then(Value::as_str)
-        .or_else(|| meta_obj.get("ui/resourceUri").and_then(Value::as_str))
+        .or_else(|| map.get("ui/resourceUri").and_then(Value::as_str))
         .map(String::from);
 
     if let Some(uri) = resource_uri {
-        meta_obj
-            .entry("openai/outputTemplate")
+        map.entry("openai/outputTemplate")
             .or_insert_with(|| Value::String(uri));
-
-        meta_obj
-            .entry("openai/widgetAccessible")
+        map.entry("openai/widgetAccessible")
             .or_insert_with(|| Value::Bool(true));
-
-        meta_obj
-            .entry("openai/toolInvocation/invoking")
+        map.entry("openai/toolInvocation/invoking")
             .or_insert_with(|| Value::String("Running...".into()));
-
-        meta_obj
-            .entry("openai/toolInvocation/invoked")
+        map.entry("openai/toolInvocation/invoked")
             .or_insert_with(|| Value::String("Done".into()));
     }
 }
 
-/// Enrich a `serde_json::Value` `_meta` field for ChatGPT mode.
-///
-/// Works on loose `Value` objects (e.g., from resource JSON responses).
-/// Operates directly on the `_meta` map to avoid take/put-back overhead.
-fn enrich_value_meta_for_chatgpt(resource: &mut Value) {
-    if let Some(Value::Object(map)) = resource.get_mut("_meta") {
-        let resource_uri = map
-            .get("ui")
-            .and_then(|ui| ui.get("resourceUri"))
-            .and_then(Value::as_str)
-            .or_else(|| map.get("ui/resourceUri").and_then(Value::as_str))
-            .map(String::from);
-
-        if let Some(uri) = resource_uri {
-            map.entry("openai/outputTemplate")
-                .or_insert_with(|| Value::String(uri));
-            map.entry("openai/widgetAccessible")
-                .or_insert_with(|| Value::Bool(true));
-            map.entry("openai/toolInvocation/invoking")
-                .or_insert_with(|| Value::String("Running...".into()));
-            map.entry("openai/toolInvocation/invoked")
-                .or_insert_with(|| Value::String("Done".into()));
-        }
+/// Enrich a typed `_meta` field (`Option<Value>`) for ChatGPT mode.
+fn enrich_meta_for_chatgpt(meta: &mut Option<Value>) {
+    if let Some(Value::Object(ref mut map)) = meta {
+        enrich_chatgpt_meta_map(map);
     }
 }
 
-/// Wrap a `serde_json::Value` in an Axum `Json` response.
-fn json_response(value: Value) -> Json<Value> {
-    Json(value)
+/// Enrich a loose JSON object's `_meta` field for ChatGPT mode.
+fn enrich_value_meta_for_chatgpt(resource: &mut Value) {
+    if let Some(Value::Object(map)) = resource.get_mut("_meta") {
+        enrich_chatgpt_meta_map(map);
+    }
 }

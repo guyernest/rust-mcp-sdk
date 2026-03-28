@@ -47,8 +47,9 @@ pub async fn token_exchange(
 
     let redirect_uri = format!("http://localhost:{}/api/auth/callback", state.config.port);
 
-    let client = reqwest::Client::new();
-    let resp: reqwest::Response = client
+    let resp: reqwest::Response = state
+        .proxy
+        .http_client()
         .post(&oauth.token_endpoint)
         .form(&[
             ("grant_type", "authorization_code"),

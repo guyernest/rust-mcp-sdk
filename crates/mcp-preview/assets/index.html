@@ -1645,6 +1645,7 @@
       constructor(runtime) {
         this.runtime = runtime;
         this.codeVerifier = null;
+        this.oauthState = null;
         this.oauthConfig = null;
         this.popup = null;
         this._boundCallback = (e) => this._handleCallback(e);
@@ -1683,7 +1684,8 @@
 
         this.codeVerifier = this._generateCodeVerifier();
         const codeChallenge = await this._generateCodeChallenge(this.codeVerifier);
-        const state = this._generateCodeVerifier(); // CSRF protection
+        this.oauthState = this._generateCodeVerifier();
+        const state = this.oauthState;
 
         const params = new URLSearchParams({
           client_id: this.oauthConfig.client_id,
@@ -1717,7 +1719,15 @@
 
         const code = event.data.code;
         const error = event.data.error;
+        const state = event.data.state;
         if (this.popup) { this.popup.close(); this.popup = null; }
+
+        // Validate CSRF state parameter
+        if (this.oauthState && state !== this.oauthState) {
+          this.runtime.logEvent('authError', { error: 'OAuth state mismatch — possible CSRF attack' });
+          this._hideLoginModal();
+          return;
+        }
 
         if (error) {
           this.runtime.logEvent('authError', { error: 'OAuth error: ' + error });

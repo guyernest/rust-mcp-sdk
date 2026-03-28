@@ -170,6 +170,23 @@ async fn check_response(response: reqwest::Response) -> Result<reqwest::Response
     Ok(response)
 }
 
+/// Check an MCP response, propagating 401/403 as `AuthRequired`.
+///
+/// Unlike `check_response`, this returns `McpRequestError` so callers can
+/// distinguish auth failures from other HTTP errors.
+async fn check_mcp_response(response: reqwest::Response) -> Result<reqwest::Response, McpRequestError> {
+    let status = response.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        let text = response.text().await.unwrap_or_default();
+        return Err(McpRequestError::AuthRequired(status.as_u16(), text));
+    }
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        return Err(McpRequestError::Other(anyhow::anyhow!("MCP server returned {}: {}", status, text)));
+    }
+    Ok(response)
+}
+
 /// Parse a JSON-RPC response, handling both plain JSON and SSE (text/event-stream).
 ///
 /// Streamable HTTP MCP servers may return SSE with `event: message\ndata: {...}`
@@ -193,11 +210,12 @@ async fn parse_rpc_response(response: reqwest::Response) -> Result<JsonRpcRespon
     }
 }
 
-/// MCP HTTP Proxy with session-once initialization
+/// MCP HTTP Proxy with session-once initialization.
 ///
 /// The proxy initializes the MCP session exactly once on the first
 /// request and reuses it for all subsequent calls. The session can
 /// be reset via `reset_session()` for reconnect scenarios.
+
 /// Error type for MCP requests that preserves upstream HTTP status for auth failures.
 #[derive(Debug)]
 pub enum McpRequestError {
@@ -215,6 +233,8 @@ impl std::fmt::Display for McpRequestError {
         }
     }
 }
+
+impl std::error::Error for McpRequestError {}
 
 pub struct McpProxy {
     base_url: String,
@@ -244,6 +264,11 @@ impl McpProxy {
             session: RwLock::new(None),
             auth_header: SyncRwLock::new(auth_header),
         }
+    }
+
+    /// Borrow the shared HTTP client for reuse (e.g., in token exchange).
+    pub fn http_client(&self) -> &reqwest::Client {
+        &self.client
     }
 
     /// Update the authorization header at runtime (e.g., after browser OAuth flow completes).
@@ -374,19 +399,7 @@ impl McpProxy {
 
         let req_builder = self.attach_session_id(self.mcp_post().json(&request)).await;
         let response = req_builder.send().await.map_err(|e| McpRequestError::Other(e.into()))?;
-
-        let status = response.status();
-
-        // Propagate 401/403 directly so the browser can detect auth failures
-        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-            let text = response.text().await.unwrap_or_default();
-            return Err(McpRequestError::AuthRequired(status.as_u16(), text));
-        }
-
-        if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
-            return Err(McpRequestError::Other(anyhow::anyhow!("MCP server returned {}: {}", status, text)));
-        }
+        let response = check_mcp_response(response).await?;
 
         let rpc_response: JsonRpcResponse = parse_rpc_response(response).await
             .map_err(|e| McpRequestError::Other(e))?;
@@ -560,18 +573,7 @@ impl McpProxy {
         }
 
         let response = req_builder.send().await.map_err(|e| McpRequestError::Other(e.into()))?;
-        let status = response.status();
-
-        // Propagate 401/403 directly so the browser can detect auth failures
-        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-            let text = response.text().await.unwrap_or_default();
-            return Err(McpRequestError::AuthRequired(status.as_u16(), text));
-        }
-
-        if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
-            return Err(McpRequestError::Other(anyhow::anyhow!("MCP server returned {}: {}", status, text)));
-        }
+        let response = check_mcp_response(response).await?;
 
         // Capture MCP session headers to forward back to the WASM client
         let session_id = extract_header(response.headers(), MCP_SESSION_ID);
