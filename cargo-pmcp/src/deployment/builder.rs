@@ -131,18 +131,25 @@ impl BinaryBuilder {
         // IMPORTANT: We cd into the lambda package directory and run without
         // --package/--bin. When cargo-lambda runs from the package root, it
         // properly configures Zig cross-compilation wrappers for C build
-        // scripts (ring, aws-lc-sys). With --package from a workspace root,
-        // the cc crate's build scripts receive conflicting --target flags
-        // (Zig's -target aarch64-linux-gnu vs cc's --target=aarch64-unknown-linux-gnu)
-        // causing "UnknownOperatingSystem" errors.
+        // scripts (ring, aws-lc-sys).
         //
-        // This matches how the pmcp.run built-in servers build successfully:
-        //   cd servers/$INSTANCE && cargo lambda build --release --arm64
+        // Additionally, we set CFLAGS_aarch64_unknown_linux_gnu to strip
+        // the --target flag that the cc crate injects. Zig 0.15+ cannot
+        // parse Rust-style target triples (aarch64-unknown-linux-gnu has
+        // "unknown" vendor which Zig rejects as UnknownOperatingSystem).
+        // The zigcc wrapper already passes the correct -target aarch64-linux-gnu,
+        // but the cc crate appends --target=aarch64-unknown-linux-gnu which
+        // overrides it. Setting CFLAGS with no --target prevents this.
+        //
+        // For aws-lc-sys specifically: force the cmake builder which handles
+        // cross-compilation without going through the cc crate's target injection.
         let lambda_pkg_dir = self.find_lambda_package_dir(&config.server.name)?;
 
         let status = Command::new("cargo")
             .args(["lambda", "build", "--release", "--arm64"])
             .current_dir(&lambda_pkg_dir)
+            // Force aws-lc-sys to use cmake builder (bypasses cc crate target conflict)
+            .env("AWS_LC_SYS_CMAKE_BUILDER", "1")
             .status()
             .context("Failed to run cargo lambda build")?;
 
