@@ -44,12 +44,53 @@ confidence-threshold = 0.8
 multiple-versions = "warn"
 wildcards = "deny"
 highlight = "all"
+skip = [
+    # Allow multiple getrandom versions (v0.2 from ring/rustls, v0.4 direct)
+    { name = "getrandom", version = "=0.2" },
+    # Allow multiple hashbrown versions during indexmap transition
+    { name = "hashbrown", version = "=0.14.5" },
+    # Allow multiple windows-sys versions during ecosystem transition
+    { name = "windows-sys", version = "=0.45.0" },
+    { name = "windows-sys", version = "=0.52.0" },
+    { name = "windows-sys", version = "=0.60.2" },
+    # Allow multiple windows-targets versions
+    { name = "windows-targets", version = "=0.42.2" },
+    { name = "windows-targets", version = "=0.52.6" },
+    { name = "windows-targets", version = "=0.53.5" },
+    # Allow multiple windows_* platform crate versions (0.42.2/0.52.6/0.53.1)
+    { name = "windows_aarch64_gnullvm", version = "=0.42.2" },
+    { name = "windows_aarch64_gnullvm", version = "=0.52.6" },
+    { name = "windows_aarch64_gnullvm", version = "=0.53.1" },
+    { name = "windows_aarch64_msvc", version = "=0.42.2" },
+    { name = "windows_aarch64_msvc", version = "=0.52.6" },
+    { name = "windows_aarch64_msvc", version = "=0.53.1" },
+    { name = "windows_i686_gnu", version = "=0.42.2" },
+    { name = "windows_i686_gnu", version = "=0.52.6" },
+    { name = "windows_i686_gnu", version = "=0.53.1" },
+    { name = "windows_i686_gnullvm", version = "=0.52.6" },
+    { name = "windows_i686_gnullvm", version = "=0.53.1" },
+    { name = "windows_i686_msvc", version = "=0.42.2" },
+    { name = "windows_i686_msvc", version = "=0.52.6" },
+    { name = "windows_i686_msvc", version = "=0.53.1" },
+    { name = "windows_x86_64_gnu", version = "=0.42.2" },
+    { name = "windows_x86_64_gnu", version = "=0.52.6" },
+    { name = "windows_x86_64_gnu", version = "=0.53.1" },
+    { name = "windows_x86_64_gnullvm", version = "=0.42.2" },
+    { name = "windows_x86_64_gnullvm", version = "=0.52.6" },
+    { name = "windows_x86_64_gnullvm", version = "=0.53.1" },
+    { name = "windows_x86_64_msvc", version = "=0.42.2" },
+    { name = "windows_x86_64_msvc", version = "=0.52.6" },
+    { name = "windows_x86_64_msvc", version = "=0.53.1" },
+]
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+allow-git = [
+    # Durable execution framework for Lambda (pre-crates.io, will be replaced with published crate)
+    "https://github.com/guyernest/lambda-durable-execution-rust.git",
+]
 
 [sources.allow-org]
 github = ["paiml"]

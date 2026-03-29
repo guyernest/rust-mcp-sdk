@@ -1,0 +1,36 @@
+{
+  "version": "52.0.0",
+  "files": {
+    "fd99753dd276155e0ba559cee51a11cd33711ed9bb580d4e297e2c833998c1de": {
+      "displayName": "McpFunction/Code",
+      "source": {
+        "path": "asset.fd99753dd276155e0ba559cee51a11cd33711ed9bb580d4e297e2c833998c1de",
+        "packaging": "zip"
+      },
+      "destinations": {
+        "816069129666-us-east-1-dcd36fec": {
+          "bucketName": "cdk-hnb659fds-assets-816069129666-us-east-1",
+          "objectKey": "fd99753dd276155e0ba559cee51a11cd33711ed9bb580d4e297e2c833998c1de.zip",
+          "region": "us-east-1",
+          "assumeRoleArn": "arn:${AWS::Partition}:iam::816069129666:role/cdk-hnb659fds-file-publishing-role-816069129666-us-east-1"
+        }
+      }
+    },
+    "ab20aa48b4cdac927b715c60eaafa2f3ef96012f0048759bc1ed8ca0f811f2bb": {
+      "displayName": "pmcp-server-stack Template",
+      "source": {
+        "path": "pmcp-server-stack.template.json",
+        "packaging": "file"
+      },
+      "destinations": {
+        "816069129666-us-east-1-df7acdc2": {
+          "bucketName": "cdk-hnb659fds-assets-816069129666-us-east-1",
+          "objectKey": "ab20aa48b4cdac927b715c60eaafa2f3ef96012f0048759bc1ed8ca0f811f2bb.json",
+          "region": "us-east-1",
+          "assumeRoleArn": "arn:${AWS::Partition}:iam::816069129666:role/cdk-hnb659fds-file-publishing-role-816069129666-us-east-1"
+        }
+      }
+    }
+  },
+  "dockerImages": {}
+}

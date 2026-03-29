@@ -1084,6 +1084,83 @@
       border-radius: 3px;
       word-break: break-all;
     }
+
+    /* OAuth Login Modal */
+    .oauth-modal-backdrop {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+    }
+    .oauth-modal-card {
+      background: var(--bg-secondary, #1e1e2e);
+      border: 1px solid var(--border-color, #333);
+      border-radius: 12px;
+      padding: 32px;
+      max-width: 420px;
+      width: 90%;
+      text-align: center;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    }
+    .oauth-modal-card h3 {
+      margin: 0 0 12px 0;
+      font-size: 1.2rem;
+      color: var(--text-primary, #e0e0e0);
+    }
+    .oauth-modal-card p {
+      margin: 0 0 8px 0;
+      color: var(--text-secondary, #a0a0a0);
+      font-size: 0.9rem;
+    }
+    .oauth-modal-server {
+      font-family: monospace;
+      font-size: 0.85rem;
+      color: var(--accent-color, #ffcc00);
+      background: rgba(0, 0, 0, 0.3);
+      padding: 6px 10px;
+      border-radius: 6px;
+      word-break: break-all;
+      margin-bottom: 16px !important;
+    }
+    .oauth-sign-in-btn {
+      background: var(--accent-color, #4fc3f7);
+      color: #000;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 32px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .oauth-sign-in-btn:hover { opacity: 0.85; }
+    /* Auth status indicator */
+    .auth-status {
+      font-size: 0.75rem;
+      margin-left: 8px;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+    .auth-status-ok {
+      color: var(--success-color, #4caf50);
+    }
+    .auth-status-expired {
+      color: var(--error-color, #ff6b6b);
+    }
+    .relogin-btn {
+      background: transparent;
+      border: 1px solid var(--error-color, #ff6b6b);
+      color: var(--error-color, #ff6b6b);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-size: 0.7rem;
+      cursor: pointer;
+      margin-left: 4px;
+    }
+    .relogin-btn:hover { background: rgba(255, 107, 107, 0.15); }
   </style>
 </head>
 <body data-theme="light">
@@ -1560,6 +1637,222 @@
       }
     };
 
+    // =========================================================================
+    // OAuth Manager - Browser-side PKCE flow, login modal, auth status
+    // =========================================================================
+
+    class OAuthManager {
+      constructor(runtime) {
+        this.runtime = runtime;
+        this.codeVerifier = null;
+        this.oauthState = null;
+        this.oauthConfig = null;
+        this.popup = null;
+        this._boundCallback = (e) => this._handleCallback(e);
+        window.addEventListener('message', this._boundCallback);
+      }
+
+      /** Store OAuth config from /api/config response */
+      setConfig(oauthConfig) {
+        this.oauthConfig = oauthConfig;
+      }
+
+      /** Whether OAuth is configured for this session */
+      get isConfigured() {
+        return this.oauthConfig !== null;
+      }
+
+      /** Generate a PKCE code_verifier (43-128 char random string, base64url) */
+      _generateCodeVerifier() {
+        const array = new Uint8Array(32);
+        crypto.getRandomValues(array);
+        return btoa(String.fromCharCode(...array))
+          .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+      }
+
+      /** Generate PKCE code_challenge (SHA-256 of verifier, base64url) */
+      async _generateCodeChallenge(verifier) {
+        const data = new TextEncoder().encode(verifier);
+        const hash = await crypto.subtle.digest('SHA-256', data);
+        return btoa(String.fromCharCode(...new Uint8Array(hash)))
+          .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+      }
+
+      /** Start the OAuth login flow. MUST be called from a click handler (popup blocker). */
+      async startLogin() {
+        if (!this.oauthConfig) return;
+
+        this.codeVerifier = this._generateCodeVerifier();
+        const codeChallenge = await this._generateCodeChallenge(this.codeVerifier);
+        this.oauthState = this._generateCodeVerifier();
+        const state = this.oauthState;
+
+        const params = new URLSearchParams({
+          client_id: this.oauthConfig.client_id,
+          response_type: 'code',
+          redirect_uri: window.location.origin + '/api/auth/callback',
+          scope: this.oauthConfig.scopes.join(' '),
+          code_challenge: codeChallenge,
+          code_challenge_method: 'S256',
+          state: state,
+        });
+
+        const authUrl = this.oauthConfig.authorization_endpoint + '?' + params.toString();
+
+        const width = 600, height = 700;
+        const left = Math.round((screen.width - width) / 2);
+        const top = Math.round((screen.height - height) / 2);
+        this.popup = window.open(
+          authUrl, 'oauth-popup',
+          'width=' + width + ',height=' + height + ',left=' + left + ',top=' + top
+        );
+
+        if (!this.popup) {
+          this.runtime.logEvent('authError', { error: 'Popup blocked by browser. Allow popups for this site.' });
+        }
+      }
+
+      /** Handle postMessage from the popup callback page */
+      async _handleCallback(event) {
+        if (event.origin !== window.location.origin) return;
+        if (!event.data || event.data.type !== 'oauth-callback') return;
+
+        const code = event.data.code;
+        const error = event.data.error;
+        const state = event.data.state;
+        if (this.popup) { this.popup.close(); this.popup = null; }
+
+        // Validate CSRF state parameter
+        if (this.oauthState && state !== this.oauthState) {
+          this.runtime.logEvent('authError', { error: 'OAuth state mismatch — possible CSRF attack' });
+          this._hideLoginModal();
+          return;
+        }
+
+        if (error) {
+          this.runtime.logEvent('authError', { error: 'OAuth error: ' + error });
+          this._hideLoginModal();
+          return;
+        }
+
+        if (!code || !this.codeVerifier) {
+          this.runtime.logEvent('authError', { error: 'Missing authorization code or verifier' });
+          this._hideLoginModal();
+          return;
+        }
+
+        // Exchange code for token via the server
+        try {
+          const resp = await fetch('/api/auth/token-exchange', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              code: code,
+              code_verifier: this.codeVerifier,
+            }),
+          });
+          const result = await resp.json();
+
+          if (result.success) {
+            this.runtime.logEvent('authSuccess', { message: 'OAuth authentication successful' });
+            this._updateAuthStatus(true);
+            this._hideLoginModal();
+            // Retry session init now that we have a token
+            await this.runtime.initSession();
+          } else {
+            this.runtime.logEvent('authError', { error: result.error || 'Token exchange failed' });
+            this._hideLoginModal();
+          }
+        } catch (e) {
+          this.runtime.logEvent('authError', { error: 'Token exchange request failed: ' + e.message });
+          this._hideLoginModal();
+        }
+
+        this.codeVerifier = null;
+      }
+
+      /** Show the login modal overlay */
+      showLoginModal() {
+        let modal = document.getElementById('oauth-login-modal');
+        if (!modal) {
+          modal = document.createElement('div');
+          modal.id = 'oauth-login-modal';
+          modal.innerHTML =
+            '<div class="oauth-modal-backdrop">' +
+              '<div class="oauth-modal-card">' +
+                '<h3>Authentication Required</h3>' +
+                '<p>The MCP server requires OAuth authentication.</p>' +
+                '<p class="oauth-modal-server">' + (this.runtime.mcpUrl || '') + '</p>' +
+                '<button id="oauth-sign-in-btn" class="oauth-sign-in-btn">Sign In</button>' +
+              '</div>' +
+            '</div>';
+          document.body.appendChild(modal);
+          document.getElementById('oauth-sign-in-btn').addEventListener('click', () => {
+            this.startLogin();
+          });
+        }
+        modal.style.display = 'block';
+      }
+
+      /** Hide the login modal */
+      _hideLoginModal() {
+        const modal = document.getElementById('oauth-login-modal');
+        if (modal) modal.style.display = 'none';
+      }
+
+      /** Show the re-login prompt via the events panel */
+      showReloginPrompt() {
+        this.runtime.logEvent('authExpired', {
+          error: 'Authentication expired (401/403). Click Re-login to authenticate again.',
+          action: 'relogin'
+        });
+        this._updateAuthStatus(false);
+      }
+
+      /** Update the auth status indicator in the header */
+      _updateAuthStatus(authenticated) {
+        let indicator = document.getElementById('auth-status-indicator');
+        if (!indicator && this.isConfigured) {
+          const statusIndicator = document.querySelector('.status-indicator');
+          if (statusIndicator) {
+            indicator = document.createElement('span');
+            indicator.id = 'auth-status-indicator';
+            indicator.className = 'auth-status';
+            statusIndicator.appendChild(indicator);
+          }
+        }
+        if (indicator) {
+          if (authenticated) {
+            indicator.textContent = ' Authenticated';
+            indicator.className = 'auth-status auth-status-ok';
+          } else {
+            indicator.innerHTML = ' Auth expired <button class="relogin-btn" id="relogin-btn">Re-login</button>';
+            indicator.className = 'auth-status auth-status-expired';
+            const btn = document.getElementById('relogin-btn');
+            if (btn) btn.addEventListener('click', () => this.showLoginModal());
+          }
+        }
+      }
+
+      /** Check initial auth status and update indicator */
+      async checkInitialStatus() {
+        if (!this.isConfigured) return;
+        try {
+          const resp = await fetch('/api/auth/status');
+          const data = await resp.json();
+          if (data.authenticated) {
+            this._updateAuthStatus(true);
+          }
+        } catch (e) {
+          // Non-critical check; ignore errors
+        }
+      }
+
+      destroy() {
+        window.removeEventListener('message', this._boundCallback);
+      }
+    }
+
     // Preview Runtime
     class PreviewRuntime {
       constructor() {
@@ -1593,6 +1886,10 @@
 
         // Bridge diagnostics
         this.bridgeDiagnostics = new BridgeDiagnostics(this);
+
+        // OAuth manager
+        this.oauth = new OAuthManager(this);
+        this.config = null;
 
         // Environment
         this.theme = 'light';
@@ -1654,6 +1951,16 @@
 
           // Update Bridge diagnostics mode badge
           this.bridgeDiagnostics.updateMode(this.mode);
+
+          // Store full config for OAuth access
+          this.config = config;
+
+          // Set up OAuth if configured
+          if (config.oauth_config) {
+            this.oauth.setConfig(config.oauth_config);
+            // Check if we are already authenticated (e.g., via CLI --api-key)
+            await this.oauth.checkInitialStatus();
+          }
         } catch (e) {
           console.error('Failed to load config:', e);
         }
@@ -1665,6 +1972,13 @@
             fetch('/api/tools'),
             fetch('/api/resources')
           ]);
+
+          // Auth failure detection: if the MCP server returns 401/403 and OAuth
+          // is configured, show the login modal instead of continuing.
+          if ((toolsResponse.status === 401 || toolsResponse.status === 403) && this.oauth.isConfigured) {
+            this.oauth.showLoginModal();
+            return;
+          }
 
           const toolsData = await toolsResponse.json();
           const resourcesData = await resourcesResponse.json();
@@ -2268,6 +2582,12 @@
             })
           });
 
+          // Auth failure during session: show re-login prompt instead of parsing error
+          if ((response.status === 401 || response.status === 403) && this.oauth.isConfigured) {
+            this.oauth.showReloginPrompt();
+            return;
+          }
+
           const result = await response.json();
           const duration = Date.now() - startTime;
 
@@ -2746,12 +3066,41 @@ ${html}
         const time = new Date().toLocaleTimeString();
         const entry = document.createElement('div');
         entry.className = 'event-entry';
-        entry.innerHTML = `
-          <span class="event-time">${time}</span>
-          <span class="event-type">${type}</span>
-          ${Object.keys(data).length > 0 ? ` - ${JSON.stringify(data)}` : ''}
-        `;
-        container.appendChild(entry);
+
+        // Special rendering for auth events
+        if (type === 'authExpired' && data.action === 'relogin') {
+          entry.innerHTML = `
+            <span class="event-time">${time}</span>
+            <span class="event-type" style="color: var(--error-color)">${type}</span>
+            - ${data.error || 'Session expired'}
+            <button class="relogin-btn" style="margin-left: 8px">Re-login</button>
+          `;
+          container.appendChild(entry);
+          const btn = entry.querySelector('.relogin-btn');
+          if (btn) btn.addEventListener('click', () => this.oauth.showLoginModal());
+        } else if (type === 'authSuccess') {
+          entry.innerHTML = `
+            <span class="event-time">${time}</span>
+            <span class="event-type" style="color: var(--success-color)">${type}</span>
+            ${data.message ? ' - ' + data.message : ''}
+          `;
+          container.appendChild(entry);
+        } else if (type === 'authError') {
+          entry.innerHTML = `
+            <span class="event-time">${time}</span>
+            <span class="event-type" style="color: var(--error-color)">${type}</span>
+            ${data.error ? ' - ' + data.error : ''}
+          `;
+          container.appendChild(entry);
+        } else {
+          entry.innerHTML = `
+            <span class="event-time">${time}</span>
+            <span class="event-type">${type}</span>
+            ${Object.keys(data).length > 0 ? ` - ${JSON.stringify(data)}` : ''}
+          `;
+          container.appendChild(entry);
+        }
+
         container.scrollTop = container.scrollHeight;
       }
 

@@ -1,9 +1,10 @@
 ---
 phase: 44-improving-mcp-preview-to-support-chatgpt-version
-verified: 2026-03-08T23:45:00Z
-status: human_needed
+verified: 2026-03-28T05:00:00Z
+status: passed
 score: 14/14
-re_verification: false
+re_verification: true
+human_verified: 2026-03-28
 human_verification:
   - test: "Start MCP server with widgets, run cargo pmcp preview --url http://localhost:3000 --mode chatgpt --open"
     expected: "Terminal banner shows ChatGPT Strict mode, browser badge shows red ChatGPT Strict"

@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
-status: unknown
-stopped_at: Completed 55.1-02-PLAN.md
-last_updated: "2026-03-23T05:06:11.814Z"
+status: Milestone complete
+stopped_at: Completed 63-02-PLAN.md
+last_updated: "2026-03-28T19:34:01.787Z"
 progress:
-  total_phases: 37
-  completed_phases: 31
-  total_plans: 74
-  completed_plans: 72
+  total_phases: 40
+  completed_phases: 34
+  total_plans: 81
+  completed_plans: 81
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-03)
 
 **Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
-**Current focus:** Phase 55.1 — fix-mcp-tasks-support
+**Current focus:** Phase 63 — advanced-pentest-attack-modules
 
 ## Current Position
 
-Phase: 55.1 (fix-mcp-tasks-support) — EXECUTING
-Plan: 2 of 2
+Phase: 63
+Plan: Not started
 
 ## Shipped Milestones
 
@@ -171,6 +171,21 @@ v1.6 decisions:
 - [Phase 60]: Renamed shared console-time CSS class to event-time after Console removal to fix orphaned styling
 - [Phase 55.1]: ToolExecution stored as Option<ToolExecution> and cloned in metadata/info -- matches existing annotations pattern
 - [Phase 55.1]: ToolCallOutcome enum at module scope for bifurcated task/result dispatch; task detection requires declared taskSupport + task_store (shape alone insufficient per D-06)
+- [Phase 61]: Used McpRequestError enum (adapted from plan ForwardError) since forward_raw did not exist; all public McpProxy methods return McpRequestError for consistent auth error propagation
+- [Phase 61]: OAuthManager instantiated unconditionally; activates only when oauth_config is set
+- [Phase 61]: oauth_config constructed before resolve_auth_header for graceful CLI-to-browser fallback
+- [Phase 62]: Worktree lacks AuthFlags -- PentestCommand uses inline --api-key flag; SARIF fingerprints via SHA-256 of id:endpoint:severity
+- [Phase 62]: Skip content array in marker echo detection to reduce false positives from normal tool echo
+- [Phase 62]: Known meta keys allowlist (ui, ui/resourceUri, pmcp:outputTypeName, annotations) for TP-02 unexpected key detection
+- [Phase 63]: PentestProfile defaults to Quick (3 MCP-specific categories); explicit --category overrides profile selection
+- [Phase 63]: Deep fuzzing targets PI-01/PI-02 with 5 mutation functions (URL-encode, double-encode, base64, NFKC, case-swap)
+- [Phase 63]: Protocol abuse uses raw reqwest for malformed messages; data exfiltration probes both resources/read and tool URI arguments
+- [Phase 63]: Separated evaluate_cors_headers for testability; custom base64url instead of crate; AF-01/AF-02 destructive-gated
+
+### Roadmap Evolution
+
+- Phase 63 added: Advanced pentest attack modules — transport, auth, data exfiltration, protocol abuse, deep fuzzing, --profile quick/deep
+- [Phase 62]: Raw reqwest over ServerTester for session header manipulation; Shannon entropy threshold 3.0 bits; proptest select() over regex strategies
 
 ### Roadmap Evolution
 
@@ -198,6 +213,7 @@ v1.6 decisions:
 - Phase 60 added: Clean up mcp-preview side tabs
 - Phase 61 added: Add OAuth support to mcp-preview
 - Phase 55.1 inserted after Phase 55: Fix MCP Tasks support (URGENT)
+- Phase 62 added: MCP Pen Test — automated penetration testing for MCP endpoints (security attacks + general cyber attacks)
 
 ### Pending Todos
 
@@ -209,6 +225,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-23T05:06:11.810Z
-Stopped at: Completed 55.1-02-PLAN.md
+Last session: 2026-03-28T19:32:34.344Z
+Stopped at: Completed 63-02-PLAN.md
 Resume: Phase 57 complete. Both plans shipped: Plan 01 (19-scenario conformance engine with 5 domains) and Plan 02 (CLI integration -- mcp-tester conformance and cargo pmcp test conformance with --strict/--domain flags and per-domain CI summary).

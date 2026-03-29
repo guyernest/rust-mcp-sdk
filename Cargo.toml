@@ -1,6 +1,6 @@
 [package]
 name = "pmcp"
-version = "2.0.2"
+version = "2.0.3"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility"
@@ -131,8 +131,14 @@ tokio-util = { version = "0.7", features = ["rt"] }
 clap = { version = "4.5", features = ["derive"] }
 env_logger = "0.11"
 dashmap = "6.1"  # Already in main deps but needed for examples
-pmcp-tasks = { path = "crates/pmcp-tasks" }  # For task examples (60_tasks_*)
-pmcp-macros = { path = "pmcp-macros" }  # For macro examples (63_mcp_tool_macro)
+pmcp-tasks = { version = "0.1.0", path = "crates/pmcp-tasks" }  # For task examples (60_tasks_*)
+pmcp-macros = { version = "0.3.0", path = "pmcp-macros" }  # For macro examples (63_mcp_tool_macro)
+
+# For durable MCP agent example (65_durable_mcp_agent)
+lambda-durable-execution-rust = { version = "0.1.0", git = "https://github.com/guyernest/lambda-durable-execution-rust.git" }
+lambda_runtime = "1.0.1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 default = ["logging"]
@@ -423,6 +429,11 @@ required-features = ["full"]
 name = "64_mcp_prompt_macro"
 path = "examples/64_mcp_prompt_macro.rs"
 required-features = ["full"]
+
+[[example]]
+name = "65_durable_mcp_agent"
+path = "examples/65_durable_mcp_agent.rs"
+required-features = ["streamable-http"]
 
 [[bench]]
 name = "comprehensive_benchmarks"

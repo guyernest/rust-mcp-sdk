@@ -1,0 +1,229 @@
+{
+ "Description": "MCP Server: pmcp-server",
+ "Metadata": {
+  "mcp:version": "1.0",
+  "mcp:serverType": "custom",
+  "mcp:serverId": "pmcp-server",
+  "mcp:resources": {},
+  "mcp:capabilities": {
+   "resources": false,
+   "composition": false
+  }
+ },
+ "Resources": {
+  "McpFunctionServiceRoleF37F17FC": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "lambda.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "ManagedPolicyArns": [
+     {
+      "Fn::Join": [
+       "",
+       [
+        "arn:",
+        {
+         "Ref": "AWS::Partition"
+        },
+        ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+       ]
+      ]
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "pmcp-server-stack/McpFunction/ServiceRole/Resource"
+   }
+  },
+  "McpFunctionServiceRoleDefaultPolicy29310C43": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "xray:PutTraceSegments",
+        "xray:PutTelemetryRecords"
+       ],
+       "Effect": "Allow",
+       "Resource": "*"
+      },
+      {
+       "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:Query"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        "arn:aws:dynamodb:us-east-1:816069129666:table/McpServer",
+        "arn:aws:dynamodb:us-east-1:816069129666:table/McpServer/*"
+       ]
+      },
+      {
+       "Action": "lambda:InvokeFunction",
+       "Effect": "Allow",
+       "Resource": "arn:aws:lambda:us-east-1:816069129666:function:*"
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "McpFunctionServiceRoleDefaultPolicy29310C43",
+    "Roles": [
+     {
+      "Ref": "McpFunctionServiceRoleF37F17FC"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "pmcp-server-stack/McpFunction/ServiceRole/DefaultPolicy/Resource"
+   }
+  },
+  "McpFunctionF370A1F8": {
+   "Type": "AWS::Lambda::Function",
+   "Properties": {
+    "Architectures": [
+     "arm64"
+    ],
+    "Code": {
+     "S3Bucket": "cdk-hnb659fds-assets-816069129666-us-east-1",
+     "S3Key": "fd99753dd276155e0ba559cee51a11cd33711ed9bb580d4e297e2c833998c1de.zip"
+    },
+    "Environment": {
+     "Variables": {
+      "RUST_LOG": "info",
+      "PMCP_ORGANIZATION_ID": "default-org",
+      "PMCP_SERVER_ID": "pmcp-server",
+      "MCP_SERVERS_TABLE": "McpServer"
+     }
+    },
+    "FunctionName": "pmcp-server",
+    "Handler": "bootstrap",
+    "LoggingConfig": {
+     "LogFormat": "JSON"
+    },
+    "MemorySize": 256,
+    "Role": {
+     "Fn::GetAtt": [
+      "McpFunctionServiceRoleF37F17FC",
+      "Arn"
+     ]
+    },
+    "Runtime": "provided.al2023",
+    "Timeout": 30,
+    "TracingConfig": {
+     "Mode": "Active"
+    }
+   },
+   "DependsOn": [
+    "McpFunctionServiceRoleDefaultPolicy29310C43",
+    "McpFunctionServiceRoleF37F17FC"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "pmcp-server-stack/McpFunction/Resource",
+    "aws:asset:path": "asset.fd99753dd276155e0ba559cee51a11cd33711ed9bb580d4e297e2c833998c1de",
+    "aws:asset:is-bundled": false,
+    "aws:asset:property": "Code"
+   }
+  },
+  "LogGroupF5B46931": {
+   "Type": "AWS::Logs::LogGroup",
+   "Properties": {
+    "LogGroupName": {
+     "Fn::Join": [
+      "",
+      [
+       "/aws/lambda/",
+       {
+        "Ref": "McpFunctionF370A1F8"
+       }
+      ]
+     ]
+    },
+    "RetentionInDays": 7
+   },
+   "UpdateReplacePolicy": "Delete",
+   "DeletionPolicy": "Delete",
+   "Metadata": {
+    "aws:cdk:path": "pmcp-server-stack/LogGroup/Resource"
+   }
+  },
+  "CDKMetadata": {
+   "Type": "AWS::CDK::Metadata",
+   "Properties": {
+    "Analytics": "v2:deflate64:H4sIAAAAAAAA/zWOQQ6CMBBFz8K+jAgu3IqJbkw0eABSSiUjpSVMqzFN7y6FsHrv/8lPJof8UECW8C+lou1ThQ34p+WiZ3NVe8WHpuXgL04Li0az80tvHhjyAXxllIz1wodRKH4xrhYYFTUnkpbgFDFnKJ3opS05SaZMR+BvprtOxo1xt3kIbBnMz3Sou3i6Ozs6G5g2rYQ37T55BkfYJ29CTCenLQ4SqpV/2e9LjtkAAAA="
+   },
+   "Metadata": {
+    "aws:cdk:path": "pmcp-server-stack/CDKMetadata/Default"
+   }
+  }
+ },
+ "Outputs": {
+  "LambdaArn": {
+   "Description": "MCP Server Lambda ARN",
+   "Value": {
+    "Fn::GetAtt": [
+     "McpFunctionF370A1F8",
+     "Arn"
+    ]
+   }
+  },
+  "LambdaName": {
+   "Description": "MCP Server Lambda Name",
+   "Value": {
+    "Ref": "McpFunctionF370A1F8"
+   }
+  },
+  "ApiUrl": {
+   "Description": "MCP endpoint (construct from deployment ID)",
+   "Value": "https://api.pmcp.run/{use-deployment-id}/mcp"
+  },
+  "DashboardUrl": {
+   "Description": "CloudWatch Console",
+   "Value": "https://console.aws.amazon.com/cloudwatch/home?region=us-east-1"
+  }
+ },
+ "Parameters": {
+  "BootstrapVersion": {
+   "Type": "AWS::SSM::Parameter::Value<String>",
+   "Default": "/cdk-bootstrap/hnb659fds/version",
+   "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]"
+  }
+ },
+ "Rules": {
+  "CheckBootstrapVersion": {
+   "Assertions": [
+    {
+     "Assert": {
+      "Fn::Not": [
+       {
+        "Fn::Contains": [
+         [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5"
+         ],
+         {
+          "Ref": "BootstrapVersion"
+         }
+        ]
+       }
+      ]
+     },
+     "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+    }
+   ]
+  }
+ }
+}

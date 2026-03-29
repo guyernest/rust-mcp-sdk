@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>OAuth Callback</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+    }
+    .status {
+      text-align: center;
+      padding: 24px;
+    }
+    .status p { font-size: 1.1rem; }
+    .error { color: #ff6b6b; }
+  </style>
+</head>
+<body>
+  <div class="status">
+    <p id="message">Completing authentication...</p>
+  </div>
+  <script>
+    (function() {
+      var params = new URLSearchParams(window.location.search);
+      var code = params.get('code');
+      var state = params.get('state');
+      var error = params.get('error');
+      var errorDescription = params.get('error_description');
+      var msgEl = document.getElementById('message');
+
+      if (error) {
+        msgEl.textContent = 'Authentication failed: ' + (errorDescription || error);
+        msgEl.classList.add('error');
+        return;
+      }
+
+      if (!code) {
+        msgEl.textContent = 'No authorization code received.';
+        msgEl.classList.add('error');
+        return;
+      }
+
+      if (window.opener) {
+        window.opener.postMessage(
+          { type: 'oauth-callback', code: code, state: state },
+          window.location.origin
+        );
+        msgEl.textContent = 'Authentication complete. This window will close.';
+        setTimeout(function() { window.close(); }, 1500);
+      } else {
+        msgEl.textContent = 'Could not communicate with the parent window.';
+        msgEl.classList.add('error');
+      }
+    })();
+  </script>
+</body>
+</html>

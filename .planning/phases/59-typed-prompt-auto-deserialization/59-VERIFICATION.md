@@ -1,20 +1,11 @@
 ---
 phase: 59-typed-prompt-auto-deserialization
-verified: 2026-03-21T21:25:54Z
-status: gaps_found
-score: 9/10 must-haves verified
-re_verification: false
-gaps:
-  - truth: "Example 64 demonstrates #[mcp_prompt] standalone and #[mcp_server] mixed tools+prompts"
-    status: partial
-    reason: "examples/64_mcp_prompt_macro.rs exists and compiles with --features full, but no [[example]] entry with required-features = [\"full\"] exists in Cargo.toml. Without the entry, cargo cannot auto-apply the feature flag and `cargo run --example 64_mcp_prompt_macro` fails with unresolved schemars errors."
-    artifacts:
-      - path: "examples/64_mcp_prompt_macro.rs"
-        issue: "File exists and is substantive, but Cargo.toml has no [[example]] entry with required-features"
-      - path: "Cargo.toml"
-        issue: "Missing [[example]] name = \"64_mcp_prompt_macro\" with required-features = [\"full\"]"
-    missing:
-      - "Add [[example]] block to Cargo.toml: name = \"64_mcp_prompt_macro\", path = \"examples/64_mcp_prompt_macro.rs\", required-features = [\"full\"]"
+verified: 2026-03-28T04:45:00Z
+status: passed
+score: 10/10 must-haves verified
+re_verification: true
+re_verification_reason: "Gap resolved — [[example]] entry for 64_mcp_prompt_macro added to Cargo.toml with required-features = [\"full\"]"
+gaps: []
 ---
 
 # Phase 59: TypedPrompt with Auto-Deserialization Verification Report

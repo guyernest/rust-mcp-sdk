@@ -13,6 +13,7 @@ Production-grade MCP server development toolkit.
 - **Client Connection** - One-command setup for Claude Code, Cursor, and MCP Inspector
 - **Automated Testing** - Generate and run scenario-based tests from server capabilities
 - **Load Testing** - Stress-test with concurrent virtual users, latency histograms, and CI/CD reports
+- **Security Pentesting** - 32 attack checks across 7 categories with SARIF output for GitHub Security tab
 - **Schema Management** - Export, validate, and diff schemas from live MCP servers
 - **Workflow Validation** - Catch structural errors in workflows before runtime
 - **MCP Apps** - Scaffold widget projects, generate ChatGPT manifests, and build landing pages
@@ -21,6 +22,7 @@ Production-grade MCP server development toolkit.
 - **Secrets Management** - Multi-provider secret storage (local, pmcp.run, AWS Secrets Manager)
 - **OAuth Authentication** - Production-ready OAuth 2.0 with AWS Cognito, Dynamic Client Registration, and SSO
 - **Landing Pages** - Create, develop, and deploy landing pages for server discovery
+- **Workspace Diagnostics** - Validate project structure, toolchain, and server connectivity
 
 ## Installation
 
@@ -78,7 +80,26 @@ cargo pmcp loadtest init https://my-server.example.com
 cargo pmcp loadtest run https://my-server.example.com --vus 20 --duration 60
 ```
 
-### 6. Deploy
+### 6. Security pentest
+
+```bash
+# Quick scan — MCP-specific checks (prompt injection, tool poisoning, session security)
+cargo pmcp pentest http://localhost:3000
+
+# Deep scan — all 7 categories including transport, auth, exfiltration, protocol abuse
+cargo pmcp pentest http://localhost:3000 --profile deep
+
+# SARIF output for GitHub Security tab
+cargo pmcp pentest http://localhost:3000 --profile deep --format sarif -o results.sarif
+
+# Filter to specific categories
+cargo pmcp pentest http://localhost:3000 --category pi,tp,ss
+
+# CI gate — fail on medium or higher findings
+cargo pmcp pentest http://localhost:3000 --fail-on medium
+```
+
+### 7. Deploy
 
 ```bash
 # Initialize for AWS Lambda with OAuth
@@ -88,7 +109,7 @@ cargo pmcp deploy init --target aws-lambda --oauth cognito
 cargo pmcp deploy --target aws-lambda
 ```
 
-### 7. Monitor
+### 8. Monitor
 
 ```bash
 cargo pmcp deploy logs --tail
@@ -106,6 +127,8 @@ cargo pmcp deploy test --verbose
 | `connect` | Connect server to Claude Code, Cursor, or Inspector | [docs/commands/connect.md](docs/commands/connect.md) |
 | `test` | Run, generate, upload, and download test scenarios | [docs/commands/test.md](docs/commands/test.md) |
 | `loadtest` | Load test with virtual users and performance reports | [docs/commands/loadtest.md](docs/commands/loadtest.md) |
+| `pentest` | Security penetration testing with 32 checks across 7 categories | [src/pentest/README.md](src/pentest/README.md) |
+| `doctor` | Workspace diagnostics — toolchain, dependencies, connectivity | |
 | `schema` | Export, validate, and diff MCP server schemas | [docs/commands/schema.md](docs/commands/schema.md) |
 | `validate` | Validate workflows and server components | [docs/commands/validate.md](docs/commands/validate.md) |
 | `deploy` | Deploy to AWS Lambda, Cloud Run, Workers, pmcp.run | [docs/commands/deploy.md](docs/commands/deploy.md) |

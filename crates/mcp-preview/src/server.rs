@@ -16,6 +16,23 @@ use crate::handlers;
 use crate::proxy::McpProxy;
 use crate::wasm_builder::{find_workspace_root, WasmBuilder};
 
+/// OAuth configuration for browser-based PKCE flow.
+///
+/// When present, the preview server exposes `/api/auth/*` endpoints and
+/// includes this config in the `/api/config` response so the browser JS
+/// can initiate the OAuth popup flow.
+#[derive(Debug, Clone, Default)]
+pub struct OAuthPreviewConfig {
+    /// OAuth client ID for the preview app.
+    pub client_id: String,
+    /// Authorization endpoint URL (for user login redirect).
+    pub authorization_endpoint: String,
+    /// Token endpoint URL (for code-to-token exchange).
+    pub token_endpoint: String,
+    /// Requested OAuth scopes.
+    pub scopes: Vec<String>,
+}
+
 /// Preview mode controlling protocol validation strictness
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum PreviewMode {
@@ -62,6 +79,8 @@ pub struct PreviewConfig {
     /// When set, the proxy attaches this header to every outbound request
     /// to the target MCP server.
     pub auth_header: Option<String>,
+    /// OAuth configuration for browser-based PKCE flow (None = no browser OAuth).
+    pub oauth_config: Option<OAuthPreviewConfig>,
 }
 
 impl Default for PreviewConfig {
@@ -75,6 +94,7 @@ impl Default for PreviewConfig {
             widgets_dir: None,
             mode: PreviewMode::default(),
             auth_header: None,
+            oauth_config: None,
         }
     }
 }
@@ -136,6 +156,10 @@ impl PreviewServer {
             .route("/wasm/{*path}", get(handlers::wasm::serve_artifact))
             // Static assets
             .route("/assets/{*path}", get(handlers::assets::serve))
+            // API endpoints - OAuth
+            .route("/api/auth/token-exchange", post(handlers::auth::token_exchange))
+            .route("/api/auth/callback", get(handlers::auth::callback))
+            .route("/api/auth/status", get(handlers::auth::status))
             // WebSocket for live updates
             .route("/ws", get(handlers::websocket::handler))
             .layer(cors)

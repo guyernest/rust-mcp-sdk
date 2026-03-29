@@ -19,12 +19,13 @@
 )]
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use std::io::IsTerminal;
 
 mod commands;
 mod deployment;
 mod landing;
+mod pentest;
 mod publishing;
 mod secrets;
 mod templates;
@@ -39,6 +40,15 @@ use commands::GlobalFlags;
 #[command(bin_name = "cargo pmcp")]
 #[command(about = "Build production-ready MCP servers in Rust", long_about = None)]
 #[command(version)]
+#[command(after_long_help = "\x1b[1mExamples:\x1b[0m
+  cargo pmcp new my-project          Create a new MCP workspace
+  cargo pmcp dev --server my-server  Start development server
+  cargo pmcp test check <url>        Quick server health check
+  cargo pmcp test conformance <url>  Run MCP protocol conformance tests
+  cargo pmcp pentest <url>           Security penetration testing
+  cargo pmcp preview <url>           Preview MCP Apps in browser
+  cargo pmcp doctor                  Diagnose workspace health
+  cargo pmcp completions zsh         Generate shell completions")]
 struct Cli {
     /// Enable verbose output for debugging
     #[arg(long, short, global = true)]
@@ -63,6 +73,9 @@ enum Commands {
     /// This creates a workspace with server-common template and scaffolding
     /// for building multiple MCP servers. The workspace pattern allows sharing
     /// common code (like HTTP bootstrap) across all servers.
+    #[command(after_long_help = "Examples:
+  cargo pmcp new my-project
+  cargo pmcp new my-project --path /tmp")]
     New {
         /// Name of the workspace to create
         name: String,
@@ -83,6 +96,11 @@ enum Commands {
     /// Test MCP servers with mcp-tester
     ///
     /// Run tests locally, generate scenarios, or manage scenarios on pmcp.run
+    #[command(after_long_help = "Examples:
+  cargo pmcp test check http://localhost:3000
+  cargo pmcp test conformance http://localhost:3000 --strict
+  cargo pmcp test apps http://localhost:3000 --mode chatgpt
+  cargo pmcp test run --server my-server")]
     Test {
         #[command(subcommand)]
         command: commands::test::TestCommand,
@@ -91,6 +109,10 @@ enum Commands {
     /// Start development server
     ///
     /// Builds and runs the server with live logs
+    #[command(after_long_help = "Examples:
+  cargo pmcp dev --server my-server
+  cargo pmcp dev --server my-server --port 8080
+  cargo pmcp dev --server my-server --connect claude-code")]
     Dev {
         /// Name of the server to run
         #[arg(long)]
@@ -108,6 +130,10 @@ enum Commands {
     /// Connect server to an MCP client
     ///
     /// Helps configure connection to Claude Code, Cursor, or MCP Inspector
+    #[command(after_long_help = "Examples:
+  cargo pmcp connect --server my-server --client claude-code
+  cargo pmcp connect --server my-server --client cursor
+  cargo pmcp connect --server my-server --client inspector")]
     Connect {
         /// Name of the server
         #[arg(long)]
@@ -166,6 +192,9 @@ enum Commands {
     /// Run load tests against MCP servers
     ///
     /// Execute load tests with configurable virtual users, scenarios, and reports.
+    #[command(after_long_help = "Examples:
+  cargo pmcp loadtest run http://localhost:3000 --users 10 --duration 30
+  cargo pmcp loadtest run http://localhost:3000 --format json -o report.json")]
     Loadtest {
         #[command(subcommand)]
         command: commands::loadtest::LoadtestCommand,
@@ -179,10 +208,47 @@ enum Commands {
         command: commands::app::AppCommand,
     },
 
+    /// Diagnose workspace and server health
+    ///
+    /// Validates project structure (Cargo.toml, pmcp dependency), Rust toolchain,
+    /// development tools (rustfmt, clippy), and optionally tests MCP server connectivity.
+    #[command(after_long_help = "Examples:
+  cargo pmcp doctor
+  cargo pmcp doctor http://localhost:3000")]
+    Doctor {
+        /// Optional MCP server URL to test connectivity
+        url: Option<String>,
+    },
+
+    /// Generate shell completions
+    ///
+    /// Outputs shell completion scripts for bash, zsh, fish, or powershell.
+    /// Pipe to a file or source directly in your shell config.
+    #[command(after_long_help = "Examples:
+  cargo pmcp completions zsh > ~/.zfunc/_cargo-pmcp
+  cargo pmcp completions bash > /etc/bash_completion.d/cargo-pmcp
+  cargo pmcp completions fish > ~/.config/fish/completions/cargo-pmcp.fish")]
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
+
+    /// Run security penetration tests against MCP servers
+    ///
+    /// Probes MCP endpoints for protocol-specific vulnerabilities: prompt injection,
+    /// tool poisoning, and session security issues. Reports findings with severity
+    /// levels in text, JSON, or SARIF format.
+    Pentest(commands::pentest::PentestCommand),
+
     /// Preview MCP Apps widgets in browser
     ///
     /// Launch a browser-based preview environment for testing MCP servers
     /// that return widget UI. Simulates the ChatGPT Apps runtime.
+    #[command(after_long_help = "Examples:
+  cargo pmcp preview http://localhost:3000 --open
+  cargo pmcp preview http://localhost:3000 --mode chatgpt --open
+  cargo pmcp preview http://localhost:3000 --widgets-dir ./widgets")]
     Preview {
         /// URL of the running MCP server
         url: String,
@@ -383,6 +449,16 @@ fn execute_command(command: Commands, global_flags: &GlobalFlags) -> Result<()> 
         },
         Commands::App { command } => {
             command.execute(global_flags)?;
+        },
+        Commands::Doctor { url } => {
+            commands::doctor::execute(url.as_deref(), global_flags)?;
+        },
+        Commands::Completions { shell } => {
+            let mut cmd = Cli::command();
+            clap_complete::generate(shell, &mut cmd, "cargo pmcp", &mut std::io::stdout());
+        },
+        Commands::Pentest(pentest_cmd) => {
+            pentest_cmd.execute(global_flags)?;
         },
         Commands::Preview {
             url,

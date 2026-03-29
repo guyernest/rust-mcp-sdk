@@ -118,30 +118,32 @@ impl BinaryBuilder {
         // Load config to get server name
         let config = crate::deployment::config::DeployConfig::load(&self.project_root)?;
 
-        // Find the actual Lambda package in the workspace
-        // First try {server_name}-lambda, then look for any *-lambda package with bootstrap binary
-        let lambda_package = self.find_lambda_package(&config.server.name)?;
+        // Use cargo lambda build with --arm64 for cross-compilation.
+        // ARM64 is cheaper and faster on Lambda than x86_64.
+        //
+        // We cd into the lambda package directory and run without --package/--bin
+        // to ensure cargo-lambda configures Zig wrappers correctly for build scripts.
+        //
+        // Three env vars fix Zig 0.15+ cross-compilation of C dependencies:
+        // - AWS_LC_SYS_CMAKE_BUILDER=1: aws-lc-sys uses cmake (not cc crate)
+        // - AWS_LC_SYS_NO_JITTER_ENTROPY=1: skip jitterentropy (Zig rejects -U flag)
+        // - CC_aarch64_unknown_linux_gnu=zigcc wrapper: ring's cc crate uses the
+        //   wrapper which handles the --target triple Zig can't parse
+        let lambda_pkg_dir = self.find_lambda_package_dir(&config.server.name)?;
 
-        // AWS Lambda Custom Runtime requires the binary to be named "bootstrap"
-        let lambda_binary = "bootstrap";
-
-        // Use cargo lambda build - it handles all cross-compilation
-        // ARM64 is cheaper and faster on Lambda than x86_64
         let status = Command::new("cargo")
-            .args(&[
-                "lambda",
-                "build",
-                "--release",
-                "--package",
-                &lambda_package,
-                "--bin",
-                lambda_binary,
-                "--output-format",
-                "binary",
-                "--target",
-                "aarch64-unknown-linux-gnu",
-            ])
-            .current_dir(&self.project_root)
+            .args(["lambda", "build", "--release", "--arm64"])
+            .current_dir(&lambda_pkg_dir)
+            // Force aws-lc-sys to use cmake builder (bypasses cc crate target conflict)
+            .env("AWS_LC_SYS_CMAKE_BUILDER", "1")
+            // Disable jitter entropy: Zig rejects -U_FORTIFY_SOURCE preprocessor flag
+            // that cmake adds. Lambda uses OS-provided entropy, not CPU jitter.
+            .env("AWS_LC_SYS_NO_JITTER_ENTROPY", "1")
+            // Set CC to cargo-lambda's zigcc wrapper for ring and other cc-crate
+            // based builds. The cc crate appends --target=aarch64-unknown-linux-gnu
+            // which bare zig rejects (UnknownOperatingSystem), but the zigcc wrapper
+            // handles it by routing through `cargo-lambda zig cc` first.
+            .envs(Self::find_zigcc_env_vars())
             .status()
             .context("Failed to run cargo lambda build")?;
 
@@ -248,6 +250,103 @@ impl BinaryBuilder {
 
     /// Find the Lambda wrapper package in the workspace.
     /// First tries {server_name}-lambda, then looks for any *-lambda package with bootstrap binary.
+    /// Find the directory of the Lambda package for cd-based builds.
+    ///
+    /// Returns the absolute path to the Lambda package directory.
+    /// Find cargo-zigbuild's zigcc wrapper script and return CC/AR env vars.
+    ///
+    /// cargo-lambda caches zigcc wrappers in ~/Library/Caches/cargo-zigbuild/
+    /// (macOS) or ~/.cache/cargo-zigbuild/ (Linux). The wrapper correctly
+    /// handles the cc crate's --target flag that bare zig rejects.
+    fn find_zigcc_env_vars() -> Vec<(String, String)> {
+        let mut vars = Vec::new();
+
+        // dirs::cache_dir() resolves to ~/Library/Caches (macOS) or ~/.cache (Linux)
+        let cache_dirs: Vec<PathBuf> = dirs::cache_dir()
+            .map(|d| vec![d.join("cargo-zigbuild")])
+            .unwrap_or_default();
+
+        for cache_base in &cache_dirs {
+            if !cache_base.exists() {
+                continue;
+            }
+            // Find the most recent version directory
+            if let Ok(entries) = std::fs::read_dir(cache_base) {
+                let mut versions: Vec<_> = entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_dir())
+                    .collect();
+                versions.sort_by_key(|e| e.file_name());
+
+                if let Some(version_dir) = versions.last() {
+                    let dir = version_dir.path();
+                    // Find zigcc-aarch64-unknown-linux-gnu-*.sh
+                    if let Ok(files) = std::fs::read_dir(&dir) {
+                        for file in files.filter_map(|f| f.ok()) {
+                            let name = file.file_name().to_string_lossy().to_string();
+                            if name.starts_with("zigcc-aarch64-unknown-linux-gnu-")
+                                && name.ends_with(".sh")
+                            {
+                                vars.push((
+                                    "CC_aarch64_unknown_linux_gnu".to_string(),
+                                    file.path().to_string_lossy().to_string(),
+                                ));
+                            }
+                        }
+                    }
+                    // AR is just the plain 'ar' in the same directory
+                    let ar = dir.join("ar");
+                    if ar.exists() {
+                        vars.push((
+                            "AR_aarch64_unknown_linux_gnu".to_string(),
+                            ar.to_string_lossy().to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        vars
+    }
+
+    fn find_lambda_package_dir(&self, server_name: &str) -> Result<PathBuf> {
+        let preferred_package = format!("{}-lambda", server_name);
+
+        // Check if the preferred package exists as a direct subdirectory
+        let preferred_dir = self.project_root.join(&preferred_package);
+        if preferred_dir.exists() && preferred_dir.join("Cargo.toml").exists() {
+            return Ok(preferred_dir);
+        }
+
+        // Search workspace members for *-lambda packages
+        let binaries = crate::deployment::naming::detect_workspace_binaries(&self.project_root)?;
+
+        for binary in &binaries {
+            if binary.binary_name == "bootstrap" && binary.package_name.ends_with("-lambda") {
+                // Find the Cargo.toml for this package using cargo_metadata
+                let metadata = cargo_metadata::MetadataCommand::new()
+                    .current_dir(&self.project_root)
+                    .exec()
+                    .context("Failed to read workspace metadata")?;
+
+                if let Some(pkg) = metadata
+                    .packages
+                    .iter()
+                    .find(|p| p.name == binary.package_name)
+                {
+                    let pkg_dir = pkg.manifest_path.parent().expect("manifest has parent");
+                    return Ok(pkg_dir.into());
+                }
+            }
+        }
+
+        bail!(
+            "No Lambda wrapper package found. Expected '{}' or any '*-lambda' package with 'bootstrap' binary.\n\
+             Run 'cargo pmcp deploy init --target pmcp-run' to create one.",
+            preferred_package
+        );
+    }
+
     fn find_lambda_package(&self, server_name: &str) -> Result<String> {
         let preferred_package = format!("{}-lambda", server_name);
 
