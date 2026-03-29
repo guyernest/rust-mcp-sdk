@@ -337,6 +337,7 @@ async fn agent_handler(event: AgentInput, ctx: DurableContextHandle) -> DurableR
 /// 1. Call the Anthropic API via a durable step (with retry).
 /// 2. If the response contains tool_use blocks, execute them via durable map.
 /// 3. Return the LLM response, extracted tool calls, and any tool results.
+#[allow(clippy::too_many_arguments)]
 async fn execute_iteration(
     ctx: &DurableContextHandle,
     http_client: &reqwest::Client,

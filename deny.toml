@@ -59,23 +59,32 @@ skip = [
     # Allow multiple windows-targets versions
     { name = "windows-targets", version = "=0.42.2" },
     { name = "windows-targets", version = "=0.52.6" },
+    { name = "windows-targets", version = "=0.53.5" },
 
-    # Allow multiple windows_* crate versions (0.42.2 from jni, 0.52.6 from older deps)
+    # Allow multiple windows_* crate versions (0.42.2 from jni, 0.52.6/0.53.1 from ecosystem)
     { name = "windows_aarch64_gnullvm", version = "=0.42.2" },
     { name = "windows_aarch64_gnullvm", version = "=0.52.6" },
+    { name = "windows_aarch64_gnullvm", version = "=0.53.1" },
     { name = "windows_aarch64_msvc", version = "=0.42.2" },
     { name = "windows_aarch64_msvc", version = "=0.52.6" },
+    { name = "windows_aarch64_msvc", version = "=0.53.1" },
     { name = "windows_i686_gnu", version = "=0.42.2" },
     { name = "windows_i686_gnu", version = "=0.52.6" },
+    { name = "windows_i686_gnu", version = "=0.53.1" },
     { name = "windows_i686_gnullvm", version = "=0.52.6" },
+    { name = "windows_i686_gnullvm", version = "=0.53.1" },
     { name = "windows_i686_msvc", version = "=0.42.2" },
     { name = "windows_i686_msvc", version = "=0.52.6" },
+    { name = "windows_i686_msvc", version = "=0.53.1" },
     { name = "windows_x86_64_gnu", version = "=0.42.2" },
     { name = "windows_x86_64_gnu", version = "=0.52.6" },
+    { name = "windows_x86_64_gnu", version = "=0.53.1" },
     { name = "windows_x86_64_gnullvm", version = "=0.42.2" },
     { name = "windows_x86_64_gnullvm", version = "=0.52.6" },
+    { name = "windows_x86_64_gnullvm", version = "=0.53.1" },
     { name = "windows_x86_64_msvc", version = "=0.42.2" },
     { name = "windows_x86_64_msvc", version = "=0.52.6" },
+    { name = "windows_x86_64_msvc", version = "=0.53.1" },
 ]
 skip-tree = []
 
@@ -83,4 +92,7 @@ skip-tree = []
 unknown-registry = "warn"
 unknown-git = "warn"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+allow-git = [
+    # Durable execution framework for Lambda (pre-crates.io, will be replaced with published crate)
+    "https://github.com/guyernest/lambda-durable-execution-rust.git",
+]
