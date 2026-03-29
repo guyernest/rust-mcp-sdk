@@ -1,67 +1,63 @@
-# Configuration for cargo-deny
-# https://github.com/EmbarkStudios/cargo-deny
+# cargo-deny configuration
+# Deployed from paiml/infra — do not edit manually.
+# Spec: docs/specifications/unified-ci-pipeline.md
 
 [graph]
 targets = []
+all-features = false
+no-default-features = false
 
 [advisories]
-version = 2
-db-path = "~/.cargo/advisory-db"
-db-urls = ["https://github.com/rustsec/advisory-db"]
-yanked = "warn"
-ignore = []
+ignore = [
+    # Unmaintained transitive deps with no available fix.
+    # Reviewed 2026-03-26 — all are deep transitive, no direct usage.
+    { id = "RUSTSEC-2024-0384", reason = "instant: transitive via web-time, no replacement available" },
+    { id = "RUSTSEC-2024-0436", reason = "paste: transitive via simba/nalgebra/parquet, use pastey when upstream migrates" },
+    { id = "RUSTSEC-2025-0119", reason = "number_prefix: transitive via indicatif, no replacement available" },
+    { id = "RUSTSEC-2025-0141", reason = "bincode: transitive, widely used, no drop-in replacement" },
+    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile: transitive, no safe upgrade available" },
+    { id = "RUSTSEC-2026-0002", reason = "lru 0.12.5: transitive via ratatui, fixed in 0.16 but ratatui pins 0.12" },
+]
 
 [licenses]
-version = 2
 allow = [
     "MIT",
-    "MIT-0",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
-    "Unicode-DFS-2016",
     "Unicode-3.0",
-    "CC0-1.0",
-    "CDLA-Permissive-2.0",
+    "Unicode-DFS-2016",
     "Zlib",
-    "MPL-2.0",
+    "BSL-1.0",
     "OpenSSL",
+    "0BSD",
+    "CC0-1.0",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+    "MIT-0",
 ]
 confidence-threshold = 0.8
-exceptions = []
 
 [bans]
 multiple-versions = "warn"
-wildcards = "allow"
+wildcards = "deny"
 highlight = "all"
-allow = []
-deny = []
 skip = [
-    # Allow multiple getrandom versions during transition period
-    # v0.2.x is used by ring/rustls (not yet updated to v0.3)
-    # v0.3.x is our direct dependency for WASM support
+    # Allow multiple getrandom versions (v0.2 from ring/rustls, v0.4 direct)
     { name = "getrandom", version = "=0.2" },
-
     # Allow multiple hashbrown versions during indexmap transition
-    # v0.14.5 is used by older dependencies
-    # v0.16.1 is used by updated indexmap v2.12.1
     { name = "hashbrown", version = "=0.14.5" },
-
     # Allow multiple windows-sys versions during ecosystem transition
-    # Various versions used by different Windows dependencies
-    { name = "windows-sys", version = "=0.52.0" },
-    # windows-sys 0.45.0 used by jni (via rustls-platform-verifier in reqwest 0.13)
     { name = "windows-sys", version = "=0.45.0" },
+    { name = "windows-sys", version = "=0.52.0" },
     { name = "windows-sys", version = "=0.60.2" },
-
     # Allow multiple windows-targets versions
     { name = "windows-targets", version = "=0.42.2" },
     { name = "windows-targets", version = "=0.52.6" },
     { name = "windows-targets", version = "=0.53.5" },
-
-    # Allow multiple windows_* crate versions (0.42.2 from jni, 0.52.6/0.53.1 from ecosystem)
+    # Allow multiple windows_* platform crate versions (0.42.2/0.52.6/0.53.1)
     { name = "windows_aarch64_gnullvm", version = "=0.42.2" },
     { name = "windows_aarch64_gnullvm", version = "=0.52.6" },
     { name = "windows_aarch64_gnullvm", version = "=0.53.1" },
@@ -86,13 +82,15 @@ skip = [
     { name = "windows_x86_64_msvc", version = "=0.52.6" },
     { name = "windows_x86_64_msvc", version = "=0.53.1" },
 ]
-skip-tree = []
 
 [sources]
-unknown-registry = "warn"
-unknown-git = "warn"
+unknown-registry = "deny"
+unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
     # Durable execution framework for Lambda (pre-crates.io, will be replaced with published crate)
     "https://github.com/guyernest/lambda-durable-execution-rust.git",
 ]
+
+[sources.allow-org]
+github = ["paiml"]
