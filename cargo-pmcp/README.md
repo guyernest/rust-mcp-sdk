@@ -176,6 +176,69 @@ audience = "your-app-client-id"
 
 For detailed OAuth architecture, see [docs/oauth-design.md](docs/oauth-design.md) and [docs/oauth-sdk-design.md](docs/oauth-sdk-design.md).
 
+## Secrets Management
+
+Secrets are environment variables that your MCP server needs at runtime. They are resolved at deploy time from `.env` files and shell environment variables, then injected into the deployment target.
+
+### Local Development
+
+Create a `.env` file in your project root with `KEY=VALUE` pairs:
+
+```text
+ANTHROPIC_API_KEY=sk-ant-...
+DATABASE_URL=postgresql://localhost/mydb
+ANALYTICS_KEY=ua-12345
+```
+
+`cargo pmcp dev <server>` automatically loads `.env` into the server process. Shell environment variables take precedence over `.env` values when both define the same key.
+
+### Declaring Secrets
+
+Declare required secrets in `pmcp.toml` so the deploy pipeline knows what to resolve:
+
+```toml
+[[secrets.definitions]]
+name = "ANTHROPIC_API_KEY"
+description = "Anthropic API key for LLM calls"
+required = true
+env_var = "ANTHROPIC_API_KEY"
+obtain_url = "https://console.anthropic.com/settings/keys"
+```
+
+### Deployment Integration
+
+`cargo pmcp deploy` resolves secrets from your environment and `.env` file, then reports which are found and which are missing:
+
+- **AWS Lambda:** Resolved secrets are injected as Lambda environment variables. Missing secrets produce a warning but do not block deployment.
+- **pmcp.run:** The CLI performs a diagnostic check only -- secrets are never sent from your machine. For missing secrets, it shows the exact `cargo pmcp secret set` command to store each secret in pmcp.run's managed Secrets Manager. Actual env var injection happens server-side.
+
+Missing secrets are warnings, not deployment blockers.
+
+### Runtime Access
+
+Server code reads secrets via the `pmcp::secrets` module:
+
+```rust
+use pmcp::secrets;
+
+// Optional secret
+if let Some(key) = secrets::get("ANALYTICS_KEY") {
+    configure_analytics(&key);
+}
+
+// Required secret (returns actionable error if missing)
+let api_key = secrets::require("ANTHROPIC_API_KEY")?;
+```
+
+The `require()` function returns an error message that includes the exact `cargo pmcp secret set` command to fix it.
+
+### Secret Providers
+
+| Provider | Storage | Commands |
+|----------|---------|----------|
+| Local | File-based at `.pmcp/secrets/` | `cargo pmcp secret list`, `set`, `get` |
+| pmcp.run | Managed Secrets Manager | `cargo pmcp secret set --target pmcp` |
+
 ## CI/CD Integration
 
 `cargo-pmcp` supports OAuth 2.0 client credentials flow for automated deployments.
