@@ -136,5 +136,4 @@ mod tests {
         assert_eq!(executor.extra_env["SECRET_A"], "val_a");
         assert_eq!(executor.extra_env["SECRET_B"], "val_b");
     }
-
 }

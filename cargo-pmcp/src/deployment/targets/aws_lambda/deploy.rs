@@ -16,8 +16,9 @@ pub async fn deploy_aws_lambda(
     println!();
 
     // Use the existing DeployExecutor with transient secret env vars
-    let executor = crate::commands::deploy::deploy::DeployExecutor::new(config.project_root.clone())
-        .with_extra_env(extra_env);
+    let executor =
+        crate::commands::deploy::deploy::DeployExecutor::new(config.project_root.clone())
+            .with_extra_env(extra_env);
     executor.execute()?;
 
     // Load and return outputs

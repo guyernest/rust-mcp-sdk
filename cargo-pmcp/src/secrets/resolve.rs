@@ -70,7 +70,7 @@ pub fn load_dotenv(project_root: &Path) -> HashMap<String, String> {
                 eprintln!("Warning: Failed to parse .env file: {e}");
             }
             HashMap::new()
-        }
+        },
     }
 }
 
@@ -119,17 +119,17 @@ pub fn print_secret_report(
                         env_name,
                         required_marker,
                     );
-                }
+                },
                 "pmcp-run" => {
                     println!("     {} {}{}", "✗".yellow(), env_name, required_marker);
                     println!(
                         "       Run: cargo pmcp secret set --server {} {} --target pmcp --prompt",
                         server_id, env_name,
                     );
-                }
+                },
                 _ => {
                     println!("     {} {}{}", "✗".yellow(), env_name, required_marker);
-                }
+                },
             }
         }
     }
@@ -205,8 +205,7 @@ mod tests {
         }
 
         let reqs = vec![req(unique_key, None, true)];
-        let dotenv: HashMap<String, String> =
-            [(unique_key.into(), "from_dotenv".into())].into();
+        let dotenv: HashMap<String, String> = [(unique_key.into(), "from_dotenv".into())].into();
 
         let res = resolve_secrets(&reqs, &dotenv);
 
