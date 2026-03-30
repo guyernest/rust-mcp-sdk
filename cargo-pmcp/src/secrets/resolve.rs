@@ -15,7 +15,6 @@ use std::path::Path;
 
 use colored::Colorize;
 
-use crate::commands::GlobalFlags;
 use crate::deployment::metadata::SecretRequirement;
 
 /// Result of resolving secrets from environment and `.env` files.
@@ -63,14 +62,13 @@ pub fn resolve_secrets(
 /// Returns an empty map if the file does not exist or cannot be parsed.
 pub fn load_dotenv(project_root: &Path) -> HashMap<String, String> {
     let env_path = project_root.join(".env");
-    if !env_path.exists() {
-        return HashMap::new();
-    }
-
     match dotenvy::from_path_iter(&env_path) {
         Ok(iter) => iter.filter_map(|item| item.ok()).collect(),
         Err(e) => {
-            eprintln!("Warning: Failed to parse .env file: {e}");
+            // NotFound is expected (no .env file) — only warn on parse errors
+            if !e.to_string().contains("not found") && !e.to_string().contains("No such file") {
+                eprintln!("Warning: Failed to parse .env file: {e}");
+            }
             HashMap::new()
         }
     }
@@ -78,8 +76,8 @@ pub fn load_dotenv(project_root: &Path) -> HashMap<String, String> {
 
 /// Print a human-readable report of resolved and missing secrets.
 ///
-/// Output is suppressed when `global_flags.quiet` is set. Target-specific
-/// guidance is shown for missing secrets:
+/// Output is suppressed when `quiet` is true. Target-specific guidance is
+/// shown for missing secrets:
 ///
 /// - **aws-lambda**: Yellow warning markers (missing secrets are non-blocking per D-04).
 /// - **pmcp-run**: Exact `cargo pmcp secret set` commands (per D-07).
@@ -87,9 +85,9 @@ pub fn print_secret_report(
     resolution: &SecretResolution,
     server_id: &str,
     target: &str,
-    global_flags: &GlobalFlags,
+    quiet: bool,
 ) {
-    if !global_flags.should_output() {
+    if quiet {
         return;
     }
 
@@ -100,7 +98,9 @@ pub fn print_secret_report(
 
     if !resolution.found.is_empty() {
         println!("   Found {} secret(s):", resolution.found.len());
-        for key in resolution.found.keys() {
+        let mut keys: Vec<&String> = resolution.found.keys().collect();
+        keys.sort();
+        for key in keys {
             println!("     {} {}", "✓".green(), key);
         }
     }
@@ -264,14 +264,8 @@ mod tests {
             found: [("FOUND_KEY".into(), "v".into())].into(),
             missing: vec![req("MISSING_KEY", None, true)],
         };
-        let flags = GlobalFlags {
-            verbose: false,
-            no_color: false,
-            quiet: false,
-        };
-
         // Should not panic
-        print_secret_report(&resolution, "test-server", "aws-lambda", &flags);
+        print_secret_report(&resolution, "test-server", "aws-lambda", false);
     }
 
     #[test]
@@ -282,14 +276,8 @@ mod tests {
             found: HashMap::new(),
             missing: vec![req("MY_SECRET", Some("MY_SECRET_ENV"), true)],
         };
-        let flags = GlobalFlags {
-            verbose: false,
-            no_color: false,
-            quiet: false,
-        };
-
         // Should not panic; the output should contain guidance per D-07
-        print_secret_report(&resolution, "chess", "pmcp-run", &flags);
+        print_secret_report(&resolution, "chess", "pmcp-run", false);
     }
 
     #[test]
@@ -298,14 +286,8 @@ mod tests {
             found: [("KEY".into(), "v".into())].into(),
             missing: vec![req("MISS", None, true)],
         };
-        let flags = GlobalFlags {
-            verbose: false,
-            no_color: false,
-            quiet: true,
-        };
-
         // Should produce no output and not panic
-        print_secret_report(&resolution, "server", "aws-lambda", &flags);
+        print_secret_report(&resolution, "server", "aws-lambda", true);
     }
 
     #[test]
@@ -314,13 +296,7 @@ mod tests {
             found: HashMap::new(),
             missing: vec![],
         };
-        let flags = GlobalFlags {
-            verbose: false,
-            no_color: false,
-            quiet: false,
-        };
-
         // Should print "No secrets required" and not panic
-        print_secret_report(&resolution, "server", "aws-lambda", &flags);
+        print_secret_report(&resolution, "server", "aws-lambda", false);
     }
 }

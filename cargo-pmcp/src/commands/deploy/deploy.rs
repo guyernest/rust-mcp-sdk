@@ -36,22 +36,18 @@ impl DeployExecutor {
         println!("🚀 Deploying to AWS Lambda...");
         println!();
 
-        // 1. Load configuration
         let config = crate::deployment::config::DeployConfig::load(&self.project_root)?;
         println!("📋 Server: {}", config.server.name);
         println!("🌍 Region: {}", config.aws.region);
         println!();
 
-        // 2. Build Rust binary
         let builder = crate::deployment::builder::BinaryBuilder::new(self.project_root.clone());
         builder.build()?;
         println!();
 
-        // 3. Run CDK deploy
         self.run_cdk_deploy(&config)?;
         println!();
 
-        // 4. Load and display outputs
         let stack_name = format!("{}-stack", config.server.name);
         let outputs = crate::deployment::load_cdk_outputs(
             &self.project_root,
@@ -141,18 +137,4 @@ mod tests {
         assert_eq!(executor.extra_env["SECRET_B"], "val_b");
     }
 
-    #[test]
-    fn extra_env_passed_to_command() {
-        // Verify that with_extra_env correctly stores the env vars that
-        // run_cdk_deploy would forward. We cannot run CDK in a test, but
-        // we verify the struct holds the data correctly.
-        let mut env = HashMap::new();
-        env.insert("API_KEY".to_string(), "sk-test-123".to_string());
-        env.insert("DB_PASSWORD".to_string(), "hunter2".to_string());
-
-        let executor = DeployExecutor::new(PathBuf::from("/tmp")).with_extra_env(env.clone());
-
-        assert_eq!(executor.extra_env, env);
-        assert_eq!(executor.extra_env.get("API_KEY").unwrap(), "sk-test-123");
-    }
 }

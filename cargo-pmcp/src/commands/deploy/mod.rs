@@ -621,18 +621,15 @@ impl DeployCommand {
                     &resolution,
                     &metadata.server_id,
                     &target_id,
-                    global_flags,
+                    !global_flags.should_output(),
                 );
 
                 let mut config = crate::deployment::DeployConfig::load(&project_root)?;
 
-                // Inject resolved secrets for AWS Lambda target (transient, never saved).
-                // Secrets flow through config.secrets -> AwsLambdaTarget::deploy ->
-                // deploy_aws_lambda -> DeployExecutor.with_extra_env -> CDK process env.
+                // For aws-lambda: inject resolved secrets into config.secrets (transient,
+                // never saved). These flow to DeployExecutor.extra_env -> CDK process env.
                 if target_id == "aws-lambda" {
-                    for (key, value) in &resolution.found {
-                        config.secrets.insert(key.clone(), value.clone());
-                    }
+                    config.secrets = resolution.found.clone();
                 }
 
                 // For pmcp-run: show server-side injection note if secrets are missing (D-08)
@@ -647,8 +644,6 @@ impl DeployCommand {
                         "   Note: pmcp.run injects secrets server-side from its managed Secrets Manager."
                     );
                 }
-
-                // D-04: Missing secrets produce warnings, not deployment-blocking errors.
 
                 let artifact = target.build(&config).await?;
                 let outputs = target.deploy(&config, artifact).await?;
