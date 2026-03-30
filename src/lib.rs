@@ -83,6 +83,7 @@ pub mod client;
 pub mod composition;
 pub mod error;
 pub mod runtime;
+pub mod secrets;
 pub mod server;
 pub mod shared;
 pub mod types;
