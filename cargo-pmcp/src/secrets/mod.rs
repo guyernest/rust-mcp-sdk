@@ -55,7 +55,11 @@ pub mod error;
 pub mod provider;
 pub mod providers;
 pub mod registry;
+pub mod resolve;
 pub mod value;
+
+// Re-export resolve types used by deploy pipeline
+pub use resolve::{load_dotenv, print_secret_report, resolve_secrets, SecretResolution};
 
 // Re-export types used by CLI commands
 pub use provider::{ListOptions, SetOptions};
