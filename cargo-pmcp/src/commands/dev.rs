@@ -5,6 +5,7 @@ use colored::Colorize;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::secrets::resolve::load_dotenv;
 use crate::utils::config::WorkspaceConfig;
 
 /// Binary targets that are Lambda deployment wrappers and cannot run locally.
@@ -158,7 +159,20 @@ pub fn execute(
     }
     if global_flags.should_output() {
         println!("  {} Server built successfully", "✓".green());
+    }
 
+    // Load .env file for local development (D-12)
+    let project_root = PathBuf::from(".");
+    let dotenv_vars = load_dotenv(&project_root);
+    if !dotenv_vars.is_empty() && global_flags.should_output() {
+        println!(
+            "  {} Loaded {} variable(s) from .env",
+            "✓".green(),
+            dotenv_vars.len()
+        );
+    }
+
+    if global_flags.should_output() {
         println!("\n{}", "Step 2: Starting server".bright_white().bold());
     }
     let url = format!("http://0.0.0.0:{}", port);
@@ -204,12 +218,20 @@ pub fn execute(
     }
 
     // Start server in foreground (user sees logs)
-    let status = Command::new("cargo")
-        .args(["run", "--bin", &server_binary])
+    let mut cmd = Command::new("cargo");
+    cmd.args(["run", "--bin", &server_binary])
         .env("MCP_HTTP_PORT", port.to_string())
-        .env("RUST_LOG", "info")
-        .status()
-        .context("Failed to start server")?;
+        .env("RUST_LOG", "info");
+
+    // Inject .env vars for local dev (D-12)
+    // Only set if not already in shell environment (D-13: shell env wins)
+    for (key, value) in &dotenv_vars {
+        if std::env::var(key).is_err() {
+            cmd.env(key, value);
+        }
+    }
+
+    let status = cmd.status().context("Failed to start server")?;
 
     if !status.success() {
         anyhow::bail!("Server exited with error");
