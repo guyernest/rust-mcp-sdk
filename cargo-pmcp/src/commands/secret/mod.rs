@@ -14,7 +14,29 @@ use crate::secrets::{
     ListOptions, ProviderRegistry, SecretCharset, SecretValue, SetOptions,
 };
 
-/// Manage secrets for MCP servers
+/// Manage secrets for MCP servers.
+///
+/// Secrets are resolved during `cargo pmcp deploy` from local env vars and `.env`
+/// files. For pmcp.run, secrets are stored server-side in managed Secrets Manager.
+///
+/// # Local Development
+///
+/// Create a `.env` file in your project root:
+/// ```text
+/// ANTHROPIC_API_KEY=sk-ant-...
+/// DATABASE_URL=postgresql://localhost/mydb
+/// ```
+///
+/// `cargo pmcp dev` automatically loads `.env` into the server process.
+///
+/// # Deployment
+///
+/// For AWS Lambda: secrets from `.env` + shell env are injected as Lambda env vars.
+/// For pmcp.run: use `cargo pmcp secret set` to store in managed Secrets Manager.
+///
+/// # Runtime
+///
+/// Server code reads secrets via `pmcp::secrets::require("SECRET_NAME")`.
 #[derive(Debug, Parser)]
 pub struct SecretCommand {
     /// Target provider (pmcp, aws, local)
@@ -68,7 +90,15 @@ pub enum SecretAction {
         no_newline: bool,
     },
 
-    /// Set a secret value
+    /// Set a secret value.
+    ///
+    /// # Examples
+    ///
+    /// Local storage:
+    ///   cargo pmcp secret set chess/ANTHROPIC_API_KEY --prompt
+    ///
+    /// pmcp.run (server-side Secrets Manager):
+    ///   cargo pmcp secret set --server chess ANTHROPIC_API_KEY --target pmcp --prompt
     Set {
         /// Secret name (format: server-id/SECRET_NAME)
         name: String,

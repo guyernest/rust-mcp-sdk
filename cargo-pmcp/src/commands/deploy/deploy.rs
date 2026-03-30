@@ -1,15 +1,33 @@
 use anyhow::{bail, Context, Result};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Instant;
 
 pub struct DeployExecutor {
     project_root: PathBuf,
+    /// Transient env vars (e.g., resolved secrets) passed to the CDK process.
+    /// These are NEVER written to deploy.toml -- they exist only as process env
+    /// vars for the CDK child process (per D-05: baked at deploy time,
+    /// D-06: never persisted).
+    extra_env: HashMap<String, String>,
 }
 
 impl DeployExecutor {
     pub fn new(project_root: PathBuf) -> Self {
-        Self { project_root }
+        Self {
+            project_root,
+            extra_env: HashMap::new(),
+        }
+    }
+
+    /// Set transient environment variables to pass to the CDK child process.
+    ///
+    /// These are used for resolved secrets that must reach the Lambda
+    /// configuration without being written to disk.
+    pub fn with_extra_env(mut self, env: HashMap<String, String>) -> Self {
+        self.extra_env = env;
+        self
     }
 
     pub fn execute(&self) -> Result<()> {
@@ -18,22 +36,18 @@ impl DeployExecutor {
         println!("🚀 Deploying to AWS Lambda...");
         println!();
 
-        // 1. Load configuration
         let config = crate::deployment::config::DeployConfig::load(&self.project_root)?;
         println!("📋 Server: {}", config.server.name);
         println!("🌍 Region: {}", config.aws.region);
         println!();
 
-        // 2. Build Rust binary
         let builder = crate::deployment::builder::BinaryBuilder::new(self.project_root.clone());
         builder.build()?;
         println!();
 
-        // 3. Run CDK deploy
         self.run_cdk_deploy(&config)?;
         println!();
 
-        // 4. Load and display outputs
         let stack_name = format!("{}-stack", config.server.name);
         let outputs = crate::deployment::load_cdk_outputs(
             &self.project_root,
@@ -74,6 +88,15 @@ impl DeployExecutor {
             cmd.env("CDK_DEFAULT_ACCOUNT", account_id);
         }
 
+        // Pass transient env vars (resolved secrets) to CDK process.
+        // These are NOT in deploy.toml -- they flow only as process env vars
+        // so the CDK TypeScript stack reads them via process.env and sets
+        // them on the Lambda function. Per D-05, secrets are "baked in" at
+        // deploy time. Per D-06, they are never written to disk.
+        for (key, value) in &self.extra_env {
+            cmd.env(key, value);
+        }
+
         print!("   Synthesizing template...");
         std::io::Write::flush(&mut std::io::stdout())?;
 
@@ -86,5 +109,31 @@ impl DeployExecutor {
 
         println!(" ✅");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extra_env_default_empty() {
+        let executor = DeployExecutor::new(PathBuf::from("/tmp"));
+        assert!(executor.extra_env.is_empty());
+    }
+
+    #[test]
+    fn with_extra_env_builder() {
+        let env: HashMap<String, String> = [
+            ("SECRET_A".into(), "val_a".into()),
+            ("SECRET_B".into(), "val_b".into()),
+        ]
+        .into();
+
+        let executor = DeployExecutor::new(PathBuf::from("/tmp")).with_extra_env(env);
+
+        assert_eq!(executor.extra_env.len(), 2);
+        assert_eq!(executor.extra_env["SECRET_A"], "val_a");
+        assert_eq!(executor.extra_env["SECRET_B"], "val_b");
     }
 }

@@ -607,7 +607,38 @@ impl DeployCommand {
             },
             None => {
                 // No subcommand = deploy
-                let config = crate::deployment::DeployConfig::load(&project_root)?;
+
+                // --- Secret resolution (pre-deploy step) ---
+                // Extract metadata for secret requirements, load .env, resolve.
+                let metadata = crate::deployment::metadata::McpMetadata::extract(&project_root)?;
+                let dotenv_vars = crate::secrets::load_dotenv(&project_root);
+                let resolution =
+                    crate::secrets::resolve_secrets(&metadata.resources.secrets, &dotenv_vars);
+                crate::secrets::print_secret_report(
+                    &resolution,
+                    &metadata.server_id,
+                    &target_id,
+                    !global_flags.should_output(),
+                );
+
+                let mut config = crate::deployment::DeployConfig::load(&project_root)?;
+
+                // For aws-lambda: inject resolved secrets into config.secrets (transient,
+                // never saved). These flow to DeployExecutor.extra_env -> CDK process env.
+                if target_id == "aws-lambda" {
+                    config.secrets = resolution.found.clone();
+                }
+
+                // For pmcp-run: show server-side injection note if secrets are missing (D-08)
+                if target_id == "pmcp-run"
+                    && resolution.missing.iter().any(|r| r.required)
+                    && global_flags.should_output()
+                {
+                    println!(
+                        "   Note: pmcp.run injects secrets server-side from its managed Secrets Manager."
+                    );
+                }
+
                 let artifact = target.build(&config).await?;
                 let outputs = target.deploy(&config, artifact).await?;
 
