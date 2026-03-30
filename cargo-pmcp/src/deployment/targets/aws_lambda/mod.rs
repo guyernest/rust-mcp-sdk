@@ -110,7 +110,7 @@ impl DeploymentTarget for AwsLambdaTarget {
         config: &DeployConfig,
         _artifact: BuildArtifact,
     ) -> Result<DeploymentOutputs> {
-        deploy::deploy_aws_lambda(config).await
+        deploy::deploy_aws_lambda(config, config.secrets.clone()).await
     }
 
     async fn destroy(&self, config: &DeployConfig, clean: bool) -> Result<()> {
