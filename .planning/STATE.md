@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: Milestone complete
-stopped_at: Completed 63-02-PLAN.md
-last_updated: "2026-03-28T19:34:01.787Z"
+stopped_at: Phase 64 context gathered
+last_updated: "2026-03-30T00:04:33.554Z"
 progress:
-  total_phases: 40
+  total_phases: 41
   completed_phases: 34
   total_plans: 81
   completed_plans: 81
@@ -214,6 +214,7 @@ v1.6 decisions:
 - Phase 61 added: Add OAuth support to mcp-preview
 - Phase 55.1 inserted after Phase 55: Fix MCP Tasks support (URGENT)
 - Phase 62 added: MCP Pen Test — automated penetration testing for MCP endpoints (security attacks + general cyber attacks)
+- Phase 64 added: Secrets deployment integration — wire cargo pmcp secret into deploy targets as env vars, SDK helpers, local dev flow, docs
 
 ### Pending Todos
 
@@ -225,6 +226,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-28T19:32:34.344Z
-Stopped at: Completed 63-02-PLAN.md
+Last session: 2026-03-30T00:04:33.545Z
+Stopped at: Phase 64 context gathered
 Resume: Phase 57 complete. Both plans shipped: Plan 01 (19-scenario conformance engine with 5 domains) and Plan 02 (CLI integration -- mcp-tester conformance and cargo pmcp test conformance with --strict/--domain flags and per-domain CI summary).
