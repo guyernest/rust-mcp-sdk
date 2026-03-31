@@ -31,6 +31,7 @@ exclude = [
     "pmcp-book/",
     "pmcp-course/",
     "examples/60_tasks_basic.rs",
+    "examples/62_task_workflow_lifecycle.rs",
     "examples/65_durable_mcp_agent.rs",
 ]
 
