@@ -35,6 +35,7 @@ use pmcp::server::typed_tool::TypedToolWithOutput;
 use pmcp::types::{ServerCapabilities, ToolCapabilities};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use validator::Validate;
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -47,15 +48,17 @@ use serde::{Deserialize, Serialize};
 /// - `validator::Validate` provides runtime validation with custom constraints
 /// - `serde` handles JSON serialization/deserialization
 /// - `deny_unknown_fields` rejects any extra fields for security
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Validate)]
 #[schemars(deny_unknown_fields)]
 pub struct AddInput {
     /// First number in the addition operation
-    #[schemars(description = "First number in the addition operation", range(min = -1000000, max = 1000000))]
+    #[validate(range(min = -1000000.0, max = 1000000.0))]
+    #[schemars(description = "First number in the addition operation")]
     pub a: f64,
 
     /// Second number in the addition operation
-    #[schemars(description = "Second number in the addition operation", range(min = -1000000, max = 1000000))]
+    #[validate(range(min = -1000000.0, max = 1000000.0))]
+    #[schemars(description = "Second number in the addition operation")]
     pub b: f64,
 }
 
@@ -81,6 +84,9 @@ pub struct AddResult {
 // ============================================================================
 
 async fn add_tool(input: AddInput, _extra: pmcp::RequestHandlerExtra) -> Result<AddResult> {
+    input.validate()
+        .map_err(|e| pmcp::Error::validation(format!("Validation failed: {}", e)))?;
+
     Ok(AddResult {
         result: input.a + input.b,
     })
@@ -144,6 +150,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.result, 7.0);
+    }
+
+    #[tokio::test]
+    async fn test_add_validation_rejects_out_of_range() {
+        let input = AddInput { a: 2000000.0, b: 3.0 };
+        let result = add_tool(input, pmcp::RequestHandlerExtra::default()).await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]

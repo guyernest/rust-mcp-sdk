@@ -1743,7 +1743,7 @@
 
         // Exchange code for token via the server
         try {
-          const resp = await fetch('/api/auth/token-exchange', {
+          const resp = await this.runtime.apiFetch('/api/auth/token-exchange', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1838,7 +1838,7 @@
       async checkInitialStatus() {
         if (!this.isConfigured) return;
         try {
-          const resp = await fetch('/api/auth/status');
+          const resp = await this.runtime.apiFetch('/api/auth/status');
           const data = await resp.json();
           if (data.authenticated) {
             this._updateAuthStatus(true);
@@ -1902,6 +1902,10 @@
         this.init();
       }
 
+      apiFetch(url, opts = {}) {
+        return fetch(url, { cache: 'no-store', ...opts });
+      }
+
       async init() {
         this.setupThemeToggle();
         this.setupBridgeToggle();
@@ -1915,7 +1919,7 @@
 
       async loadConfig() {
         try {
-          const response = await fetch('/api/config');
+          const response = await this.apiFetch('/api/config');
           const config = await response.json();
           this.theme = config.theme || 'light';
           this.locale = config.locale || 'en-US';
@@ -1969,8 +1973,8 @@
       async initSession() {
         try {
           const [toolsResponse, resourcesResponse] = await Promise.all([
-            fetch('/api/tools'),
-            fetch('/api/resources')
+            this.apiFetch('/api/tools'),
+            this.apiFetch('/api/resources')
           ]);
 
           // Auth failure detection: if the MCP server returns 401/403 and OAuth
@@ -2051,7 +2055,7 @@
 
       async checkWasmStatus() {
         try {
-          const resp = await fetch('/api/wasm/status');
+          const resp = await this.apiFetch('/api/wasm/status');
           const data = await resp.json();
           if (data.status === 'ready') {
             this.wasmReady = true;
@@ -2104,7 +2108,7 @@
         this.renderResourcePicker();
 
         try {
-          const response = await fetch(`/api/resources/read?uri=${encodeURIComponent(uri)}`);
+          const response = await this.apiFetch(`/api/resources/read?uri=${encodeURIComponent(uri)}`);
           const data = await response.json();
 
           if (data.error) {
@@ -2205,7 +2209,7 @@
         this.setStatus('reconnecting', 'Reconnecting...');
 
         try {
-          await fetch('/api/reconnect', { method: 'POST' });
+          await this.apiFetch('/api/reconnect', { method: 'POST' });
           await this.initSession();
         } catch (e) {
           this.setStatus(false, 'Reconnect failed');
@@ -2270,15 +2274,23 @@
         document.getElementById('execute-btn').disabled = false;
       }
 
+      _typeDefault(type) {
+        switch (type) {
+          case 'string':  return '';
+          case 'number':
+          case 'integer': return 0;
+          case 'boolean': return false;
+          case 'object':  return {};
+          case 'array':   return [];
+          default:        return null;
+        }
+      }
+
       generateExampleArgs(schema) {
         if (!schema || !schema.properties) return {};
         const args = {};
         for (const [key, prop] of Object.entries(schema.properties)) {
-          if (prop.type === 'string') args[key] = prop.default || '';
-          else if (prop.type === 'number') args[key] = prop.default || 0;
-          else if (prop.type === 'boolean') args[key] = prop.default || false;
-          else if (prop.type === 'object') args[key] = {};
-          else if (prop.type === 'array') args[key] = [];
+          args[key] = prop.default ?? this._typeDefault(prop.type);
         }
         return args;
       }
@@ -2573,7 +2585,7 @@
         this.logNetwork('request', this.selectedTool.name, args);
 
         try {
-          const response = await fetch('/api/tools/call', {
+          const response = await this.apiFetch('/api/tools/call', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2727,7 +2739,7 @@
               return { content: mcpResult.content || [], isError: false };
             } else {
               // Proxy mode: HTTP request to preview server
-              const response = await fetch('/api/tools/call', {
+              const response = await runtime.apiFetch('/api/tools/call', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name, arguments: args || {} })
@@ -2932,7 +2944,7 @@ ${html}
           if (!this.wasmReady) {
             this.setToggleBuilding(true);
             try {
-              const resp = await fetch('/api/wasm/build', { method: 'POST' });
+              const resp = await this.apiFetch('/api/wasm/build', { method: 'POST' });
               const data = await resp.json();
               if (data.status === 'ready') {
                 this.wasmReady = true;
@@ -3143,7 +3155,7 @@ ${html}
         this.logEvent('chatgptCallTool', { name, args });
 
         try {
-          const response = await fetch('/api/tools/call', {
+          const response = await this.apiFetch('/api/tools/call', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, arguments: args || {} })
