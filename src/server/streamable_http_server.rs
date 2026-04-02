@@ -1,7 +1,7 @@
 //! Streamable HTTP server implementation for MCP.
 use crate::error::Result;
 use crate::server::http_middleware::{
-    adapters::{from_axum, into_axum},
+    adapters::{from_axum_with_limit, into_axum},
     ServerHttpContext, ServerHttpMiddlewareChain, ServerHttpResponse,
 };
 use crate::server::tower_layers::{AllowedOrigins, DnsRebindingLayer, SecurityHeadersLayer};
@@ -191,6 +191,11 @@ pub struct StreamableHttpServerConfig {
     /// path uses [`crate::server::axum_router::RouterConfig::allowed_origins`]
     /// instead.
     pub allowed_origins: Option<AllowedOrigins>,
+    /// Maximum request body size in bytes.
+    ///
+    /// Requests exceeding this limit are rejected with HTTP 413 before
+    /// any JSON parsing occurs. Default: 4 MB (matches AWS API Gateway).
+    pub max_request_bytes: usize,
 }
 
 impl std::fmt::Debug for StreamableHttpServerConfig {
@@ -206,6 +211,7 @@ impl std::fmt::Debug for StreamableHttpServerConfig {
             .field("on_session_closed", &self.on_session_closed.is_some())
             .field("http_middleware", &self.http_middleware.is_some())
             .field("allowed_origins", &self.allowed_origins)
+            .field("max_request_bytes", &self.max_request_bytes)
             .finish()
     }
 }
@@ -220,6 +226,7 @@ impl Default for StreamableHttpServerConfig {
             on_session_closed: None,
             http_middleware: None,
             allowed_origins: None,
+            max_request_bytes: crate::server::limits::DEFAULT_MAX_REQUEST_BYTES,
         }
     }
 }
@@ -246,6 +253,7 @@ impl StreamableHttpServerConfig {
             on_session_closed: None,
             http_middleware: None,
             allowed_origins: Some(AllowedOrigins::any()),
+            max_request_bytes: crate::server::limits::DEFAULT_MAX_REQUEST_BYTES,
         }
     }
 }
@@ -836,13 +844,13 @@ async fn handle_post_fast_path(
     let headers = parts.headers;
 
     // Read body to string
-    let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
+    let body_bytes = match axum::body::to_bytes(body, state.config.max_request_bytes).await {
         Ok(b) => b,
         Err(e) => {
             return create_error_response(
-                StatusCode::BAD_REQUEST,
-                -32700,
-                &format!("Failed to read body: {}", e),
+                StatusCode::PAYLOAD_TOO_LARGE,
+                -32600,
+                &format!("Request body exceeds limit: {}", e),
             );
         },
     };
@@ -1005,16 +1013,17 @@ async fn handle_post_with_middleware(
     // Convert from axum request
     let (parts, body) = request.into_parts();
 
-    let mut server_request = match from_axum(parts, body).await {
-        Ok(req) => req,
-        Err(e) => {
-            return create_error_response(
-                StatusCode::BAD_REQUEST,
-                -32700,
-                &format!("Failed to parse request: {}", e),
-            );
-        },
-    };
+    let mut server_request =
+        match from_axum_with_limit(parts, body, state.config.max_request_bytes).await {
+            Ok(req) => req,
+            Err(e) => {
+                return create_error_response(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    -32600,
+                    &format!("Request body exceeds limit: {}", e),
+                );
+            },
+        };
 
     // Extract session ID from headers
     let session_id = server_request

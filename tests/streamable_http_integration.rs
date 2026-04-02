@@ -41,6 +41,7 @@ async fn test_streamable_http_stateless_mode() {
         on_session_closed: None,
         http_middleware: None,
         allowed_origins: None,
+        max_request_bytes: pmcp::server::limits::DEFAULT_MAX_REQUEST_BYTES,
     };
 
     let server_instance =
@@ -116,6 +117,7 @@ async fn test_streamable_http_stateful_mode() {
         })),
         http_middleware: None,
         allowed_origins: None,
+        max_request_bytes: pmcp::server::limits::DEFAULT_MAX_REQUEST_BYTES,
     };
 
     let server_instance =
@@ -211,6 +213,7 @@ async fn test_transport_send_receive_multiple() {
         on_session_closed: None,
         http_middleware: None,
         allowed_origins: None,
+        max_request_bytes: pmcp::server::limits::DEFAULT_MAX_REQUEST_BYTES,
     };
 
     let server_instance =

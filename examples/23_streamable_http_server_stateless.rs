@@ -184,6 +184,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         on_session_closed: None,
         http_middleware: None, // No HTTP middleware
         allowed_origins: None,
+        max_request_bytes: pmcp::server::limits::DEFAULT_MAX_REQUEST_BYTES,
     };
 
     // Create the streamable HTTP server in stateless mode

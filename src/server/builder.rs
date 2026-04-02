@@ -4,6 +4,7 @@ use crate::error::{Error, Result};
 use crate::runtime::RwLock;
 use crate::server::auth::{AuthProvider, ToolAuthorizer};
 use crate::server::core::ServerCore;
+use crate::server::limits::PayloadLimits;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::server::observability::{
     CloudWatchBackend, ConsoleBackend, McpObservabilityMiddleware, NullBackend,
@@ -84,6 +85,8 @@ pub struct ServerCoreBuilder {
     website_url: Option<String>,
     /// Optional icons for the server implementation (MCP 2025-11-25)
     icons: Option<Vec<crate::types::protocol::IconInfo>>,
+    /// Payload and resource limits
+    payload_limits: PayloadLimits,
 }
 
 impl Default for ServerCoreBuilder {
@@ -119,6 +122,7 @@ impl ServerCoreBuilder {
             host_layers: Vec::new(),
             website_url: None,
             icons: None,
+            payload_limits: PayloadLimits::default(),
         }
     }
 
@@ -831,6 +835,15 @@ impl ServerCoreBuilder {
         Ok(self)
     }
 
+    /// Set payload and resource limits for the server.
+    ///
+    /// Controls maximum request body size and tool argument size.
+    /// Defaults are tuned for AWS Lambda (4 MB request, 1 MB args).
+    pub fn payload_limits(mut self, limits: PayloadLimits) -> Self {
+        self.payload_limits = limits;
+        self
+    }
+
     /// Build the `ServerCore` instance.
     ///
     /// # Errors
@@ -900,6 +913,7 @@ impl ServerCoreBuilder {
             #[cfg(not(target_arch = "wasm32"))]
             self.task_store,
             stateless_mode,
+            self.payload_limits,
         ))
     }
 }

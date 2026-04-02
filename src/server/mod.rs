@@ -33,6 +33,7 @@ pub mod adapters;
 pub mod builder;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod core;
+pub mod limits;
 
 // Native-only modules (require tokio, threading, etc.)
 #[cfg(not(target_arch = "wasm32"))]

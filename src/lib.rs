@@ -115,6 +115,7 @@ pub use server::task_store::{InMemoryTaskStore, StoreConfig, TaskStore, TaskStor
 #[cfg(not(target_arch = "wasm32"))]
 pub use server::{
     auth,
+    limits::PayloadLimits,
     simple_prompt::{SimplePrompt, SyncPrompt},
     simple_resources::{DynamicResourceHandler, ResourceCollection, StaticResource},
     simple_tool::{SimpleTool, SyncTool},
