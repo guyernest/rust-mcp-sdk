@@ -353,6 +353,7 @@ mod tests {
             None, // task_router
             None, // task_store
             false,
+            crate::server::limits::PayloadLimits::default(),
         );
 
         let handler = Arc::new(server);

@@ -63,6 +63,7 @@ async fn test_oauth_middleware_injects_token() {
         on_session_closed: None,
         http_middleware: None,
         allowed_origins: None,
+        max_request_bytes: pmcp::server::limits::DEFAULT_MAX_REQUEST_BYTES,
     };
 
     let server_instance =
@@ -131,6 +132,7 @@ async fn test_auth_provider_takes_precedence_over_oauth() {
         on_session_closed: None,
         http_middleware: None,
         allowed_origins: None,
+        max_request_bytes: pmcp::server::limits::DEFAULT_MAX_REQUEST_BYTES,
     };
 
     let server_instance =
@@ -191,6 +193,7 @@ async fn test_oauth_token_expiry_triggers_error() {
         on_session_closed: None,
         http_middleware: None,
         allowed_origins: None,
+        max_request_bytes: pmcp::server::limits::DEFAULT_MAX_REQUEST_BYTES,
     };
 
     let server_instance =
@@ -251,6 +254,7 @@ async fn test_multiple_requests_with_oauth() {
         on_session_closed: None,
         http_middleware: None,
         allowed_origins: None,
+        max_request_bytes: pmcp::server::limits::DEFAULT_MAX_REQUEST_BYTES,
     };
 
     let server_instance =
@@ -308,6 +312,7 @@ async fn test_oauth_with_case_insensitive_header_check() {
         on_session_closed: None,
         http_middleware: None,
         allowed_origins: None,
+        max_request_bytes: pmcp::server::limits::DEFAULT_MAX_REQUEST_BYTES,
     };
 
     let server_instance =

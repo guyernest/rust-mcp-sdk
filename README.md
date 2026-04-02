@@ -230,40 +230,27 @@ High-performance Rust implementation of the MCP protocol.
 
 ### ⚡ cargo-pmcp (CLI Toolkit)
 
-Scaffolding and development toolkit for MCP servers.
+Full-lifecycle development toolkit — from scaffolding to production deployment.
 
-**What it does:**
-- **Scaffold servers** in seconds with proven patterns
-- **Hot-reload dev server** for rapid iteration
-- **Generate test scenarios** automatically
-- **Load test servers** with concurrent virtual users and latency percentiles
-- **Build MCP Apps** - scaffold widget projects, preview in browser, generate manifests
-- **Validate quality gates** (fmt, clippy, tests)
-- **Deploy to production** - AWS Lambda, Google Cloud Run, or Cloudflare Workers
-- **Manage deployments** - logs, metrics, secrets, rollback
-
-**Commands:**
 ```bash
-cargo pmcp new <workspace>              # Create workspace
-cargo pmcp add server <name>            # Add server
-cargo pmcp dev --server <name>          # Start dev server
-cargo pmcp test --server <name>         # Run tests
-cargo pmcp loadtest run <url>           # Load test a server
-cargo pmcp app new <name>              # Scaffold widget project
-cargo pmcp preview --url <url> --open  # Preview widgets in browser
-cargo pmcp app build --url <url>       # Build manifest + landing page
-cargo pmcp deploy --target <target>     # Deploy to production
-cargo pmcp deploy logs --tail           # Stream logs
-cargo pmcp deploy destroy --clean       # Remove deployment
+cargo install cargo-pmcp
 ```
 
-**Why use it?**
-- Encodes best practices from 6 production servers
-- Saves 30-60 minutes vs manual setup
-- Ensures consistent structure across servers
-- Integrated testing and quality validation
+```bash
+cargo pmcp new my-workspace             # Scaffold a new workspace
+cargo pmcp add server my-server         # Add a server with best-practice template
+cargo pmcp dev --server my-server       # Dev server with hot-reload
+cargo pmcp test --server my-server      # Auto-generated scenario tests
+cargo pmcp loadtest run                 # Load test with latency percentiles
+cargo pmcp pentest run                  # Security audit (32 checks, SARIF output)
+cargo pmcp preview --open               # Browser-based widget preview
+cargo pmcp deploy --target aws-lambda   # Deploy to AWS Lambda, GCR, or Cloudflare
+cargo pmcp deploy logs --tail           # Stream production logs
+```
 
-**Learn more**: [cargo-pmcp Guide](cargo-pmcp/README.md)
+Covers the full development lifecycle: scaffolding, dev mode, testing, load testing, security pentesting, MCP Apps preview, schema management, multi-target deployment, secrets, and OAuth setup.
+
+**Full command reference**: [cargo-pmcp Guide](cargo-pmcp/README.md)
 
 ---
 

@@ -30,6 +30,7 @@ use rusqlite::{Connection, OpenFlags};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use validator::Validate;
 
 // ============================================================================
 // CONFIGURATION
@@ -43,28 +44,31 @@ const DATABASE_ASSET: &str = "chinook.db";
 // TYPE DEFINITIONS
 // ============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Validate)]
 #[schemars(deny_unknown_fields)]
 pub struct ExecuteQueryInput {
     /// SQL query to execute (SELECT only)
+    #[validate(length(min = 1, max = 10000))]
     #[schemars(description = "SQL SELECT query to execute")]
     pub sql: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Validate)]
 #[schemars(deny_unknown_fields)]
 pub struct ListTablesInput {
     // No parameters required
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Validate)]
 #[schemars(deny_unknown_fields)]
 pub struct GetSampleRowsInput {
     /// Table name
+    #[validate(length(min = 1, max = 255))]
     #[schemars(description = "Name of the table to sample")]
     pub table: String,
 
     /// Number of rows to return (default 5, max 20)
+    #[validate(range(min = 1, max = 20))]
     #[schemars(description = "Number of sample rows (1-20)")]
     #[serde(default = "default_limit")]
     pub limit: u32,
@@ -140,7 +144,8 @@ fn validate_table_name(conn: &Connection, table: &str) -> Result<()> {
 // ============================================================================
 
 async fn execute_query_tool(input: ExecuteQueryInput, _extra: pmcp::RequestHandlerExtra) -> Result<Value> {
-    // Validate SQL
+    input.validate()
+        .map_err(|e| Error::validation(format!("Validation failed: {}", e)))?;
     validate_sql(&input.sql)?;
 
     // Open database
@@ -222,6 +227,8 @@ async fn list_tables_tool(_input: ListTablesInput, _extra: pmcp::RequestHandlerE
 }
 
 async fn get_sample_rows_tool(input: GetSampleRowsInput, _extra: pmcp::RequestHandlerExtra) -> Result<Value> {
+    input.validate()
+        .map_err(|e| Error::validation(format!("Validation failed: {}", e)))?;
     let conn = open_db()?;
 
     // Validate table exists

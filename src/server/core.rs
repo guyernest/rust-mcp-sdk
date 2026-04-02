@@ -5,6 +5,7 @@
 //! WASM/WASI targets.
 
 use crate::error::{Error, Result};
+use crate::server::limits::PayloadLimits;
 use crate::shared::middleware::{EnhancedMiddlewareChain, MiddlewareContext};
 use crate::shared::protocol_helpers::{create_notification, create_request};
 use crate::types::jsonrpc::ResponsePayload;
@@ -270,6 +271,9 @@ pub struct ServerCore {
     ///
     /// Default: false (maintains backward compatibility)
     stateless_mode: bool,
+
+    /// Payload and resource limits for denial-of-service protection
+    payload_limits: PayloadLimits,
 }
 
 /// Outcome of a tool handler call — either a normal result or a task creation.
@@ -302,6 +306,7 @@ impl ServerCore {
             Arc<dyn crate::server::task_store::TaskStore>,
         >,
         stateless_mode: bool,
+        payload_limits: PayloadLimits,
     ) -> Self {
         let uri_to_tool_meta = build_uri_to_tool_meta(&tool_infos);
         Self {
@@ -329,7 +334,13 @@ impl ServerCore {
             #[cfg(not(target_arch = "wasm32"))]
             task_store,
             stateless_mode,
+            payload_limits,
         }
+    }
+
+    /// Get the configured payload limits.
+    pub fn payload_limits(&self) -> &PayloadLimits {
+        &self.payload_limits
     }
 
     /// Check if the server is initialized.
@@ -418,6 +429,17 @@ impl ServerCore {
                 .await
                 .process_request(&req.name, &mut args, &mut extra, &context)
                 .await?;
+
+            // Enforce tool argument size limit (post-middleware, so inflated args are caught)
+            if self.payload_limits.max_tool_args_bytes < usize::MAX {
+                let args_size = json_serialized_len(&args)?;
+                if args_size > self.payload_limits.max_tool_args_bytes {
+                    return Err(Error::validation(format!(
+                        "Tool arguments for '{}' exceed size limit ({} bytes > {} max)",
+                        req.name, args_size, self.payload_limits.max_tool_args_bytes
+                    )));
+                }
+            }
 
             // Execute the tool with potentially modified args and extra
             let mut result = handler.handle(args, extra).await;
@@ -1218,6 +1240,24 @@ fn format_record_count(len: usize) -> String {
     }
 }
 
+/// Compute the serialized JSON byte length without allocating.
+fn json_serialized_len(value: &impl serde::Serialize) -> Result<usize> {
+    struct CountingWriter(usize);
+    impl std::io::Write for CountingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = CountingWriter(0);
+    serde_json::to_writer(&mut counter, value)
+        .map_err(|e| Error::validation(format!("Cannot measure argument size: {e}")))?;
+    Ok(counter.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1274,6 +1314,7 @@ mod tests {
             None,  // task_router
             None,  // task_store
             false, // stateless_mode
+            PayloadLimits::default(),
         );
 
         assert!(!server.is_initialized().await);
@@ -1321,6 +1362,7 @@ mod tests {
             None,  // task_router
             None,  // task_store
             false, // stateless_mode
+            PayloadLimits::default(),
         );
 
         // Initialize first
@@ -1377,6 +1419,7 @@ mod tests {
             None, // task_router
             None, // task_store
             true, // stateless_mode enabled
+            PayloadLimits::default(),
         );
 
         // Try to list tools WITHOUT initializing first
@@ -1427,6 +1470,7 @@ mod tests {
             None,  // task_router
             None,  // task_store
             false, // stateless_mode disabled (normal mode)
+            PayloadLimits::default(),
         );
 
         // Try to list tools WITHOUT initializing first

@@ -31,13 +31,14 @@
 
 use crate::mcp_common::{self, ParamRole};
 use crate::mcp_prompt::McpPromptArgs;
+use crate::mcp_resource::McpResourceArgs;
 use crate::mcp_tool::{McpToolAnnotations, McpToolArgs};
 use darling::FromMeta;
 use heck::ToUpperCamelCase;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::parse::Parser;
-use syn::{ImplItem, ImplItemFn, ItemImpl, ReturnType, Type};
+use syn::{FnArg, ImplItem, ImplItemFn, ItemImpl, ReturnType, Type};
 
 use mcp_common::ParamSlot;
 
@@ -83,20 +84,40 @@ struct PromptMethodInfo {
     param_order: Vec<ParamSlot>,
 }
 
+/// Information collected from a single `#[mcp_resource]`-annotated method.
+struct ResourceMethodInfo {
+    /// The method identifier.
+    method_name: syn::Ident,
+    /// The resolved resource name.
+    resource_name: String,
+    /// Resource description.
+    description: String,
+    /// URI or URI template.
+    uri: String,
+    /// MIME type.
+    mime_type: String,
+    /// Whether the method is async.
+    is_async: bool,
+    /// URI template variable parameter names (in order).
+    uri_param_names: Vec<String>,
+    /// Parameter order for correct call-site generation (skips &self).
+    param_order: Vec<ParamSlot>,
+}
+
 /// Expand `#[mcp_server]` attribute macro on an impl block.
 ///
 /// The `args` token stream is currently unused (reserved for future options).
 /// The `input` is the parsed `ItemImpl` block containing `#[mcp_tool]` methods.
 pub fn expand_mcp_server(_args: TokenStream, mut input: ItemImpl) -> syn::Result<TokenStream> {
-    // Collect all #[mcp_tool]-annotated methods.
+    // Collect all annotated methods.
     let tool_methods = collect_tool_methods(&input)?;
-    // Collect all #[mcp_prompt]-annotated methods.
     let prompt_methods = collect_prompt_methods(&input)?;
+    let resource_methods = collect_resource_methods(&input)?;
 
-    if tool_methods.is_empty() && prompt_methods.is_empty() {
+    if tool_methods.is_empty() && prompt_methods.is_empty() && resource_methods.is_empty() {
         return Err(syn::Error::new_spanned(
             &input,
-            "No methods marked with #[mcp_tool] or #[mcp_prompt] found in impl block",
+            "No methods marked with #[mcp_tool], #[mcp_prompt], or #[mcp_resource] found in impl block",
         ));
     }
 
@@ -323,15 +344,121 @@ pub fn expand_mcp_server(_args: TokenStream, mut input: ItemImpl) -> syn::Result
         register_lines.push(register_line);
     }
 
-    // Strip #[mcp_tool(...)] and #[mcp_prompt(...)] attributes from methods in the original impl block.
+    // Generate per-resource handler structs and DynamicResourceProvider impls.
+    let mut resource_provider_names = Vec::new();
+    for res_info in &resource_methods {
+        let handler_name = format_ident!(
+            "{}ResourceHandler",
+            res_info.method_name.to_string().to_upper_camel_case()
+        );
+        let method_ident = &res_info.method_name;
+        let uri = &res_info.uri;
+        let resource_name = &res_info.resource_name;
+        let description = &res_info.description;
+        let mime_type = &res_info.mime_type;
+
+        // Generate URI parameter extraction.
+        let uri_param_extraction: Vec<TokenStream> = res_info
+            .uri_param_names
+            .iter()
+            .map(|name| {
+                let ident = format_ident!("{}", name);
+                quote! {
+                    let #ident = params.get(#name)
+                        .ok_or_else(|| pmcp::Error::validation(format!(
+                            "Missing URI parameter '{}' for resource '{}'", #name, #uri
+                        )))?
+                        .clone();
+                }
+            })
+            .collect();
+
+        // Build call arguments in the user's declared parameter order.
+        let mut uri_var_idx = 0;
+        let call_args: Vec<TokenStream> = res_info
+            .param_order
+            .iter()
+            .map(|slot| match slot {
+                ParamSlot::Args => {
+                    let ident = format_ident!("{}", res_info.uri_param_names[uri_var_idx]);
+                    uri_var_idx += 1;
+                    quote! { #ident }
+                },
+                ParamSlot::Extra => quote! { _context.extra.clone() },
+                ParamSlot::State => unreachable!("#[mcp_server] uses &self, not State<T>"),
+            })
+            .collect();
+
+        // Generate function call (async vs sync).
+        let fn_call = if res_info.is_async {
+            quote! { let content_str: String = self.server.#method_ident(#(#call_args),*).await?; }
+        } else {
+            quote! { let content_str: String = self.server.#method_ident(#(#call_args),*)?; }
+        };
+
+        let handler_struct = quote! {
+            struct #handler_name #handler_impl_params #handler_where {
+                server: std::sync::Arc<#server_type>,
+            }
+
+            #[pmcp::async_trait]
+            impl #handler_impl_params pmcp::server::dynamic_resources::DynamicResourceProvider
+                for #handler_name #ty_gen_params #handler_where
+            {
+                fn templates(&self) -> Vec<pmcp::types::ResourceTemplate> {
+                    let mut tmpl = pmcp::types::ResourceTemplate::new(#uri, #resource_name)
+                        .with_description(#description);
+                    tmpl.mime_type = Some(#mime_type.to_string());
+                    vec![tmpl]
+                }
+
+                async fn fetch(
+                    &self,
+                    _uri: &str,
+                    params: pmcp::server::dynamic_resources::UriParams,
+                    _context: pmcp::server::dynamic_resources::RequestContext,
+                ) -> pmcp::Result<pmcp::types::ReadResourceResult> {
+                    #(#uri_param_extraction)*
+                    #fn_call
+                    Ok(pmcp::types::ReadResourceResult::new(
+                        vec![pmcp::types::Content::text(content_str)]
+                    ))
+                }
+            }
+        };
+        handler_structs.push(handler_struct);
+        resource_provider_names.push(handler_name);
+    }
+
+    // Strip macro attributes from methods in the original impl block.
     strip_mcp_attrs(&mut input);
 
     // Generate the McpServer trait implementation.
+    // If resources are present, build a ResourceCollection with all providers.
+    let resource_registration = if !resource_provider_names.is_empty() {
+        let provider_adds: Vec<TokenStream> = resource_provider_names
+            .iter()
+            .map(|name| {
+                quote! {
+                    .add_dynamic_provider(std::sync::Arc::new(#name { server: shared.clone() }))
+                }
+            })
+            .collect();
+        quote! {
+            let resource_collection = pmcp::ResourceCollection::new()
+                #(#provider_adds)*;
+            builder = builder.resources(resource_collection);
+        }
+    } else {
+        quote! {}
+    };
+
     let mcp_server_impl = quote! {
         impl #impl_gen_params pmcp::McpServer for #server_type #where_clause {
             fn register(self, mut builder: pmcp::ServerBuilder) -> pmcp::ServerBuilder {
                 let shared = std::sync::Arc::new(self);
                 #(#register_lines)*
+                #resource_registration
                 builder
             }
         }
@@ -614,17 +741,170 @@ fn parse_mcp_prompt_attr(attr: &syn::Attribute, method: &ImplItemFn) -> syn::Res
         .map_err(|e| syn::Error::new_spanned(&method.sig.ident, e.to_string()))
 }
 
-/// Strip `#[mcp_tool(...)]` and `#[mcp_prompt(...)]` attributes from all methods.
-///
-/// After collecting tool and prompt info, the attributes are no longer needed and
-/// would cause compilation errors if left in place (since `mcp_tool`/`mcp_prompt`
-/// are proc macro attributes that expect standalone functions, not methods in an
-/// already-processed block).
+/// Collect information from all `#[mcp_resource(...)]`-annotated methods in the impl block.
+fn collect_resource_methods(impl_block: &ItemImpl) -> syn::Result<Vec<ResourceMethodInfo>> {
+    let mut methods = Vec::new();
+
+    for item in &impl_block.items {
+        let ImplItem::Fn(method) = item else {
+            continue;
+        };
+
+        let Some(attr_index) = method
+            .attrs
+            .iter()
+            .position(|a| a.path().is_ident("mcp_resource"))
+        else {
+            continue;
+        };
+
+        let attr = &method.attrs[attr_index];
+        let macro_args = parse_mcp_resource_attr(attr, method)?;
+        let resource_name = macro_args
+            .name
+            .unwrap_or_else(|| method.sig.ident.to_string());
+        let uri = macro_args.uri;
+        let mime_type = macro_args
+            .mime_type
+            .unwrap_or_else(|| "text/plain".to_string());
+        let template_vars = crate::mcp_resource::extract_template_vars(&uri)
+            .map_err(|e| syn::Error::new_spanned(&method.sig.ident, e))?;
+
+        let mut has_self = false;
+        let mut has_extra = false;
+        let mut uri_param_names: Vec<String> = Vec::new();
+        let mut param_order: Vec<ParamSlot> = Vec::new();
+
+        for param in &method.sig.inputs {
+            let role = mcp_common::classify_param(param)?;
+            match role {
+                ParamRole::SelfRef => {
+                    has_self = true;
+                },
+                ParamRole::Args(ty) => {
+                    // For resources in #[mcp_server], String params map to URI template vars.
+                    if mcp_common::type_name_matches(&ty, "String") {
+                        if let FnArg::Typed(pat_type) = param {
+                            if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
+                                let name = pat_ident.ident.to_string();
+                                if template_vars.contains(&name) {
+                                    uri_param_names.push(name);
+                                    param_order.push(ParamSlot::Args);
+                                    continue;
+                                }
+                            }
+                        }
+                        return Err(syn::Error::new_spanned(
+                            param,
+                            format!(
+                                "Parameter name must match a URI template variable. Available: {:?}",
+                                template_vars
+                            ),
+                        ));
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            param,
+                            "Resource function parameters (URI template variables) must be String type",
+                        ));
+                    }
+                },
+                ParamRole::Extra => {
+                    if has_extra {
+                        return Err(syn::Error::new_spanned(
+                            param,
+                            "#[mcp_resource] methods can have at most one RequestHandlerExtra parameter",
+                        ));
+                    }
+                    has_extra = true;
+                    param_order.push(ParamSlot::Extra);
+                },
+                ParamRole::State { .. } => {
+                    return Err(syn::Error::new_spanned(
+                        param,
+                        "#[mcp_server] methods use &self for state access, not State<T>",
+                    ));
+                },
+            }
+        }
+
+        if !has_self {
+            return Err(syn::Error::new_spanned(
+                &method.sig.ident,
+                "#[mcp_server] methods must take &self as the first parameter",
+            ));
+        }
+
+        // Validate all URI template variables have matching parameters.
+        let uncovered: Vec<&str> = template_vars
+            .iter()
+            .filter(|v| !uri_param_names.contains(v))
+            .map(String::as_str)
+            .collect();
+        if !uncovered.is_empty() {
+            return Err(syn::Error::new_spanned(
+                &method.sig.ident,
+                format!(
+                    "URI template variables not covered by function parameters: {:?}",
+                    uncovered
+                ),
+            ));
+        }
+
+        methods.push(ResourceMethodInfo {
+            method_name: method.sig.ident.clone(),
+            resource_name,
+            description: macro_args.description,
+            uri,
+            mime_type,
+            is_async: method.sig.asyncness.is_some(),
+            uri_param_names,
+            param_order,
+        });
+    }
+
+    Ok(methods)
+}
+
+/// Parse `#[mcp_resource(...)]` attribute into `McpResourceArgs`.
+fn parse_mcp_resource_attr(
+    attr: &syn::Attribute,
+    method: &ImplItemFn,
+) -> syn::Result<McpResourceArgs> {
+    let tokens = match &attr.meta {
+        syn::Meta::List(list) => list.tokens.clone(),
+        syn::Meta::Path(_) => {
+            return Err(syn::Error::new_spanned(
+                &method.sig.ident,
+                "mcp_resource requires `uri = \"...\"` and `description = \"...\"` attributes",
+            ));
+        },
+        syn::Meta::NameValue(_) => {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "mcp_resource requires parenthesized arguments: #[mcp_resource(uri = \"...\", description = \"...\")]",
+            ));
+        },
+    };
+
+    let parser =
+        syn::punctuated::Punctuated::<darling::ast::NestedMeta, syn::Token![,]>::parse_terminated;
+    let nested_metas = parser
+        .parse2(tokens)
+        .map(|p| p.into_iter().collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    McpResourceArgs::from_list(&nested_metas)
+        .map_err(|e| syn::Error::new_spanned(&method.sig.ident, e.to_string()))
+}
+
+/// Strip `#[mcp_tool]`, `#[mcp_prompt]`, and `#[mcp_resource]` attributes from all methods.
 fn strip_mcp_attrs(input: &mut ItemImpl) {
     for item in &mut input.items {
         if let ImplItem::Fn(method) = item {
             method.attrs.retain(|attr| {
-                !attr.path().is_ident("mcp_tool") && !attr.path().is_ident("mcp_prompt")
+                !attr.path().is_ident("mcp_tool")
+                    && !attr.path().is_ident("mcp_prompt")
+                    && !attr.path().is_ident("mcp_resource")
             });
         }
     }

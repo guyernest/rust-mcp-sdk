@@ -912,12 +912,23 @@ pub mod adapters {
     /// }
     /// ```
     pub async fn from_axum(parts: http::request::Parts, body: Body) -> Result<ServerHttpRequest> {
+        from_axum_with_limit(parts, body, usize::MAX).await
+    }
+
+    /// Convert an axum request with a body size limit.
+    ///
+    /// Same as [`from_axum`] but rejects bodies exceeding `max_bytes`.
+    pub async fn from_axum_with_limit(
+        parts: http::request::Parts,
+        body: Body,
+        max_bytes: usize,
+    ) -> Result<ServerHttpRequest> {
         use axum::body::to_bytes;
 
-        // Extract body bytes
-        let body_bytes = to_bytes(body, usize::MAX)
+        // Extract body bytes with size limit
+        let body_bytes = to_bytes(body, max_bytes)
             .await
-            .map_err(|e| crate::Error::internal(format!("Failed to read request body: {}", e)))?;
+            .map_err(|e| crate::Error::internal(format!("Request body exceeds limit: {}", e)))?;
 
         Ok(ServerHttpRequest {
             method: parts.method,

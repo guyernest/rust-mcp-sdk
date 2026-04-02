@@ -389,6 +389,7 @@ pmcp = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }
+validator = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
@@ -465,6 +466,7 @@ serde_json = {{ workspace = true }}
 schemars = {{ workspace = true }}
 anyhow = {{ workspace = true }}
 thiserror = {{ workspace = true }}
+validator = {{ workspace = true }}
 rusqlite = {{ version = "0.32", features = ["bundled"] }}
 
 [dev-dependencies]

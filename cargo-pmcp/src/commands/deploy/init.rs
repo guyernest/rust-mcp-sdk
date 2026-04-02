@@ -554,6 +554,12 @@ export class McpServerStack extends cdk.Stack {{
     const organizationId = this.node.tryGetContext('organizationId') || process.env.PMCP_ORGANIZATION_ID || 'default-org';
     const mcpServersTable = this.node.tryGetContext('mcpServersTable') || process.env.MCP_SERVERS_TABLE || 'McpServer';
 
+    // Cost allocation tags — propagate to all resources in this stack
+    cdk.Tags.of(this).add('project', 'hosting');
+    cdk.Tags.of(this).add('service', serverId);
+    cdk.Tags.of(this).add('managed-by', 'pmcp');
+    cdk.Tags.of(this).add('target', 'pmcp-run');
+
     // Lambda function (ARM64 for better price/performance)
     const mcpFunction = new lambda.Function(this, 'McpFunction', {{
       functionName: serverId,
@@ -651,9 +657,17 @@ export class McpServerStack extends cdk.Stack {{
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {{
     super(scope, id, props);
 
+    const serverName = '{}';
+
+    // Cost allocation tags — propagate to all resources in this stack
+    cdk.Tags.of(this).add('project', serverName);
+    cdk.Tags.of(this).add('service', serverName);
+    cdk.Tags.of(this).add('managed-by', 'pmcp');
+    cdk.Tags.of(this).add('target', 'aws-lambda');
+
     // Lambda function (ARM64 for better price/performance)
     const mcpFunction = new lambda.Function(this, 'McpFunction', {{
-      functionName: '{}',
+      functionName: serverName,
       runtime: lambda.Runtime.PROVIDED_AL2023,
       handler: 'bootstrap',
       code: lambda.Code.fromAsset('.build'),
@@ -1315,6 +1329,13 @@ export class McpServerStack extends cdk.Stack {{
     super(scope, id, props);
 
     const serverName = '{server_name}';
+
+    // Cost allocation tags — propagate to all resources in this stack
+    cdk.Tags.of(this).add('project', serverName);
+    cdk.Tags.of(this).add('service', serverName);
+    cdk.Tags.of(this).add('managed-by', 'pmcp');
+    cdk.Tags.of(this).add('target', 'aws-lambda');
+    cdk.Tags.of(this).add('component', 'oauth');
 
     // ═══════════════════════════════════════════════════════════════════════
     // Cognito User Pool for OAuth
