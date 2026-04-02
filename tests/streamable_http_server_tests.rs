@@ -142,7 +142,7 @@ mod streamable_http_server_tests {
             on_session_closed: None,
             http_middleware: None,
             allowed_origins: None,
-        max_request_bytes: pmcp::server::limits::DEFAULT_MAX_REQUEST_BYTES,
+            max_request_bytes: pmcp::server::limits::DEFAULT_MAX_REQUEST_BYTES,
         };
 
         let http_server = StreamableHttpServer::with_config(addr, server, config);

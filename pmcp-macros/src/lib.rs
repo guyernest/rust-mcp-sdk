@@ -57,6 +57,7 @@ use syn::{parse_macro_input, ItemFn, ItemImpl};
 
 mod mcp_common;
 mod mcp_prompt;
+mod mcp_resource;
 mod mcp_server;
 mod mcp_tool;
 mod tool;
@@ -232,6 +233,37 @@ pub fn mcp_server(args: TokenStream, input: TokenStream) -> TokenStream {
 pub fn mcp_prompt(args: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemFn);
     mcp_prompt::expand_mcp_prompt(args.into(), &input)
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
+}
+
+/// Define a resource provider with automatic URI template matching.
+///
+/// Generates a struct implementing `DynamicResourceProvider` from a function.
+/// URI template variables are extracted and passed as `String` parameters.
+///
+/// # Attributes
+///
+/// - `uri` (required) — URI or URI template (e.g., `"docs://{topic}"`)
+/// - `description` (required) — Human-readable description
+/// - `name` (optional) — Override resource name (defaults to function name)
+/// - `mime_type` (optional) — MIME type (defaults to `"text/plain"`)
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// #[mcp_resource(uri = "docs://{topic}", description = "Documentation pages")]
+/// async fn read_doc(topic: String) -> Result<String> {
+///     tokio::fs::read_to_string(format!("docs/{topic}.md")).await.map_err(Into::into)
+/// }
+///
+/// // Register via ResourceCollection:
+/// // .add_dynamic_provider(Arc::new(read_doc()))
+/// ```
+#[proc_macro_attribute]
+pub fn mcp_resource(args: TokenStream, input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ItemFn);
+    mcp_resource::expand_mcp_resource(args.into(), &input)
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }

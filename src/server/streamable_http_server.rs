@@ -149,6 +149,7 @@ type SessionCallback = Box<dyn Fn(&str) + Send + Sync>;
 ///     on_session_closed: None,
 ///     http_middleware: None,
 ///     allowed_origins: None,
+///     max_request_bytes: pmcp::server::limits::DEFAULT_MAX_REQUEST_BYTES,
 /// };
 ///
 /// // Stateful configuration with custom session IDs
@@ -166,6 +167,7 @@ type SessionCallback = Box<dyn Fn(&str) + Send + Sync>;
 ///     })),
 ///     http_middleware: None,
 ///     allowed_origins: None,
+///     max_request_bytes: pmcp::server::limits::DEFAULT_MAX_REQUEST_BYTES,
 /// };
 /// ```
 pub struct StreamableHttpServerConfig {

@@ -272,7 +272,7 @@ pub struct ServerCore {
     /// Default: false (maintains backward compatibility)
     stateless_mode: bool,
 
-    /// Payload and resource limits for DoS protection
+    /// Payload and resource limits for denial-of-service protection
     payload_limits: PayloadLimits,
 }
 
