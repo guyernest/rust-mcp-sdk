@@ -30,6 +30,9 @@ exclude = [
     "examples/wasm/",
     "pmcp-book/",
     "pmcp-course/",
+    "examples/60_tasks_basic.rs",
+    "examples/62_task_workflow_lifecycle.rs",
+    "examples/65_durable_mcp_agent.rs",
 ]
 
 [dependencies]
@@ -131,14 +134,8 @@ tokio-util = { version = "0.7", features = ["rt"] }
 clap = { version = "4.5", features = ["derive"] }
 env_logger = "0.11"
 dashmap = "6.1"  # Already in main deps but needed for examples
-pmcp-tasks = { version = "0.1.0", path = "crates/pmcp-tasks" }  # For task examples (60_tasks_*)
 pmcp-macros = { version = "0.3.0", path = "pmcp-macros" }  # For macro examples (63_mcp_tool_macro)
 
-# For durable MCP agent example (65_durable_mcp_agent)
-lambda-durable-execution-rust = { version = "0.1.0", git = "https://github.com/guyernest/lambda-durable-execution-rust.git" }
-lambda_runtime = "1.0.1"
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 default = ["logging"]
@@ -417,10 +414,6 @@ path = "examples/hotel_gallery.rs"
 required-features = ["schema-generation"]
 
 [[example]]
-name = "60_tasks_basic"
-path = "examples/60_tasks_basic.rs"
-
-[[example]]
 name = "63_mcp_tool_macro"
 path = "examples/63_mcp_tool_macro.rs"
 required-features = ["full"]
@@ -429,11 +422,6 @@ required-features = ["full"]
 name = "64_mcp_prompt_macro"
 path = "examples/64_mcp_prompt_macro.rs"
 required-features = ["full"]
-
-[[example]]
-name = "65_durable_mcp_agent"
-path = "examples/65_durable_mcp_agent.rs"
-required-features = ["streamable-http"]
 
 [[bench]]
 name = "comprehensive_benchmarks"

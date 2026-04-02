@@ -87,10 +87,7 @@ skip = [
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = [
-    # Durable execution framework for Lambda (pre-crates.io, will be replaced with published crate)
-    "https://github.com/guyernest/lambda-durable-execution-rust.git",
-]
+allow-git = []
 
 [sources.allow-org]
 github = ["paiml"]
