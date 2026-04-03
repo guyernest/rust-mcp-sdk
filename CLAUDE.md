@@ -275,6 +275,14 @@ Pushing a `v*` tag to upstream triggers `.github/workflows/release.yml`:
 - One tag per release — the Release workflow publishes ALL crates that have new versions
 - If a crate version already exists on crates.io, the publish step skips it gracefully
 
+## Contract-First Development
+
+All new features and bug fixes must follow provable-contract-first methodology:
+1. Write or update the contract YAML in `../provable-contracts/contracts/<crate>/`
+2. Run `pmat comply check` to validate compliance
+3. Implement the code to satisfy the contract
+4. Run `pmat comply check` again to confirm
+
 ## Emergency Override (USE WITH EXTREME CAUTION)
 ```bash
 # Only for critical hotfixes - requires justification
