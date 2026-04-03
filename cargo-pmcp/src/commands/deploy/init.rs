@@ -436,7 +436,7 @@ impl InitCommand {
                 "inlineSources": true,
                 "experimentalDecorators": true,
                 "strictPropertyInitialization": false,
-                "typeRoots": ["./node_modules/@types"]
+                "types": ["node"]
             },
             "exclude": ["node_modules", "cdk.out"]
         });
