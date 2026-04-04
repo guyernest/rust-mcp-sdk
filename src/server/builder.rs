@@ -166,6 +166,7 @@ impl ServerCoreBuilder {
     ///
     /// Tools are functions that can be called by the client.
     pub fn tool(mut self, name: impl Into<String>, handler: impl ToolHandler + 'static) -> Self {
+        contract_pre_tool_dispatch_integrity!();
         let name = name.into();
         let handler = Arc::new(handler) as Arc<dyn ToolHandler>;
         // Cache metadata at registration time to avoid per-request cloning

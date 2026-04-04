@@ -345,6 +345,7 @@ impl ServerCore {
 
     /// Check if the server is initialized.
     pub async fn is_initialized(&self) -> bool {
+        contract_pre_session_lifecycle!();
         *self.initialized.read().await
     }
 
@@ -355,6 +356,7 @@ impl ServerCore {
 
     /// Handle initialization request.
     async fn handle_initialize(&self, init_req: &InitializeRequest) -> Result<InitializeResult> {
+        contract_pre_session_lifecycle!();
         // Store client capabilities
         *self.client_capabilities.write().await = Some(init_req.capabilities.clone());
         *self.initialized.write().await = true;
@@ -371,6 +373,7 @@ impl ServerCore {
 
     /// Handle list tools request.
     async fn handle_list_tools(&self, _req: &ListToolsRequest) -> Result<ListToolsResult> {
+        contract_pre_tool_dispatch_integrity!();
         let tools: Vec<ToolInfo> = self.tool_infos.values().cloned().collect();
 
         Ok(ListToolsResult {
@@ -385,6 +388,7 @@ impl ServerCore {
         req: &CallToolRequest,
         auth_context: Option<AuthContext>,
     ) -> Result<ToolCallOutcome> {
+        contract_pre_tool_dispatch_integrity!();
         let handler = self
             .tools
             .get(&req.name)
@@ -670,6 +674,7 @@ impl ServerCore {
 
     /// Create an error response.
     fn error_response(id: RequestId, code: i32, message: String) -> JSONRPCResponse {
+        contract_pre_error_code_mapping!();
         JSONRPCResponse {
             jsonrpc: "2.0".to_string(),
             id,
@@ -875,6 +880,7 @@ impl ServerCore {
         request: Request,
         auth_context: Option<AuthContext>,
     ) -> JSONRPCResponse {
+        contract_pre_session_lifecycle!();
         match request {
             Request::Client(ref boxed_req)
                 if matches!(**boxed_req, ClientRequest::Initialize(_)) =>

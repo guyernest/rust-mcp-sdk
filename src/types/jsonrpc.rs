@@ -128,6 +128,7 @@ pub struct JSONRPCRequest<P = serde_json::Value> {
 impl<P> JSONRPCRequest<P> {
     /// Create a new JSON-RPC request.
     pub fn new(id: impl Into<RequestId>, method: impl Into<String>, params: Option<P>) -> Self {
+        contract_pre_jsonrpc_framing!();
         Self {
             jsonrpc: JSONRPC_VERSION.to_string(),
             id: id.into(),
@@ -138,6 +139,7 @@ impl<P> JSONRPCRequest<P> {
 
     /// Validate that this is a valid JSON-RPC request.
     pub fn validate(&self) -> Result<(), crate::Error> {
+        contract_pre_jsonrpc_framing!();
         if self.jsonrpc != JSONRPC_VERSION {
             return Err(crate::Error::validation(format!(
                 "Invalid JSON-RPC version: expected {}, got {}",

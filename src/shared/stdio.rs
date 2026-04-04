@@ -63,6 +63,7 @@ impl Default for StdioTransport {
 #[async_trait]
 impl Transport for StdioTransport {
     async fn send(&mut self, message: TransportMessage) -> Result<()> {
+        contract_pre_transport_abstraction!();
         if self.closed.load(std::sync::atomic::Ordering::Acquire) {
             return Err(TransportError::ConnectionClosed.into());
         }
@@ -72,6 +73,7 @@ impl Transport for StdioTransport {
     }
 
     async fn receive(&mut self) -> Result<TransportMessage> {
+        contract_pre_transport_abstraction!();
         if self.closed.load(std::sync::atomic::Ordering::Acquire) {
             return Err(TransportError::ConnectionClosed.into());
         }
@@ -81,6 +83,7 @@ impl Transport for StdioTransport {
     }
 
     async fn close(&mut self) -> Result<()> {
+        contract_pre_transport_abstraction!();
         self.closed
             .store(true, std::sync::atomic::Ordering::Release);
 

@@ -76,6 +76,10 @@
 #![allow(clippy::used_underscore_binding)]
 #![allow(clippy::result_large_err)]
 
+#[macro_use]
+#[allow(unused_macros)]
+mod generated_contracts;
+
 pub mod assets;
 pub mod client;
 #[cfg(feature = "composition")]
