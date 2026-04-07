@@ -9,6 +9,15 @@ repository = "https://github.com/paiml/rust-mcp-sdk"
 keywords = ["mcp", "developer-tools", "testing", "scaffolding", "sdk"]
 categories = ["development-tools", "command-line-utilities"]
 
+# CDK infrastructure-as-code artifacts are not part of the published crate.
+# deploy/node_modules/ alone is ~202MB and deploy/cdk.out/ is ~38MB — together
+# they blew past the 10MB crates.io limit during the v2.2.0 release (21.4MiB
+# compressed). Keep all deploy/* out of every published crate.
+exclude = [
+    "deploy/",
+    "target/",
+]
+
 [lib]
 name = "pmcp_server"
 path = "src/lib.rs"
