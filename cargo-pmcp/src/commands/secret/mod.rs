@@ -8,10 +8,12 @@ use clap::{Parser, Subcommand};
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
 
+use colored::Colorize;
+
 use crate::commands::flags::FormatValue;
 use crate::secrets::{
     config::{detect_target, SecretTarget, SecretsConfig},
-    ListOptions, ProviderRegistry, SecretCharset, SecretValue, SetOptions,
+    Audience, ListOptions, ProviderRegistry, SecretCharset, SecretValue, SetOptions,
 };
 
 /// Manage secrets for MCP servers.
@@ -50,6 +52,15 @@ pub struct SecretCommand {
     /// Server ID for namespacing secrets
     #[arg(long, global = true)]
     server: Option<String>,
+
+    /// Which Lambda the secret targets.
+    ///
+    /// `mcp` (default) sets env vars on the MCP server Lambda. `billing` sets
+    /// env vars on the subscription Lambda (for servers that opt into Stripe
+    /// billing via pmcp.run's Server Status > BILLING). `billing` is only
+    /// supported when --target=pmcp-run.
+    #[arg(long, value_enum, global = true, default_value_t = Audience::Mcp)]
+    audience: Audience,
 
     /// Output format (text, json)
     #[arg(long, value_enum, default_value = "text", global = true)]
@@ -214,7 +225,7 @@ impl SecretCommand {
                     include_metadata: *metadata,
                 };
 
-                let result = provider.list(options).await?;
+                let result = provider.list(self.audience, options).await?;
 
                 if matches!(self.format, FormatValue::Json) {
                     println!("{}", serde_json::to_string_pretty(&result.secrets)?);
@@ -251,7 +262,7 @@ impl SecretCommand {
                 }
 
                 let secret_name = self.resolve_secret_name(name)?;
-                let value = provider.get(&secret_name).await?;
+                let value = provider.get(self.audience, &secret_name).await?;
 
                 if let Some(output_path) = output {
                     // Write to file with restricted permissions
@@ -343,13 +354,21 @@ impl SecretCommand {
                     ..Default::default()
                 };
 
-                let metadata = provider.set(&secret_name, secret_value, options).await?;
+                let metadata = provider
+                    .set(self.audience, &secret_name, secret_value, options)
+                    .await?;
 
                 if !quiet {
                     println!("✅ Secret '{}' set successfully.", secret_name);
                     if let Some(version) = metadata.version {
                         println!("   Version: {}", version);
                     }
+                }
+
+                // Per CR Q2: display non-fatal warnings on stderr in yellow,
+                // but keep exit code 0 — the secret WAS stored successfully.
+                if let Some(warning) = metadata.warning {
+                    eprintln!("{}: {}", "warning".yellow().bold(), warning.yellow());
                 }
             },
 
@@ -373,7 +392,7 @@ impl SecretCommand {
                     }
                 }
 
-                provider.delete(&secret_name, *yes).await?;
+                provider.delete(self.audience, &secret_name, *yes).await?;
 
                 if !quiet {
                     println!("✅ Secret '{}' deleted.", secret_name);
@@ -444,7 +463,7 @@ impl SecretCommand {
                 println!("Secrets referenced in configuration:");
 
                 // Check which secrets exist
-                let list_result = provider.list(ListOptions::default()).await?;
+                let list_result = provider.list(self.audience, ListOptions::default()).await?;
                 let existing: std::collections::HashSet<_> =
                     list_result.secrets.iter().map(|s| &s.name).collect();
 
@@ -476,7 +495,12 @@ impl SecretCommand {
                             let value = rpassword::prompt_password("  Enter value (hidden): ")?;
 
                             provider
-                                .set(name, SecretValue::new(value), SetOptions::default())
+                                .set(
+                                    self.audience,
+                                    name,
+                                    SecretValue::new(value),
+                                    SetOptions::default(),
+                                )
                                 .await?;
                             println!("  ✓ Created");
                         }

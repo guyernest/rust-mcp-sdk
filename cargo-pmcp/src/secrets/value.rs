@@ -135,6 +135,11 @@ pub struct SecretMetadata {
     /// Custom tags
     #[serde(default)]
     pub tags: std::collections::HashMap<String, String>,
+    /// Non-fatal warning from the provider (e.g., billing audience set but
+    /// no subscription Lambda registered yet). The operation succeeded;
+    /// the warning informs the user about a downstream propagation gap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 impl SecretMetadata {
@@ -147,6 +152,7 @@ impl SecretMetadata {
             modified_at: None,
             description: None,
             tags: std::collections::HashMap::new(),
+            warning: None,
         }
     }
 }

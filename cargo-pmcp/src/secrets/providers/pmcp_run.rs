@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::secrets::error::{SecretError, SecretResult};
 use crate::secrets::provider::{
-    parse_secret_name, ListOptions, ListResult, ProviderCapabilities, ProviderHealth,
+    parse_secret_name, Audience, ListOptions, ListResult, ProviderCapabilities, ProviderHealth,
     SecretProvider, SetOptions,
 };
 use crate::secrets::value::{SecretEntry, SecretMetadata, SecretValue};
@@ -207,7 +207,7 @@ impl SecretProvider for PmcpRunSecretProvider {
         Ok(())
     }
 
-    async fn list(&self, options: ListOptions) -> SecretResult<ListResult> {
+    async fn list(&self, audience: Audience, options: ListOptions) -> SecretResult<ListResult> {
         // Server ID is required for listing secrets
         let server_id = options.server_id.ok_or_else(|| {
             SecretError::ConfigError(
@@ -216,8 +216,8 @@ impl SecretProvider for PmcpRunSecretProvider {
         })?;
 
         let query = r#"
-            query ListServerSecrets($serverId: String!) {
-                listServerSecrets(serverId: $serverId) {
+            query ListServerSecrets($serverId: String!, $audience: ServerSecretAudience) {
+                listServerSecrets(serverId: $serverId, audience: $audience) {
                     serverId
                     secrets
                 }
@@ -226,6 +226,7 @@ impl SecretProvider for PmcpRunSecretProvider {
 
         let variables = serde_json::json!({
             "serverId": server_id,
+            "audience": audience.as_graphql(),
         });
 
         #[derive(Deserialize)]
@@ -286,6 +287,7 @@ impl SecretProvider for PmcpRunSecretProvider {
                     modified_at: None,
                     description: None,
                     tags: Default::default(),
+                    warning: None,
                 },
             })
             .collect();
@@ -296,13 +298,13 @@ impl SecretProvider for PmcpRunSecretProvider {
         })
     }
 
-    async fn get(&self, name: &str) -> SecretResult<SecretValue> {
+    async fn get(&self, audience: Audience, name: &str) -> SecretResult<SecretValue> {
         self.validate_name(name)?;
         let (server_id, secret_name) = parse_secret_name(name)?;
 
         let query = r#"
-            query GetServerSecret($serverId: String!, $secretName: String!) {
-                getServerSecret(serverId: $serverId, secretName: $secretName) {
+            query GetServerSecret($serverId: String!, $secretName: String!, $audience: ServerSecretAudience) {
+                getServerSecret(serverId: $serverId, secretName: $secretName, audience: $audience) {
                     serverId
                     secretName
                     secretValue
@@ -314,6 +316,7 @@ impl SecretProvider for PmcpRunSecretProvider {
         let variables = serde_json::json!({
             "serverId": server_id,
             "secretName": secret_name,
+            "audience": audience.as_graphql(),
         });
 
         #[derive(Deserialize)]
@@ -355,6 +358,7 @@ impl SecretProvider for PmcpRunSecretProvider {
 
     async fn set(
         &self,
+        audience: Audience,
         name: &str,
         value: SecretValue,
         options: SetOptions,
@@ -363,12 +367,13 @@ impl SecretProvider for PmcpRunSecretProvider {
         let (server_id, secret_name) = parse_secret_name(name)?;
 
         let query = r#"
-            mutation SetServerSecret($serverId: String!, $secretName: String!, $secretValue: String!, $description: String) {
-                setServerSecret(serverId: $serverId, secretName: $secretName, secretValue: $secretValue, description: $description) {
+            mutation SetServerSecret($serverId: String!, $secretName: String!, $secretValue: String!, $description: String, $audience: ServerSecretAudience) {
+                setServerSecret(serverId: $serverId, secretName: $secretName, secretValue: $secretValue, description: $description, audience: $audience) {
                     success
                     serverId
                     secretName
                     error
+                    warning
                 }
             }
         "#;
@@ -378,6 +383,7 @@ impl SecretProvider for PmcpRunSecretProvider {
             "secretName": secret_name,
             "secretValue": value.expose(),
             "description": options.description,
+            "audience": audience.as_graphql(),
         });
 
         #[derive(Deserialize)]
@@ -395,6 +401,7 @@ impl SecretProvider for PmcpRunSecretProvider {
             #[serde(rename = "secretName")]
             secret_name: Option<String>,
             error: Option<String>,
+            warning: Option<String>,
         }
 
         let response: SetResponse = self.execute_graphql(query, variables).await?;
@@ -417,7 +424,9 @@ impl SecretProvider for PmcpRunSecretProvider {
             });
         }
 
-        // Case 1: Success
+        // Case 1: Success — `warning` carries the platform's non-fatal hint
+        // (e.g. "billing audience targeted but no subscription Lambda registered").
+        // Per CR Q2 the caller displays it on stderr without flipping the exit code.
         Ok(SecretMetadata {
             name: result
                 .secret_name
@@ -427,16 +436,17 @@ impl SecretProvider for PmcpRunSecretProvider {
             modified_at: None,
             description: options.description,
             tags: options.tags,
+            warning: result.warning,
         })
     }
 
-    async fn delete(&self, name: &str, _force: bool) -> SecretResult<()> {
+    async fn delete(&self, audience: Audience, name: &str, _force: bool) -> SecretResult<()> {
         self.validate_name(name)?;
         let (server_id, secret_name) = parse_secret_name(name)?;
 
         let query = r#"
-            mutation DeleteServerSecret($serverId: String!, $secretName: String!) {
-                deleteServerSecret(serverId: $serverId, secretName: $secretName) {
+            mutation DeleteServerSecret($serverId: String!, $secretName: String!, $audience: ServerSecretAudience) {
+                deleteServerSecret(serverId: $serverId, secretName: $secretName, audience: $audience) {
                     success
                     error
                 }
@@ -446,6 +456,7 @@ impl SecretProvider for PmcpRunSecretProvider {
         let variables = serde_json::json!({
             "serverId": server_id,
             "secretName": secret_name,
+            "audience": audience.as_graphql(),
         });
 
         #[derive(Deserialize)]

@@ -64,9 +64,12 @@ impl std::fmt::Display for ProtocolVersion {
 #[non_exhaustive]
 #[serde(rename_all = "camelCase")]
 pub struct IconInfo {
-    /// Icon URL
-    #[serde(alias = "src")]
-    pub url: String,
+    /// Icon source URL.
+    ///
+    /// Serialized as `src` per the MCP 2025-11-25 spec. Accepts `url` as a
+    /// deserialize alias for backwards compat with pre-2025-11-25 servers.
+    #[serde(alias = "url")]
+    pub src: String,
     /// Icon MIME type
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
@@ -79,12 +82,13 @@ pub struct IconInfo {
 }
 
 impl IconInfo {
-    /// Create an `IconInfo` with the icon URL.
+    /// Create an `IconInfo` with the icon source URL.
     ///
-    /// Optional fields (`mime_type`, sizes, theme) default to `None`.
-    pub fn new(url: impl Into<String>) -> Self {
+    /// Optional fields (`mime_type`, `sizes`, `theme`) default to `None`.
+    /// The argument is serialized as `src` per MCP 2025-11-25 spec.
+    pub fn new(src: impl Into<String>) -> Self {
         Self {
-            url: url.into(),
+            src: src.into(),
             mime_type: None,
             sizes: None,
             theme: None,
@@ -599,5 +603,47 @@ mod tests {
         let meta: RequestMeta = serde_json::from_str(json_str).unwrap();
         assert_eq!(meta._task_id.as_deref(), Some("task-xyz"));
         assert!(meta.progress_token.is_none());
+    }
+
+    /// Per MCP 2025-11-25 spec, `IconInfo` must serialize its source URL
+    /// as `src` (not `url`). Regression test for CR-002 — `ChatGPT`'s pydantic
+    /// validator rejects responses where the field is named `url`.
+    #[test]
+    fn icon_info_serializes_as_src() {
+        let icon = IconInfo::new("https://example.com/icon.png").with_mime_type("image/png");
+        let json = serde_json::to_value(&icon).unwrap();
+        assert_eq!(json["src"].as_str(), Some("https://example.com/icon.png"));
+        assert_eq!(json["mimeType"].as_str(), Some("image/png"));
+        assert!(
+            json.get("url").is_none(),
+            "IconInfo must not emit `url` — MCP spec requires `src`"
+        );
+    }
+
+    #[test]
+    fn icon_info_deserializes_src() {
+        let j = serde_json::json!({"src": "https://example.com/a.png"});
+        let icon: IconInfo = serde_json::from_value(j).unwrap();
+        assert_eq!(icon.src, "https://example.com/a.png");
+    }
+
+    /// Backwards compat: legacy `url` key must still deserialize via the alias.
+    #[test]
+    fn icon_info_deserializes_legacy_url_alias() {
+        let j = serde_json::json!({"url": "https://example.com/b.png"});
+        let icon: IconInfo = serde_json::from_value(j).unwrap();
+        assert_eq!(icon.src, "https://example.com/b.png");
+    }
+
+    #[test]
+    fn icon_info_round_trip_preserves_value() {
+        let original = IconInfo::new("https://example.com/c.png")
+            .with_mime_type("image/svg+xml")
+            .with_sizes(vec!["32x32".to_string(), "64x64".to_string()]);
+        let json = serde_json::to_value(&original).unwrap();
+        let restored: IconInfo = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.src, original.src);
+        assert_eq!(restored.mime_type, original.mime_type);
+        assert_eq!(restored.sizes, original.sizes);
     }
 }

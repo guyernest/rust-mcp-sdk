@@ -1,6 +1,6 @@
 [package]
 name = "pmcp-macros"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "Procedural macros for PMCP SDK - Model Context Protocol"

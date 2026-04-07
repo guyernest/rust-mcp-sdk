@@ -64,6 +64,7 @@ async fn start_http_in_background(server: pmcp::Server) -> Result<SocketAddr, Er
         on_session_closed: None,
         http_middleware: None,
         allowed_origins: None,
+        max_request_bytes: pmcp::server::limits::DEFAULT_MAX_REQUEST_BYTES,
     };
 
     let http_server = pmcp::server::streamable_http_server::StreamableHttpServer::with_config(
