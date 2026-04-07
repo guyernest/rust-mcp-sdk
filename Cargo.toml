@@ -33,6 +33,16 @@ exclude = [
     "examples/60_tasks_basic.rs",
     "examples/62_task_workflow_lifecycle.rs",
     "examples/65_durable_mcp_agent.rs",
+    # PMAT / PV tooling metadata — not part of the published crate.
+    # .pmat/context.db alone is ~21MB and blew past the 10MB crates.io limit
+    # during the v2.2.0 release. Keep these out of every future release.
+    ".pmat/",
+    ".pv/",
+    "contracts/",
+    # GSD phase planning (6.3MB) and presentation decks (5.6MB) — workspace
+    # scaffolding, not crate content. Also blew the 10MB limit during v2.2.0.
+    ".planning/",
+    "presentations/",
 ]
 
 [dependencies]
