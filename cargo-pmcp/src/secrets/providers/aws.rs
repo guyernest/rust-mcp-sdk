@@ -7,8 +7,8 @@ use async_trait::async_trait;
 
 use crate::secrets::error::{SecretError, SecretResult};
 use crate::secrets::provider::{
-    parse_secret_name, ListOptions, ListResult, ProviderCapabilities, ProviderHealth,
-    SecretProvider, SetOptions,
+    parse_secret_name, reject_billing_audience, Audience, ListOptions, ListResult,
+    ProviderCapabilities, ProviderHealth, SecretProvider, SetOptions,
 };
 use crate::secrets::value::{SecretMetadata, SecretValue};
 
@@ -91,7 +91,8 @@ impl SecretProvider for AwsSecretProvider {
         Ok(())
     }
 
-    async fn list(&self, _options: ListOptions) -> SecretResult<ListResult> {
+    async fn list(&self, audience: Audience, _options: ListOptions) -> SecretResult<ListResult> {
+        reject_billing_audience(self.id(), audience)?;
         // TODO: Implement with aws-sdk-secretsmanager
         Err(SecretError::ProviderError {
             provider: "aws".to_string(),
@@ -99,7 +100,8 @@ impl SecretProvider for AwsSecretProvider {
         })
     }
 
-    async fn get(&self, _name: &str) -> SecretResult<SecretValue> {
+    async fn get(&self, audience: Audience, _name: &str) -> SecretResult<SecretValue> {
+        reject_billing_audience(self.id(), audience)?;
         // TODO: Implement with aws-sdk-secretsmanager
         Err(SecretError::ProviderError {
             provider: "aws".to_string(),
@@ -109,10 +111,12 @@ impl SecretProvider for AwsSecretProvider {
 
     async fn set(
         &self,
+        audience: Audience,
         _name: &str,
         _value: SecretValue,
         _options: SetOptions,
     ) -> SecretResult<SecretMetadata> {
+        reject_billing_audience(self.id(), audience)?;
         // TODO: Implement with aws-sdk-secretsmanager
         Err(SecretError::ProviderError {
             provider: "aws".to_string(),
@@ -120,7 +124,8 @@ impl SecretProvider for AwsSecretProvider {
         })
     }
 
-    async fn delete(&self, _name: &str, _force: bool) -> SecretResult<()> {
+    async fn delete(&self, audience: Audience, _name: &str, _force: bool) -> SecretResult<()> {
+        reject_billing_audience(self.id(), audience)?;
         // TODO: Implement with aws-sdk-secretsmanager
         Err(SecretError::ProviderError {
             provider: "aws".to_string(),

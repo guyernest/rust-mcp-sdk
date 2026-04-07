@@ -254,9 +254,14 @@ async fn handle_client_registration(event: Request) -> Result<Response<Body>, Er
     if let Some(ref secret) = client_secret {{
         // Hash the secret before storing
         use sha2::{{Sha256, Digest}};
+        use std::fmt::Write;
         let mut hasher = Sha256::new();
         hasher.update(secret.as_bytes());
-        let hash = format!("{{:x}}", hasher.finalize());
+        let digest = hasher.finalize();
+        let mut hash = String::with_capacity(64);
+        for b in &digest {{
+            let _ = write!(hash, "{{b:02x}}");
+        }}
         item.insert(
             "client_secret_hash".to_string(),
             aws_sdk_dynamodb::types::AttributeValue::S(hash),

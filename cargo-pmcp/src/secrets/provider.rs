@@ -1,9 +1,48 @@
 //! Secret provider trait and related types.
 
 use async_trait::async_trait;
+use clap::ValueEnum;
+use serde::{Deserialize, Serialize};
 
 use super::error::SecretResult;
 use super::value::{SecretEntry, SecretMetadata, SecretValue};
+
+/// Which Lambda the secret is intended for.
+///
+/// pmcp.run servers that opt into Stripe billing have two Lambdas: the MCP
+/// server Lambda (handles MCP protocol traffic) and a subscription Lambda
+/// (handles Stripe webhook events). Each Lambda has its own pool of
+/// environment-variable secrets.
+///
+/// `Mcp` (default) targets the MCP server Lambda. `Billing` targets the
+/// subscription Lambda; only the `pmcp-run` target supports it — other
+/// providers reject `Billing` because they have no subscription-Lambda concept.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+#[clap(rename_all = "lowercase")]
+pub enum Audience {
+    /// MCP server Lambda (default).
+    #[default]
+    Mcp,
+    /// Subscription Lambda for Stripe billing (pmcp-run only).
+    Billing,
+}
+
+impl Audience {
+    /// GraphQL enum variant string for the `ServerSecretAudience` type.
+    pub fn as_graphql(self) -> &'static str {
+        match self {
+            Self::Mcp => "mcp",
+            Self::Billing => "billing",
+        }
+    }
+}
+
+impl std::fmt::Display for Audience {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_graphql())
+    }
+}
 
 /// Capabilities supported by a secret provider.
 #[derive(Debug, Clone, Default)]
@@ -124,28 +163,51 @@ pub trait SecretProvider: Send + Sync {
     fn validate_name(&self, name: &str) -> SecretResult<()>;
 
     /// List secrets (values are never returned, only names/metadata).
-    async fn list(&self, options: ListOptions) -> SecretResult<ListResult>;
+    async fn list(&self, audience: Audience, options: ListOptions) -> SecretResult<ListResult>;
 
     /// Get a secret value by name.
     ///
     /// The name should include the server prefix (e.g., "chess/ANTHROPIC_API_KEY").
-    async fn get(&self, name: &str) -> SecretResult<SecretValue>;
+    async fn get(&self, audience: Audience, name: &str) -> SecretResult<SecretValue>;
 
     /// Set a secret value.
     ///
-    /// Returns metadata about the created/updated secret.
+    /// Returns metadata about the created/updated secret. The metadata may
+    /// include a non-fatal `warning` (e.g., billing audience targeted but no
+    /// subscription Lambda registered yet) — the caller should display it
+    /// without flipping the exit code.
     async fn set(
         &self,
+        audience: Audience,
         name: &str,
         value: SecretValue,
         options: SetOptions,
     ) -> SecretResult<SecretMetadata>;
 
     /// Delete a secret.
-    async fn delete(&self, name: &str, force: bool) -> SecretResult<()>;
+    async fn delete(&self, audience: Audience, name: &str, force: bool) -> SecretResult<()>;
 
     /// Check the health/availability of this provider.
     async fn health_check(&self) -> SecretResult<ProviderHealth>;
+}
+
+/// Reject `Audience::Billing` for providers without a subscription-Lambda concept.
+///
+/// Local filesystem and AWS Secrets Manager targets deploy a single Lambda;
+/// they have no separate billing pool. Returning a clear error here is better
+/// than silently storing a secret that nothing will read.
+pub fn reject_billing_audience(provider: &str, audience: Audience) -> SecretResult<()> {
+    if audience == Audience::Billing {
+        Err(super::error::SecretError::ProviderError {
+            provider: provider.to_string(),
+            message: format!(
+                "--audience billing is only supported when --target=pmcp-run; \
+                 the {provider} target does not expose a subscription Lambda concept."
+            ),
+        })
+    } else {
+        Ok(())
+    }
 }
 
 /// Parse a fully-qualified secret name into (server_id, secret_name).
@@ -210,5 +272,40 @@ mod tests {
     fn test_make_secret_name() {
         let name = make_secret_name("chess", "ANTHROPIC_API_KEY");
         assert_eq!(name, "chess/ANTHROPIC_API_KEY");
+    }
+
+    #[test]
+    fn test_audience_default_is_mcp() {
+        assert_eq!(Audience::default(), Audience::Mcp);
+    }
+
+    #[test]
+    fn test_audience_graphql_strings() {
+        assert_eq!(Audience::Mcp.as_graphql(), "mcp");
+        assert_eq!(Audience::Billing.as_graphql(), "billing");
+    }
+
+    #[test]
+    fn test_audience_display() {
+        assert_eq!(Audience::Mcp.to_string(), "mcp");
+        assert_eq!(Audience::Billing.to_string(), "billing");
+    }
+
+    #[test]
+    fn test_reject_billing_audience_passes_mcp() {
+        assert!(reject_billing_audience("local", Audience::Mcp).is_ok());
+    }
+
+    #[test]
+    fn test_reject_billing_audience_rejects_billing() {
+        let result = reject_billing_audience("local", Audience::Billing);
+        match result {
+            Err(super::super::error::SecretError::ProviderError { provider, message }) => {
+                assert_eq!(provider, "local");
+                assert!(message.contains("--audience billing"));
+                assert!(message.contains("pmcp-run"));
+            },
+            other => panic!("expected ProviderError, got {other:?}"),
+        }
     }
 }

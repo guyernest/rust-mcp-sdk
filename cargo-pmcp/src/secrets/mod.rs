@@ -62,6 +62,6 @@ pub mod value;
 pub use resolve::{load_dotenv, print_secret_report, resolve_secrets, SecretResolution};
 
 // Re-export types used by CLI commands
-pub use provider::{ListOptions, SetOptions};
+pub use provider::{Audience, ListOptions, SetOptions};
 pub use registry::ProviderRegistry;
 pub use value::{SecretCharset, SecretValue};

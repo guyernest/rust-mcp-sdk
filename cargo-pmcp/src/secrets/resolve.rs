@@ -123,7 +123,7 @@ pub fn print_secret_report(
                 "pmcp-run" => {
                     println!("     {} {}{}", "✗".yellow(), env_name, required_marker);
                     println!(
-                        "       Run: cargo pmcp secret set --server {} {} --target pmcp --prompt",
+                        "       Run: cargo pmcp secret set --server {} {} --target pmcp-run --prompt",
                         server_id, env_name,
                     );
                 },

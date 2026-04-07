@@ -85,11 +85,27 @@ pub fn extract_state_inner(ty: &Type) -> syn::Result<Type> {
     ))
 }
 
-/// Check if a type is `Value` or `serde_json::Value`.
+/// Check if a type is `serde_json::Value` or a common alias.
 ///
 /// Per D-15: skip `outputSchema` generation for `Result<Value>` returns.
+/// Matches: `Value`, `JsonValue`, `serde_json::Value`.
+///
+/// This is a best-effort heuristic — proc macros cannot resolve type aliases,
+/// so a user-defined `struct Value` would be a false positive.
 pub fn is_value_type(ty: &Type) -> bool {
-    type_name_matches(ty, "Value")
+    if let Type::Path(TypePath { path, .. }) = ty {
+        let segments = &path.segments;
+        match segments.len() {
+            1 => {
+                let ident = &segments[0].ident;
+                ident == "Value" || ident == "JsonValue"
+            },
+            2 => segments[0].ident == "serde_json" && segments[1].ident == "Value",
+            _ => false,
+        }
+    } else {
+        false
+    }
 }
 
 /// Extract the Ok type from `Result<T>` or `Result<T, E>`.
@@ -230,8 +246,33 @@ mod tests {
     }
 
     #[test]
+    fn test_is_value_type_json_value_alias() {
+        let ty: Type = parse_quote!(JsonValue);
+        assert!(
+            is_value_type(&ty),
+            "should recognize JsonValue alias for serde_json::Value"
+        );
+    }
+
+    #[test]
+    fn test_is_value_type_fully_qualified() {
+        let ty: Type = parse_quote!(serde_json::Value);
+        assert!(
+            is_value_type(&ty),
+            "should recognize fully qualified serde_json::Value"
+        );
+    }
+
+    #[test]
     fn test_is_value_type_false() {
         let ty: Type = parse_quote!(CalculatorResult);
+        assert!(!is_value_type(&ty));
+    }
+
+    #[test]
+    fn test_is_value_type_false_other_value() {
+        // A user-defined type named MyValue should NOT match
+        let ty: Type = parse_quote!(MyValue);
         assert!(!is_value_type(&ty));
     }
 

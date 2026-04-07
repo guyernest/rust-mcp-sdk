@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-04-06
+
+### `pmcp` 2.2.0 — IconInfo wire format spec compliance (CR-002)
+
+#### Fixed
+- **`IconInfo.url` renamed back to `IconInfo.src`** — matches MCP 2025-11-25 spec field name. ChatGPT's pydantic validator rejects responses where the icon field is named `url`. Wire format now emits `src`. `#[serde(alias = "url")]` retained so legacy servers serializing as `url` continue to deserialize correctly. Constructor and fluent API (`IconInfo::new(...)`, `with_mime_type`, `with_sizes`, `with_theme`) are unchanged — the only source-level breakage is direct field access (`icon.url`), which is not used in this workspace.
+- **CR-002 regression tests** added: serialization asserts the wire key is `src` and never `url`; deserialization tests cover both new (`src`) and legacy (`url`) inputs; round-trip preserves value.
+
+### `pmcp-macros` 0.4.1 — `#[mcp_tool]` alias matching
+
+#### Fixed
+- **`is_value_type()` recognizes common aliases** for `serde_json::Value`. Previously a tool returning `pmcp::Result<JsonValue>` (where `JsonValue` is `use serde_json::{Value as JsonValue}`) generated an `outputSchema` of `{"$schema": "...", "title": "AnyValue"}` — missing the required `"type": "object"` field, causing MCP clients like Gemini CLI to reject **all** tools on the server. The macro now matches `Value`, `JsonValue`, and the fully qualified `serde_json::Value` and skips schema generation for all three.
+
+### `mcp-tester` 0.5.0 — outputSchema conformance check
+
+#### Added
+- **T-05: outputSchema validation** in `cargo pmcp test conformance --domain tools`. Validates that every tool with an `outputSchema` has `"type": "object"` at the root per the MCP spec. Skipped if no tools declare `outputSchema`. Catches the macro-generated `AnyValue` schema bug independent of the SDK fix above (defense in depth).
+
+### `cargo-pmcp` 0.6.0 — Billing audience flag, sha2 0.11 fix, deploy hint fix
+
+#### Added
+- **`--audience {mcp|billing}` global flag** on `cargo pmcp secret set/get/list/delete` (per CR: pmcp.run billing audience). Default is `mcp` (backwards compatible). `billing` targets the subscription Lambda for servers that opt into Stripe billing via pmcp.run. Threaded through the GraphQL `setServerSecret`/`getServerSecret`/`listServerSecrets`/`deleteServerSecret` operations as `$audience: ServerSecretAudience`. Non-pmcp-run targets (local, aws) reject `--audience billing` with a clear error since they have no subscription-Lambda concept.
+- **Platform warning display**: when `setServerSecret` succeeds but no subscription Lambda is registered yet, the platform's non-fatal warning (e.g., "Secret saved but no subscription Lambda is registered…") is shown on stderr in yellow. Exit code stays 0 — the secret was stored, the warning is about downstream propagation, not failure.
+- **`Audience` enum** (`Mcp`/`Billing`) with `clap::ValueEnum` derive — gives tab-completion for free.
+
+#### Fixed
+- **`sha2` 0.11 `LowerHex` regression**: `format!("{:x}", hasher.finalize())` no longer compiles because `sha2` 0.11's `Array<u8, ...>` output type doesn't implement `LowerHex`. Replaced with explicit hex encoding in `cargo-pmcp/src/pentest/sarif.rs` (SARIF fingerprint) and the `cargo-pmcp/src/templates/oauth/proxy.rs` template (which would have generated uncompilable code for projects scaffolded against sha2 0.11).
+- **`cargo pmcp deploy --target pmcp-run` missing-secret hint** now correctly suggests `cargo pmcp secret set --target pmcp-run` instead of `--target pmcp` (which doesn't exist).
+- **`cargo pmcp deploy init` tsconfig template** uses `types: ["node"]` instead of `typeRoots: ["./node_modules/@types"]` to avoid TS2580 `Cannot find name 'process'` errors when `node_modules` isn't local (#696c7d4b).
+- **`pmcp-server-lambda`** updated to set the new `max_request_bytes` field on `StreamableHttpServerConfig` introduced in pmcp 2.1.0.
+
+#### Internal
+- Removed unused `anyhow::Result` import in `pentest/attacks/transport_security.rs`.
+- `is_value_type` zero-alloc refactor: direct `Ident` comparison instead of `String` allocation.
+
 ## [2.0.2] - 2026-03-24
 
 ### Fixed

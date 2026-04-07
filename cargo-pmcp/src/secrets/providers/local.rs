@@ -11,8 +11,8 @@ use std::path::PathBuf;
 
 use crate::secrets::error::{SecretError, SecretResult};
 use crate::secrets::provider::{
-    parse_secret_name, ListOptions, ListResult, ProviderCapabilities, ProviderHealth,
-    SecretProvider, SetOptions,
+    parse_secret_name, reject_billing_audience, Audience, ListOptions, ListResult,
+    ProviderCapabilities, ProviderHealth, SecretProvider, SetOptions,
 };
 use crate::secrets::value::{SecretEntry, SecretMetadata, SecretValue};
 
@@ -133,7 +133,8 @@ impl SecretProvider for LocalSecretProvider {
         Ok(())
     }
 
-    async fn list(&self, options: ListOptions) -> SecretResult<ListResult> {
+    async fn list(&self, audience: Audience, options: ListOptions) -> SecretResult<ListResult> {
+        reject_billing_audience(self.id(), audience)?;
         self.ensure_dir()?;
 
         let mut secrets = Vec::new();
@@ -189,6 +190,7 @@ impl SecretProvider for LocalSecretProvider {
                         modified_at: file_meta.modified().ok().map(|t| format!("{:?}", t)),
                         description: None,
                         tags: Default::default(),
+                        warning: None,
                     }
                 } else {
                     SecretMetadata::new(&secret_name)
@@ -210,7 +212,8 @@ impl SecretProvider for LocalSecretProvider {
         })
     }
 
-    async fn get(&self, name: &str) -> SecretResult<SecretValue> {
+    async fn get(&self, audience: Audience, name: &str) -> SecretResult<SecretValue> {
+        reject_billing_audience(self.id(), audience)?;
         self.validate_name(name)?;
         let (server_id, secret_name) = parse_secret_name(name)?;
 
@@ -228,10 +231,12 @@ impl SecretProvider for LocalSecretProvider {
 
     async fn set(
         &self,
+        audience: Audience,
         name: &str,
         value: SecretValue,
         options: SetOptions,
     ) -> SecretResult<SecretMetadata> {
+        reject_billing_audience(self.id(), audience)?;
         self.validate_name(name)?;
         self.ensure_dir()?;
 
@@ -270,10 +275,12 @@ impl SecretProvider for LocalSecretProvider {
             modified_at: Some(chrono::Utc::now().to_rfc3339()),
             description: options.description,
             tags: options.tags,
+            warning: None,
         })
     }
 
-    async fn delete(&self, name: &str, _force: bool) -> SecretResult<()> {
+    async fn delete(&self, audience: Audience, name: &str, _force: bool) -> SecretResult<()> {
+        reject_billing_audience(self.id(), audience)?;
         self.validate_name(name)?;
         let (server_id, secret_name) = parse_secret_name(name)?;
 
@@ -340,6 +347,7 @@ mod tests {
         // Set a secret
         let result = provider
             .set(
+                Audience::Mcp,
                 "test-server/API_KEY",
                 SecretValue::new("secret-value".to_string()),
                 SetOptions::default(),
@@ -348,7 +356,10 @@ mod tests {
         assert!(result.is_ok());
 
         // Get the secret
-        let value = provider.get("test-server/API_KEY").await.unwrap();
+        let value = provider
+            .get(Audience::Mcp, "test-server/API_KEY")
+            .await
+            .unwrap();
         assert_eq!(value.expose(), "secret-value");
     }
 
@@ -360,6 +371,7 @@ mod tests {
         // Set some secrets
         provider
             .set(
+                Audience::Mcp,
                 "server-a/KEY1",
                 SecretValue::new("value1".to_string()),
                 SetOptions::default(),
@@ -368,6 +380,7 @@ mod tests {
             .unwrap();
         provider
             .set(
+                Audience::Mcp,
                 "server-a/KEY2",
                 SecretValue::new("value2".to_string()),
                 SetOptions::default(),
@@ -376,6 +389,7 @@ mod tests {
             .unwrap();
         provider
             .set(
+                Audience::Mcp,
                 "server-b/KEY3",
                 SecretValue::new("value3".to_string()),
                 SetOptions::default(),
@@ -384,15 +398,21 @@ mod tests {
             .unwrap();
 
         // List all secrets
-        let result = provider.list(ListOptions::default()).await.unwrap();
+        let result = provider
+            .list(Audience::Mcp, ListOptions::default())
+            .await
+            .unwrap();
         assert_eq!(result.secrets.len(), 3);
 
         // List for specific server
         let result = provider
-            .list(ListOptions {
-                server_id: Some("server-a".to_string()),
-                ..Default::default()
-            })
+            .list(
+                Audience::Mcp,
+                ListOptions {
+                    server_id: Some("server-a".to_string()),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
         assert_eq!(result.secrets.len(), 2);
@@ -406,6 +426,7 @@ mod tests {
         // Set a secret
         provider
             .set(
+                Audience::Mcp,
                 "test-server/DELETE_ME",
                 SecretValue::new("to-delete".to_string()),
                 SetOptions::default(),
@@ -415,12 +436,12 @@ mod tests {
 
         // Delete it
         provider
-            .delete("test-server/DELETE_ME", false)
+            .delete(Audience::Mcp, "test-server/DELETE_ME", false)
             .await
             .unwrap();
 
         // Verify it's gone
-        let result = provider.get("test-server/DELETE_ME").await;
+        let result = provider.get(Audience::Mcp, "test-server/DELETE_ME").await;
         assert!(matches!(result, Err(SecretError::NotFound { .. })));
     }
 
@@ -432,6 +453,7 @@ mod tests {
         // Set a secret
         provider
             .set(
+                Audience::Mcp,
                 "test-server/EXISTING",
                 SecretValue::new("original".to_string()),
                 SetOptions::default(),
@@ -442,6 +464,7 @@ mod tests {
         // Try to set with no_overwrite
         let result = provider
             .set(
+                Audience::Mcp,
                 "test-server/EXISTING",
                 SecretValue::new("new-value".to_string()),
                 SetOptions {
@@ -453,8 +476,50 @@ mod tests {
         assert!(matches!(result, Err(SecretError::AlreadyExists { .. })));
 
         // Original value should remain
-        let value = provider.get("test-server/EXISTING").await.unwrap();
+        let value = provider
+            .get(Audience::Mcp, "test-server/EXISTING")
+            .await
+            .unwrap();
         assert_eq!(value.expose(), "original");
+    }
+
+    /// Local provider must reject `--audience billing` since it has no
+    /// subscription-Lambda concept (CR: pmcp.run billing audience).
+    #[tokio::test]
+    async fn test_local_provider_rejects_billing_audience() {
+        let temp_dir = TempDir::new().unwrap();
+        let provider = LocalSecretProvider::new(temp_dir.path().join("secrets"));
+
+        let set_result = provider
+            .set(
+                Audience::Billing,
+                "test-server/STRIPE_API_KEY",
+                SecretValue::new("sk_test_x".to_string()),
+                SetOptions::default(),
+            )
+            .await;
+        assert!(matches!(set_result, Err(SecretError::ProviderError { .. })));
+
+        let get_result = provider
+            .get(Audience::Billing, "test-server/STRIPE_API_KEY")
+            .await;
+        assert!(matches!(get_result, Err(SecretError::ProviderError { .. })));
+
+        let list_result = provider
+            .list(Audience::Billing, ListOptions::default())
+            .await;
+        assert!(matches!(
+            list_result,
+            Err(SecretError::ProviderError { .. })
+        ));
+
+        let delete_result = provider
+            .delete(Audience::Billing, "test-server/STRIPE_API_KEY", false)
+            .await;
+        assert!(matches!(
+            delete_result,
+            Err(SecretError::ProviderError { .. })
+        ));
     }
 
     #[test]
