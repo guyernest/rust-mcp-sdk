@@ -1,200 +1,202 @@
-# Research Summary: MCP Apps Developer Experience (v1.3)
+# Research Summary: rmcp Upgrades (v2.1 Documentation & DX)
 
-**Project:** PMCP SDK -- MCP Apps Developer Experience
-**Domain:** MCP Apps developer tooling (widget preview, WASM bridge, publishing, authoring DX, E2E testing)
-**Researched:** 2026-02-24
-**Overall confidence:** HIGH
+**Project:** PMCP SDK — rmcp comparison / DX upgrade milestone
+**Domain:** Rust crate documentation, docs.rs presentation, developer experience
+**Researched:** 2026-04-10
+**Confidence:** HIGH (all findings verified against actual source files in both repos)
+
+---
 
 ## Executive Summary
 
-The v1.3 milestone transforms the PMCP SDK's MCP Apps story from "types and adapters exist" to "a developer can author, preview, test, and publish an MCP App entirely from the Rust toolchain." The infrastructure is 60-80% built: mcp-preview has an Axum server with tool list/call proxy, asset serving, and a full preview UI; the WASM client has dual-transport connect/list/call; chess and map examples have working server code and widget HTML; Playwright scaffolding has 10 tests written with a mock bridge fixture. The remaining work is integration -- wiring the pieces together so that widget iframes actually render with a working bridge, the WASM client can be used as an in-browser bridge alternative, and the publishing pipeline generates ChatGPT-compatible manifests.
+PMCP is an established Rust MCP SDK with more raw documentation content than its main competitor rmcp, but it has a critical presentation gap: the right information exists in the wrong places, several files contain actively wrong content, and docs.rs surfaces internal/unstable APIs to users alongside production ones. This is a documentation architecture problem, not a documentation quantity problem — no new crates or runtime dependencies are needed to fix it.
 
-The recommended approach is bridge-first: fix the mcp-preview bridge injection (replace broken `window.parent.previewRuntime` cross-origin access with postMessage or same-origin `srcdoc` proxy, add `resources/read` proxy), then layer WASM bridge support, shared bridge library, authoring scaffolding, and publishing on top. The dependency chain is strict -- nothing downstream works until the preview bridge renders widgets with live tool call routing. Stack changes are minimal: bump mcp-preview's axum from 0.7 to 0.8 (code already uses 0.8 syntax), add `minijinja "2"` to mcp-preview and cargo-pmcp for template generation, and expand web-sys features in the WASM client. Three new deps total across the workspace.
+The recommended approach is a three-phase upgrade: (1) stop the bleeding by replacing provably-wrong content (the examples/README.md is the Spin framework README, the protocol version badge is 6 months stale), (2) rewrite stale documentation to reflect the current API (the macros README documents deprecated `#[tool]` and claims `#[mcp_prompt]` doesn't exist — it does), and (3) fix the docs.rs rendering pipeline so feature-gated items display badges and users can see which features enable what. The entire upgrade is configuration changes, file rewrites, and targeted attribute additions — scope is well-bounded.
 
-The key risks are: (1) bridge contract divergence between the preview mock and ChatGPT's Skybridge runtime causing widgets to work in dev but fail in production -- mitigated by defining a shared `McpBridgeContract` TypeScript interface and a canonical `widget-runtime.js`; (2) postMessage wildcard origin (`'*'`) in the bridge code creating a CVE-class security vulnerability -- mitigated by implementing origin handshake on all bridge paths; (3) WASM client hardcoded request IDs causing concurrent call corruption -- mitigated by adding an atomic counter before exposing WASM to widget authors.
+The key risk is drift: the examples/README.md became the Spin framework README because there was no enforcement mechanism. Every fix in this milestone must include a verification step (CI check, doctest, or count assertion) that prevents the same decay from happening again. The secondary risk is accidentally breaking the public API surface during doc-focused changes — run `cargo semver-checks` on every PR in this milestone.
+
+---
 
 ## Key Findings
 
 ### Recommended Stack
 
-Three new dependencies total. No experimental or unstable libraries. The stack is deliberately conservative.
+No new dependencies are required for this milestone. All fixes are configuration and content changes. The relevant tooling already exists:
 
-**Core changes:**
-- `axum "0.8"` in mcp-preview: Version bump (from 0.7) to align with root pmcp crate. Route syntax in `server.rs` already uses 0.8 `/{*path}` patterns. Eliminates duplicate axum compilation.
-- `minijinja "2"` in mcp-preview + cargo-pmcp: Template engine for demo landing pages and `--mcp-apps` scaffolding. Single-file, zero proc macros, Jinja2 syntax. Chosen over tera (heavier deps), handlebars (no filters), askama (compile-time only).
-- `web-sys` feature additions in wasm-client: `MessageChannel`, `MessagePort`, `MessageEvent`, `HtmlIframeElement`, `Window`, `EventTarget`, `Document`, `Element`. Feature flags on the existing dep, not new crates.
+- `#![cfg_attr(docsrs, feature(doc_auto_cfg))]` in `src/lib.rs` — single line that auto-generates feature badges for all 145 feature-gated items on docs.rs (currently only 6 have manual annotations, meaning 139 items show no badge)
+- Explicit `[package.metadata.docs.rs]` feature list replacing `all-features = true` — prevents test helpers, wasm-only, and unstable APIs from surfacing in docs
+- `#![doc = include_str!("../README.md")]` in `pmcp-macros/src/lib.rs` — appropriate for the macros crate (focused README); NOT recommended for the main pmcp crate (README contains deployment/CLI/book content)
+- `RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps` added to CI — enforces zero doc warnings (currently 29 warnings including broken intra-doc links)
 
-**Build tooling:**
-- `wasm-pack` (0.13.x) for WASM client builds. Already the standard tool; needs `just` recipe.
-- Playwright `@playwright/test ^1.50.0` already in `tests/playwright/package.json`. No npm changes needed.
+**Core changes (no new deps):**
+- `src/lib.rs`: Add `doc_auto_cfg` attribute, expand feature flag table in doc comments
+- `Cargo.toml`: Replace `all-features = true` with explicit 13-feature list, exclude internal features
+- `pmcp-macros/README.md`: Complete rewrite (currently documents deprecated macros only)
+- `examples/README.md`: Complete rewrite (currently contains Spin framework README — entirely wrong)
+- `examples/` directory: Audit and resolve 17 orphan files, 4 duplicate number prefixes
 
-**Explicitly not adding:** trunk (overkill), leptos/yew (framework complexity), cargo-generate (external tool dependency), axum-extra (unnecessary).
+### Expected Features (DX Capabilities)
 
-### Expected Features
+**Must have — table stakes (credibility blockers if absent):**
+- Accurate `examples/README.md` with correct PMCP content — first thing devs check
+- Correct protocol version badge (`2025-11-25`, not `2025-03-26`) — active misinformation
+- Macros README documenting `#[mcp_tool]`, `#[mcp_server]`, `#[mcp_prompt]`, `#[mcp_resource]` — current README steers users to deprecated `#[tool]`
+- Consistent example numbering without collisions — examples 08, 11, 12, 32 each have two files
+- Feature flag documentation table — 20+ features, none documented in any user-facing location
 
-**Must have (table stakes -- milestone fails without these):**
-- Widget iframe renders from resource URI via `resources/read` proxy (mcp-preview)
-- `window.mcpBridge.callTool()` routes to real MCP server through postMessage bridge
-- MCP session initialization happens once, not per-request (McpProxy fix)
-- Chess and map examples compile and run (`cargo build --features mcp-apps`)
-- Playwright chess widget tests pass (10 tests against real widget HTML selectors)
-- `cargo pmcp new --mcp-apps` scaffolding generates a working MCP App project
+**Should have — competitive differentiators:**
+- Feature badges on all 145 feature-gated docs.rs items (via `doc_auto_cfg` — one line)
+- Transport matrix table in lib.rs docs linking to actual types
+- Migration callout for `#[tool]` -> `#[mcp_tool]` (rmcp has migration guides prominently; PMCP v2.0 was a breaking change with no linked guide)
+- Zero-warning doc build enforced in CI
+- Ghost feature flags (`wasi-http`, `unstable`, `simd`) documented with status/intent
 
-**Should have (differentiators):**
-- Shared bridge library (`widget-runtime.js`) eliminating copy-paste across widgets
-- ChatGPT manifest generation (`cargo pmcp manifest`)
-- WASM in-browser test client as alternative bridge mode in preview
-- Demo landing page generation (`cargo pmcp landing`)
-- Bridge API TypeScript type definitions (`widget-runtime.d.ts`)
-- Playwright test report with screenshots
+**Defer to later milestone:**
+- Per-capability code examples in README (book/course fill this role for PMCP)
+- Community showcase ("Built with") — cannot fabricate; add when real projects verified
+- Subdirectory reorganization of examples (flat numbering works; reorganization is high churn for low gain)
+- `document-features` crate (adds build dep for something a manual table does equally well)
 
-**Defer to v1.4+:**
-- WASM bridge polyfill (bundled `widget-runtime.js` with WASM client inside)
-- Integration Playwright test (preview server + real MCP server)
-- Auto-reload on server restart via WebSocket
-- Multiple widget resources panel in preview UI
-- Manifest validation against ChatGPT schema
-- Widget accessibility tests (axe-core)
+### Architecture Integration Points
 
-### Architecture Approach
+The documentation build pipeline has a specific dependency order that must be respected. Changes in the wrong order produce wasted rework:
 
-The architecture is a six-component system with strict dependency flow: `McpProxy` (HTTP-to-JSON-RPC translation with session persistence) feeds `BridgeInjector` (pure HTML transform that inserts preview bridge JS), which feeds `handlers::widget` (the new `/widget-proxy` endpoint). The shared bridge library (`mcp-bridge-js`) defines the contract all bridge implementations must satisfy. The WASM `WidgetRenderer` implements the same contract through postMessage. `cargo-pmcp` commands consume the preview infrastructure for scaffolding, manifests, and demos.
+**Major components affected:**
 
-**Major components:**
-1. `McpProxy` (modified) -- HTTP proxy to MCP server with session persistence, `resources/read` + `resources/list`, atomic request IDs
-2. `BridgeInjector` (new) -- Pure function: HTML in, HTML+bridge-script out. Injects `window.mcpBridge` that routes `callTool()` to preview server's `/api/tools/call`
-3. `handlers::widget` (new) -- `/widget-proxy?uri=<resource-uri>` endpoint. Fetches resource HTML, runs through BridgeInjector, serves with iframe-friendly headers
-4. `mcp-bridge-js` / `widget-runtime.js` (new) -- Shared JS bridge library. Detects environment (ChatGPT/preview/standalone). Single source of truth for bridge API contract
-5. `WasmClient::WidgetRenderer` (new) -- Creates iframe, injects bridge via postMessage, routes tool calls through WASM HTTP transport
-6. `cargo-pmcp` commands (modified/new) -- `new --mcp-apps`, `manifest`, `landing` commands
+1. **`Cargo.toml` docs.rs metadata** — upstream gate; all feature-badge rendering depends on this being an explicit list, not `all-features = true`. This must change first.
+
+2. **`src/lib.rs` crate attributes + doc comments** — add `doc_auto_cfg`, expand feature flag table. Depends on knowing the explicit feature list from step 1.
+
+3. **`pmcp-macros/README.md` + `pmcp-macros/src/lib.rs`** — standalone rewrite; documents the current proc-macro API. No dependencies on other changes, but logically part of the same content pass.
+
+4. **`examples/README.md` rewrite + orphan audit** — depends on knowing the complete feature list (step 2) to accurately list `required-features` per example. Must come after content pass so example descriptions reference the right macro names.
+
+5. **CI enforcement gates** — doc-check Makefile target, example count assertion, semver-checks on every PR. These are the drift-prevention layer and should be added in the same phase as the content they guard.
+
+**Dependency graph (short form):**
+```
+Cargo.toml (explicit features)
+  -> lib.rs (doc_auto_cfg + feature table)
+       -> macros README (current API names)
+             -> examples/README.md (complete index)
+                   -> CI gates (doc-check, count assertion, semver-checks)
+```
 
 ### Critical Pitfalls
 
-Research identified 7 critical pitfalls. These are the top 5 that must be addressed during implementation:
+1. **examples/README.md is the Spin framework README** — replace immediately; this is the single highest-credibility damage. A dev browsing the examples/ directory on GitHub sees WebAssembly microservice content with zero relation to PMCP. Detection: `head -3 examples/README.md`.
 
-1. **McpProxy re-initializes on every request (no session stickiness)** -- `list_tools()` calls `initialize()` before every request. Breaks stateful MCP servers, wastes RTTs. Fix: `OnceCell<String>` for session ID, forward `Mcp-Session-Id` header. Address in Phase 1.
+2. **Macros README actively misleads** — documents `#[tool]` (deprecated since 0.3.0) as the primary macro, claims prompts/resources are "coming soon" when they shipped. New users will adopt the deprecated API and get deprecation warnings on first compile. Fix: complete README rewrite leading with `#[mcp_tool]`, `#[mcp_server]`, `#[mcp_prompt]`, `#[mcp_resource]`.
 
-2. **postMessage wildcard origin `'*'` in bridge code (CVE-class vulnerability)** -- Both `ChatGptAdapter::inject_bridge()` and the preview bridge send postMessage with `'*'` target and accept messages without `event.origin` validation. Fix: origin handshake protocol. Address in Phase 1.
+3. **17 orphan example files not in Cargo.toml** — users cannot run them with `cargo run --example`, they do not compile in CI, and they silently rot. The number collisions (4 pairs of files sharing a prefix number) make any README index ambiguous. Fix: audit each — register with correct `required-features` or delete.
 
-3. **WASM client hardcoded request IDs (concurrent call corruption)** -- `call_tool()` uses `3i64`, `list_tools()` uses `2i64`. Concurrent widget calls collide. Fix: `AtomicI64` counter. Address in Phase 2.
+4. **`all-features = true` exposes internal APIs on docs.rs** — `test-helpers`, `unstable`, `simd`, and example-only feature flags appear on docs.rs as production APIs. Users see `authentication_example` as a feature they can enable. Fix: explicit 13-feature list in `[package.metadata.docs.rs]`, excluding all internal/test/example flags.
 
-4. **Bridge contract divergence between preview mock and production** -- Preview returns raw game state; ChatGPT wraps in `{ content: [...] }` envelope. Widgets work in dev, fail in production. Fix: define shared `McpBridgeContract` interface, enforce in both bridges. Address across Phases 1-3.
+5. **Documentation changes that accidentally break public API** — doc cleanup is when `pub use` re-exports get moved or removed without noticing it's a semver break. The deprecated `#[tool]` macro must stay until a major version bump. Fix: `cargo semver-checks check-release` as a required check on every PR in this milestone.
 
-5. **`html.replace("</head>", ...)` double-injects on template HTML** -- `str::replace` replaces ALL occurrences. HTML with `</head>` in scripts/comments gets bridge injected multiple times. Fix: use `replacen(..., 1)` or position-based insertion. Address in Phase 1.
+---
 
 ## Implications for Roadmap
 
-Based on combined research, suggested phase structure (6 phases, ~13 days):
+Based on combined research, the suggested phase structure follows the architecture dependency order above. Phases are scoped to be completable independently with verifiable exit criteria.
 
-### Phase 1: Preview Bridge Infrastructure
-**Rationale:** Everything downstream depends on widgets actually rendering with a working bridge in mcp-preview. This is the single blocking dependency for the entire milestone.
-**Delivers:** Working widget preview -- developer runs `cargo pmcp preview`, sees widget, clicks buttons, tools fire.
-**Addresses features:** Widget iframe from resource URI, `callTool()` bridge routing, MCP session init, resource fetching, DevTools updates, connection status.
-**Avoids pitfalls:** McpProxy re-initialization (Pitfall 1), postMessage wildcard origin (Pitfall 2), HTML injection double-fire (Pitfall 4), bridge contract divergence (Pitfall 6 -- defines the contract).
-**Stack changes:** Bump axum 0.7 to 0.8 in mcp-preview.
-**Estimated effort:** 3 days.
+### Phase 1: Examples Cleanup and Credibility Fixes
+**Rationale:** Two confirmed-broken files are actively damaging credibility right now — the wrong examples/README.md and the stale protocol version badge. These are the lowest-complexity, highest-impact items and unblock everything that comes after.
+**Delivers:** Accurate examples/README.md, correct protocol badge, resolved orphan files, no duplicate example numbers, no `.disabled` files
+**Addresses:** Table-stakes features (examples/README.md accuracy, consistent numbering)
+**Avoids:** Pitfall 1 (Spin README), Pitfall 4 (orphan examples), Pitfall 2 (version badge), Pitfall 16 (duplicate numbers)
+**Exit criteria:**
+- `head -3 examples/README.md` shows PMCP content
+- `grep 'MCP-v' README.md` version matches `LATEST_PROTOCOL_VERSION` in code
+- Count of `*.rs` files in `examples/` equals count of `[[example]]` entries in Cargo.toml
+- `ls examples/*.rs | awk -F_ '{print $1}' | sort | uniq -d` returns empty
 
-### Phase 2: WASM Widget Bridge
-**Rationale:** Once the bridge protocol is validated in Phase 1, the WASM client implements the same protocol as an in-browser alternative. This is a differentiator (only Rust SDK with browser-native MCP client) but not blocking.
-**Delivers:** WASM client can render widgets in iframes with postMessage bridge. Side-by-side comparison mode in preview (proxy vs WASM).
-**Addresses features:** WASM client loads in preview context, bridge adapter (WASM -> mcpBridge shape), CORS handling, connection URL configuration.
-**Avoids pitfalls:** Hardcoded request IDs (Pitfall 3), WASM binary size bloat (Pitfall 7).
-**Stack changes:** web-sys feature additions in wasm-client.
-**Estimated effort:** 2 days.
+### Phase 2: Macros Documentation Rewrite
+**Rationale:** The macros README is the second-highest credibility damage. It documents a deprecated API as primary, claims shipped features are missing, and cites a stale version number. This must be fixed before the docs.rs pipeline work because the feature flag table will reference these macro names.
+**Delivers:** Rewritten `pmcp-macros/README.md` covering current macros, added `include_str!` in macros lib.rs, updated version references, migration section for `#[tool]` -> `#[mcp_tool]`, additional compile-fail UI tests for `mcp_server` and `mcp_resource`
+**Addresses:** Must-have (macros README accuracy), differentiator (migration callout)
+**Avoids:** Pitfall 3 (deprecated macros as primary API), Pitfall 14 (missing compile-fail tests), Pitfall 15 (rust,ignore doctests)
+**Exit criteria:**
+- `grep -c 'mcp_tool\|mcp_server\|mcp_prompt\|mcp_resource' pmcp-macros/README.md` > 0
+- `grep -c '^pmcp = { version = "1' pmcp-macros/README.md` == 0
+- Compile-fail test for `mcp_server` and `mcp_resource` added to `tests/ui/`
 
-### Phase 3: Shared Bridge Library
-**Rationale:** After two bridge implementations (proxy in Phase 1, WASM in Phase 2), the API contract is proven. Extract into a shared library to eliminate copy-paste and enforce the contract.
-**Delivers:** `widget-runtime.js` served by preview at `/widget-runtime.js`. TypeScript `.d.ts` types. Chess and map examples updated to use it.
-**Addresses features:** Shared bridge library, bridge API type definitions, environment detection (ChatGPT/preview/standalone).
-**Avoids pitfalls:** Divergent bridge APIs (Pitfall 6).
-**Stack changes:** None (plain JavaScript/TypeScript, no Rust deps).
-**Estimated effort:** 2 days.
+### Phase 3: docs.rs Pipeline and Feature Flag Polish
+**Rationale:** Once content is accurate (Phases 1-2), fix the rendering pipeline that determines what users see on docs.rs. The `doc_auto_cfg` one-liner is the highest-leverage change in the entire milestone (139 items gain badges). The explicit feature list prevents internal APIs from surfacing.
+**Delivers:** `doc_auto_cfg` in lib.rs, explicit feature list in Cargo.toml docs.rs metadata, feature flag table in lib.rs doc comments, 10 missing `cfg_attr(docsrs, doc(cfg(...)))` annotations, 29 rustdoc warnings resolved, ghost feature flags documented, `make doc-check` CI target
+**Addresses:** Should-have differentiators (feature badges, zero-warning docs), ghost feature flag documentation
+**Avoids:** Pitfall 5 (29 doc warnings), Pitfall 6 (missing doc(cfg) annotations), Pitfall 7 (ghost feature flags), Pitfall 10 (all-features conflicts)
+**Exit criteria:**
+- `RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps` exits 0
+- `src/lib.rs` contains `cfg_attr(docsrs, feature(doc_auto_cfg))`
+- `Cargo.toml` `[package.metadata.docs.rs]` uses explicit feature list, not `all-features = true`
 
-### Phase 4: Widget Authoring DX + Scaffolding
-**Rationale:** With the bridge library from Phase 3, scaffolding can reference it. The authoring DX features make widget development pleasant.
-**Delivers:** `cargo pmcp new --mcp-apps` scaffolding, `pmcp::widget!()` macro helper, `widgets/` directory convention in examples.
-**Addresses features:** File-based widget authoring, scaffolding template, shared bridge in scaffolded `preview.html`, widget CSP configuration helper, stateless widget pattern in template.
-**Uses stack:** `minijinja "2"` in cargo-pmcp for template expansion.
-**Estimated effort:** 2 days.
-
-### Phase 5: Publishing Pipeline
-**Rationale:** Publishing depends on working widgets (Phase 1), file-based structure (Phase 4), and bridge library (Phase 3). Implements the deployment-to-ChatGPT workflow.
-**Delivers:** `cargo pmcp manifest` for ChatGPT manifest generation, `cargo pmcp landing` for demo pages, HTTPS URL validation, `text/html+skybridge` MIME verification.
-**Addresses features:** ChatGPT manifest generation, demo landing page, deploy `--mcp-apps` flag, submission checklist.
-**Avoids pitfalls:** HTTPS silent rejection (Pitfall 5).
-**Uses stack:** `minijinja "2"` in mcp-preview for landing page templates, `serde_json` for manifest generation.
-**Estimated effort:** 2 days.
-
-### Phase 6: Ship Examples + Playwright E2E
-**Rationale:** Integration validation. Examples exercise every piece of the toolchain. Playwright tests prove it all works end-to-end. Must come last because it depends on all previous phases.
-**Delivers:** Chess and map examples in final form, Playwright test suite green in CI, map widget tests, example READMEs.
-**Addresses features:** Chess/map examples compile and run, Playwright test server wired to widget directories, widget HTML data attributes match test selectors, screenshot reports.
-**Estimated effort:** 2 days.
+### Phase 4: General Documentation Polish
+**Rationale:** Lower-urgency improvements that are valuable but not blocking. Lib.rs doctests show the legacy `ToolHandler` pattern; they compile but showcase suboptimal DX. This phase also adds the enforcement CI gates that prevent future drift.
+**Delivers:** Updated lib.rs doctests showing `TypedTool`/`TypedToolWithOutput` pattern, transport matrix table in lib.rs docs, CI example-count assertion to prevent future orphan accumulation, `cargo semver-checks` added to PR gate
+**Addresses:** Minor pitfall (stale crate-level doc examples), drift prevention (Pitfall 11)
+**Avoids:** Pitfall 8 (stale lib.rs examples), Pitfall 9 (accidental API breakage), Pitfall 11 (README drifting again)
+**Exit criteria:**
+- lib.rs crate-level doc examples compile and show `TypedToolWithOutput` pattern
+- CI check counts `[[example]]` entries vs `.rs` files, fails on mismatch
+- `cargo semver-checks check-release` runs in CI
 
 ### Phase Ordering Rationale
 
-- **Phase 1 before everything:** The preview bridge is the load-bearing wall. WASM bridge (Phase 2), shared library (Phase 3), scaffolding (Phase 4), publishing (Phase 5), and tests (Phase 6) all depend on the bridge protocol working.
-- **Phase 2 before Phase 3:** Building two independent bridge implementations (proxy and WASM) before extracting the shared library ensures the abstraction is correct. Extract after proving, not before.
-- **Phase 4 after Phase 3:** Scaffolding templates reference `widget-runtime.js`. The template is wrong if the bridge library does not exist yet.
-- **Phase 5 after Phase 4:** Manifest generation reads `pmcp.toml [mcp-apps]` which is scaffolded in Phase 4. Demo landing page uses the file-based widget structure from Phase 4.
-- **Phase 6 last:** E2E tests validate the complete pipeline. They cannot be written until all components exist. The chess/map examples serve as integration fixtures.
+- **Phases 1-2 before 3:** The feature flag table in Phase 3 must reference accurate macro names (Phase 2) and will be cross-linked from the examples README (Phase 1). Doing the pipeline fix first would produce technically correct badges on inaccurate content.
+- **Phase 3 before 4:** The polish in Phase 4 should reference the feature names that come out of the Phase 3 explicit feature list. Running semver-checks (Phase 4 gate) is also only meaningful once the doc changes (Phases 1-3) are stable.
+- **Phases 1 and 2 are partially parallel:** The examples cleanup and macros rewrite do not depend on each other. A team with two people could work them simultaneously.
 
 ### Research Flags
 
-Phases likely needing deeper research during planning:
-- **Phase 1:** The `resources/read` proxy call and postMessage origin handshake pattern need careful specification. The bridge injection point (`</head>` vs fallback) needs test cases for edge-case HTML. Research recommended.
-- **Phase 2:** WASM module loading in iframe `srcdoc` context is novel (limited prior art). The `&mut self` / concurrent-call problem in wasm-bindgen needs design attention. Research recommended.
-- **Phase 5:** ChatGPT App Directory submission process is opaque (human review). Manifest format may evolve. MEDIUM confidence. Research recommended.
+Phases where standard patterns apply (no additional research needed):
+- **Phase 1** — file replacements and Cargo.toml audits; purely mechanical
+- **Phase 2** — macro API is fully documented in `pmcp-macros/src/lib.rs`; rewrite follows that ground truth
+- **Phase 3** — `doc_auto_cfg` is well-documented and the explicit feature list content is known
 
-Phases with standard patterns (skip research-phase):
-- **Phase 3:** Shared JavaScript library with environment detection is a well-documented pattern. Standard.
-- **Phase 4:** CLI scaffolding with template expansion is standard Rust CLI practice. cargo-pmcp already has the infrastructure. Standard.
-- **Phase 6:** Playwright E2E with mock bridge is standard. Tests are already written. Standard.
+Phases that may need targeted investigation during implementation:
+- **Phase 3 (rustdoc warnings)** — 9 of the 29 warnings are unresolved links that likely reference `pmcp-tasks` crate types. The fix may require adding a dependency or changing link format; inspect each warning before deciding approach.
+- **Phase 4 (TypedToolWithOutput doctest)** — the doctest must compile with specific feature flags; verify which features are required before writing the doctest.
+
+---
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | Only 3 new deps, all mature. Axum 0.8 bump is well-documented. minijinja is production-quality. web-sys features are official. |
-| Features | HIGH | Five feature areas well-defined. Table stakes vs differentiators clearly separated. Anti-features identified (no React templates, no HMR, no CDN hosting). Existing codebase is 60-80% complete. |
-| Architecture | HIGH | Based on direct codebase analysis of all existing components. Component boundaries, data flows, and build order derived from actual code, not hypothetical design. |
-| Pitfalls | HIGH | 7 critical pitfalls identified from codebase analysis and domain research. All have concrete code-level prevention strategies. The postMessage security pitfall is backed by a real CVE (CVE-2024-49038). |
+| Stack | HIGH | Zero new dependencies; changes are attribute lines and config values verified in both repos |
+| Features | HIGH | All feature gaps confirmed by direct file reads; broken README content confirmed line-by-line |
+| Architecture | HIGH | Dependency order derived from actual build pipeline mechanics, not speculation |
+| Pitfalls | HIGH | All "critical" pitfalls are confirmed-existing bugs, not risks — the wrong README is literally there right now |
 
 **Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **ChatGPT App Directory submission process:** The submission is human-reviewed with opaque acceptance criteria. Manifest format is documented but the review process is not. Validate manifest structure against real submissions when Phase 5 is planned.
-- **WASM module loading in srcdoc iframes:** No established pattern for loading WASM modules inside `srcdoc`-based iframes. May need blob URL or `importmap` approach. Prototype during Phase 2 planning.
-- **MCP Apps spec evolution:** The ext-apps specification went production-stable 2026-01-26 but is still young. If the spec changes `_meta.ui.resourceUri` semantics or adds new host requirements, the bridge and manifest code may need updates. Monitor the spec repo.
-- **Bridge contract completeness:** The research identifies `callTool`, `getState`, `setState` as the core bridge API. The full contract (including `listTools`, `readResource`, `onStateChange`, lifecycle events) needs specification during Phase 1 planning.
-- **Axum 0.8 WebSocket breaking change:** Axum 0.8 changed `Message` to use `Bytes` instead of `Vec<u8>`. The existing WebSocket handler in mcp-preview may need updates. Verify during Phase 1 implementation.
+- **Rustdoc warning origins** — 9 unresolved link warnings likely from `pmcp-tasks` types; the correct fix (intra-doc link fix vs. cross-crate link vs. removal) must be determined during Phase 3 implementation by inspecting each warning.
+- **Orphan example viability** — 17 unregistered example files; each needs a compile check before deciding register-vs-delete. Some (like `32_simd_parsing_performance.rs`) need the `simd` feature which may have other constraints.
+- **Ghost feature `wasi-http` disposition** — currently an empty feature flag with a "future" comment. The decision to document-as-planned vs. remove vs. implement is a product decision that research cannot make; flag for explicit decision during Phase 3.
+- **docs.rs explicit feature list validation** — the 13-feature list proposed in ARCHITECTURE.md should be validated against a local `RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc` run to confirm no build failures before merging.
+
+---
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- Codebase analysis: `crates/mcp-preview/` -- server.rs, proxy.rs, handlers/, assets/index.html (bridge implementation ~90% complete, cross-origin bug identified)
-- Codebase analysis: `examples/wasm-client/src/lib.rs` -- WASM client capabilities, hardcoded ID bug, missing bridge injection
-- Codebase analysis: `examples/mcp-apps-chess/` and `mcp-apps-map/` -- complete server code, widget HTML, preview.html mock bridge
-- Codebase analysis: `cargo-pmcp/src/commands/` -- preview.rs, new.rs (no --mcp-apps template exists)
-- Codebase analysis: `src/types/mcp_apps.rs` -- all MCP Apps types present and working
-- Codebase analysis: `tests/playwright/` -- 10 chess tests written, mock-mcp-bridge.ts fixture, config scaffolded
-- [Axum 0.8.0 announcement](https://tokio.rs/blog/2025-01-01-announcing-axum-0-8-0) -- path syntax changes, WebSocket Bytes migration
-- [web-sys docs](https://docs.rs/web-sys/latest/web_sys/) -- feature flags for MessageChannel, HtmlIframeElement, Window
+- `/Users/guy/Development/mcp/sdk/rust-mcp-sdk/` — direct codebase audit (all PMCP findings)
+- `/Users/guy/Development/mcp/sdk/rust-sdk/` — direct codebase audit (all rmcp comparison findings)
+- `https://docs.rs/about/metadata` — docs.rs `[package.metadata.docs.rs]` configuration reference
+- `https://doc.rust-lang.org/stable/unstable-book/language-features/doc-auto-cfg.html` — `doc_auto_cfg` specification
 
 ### Secondary (MEDIUM confidence)
-- [MCP Apps ext-apps spec 2026-01-26](https://github.com/modelcontextprotocol/ext-apps) -- `ui://` resource URI scheme, postMessage protocol, production-stable
-- [MCP Apps Blog 2026-01-26](http://blog.modelcontextprotocol.io/posts/2026-01-26-mcp-apps/) -- host support (Claude, VS Code, Goose, Postman, MCPJam)
-- [OpenAI Apps SDK](https://developers.openai.com/apps-sdk/) -- ChatGPT deployment requirements, HTTPS mandatory, no manifest.json file
-- [ChatGPT Apps Developer Mode](https://help.openai.com/en/articles/12584461-developer-mode-apps-and-full-mcp-connectors-in-chatgpt-beta) -- App Directory submission process
-- [minijinja on crates.io](https://crates.io/crates/minijinja) -- version 2.15.1
-- [PostMessage security -- Microsoft MSRC](https://www.microsoft.com/en-us/msrc/blog/2025/08/postmessaged-and-compromised) -- CVE-2024-49038 reference
-- [wasm-bindgen pitfalls](https://www.rossng.eu/posts/2025-01-20-wasm-bindgen-pitfalls/) -- recursive object use, async aliasing
+- `https://vadosware.io/post/getting-features-to-show-up-in-your-rust-docs` — `doc_auto_cfg` usage guide
+- `https://users.rust-lang.org/t/best-practice-for-documenting-crates-readme-md-vs-documentation-comments/124254` — README drift discussion
+- `https://docs.rs/document-features/latest/document_features/` — evaluated and rejected (adds build dep for no gain over manual table)
 
-### Tertiary (LOW confidence)
-- [MCP Apps playground](https://github.com/digitarald/mcp-apps-playground) -- community widget authoring patterns
-- [SEP-1865 PR](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/1865) -- original proposal background
+### Tertiary (MEDIUM confidence)
+- `https://github.com/rust-osdev/uefi-rs/pull/487` — real-world `doc_auto_cfg` adoption example
 
 ---
-*Research completed: 2026-02-24*
+
+*Research completed: 2026-04-10*
 *Ready for roadmap: yes*
