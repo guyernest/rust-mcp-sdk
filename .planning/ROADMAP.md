@@ -747,7 +747,7 @@ Plans:
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 65. Examples Cleanup + Protocol Accuracy | v2.1 | 3/3 | Complete   | 2026-04-10 |
+| 65. Examples Cleanup + Protocol Accuracy | v2.1 | 3/3 | Complete    | 2026-04-10 |
 | 66. Macros Documentation Rewrite | v2.1 | 0/? | Not started | - |
 | 67. docs.rs Pipeline + Feature Flags | v2.1 | 0/? | Not started | - |
 | 68. General Documentation Polish | v2.1 | 0/? | Not started | - |
