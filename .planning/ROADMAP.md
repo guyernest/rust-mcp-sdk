@@ -703,10 +703,10 @@ Plans:
   2. Every `.rs` file in `examples/` has a corresponding `[[example]]` entry in `Cargo.toml` with correct `required-features`, and `cargo run --example <name>` works for each
   3. No two example files share the same numbered prefix -- `ls examples/*.rs | awk -F_ '{print $1}' | sort | uniq -d` returns empty
   4. The README.md MCP-Compatible badge and compatibility table display protocol version `2025-11-25`, matching `LATEST_PROTOCOL_VERSION` in source code
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 Plans:
 - [x] 65-01-PLAN.md — Audit orphan examples + fix protocol badge (EXMP-02, PROT-01)
-- [ ] 65-02-PLAN.md — Renumber all examples with role-prefix scheme (EXMP-03)
+- [x] 65-02-PLAN.md — Renumber all examples with role-prefix scheme (EXMP-03)
 - [ ] 65-03-PLAN.md — Write examples/README.md index (EXMP-01)
 
 ### Phase 66: Macros Documentation Rewrite
@@ -747,7 +747,7 @@ Plans:
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 65. Examples Cleanup + Protocol Accuracy | v2.1 | 1/3 | In Progress|  |
+| 65. Examples Cleanup + Protocol Accuracy | v2.1 | 2/3 | In Progress|  |
 | 66. Macros Documentation Rewrite | v2.1 | 0/? | Not started | - |
 | 67. docs.rs Pipeline + Feature Flags | v2.1 | 0/? | Not started | - |
 | 68. General Documentation Polish | v2.1 | 0/? | Not started | - |
