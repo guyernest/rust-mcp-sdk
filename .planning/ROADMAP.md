@@ -11,6 +11,7 @@
 - **v1.6 CLI DX Overhaul** — Phases 27-32 (in progress)
 - ✅ **v1.7 SDK Maturation** — Phases 52-53 (shipped 2026-03-20)
 - **v2.0 Protocol Modernization** — Phases 54-59 (in progress)
+- **v2.1 rmcp Upgrades** — Phases 65-68 (in progress)
 
 ## Phases
 
@@ -681,3 +682,68 @@ Plans:
 - [x] 64-01-PLAN.md -- Secret resolution logic + deploy pipeline integration (dotenvy, resolve_secrets, CDK env passthrough)
 - [x] 64-02-PLAN.md -- SDK pmcp::secrets thin reader module (get/require helpers, SecretError)
 - [ ] 64-03-PLAN.md -- Dev command .env loading + documentation (dev.rs injection, README, CLI help)
+
+### v2.1 rmcp Upgrades (In Progress)
+
+**Milestone Goal:** Close the credibility and developer-experience gaps where the official Rust MCP SDK (rmcp) outshines PMCP -- documentation accuracy, feature gate presentation, macro documentation, example index, and repo hygiene. No new runtime dependencies; all fixes are configuration changes, file rewrites, and targeted attribute additions.
+
+- [ ] **Phase 65: Examples Cleanup and Protocol Accuracy** - Replace broken examples/README.md, fix protocol badge, resolve 17 orphan example files and 4 duplicate number prefixes
+- [ ] **Phase 66: Macros Documentation Rewrite** - Rewrite pmcp-macros README to document current #[mcp_tool]/#[mcp_server]/#[mcp_prompt]/#[mcp_resource] API with migration guide
+- [ ] **Phase 67: docs.rs Pipeline and Feature Flags** - Enable doc_auto_cfg for automatic feature badges, explicit feature list in docs.rs metadata, feature flag table, zero rustdoc warnings
+- [ ] **Phase 68: General Documentation Polish** - Update lib.rs doctests to TypedToolWithOutput pattern, add transport matrix, CI enforcement gates for drift prevention
+
+## Phase Details (v2.1)
+
+### Phase 65: Examples Cleanup and Protocol Accuracy
+**Goal**: Developers browsing the examples/ directory and README see accurate PMCP content with correct protocol version, every example file is runnable, and no numbering collisions exist
+**Depends on**: Phase 64
+**Requirements**: EXMP-01, EXMP-02, EXMP-03, PROT-01
+**Success Criteria** (what must be TRUE):
+  1. `examples/README.md` contains a PMCP example index organized by category (transport, tools, resources, prompts, tasks, apps) with required features and run commands for each example
+  2. Every `.rs` file in `examples/` has a corresponding `[[example]]` entry in `Cargo.toml` with correct `required-features`, and `cargo run --example <name>` works for each
+  3. No two example files share the same numbered prefix -- `ls examples/*.rs | awk -F_ '{print $1}' | sort | uniq -d` returns empty
+  4. The README.md MCP-Compatible badge and compatibility table display protocol version `2025-11-25`, matching `LATEST_PROTOCOL_VERSION` in source code
+**Plans**: TBD
+
+### Phase 66: Macros Documentation Rewrite
+**Goal**: A developer reading pmcp-macros documentation (on docs.rs or GitHub) sees accurate documentation of #[mcp_tool], #[mcp_server], #[mcp_prompt], and #[mcp_resource] as the primary API, with a clear migration path from deprecated macros
+**Depends on**: Phase 65
+**Requirements**: MACR-01, MACR-02, MACR-03
+**Success Criteria** (what must be TRUE):
+  1. `pmcp-macros/README.md` documents `#[mcp_tool]`, `#[mcp_server]`, `#[mcp_prompt]`, and `#[mcp_resource]` as the primary API with working code examples that compile
+  2. A migration section guides users from deprecated `#[tool]`/`#[tool_router]` to `#[mcp_tool]`/`#[mcp_server]` with before/after code comparisons
+  3. `pmcp-macros/src/lib.rs` uses `include_str!("../README.md")` so that `docs.rs/pmcp-macros` renders the rewritten README as the crate-level documentation
+  4. No references to stale version numbers (e.g., `pmcp = { version = "1.*" }`) appear in the macros README
+**Plans**: TBD
+
+### Phase 67: docs.rs Pipeline and Feature Flags
+**Goal**: docs.rs renders PMCP with automatic feature badges on all feature-gated items, an explicit feature list preventing internal APIs from surfacing, a documented feature flag table, and zero rustdoc warnings
+**Depends on**: Phase 66
+**Requirements**: DRSD-01, DRSD-02, DRSD-03, DRSD-04
+**Success Criteria** (what must be TRUE):
+  1. `src/lib.rs` contains `#![cfg_attr(docsrs, feature(doc_auto_cfg))]` and all ~145 feature-gated items on docs.rs display automatic feature availability badges
+  2. `Cargo.toml` `[package.metadata.docs.rs]` uses an explicit feature list (~13 user-facing features) instead of `all-features = true`, preventing test helpers and internal features from surfacing
+  3. A feature flag table in `lib.rs` doc comments documents all user-facing features with descriptions and what they enable
+  4. `RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps` exits with zero warnings -- all broken intra-doc links and unclosed HTML tags resolved
+  5. CI includes a `make doc-check` target that enforces zero rustdoc warnings on every PR
+**Plans**: TBD
+
+### Phase 68: General Documentation Polish
+**Goal**: Crate-level documentation showcases current best practices (TypedToolWithOutput, proc macros), transport types are discoverable, and CI gates prevent future documentation drift
+**Depends on**: Phase 67
+**Requirements**: PLSH-01, PLSH-02, PLSH-03
+**Success Criteria** (what must be TRUE):
+  1. `lib.rs` crate-level doc examples compile and demonstrate the `TypedToolWithOutput` pattern and current builder APIs (not legacy `Server::builder()` or `ToolHandler`)
+  2. A transport matrix table in `lib.rs` doc comments lists all supported transports (stdio, streamable HTTP, SSE) with links to their actual module/type paths
+  3. CI enforces that the count of `[[example]]` entries in `Cargo.toml` matches the count of `.rs` files in `examples/`, failing the build on mismatch
+  4. `cargo semver-checks check-release` runs in CI on every PR to prevent accidental API breakage during documentation changes
+**Plans**: TBD
+
+## Progress (v2.1)
+
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 65. Examples Cleanup + Protocol Accuracy | v2.1 | 0/? | Not started | - |
+| 66. Macros Documentation Rewrite | v2.1 | 0/? | Not started | - |
+| 67. docs.rs Pipeline + Feature Flags | v2.1 | 0/? | Not started | - |
+| 68. General Documentation Polish | v2.1 | 0/? | Not started | - |

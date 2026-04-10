@@ -101,26 +101,26 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EXMP-01 | TBD | Pending |
-| EXMP-02 | TBD | Pending |
-| EXMP-03 | TBD | Pending |
-| PROT-01 | TBD | Pending |
-| MACR-01 | TBD | Pending |
-| MACR-02 | TBD | Pending |
-| MACR-03 | TBD | Pending |
-| DRSD-01 | TBD | Pending |
-| DRSD-02 | TBD | Pending |
-| DRSD-03 | TBD | Pending |
-| DRSD-04 | TBD | Pending |
-| PLSH-01 | TBD | Pending |
-| PLSH-02 | TBD | Pending |
-| PLSH-03 | TBD | Pending |
+| EXMP-01 | Phase 65 | Pending |
+| EXMP-02 | Phase 65 | Pending |
+| EXMP-03 | Phase 65 | Pending |
+| PROT-01 | Phase 65 | Pending |
+| MACR-01 | Phase 66 | Pending |
+| MACR-02 | Phase 66 | Pending |
+| MACR-03 | Phase 66 | Pending |
+| DRSD-01 | Phase 67 | Pending |
+| DRSD-02 | Phase 67 | Pending |
+| DRSD-03 | Phase 67 | Pending |
+| DRSD-04 | Phase 67 | Pending |
+| PLSH-01 | Phase 68 | Pending |
+| PLSH-02 | Phase 68 | Pending |
+| PLSH-03 | Phase 68 | Pending |
 
 **Coverage:**
 - v2.1 requirements: 14 total
-- Mapped to phases: 0
-- Unmapped: 14
+- Mapped to phases: 14
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-10*
-*Last updated: 2026-04-10 after initial definition*
+*Last updated: 2026-04-10 after roadmap creation*
