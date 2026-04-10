@@ -57,16 +57,16 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ### Active
 
-## Current Milestone: v1.6 CLI DX Overhaul
+## Current Milestone: v2.1 rmcp Upgrades
 
-**Goal:** Normalize the cargo pmcp CLI for consistency and developer experience ahead of course recording — fix flag inconsistencies, propagate auth to all server-facing commands, surface mcp-tester via cargo pmcp test, and add doctor/completions commands.
+**Goal:** Close the credibility and developer-experience gaps where the official Rust MCP SDK (rmcp) outshines PMCP — documentation accuracy, feature gate presentation, macro documentation, example index, and repo hygiene.
 
 **Target features:**
-- Flag consistency: positional URL, unified --server, --verbose/-v, --yes, -o, --format
-- Auth propagation: OAuth + API key flags on test check/run/generate, preview, schema export
-- Tester integration: surface mcp-tester commands through cargo pmcp test with aligned flags
-- New commands: cargo pmcp doctor (workspace health), cargo pmcp completions (shell completions)
-- Help polish: consistent help text, usage examples, global --no-color/--quiet
+- Fix examples/README.md with accurate, coherent example index covering all transport types and use cases
+- Fix macros README drift — document full #[mcp_tool], #[mcp_prompt], #[mcp_server] support
+- Tighten feature gating and docs.rs presentation with explicit feature coverage annotations
+- Improve macro documentation and ergonomics — coherent pattern documentation
+- General repo hygiene — README accuracy, consistent doc quality, transport embedding story
 
 ### Future
 
@@ -83,7 +83,7 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ## Current State
 
-v1.6 in progress. All prior milestones (v1.0-v1.5) shipped.
+v2.1 in progress. All prior milestones (v1.0-v2.0) shipped.
 
 **Shipped milestones:**
 - v1.0: MCP Tasks Foundation (types, store, server integration)
@@ -92,6 +92,7 @@ v1.6 in progress. All prior milestones (v1.0-v1.5) shipped.
 - v1.3: MCP Apps Developer Experience (preview, WASM, authoring, publishing, examples, E2E)
 - v1.4: Book & Course Update (load testing docs, MCP Apps chapter refresh, quizzes, exercises)
 - v1.5: Cloud Load Testing Upload (loadtest config upload, OAuth for load testing)
+- v2.0: Protocol Modernization (protocol 2025-11-25, Tower middleware, conformance, proc macros, pentest, secrets)
 
 ### Out of Scope
 
@@ -165,4 +166,22 @@ Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, park
 | Standalone examples (workspace exclude) (v1.3) | Avoids feature flag unification conflicts | ✓ Good — each example builds independently |
 
 ---
-*Last updated: 2026-03-03 after v1.6 milestone start*
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd-transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd-complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
+
+---
+*Last updated: 2026-04-10 after v2.1 milestone start*

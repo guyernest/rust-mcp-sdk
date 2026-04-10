@@ -1,30 +1,32 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: Protocol Modernization
-status: Milestone complete
-stopped_at: Completed 64-03-PLAN.md
-last_updated: "2026-03-30T01:10:10.523Z"
+milestone: v2.1
+milestone_name: rmcp Upgrades
+status: Defining requirements
+stopped_at: null
+last_updated: "2026-04-10T00:00:00.000Z"
 progress:
-  total_phases: 41
-  completed_phases: 35
-  total_plans: 84
-  completed_plans: 84
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-03)
+See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
-**Current focus:** Phase 64 — secrets-deployment-integration
+**Current focus:** Defining requirements for v2.1
 
 ## Current Position
 
-Phase: 64
-Plan: Not started
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-10 — Milestone v2.1 started
 
 ## Shipped Milestones
 
