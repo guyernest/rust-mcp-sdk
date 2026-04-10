@@ -270,7 +270,7 @@ test-with-tester: build-tester
 test-example-server: build-tester
 	@echo "$(BLUE)Testing specific example server: $(EXAMPLE)$(NC)"
 	@if [ -z "$(EXAMPLE)" ]; then \
-		echo "$(RED)Error: EXAMPLE not specified. Use: make test-example-server EXAMPLE=22_streamable_http_server_stateful$(NC)"; \
+		echo "$(RED)Error: EXAMPLE not specified. Use: make test-example-server EXAMPLE=t04_streamable_http_stateful$(NC)"; \
 		exit 1; \
 	fi
 	@chmod +x scripts/test_examples_with_tester.sh
@@ -726,12 +726,12 @@ install: build-release
 .PHONY: example-server
 example-server:
 	@echo "$(BLUE)Running example server...$(NC)"
-	RUST_LOG=$(RUST_LOG) $(CARGO) run --example server --all-features
+	RUST_LOG=$(RUST_LOG) $(CARGO) run --example s02_server --all-features
 
 .PHONY: example-client
 example-client:
 	@echo "$(BLUE)Running example client...$(NC)"
-	RUST_LOG=$(RUST_LOG) $(CARGO) run --example client --all-features
+	RUST_LOG=$(RUST_LOG) $(CARGO) run --example c05_client --all-features
 
 # Help target
 .PHONY: help

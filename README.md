@@ -478,8 +478,8 @@ cargo run --example s28_authentication      # OAuth/Bearer
 cargo run --example t01_websocket_transport # WebSocket
 cargo run --example m01_basic_middleware    # Middleware chain
 
-# Testing
-cargo run --example 26-server-tester -- test http://localhost:8080
+# Testing (mcp-tester is a standalone Cargo project in examples/26-server-tester)
+cargo install mcp-tester && mcp-tester test http://localhost:8080
 
 # AI-assisted development
 # See ai-agents/README.md for Kiro and Claude Code setup
