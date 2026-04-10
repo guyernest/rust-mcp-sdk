@@ -250,6 +250,10 @@ name = "08_logging"
 path = "examples/08_logging.rs"
 
 [[example]]
+name = "08_server_resources"
+path = "examples/08_server_resources.rs"
+
+[[example]]
 name = "09_authentication"
 path = "examples/09_authentication.rs"
 required-features = ["authentication_example"]
@@ -260,6 +264,10 @@ path = "examples/10_progress_notifications.rs"
 required-features = ["progress_example"]
 
 [[example]]
+name = "11_progress_countdown"
+path = "examples/11_progress_countdown.rs"
+
+[[example]]
 name = "11_request_cancellation"
 path = "examples/11_request_cancellation.rs"
 required-features = ["cancellation_example"]
@@ -267,6 +275,10 @@ required-features = ["cancellation_example"]
 [[example]]
 name = "12_error_handling"
 path = "examples/12_error_handling.rs"
+
+[[example]]
+name = "12_prompt_workflow_progress"
+path = "examples/12_prompt_workflow_progress.rs"
 
 [[example]]
 name = "13_websocket_transport"
@@ -303,10 +315,6 @@ name = "20_oidc_discovery"
 path = "examples/20_oidc_discovery.rs"
 required-features = ["http-client"]
 
-# [[example]]
-# name = "21_macro_tools"
-# path = "examples/21_macro_tools.rs"
-# required-features = ["macros"]
 
 [[example]]
 name = "22_streamable_http_server_stateful"
@@ -349,6 +357,11 @@ path = "examples/31_advanced_error_recovery.rs"
 required-features = ["full"]
 
 [[example]]
+name = "32_simd_parsing_performance"
+path = "examples/32_simd_parsing_performance.rs"
+required-features = ["full"]
+
+[[example]]
 name = "32_typed_tools"
 path = "examples/32_typed_tools.rs"
 required-features = ["schema-generation"]
@@ -379,6 +392,20 @@ path = "examples/37_description_variants_example.rs"
 required-features = ["schema-generation"]
 
 [[example]]
+name = "40_middleware_demo"
+path = "examples/40_middleware_demo.rs"
+required-features = ["full"]
+
+[[example]]
+name = "47_multiple_clients_parallel"
+path = "examples/47_multiple_clients_parallel.rs"
+required-features = ["full"]
+
+[[example]]
+name = "48_structured_output_schema"
+path = "examples/48_structured_output_schema.rs"
+
+[[example]]
 name = "49_tool_with_sampling_server"
 path = "examples/49_tool_with_sampling_server.rs"
 required-features = ["full"]
@@ -401,6 +428,11 @@ path = "examples/53_typed_tools_workflow_integration.rs"
 required-features = ["schema-generation"]
 
 [[example]]
+name = "54_hybrid_workflow_execution"
+path = "examples/54_hybrid_workflow_execution.rs"
+required-features = ["full"]
+
+[[example]]
 name = "55_server_middleware"
 path = "examples/55_server_middleware.rs"
 required-features = ["streamable-http"]
@@ -414,14 +446,55 @@ name = "57_tool_middleware_oauth"
 path = "examples/57_tool_middleware_oauth.rs"
 
 [[example]]
+name = "58_oauth_transport_to_tools"
+path = "examples/58_oauth_transport_to_tools.rs"
+required-features = ["full"]
+
+[[example]]
+name = "59_dynamic_resource_workflow"
+path = "examples/59_dynamic_resource_workflow.rs"
+required-features = ["full"]
+
+[[example]]
+name = "60_resource_only_steps"
+path = "examples/60_resource_only_steps.rs"
+required-features = ["full"]
+
+[[example]]
+name = "61_observability_middleware"
+path = "examples/61_observability_middleware.rs"
+required-features = ["full"]
+
+[[example]]
+name = "client"
+path = "examples/client.rs"
+
+[[example]]
 name = "conference_venue_map"
 path = "examples/conference_venue_map.rs"
 required-features = ["schema-generation"]
 
 [[example]]
+name = "currency_server"
+path = "examples/currency_server.rs"
+
+[[example]]
 name = "hotel_gallery"
 path = "examples/hotel_gallery.rs"
 required-features = ["schema-generation"]
+
+[[example]]
+name = "refactored_server_example"
+path = "examples/refactored_server_example.rs"
+required-features = ["full"]
+
+[[example]]
+name = "server"
+path = "examples/server.rs"
+
+[[example]]
+name = "test_currency_server"
+path = "examples/test_currency_server.rs"
 
 [[example]]
 name = "63_mcp_tool_macro"
