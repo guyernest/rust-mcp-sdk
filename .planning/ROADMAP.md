@@ -703,7 +703,11 @@ Plans:
   2. Every `.rs` file in `examples/` has a corresponding `[[example]]` entry in `Cargo.toml` with correct `required-features`, and `cargo run --example <name>` works for each
   3. No two example files share the same numbered prefix -- `ls examples/*.rs | awk -F_ '{print $1}' | sort | uniq -d` returns empty
   4. The README.md MCP-Compatible badge and compatibility table display protocol version `2025-11-25`, matching `LATEST_PROTOCOL_VERSION` in source code
-**Plans**: TBD
+**Plans:** 3 plans
+Plans:
+- [ ] 65-01-PLAN.md — Audit orphan examples + fix protocol badge (EXMP-02, PROT-01)
+- [ ] 65-02-PLAN.md — Renumber all examples with role-prefix scheme (EXMP-03)
+- [ ] 65-03-PLAN.md — Write examples/README.md index (EXMP-01)
 
 ### Phase 66: Macros Documentation Rewrite
 **Goal**: A developer reading pmcp-macros documentation (on docs.rs or GitHub) sees accurate documentation of #[mcp_tool], #[mcp_server], #[mcp_prompt], and #[mcp_resource] as the primary API, with a clear migration path from deprecated macros
