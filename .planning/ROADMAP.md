@@ -751,3 +751,31 @@ Plans:
 | 66. Macros Documentation Rewrite | v2.1 | 0/? | Not started | - |
 | 67. docs.rs Pipeline + Feature Flags | v2.1 | 0/? | Not started | - |
 | 68. General Documentation Polish | v2.1 | 0/? | Not started | - |
+
+## Backlog
+
+Parking lot for unsequenced ideas. Items here aren't scheduled — promote with `/gsd:review-backlog` when ready.
+
+### Phase 999.1: Delete DEFAULT_PROTOCOL_VERSION constant and make callsites explicit (BACKLOG)
+
+**Goal:** Remove the public `DEFAULT_PROTOCOL_VERSION` re-export and replace each of its ~15 callsites with an explicit choice — either `LATEST_PROTOCOL_VERSION` (where the code is advertising what this SDK supports) or a literal `"2025-03-26"` with a `// backward-compat fallback` comment (where the code genuinely wants the widest-compatible version for un-negotiated peers). The name `DEFAULT` is misleading: nothing is actually "default" about it — it's a specific compat choice that happens to be older than `LATEST`, and that distinction is invisible at every callsite.
+
+**Scope:**
+- Breaking API change (public re-export at `src/lib.rs:307` + `src/types/mod.rs:32`) — requires minor version bump and release note
+- Callsites to audit and convert:
+  - `src/types/protocol/mod.rs:32` — `impl Default for ProtocolVersion`
+  - `src/server/streamable_http_server.rs` lines 560, 971, 979, 981, 985, 1225, 1231, 1233, 1236
+  - `src/server/core.rs:1329` and `:1376`
+  - `src/shared/event_store.rs:367`
+  - `src/lib.rs:286` — public doctest asserting the value
+  - `src/types/protocol/version.rs:51,65` — unit tests
+  - `benches/comprehensive_benchmarks.rs:421`
+
+**Why:** Phase 65 simplify review flagged the inconsistency — `LATEST_PROTOCOL_VERSION = "2025-11-25"` but `DEFAULT_PROTOCOL_VERSION = "2025-03-26"`. Mechanically bumping `DEFAULT` to match `LATEST` would be a silent behavior change for peers reaching the fallback path (they'd be assumed to speak the newer protocol before they've said so). The right fix is to delete the misleading abstraction, not flip its value.
+
+**Requirements:** TBD
+
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (promote with `/gsd:review-backlog` when ready)
