@@ -54,6 +54,7 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 - ✓ Course Ch 12 Load Testing cross-reference section — v1.4
 - ✓ Course Ch 20 sub-chapters rewritten with WidgetDir/mcpBridge/adapter paradigm — v1.4
 - ✓ Course quizzes and exercises for load testing and MCP Apps content — v1.4
+- ✓ Examples cleanup: 17 orphans registered, 63 files role-prefixed (s/c/t/m), accurate PMCP README index, protocol badge 2025-11-25 — v2.1 (Phase 65)
 
 ### Active
 
@@ -184,4 +185,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-10 after v2.1 milestone start*
+*Last updated: 2026-04-10 after Phase 65 (v2.1 examples cleanup + protocol accuracy) completion*
