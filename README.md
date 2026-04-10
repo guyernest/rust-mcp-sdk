@@ -465,18 +465,18 @@ The SDK includes 60+ comprehensive examples covering all features:
 
 ```bash
 # Basic examples
-cargo run --example 01_client_initialize    # Client setup
-cargo run --example 02_server_basic         # Basic server
-cargo run --example 03_client_tools         # Tool usage
+cargo run --example c01_client_initialize   # Client setup
+cargo run --example s01_basic_server        # Basic server
+cargo run --example c02_client_tools        # Tool usage
 
 # Type-safe tools (v1.6.0+)
-cargo run --example 32_typed_tools --features schema-generation
-cargo run --example 33_advanced_typed_tools --features schema-generation
+cargo run --example s16_typed_tools --features schema-generation
+cargo run --example s17_advanced_typed_tools --features schema-generation
 
 # Advanced features
-cargo run --example 09_authentication       # OAuth/Bearer
-cargo run --example 13_websocket_transport  # WebSocket
-cargo run --example 15_middleware           # Middleware chain
+cargo run --example s28_authentication      # OAuth/Bearer
+cargo run --example t01_websocket_transport # WebSocket
+cargo run --example m01_basic_middleware    # Middleware chain
 
 # Testing
 cargo run --example 26-server-tester -- test http://localhost:8080
@@ -567,7 +567,7 @@ Base64 Operations       252+ MB/s       N/A               Optimized
 **Run benchmarks:**
 ```bash
 make bench                           # General benchmarks
-cargo run --example 32_simd_parsing  # SIMD-specific
+cargo run --example t08_simd_parsing_performance  # SIMD-specific
 ```
 
 ---
