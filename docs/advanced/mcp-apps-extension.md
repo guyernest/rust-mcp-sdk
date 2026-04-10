@@ -326,7 +326,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Running the Example
 
 ```bash
-cargo run --example conference_venue_map --features schema-generation
+cargo run --example s39_mcp_app_venue_map --features schema-generation
 ```
 
 ### Key Features
@@ -541,7 +541,7 @@ async fn get_room_images(
 ### Running the Example
 
 ```bash
-cargo run --example hotel_gallery --features schema-generation
+cargo run --example s40_mcp_app_hotel_gallery --features schema-generation
 ```
 
 ### Key Features

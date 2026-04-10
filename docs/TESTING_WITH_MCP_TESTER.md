@@ -32,13 +32,13 @@ make test-with-tester
 
 ### 3. Test Specific Example
 ```bash
-make test-example-server EXAMPLE=22_streamable_http_server_stateful
+make test-example-server EXAMPLE=t04_streamable_http_stateful
 ```
 
 ### 4. Generate Test Scenario
 ```bash
 # Start your server first
-cargo run --example 22_streamable_http_server_stateful --features streamable-http &
+cargo run --example t04_streamable_http_stateful --features streamable-http &
 
 # Generate scenario
 make generate-test-scenario URL=http://localhost:8080
@@ -313,7 +313,7 @@ fi
 ### Complete Testing Example
 ```bash
 # 1. Start the example server
-cargo run --example 22_streamable_http_server_stateful --features streamable-http &
+cargo run --example t04_streamable_http_stateful --features streamable-http &
 SERVER_PID=$!
 
 # 2. Wait for startup
