@@ -14,7 +14,7 @@
 [![Documentation](https://docs.rs/pmcp/badge.svg)](https://docs.rs/pmcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust 1.83+](https://img.shields.io/badge/rust-1.83+-orange.svg)](https://www.rust-lang.org)
-[![MCP Compatible](https://img.shields.io/badge/MCP-v2025--03--26-blue.svg)](https://modelcontextprotocol.io)
+[![MCP Compatible](https://img.shields.io/badge/MCP-v2025--11--25-blue.svg)](https://modelcontextprotocol.io)
 
 > **Production-grade Rust implementation of the [Model Context Protocol](https://modelcontextprotocol.io) (MCP) - 16x faster than TypeScript, built with Toyota Way quality principles**
 
@@ -378,7 +378,7 @@ cargo pmcp app build --url https://my-server.example.com
 
 **PMCP v2.0 — aligned with the MCP TypeScript SDK v2.0 release (2026-03-22):**
 
-- **Protocol v2025-03-26**: Full alignment with the latest MCP specification, backward compatible with `2024-11-05`
+- **Protocol v2025-11-25**: Full alignment with the latest MCP specification, backward compatible with `2024-11-05`
 - **MCP Apps**: Rich interactive HTML UI widgets served from MCP servers — works with ChatGPT, Claude Desktop, and other MCP clients. Live preview with browser-style DevTools (resizable panel, network/events/protocol/bridge tabs)
 - **MCP Tasks**: Experimental shared client/server state with DynamoDB-backed task lifecycle management and task variables
 - **Conformance Test Suite**: 19-scenario conformance engine across 5 domains with `cargo pmcp test conformance` and `mcp-tester conformance` CLI integration
@@ -638,7 +638,7 @@ We welcome contributions! Please:
 
 | Feature | TypeScript SDK v2.0 | PMCP v2.0 (Rust) |
 |---------|---------------------|------------------|
-| Protocol Version | 2025-03-26 | 2025-03-26 (+ 2024-11-05 compat) |
+| Protocol Version | 2025-11-25 | 2025-11-25 (+ 2024-11-05 compat) |
 | Transports | stdio, SSE, WebSocket | stdio, SSE, WebSocket, WASM |
 | Authentication | OAuth 2.0, Bearer | OAuth 2.0, Bearer, OIDC |
 | Tools | ✓ | ✓ (Type-safe + outputSchema) |
