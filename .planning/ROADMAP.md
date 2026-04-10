@@ -687,7 +687,7 @@ Plans:
 
 **Milestone Goal:** Close the credibility and developer-experience gaps where the official Rust MCP SDK (rmcp) outshines PMCP -- documentation accuracy, feature gate presentation, macro documentation, example index, and repo hygiene. No new runtime dependencies; all fixes are configuration changes, file rewrites, and targeted attribute additions.
 
-- [ ] **Phase 65: Examples Cleanup and Protocol Accuracy** - Replace broken examples/README.md, fix protocol badge, resolve 17 orphan example files and 4 duplicate number prefixes
+- [x] **Phase 65: Examples Cleanup and Protocol Accuracy** - Replace broken examples/README.md, fix protocol badge, resolve 17 orphan example files and 4 duplicate number prefixes (completed 2026-04-10)
 - [ ] **Phase 66: Macros Documentation Rewrite** - Rewrite pmcp-macros README to document current #[mcp_tool]/#[mcp_server]/#[mcp_prompt]/#[mcp_resource] API with migration guide
 - [ ] **Phase 67: docs.rs Pipeline and Feature Flags** - Enable doc_auto_cfg for automatic feature badges, explicit feature list in docs.rs metadata, feature flag table, zero rustdoc warnings
 - [ ] **Phase 68: General Documentation Polish** - Update lib.rs doctests to TypedToolWithOutput pattern, add transport matrix, CI enforcement gates for drift prevention
@@ -703,11 +703,11 @@ Plans:
   2. Every `.rs` file in `examples/` has a corresponding `[[example]]` entry in `Cargo.toml` with correct `required-features`, and `cargo run --example <name>` works for each
   3. No two example files share the same numbered prefix -- `ls examples/*.rs | awk -F_ '{print $1}' | sort | uniq -d` returns empty
   4. The README.md MCP-Compatible badge and compatibility table display protocol version `2025-11-25`, matching `LATEST_PROTOCOL_VERSION` in source code
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 Plans:
 - [x] 65-01-PLAN.md — Audit orphan examples + fix protocol badge (EXMP-02, PROT-01)
 - [x] 65-02-PLAN.md — Renumber all examples with role-prefix scheme (EXMP-03)
-- [ ] 65-03-PLAN.md — Write examples/README.md index (EXMP-01)
+- [x] 65-03-PLAN.md — Write examples/README.md index (EXMP-01)
 
 ### Phase 66: Macros Documentation Rewrite
 **Goal**: A developer reading pmcp-macros documentation (on docs.rs or GitHub) sees accurate documentation of #[mcp_tool], #[mcp_server], #[mcp_prompt], and #[mcp_resource] as the primary API, with a clear migration path from deprecated macros
@@ -747,7 +747,7 @@ Plans:
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 65. Examples Cleanup + Protocol Accuracy | v2.1 | 2/3 | In Progress|  |
+| 65. Examples Cleanup + Protocol Accuracy | v2.1 | 3/3 | Complete   | 2026-04-10 |
 | 66. Macros Documentation Rewrite | v2.1 | 0/? | Not started | - |
 | 67. docs.rs Pipeline + Feature Flags | v2.1 | 0/? | Not started | - |
 | 68. General Documentation Polish | v2.1 | 0/? | Not started | - |

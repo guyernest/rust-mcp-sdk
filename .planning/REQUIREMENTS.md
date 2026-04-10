@@ -9,7 +9,7 @@ Requirements for rmcp Upgrades milestone. Each maps to roadmap phases.
 
 ### Examples Cleanup
 
-- [ ] **EXMP-01**: Examples README replaced with accurate PMCP example index organized by category with required features and run commands
+- [x] **EXMP-01**: Examples README replaced with accurate PMCP example index organized by category with required features and run commands
 - [x] **EXMP-02**: All example .rs files in examples/ are registered in Cargo.toml with correct required-features (17 orphans resolved)
 - [ ] **EXMP-03**: No duplicate example number prefixes — each numbered prefix maps to exactly one file (08, 11, 12, 32 resolved)
 
@@ -101,7 +101,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| EXMP-01 | Phase 65 | Pending |
+| EXMP-01 | Phase 65 | Complete |
 | EXMP-02 | Phase 65 | Complete |
 | EXMP-03 | Phase 65 | Pending |
 | PROT-01 | Phase 65 | Complete |

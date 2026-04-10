@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: unknown
-stopped_at: Completed 65-01-PLAN.md
-last_updated: "2026-04-10T22:38:56.865Z"
+stopped_at: Completed 65-03-PLAN.md
+last_updated: "2026-04-10T22:56:29.116Z"
 progress:
   total_phases: 40
   completed_phases: 0
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 65 (examples-cleanup-protocol-accuracy) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Shipped Milestones
 
@@ -57,6 +57,7 @@ v2.1 decisions:
 - Phase ordering follows the docs.rs build pipeline dependency: content accuracy first, then rendering pipeline, then polish
 - No new runtime dependencies for this milestone -- all fixes are config, content, and attribute changes
 - [Phase 65]: All 17 orphan examples compile successfully -- registered all with import-derived feature flags (no deletions needed)
+- [Phase 65]: examples/README.md replaced with PMCP example index — 63 examples categorized by Role/Capability/Complexity + migration reference
 
 ### Roadmap Evolution
 
@@ -72,6 +73,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-10T22:38:56.862Z
-Stopped at: Completed 65-01-PLAN.md
+Last session: 2026-04-10T22:56:29.114Z
+Stopped at: Completed 65-03-PLAN.md
 Resume: Run `/gsd:plan-phase 65` to begin Phase 65 planning.
