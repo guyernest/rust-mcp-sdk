@@ -26,11 +26,11 @@ jobs:
     strategy:
       matrix:
         example:
-          - name: "22_streamable_http_server_stateful"
+          - name: "t04_streamable_http_stateful"
             features: "streamable-http"
             transport: "http"
             port: 8080
-          - name: "23_streamable_http_server_stateless"
+          - name: "t05_streamable_http_stateless"
             features: "streamable-http"
             transport: "http"
             port: 8081
@@ -131,7 +131,7 @@ jobs:
     - name: Verify Example Compilation
       run: |
         # Just build an example to verify compilation
-        cargo build --example 22_streamable_http_server_stateful --features streamable-http
+        cargo build --example t04_streamable_http_stateful --features streamable-http
         echo "::notice::Example builds successfully"
 
     - name: Mark Test Complete

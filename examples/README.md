@@ -41,7 +41,7 @@ cargo run --example s02_server
 
 **s25_refactored_server** — Transport-independent `ServerCore` + `StdioAdapter` pattern (new protocol/transport split).
 ```bash
-cargo run --example s25_refactored_server --features full
+cargo run --example s25_refactored_server
 ```
 
 ### Resources
@@ -219,17 +219,17 @@ cargo run --example s34_typed_tools_workflow --features schema-generation
 
 **s35_hybrid_workflow** — Hybrid execution model: server runs deterministic steps, client LLM handles fuzzy-matching steps.
 ```bash
-cargo run --example s35_hybrid_workflow --features full
+cargo run --example s35_hybrid_workflow
 ```
 
 **s36_dynamic_resource_workflow** — Template-bound resource URIs built from previous-step outputs.
 ```bash
-cargo run --example s36_dynamic_resource_workflow --features full
+cargo run --example s36_dynamic_resource_workflow
 ```
 
 **s37_resource_only_steps** — Workflow steps that fetch resources without executing any tool.
 ```bash
-cargo run --example s37_resource_only_steps --features full
+cargo run --example s37_resource_only_steps
 ```
 
 **s38_prompt_workflow_progress** — Multi-step prompt workflow with progress reporting and cancellation.
@@ -286,7 +286,7 @@ cargo run --example c04_client_prompts
 
 **c06_multiple_clients_parallel** — Multiple MCP clients running in parallel with independent per-client state.
 ```bash
-cargo run --example c06_multiple_clients_parallel --features full
+cargo run --example c06_multiple_clients_parallel
 ```
 
 **c07_oidc_discovery** — OIDC discovery, token exchange, and refresh against an OAuth 2.0 provider (with CORS/retry handling).
@@ -343,7 +343,7 @@ cargo run --example t07_connection_pool --features full
 
 **t08_simd_parsing_performance** — SIMD-accelerated JSON-RPC, SSE, Base64, and HTTP-header parsing with benchmarks.
 ```bash
-cargo run --example t08_simd_parsing_performance --features full
+cargo run --example t08_simd_parsing_performance
 ```
 
 ---
@@ -364,7 +364,7 @@ cargo run --example m02_enhanced_middleware --features full
 
 **m03_middleware_demo** — End-to-end flow combining protocol middleware with `StreamableHttpTransport` and OAuth.
 ```bash
-cargo run --example m03_middleware_demo --features full
+cargo run --example m03_middleware_demo
 ```
 
 ### HTTP / Server Middleware
@@ -383,7 +383,7 @@ cargo run --example m05_tool_middleware_oauth
 
 **m06_oauth_transport_to_tools** — Complete transport → middleware → tools OAuth flow (production-ready pattern).
 ```bash
-cargo run --example m06_oauth_transport_to_tools --features full
+cargo run --example m06_oauth_transport_to_tools
 ```
 
 ### Error Recovery and Observability
@@ -395,7 +395,7 @@ cargo run --example m07_advanced_error_recovery --features full
 
 **m08_observability_middleware** — Tracing, metrics, and logging via the built-in observability middleware (console + CloudWatch EMF).
 ```bash
-cargo run --example m08_observability_middleware --features full
+cargo run --example m08_observability_middleware
 ```
 
 ---

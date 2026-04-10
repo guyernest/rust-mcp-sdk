@@ -111,9 +111,9 @@ All examples serve as both documentation and tests:
 # Run all examples
 make test-examples
 
-# Run specific examples
-cargo run --example 25_property_testing_demo
-cargo run --example 26_quality_gates_demo
+# Run specific examples — see examples/README.md for the full index
+cargo run --example s01_basic_server
+cargo run --example c01_client_initialize
 ```
 
 **ALWAYS Requirement Examples:**

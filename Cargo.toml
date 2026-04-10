@@ -315,7 +315,6 @@ name = "c07_oidc_discovery"
 path = "examples/c07_oidc_discovery.rs"
 required-features = ["http-client"]
 
-
 [[example]]
 name = "t04_streamable_http_stateful"
 path = "examples/t04_streamable_http_stateful.rs"
@@ -359,7 +358,6 @@ required-features = ["full"]
 [[example]]
 name = "t08_simd_parsing_performance"
 path = "examples/t08_simd_parsing_performance.rs"
-required-features = ["full"]
 
 [[example]]
 name = "s16_typed_tools"
@@ -394,12 +392,10 @@ required-features = ["schema-generation"]
 [[example]]
 name = "m03_middleware_demo"
 path = "examples/m03_middleware_demo.rs"
-required-features = ["full"]
 
 [[example]]
 name = "c06_multiple_clients_parallel"
 path = "examples/c06_multiple_clients_parallel.rs"
-required-features = ["full"]
 
 [[example]]
 name = "s22_structured_output_schema"
@@ -430,7 +426,6 @@ required-features = ["schema-generation"]
 [[example]]
 name = "s35_hybrid_workflow"
 path = "examples/s35_hybrid_workflow.rs"
-required-features = ["full"]
 
 [[example]]
 name = "m04_server_http_middleware"
@@ -448,22 +443,18 @@ path = "examples/m05_tool_middleware_oauth.rs"
 [[example]]
 name = "m06_oauth_transport_to_tools"
 path = "examples/m06_oauth_transport_to_tools.rs"
-required-features = ["full"]
 
 [[example]]
 name = "s36_dynamic_resource_workflow"
 path = "examples/s36_dynamic_resource_workflow.rs"
-required-features = ["full"]
 
 [[example]]
 name = "s37_resource_only_steps"
 path = "examples/s37_resource_only_steps.rs"
-required-features = ["full"]
 
 [[example]]
 name = "m08_observability_middleware"
 path = "examples/m08_observability_middleware.rs"
-required-features = ["full"]
 
 [[example]]
 name = "c05_client"
@@ -486,7 +477,6 @@ required-features = ["schema-generation"]
 [[example]]
 name = "s25_refactored_server"
 path = "examples/s25_refactored_server.rs"
-required-features = ["full"]
 
 [[example]]
 name = "s02_server"

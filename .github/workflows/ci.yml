@@ -95,72 +95,28 @@ jobs:
     
     - name: Check examples
       run: |
-        for example in examples/*.rs; do
-          if [[ -f "$example" ]]; then
-            example_name=$(basename "$example" .rs)
-            # Skip examples that require special feature flags
-            if [[ "$example_name" == "09_authentication" ]]; then
-              echo "Skipping example: $example_name (requires authentication_example feature)"
-              continue
+        # Build every registered example with its declared required-features.
+        # Reading required-features from cargo metadata keeps this in sync with
+        # Cargo.toml automatically, so future renames or feature changes don't
+        # require workflow edits.
+        cargo metadata --no-deps --format-version 1 \
+          | python3 -c '
+        import json, sys
+        meta = json.load(sys.stdin)
+        pkg = next(p for p in meta["packages"] if p["name"] == "pmcp")
+        for t in pkg["targets"]:
+            if "example" in t["kind"]:
+                feats = ",".join(t.get("required-features") or [])
+                print(f"{t[\"name\"]}|{feats}")
+        ' | while IFS='|' read -r name feats; do
+            if [[ -n "$feats" ]]; then
+              echo "Checking example: $name (features: $feats)"
+              cargo check --example "$name" --features "$feats"
+            else
+              echo "Checking example: $name (no required features)"
+              cargo check --example "$name" --features http
             fi
-            if [[ "$example_name" == "10_progress_notifications" ]]; then
-              echo "Skipping example: $example_name (requires progress_example feature)"
-              continue
-            fi
-            if [[ "$example_name" == "11_request_cancellation" ]]; then
-              echo "Skipping example: $example_name (requires cancellation_example feature)"
-              continue
-            fi
-            if [[ "$example_name" == "13_websocket_transport" ]] || \
-               [[ "$example_name" == "27_websocket_server_enhanced" ]]; then
-              echo "Skipping example: $example_name (requires websocket feature)"
-              continue
-            fi
-            if [[ "$example_name" == "18_resource_watcher" ]]; then
-              echo "Skipping example: $example_name (requires resource-watcher feature)"
-              continue
-            fi
-            if [[ "$example_name" == "22_streamable_http_server_stateful" ]] || \
-               [[ "$example_name" == "23_streamable_http_server_stateless" ]] || \
-               [[ "$example_name" == "24_streamable_http_client" ]] || \
-               [[ "$example_name" == "55_server_middleware" ]]; then
-              echo "Skipping example: $example_name (requires streamable-http feature)"
-              continue
-            fi
-            if [[ "$example_name" == "32_typed_tools" ]] || \
-               [[ "$example_name" == "33_advanced_typed_tools" ]] || \
-               [[ "$example_name" == "34_serverbuilder_typed" ]] || \
-               [[ "$example_name" == "35_wasm_typed_tools" ]] || \
-               [[ "$example_name" == "36_typed_tool_v2_example" ]] || \
-               [[ "$example_name" == "37_description_variants_example" ]] || \
-               [[ "$example_name" == "53_typed_tools_workflow_integration" ]] || \
-               [[ "$example_name" == "conference_venue_map" ]] || \
-               [[ "$example_name" == "hotel_gallery" ]]; then
-              echo "Skipping example: $example_name (requires schema-generation feature)"
-              continue
-            fi
-            if [[ "$example_name" == "20_oidc_discovery" ]]; then
-              echo "Skipping example: $example_name (requires http-client feature)"
-              continue
-            fi
-            if [[ "$example_name" == "28_sse_optimized" ]]; then
-              echo "Skipping example: $example_name (requires sse feature)"
-              continue
-            fi
-            if [[ "$example_name" == "29_connection_pool" ]] || \
-               [[ "$example_name" == "30_enhanced_middleware" ]] || \
-               [[ "$example_name" == "31_advanced_error_recovery" ]] || \
-               [[ "$example_name" == "49_tool_with_sampling_server" ]] || \
-               [[ "$example_name" == "63_mcp_tool_macro" ]] || \
-               [[ "$example_name" == "64_mcp_prompt_macro" ]]; then
-              echo "Skipping example: $example_name (requires full feature)"
-              continue
-            fi
-            echo "Checking example: $example_name"
-            # Most examples need at least http feature for tokio
-            cargo check --example "$example_name" --features http
-          fi
-        done
+          done
 
     - name: Clean up before coverage
       run: |
