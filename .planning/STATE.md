@@ -2,16 +2,14 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
-status: executing
-stopped_at: Roadmap created for v2.1 milestone. 4 phases (65-68), 14 requirements mapped.
-last_updated: "2026-04-10T22:01:14.086Z"
-last_activity: 2026-04-10 -- Phase 65 planning complete
+status: unknown
+stopped_at: Completed 65-01-PLAN.md
+last_updated: "2026-04-10T22:38:56.865Z"
 progress:
-  total_phases: 13
+  total_phases: 40
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
-  percent: 0
 ---
 
 # Project State
@@ -21,16 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Close credibility and DX gaps where rmcp outshines PMCP -- documentation accuracy, feature gate presentation, macro documentation, example index, repo hygiene.
-**Current focus:** Phase 65 (Examples Cleanup and Protocol Accuracy)
+**Current focus:** Phase 65 — examples-cleanup-protocol-accuracy
 
 ## Current Position
 
-Phase: 65 of 68 (Examples Cleanup and Protocol Accuracy)
-Plan: 0 of ? in current phase
-Status: Ready to execute
-Last activity: 2026-04-10 -- Phase 65 planning complete
-
-Progress: [░░░░░░░░░░] 0%
+Phase: 65 (examples-cleanup-protocol-accuracy) — EXECUTING
+Plan: 2 of 3
 
 ## Shipped Milestones
 
@@ -62,6 +56,7 @@ v2.1 decisions:
 - EXMP and PROT combined into Phase 65 (both are credibility fixes, no dependency between them, co-deliverable)
 - Phase ordering follows the docs.rs build pipeline dependency: content accuracy first, then rendering pipeline, then polish
 - No new runtime dependencies for this milestone -- all fixes are config, content, and attribute changes
+- [Phase 65]: All 17 orphan examples compile successfully -- registered all with import-derived feature flags (no deletions needed)
 
 ### Roadmap Evolution
 
@@ -77,6 +72,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-10
-Stopped at: Roadmap created for v2.1 milestone. 4 phases (65-68), 14 requirements mapped.
+Last session: 2026-04-10T22:38:56.862Z
+Stopped at: Completed 65-01-PLAN.md
 Resume: Run `/gsd:plan-phase 65` to begin Phase 65 planning.

@@ -10,12 +10,12 @@ Requirements for rmcp Upgrades milestone. Each maps to roadmap phases.
 ### Examples Cleanup
 
 - [ ] **EXMP-01**: Examples README replaced with accurate PMCP example index organized by category with required features and run commands
-- [ ] **EXMP-02**: All example .rs files in examples/ are registered in Cargo.toml with correct required-features (17 orphans resolved)
+- [x] **EXMP-02**: All example .rs files in examples/ are registered in Cargo.toml with correct required-features (17 orphans resolved)
 - [ ] **EXMP-03**: No duplicate example number prefixes — each numbered prefix maps to exactly one file (08, 11, 12, 32 resolved)
 
 ### Protocol Accuracy
 
-- [ ] **PROT-01**: README MCP-Compatible badge and compatibility table show 2025-11-25, matching LATEST_PROTOCOL_VERSION in code
+- [x] **PROT-01**: README MCP-Compatible badge and compatibility table show 2025-11-25, matching LATEST_PROTOCOL_VERSION in code
 
 ### Macros Documentation
 
@@ -102,9 +102,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | EXMP-01 | Phase 65 | Pending |
-| EXMP-02 | Phase 65 | Pending |
+| EXMP-02 | Phase 65 | Complete |
 | EXMP-03 | Phase 65 | Pending |
-| PROT-01 | Phase 65 | Pending |
+| PROT-01 | Phase 65 | Complete |
 | MACR-01 | Phase 66 | Pending |
 | MACR-02 | Phase 66 | Pending |
 | MACR-03 | Phase 66 | Pending |
