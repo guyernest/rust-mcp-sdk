@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-04-11
+
+### `pmcp` 2.3.0 — no behavioral change, pmcp-macros bump signal
+
+#### Changed
+- **Dependency pin bump:** `pmcp-macros` dev-dep and optional-feature-dep both pinned at `0.5.0` (was `0.4.1`). See the `pmcp-macros` 0.5.0 sub-entry below for the breaking-change surface. `pmcp`'s own re-exported public API (`pub use pmcp_macros::{mcp_prompt, mcp_server, mcp_tool};`) is unchanged — users of the `macros` feature who only import `pmcp::mcp_tool` / `pmcp::mcp_server` / `pmcp::mcp_prompt` need no code changes. Users who depend on `pmcp-macros` directly and were still using the deprecated `#[tool]` / `#[tool_router]` / `#[prompt]` / `#[resource]` macros must migrate; see [pmcp-macros/CHANGELOG.md](pmcp-macros/CHANGELOG.md) for the migration guide with before/after code snippets.
+- **Version bumped to 2.3.0** to signal the transitive macro-surface change to users checking `cargo update --dry-run` or crates.io diff feeds. A patch bump would have under-communicated the semver-legal breakage in the workspace's macro crate.
+
+### `pmcp-macros` 0.5.0 — Deprecated macros removed, README rewritten
+
+#### Removed (breaking)
+- `#[tool]` macro (use `#[mcp_tool]`).
+- `#[tool_router]` macro (use `#[mcp_server]`).
+- `#[prompt]` zero-op stub (use `#[mcp_prompt]`).
+- `#[resource]` zero-op stub (use `#[mcp_resource]`).
+- `tool_router_dev` Cargo feature (gated the deleted `#[tool_router]` integration tests).
+
+898 lines of deprecated/stub source removed across 6 files. `lib.rs` crate root shrank from 374 to 226 lines. See [pmcp-macros/CHANGELOG.md](pmcp-macros/CHANGELOG.md) for the complete migration guide including before/after code snippets for each removed macro.
+
+#### Changed
+- **Crate-level docs sourced from `pmcp-macros/README.md`** via `#![doc = include_str!("../README.md")]`. docs.rs and GitHub render the same 355-line document — no more stale `pmcp = "1.1"` crate-root docs.
+- **README fully rewritten** (252 → 355 lines) to document `#[mcp_tool]`, `#[mcp_server]`, `#[mcp_prompt]`, and `#[mcp_resource]` as the primary API with `rust,no_run` doctest-verified examples. Zero `rust,ignore` fences; API drift is now caught automatically by `cargo test --doc -p pmcp-macros`.
+- **Per-macro `///` documentation** references the renamed `examples/s23_mcp_tool_macro.rs` and `examples/s24_mcp_prompt_macro.rs` files from Phase 65 — the previous `63_`/`64_` numbers have been removed from both rustdoc comments and runnable example headers.
+- **`docs/advanced/migration-from-typescript.md` and four pmcp-course chapters** updated to `#[mcp_tool]` / `#[mcp_server]` syntax (Phase 66 Wave 1 cleanup of downstream consumers).
+
 ## [2.2.0] - 2026-04-06
 
 ### `pmcp` 2.2.0 — IconInfo wire format spec compliance (CR-002)
