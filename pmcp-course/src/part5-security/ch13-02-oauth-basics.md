@@ -240,7 +240,7 @@ impl Scope {
 
 ```rust
 #[derive(TypedTool)]
-#[tool(name = "execute_query", description = "Run a database query")]
+#[mcp_tool(name = "execute_query", description = "Run a database query")]
 pub struct ExecuteQuery;
 
 impl ExecuteQuery {

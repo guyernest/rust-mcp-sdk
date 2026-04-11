@@ -174,7 +174,7 @@ Once authentication succeeds, your tools can access user information through the
 
 ```rust
 #[derive(TypedTool)]
-#[tool(name = "get_my_data", description = "Get data for the authenticated user")]
+#[mcp_tool(name = "get_my_data", description = "Get data for the authenticated user")]
 pub struct GetMyData;
 
 impl GetMyData {
@@ -291,7 +291,7 @@ Scopes let you implement least-privilege access: users get only the permissions 
 
 ```rust
 #[derive(TypedTool)]
-#[tool(
+#[mcp_tool(
     name = "delete_customer",
     description = "Delete a customer record",
     annotations(destructive = true)
