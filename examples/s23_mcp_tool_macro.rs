@@ -11,7 +11,7 @@
 //! # Run
 //!
 //! ```bash
-//! cargo run --example 63_mcp_tool_macro --features full
+//! cargo run --example s23_mcp_tool_macro --features full
 //! ```
 
 use pmcp::{ServerBuilder, ServerCapabilities, State, ToolHandler};

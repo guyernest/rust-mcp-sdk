@@ -10,7 +10,7 @@
 //! # Run
 //!
 //! ```bash
-//! cargo run --example 64_mcp_prompt_macro --features full
+//! cargo run --example s24_mcp_prompt_macro --features full
 //! ```
 
 use pmcp::types::{Content, GetPromptResult, PromptMessage};

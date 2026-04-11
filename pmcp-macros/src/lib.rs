@@ -16,7 +16,7 @@ mod mcp_tool;
 #[allow(dead_code)]
 mod utils;
 
-// Phase 66 Plan 01 (POC gate): note on the missing `ReadmeDoctests` struct.
+// Note on the missing `ReadmeDoctests` struct.
 //
 // The rustdoc book recommends this pattern for making README doctests
 // executable under `cargo test --doc`:
@@ -31,10 +31,10 @@ mod utils;
 //     other than functions tagged with `#[proc_macro]`,
 //     `#[proc_macro_derive]`, or `#[proc_macro_attribute]`
 //
-// Discovered during the POC gate for Phase 66. The crate-level
-// `#![doc = include_str!("../POC_README.md")]` attribute at the top of this
-// file is sufficient on its own: the included file's `rust,no_run` code
-// blocks are picked up as doctests attached to the crate root.
+// Discovered during the Phase 66 POC gate. The crate-level
+// `#![doc = include_str!("../README.md")]` attribute at the top of this file
+// is sufficient on its own: the included file's `rust,no_run` code blocks
+// are picked up as doctests attached to the crate root.
 //
 // This comment is intentionally preserved as a breadcrumb so future
 // contributors do not re-introduce the struct expecting it to "make doctests
@@ -44,51 +44,42 @@ mod utils;
 ///
 /// Generates a struct implementing `ToolHandler` from an annotated standalone
 /// async or sync function. Eliminates `Box::pin` boilerplate and provides
-/// automatic input/output schema generation, `State<T>` injection, and
-/// MCP annotation support.
+/// automatic input/output schema generation, `State<T>` injection, and MCP
+/// annotation support.
 ///
 /// # Attributes
 ///
-/// - `description` - Tool description (required, enforced at compile time)
-/// - `name` - Override tool name (defaults to function name)
-/// - `annotations(...)` - MCP standard annotations (`read_only`, `destructive`,
-///   `idempotent`, `open_world`)
-/// - `ui = "..."` - Widget resource URI for MCP Apps
+/// - `description = "..."` — required. Human-readable description enforced at
+///   compile time.
+/// - `name = "..."` — optional. Overrides the tool name (defaults to the
+///   function name).
+/// - `annotations(...)` — optional. MCP standard annotations: `read_only`,
+///   `destructive`, `idempotent`, `open_world`.
+/// - `ui = "..."` — optional. Widget resource URI for MCP Apps integrations.
 ///
-/// # Examples
+/// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// use pmcp::mcp_tool;
+/// use schemars::JsonSchema;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Debug, Deserialize, JsonSchema)]
+/// struct AddArgs { a: f64, b: f64 }
+///
+/// #[derive(Debug, Serialize, JsonSchema)]
+/// struct AddResult { sum: f64 }
+///
 /// #[mcp_tool(description = "Add two numbers")]
-/// async fn add(args: AddArgs) -> Result<AddResult> {
+/// async fn add(args: AddArgs) -> pmcp::Result<AddResult> {
 ///     Ok(AddResult { sum: args.a + args.b })
 /// }
 ///
-/// // Register: server_builder.tool("add", add())
+/// // Register with: ServerBuilder::new().tool("add", add())
 /// ```
 ///
-/// With state injection:
-///
-/// ```rust,ignore
-/// #[mcp_tool(description = "Query database")]
-/// async fn query(args: QueryArgs, db: State<Database>) -> Result<Value> {
-///     let rows = db.execute(&args.sql).await?;
-///     Ok(json!({ "rows": rows }))
-/// }
-///
-/// // Register: server_builder.tool("query", query().with_state(shared_db))
-/// ```
-///
-/// With annotations:
-///
-/// ```rust,ignore
-/// #[mcp_tool(
-///     description = "Delete a record",
-///     annotations(destructive = true, idempotent = false),
-/// )]
-/// async fn delete(args: DeleteArgs) -> Result<Value> {
-///     // ...
-/// }
-/// ```
+/// See `examples/s23_mcp_tool_macro.rs` for a complete runnable demo covering
+/// `State<T>` injection, sync tools, annotations, and impl-block registration.
 #[proc_macro_attribute]
 pub fn mcp_tool(args: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemFn);
@@ -97,27 +88,41 @@ pub fn mcp_tool(args: TokenStream, input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Collects `#[mcp_tool]` methods from an impl block and generates tool handlers.
+/// Collects `#[mcp_tool]` and `#[mcp_prompt]` methods from an impl block and
+/// generates handlers plus bulk registration.
 ///
-/// Processes an impl block to find all methods annotated with `#[mcp_tool(...)]`,
-/// generates per-tool `ToolHandler` structs using `Arc<ServerType>` for shared
-/// `&self` access, and implements `McpServer` for bulk registration.
+/// Processes an impl block to find all methods annotated with `#[mcp_tool(...)]`
+/// or `#[mcp_prompt(...)]`, generates per-method handler structs sharing an
+/// `Arc<ServerType>` for `&self` access, and emits `impl McpServer for ServerType`
+/// so `ServerBuilder::mcp_server(...)` can register everything at once.
 ///
-/// # Examples
+/// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// use pmcp::{mcp_server, mcp_tool};
+/// use schemars::JsonSchema;
+/// use serde::{Deserialize, Serialize};
+///
+/// struct Calculator;
+///
+/// #[derive(Debug, Deserialize, JsonSchema)]
+/// struct AddArgs { a: f64, b: f64 }
+///
+/// #[derive(Debug, Serialize, JsonSchema)]
+/// struct AddResult { sum: f64 }
+///
 /// #[mcp_server]
-/// impl MyServer {
-///     #[mcp_tool(description = "Query database")]
-///     async fn query(&self, args: QueryArgs) -> Result<QueryResult> {
-///         self.db.execute(&args.sql).await
+/// impl Calculator {
+///     #[mcp_tool(description = "Add two numbers")]
+///     async fn add(&self, args: AddArgs) -> pmcp::Result<AddResult> {
+///         Ok(AddResult { sum: args.a + args.b })
 ///     }
 /// }
 ///
-/// // Register all tools at once:
-/// let builder = ServerBuilder::new()
-///     .mcp_server(my_server);
+/// // Register with: ServerBuilder::new().mcp_server(Calculator)
 /// ```
+///
+/// See `examples/s23_mcp_tool_macro.rs` for a complete runnable demo.
 #[proc_macro_attribute]
 pub fn mcp_server(args: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemImpl);
@@ -129,39 +134,47 @@ pub fn mcp_server(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Defines a prompt handler with automatic argument schema generation.
 ///
 /// Generates a struct implementing `PromptHandler` from an annotated standalone
-/// async or sync function. Eliminates boilerplate and provides automatic
-/// argument schema generation from `JsonSchema` and `State<T>` injection.
+/// async or sync function. Eliminates the
+/// `HashMap::get("x").ok_or()?.parse()?` boilerplate of hand-rolled prompt
+/// handlers, derives argument schemas from `JsonSchema`, and supports
+/// `State<T>` injection.
 ///
 /// # Attributes
 ///
-/// - `description` - Prompt description (required, enforced at compile time)
-/// - `name` - Override prompt name (defaults to function name)
+/// - `description = "..."` — required. Human-readable description enforced at
+///   compile time.
+/// - `name = "..."` — optional. Overrides the prompt name (defaults to the
+///   function name).
 ///
-/// # Examples
+/// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// use pmcp::mcp_prompt;
+/// use pmcp::types::{Content, GetPromptResult, PromptMessage};
+/// use schemars::JsonSchema;
+/// use serde::Deserialize;
+///
+/// #[derive(Debug, Deserialize, JsonSchema)]
+/// struct ReviewArgs {
+///     /// The programming language to review
+///     language: String,
+/// }
+///
 /// #[mcp_prompt(description = "Review code for quality issues")]
-/// async fn code_review(args: ReviewArgs) -> Result<GetPromptResult> {
+/// async fn code_review(args: ReviewArgs) -> pmcp::Result<GetPromptResult> {
 ///     Ok(GetPromptResult::new(
-///         vec![PromptMessage::user(Content::text(format!("Review {}", args.language)))],
+///         vec![PromptMessage::user(Content::text(format!(
+///             "Review this {} code", args.language,
+///         )))],
 ///         None,
 ///     ))
 /// }
 ///
-/// // Register: server_builder.prompt("code_review", code_review())
+/// // Register with: ServerBuilder::new().prompt("code_review", code_review())
 /// ```
 ///
-/// With state injection:
-///
-/// ```rust,ignore
-/// #[mcp_prompt(description = "Suggest improvements")]
-/// async fn suggest(args: SuggestArgs, db: State<Database>) -> Result<GetPromptResult> {
-///     let context = db.get_context(&args.topic).await?;
-///     Ok(GetPromptResult::new(vec![PromptMessage::user(Content::text(context))], None))
-/// }
-///
-/// // Register: server_builder.prompt("suggest", suggest().with_state(shared_db))
-/// ```
+/// See `examples/s24_mcp_prompt_macro.rs` for a complete runnable demo
+/// covering `State<T>` injection and impl-block registration.
 #[proc_macro_attribute]
 pub fn mcp_prompt(args: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemFn);
@@ -170,29 +183,40 @@ pub fn mcp_prompt(args: TokenStream, input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Define a resource provider with automatic URI template matching.
+/// Defines a resource provider with automatic URI template matching.
 ///
-/// Generates a struct implementing `DynamicResourceProvider` from a function.
-/// URI template variables are extracted and passed as `String` parameters.
+/// Generates a struct implementing `DynamicResourceProvider` from an annotated
+/// standalone async or sync function. Every `{variable_name}` placeholder inside
+/// the `uri` template is extracted at request time and passed to the function as
+/// a `String` parameter of the same name — no hand-rolled URI parsing required.
 ///
 /// # Attributes
 ///
-/// - `uri` (required) — URI or URI template (e.g., `"docs://{topic}"`)
-/// - `description` (required) — Human-readable description
-/// - `name` (optional) — Override resource name (defaults to function name)
-/// - `mime_type` (optional) — MIME type (defaults to `"text/plain"`)
+/// - `uri = "..."` — required. URI or URI template (for example
+///   `"docs://{topic}"`).
+/// - `description = "..."` — required. Human-readable description.
+/// - `name = "..."` — optional. Overrides the resource name (defaults to the
+///   function name).
+/// - `mime_type = "..."` — optional. Defaults to `"text/plain"`.
 ///
-/// # Examples
+/// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// // Note: direct import until the `mcp_resource` re-export gap is closed.
+/// use pmcp_macros::mcp_resource;
+///
 /// #[mcp_resource(uri = "docs://{topic}", description = "Documentation pages")]
-/// async fn read_doc(topic: String) -> Result<String> {
-///     tokio::fs::read_to_string(format!("docs/{topic}.md")).await.map_err(Into::into)
+/// async fn read_doc(topic: String) -> pmcp::Result<String> {
+///     Ok(format!("# {topic}\n\nDocumentation content for `{topic}`."))
 /// }
 ///
-/// // Register via ResourceCollection:
-/// // .add_dynamic_provider(Arc::new(read_doc()))
+/// // Register with:
+/// // ResourceCollection::new().add_dynamic_provider(Arc::new(read_doc()))
 /// ```
+///
+/// See `examples/s23_mcp_tool_macro.rs` and `examples/s24_mcp_prompt_macro.rs`
+/// for the related `#[mcp_tool]` / `#[mcp_prompt]` patterns; a complete runnable
+/// resource demo is tracked for a future phase.
 #[proc_macro_attribute]
 pub fn mcp_resource(args: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemFn);
