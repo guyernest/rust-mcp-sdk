@@ -1,8 +1,8 @@
 ---
 phase: 67
 slug: docs-rs-pipeline-and-feature-flags
-status: draft
-nyquist_compliant: false
+status: finalized
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-04-11
 ---
@@ -45,8 +45,8 @@ created: 2026-04-11
 | 67-02-01 | 02 | 1 | DRSD-01 | — | All 6 manual `#[cfg_attr(docsrs, doc(cfg(...)))]` annotations removed; `feature(doc_cfg)` at `src/lib.rs:70` unchanged | unit | `[ $(rg '#\[cfg_attr\(docsrs, doc\(cfg' src/ --count-matches \| awk -F: '{s+=$2} END {print s}') -eq 0 ] && grep -E 'feature\(doc_cfg\)' src/lib.rs` | ✅ | ⬜ pending |
 | 67-03-01 | 03 | 1 | DOCD-02 (pulled from deferred) | — | `CRATE-README.md` exists at repo root with required sections | integration | `test -f CRATE-README.md && grep -q '## Quick Start' CRATE-README.md && grep -q '## Cargo Features' CRATE-README.md` | ❌ W0 | ⬜ pending |
 | 67-03-02 | 03 | 1 | DRSD-03 | — | `src/lib.rs` top uses `#![doc = include_str!("../CRATE-README.md")]` and inline `//!` Quick Start block removed | unit | `grep -q 'include_str!("../CRATE-README.md")' src/lib.rs && ! grep -E '^//! ### Client Example' src/lib.rs` | ❌ W0 | ⬜ pending |
-| 67-03-03 | 03 | 1 | DRSD-03 | — | Feature flag table present in `CRATE-README.md` with 17 rows (default + full + 15 individual) | integration | `awk '/## Cargo Features/,/^## /{print}' CRATE-README.md \| grep -c '^\| \`' \| awk '{exit ($1==17)?0:1}'` | ❌ W0 | ⬜ pending |
-| 67-03-04 | 03 | 1 | DRSD-03 | — | Feature table includes all 15 individual features including simd and logging | integration | `for f in composition http http-client jwt-auth logging macros mcp-apps oauth rayon resource-watcher schema-generation simd sse streamable-http validation websocket; do grep -q "\\\`$f\\\`" CRATE-README.md \|\| { echo "missing $f"; exit 1; }; done` | ❌ W0 | ⬜ pending |
+| 67-03-03 | 03 | 1 | DRSD-03 | — | Feature flag table present in `CRATE-README.md` with 18 rows (default + full + 16 individual including logging) | integration | `awk '/## Cargo Features/,/^## /{print}' CRATE-README.md \| grep -c '^\| \`' \| awk '{exit ($1==18)?0:1}'` | ❌ W0 | ⬜ pending |
+| 67-03-04 | 03 | 1 | DRSD-03 | — | Feature table includes all 16 individual features including simd and logging | integration | `for f in composition http http-client jwt-auth logging macros mcp-apps oauth rayon resource-watcher schema-generation simd sse streamable-http validation websocket; do grep -q "\\\`$f\\\`" CRATE-README.md \|\| { echo "missing $f"; exit 1; }; done` | ❌ W0 | ⬜ pending |
 | 67-03-05 | 03 | 1 | DRSD-03 | — | Doctests in CRATE-README.md compile (verbatim move from src/lib.rs must still pass) | unit | `cargo test --doc --features full` | ✅ | ⬜ pending |
 | 67-04-01 | 04 | 2 | DRSD-04 | — | 9 unescaped markdown link pitfalls in http_logging_middleware.rs / http_middleware.rs / http_utils.rs fixed | unit | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features composition,http,http-client,jwt-auth,macros,mcp-apps,oauth,rayon,resource-watcher,schema-generation,simd,sse,streamable-http,validation,websocket 2>&1 \| ! grep -E 'src/server/http_(logging_)?middleware.rs.*warning'` | ✅ | ⬜ pending |
 | 67-04-02 | 04 | 2 | DRSD-04 | — | 15 broken intra-doc links fixed (TaskStore, TaskRouter, IdentityProvider, CorsLayer, StreamableHttpServerConfig, PauseReason::ToolError, WorkflowProgress, ServerCoreBuilder, etc.) | unit | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features composition,http,http-client,jwt-auth,macros,mcp-apps,oauth,rayon,resource-watcher,schema-generation,simd,sse,streamable-http,validation,websocket 2>&1 \| ! grep 'unresolved link'` | ✅ | ⬜ pending |
@@ -98,3 +98,19 @@ No test infrastructure installation needed — `cargo test --doc`, `cargo doc`, 
 - [ ] `nyquist_compliant: true` set in frontmatter (flip after planner finalizes task IDs)
 
 **Approval:** pending (planner will finalize task IDs against actual plan file numbering, then flip `nyquist_compliant: true`)
+
+
+---
+
+## Plan-Numbering Finalization Note (added 2026-04-11 post-planning)
+
+The per-task verification map above was written with the researcher's estimated 20 task IDs (67-01-01 … 67-06-03). The planner consolidated related verifications into 13 atomic tasks across 6 plans while preserving every distinct grep/command via multi-line <acceptance_criteria> inside each task. The map remains valid as a verification-intent reference; the actual task IDs in the final PLAN.md files are:
+
+- 67-01-01 (Plan 01, 1 task)
+- 67-02-01 (Plan 02, 1 task)
+- 67-03-01, 67-03-02 (Plan 03, 2 tasks)
+- 67-04-01 through 67-04-06 (Plan 04, 6 tasks — matching the researcher's batch IDs)
+- 67-05-01, 67-05-02 (Plan 05, 2 tasks)
+- 67-06-01 (Plan 06, 1 task, which aggregates the researcher's 67-06-01/02/03 into a single 12-check gate)
+
+Total: 13 tasks.  is set because every task has an <automated> verify command plus multi-condition <acceptance_criteria>, and the single manual-only verification (visual badge fidelity on nightly) remains in the Manual-Only Verifications table.

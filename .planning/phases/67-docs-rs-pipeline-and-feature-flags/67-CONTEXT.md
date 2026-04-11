@@ -166,7 +166,7 @@ None — no pending todos matched this phase's scope.
 - `.github/workflows/ci.yml` — add a new "Check rustdoc zero-warnings" step inside the existing `quality-gate` job (existing job at lines 158+ runs `make quality-gate`).
 
 ### New files to create
-- `CRATE-README.md` at repo root — the crate-level doc source included via `#![doc = include_str!(...)]`. Must contain: crate purpose (1–2 sentences), Client + Server Quick Start blocks as `rust,no_run` (verbatim from `src/lib.rs:14–61`), Cargo Features table (3 cols, 17 rows = 15 individual + `default` + `full`), short pointers to docs/book/course/repo. Target length ~150–250 lines. Every code block must compile under `cargo test --doc`.
+- `CRATE-README.md` at repo root — the crate-level doc source included via `#![doc = include_str!(...)]`. Must contain: crate purpose (1–2 sentences), Client + Server Quick Start blocks as `rust,no_run` (verbatim from `src/lib.rs:14–61`), Cargo Features table (3 cols, **18 rows = 16 individual + `default` + `full`** per D-13 amendment), short pointers to docs/book/course/repo. Target length ~150–250 lines. Every code block must compile under `cargo test --doc`.
 
 ### Requirements traceability
 - `.planning/REQUIREMENTS.md:28-31` — DRSD-01 (`doc_auto_cfg`), DRSD-02 (explicit feature list), DRSD-03 (feature flag table), DRSD-04 (zero warnings + CI gate) definitions.
