@@ -147,7 +147,7 @@ auto-detects and wraps it accordingly.
 
 See the complete showcase covering standalone tools, state injection, annotations,
 and impl-block tools:
-https://github.com/paiml/pmcp/blob/main/examples/s23_mcp_tool_macro.rs
+<https://github.com/paiml/pmcp/blob/main/examples/s23_mcp_tool_macro.rs>
 
 ## `#[mcp_server]`
 
@@ -211,7 +211,7 @@ belong to the type.
 
 `examples/s23_mcp_tool_macro.rs` also demonstrates `#[mcp_server]` alongside
 standalone `#[mcp_tool]` registrations:
-https://github.com/paiml/pmcp/blob/main/examples/s23_mcp_tool_macro.rs
+<https://github.com/paiml/pmcp/blob/main/examples/s23_mcp_tool_macro.rs>
 
 ## `#[mcp_prompt]`
 
@@ -275,7 +275,7 @@ struct field; the SDK fills in absent values with `None` automatically.
 
 ### Full runnable example
 
-https://github.com/paiml/pmcp/blob/main/examples/s24_mcp_prompt_macro.rs
+<https://github.com/paiml/pmcp/blob/main/examples/s24_mcp_prompt_macro.rs>
 
 ## `#[mcp_resource]`
 
@@ -352,4 +352,4 @@ dependency — always route through `pmcp`'s feature flag.
 
 ## License
 
-MIT — see https://github.com/paiml/pmcp/blob/main/LICENSE
+MIT — see <https://github.com/paiml/pmcp/blob/main/LICENSE>
