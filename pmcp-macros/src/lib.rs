@@ -1,9 +1,9 @@
-// Phase 66 Plan 01 (POC gate): wire an include_str'd Markdown file through
-// `cargo test --doc -p pmcp-macros` to prove the Wave 1+ README rewrite path
-// is viable. Uses a dedicated POC_README.md rather than the real README.md
-// because the real README still contains stale `rust` code blocks that will
-// be replaced in a subsequent plan.
-#![doc = include_str!("../POC_README.md")]
+// Crate-level rustdoc is sourced from pmcp-macros/README.md via include_str! so
+// that docs.rs and GitHub render from a single authoritative source. Every
+// `rust,no_run` code block inside the README is compiled as a doctest under
+// `cargo test --doc -p pmcp-macros`, which catches API drift automatically
+// (no more silent staleness in the README).
+#![doc = include_str!("../README.md")]
 
 use proc_macro::TokenStream;
 use syn::{parse_macro_input, ItemFn, ItemImpl};
