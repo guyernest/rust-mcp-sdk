@@ -109,8 +109,9 @@ server.setRequestHandler("tools/call", async (request) => {
 ```
 
 **Rust PMCP (with macros):**
+<!-- Note: real #[mcp_tool] requires a single args struct — see pmcp-macros/README.md -->
 ```rust
-use pmcp::{tool, tool_router, Parameters};
+use pmcp::{mcp_server, mcp_tool, Parameters};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct CalculateParams {
@@ -119,9 +120,9 @@ struct CalculateParams {
     b: f64,
 }
 
-#[tool_router]
+#[mcp_server]
 impl Calculator {
-    #[tool(name = "calculate", description = "Perform calculations")]
+    #[mcp_tool(name = "calculate", description = "Perform calculations")]
     async fn calculate(&self, params: Parameters<CalculateParams>) -> Result<f64> {
         match params.0.operation.as_str() {
             "add" => Ok(params.0.a + params.0.b),
