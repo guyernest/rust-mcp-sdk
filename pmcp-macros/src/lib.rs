@@ -1,3 +1,10 @@
+// Phase 66 Plan 01 (POC gate): wire an include_str'd Markdown file through
+// `cargo test --doc -p pmcp-macros` to prove the Wave 1+ README rewrite path
+// is viable. Uses a dedicated POC_README.md rather than the real README.md
+// because the real README still contains stale `rust` code blocks that will
+// be replaced in a subsequent plan.
+#![doc = include_str!("../POC_README.md")]
+
 //! Procedural macros for PMCP SDK
 //!
 //! This crate provides attribute macros to reduce boilerplate when implementing
@@ -64,6 +71,30 @@ mod tool;
 mod tool_router;
 #[allow(dead_code)]
 mod utils;
+
+// Phase 66 Plan 01 (POC gate): note on the missing `ReadmeDoctests` struct.
+//
+// The rustdoc book recommends this pattern for making README doctests
+// executable under `cargo test --doc`:
+//
+//     #[cfg(doctest)]
+//     #[doc = include_str!("../README.md")]
+//     pub struct ReadmeDoctests;
+//
+// That pattern does NOT compile in a `proc-macro = true` crate. rustc 1.94
+// rejects it with:
+//     error: `proc-macro` crate types currently cannot export any items
+//     other than functions tagged with `#[proc_macro]`,
+//     `#[proc_macro_derive]`, or `#[proc_macro_attribute]`
+//
+// Discovered during the POC gate for Phase 66. The crate-level
+// `#![doc = include_str!("../POC_README.md")]` attribute at the top of this
+// file is sufficient on its own: the included file's `rust,no_run` code
+// blocks are picked up as doctests attached to the crate root.
+//
+// This comment is intentionally preserved as a breadcrumb so future
+// contributors do not re-introduce the struct expecting it to "make doctests
+// work on proc-macro crates". It does not. The crate-level attribute does.
 
 /// Defines a tool handler with automatic schema generation.
 ///
