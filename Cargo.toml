@@ -218,219 +218,282 @@ opt-level = 3
 debug = true
 
 [[example]]
-name = "01_client_initialize"
-path = "examples/01_client_initialize.rs"
+name = "c01_client_initialize"
+path = "examples/c01_client_initialize.rs"
 
 [[example]]
-name = "02_server_basic"
-path = "examples/02_server_basic.rs"
+name = "s01_basic_server"
+path = "examples/s01_basic_server.rs"
 
 [[example]]
-name = "03_client_tools"
-path = "examples/03_client_tools.rs"
+name = "c02_client_tools"
+path = "examples/c02_client_tools.rs"
 
 [[example]]
-name = "04_server_resources"
-path = "examples/04_server_resources.rs"
+name = "s03_server_resources"
+path = "examples/s03_server_resources.rs"
 
 [[example]]
-name = "05_client_resources"
-path = "examples/05_client_resources.rs"
+name = "c03_client_resources"
+path = "examples/c03_client_resources.rs"
 
 [[example]]
-name = "06_server_prompts"
-path = "examples/06_server_prompts.rs"
+name = "s05_server_prompts"
+path = "examples/s05_server_prompts.rs"
 
 [[example]]
-name = "07_client_prompts"
-path = "examples/07_client_prompts.rs"
+name = "c04_client_prompts"
+path = "examples/c04_client_prompts.rs"
 
 [[example]]
-name = "08_logging"
-path = "examples/08_logging.rs"
+name = "s07_logging"
+path = "examples/s07_logging.rs"
 
 [[example]]
-name = "09_authentication"
-path = "examples/09_authentication.rs"
+name = "s04_server_resources_collection"
+path = "examples/s04_server_resources_collection.rs"
+
+[[example]]
+name = "s28_authentication"
+path = "examples/s28_authentication.rs"
 required-features = ["authentication_example"]
 
 [[example]]
-name = "10_progress_notifications"
-path = "examples/10_progress_notifications.rs"
+name = "s08_progress_notifications"
+path = "examples/s08_progress_notifications.rs"
 required-features = ["progress_example"]
 
 [[example]]
-name = "11_request_cancellation"
-path = "examples/11_request_cancellation.rs"
+name = "s09_progress_countdown"
+path = "examples/s09_progress_countdown.rs"
+
+[[example]]
+name = "s10_request_cancellation"
+path = "examples/s10_request_cancellation.rs"
 required-features = ["cancellation_example"]
 
 [[example]]
-name = "12_error_handling"
-path = "examples/12_error_handling.rs"
+name = "s11_error_handling"
+path = "examples/s11_error_handling.rs"
 
 [[example]]
-name = "13_websocket_transport"
-path = "examples/13_websocket_transport.rs"
+name = "s38_prompt_workflow_progress"
+path = "examples/s38_prompt_workflow_progress.rs"
+
+[[example]]
+name = "t01_websocket_transport"
+path = "examples/t01_websocket_transport.rs"
 required-features = ["websocket"]
 
 [[example]]
-name = "14_sampling_llm"
-path = "examples/14_sampling_llm.rs"
+name = "s12_sampling_llm"
+path = "examples/s12_sampling_llm.rs"
 
 [[example]]
-name = "15_middleware"
-path = "examples/15_middleware.rs"
+name = "m01_basic_middleware"
+path = "examples/m01_basic_middleware.rs"
 
 [[example]]
-name = "16_oauth_server"
-path = "examples/16_oauth_server.rs"
+name = "s29_oauth_server"
+path = "examples/s29_oauth_server.rs"
 
 [[example]]
-name = "17_completable_prompts"
-path = "examples/17_completable_prompts.rs"
+name = "s06_completable_prompts"
+path = "examples/s06_completable_prompts.rs"
 
 [[example]]
-name = "18_resource_watcher"
-path = "examples/18_resource_watcher.rs"
+name = "s14_resource_watcher"
+path = "examples/s14_resource_watcher.rs"
 required-features = ["resource-watcher"]
 
 [[example]]
-name = "19_elicit_input"
-path = "examples/19_elicit_input.rs"
+name = "s13_elicit_input"
+path = "examples/s13_elicit_input.rs"
 
 [[example]]
-name = "20_oidc_discovery"
-path = "examples/20_oidc_discovery.rs"
+name = "c07_oidc_discovery"
+path = "examples/c07_oidc_discovery.rs"
 required-features = ["http-client"]
 
-# [[example]]
-# name = "21_macro_tools"
-# path = "examples/21_macro_tools.rs"
-# required-features = ["macros"]
-
 [[example]]
-name = "22_streamable_http_server_stateful"
-path = "examples/22_streamable_http_server_stateful.rs"
+name = "t04_streamable_http_stateful"
+path = "examples/t04_streamable_http_stateful.rs"
 required-features = ["streamable-http"]
 
 [[example]]
-name = "23_streamable_http_server_stateless"
-path = "examples/23_streamable_http_server_stateless.rs"
+name = "t05_streamable_http_stateless"
+path = "examples/t05_streamable_http_stateless.rs"
 required-features = ["streamable-http"]
 
 [[example]]
-name = "24_streamable_http_client"
-path = "examples/24_streamable_http_client.rs"
+name = "t06_streamable_http_client"
+path = "examples/t06_streamable_http_client.rs"
 required-features = ["streamable-http"]
 
 [[example]]
-name = "27_websocket_server_enhanced"
-path = "examples/27_websocket_server_enhanced.rs"
+name = "t02_websocket_server_enhanced"
+path = "examples/t02_websocket_server_enhanced.rs"
 required-features = ["websocket"]
 
 [[example]]
-name = "28_sse_optimized"
-path = "examples/28_sse_optimized.rs"
+name = "t03_sse_optimized"
+path = "examples/t03_sse_optimized.rs"
 required-features = ["sse"]
 
 [[example]]
-name = "29_connection_pool"
-path = "examples/29_connection_pool.rs"
+name = "t07_connection_pool"
+path = "examples/t07_connection_pool.rs"
 required-features = ["full"]
 
 [[example]]
-name = "30_enhanced_middleware"
-path = "examples/30_enhanced_middleware.rs"
+name = "m02_enhanced_middleware"
+path = "examples/m02_enhanced_middleware.rs"
 required-features = ["full"]
 
 [[example]]
-name = "31_advanced_error_recovery"
-path = "examples/31_advanced_error_recovery.rs"
+name = "m07_advanced_error_recovery"
+path = "examples/m07_advanced_error_recovery.rs"
 required-features = ["full"]
 
 [[example]]
-name = "32_typed_tools"
-path = "examples/32_typed_tools.rs"
+name = "t08_simd_parsing_performance"
+path = "examples/t08_simd_parsing_performance.rs"
+
+[[example]]
+name = "s16_typed_tools"
+path = "examples/s16_typed_tools.rs"
 required-features = ["schema-generation"]
 
 [[example]]
-name = "33_advanced_typed_tools"
-path = "examples/33_advanced_typed_tools.rs"
+name = "s17_advanced_typed_tools"
+path = "examples/s17_advanced_typed_tools.rs"
 required-features = ["schema-generation"]
 
 [[example]]
-name = "34_serverbuilder_typed"
-path = "examples/34_serverbuilder_typed.rs"
+name = "s18_serverbuilder_typed"
+path = "examples/s18_serverbuilder_typed.rs"
 required-features = ["schema-generation"]
 
 [[example]]
-name = "35_wasm_typed_tools"
-path = "examples/35_wasm_typed_tools.rs"
+name = "s19_wasm_typed_tools"
+path = "examples/s19_wasm_typed_tools.rs"
 required-features = ["schema-generation"]
 
 [[example]]
-name = "36_typed_tool_v2_example"
-path = "examples/36_typed_tool_v2_example.rs"
+name = "s20_typed_tool_v2"
+path = "examples/s20_typed_tool_v2.rs"
 required-features = ["schema-generation"]
 
 [[example]]
-name = "37_description_variants_example"
-path = "examples/37_description_variants_example.rs"
+name = "s21_description_variants"
+path = "examples/s21_description_variants.rs"
 required-features = ["schema-generation"]
 
 [[example]]
-name = "49_tool_with_sampling_server"
-path = "examples/49_tool_with_sampling_server.rs"
+name = "m03_middleware_demo"
+path = "examples/m03_middleware_demo.rs"
+
+[[example]]
+name = "c06_multiple_clients_parallel"
+path = "examples/c06_multiple_clients_parallel.rs"
+
+[[example]]
+name = "s22_structured_output_schema"
+path = "examples/s22_structured_output_schema.rs"
+
+[[example]]
+name = "s30_tool_with_sampling"
+path = "examples/s30_tool_with_sampling.rs"
 required-features = ["full"]
 
 [[example]]
-name = "50_workflow_minimal"
-path = "examples/50_workflow_minimal.rs"
+name = "s31_workflow_minimal"
+path = "examples/s31_workflow_minimal.rs"
 
 [[example]]
-name = "51_workflow_error_messages"
-path = "examples/51_workflow_error_messages.rs"
+name = "s32_workflow_error_messages"
+path = "examples/s32_workflow_error_messages.rs"
 
 [[example]]
-name = "52_workflow_dsl_cookbook"
-path = "examples/52_workflow_dsl_cookbook.rs"
+name = "s33_workflow_dsl_cookbook"
+path = "examples/s33_workflow_dsl_cookbook.rs"
 
 [[example]]
-name = "53_typed_tools_workflow_integration"
-path = "examples/53_typed_tools_workflow_integration.rs"
+name = "s34_typed_tools_workflow"
+path = "examples/s34_typed_tools_workflow.rs"
 required-features = ["schema-generation"]
 
 [[example]]
-name = "55_server_middleware"
-path = "examples/55_server_middleware.rs"
+name = "s35_hybrid_workflow"
+path = "examples/s35_hybrid_workflow.rs"
+
+[[example]]
+name = "m04_server_http_middleware"
+path = "examples/m04_server_http_middleware.rs"
 required-features = ["streamable-http"]
 
 [[example]]
-name = "56_dynamic_resources"
-path = "examples/56_dynamic_resources.rs"
+name = "s15_dynamic_resources"
+path = "examples/s15_dynamic_resources.rs"
 
 [[example]]
-name = "57_tool_middleware_oauth"
-path = "examples/57_tool_middleware_oauth.rs"
+name = "m05_tool_middleware_oauth"
+path = "examples/m05_tool_middleware_oauth.rs"
 
 [[example]]
-name = "conference_venue_map"
-path = "examples/conference_venue_map.rs"
+name = "m06_oauth_transport_to_tools"
+path = "examples/m06_oauth_transport_to_tools.rs"
+
+[[example]]
+name = "s36_dynamic_resource_workflow"
+path = "examples/s36_dynamic_resource_workflow.rs"
+
+[[example]]
+name = "s37_resource_only_steps"
+path = "examples/s37_resource_only_steps.rs"
+
+[[example]]
+name = "m08_observability_middleware"
+path = "examples/m08_observability_middleware.rs"
+
+[[example]]
+name = "c05_client"
+path = "examples/c05_client.rs"
+
+[[example]]
+name = "s39_mcp_app_venue_map"
+path = "examples/s39_mcp_app_venue_map.rs"
 required-features = ["schema-generation"]
 
 [[example]]
-name = "hotel_gallery"
-path = "examples/hotel_gallery.rs"
+name = "s26_currency_server"
+path = "examples/s26_currency_server.rs"
+
+[[example]]
+name = "s40_mcp_app_hotel_gallery"
+path = "examples/s40_mcp_app_hotel_gallery.rs"
 required-features = ["schema-generation"]
 
 [[example]]
-name = "63_mcp_tool_macro"
-path = "examples/63_mcp_tool_macro.rs"
+name = "s25_refactored_server"
+path = "examples/s25_refactored_server.rs"
+
+[[example]]
+name = "s02_server"
+path = "examples/s02_server.rs"
+
+[[example]]
+name = "s27_test_currency_server"
+path = "examples/s27_test_currency_server.rs"
+
+[[example]]
+name = "s23_mcp_tool_macro"
+path = "examples/s23_mcp_tool_macro.rs"
 required-features = ["full"]
 
 [[example]]
-name = "64_mcp_prompt_macro"
-path = "examples/64_mcp_prompt_macro.rs"
+name = "s24_mcp_prompt_macro"
+path = "examples/s24_mcp_prompt_macro.rs"
 required-features = ["full"]
 
 [[bench]]

@@ -333,11 +333,11 @@ impl<F: FoundationClient + 'static> ArithmeticsServer<F> {
 
 ## Examples
 
-- `examples/63_mcp_tool_macro.rs` — Standalone tools, State<T>, sync detection
-- `examples/64_mcp_prompt_macro.rs` — Standalone prompts, mixed tools+prompts, numeric args
+- `examples/s23_mcp_tool_macro.rs` — Standalone tools, State<T>, sync detection
+- `examples/s24_mcp_prompt_macro.rs` — Standalone prompts, mixed tools+prompts, numeric args
 
 Run with:
 ```bash
-cargo run --example 63_mcp_tool_macro --features full
-cargo run --example 64_mcp_prompt_macro --features full
+cargo run --example s23_mcp_tool_macro --features full
+cargo run --example s24_mcp_prompt_macro --features full
 ```

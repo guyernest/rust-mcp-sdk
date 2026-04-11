@@ -125,8 +125,8 @@ main() {
 
     # Test HTTP examples
     HTTP_EXAMPLES=(
-        "22_streamable_http_server_stateful:22_http_stateful_test.yaml:8080"
-        "23_streamable_http_server_stateless:23_http_stateless_test.yaml:8081"
+        "t04_streamable_http_stateful:t04_http_stateful_test.yaml:8080"
+        "t05_streamable_http_stateless:t05_http_stateless_test.yaml:8081"
         "25-oauth-basic:25_oauth_test.yaml:8080"
     )
 
@@ -142,9 +142,7 @@ main() {
 
     # Test stdio examples
     STDIO_EXAMPLES=(
-        "01_simple_tool:01_simple_tool_test.yaml"
-        "04_prompts:04_prompts_test.yaml"
-        "06_server_prompts:06_server_prompts_test.yaml"
+        "s05_server_prompts:s05_server_prompts_test.yaml"
     )
 
     for example_spec in "${STDIO_EXAMPLES[@]}"; do

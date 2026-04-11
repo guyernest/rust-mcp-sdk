@@ -14,7 +14,7 @@
 [![Documentation](https://docs.rs/pmcp/badge.svg)](https://docs.rs/pmcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust 1.83+](https://img.shields.io/badge/rust-1.83+-orange.svg)](https://www.rust-lang.org)
-[![MCP Compatible](https://img.shields.io/badge/MCP-v2025--03--26-blue.svg)](https://modelcontextprotocol.io)
+[![MCP Compatible](https://img.shields.io/badge/MCP-v2025--11--25-blue.svg)](https://modelcontextprotocol.io)
 
 > **Production-grade Rust implementation of the [Model Context Protocol](https://modelcontextprotocol.io) (MCP) - 16x faster than TypeScript, built with Toyota Way quality principles**
 
@@ -378,7 +378,7 @@ cargo pmcp app build --url https://my-server.example.com
 
 **PMCP v2.0 — aligned with the MCP TypeScript SDK v2.0 release (2026-03-22):**
 
-- **Protocol v2025-03-26**: Full alignment with the latest MCP specification, backward compatible with `2024-11-05`
+- **Protocol v2025-11-25**: Full alignment with the latest MCP specification, backward compatible with `2024-11-05`
 - **MCP Apps**: Rich interactive HTML UI widgets served from MCP servers — works with ChatGPT, Claude Desktop, and other MCP clients. Live preview with browser-style DevTools (resizable panel, network/events/protocol/bridge tabs)
 - **MCP Tasks**: Experimental shared client/server state with DynamoDB-backed task lifecycle management and task variables
 - **Conformance Test Suite**: 19-scenario conformance engine across 5 domains with `cargo pmcp test conformance` and `mcp-tester conformance` CLI integration
@@ -465,21 +465,21 @@ The SDK includes 60+ comprehensive examples covering all features:
 
 ```bash
 # Basic examples
-cargo run --example 01_client_initialize    # Client setup
-cargo run --example 02_server_basic         # Basic server
-cargo run --example 03_client_tools         # Tool usage
+cargo run --example c01_client_initialize   # Client setup
+cargo run --example s01_basic_server        # Basic server
+cargo run --example c02_client_tools        # Tool usage
 
 # Type-safe tools (v1.6.0+)
-cargo run --example 32_typed_tools --features schema-generation
-cargo run --example 33_advanced_typed_tools --features schema-generation
+cargo run --example s16_typed_tools --features schema-generation
+cargo run --example s17_advanced_typed_tools --features schema-generation
 
 # Advanced features
-cargo run --example 09_authentication       # OAuth/Bearer
-cargo run --example 13_websocket_transport  # WebSocket
-cargo run --example 15_middleware           # Middleware chain
+cargo run --example s28_authentication      # OAuth/Bearer
+cargo run --example t01_websocket_transport # WebSocket
+cargo run --example m01_basic_middleware    # Middleware chain
 
-# Testing
-cargo run --example 26-server-tester -- test http://localhost:8080
+# Testing (mcp-tester is a standalone Cargo project in examples/26-server-tester)
+cargo install mcp-tester && mcp-tester test http://localhost:8080
 
 # AI-assisted development
 # See ai-agents/README.md for Kiro and Claude Code setup
@@ -567,7 +567,7 @@ Base64 Operations       252+ MB/s       N/A               Optimized
 **Run benchmarks:**
 ```bash
 make bench                           # General benchmarks
-cargo run --example 32_simd_parsing  # SIMD-specific
+cargo run --example t08_simd_parsing_performance  # SIMD-specific
 ```
 
 ---
@@ -638,7 +638,7 @@ We welcome contributions! Please:
 
 | Feature | TypeScript SDK v2.0 | PMCP v2.0 (Rust) |
 |---------|---------------------|------------------|
-| Protocol Version | 2025-03-26 | 2025-03-26 (+ 2024-11-05 compat) |
+| Protocol Version | 2025-11-25 | 2025-11-25 (+ 2024-11-05 compat) |
 | Transports | stdio, SSE, WebSocket | stdio, SSE, WebSocket, WASM |
 | Authentication | OAuth 2.0, Bearer | OAuth 2.0, Bearer, OIDC |
 | Tools | ✓ | ✓ (Type-safe + outputSchema) |

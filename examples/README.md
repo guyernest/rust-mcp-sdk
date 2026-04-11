@@ -1,136 +1,508 @@
-<div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs/static/image/logo-dark.png">
-    <img alt="spin logo" src="./docs/static/image/logo.png" width="300" height="128">
-  </picture>
-  <p>Spin is a framework for building, deploying, and running fast, secure, and composable cloud microservices with WebAssembly.</p>
-      <a href="https://github.com/spinframework/spin/actions/workflows/build.yml"><img src="https://github.com/spinframework/spin/actions/workflows/build.yml/badge.svg" alt="build status" /></a>
-      <a href="https://cloud-native.slack.com/archives/C089NJ9G1V0"><img alt="Slack" src="https://img.shields.io/badge/slack-spin-green.svg?logo=slack"></a>
-      <a href="https://www.bestpractices.dev/projects/10373"><img src="https://www.bestpractices.dev/projects/10373/badge"></a>
-</div>
+# PMCP SDK Examples
 
-## What is Spin?
+Examples demonstrating the [PMCP](https://crates.io/crates/pmcp) Model Context Protocol SDK for Rust. Every example in this directory is a standalone, runnable program registered in `Cargo.toml` and ships with a copy-paste `cargo run` command.
 
-Spin is an open source framework for building and running fast, secure, and
-composable cloud microservices with WebAssembly. It aims to be the easiest way
-to get started with WebAssembly microservices, and takes advantage of the latest
-developments in the
-[WebAssembly component model](https://github.com/WebAssembly/component-model)
-and [Wasmtime](https://wasmtime.dev/) runtime.
+## Conventions
 
-Spin offers a simple CLI that helps you create, distribute, and execute
-applications, and in the next sections we will learn more about Spin
-applications and how to get started.
+Examples follow a **role-prefix** naming scheme:
 
-## Getting started
+| Prefix | Role | Count |
+|--------|------|-------|
+| `s` | Server | 40 |
+| `c` | Client | 7 |
+| `t` | Transport | 8 |
+| `m` | Middleware | 8 |
 
-See the [Install Spin](https://spinframework.dev/install) page of the [Spin documentation](https://spinframework.dev) for a detailed
-guide on installing and configuring Spin, but in short run the following commands:
+Within each role, examples are ordered by capability (tools, resources, prompts, sampling, etc.) and then by complexity (basic to advanced). The migration table at the bottom maps the previous numeric-only names to the current role-prefixed names.
+
+## Prerequisites
+
+- Rust toolchain (`stable` or newer). Install with [rustup](https://rustup.rs/).
+- A clone of this repository. All commands below assume you are in the repository root.
+- Some examples require feature flags (e.g. `websocket`, `streamable-http`, `schema-generation`, `full`). Feature flags are noted per-example and come from `Cargo.toml` `[[example]]` entries.
+
+Run any example using the copy-paste command block shown directly under its entry.
+
+---
+
+## Server Examples
+
+### Basic Server
+
+**s01_basic_server** — Minimal MCP server with a single tool handler over stdio.
 ```bash
-curl -fsSL https://spinframework.dev/downloads/install.sh | bash
-sudo mv ./spin /usr/local/bin/spin
+cargo run --example s01_basic_server
 ```
 
-Alternatively, you could [build Spin from source](https://spinframework.dev/contributing-spin).
-
-To get started writing apps, follow the [quickstart guide](https://spinframework.dev/quickstart/),
-and then follow the
-[Rust](https://spinframework.dev/rust-components/), [JavaScript](https://spinframework.dev/javascript-components), [Python](https://spinframework.dev/python-components), or [Go](https://spinframework.dev/go-components/)
-language guides, and the [guide on writing Spin applications](https://spinframework.dev/writing-apps/).
-
-## Language support
-
-WebAssembly is a language-agnostic runtime: you can build WebAssembly components from a variety of source languages. Spin SDKs are available for several languages, including:
-
-* JavaScript: https://github.com/spinframework/spin-js-sdk
-* Rust: https://crates.io/crates/spin-sdk
-* Go: https://pkg.go.dev/github.com/fermyon/spin/sdk/go/v2
-* Python: https://github.com/spinframework/spin-python-sdk
-* Zig: https://github.com/dasimmet/zig-spin (third party)
-* Moonbit: https://github.com/gmlewis/spin-moonbit-sdk (third party)
-
-> The Spin framework team supports the JavaScript, Rust, Go, and Python SDKs. Other language integrations are supported by their authors, and we're grateful to them for their work!
-
-## Usage
-
-Below is an example of using the `spin` CLI to create a new Spin application.  To run the example you will need to install the `wasm32-wasip1` target for Rust.
-
+**s02_server** — Minimal echo-tool server, the smallest usable `Server` + `ToolHandler` pair.
 ```bash
-$ rustup target add wasm32-wasip1
+cargo run --example s02_server
 ```
 
-First, run the `spin new` command to create a Spin application from a template.
+**s25_refactored_server** — Transport-independent `ServerCore` + `StdioAdapter` pattern (new protocol/transport split).
 ```bash
-# Create a new Spin application named 'hello-rust' based on the Rust http template, accepting all defaults
-$ spin new --accept-defaults -t http-rust hello-rust
-```
-Running the `spin new` command created a `hello-rust` directory with all the necessary files for your application. Change to the `hello-rust` directory and build the application with `spin build`, then run it locally with `spin up`:
-
-```bash
-# Compile to Wasm by executing the `build` command.
-$ spin build
-Executing the build command for component hello-rust: cargo build --target wasm32-wasip1 --release
-    Finished release [optimized] target(s) in 0.03s
-Successfully ran the build command for the Spin components.
-
-# Run the application locally.
-$ spin up
-Logging component stdio to ".spin/logs/"
-
-Serving http://127.0.0.1:3000
-Available Routes:
-  hello-rust: http://127.0.0.1:3000 (wildcard)
+cargo run --example s25_refactored_server
 ```
 
-That's it! Now that the application is running, use your browser or cURL in another shell to try it out:
+### Resources
 
+**s03_server_resources** — Server that serves resources with URI templates and custom handlers.
 ```bash
-# Send a request to the application.
-$ curl -i 127.0.0.1:3000
-HTTP/1.1 200 OK
-content-type: text/plain
-transfer-encoding: chunked
-date: Sun, 02 Mar 2025 20:09:11 GMT
-
-Hello World!
+cargo run --example s03_server_resources
 ```
 
-You can make the app do more by editting the `src/lib.rs` file in the `hello-rust` directory using your favorite editor or IDE. To learn more about writing Spin applications see [Writing Applications](https://spinframework.dev/writing-apps) in the Spin documentation.  To learn how to publish and distribute your application see the [Publishing and Distribution](https://spinframework.dev/distributing-apps) guide in the Spin documentation.
+**s04_server_resources_collection** — `ResourceCollection` with `StaticResource` and `DynamicResourceHandler` combined.
+```bash
+cargo run --example s04_server_resources_collection
+```
 
-## Language Support for Spin Features
+**s14_resource_watcher** — `ResourceWatcher` for live file-system change monitoring.
+```bash
+cargo run --example s14_resource_watcher --features resource-watcher
+```
 
-The table below summarizes the [feature support](https://spinframework.dev/language-support-overview) in each of the language SDKs.
+**s15_dynamic_resources** — Dynamic resource providers with URI templates and automatic parameter extraction.
+```bash
+cargo run --example s15_dynamic_resources
+```
 
-| Feature | Rust SDK Supported? | TypeScript SDK Supported? | Python SDK Supported? | Tiny Go SDK Supported? | C# SDK Supported? |
-|-----|-----|-----|-----|-----|-----|
-| **Triggers** |
-| [HTTP](https://spinframework.dev/http-trigger) | Supported | Supported | Supported | Supported | Supported |
-| [Redis](https://spinframework.dev/redis-trigger) | Supported | Supported | Supported | Supported | Not Supported |
-| **APIs** |
-| [Outbound HTTP](https://spinframework.dev/rust-components.md#sending-outbound-http-requests) | Supported | Supported | Supported | Supported | Supported |
-| [Configuration Variables](https://spinframework.dev/variables) | Supported | Supported | Supported | Supported | Supported |
-| [Key Value Storage](https://spinframework.dev/kv-store-api-guide) | Supported | Supported | Supported | Supported | Not Supported |
-| [SQLite Storage](https://spinframework.dev/sqlite-api-guide) | Supported | Supported | Supported | Supported | Not Supported |
-| [MySQL](https://spinframework.dev/rdbms-storage#using-mysql-and-postgresql-from-applications) | Supported | Supported | Not Supported | Supported | Not Supported |
-| [PostgreSQL](https://spinframework.dev/rdbms-storage#using-mysql-and-postgresql-from-applications) | Supported | Supported | Not Supported | Supported | Supported |
-| [Outbound Redis](https://spinframework.dev/rust-components.md#storing-data-in-redis-from-rust-components) | Supported | Supported | Supported | Supported | Supported |
-| [Serverless AI](https://spinframework.dev/serverless-ai-api-guide) | Supported | Supported | Supported | Supported | Not Supported |
-| **Extensibility** |
-| [Authoring Custom Triggers](https://spinframework.dev/extending-and-embedding) | Supported | Not Supported | Not Supported | Not Supported | Not Supported |
+### Prompts
 
-## Getting Involved and Contributing
+**s05_server_prompts** — Server with prompt handlers, templates, and dynamic prompt generation.
+```bash
+cargo run --example s05_server_prompts
+```
 
-We are delighted that you are interested in making Spin better! Thank you!
+**s06_completable_prompts** — Completable prompt arguments (argument auto-completion).
+```bash
+cargo run --example s06_completable_prompts
+```
 
-Each Monday at 2:30om UTC and 9:00pm UTC (alternating), we meet to discuss Spin issues, roadmap, and ideas in our Spin Project Meetings. Subscribe to this [Google Calendar](https://calendar.google.com/calendar/u/1?cid=c3Bpbi5tYWludGFpbmVyc0BnbWFpbC5jb20) for meeting dates.
+### Logging, Progress, Cancellation, Errors
 
-The [Spin Project Meeting agenda](https://docs.google.com/document/d/1EG392gb8Eg-1ZEPDy18pgFZvMMrdAEybpCSufFXoe00/edit?usp=sharing) is a public document. The document contains a rolling agenda with the date and time of each meeting, the Zoom link, and topics of discussion for the day. You will also find the meeting minutes for each meeting and the link to the recording. If you have something you would like to demo or discuss at the project meeting, we encourage you to add it to the agenda.
+**s07_logging** — Server/client logging with levels, structured metadata, and filtering.
+```bash
+cargo run --example s07_logging
+```
 
-You can find the contributing guide [here](https://spinframework.dev/contributing-spin).
+**s08_progress_notifications** — Protocol-level progress notifications and tokens.
+```bash
+cargo run --example s08_progress_notifications --features progress_example
+```
 
-## Stay in Touch
+**s09_progress_countdown** — Countdown tool with rate-limited progress reporting via `extra.report_count()`.
+```bash
+cargo run --example s09_progress_countdown
+```
 
-Follow us on Twitter: [@spinframework](https://twitter.com/spinframework)
+**s10_request_cancellation** — Request cancellation tokens and `CancelledNotification`.
+```bash
+cargo run --example s10_request_cancellation --features cancellation_example
+```
 
-You can join the Spin community in the [Spin CNCF Slack channel](https://cloud-native.slack.com/archives/C089NJ9G1V0) where you can ask questions, get help, and show off the cool things you are doing with Spin!
+**s11_error_handling** — Error codes, recovery strategies, and retry with backoff.
+```bash
+cargo run --example s11_error_handling
+```
 
+### Sampling and Elicitation
+
+**s12_sampling_llm** — Implementing a `SamplingHandler` for LLM sampling on the server.
+```bash
+cargo run --example s12_sampling_llm
+```
+
+**s13_elicit_input** — User input elicitation using the 2025-11-25 spec-compliant JSON-schema elicitation API.
+```bash
+cargo run --example s13_elicit_input
+```
+
+**s30_tool_with_sampling** — Tool that internally calls `sampling/createMessage` (text summarization pattern).
+```bash
+cargo run --example s30_tool_with_sampling --features full
+```
+
+### Typed Tools
+
+**s16_typed_tools** — `TypedTool` with automatic JSON-schema generation from Rust types.
+```bash
+cargo run --example s16_typed_tools --features schema-generation
+```
+
+**s17_advanced_typed_tools** — Field descriptions, validation, regex, ranges, optional fields, nested structures.
+```bash
+cargo run --example s17_advanced_typed_tools --features schema-generation
+```
+
+**s18_serverbuilder_typed** — Ergonomic `ServerBuilder::tool_typed` / `tool_typed_sync` methods.
+```bash
+cargo run --example s18_serverbuilder_typed --features schema-generation
+```
+
+**s19_wasm_typed_tools** — Typed tools compatible with WASM targets (browser, Cloudflare Workers, WASI).
+```bash
+cargo run --example s19_wasm_typed_tools --features schema-generation
+```
+
+**s20_typed_tool_v2** — `TypedToolWithOutput` with both input and output typing (auto-generated `outputSchema`).
+```bash
+cargo run --example s20_typed_tool_v2 --features schema-generation
+```
+
+**s21_description_variants** — All description-builder variants for typed tools (async, sync, with output).
+```bash
+cargo run --example s21_description_variants --features schema-generation
+```
+
+**s22_structured_output_schema** — Top-level `outputSchema` on `ToolInfo` per MCP 2025-11-25.
+```bash
+cargo run --example s22_structured_output_schema
+```
+
+### Proc Macros
+
+**s23_mcp_tool_macro** — `#[mcp_tool]` + `#[mcp_server]` proc macros (compared to `TypedTool`/`TypedToolWithOutput`).
+```bash
+cargo run --example s23_mcp_tool_macro --features full
+```
+
+**s24_mcp_prompt_macro** — `#[mcp_prompt]` proc macro with mixed tools + prompts via `#[mcp_server]`.
+```bash
+cargo run --example s24_mcp_prompt_macro --features full
+```
+
+### Currency Domain Example
+
+**s26_currency_server** — Full currency exchange MCP server (rates, trends, predictions, ASCII sparklines).
+```bash
+cargo run --example s26_currency_server
+```
+
+**s27_test_currency_server** — Test harness that prints the expected protocol messages for `s26_currency_server`.
+```bash
+cargo run --example s27_test_currency_server
+```
+
+### Authentication and OAuth
+
+**s28_authentication** — Client-side `AuthInfo` + `AuthScheme` for authenticated MCP calls.
+```bash
+cargo run --example s28_authentication --features authentication_example
+```
+
+**s29_oauth_server** — Full OAuth 2.0 server with `InMemoryOAuthProvider`, bearer tokens, and scope middleware.
+```bash
+cargo run --example s29_oauth_server
+```
+
+### Workflow System
+
+**s31_workflow_minimal** — Minimal `SequentialWorkflow` (quadratic-formula solver) with DSL helpers and bindings.
+```bash
+cargo run --example s31_workflow_minimal
+```
+
+**s32_workflow_error_messages** — Common workflow validation errors and how to diagnose them.
+```bash
+cargo run --example s32_workflow_error_messages
+```
+
+**s33_workflow_dsl_cookbook** — Recipes covering `prompt_arg`, `from_step`, `field`, `constant`, and binding patterns.
+```bash
+cargo run --example s33_workflow_dsl_cookbook
+```
+
+**s34_typed_tools_workflow** — Typed tools + workflow with server-side tool execution during `prompts/get`.
+```bash
+cargo run --example s34_typed_tools_workflow --features schema-generation
+```
+
+**s35_hybrid_workflow** — Hybrid execution model: server runs deterministic steps, client LLM handles fuzzy-matching steps.
+```bash
+cargo run --example s35_hybrid_workflow
+```
+
+**s36_dynamic_resource_workflow** — Template-bound resource URIs built from previous-step outputs.
+```bash
+cargo run --example s36_dynamic_resource_workflow
+```
+
+**s37_resource_only_steps** — Workflow steps that fetch resources without executing any tool.
+```bash
+cargo run --example s37_resource_only_steps
+```
+
+**s38_prompt_workflow_progress** — Multi-step prompt workflow with progress reporting and cancellation.
+```bash
+cargo run --example s38_prompt_workflow_progress
+```
+
+### MCP Apps (HTML Widgets)
+
+**s39_mcp_app_venue_map** — MCP Apps (SEP-1865) interactive map built with Leaflet.js and `UIResourceBuilder`.
+```bash
+cargo run --example s39_mcp_app_venue_map --features schema-generation
+```
+
+**s40_mcp_app_hotel_gallery** — MCP Apps image gallery with lightbox and responsive grid.
+```bash
+cargo run --example s40_mcp_app_hotel_gallery --features schema-generation
+```
+
+---
+
+## Client Examples
+
+### Initialization
+
+**c01_client_initialize** — Client initialization, capability negotiation, and server-capability inspection.
+```bash
+cargo run --example c01_client_initialize
+```
+
+**c05_client** — Bare-minimum MCP client setup over stdio.
+```bash
+cargo run --example c05_client
+```
+
+### Tools, Resources, Prompts
+
+**c02_client_tools** — Listing, calling, and error-handling MCP tools from the client.
+```bash
+cargo run --example c02_client_tools
+```
+
+**c03_client_resources** — Listing resources, reading content, handling content types, pagination.
+```bash
+cargo run --example c03_client_resources
+```
+
+**c04_client_prompts** — Listing prompts, passing arguments, and consuming prompt responses.
+```bash
+cargo run --example c04_client_prompts
+```
+
+### Concurrency and Auth
+
+**c06_multiple_clients_parallel** — Multiple MCP clients running in parallel with independent per-client state.
+```bash
+cargo run --example c06_multiple_clients_parallel
+```
+
+**c07_oidc_discovery** — OIDC discovery, token exchange, and refresh against an OAuth 2.0 provider (with CORS/retry handling).
+```bash
+cargo run --example c07_oidc_discovery --features http-client
+```
+
+---
+
+## Transport Examples
+
+### WebSocket
+
+**t01_websocket_transport** — WebSocket client transport with `WebSocketConfig`.
+```bash
+cargo run --example t01_websocket_transport --features websocket
+```
+
+**t02_websocket_server_enhanced** — Multi-client `EnhancedWebSocketServer` with heartbeats and connection management.
+```bash
+cargo run --example t02_websocket_server_enhanced --features websocket
+```
+
+### SSE
+
+**t03_sse_optimized** — `OptimizedSseTransport` with compression, batching, and reconnection.
+```bash
+cargo run --example t03_sse_optimized --features sse
+```
+
+### Streamable HTTP
+
+**t04_streamable_http_stateful** — Stateful HTTP server with session management and `mcp-protocol-version` header handling.
+```bash
+cargo run --example t04_streamable_http_stateful --features streamable-http
+```
+
+**t05_streamable_http_stateless** — Stateless HTTP server (ideal for AWS Lambda and serverless deployments).
+```bash
+cargo run --example t05_streamable_http_stateless --features streamable-http
+```
+
+**t06_streamable_http_client** — HTTP client for both stateful and stateless streamable-HTTP servers.
+```bash
+cargo run --example t06_streamable_http_client --features streamable-http
+```
+
+### Connection Pooling and Performance
+
+**t07_connection_pool** — Connection pool with round-robin / least-connections load balancing strategies.
+```bash
+cargo run --example t07_connection_pool --features full
+```
+
+**t08_simd_parsing_performance** — SIMD-accelerated JSON-RPC, SSE, Base64, and HTTP-header parsing with benchmarks.
+```bash
+cargo run --example t08_simd_parsing_performance
+```
+
+---
+
+## Middleware Examples
+
+### Protocol Middleware
+
+**m01_basic_middleware** — Basic `Middleware` trait usage with `LoggingMiddleware` and a `MiddlewareChain`.
+```bash
+cargo run --example m01_basic_middleware
+```
+
+**m02_enhanced_middleware** — Priority ordering, rate limiting, circuit breaker, metrics, and context propagation.
+```bash
+cargo run --example m02_enhanced_middleware --features full
+```
+
+**m03_middleware_demo** — End-to-end flow combining protocol middleware with `StreamableHttpTransport` and OAuth.
+```bash
+cargo run --example m03_middleware_demo
+```
+
+### HTTP / Server Middleware
+
+**m04_server_http_middleware** — `ServerHttpLoggingMiddleware` with header redaction, CORS, and body gating.
+```bash
+cargo run --example m04_server_http_middleware --features streamable-http
+```
+
+### OAuth Pass-Through
+
+**m05_tool_middleware_oauth** — Tool middleware that extracts OAuth tokens from `AuthContext` and injects them into tool calls.
+```bash
+cargo run --example m05_tool_middleware_oauth
+```
+
+**m06_oauth_transport_to_tools** — Complete transport → middleware → tools OAuth flow (production-ready pattern).
+```bash
+cargo run --example m06_oauth_transport_to_tools
+```
+
+### Error Recovery and Observability
+
+**m07_advanced_error_recovery** — Adaptive retry with jitter, partial-failure bulk recovery, deadline-aware timeouts, health monitoring.
+```bash
+cargo run --example m07_advanced_error_recovery --features full
+```
+
+**m08_observability_middleware** — Tracing, metrics, and logging via the built-in observability middleware (console + CloudWatch EMF).
+```bash
+cargo run --example m08_observability_middleware
+```
+
+---
+
+## Standalone Example Projects
+
+The following subdirectories contain full standalone Cargo projects (excluded from the root workspace). Each has its own `Cargo.toml` and build instructions — see the `README.md` inside each directory:
+
+| Directory | What it demonstrates |
+|-----------|----------------------|
+| `examples/mcp-apps-chess/` | MCP Apps: interactive chess board widget |
+| `examples/mcp-apps-map/` | MCP Apps: map widget with `WidgetDir` hot-reload |
+| `examples/mcp-apps-dataviz/` | MCP Apps: data visualization widget |
+| `examples/wasm-client/` | Browser WASM MCP client |
+| `examples/wasm-mcp-server/` | WASM MCP server target |
+| `examples/wasm/` | Shared WASM helpers |
+| `examples/scenarios/` | End-to-end scenario harnesses |
+| `examples/test-basic/` | Basic smoke-test fixture |
+| `examples/25-oauth-basic/` | Basic OAuth 2.0 scaffold project |
+| `examples/26-server-tester/` | `mcp-tester` integration harness |
+| `examples/27-course-server-minimal/` | Minimal server used by the PMCP course |
+
+---
+
+## Migration Reference
+
+If you were using examples from a previous version of PMCP, the table below maps the old example names to the current role-prefixed names. Any old `cargo run` invocations should be updated to the new role-prefixed names.
+
+### Server Examples
+
+| Old Name | New Name |
+|----------|----------|
+| 02_server_basic | s01_basic_server |
+| server | s02_server |
+| 04_server_resources | s03_server_resources |
+| 08_server_resources | s04_server_resources_collection |
+| 06_server_prompts | s05_server_prompts |
+| 17_completable_prompts | s06_completable_prompts |
+| 08_logging | s07_logging |
+| 10_progress_notifications | s08_progress_notifications |
+| 11_progress_countdown | s09_progress_countdown |
+| 11_request_cancellation | s10_request_cancellation |
+| 12_error_handling | s11_error_handling |
+| 14_sampling_llm | s12_sampling_llm |
+| 19_elicit_input | s13_elicit_input |
+| 18_resource_watcher | s14_resource_watcher |
+| 56_dynamic_resources | s15_dynamic_resources |
+| 32_typed_tools | s16_typed_tools |
+| 33_advanced_typed_tools | s17_advanced_typed_tools |
+| 34_serverbuilder_typed | s18_serverbuilder_typed |
+| 35_wasm_typed_tools | s19_wasm_typed_tools |
+| 36_typed_tool_v2_example | s20_typed_tool_v2 |
+| 37_description_variants_example | s21_description_variants |
+| 48_structured_output_schema | s22_structured_output_schema |
+| 63_mcp_tool_macro | s23_mcp_tool_macro |
+| 64_mcp_prompt_macro | s24_mcp_prompt_macro |
+| refactored_server_example | s25_refactored_server |
+| currency_server | s26_currency_server |
+| test_currency_server | s27_test_currency_server |
+| 09_authentication | s28_authentication |
+| 16_oauth_server | s29_oauth_server |
+| 49_tool_with_sampling_server | s30_tool_with_sampling |
+| 50_workflow_minimal | s31_workflow_minimal |
+| 51_workflow_error_messages | s32_workflow_error_messages |
+| 52_workflow_dsl_cookbook | s33_workflow_dsl_cookbook |
+| 53_typed_tools_workflow_integration | s34_typed_tools_workflow |
+| 54_hybrid_workflow_execution | s35_hybrid_workflow |
+| 59_dynamic_resource_workflow | s36_dynamic_resource_workflow |
+| 60_resource_only_steps | s37_resource_only_steps |
+| 12_prompt_workflow_progress | s38_prompt_workflow_progress |
+| conference_venue_map | s39_mcp_app_venue_map |
+| hotel_gallery | s40_mcp_app_hotel_gallery |
+
+### Client Examples
+
+| Old Name | New Name |
+|----------|----------|
+| 01_client_initialize | c01_client_initialize |
+| 03_client_tools | c02_client_tools |
+| 05_client_resources | c03_client_resources |
+| 07_client_prompts | c04_client_prompts |
+| client | c05_client |
+| 47_multiple_clients_parallel | c06_multiple_clients_parallel |
+| 20_oidc_discovery | c07_oidc_discovery |
+
+### Transport Examples
+
+| Old Name | New Name |
+|----------|----------|
+| 13_websocket_transport | t01_websocket_transport |
+| 27_websocket_server_enhanced | t02_websocket_server_enhanced |
+| 28_sse_optimized | t03_sse_optimized |
+| 22_streamable_http_server_stateful | t04_streamable_http_stateful |
+| 23_streamable_http_server_stateless | t05_streamable_http_stateless |
+| 24_streamable_http_client | t06_streamable_http_client |
+| 29_connection_pool | t07_connection_pool |
+| 32_simd_parsing_performance | t08_simd_parsing_performance |
+
+### Middleware Examples
+
+| Old Name | New Name |
+|----------|----------|
+| 15_middleware | m01_basic_middleware |
+| 30_enhanced_middleware | m02_enhanced_middleware |
+| 40_middleware_demo | m03_middleware_demo |
+| 55_server_middleware | m04_server_http_middleware |
+| 57_tool_middleware_oauth | m05_tool_middleware_oauth |
+| 58_oauth_transport_to_tools | m06_oauth_transport_to_tools |
+| 31_advanced_error_recovery | m07_advanced_error_recovery |
+| 61_observability_middleware | m08_observability_middleware |
