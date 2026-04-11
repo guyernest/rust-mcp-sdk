@@ -38,4 +38,3 @@ proptest = "1.6"
 [features]
 default = []
 debug = []  # Enable debug output in macros
-tool_router_dev = []  # Enable WIP tool_router tests
