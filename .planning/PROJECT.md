@@ -55,6 +55,7 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 - ✓ Course Ch 20 sub-chapters rewritten with WidgetDir/mcpBridge/adapter paradigm — v1.4
 - ✓ Course quizzes and exercises for load testing and MCP Apps content — v1.4
 - ✓ Examples cleanup: 17 orphans registered, 63 files role-prefixed (s/c/t/m), accurate PMCP README index, protocol badge 2025-11-25 — v2.1 (Phase 65)
+- ✓ Macros documentation rewrite: deleted deprecated `#[tool]`/`#[tool_router]`/stub `#[prompt]`/`#[resource]` from pmcp-macros (898 LOC, 46% of crate); rewrote pmcp-macros/README.md from scratch (355 lines, 5 compiling `rust,no_run` doctests for all four `mcp_*` macros) wired via `#![doc = include_str!("../README.md")]`; published pmcp-macros 0.5.0 and pmcp 2.3.0 with full MACR-02 migration guide — v2.1 (Phase 66)
 
 ### Active
 
@@ -185,4 +186,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-10 after Phase 65 (v2.1 examples cleanup + protocol accuracy) completion*
+*Last updated: 2026-04-11 after Phase 66 (v2.1 macros documentation rewrite — pmcp-macros 0.5.0, pmcp 2.3.0) completion*
