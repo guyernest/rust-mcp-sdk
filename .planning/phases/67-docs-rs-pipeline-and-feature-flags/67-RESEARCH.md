@@ -654,21 +654,19 @@ A drift check is worth considering for the plan: a test or script that parses al
 | A7 | CONTEXT.md's "14 individual features" count for D-13 is internally consistent with the "15 individual features" count for D-16. | User Constraints | LOW — the two differ only because D-13 includes `logging` (default-enabled) as a visible row while D-16 omits it from docs.rs metadata (auto-included via `default`). The plan phase should make this explicit: "table has 15 rows counting `logging`; metadata has 15 features not counting `logging`; they are internally consistent by different logics." |
 | A8 | docs.rs max targets is 10, not 6. | Upstream Dependency Changes footnote | LOW — `https://docs.rs/about/builds` authoritatively states "Maximum number of build targets: 10". CONTEXT.md D-18 says 6. Correction is documentation-only; D-18 uses 2 targets which is well within both limits. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-None blocking.
+Both questions resolved before planning. One contained an arithmetic error that was caught by the gsd-plan-checker on 2026-04-11 and has been corrected inline.
 
-Two questions are answered-but-worth-flagging:
+1. **RESOLVED — Should D-01 be amended in CONTEXT.md before planning, or should the plan phase treat the correction as its first task?**
+   - What we know: CONTEXT.md D-01 said `feature(doc_auto_cfg)`; upstream removed this in Rust 1.92.0. The correct replacement is `feature(doc_cfg)` (which `src/lib.rs:70` already has — so no source edit is needed on line 70).
+   - **RESOLVED:** The orchestrator amended CONTEXT.md D-01 in-place post-research (commit fa4fa5f0) before spawning the planner. The amendment is explicit and timestamped ("AMENDED 2026-04-11 post-research"). The planner read the amended D-01 and Plan 02 correctly deletes the 6 manual annotations without touching line 70. Plan 02 Task acceptance_criteria grep-enforces `grep -c 'doc_auto_cfg' src/lib.rs == 0` to prevent E0557 regressions.
 
-1. **Should D-01 be amended in CONTEXT.md before planning, or should the plan phase treat the correction as its first task?**
-   - What we know: CONTEXT.md D-01 says `feature(doc_auto_cfg)`; upstream removed this in Rust 1.92.0. The correct replacement is `feature(doc_cfg)`.
-   - What's unclear: workflow convention — does the researcher edit CONTEXT.md, or does the planner absorb the correction in its plan?
-   - Recommendation: The researcher flags, the planner amends CONTEXT.md in the same commit as the first plan file. Do NOT silently amend mid-research.
-
-2. **Should the CRATE-README.md Cargo Features table have 15 or 16 individual rows?**
-   - What we know: D-13 lists 16 names (composition, http, http-client, jwt-auth, logging, macros, mcp-apps, oauth, rayon, resource-watcher, schema-generation, simd, sse, streamable-http, validation, websocket). The text says "14 individual entries" but counts 16. CONTEXT.md D-16 lists 15 features for `[package.metadata.docs.rs]` — `logging` omitted because `default = ["logging"]`.
-   - What's unclear: whether `logging` gets a dedicated row in the README table. D-12 says the `default` meta row describes `["logging"]` — which tells the reader what `default` enables but does not describe `logging` as a standalone user opt-in.
-   - Recommendation: **Include `logging` as an individual row below the `default` meta row.** The meta row describes what's on by default; the individual row describes what `logging` does if you turn off default features (`default-features = false`) and re-enable it explicitly. This gives 17 total rows (2 meta + 15 individual). The plan phase should capture this as an explicit editorial call.
+2. **RESOLVED (with arithmetic correction) — Should the CRATE-README.md Cargo Features table have 15 or 16 individual rows?**
+   - What we know: D-13 lists 16 names (composition, http, http-client, jwt-auth, logging, macros, mcp-apps, oauth, rayon, resource-watcher, schema-generation, simd, sse, streamable-http, validation, websocket). CONTEXT.md D-16 lists 15 features for `[package.metadata.docs.rs]` — `logging` omitted because `default = ["logging"]`.
+   - **RESOLVED (editorial):** Include `logging` as an individual row below the `default` meta row. The `default` meta row describes what's on by default; the individual `logging` row describes what `logging` does if a user sets `default-features = false` and re-enables features à la carte.
+   - **RESOLVED (arithmetic — CORRECTED 2026-04-11 after plan-checker review):** Total row count is **18**, not 17. The original recommendation claimed "17 total rows (2 meta + 15 individual)" but the name list in the sentence above has **16** entries (count: composition=1, http=2, http-client=3, jwt-auth=4, logging=5, macros=6, mcp-apps=7, oauth=8, rayon=9, resource-watcher=10, schema-generation=11, simd=12, sse=13, streamable-http=14, validation=15, websocket=16). So the correct arithmetic is 2 meta + 16 individual = **18 total rows**. The phrase "15 individual" in the first amendment was a miscount. CONTEXT.md D-13 and Plans 03 & 06 have been updated to reflect 18 rows.
+   - **Why the confusion existed:** D-16 (Cargo.toml docs.rs metadata) legitimately has 15 features because `logging` is excluded (implicit via `default`). D-13 (CRATE-README.md feature table) legitimately has 16 individual rows because `logging` is explicitly listed for reader documentation. The single-source-of-truth invariant Plan 06 Check 4 enforces is not "identical lists" but "CRATE-README.md features list = D-16 features list + {logging}" — exactly one permitted diff.
 
 ## Sources
 
