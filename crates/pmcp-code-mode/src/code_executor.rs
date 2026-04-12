@@ -67,9 +67,204 @@ pub trait CodeExecutor: Send + Sync {
     ) -> Result<serde_json::Value, ExecutionError>;
 }
 
-// NOTE: PlanExecutor blanket impl deferred -- PlanExecutor::execute requires &mut self,
-// which is incompatible with CodeExecutor's &self. Wrapping in Mutex adds complexity
-// without clear benefit. External servers implement CodeExecutor directly.
+// ---------------------------------------------------------------------------
+// Standard adapters: bridge low-level executor traits to CodeExecutor
+// ---------------------------------------------------------------------------
+//
+// These adapters solve the &mut self vs &self mismatch: PlanExecutor::execute
+// requires &mut self, but CodeExecutor::execute takes &self. Each adapter
+// creates a fresh PlanCompiler + PlanExecutor per call (cheap — both are small
+// structs, and the caller's HttpExecutor/SdkExecutor holds Arc'd state).
+
+/// Adapter bridging [`HttpExecutor`] to [`CodeExecutor`] for JavaScript/OpenAPI
+/// servers (Pattern B: JS+HTTP).
+///
+/// Compiles JavaScript code into an execution plan, then runs it against an
+/// HTTP backend. The executor holds its own [`ExecutionConfig`] for limits
+/// (`max_api_calls`, `timeout_seconds`, `max_loop_iterations`).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use pmcp_code_mode::{JsCodeExecutor, ExecutionConfig};
+///
+/// let http = CostExplorerHttpExecutor::new(clients.clone());
+/// let config = ExecutionConfig::default();
+/// let executor = Arc::new(JsCodeExecutor::new(http, config));
+/// // Pass executor to #[derive(CodeMode)] struct as code_executor field
+/// ```
+#[cfg(feature = "js-runtime")]
+pub struct JsCodeExecutor<H: crate::executor::HttpExecutor + Clone> {
+    http: H,
+    config: crate::executor::ExecutionConfig,
+}
+
+#[cfg(feature = "js-runtime")]
+impl<H: crate::executor::HttpExecutor + Clone> JsCodeExecutor<H> {
+    /// Create a new JS code executor with the given HTTP backend and config.
+    pub fn new(http: H, config: crate::executor::ExecutionConfig) -> Self {
+        Self { http, config }
+    }
+}
+
+#[cfg(feature = "js-runtime")]
+#[async_trait::async_trait]
+impl<H: crate::executor::HttpExecutor + Clone + 'static> CodeExecutor for JsCodeExecutor<H> {
+    async fn execute(
+        &self,
+        code: &str,
+        _variables: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Value, ExecutionError> {
+        let mut compiler = crate::executor::PlanCompiler::with_config(&self.config);
+        let plan = compiler.compile_code(code).map_err(|e| ExecutionError::RuntimeError {
+            message: format!("Compilation failed: {e}"),
+        })?;
+        let mut executor =
+            crate::executor::PlanExecutor::new(self.http.clone(), self.config.clone());
+        let result = executor.execute(&plan).await?;
+        tracing::info!(
+            api_calls = result.api_calls.len(),
+            execution_time_ms = result.execution_time_ms,
+            "JsCodeExecutor: plan executed"
+        );
+        Ok(result.value)
+    }
+}
+
+/// Adapter bridging [`SdkExecutor`] to [`CodeExecutor`] for SDK-backed servers
+/// (Pattern C: JS+SDK).
+///
+/// Uses a no-op HTTP executor stub since SDK plans route through
+/// `PlanExecutor::set_sdk_executor` instead of HTTP calls.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use pmcp_code_mode::{SdkCodeExecutor, ExecutionConfig};
+///
+/// let sdk = MyCostExplorerSdk::new(credentials);
+/// let config = ExecutionConfig::default();
+/// let executor = Arc::new(SdkCodeExecutor::new(sdk, config));
+/// ```
+#[cfg(feature = "js-runtime")]
+pub struct SdkCodeExecutor<S: crate::executor::SdkExecutor + Clone + 'static> {
+    sdk: S,
+    config: crate::executor::ExecutionConfig,
+}
+
+#[cfg(feature = "js-runtime")]
+impl<S: crate::executor::SdkExecutor + Clone + 'static> SdkCodeExecutor<S> {
+    /// Create a new SDK code executor with the given SDK backend and config.
+    pub fn new(sdk: S, config: crate::executor::ExecutionConfig) -> Self {
+        Self { sdk, config }
+    }
+}
+
+#[cfg(feature = "js-runtime")]
+#[async_trait::async_trait]
+impl<S: crate::executor::SdkExecutor + Clone + 'static> CodeExecutor for SdkCodeExecutor<S> {
+    async fn execute(
+        &self,
+        code: &str,
+        _variables: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Value, ExecutionError> {
+        let mut compiler = crate::executor::PlanCompiler::with_config(&self.config);
+        let plan = compiler.compile_code(code).map_err(|e| ExecutionError::RuntimeError {
+            message: format!("Compilation failed: {e}"),
+        })?;
+        let mut executor = crate::executor::PlanExecutor::new(
+            NoopHttpExecutor,
+            self.config.clone(),
+        );
+        executor.set_sdk_executor(self.sdk.clone());
+        let result = executor.execute(&plan).await?;
+        tracing::info!(
+            api_calls = result.api_calls.len(),
+            execution_time_ms = result.execution_time_ms,
+            "SdkCodeExecutor: plan executed"
+        );
+        Ok(result.value)
+    }
+}
+
+/// Adapter bridging [`McpExecutor`] to [`CodeExecutor`] for MCP composition
+/// servers (Pattern D: JS+MCP).
+///
+/// Uses a no-op HTTP executor stub since MCP plans route through
+/// `PlanExecutor::set_mcp_executor` instead of HTTP calls.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use pmcp_code_mode::{McpCodeExecutor, ExecutionConfig};
+///
+/// let mcp = MyMcpRouter::new(foundation_servers);
+/// let config = ExecutionConfig::default();
+/// let executor = Arc::new(McpCodeExecutor::new(mcp, config));
+/// ```
+#[cfg(feature = "mcp-code-mode")]
+pub struct McpCodeExecutor<M: crate::executor::McpExecutor + Clone + 'static> {
+    mcp: M,
+    config: crate::executor::ExecutionConfig,
+}
+
+#[cfg(feature = "mcp-code-mode")]
+impl<M: crate::executor::McpExecutor + Clone + 'static> McpCodeExecutor<M> {
+    /// Create a new MCP composition code executor.
+    pub fn new(mcp: M, config: crate::executor::ExecutionConfig) -> Self {
+        Self { mcp, config }
+    }
+}
+
+#[cfg(feature = "mcp-code-mode")]
+#[async_trait::async_trait]
+impl<M: crate::executor::McpExecutor + Clone + 'static> CodeExecutor for McpCodeExecutor<M> {
+    async fn execute(
+        &self,
+        code: &str,
+        _variables: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Value, ExecutionError> {
+        let mut compiler = crate::executor::PlanCompiler::with_config(&self.config);
+        let plan = compiler.compile_code(code).map_err(|e| ExecutionError::RuntimeError {
+            message: format!("Compilation failed: {e}"),
+        })?;
+        let mut executor = crate::executor::PlanExecutor::new(
+            NoopHttpExecutor,
+            self.config.clone(),
+        );
+        executor.set_mcp_executor(self.mcp.clone());
+        let result = executor.execute(&plan).await?;
+        tracing::info!(
+            api_calls = result.api_calls.len(),
+            execution_time_ms = result.execution_time_ms,
+            "McpCodeExecutor: plan executed"
+        );
+        Ok(result.value)
+    }
+}
+
+/// No-op HTTP executor for SDK and MCP adapters that don't use HTTP calls.
+#[cfg(feature = "js-runtime")]
+#[derive(Clone)]
+struct NoopHttpExecutor;
+
+#[cfg(feature = "js-runtime")]
+#[async_trait::async_trait]
+impl crate::executor::HttpExecutor for NoopHttpExecutor {
+    async fn execute_request(
+        &self,
+        method: &str,
+        path: &str,
+        _body: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, ExecutionError> {
+        Err(ExecutionError::RuntimeError {
+            message: format!(
+                "HTTP calls not supported in this executor mode (attempted {method} {path}). \
+                 Use JsCodeExecutor for HTTP-based execution."
+            ),
+        })
+    }
+}
 
 #[cfg(test)]
 mod tests {

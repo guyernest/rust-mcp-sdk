@@ -119,12 +119,20 @@ pub use executor::{
     filter_blocked_fields, find_blocked_fields_in_output, ApiCallLog, ArrayMethodCall,
     BinaryOperator, BuiltinFunction, CompileError, ExecutionConfig, ExecutionPlan, ExecutionResult,
     HttpExecutor, JsExecutor, MockExecutionMode, MockHttpExecutor, MockedCall, PathPart,
-    PathTemplate, PlanCompiler, PlanExecutor, PlanMetadata, PlanStep, UnaryOperator, ValueExpr,
+    PathTemplate, PlanCompiler, PlanExecutor, PlanMetadata, PlanStep, SdkExecutor, UnaryOperator,
+    ValueExpr,
 };
+
+// Standard CodeExecutor adapters (bridge low-level traits to derive-macro-compatible API)
+#[cfg(feature = "js-runtime")]
+pub use code_executor::{JsCodeExecutor, SdkCodeExecutor};
 
 // MCP Code Mode executor
 #[cfg(feature = "mcp-code-mode")]
 pub use executor::McpExecutor;
+
+#[cfg(feature = "mcp-code-mode")]
+pub use code_executor::McpCodeExecutor;
 
 pub use token::{
     canonicalize_code, compute_context_hash, hash_code, ApprovalToken, HmacTokenGenerator,
