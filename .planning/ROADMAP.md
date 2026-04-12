@@ -689,7 +689,7 @@ Plans:
 
 - [x] **Phase 65: Examples Cleanup and Protocol Accuracy** - Replace broken examples/README.md, fix protocol badge, resolve 17 orphan example files and 4 duplicate number prefixes (completed 2026-04-10)
 - [x] **Phase 66: Macros Documentation Rewrite** - Rewrite pmcp-macros README to document current #[mcp_tool]/#[mcp_server]/#[mcp_prompt]/#[mcp_resource] API with migration guide (completed 2026-04-11)
-- [ ] **Phase 67: docs.rs Pipeline and Feature Flags** - Enable doc_auto_cfg for automatic feature badges, explicit feature list in docs.rs metadata, feature flag table, zero rustdoc warnings
+- [x] **Phase 67: docs.rs Pipeline and Feature Flags** - Enable doc_auto_cfg for automatic feature badges, explicit feature list in docs.rs metadata, feature flag table, zero rustdoc warnings (completed 2026-04-12)
 - [ ] **Phase 68: General Documentation Polish** - Update lib.rs doctests to TypedToolWithOutput pattern, add transport matrix, CI enforcement gates for drift prevention
 
 ## Phase Details (v2.1)
@@ -749,7 +749,7 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 65. Examples Cleanup + Protocol Accuracy | v2.1 | 3/3 | Complete    | 2026-04-10 |
 | 66. Macros Documentation Rewrite | v2.1 | 5/5 | Complete    | 2026-04-11 |
-| 67. docs.rs Pipeline + Feature Flags | v2.1 | 0/? | Not started | - |
+| 67. docs.rs Pipeline + Feature Flags | v2.1 | 6/6 | Complete    | 2026-04-12 |
 | 68. General Documentation Polish | v2.1 | 0/? | Not started | - |
 
 ## Backlog
@@ -775,7 +775,7 @@ Parking lot for unsequenced ideas. Items here aren't scheduled — promote with 
 
 **Requirements:** TBD
 
-**Plans:** 5/5 plans complete
+**Plans:** 6/6 plans complete
 
 Plans:
 - [ ] TBD (promote with `/gsd:review-backlog` when ready)
