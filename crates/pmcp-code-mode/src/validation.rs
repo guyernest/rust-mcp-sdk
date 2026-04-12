@@ -210,6 +210,110 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
         self.policy_evaluator.is_some()
     }
 
+    /// Check mutation and query authorization against config (blocklists, allowlists).
+    ///
+    /// This is the authorization logic shared between the sync and async validation paths.
+    /// It uses the already-parsed `query_info` to avoid re-parsing.
+    fn check_config_authorization(
+        &self,
+        query_info: &GraphQLQueryInfo,
+        start: Instant,
+    ) -> Result<(), Box<ValidationResult>> {
+        // Mutation authorization checks
+        if !query_info.operation_type.is_read_only() {
+            let mutation_name = query_info.root_fields.first().cloned().unwrap_or_default();
+
+            if !self.config.blocked_mutations.is_empty()
+                && self.config.blocked_mutations.contains(&mutation_name)
+            {
+                return Err(Box::new(ValidationResult::failure(
+                    vec![PolicyViolation::new(
+                        "code_mode",
+                        "blocked_mutation",
+                        &format!("Mutation '{}' is blocked for this server", mutation_name),
+                    )
+                    .with_suggestion("This mutation is in the blocklist and cannot be executed")],
+                    self.build_metadata(query_info, start.elapsed().as_millis() as u64),
+                )));
+            }
+
+            if !self.config.allowed_mutations.is_empty() {
+                if !self.config.allowed_mutations.contains(&mutation_name) {
+                    return Err(Box::new(ValidationResult::failure(
+                        vec![PolicyViolation::new(
+                            "code_mode",
+                            "mutation_not_allowed",
+                            &format!("Mutation '{}' is not in the allowlist", mutation_name),
+                        )
+                        .with_suggestion(&format!(
+                            "Only these mutations are allowed: {}",
+                            self.config
+                                .allowed_mutations
+                                .iter()
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ))],
+                        self.build_metadata(query_info, start.elapsed().as_millis() as u64),
+                    )));
+                }
+            } else if !self.config.allow_mutations {
+                return Err(Box::new(ValidationResult::failure(
+                    vec![PolicyViolation::new(
+                        "code_mode",
+                        "allow_mutations",
+                        "Mutations are not enabled for this server",
+                    )
+                    .with_suggestion("Only read-only queries are allowed")],
+                    self.build_metadata(query_info, start.elapsed().as_millis() as u64),
+                )));
+            }
+        }
+
+        // Query (read) authorization checks -- mirrors mutation enforcement above
+        if query_info.operation_type.is_read_only() {
+            let query_name = query_info.root_fields.first().cloned().unwrap_or_default();
+
+            if !self.config.blocked_queries.is_empty()
+                && self.config.blocked_queries.contains(&query_name)
+            {
+                return Err(Box::new(ValidationResult::failure(
+                    vec![PolicyViolation::new(
+                        "code_mode",
+                        "blocked_query",
+                        &format!("Query '{}' is blocked for this server", query_name),
+                    )
+                    .with_suggestion("This query is in the blocklist and cannot be executed")],
+                    self.build_metadata(query_info, start.elapsed().as_millis() as u64),
+                )));
+            }
+
+            if !self.config.allowed_queries.is_empty()
+                && !self.config.allowed_queries.contains(&query_name)
+            {
+                return Err(Box::new(ValidationResult::failure(
+                    vec![PolicyViolation::new(
+                        "code_mode",
+                        "query_not_allowed",
+                        &format!("Query '{}' is not in the allowlist", query_name),
+                    )
+                    .with_suggestion(&format!(
+                        "Only these queries are allowed: {}",
+                        self.config
+                            .allowed_queries
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))],
+                    self.build_metadata(query_info, start.elapsed().as_millis() as u64),
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
     /// Validate a GraphQL query using basic config checks only.
     pub fn validate_graphql_query(
         &self,
@@ -237,96 +341,9 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
 
         let query_info = self.graphql_validator.validate(query)?;
 
-        // Mutation authorization checks
-        if !query_info.operation_type.is_read_only() {
-            let mutation_name = query_info.root_fields.first().cloned().unwrap_or_default();
-
-            if !self.config.blocked_mutations.is_empty()
-                && self.config.blocked_mutations.contains(&mutation_name)
-            {
-                return Ok(ValidationResult::failure(
-                    vec![PolicyViolation::new(
-                        "code_mode",
-                        "blocked_mutation",
-                        &format!("Mutation '{}' is blocked for this server", mutation_name),
-                    )
-                    .with_suggestion("This mutation is in the blocklist and cannot be executed")],
-                    self.build_metadata(&query_info, start.elapsed().as_millis() as u64),
-                ));
-            }
-
-            if !self.config.allowed_mutations.is_empty() {
-                if !self.config.allowed_mutations.contains(&mutation_name) {
-                    return Ok(ValidationResult::failure(
-                        vec![PolicyViolation::new(
-                            "code_mode",
-                            "mutation_not_allowed",
-                            &format!("Mutation '{}' is not in the allowlist", mutation_name),
-                        )
-                        .with_suggestion(&format!(
-                            "Only these mutations are allowed: {}",
-                            self.config
-                                .allowed_mutations
-                                .iter()
-                                .cloned()
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ))],
-                        self.build_metadata(&query_info, start.elapsed().as_millis() as u64),
-                    ));
-                }
-            } else if !self.config.allow_mutations {
-                return Ok(ValidationResult::failure(
-                    vec![PolicyViolation::new(
-                        "code_mode",
-                        "allow_mutations",
-                        "Mutations are not enabled for this server",
-                    )
-                    .with_suggestion("Only read-only queries are allowed")],
-                    self.build_metadata(&query_info, start.elapsed().as_millis() as u64),
-                ));
-            }
-        }
-
-        // Query (read) authorization checks -- mirrors mutation enforcement above
-        if query_info.operation_type.is_read_only() {
-            let query_name = query_info.root_fields.first().cloned().unwrap_or_default();
-
-            if !self.config.blocked_queries.is_empty()
-                && self.config.blocked_queries.contains(&query_name)
-            {
-                return Ok(ValidationResult::failure(
-                    vec![PolicyViolation::new(
-                        "code_mode",
-                        "blocked_query",
-                        &format!("Query '{}' is blocked for this server", query_name),
-                    )
-                    .with_suggestion("This query is in the blocklist and cannot be executed")],
-                    self.build_metadata(&query_info, start.elapsed().as_millis() as u64),
-                ));
-            }
-
-            if !self.config.allowed_queries.is_empty()
-                && !self.config.allowed_queries.contains(&query_name)
-            {
-                return Ok(ValidationResult::failure(
-                    vec![PolicyViolation::new(
-                        "code_mode",
-                        "query_not_allowed",
-                        &format!("Query '{}' is not in the allowlist", query_name),
-                    )
-                    .with_suggestion(&format!(
-                        "Only these queries are allowed: {}",
-                        self.config
-                            .allowed_queries
-                            .iter()
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ))],
-                    self.build_metadata(&query_info, start.elapsed().as_millis() as u64),
-                ));
-            }
+        // Config-based authorization checks (mutation blocklist/allowlist, query blocklist/allowlist)
+        if let Err(failure) = self.check_config_authorization(&query_info, start) {
+            return Ok(*failure);
         }
 
         self.complete_validation(query, &query_info, context, start)
@@ -395,7 +412,10 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
                 target: "code_mode",
                 "Falling back to basic config checks (no policy evaluator configured)"
             );
-            return self.validate_graphql_query(query, context);
+            // Reuse already-parsed query_info instead of re-parsing via validate_graphql_query
+            if let Err(failure) = self.check_config_authorization(&query_info, start) {
+                return Ok(*failure);
+            }
         }
 
         self.complete_validation(query, &query_info, context, start)
