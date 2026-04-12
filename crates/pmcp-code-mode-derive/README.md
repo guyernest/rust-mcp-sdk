@@ -2,11 +2,11 @@
 
 Derive macro for Code Mode validation and execution in MCP servers. Generates `register_code_mode_tools` to wire `validate_code` and `execute_code` tools onto a `ServerBuilder` with a single attribute.
 
+Supports all Code Mode languages: GraphQL (default), JavaScript/OpenAPI, SQL, and MCP composition.
+
 ## Quick Start
 
-### Production: With `context_from`
-
-The `context_from` attribute binds approval tokens to real user/session context. This is the recommended path for production servers.
+### GraphQL Server (default)
 
 ```rust,ignore
 use pmcp_code_mode::{
@@ -25,36 +25,74 @@ impl CodeExecutor for MyExecutor {
         code: &str,
         _variables: Option<&serde_json::Value>,
     ) -> Result<serde_json::Value, ExecutionError> {
-        Ok(serde_json::json!({"status": "ok"}))
+        Ok(serde_json::json!({"result": "ok"}))
     }
 }
 
 #[derive(CodeMode)]
 #[code_mode(context_from = "get_context")]
-struct MyServer {
+struct MyGraphQLServer {
     code_mode_config: CodeModeConfig,
     token_secret: TokenSecret,
     policy_evaluator: Arc<NoopPolicyEvaluator>,
     code_executor: Arc<MyExecutor>,
 }
 
-impl MyServer {
+impl MyGraphQLServer {
     fn get_context(&self, extra: &pmcp::RequestHandlerExtra) -> ValidationContext {
-        // Extract real user/session info from the MCP request
         ValidationContext::new("user-123", "session-456", "schema-v1", "perms-v1")
     }
 }
 
-// context_from requires Arc<Self> — the generated handler holds a reference
-let server = Arc::new(MyServer {
-    code_mode_config: CodeModeConfig::enabled(),
-    token_secret: TokenSecret::new(b"my-secret-key-at-least-16-bytes!".to_vec()),
-    policy_evaluator: Arc::new(NoopPolicyEvaluator::new()),
-    code_executor: Arc::new(MyExecutor),
-});
-
-// register_code_mode_tools returns Result (catches invalid HMAC secret at startup)
+let server = Arc::new(MyGraphQLServer { /* ... */ });
 let builder = server.register_code_mode_tools(pmcp::Server::builder())?;
+```
+
+### JavaScript/OpenAPI Server (e.g. Cost Coach)
+
+Requires the `openapi-code-mode` feature on `pmcp-code-mode`.
+
+```rust,ignore
+#[derive(CodeMode)]
+#[code_mode(context_from = "get_context", language = "javascript")]
+struct CostCoachServer {
+    code_mode_config: CodeModeConfig,
+    token_secret: TokenSecret,
+    policy_evaluator: Arc<NoopPolicyEvaluator>,
+    code_executor: Arc<JsExecutor>,  // Holds its own ExecutionConfig
+}
+```
+
+The generated handler calls `validate_javascript_code` (sync) instead of `validate_graphql_query_async`. The executor holds its own `ExecutionConfig` with `max_api_calls`, `timeout_seconds`, `max_loop_iterations` — no change to the `CodeExecutor` trait.
+
+### SQL Server
+
+Requires the `sql-code-mode` feature on `pmcp-code-mode`.
+
+```rust,ignore
+#[derive(CodeMode)]
+#[code_mode(context_from = "get_context", language = "sql")]
+struct MySqlServer {
+    code_mode_config: CodeModeConfig,
+    token_secret: TokenSecret,
+    policy_evaluator: Arc<NoopPolicyEvaluator>,
+    code_executor: Arc<SqlExecutor>,
+}
+```
+
+### MCP Composition Server
+
+Requires the `mcp-code-mode` feature on `pmcp-code-mode`.
+
+```rust,ignore
+#[derive(CodeMode)]
+#[code_mode(context_from = "get_context", language = "mcp")]
+struct McpRouter {
+    code_mode_config: CodeModeConfig,
+    token_secret: TokenSecret,
+    policy_evaluator: Arc<NoopPolicyEvaluator>,
+    code_executor: Arc<McpCompositionExecutor>,
+}
 ```
 
 ### Testing: Without `context_from`
@@ -70,7 +108,7 @@ struct MyServer {
     code_executor: Arc<MyExecutor>,
 }
 
-// No Arc needed — &self is sufficient
+#[allow(deprecated)]
 let builder = server.register_code_mode_tools(pmcp::Server::builder())?;
 // ^ Compiler emits: "use #[code_mode(context_from = ...)] to bind tokens to real user context"
 ```
@@ -79,31 +117,23 @@ let builder = server.register_code_mode_tools(pmcp::Server::builder())?;
 
 | Attribute | Type | Default | Effect |
 |-----------|------|---------|--------|
-| `context_from` | `"method_name"` | *(none)* | Method on your struct returning `ValidationContext`. Enables real token binding. Changes `register_code_mode_tools` receiver to `self: &Arc<Self>`. |
-| `language` | `"language_name"` | `"graphql"` | Selects the validation method and tool metadata. See language table below. |
+| `context_from` | `"method_name"` | *(none)* | Method on your struct returning `ValidationContext`. Enables real token binding. Changes receiver to `self: &Arc<Self>`. |
+| `language` | `"language_name"` | `"graphql"` | Selects the validation method and tool metadata at compile time. |
 
-**Supported `language` values:**
+### Supported Languages
 
-| Value | Validation Method | Feature Required |
-|-------|-------------------|------------------|
-| `"graphql"` (default) | `validate_graphql_query_async` (async) | *(none)* |
-| `"javascript"` | `validate_javascript_code` (sync) | `openapi-code-mode` |
+| Value | Validation Method | Async | Feature Required |
+|-------|-------------------|-------|------------------|
+| `"graphql"` (default) | `validate_graphql_query_async` | yes | *(none)* |
+| `"javascript"` or `"js"` | `validate_javascript_code` | no | `openapi-code-mode` |
+| `"sql"` | `validate_sql_query` | no | `sql-code-mode` |
+| `"mcp"` | `validate_mcp_composition` | yes | `mcp-code-mode` |
 
-Using `language = "javascript"` without enabling the `openapi-code-mode` feature on `pmcp-code-mode` will produce a compile error (`validate_javascript_code` is feature-gated). Unknown language values produce a compile error at macro expansion time.
+**How it works:** The derive macro emits different `quote!` blocks based on the `language` value — the dispatch is entirely at compile time, zero runtime cost. Using a language without its feature flag produces a standard "method not found" compile error. Unknown language values produce a clear compile error listing all supported values.
 
-```rust,ignore
-// GraphQL server (default)
-#[derive(CodeMode)]
-#[code_mode(context_from = "get_context")]
-struct MyGraphQLServer { /* ... */ }
+**Adding a new language:** Add a variant to `CodeLanguage` in `pmcp-code-mode/src/types.rs` and a match arm in `gen_validation_call()` in this crate. A sync test enforces both sides stay aligned.
 
-// JavaScript/OpenAPI server (requires openapi-code-mode feature)
-#[derive(CodeMode)]
-#[code_mode(context_from = "get_context", language = "javascript")]
-struct MyCostCoachServer { /* ... */ }
-```
-
-**`context_from` method signature:**
+### `context_from` Method Signature
 
 ```rust,ignore
 impl MyServer {
@@ -160,7 +190,7 @@ impl MyServer {
 The method:
 
 1. Creates a shared `Arc<ValidationPipeline>` from the struct's config, secret, and policy evaluator
-2. Registers a `validate_code` tool handler (async validation + policy evaluation + HMAC token)
+2. Registers a `validate_code` tool handler (language-specific validation + policy evaluation + HMAC token)
 3. Registers an `execute_code` tool handler (token verification + `CodeExecutor::execute`)
 4. Returns the builder with both tools added, or `TokenError` if the HMAC secret is invalid
 
@@ -199,6 +229,15 @@ error: `Rc<String>` cannot be sent between threads safely
 error: `context_from = "not-valid"` is not a valid Rust identifier
 ```
 
+**Unsupported language:** Unknown `language` values produce a compile error listing all supported values:
+
+```text
+error: `language = "python"` is not a supported language.
+       Supported values: "graphql" (default), "javascript", "sql", "mcp"
+```
+
+**Missing feature flag:** Using `language = "javascript"` without `openapi-code-mode` enabled produces a standard Rust "method not found" error — the feature-gated method doesn't exist.
+
 **Missing `context_from` method:** If you specify `context_from = "get_context"` but don't define the method, the generated code produces a standard Rust "method not found" error pointing at your struct.
 
 ## Breaking Changes in v0.1.0
@@ -212,6 +251,8 @@ let builder = server.register_code_mode_tools(builder);
 // After (v0.1.0):
 let builder = server.register_code_mode_tools(builder)?;
 ```
+
+`language` attribute now selects the validation path, not just metadata. Servers that previously used `language = "javascript"` as a documentation hint will now get their code routed through `validate_javascript_code` instead of the GraphQL parser (which is the correct behavior).
 
 See [CHANGELOG.md](./CHANGELOG.md) for the full list of changes.
 
@@ -229,8 +270,10 @@ This is a proc-macro crate. It depends on `syn`, `quote`, `proc-macro2`, and `da
 Key questions for reviewers:
 
 - **Fixed field names vs. attribute mapping** — is `code_mode_config`/`token_secret`/`policy_evaluator`/`code_executor` workable, or do you need `#[code_mode(config = "my_field")]` style overrides?
-- **`context_from` sync only** — the context method is currently sync (`fn get_context(&self, extra) -> ValidationContext`). Do you need an async version for cases where context requires a network call (e.g., fetching permissions from a remote service)?
-- **Additional languages** — SQL and MCP (composition) are planned. Should `language` accept these now with stub validation, or wait until the validators exist?
+- **`context_from` sync only** — the context method is currently sync (`fn get_context(&self, extra) -> ValidationContext`). Do you need an async version for cases where context requires a network call?
+- **`CodeExecutor` per language** — the executor holds its own config (e.g., `ExecutionConfig` for JS). Is this pattern working for your backend, or do you need language-specific executor traits?
+- **SQL dialect** — what SQL dialects and parameterization styles does your team need?
+- **MCP composition** — what validation should `validate_mcp_composition` perform? Schema compatibility, tool existence, or structural checks?
 - **Error handling** — is `TokenError` sufficient, or should `register_code_mode_tools` return a broader error type?
 
 File issues or discuss in the `#pmcp-sdk` channel.

@@ -2,7 +2,7 @@
 
 Code Mode validation and execution framework for MCP servers built on the PMCP SDK.
 
-Enables LLM-generated queries (GraphQL today; JavaScript/OpenAPI behind feature flags) to be **validated, explained, and executed** with HMAC-signed approval tokens that cryptographically bind code to its validation result.
+Enables LLM-generated code (GraphQL, JavaScript, SQL, MCP compositions) to be **validated, explained, and executed** with HMAC-signed approval tokens that cryptographically bind code to its validation result.
 
 > **Status:** v0.1.0 — migrated from `pmcp-run/built-in/shared/pmcp-code-mode` into the SDK workspace in Phase 67.1. The public API is stabilizing; feedback is welcome before the 1.0 contract is locked.
 
@@ -13,9 +13,9 @@ Enables LLM-generated queries (GraphQL today; JavaScript/OpenAPI behind feature 
                        │   LLM Client │
                        └──────┬───────┘
                               │
-               1. describe_schema()  ← schema exposed per exposure policy
+               1. describe_schema()  <- schema exposed per exposure policy
                               │
-               2. LLM generates code (GraphQL query, JS plan, etc.)
+               2. LLM generates code (GraphQL, JS, SQL, MCP composition)
                               │
                3. validate_code(code) ──────────────────────┐
                               │                              │
@@ -23,7 +23,7 @@ Enables LLM-generated queries (GraphQL today; JavaScript/OpenAPI behind feature 
                     │ ValidationPipeline │                   │
                     │  ┌───────────────┐ │     ┌────────────▼────────────┐
                     │  │ Parse         │ │     │ PolicyEvaluator (Cedar, │
-                    │  │ Security scan │ │────▶│ AVP, or custom)         │
+                    │  │ Security scan │ │────>│ AVP, or custom)         │
                     │  │ Explain       │ │     └─────────────────────────┘
                     │  │ HMAC sign     │ │
                     │  └───────────────┘ │
@@ -37,13 +37,26 @@ Enables LLM-generated queries (GraphQL today; JavaScript/OpenAPI behind feature 
                               │                              │
                     ┌─────────▼──────────┐     ┌────────────▼──────┐
                     │ Token verification │     │ CodeExecutor impl │
-                    │ (hash, expiry, sig)│────▶│ (your backend)    │
+                    │ (hash, expiry, sig)│────>│ (your backend)    │
                     └────────────────────┘     └───────────────────┘
                               │
                     execution result (JSON)
 ```
 
 The token ensures that the **exact code** the user approved is what gets executed — any modification after validation invalidates the token.
+
+## Supported Languages
+
+The `language` attribute on `#[derive(CodeMode)]` selects the validation path at compile time. Each language maps to a feature-gated validation method on `ValidationPipeline`:
+
+| Language | Derive Attribute | Validation Method | Feature Required |
+|----------|-----------------|-------------------|------------------|
+| GraphQL | `"graphql"` (default) | `validate_graphql_query_async` | *(none)* |
+| JavaScript | `"javascript"` or `"js"` | `validate_javascript_code` | `openapi-code-mode` |
+| SQL | `"sql"` | `validate_sql_query` | `sql-code-mode` |
+| MCP | `"mcp"` | `validate_mcp_composition` | `mcp-code-mode` |
+
+The `CodeLanguage` enum in `pmcp_code_mode::types` is the runtime representation of these values. Unknown language strings produce a compile error at macro expansion time.
 
 ## Quick Start
 
@@ -90,7 +103,9 @@ The policy evaluator is stored as `Arc<dyn PolicyEvaluator>`, enabling shared ow
 
 ### With `#[derive(CodeMode)]` (Recommended)
 
-The derive macro eliminates ~80 lines of boilerplate per server. See the [pmcp-code-mode-derive README](../pmcp-code-mode-derive/README.md) for the full derive guide.
+The derive macro eliminates ~80 lines of boilerplate per server and supports all four languages. See the [pmcp-code-mode-derive README](../pmcp-code-mode-derive/README.md) for the full derive guide.
+
+**GraphQL server (default):**
 
 ```rust
 use pmcp_code_mode::{CodeModeConfig, TokenSecret, NoopPolicyEvaluator, CodeExecutor};
@@ -99,24 +114,41 @@ use std::sync::Arc;
 
 #[derive(CodeMode)]
 #[code_mode(context_from = "get_context")]
-struct MyServer {
+struct MyGraphQLServer {
     code_mode_config: CodeModeConfig,
     token_secret: TokenSecret,
     policy_evaluator: Arc<NoopPolicyEvaluator>,
-    code_executor: Arc<MyExecutor>,
+    code_executor: Arc<MyGraphQLExecutor>,
 }
-
-impl MyServer {
-    fn get_context(&self, extra: &pmcp::RequestHandlerExtra) -> ValidationContext {
-        // Build real context from the MCP session
-        ValidationContext::new("user-123", "session-456", "schema-v1", "perms-v1")
-    }
-}
-
-// register_code_mode_tools requires Arc<Self> when context_from is set
-let server = Arc::new(MyServer { /* ... */ });
-let builder = server.register_code_mode_tools(pmcp::Server::builder())?;
 ```
+
+**JavaScript/OpenAPI server (Cost Coach, etc.):**
+
+```rust
+#[derive(CodeMode)]
+#[code_mode(context_from = "get_context", language = "javascript")]
+struct MyCostCoachServer {
+    code_mode_config: CodeModeConfig,
+    token_secret: TokenSecret,
+    policy_evaluator: Arc<NoopPolicyEvaluator>,
+    code_executor: Arc<MyJsExecutor>,
+}
+```
+
+**SQL server:**
+
+```rust
+#[derive(CodeMode)]
+#[code_mode(context_from = "get_context", language = "sql")]
+struct MySqlServer {
+    code_mode_config: CodeModeConfig,
+    token_secret: TokenSecret,
+    policy_evaluator: Arc<NoopPolicyEvaluator>,
+    code_executor: Arc<MySqlExecutor>,
+}
+```
+
+All derive-generated servers share the same pattern: the `language` attribute selects the parser, the `context_from` method binds tokens to real user identity, and `CodeExecutor` handles your backend-specific execution.
 
 **Field name convention:** The derive macro identifies required fields by fixed names. Missing any field produces a compile error listing all absent fields.
 
@@ -129,7 +161,7 @@ let builder = server.register_code_mode_tools(pmcp::Server::builder())?;
 
 ### Implementing `CodeExecutor`
 
-This is the only trait you need to implement:
+This is the only trait you need to implement. The executor holds its own configuration (timeouts, limits, etc.) — `CodeExecutor::execute()` is intentionally kept simple:
 
 ```rust
 use pmcp_code_mode::{CodeExecutor, ExecutionError, async_trait};
@@ -152,11 +184,11 @@ impl CodeExecutor for MyGraphQLExecutor {
 }
 ```
 
-Four execution patterns are supported through this single trait:
-- **Pattern A (SQL):** Direct SQL execution, no JS runtime
-- **Pattern B (JS+HTTP):** JavaScript plan compiled and executed via HTTP calls
-- **Pattern C (JS+SDK):** JavaScript plan executed via AWS SDK calls
-- **Pattern D (JS+MCP):** JavaScript plan executed via MCP tool calls
+Execution patterns supported through this single trait:
+- **GraphQL:** Direct query execution against a GraphQL backend
+- **JavaScript/OpenAPI:** JS plan execution via HTTP/SDK/MCP calls (executor holds `ExecutionConfig` for limits)
+- **SQL:** Direct SQL execution against a database pool
+- **MCP composition:** Tool calls routed to other MCP servers
 
 ## Key Types
 
@@ -164,6 +196,7 @@ Four execution patterns are supported through this single trait:
 |------|-------------|
 | `ValidationPipeline` | Orchestrates: parse -> policy check -> security analysis -> explanation -> token |
 | `CodeModeConfig` | Controls what's allowed: mutations, introspection, blocked fields, max depth, TTL |
+| `CodeLanguage` | Enum of supported languages: `GraphQL`, `JavaScript`, `Sql`, `Mcp` |
 | `PolicyEvaluator` | Trait for pluggable authorization (Cedar, AWS Verified Permissions, custom) |
 | `CodeExecutor` | Trait for executing validated code against your backend |
 | `TokenSecret` | Zeroizing HMAC secret — backed by `secrecy::SecretBox<[u8]>`, no Debug/Clone/Serialize |
@@ -171,8 +204,8 @@ Four execution patterns are supported through this single trait:
 | `TokenError` | Error type for constructor failures (e.g. HMAC secret too short) |
 | `ApprovalToken` | Signed token: code hash, user ID, session ID, expiry, risk level, context hash |
 | `NoopPolicyEvaluator` | **Test-only** evaluator that allows everything — NOT for production |
-| `GraphQLValidator` | Parses and analyzes GraphQL queries (depth, field access, introspection detection) |
 | `ValidationResponse` | Handler-level response wrapping `ValidationResult` + auto-approval, action, code hash |
+| `ExecutionConfig` | JS execution limits: `max_api_calls`, `timeout_seconds`, `max_loop_iterations` |
 | `CodeModeHandler` | Server-side handler trait with tool builder, pre-handle hooks, soft-disable |
 
 ## Configuration
@@ -210,10 +243,13 @@ The pipeline enforces config-level authorization checks before policy evaluation
 | Feature | Default | What It Adds |
 |---------|---------|-------------|
 | *(none)* | yes | GraphQL validation via `graphql-parser` |
-| `openapi-code-mode` | no | JavaScript/OpenAPI validation (adds SWC parser) |
-| `js-runtime` | no | JavaScript AST-based execution in pure Rust |
-| `mcp-code-mode` | no | MCP-to-MCP executor composition |
+| `openapi-code-mode` | no | JavaScript/OpenAPI validation via SWC parser |
+| `js-runtime` | no | JavaScript AST-based execution in pure Rust (implies `openapi-code-mode`) |
+| `sql-code-mode` | no | SQL query validation and parameterization |
+| `mcp-code-mode` | no | MCP-to-MCP tool composition (implies `js-runtime`) |
 | `cedar` | no | Local Cedar policy evaluation via `cedar-policy 4.9` |
+
+**Dependency chain:** `mcp-code-mode` -> `js-runtime` -> `openapi-code-mode`
 
 ## Security Design
 
@@ -277,6 +313,10 @@ pipeline.set_policy_evaluator(Box::new(my_evaluator));
 pipeline.set_policy_evaluator(Arc::new(my_evaluator));
 ```
 
+### `language` attribute selects validation path
+
+`#[code_mode(language = "...")]` now dispatches to the correct language-specific validation method at compile time, not just tool metadata. Servers using JavaScript, SQL, or MCP can now use `#[derive(CodeMode)]` instead of manual handler structs.
+
 See [CHANGELOG.md](./CHANGELOG.md) for the full list of changes.
 
 ## Known Limitations (v0.1.0)
@@ -288,6 +328,8 @@ See [CHANGELOG.md](./CHANGELOG.md) for the full list of changes.
 3. **No server-side token revocation.** Tokens are stateless (verified by HMAC). Once issued, a token is valid until it expires. Short TTL (5 min default) mitigates this.
 
 4. **JavaScript validation is sync only.** `validate_javascript_code` is synchronous (no async variant). The derive macro handles this transparently — the generated async handler calls the sync method without `.await`.
+
+5. **SQL and MCP validators are stub.** The `validate_sql_query` and `validate_mcp_composition` methods require their respective feature flags. These validators are being implemented — the derive macro dispatch is ready.
 
 ## Crate Dependencies
 
@@ -322,11 +364,11 @@ This is a pre-1.0 API. Key areas where we'd like team input:
 
 - **Derive macro ergonomics** — are the fixed field names (`code_mode_config`, `token_secret`, etc.) workable, or do you need attribute-based field mapping (e.g., `#[code_mode(config = "my_config")]`)?
 - **`context_from` pattern** — does returning `ValidationContext` from a method on your server struct work for your auth integration, or do you need an async version?
-- **`CodeExecutor` trait surface** — is `execute(code, variables) -> Result<Value, ExecutionError>` sufficient, or do you need an `ExecutionContext` parameter for timeouts/cancellation?
+- **`CodeExecutor` trait surface** — is `execute(code, variables) -> Result<Value, ExecutionError>` sufficient for all language backends, or do specific languages need additional context?
 - **`Result`-returning constructors** — are the `TokenError` variants clear enough for your error handling?
-- **Schema exposure model** — does the three-layer model work for your use cases?
+- **SQL validation** — what SQL dialects do you need? Should the validator support parameterized queries, prepared statements, or raw SQL only?
+- **MCP composition** — what does your composition validation need? Schema compatibility checks, tool existence verification, or just structural validation?
 - **Policy evaluation** — any use cases beyond Cedar and AVP?
-- **Token binding** — should tokens include additional context (client certificate fingerprint, IP binding)?
 
 File issues or discuss in the `#pmcp-sdk` channel.
 
