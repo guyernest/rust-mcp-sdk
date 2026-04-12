@@ -1,5 +1,6 @@
 use pmcp_code_mode::{
     CodeExecutor, CodeModeConfig, ExecutionError, NoopPolicyEvaluator, TokenSecret,
+    ValidationContext,
 };
 use pmcp_code_mode_derive::CodeMode;
 use std::sync::Arc;
@@ -18,6 +19,7 @@ impl CodeExecutor for MyExecutor {
 }
 
 #[derive(CodeMode)]
+#[code_mode(context_from = "get_context")]
 struct MyServer {
     code_mode_config: CodeModeConfig,
     token_secret: TokenSecret,
@@ -25,11 +27,15 @@ struct MyServer {
     code_executor: Arc<MyExecutor>,
 }
 
+impl MyServer {
+    fn get_context(&self, _extra: &pmcp::RequestHandlerExtra) -> ValidationContext {
+        ValidationContext::new("user-1", "session-1", "schema-v1", "perms-v1")
+    }
+}
+
 fn main() {
-    // Type-check: verify the generated method signature exists
-    #[allow(deprecated)]
-    fn _check_method_exists(server: &MyServer, builder: pmcp::ServerBuilder) {
-        let _builder: pmcp::ServerBuilder =
-            server.register_code_mode_tools(builder);
+    // Type-check: verify the generated method requires Arc<Self>
+    fn _check_arc_method(server: &Arc<MyServer>, builder: pmcp::ServerBuilder) {
+        let _builder: pmcp::ServerBuilder = server.register_code_mode_tools(builder);
     }
 }

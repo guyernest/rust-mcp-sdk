@@ -18,6 +18,7 @@ impl CodeExecutor for MyExecutor {
 }
 
 #[derive(CodeMode)]
+#[code_mode(language = "javascript")]
 struct MyServer {
     code_mode_config: CodeModeConfig,
     token_secret: TokenSecret,
@@ -26,10 +27,10 @@ struct MyServer {
 }
 
 fn main() {
-    // Type-check: verify the generated method signature exists
+    // Type-check: verify the generated method uses &self (NOT Arc<Self>)
+    // This proves backward compatibility -- non-context_from users keep &self
     #[allow(deprecated)]
-    fn _check_method_exists(server: &MyServer, builder: pmcp::ServerBuilder) {
-        let _builder: pmcp::ServerBuilder =
-            server.register_code_mode_tools(builder);
+    fn _check_method(server: &MyServer, builder: pmcp::ServerBuilder) {
+        let _builder: pmcp::ServerBuilder = server.register_code_mode_tools(builder);
     }
 }

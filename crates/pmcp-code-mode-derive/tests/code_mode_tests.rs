@@ -12,6 +12,8 @@ fn code_mode_compile_tests() {
     t.compile_fail("tests/ui/missing_policy_evaluator.rs");
     t.compile_fail("tests/ui/non_send_field.rs");
     t.compile_fail("tests/ui/wrong_token_type.rs");
-    // Compile-pass test (a valid struct with all required fields)
+    // Compile-pass tests
     t.pass("tests/ui/valid_code_mode.rs");
+    t.pass("tests/ui/valid_code_mode_context.rs");
+    t.pass("tests/ui/valid_code_mode_language.rs");
 }
