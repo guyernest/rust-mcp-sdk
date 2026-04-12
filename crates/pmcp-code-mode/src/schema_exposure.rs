@@ -106,7 +106,7 @@ impl OperationCategory {
 }
 
 /// Risk level for an operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OperationRiskLevel {
     /// Read-only, no side effects
@@ -114,17 +114,12 @@ pub enum OperationRiskLevel {
     /// Creates data, generally reversible
     Low,
     /// Modifies data, potentially reversible
+    #[default]
     Medium,
     /// Deletes data, difficult to reverse
     High,
     /// System-wide impact, irreversible
     Critical,
-}
-
-impl Default for OperationRiskLevel {
-    fn default() -> Self {
-        Self::Medium
-    }
 }
 
 /// Normalized operation model that works across all schema formats.

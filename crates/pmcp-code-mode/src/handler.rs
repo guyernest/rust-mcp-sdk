@@ -12,36 +12,25 @@ use pmcp::types::ToolInfo;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::types::{PolicyViolation, RiskLevel, UnifiedAction, ValidationMetadata};
+use crate::types::{
+    PolicyViolation, RiskLevel, UnifiedAction, ValidationMetadata, ValidationResult,
+};
 
-/// Response from `validate_code_impl` containing all validation results.
+/// Response from `validate_code_impl` containing validation results plus
+/// handler-specific metadata.
+///
+/// Wraps [`ValidationResult`] from the validation pipeline and adds fields
+/// for handler-level concerns (auto-approval, unified action, code hash).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationResponse {
-    /// Whether the code is valid
-    pub is_valid: bool,
+    /// Core validation result from the pipeline.
+    #[serde(flatten)]
+    pub result: ValidationResult,
 
-    /// Human-readable explanation of what the code does
-    pub explanation: String,
-
-    /// Risk level (LOW, MEDIUM, HIGH, CRITICAL)
-    pub risk_level: RiskLevel,
-
-    /// Approval token for execution (None if invalid or dry_run)
-    pub approval_token: Option<String>,
-
-    /// Whether this was auto-approved based on risk level
+    /// Whether this was auto-approved based on risk level.
     pub auto_approved: bool,
 
-    /// Warnings (non-blocking issues)
-    pub warnings: Vec<String>,
-
-    /// Policy violations (blocking issues)
-    pub violations: Vec<PolicyViolation>,
-
-    /// Validation metadata
-    pub metadata: ValidationMetadata,
-
-    /// Unified action (Read, Write, Delete, Admin)
+    /// Unified action (Read, Write, Delete, Admin).
     pub action: Option<UnifiedAction>,
 
     /// SHA-256 hash of the canonicalized code that was validated.
@@ -58,14 +47,8 @@ impl ValidationResponse {
         metadata: ValidationMetadata,
     ) -> Self {
         Self {
-            is_valid: true,
-            explanation,
-            risk_level,
-            approval_token: Some(approval_token),
+            result: ValidationResult::success(explanation, risk_level, approval_token, metadata),
             auto_approved: false,
-            warnings: vec![],
-            violations: vec![],
-            metadata,
             action: None,
             validated_code_hash: None,
         }
@@ -74,14 +57,18 @@ impl ValidationResponse {
     /// Create a failed validation response.
     pub fn failure(violations: Vec<PolicyViolation>, metadata: ValidationMetadata) -> Self {
         Self {
-            is_valid: false,
-            explanation: String::new(),
-            risk_level: RiskLevel::Critical,
-            approval_token: None,
+            result: ValidationResult::failure(violations, metadata),
             auto_approved: false,
-            warnings: vec![],
-            violations,
-            metadata,
+            action: None,
+            validated_code_hash: None,
+        }
+    }
+
+    /// Create from an existing `ValidationResult`.
+    pub fn from_result(result: ValidationResult) -> Self {
+        Self {
+            result,
+            auto_approved: false,
             action: None,
             validated_code_hash: None,
         }
@@ -107,7 +94,7 @@ impl ValidationResponse {
 
     /// Add warnings to the response.
     pub fn with_warnings(mut self, warnings: Vec<String>) -> Self {
-        self.warnings = warnings;
+        self.result.warnings = warnings;
         self
     }
 
@@ -116,14 +103,14 @@ impl ValidationResponse {
     /// Returns a tuple of (json_value, is_error).
     pub fn to_json_response(&self) -> (Value, bool) {
         let response = json!({
-            "valid": self.is_valid,
-            "explanation": self.explanation,
-            "risk_level": format!("{}", self.risk_level),
-            "approval_token": self.approval_token,
+            "valid": self.result.is_valid,
+            "explanation": self.result.explanation,
+            "risk_level": format!("{}", self.result.risk_level),
+            "approval_token": self.result.approval_token,
             "action": self.action.as_ref().map(|a| a.to_string()),
             "auto_approved": self.auto_approved,
-            "warnings": self.warnings,
-            "violations": self.violations.iter().map(|v| json!({
+            "warnings": self.result.warnings,
+            "violations": self.result.violations.iter().map(|v| json!({
                 "policy": v.policy_name,
                 "rule": v.rule,
                 "message": v.message,
@@ -131,14 +118,14 @@ impl ValidationResponse {
             })).collect::<Vec<_>>(),
             "validated_code_hash": self.validated_code_hash,
             "metadata": {
-                "is_read_only": self.metadata.is_read_only,
-                "accessed_types": self.metadata.accessed_types,
-                "accessed_fields": self.metadata.accessed_fields,
-                "validation_time_ms": self.metadata.validation_time_ms
+                "is_read_only": self.result.metadata.is_read_only,
+                "accessed_types": self.result.metadata.accessed_types,
+                "accessed_fields": self.result.metadata.accessed_fields,
+                "validation_time_ms": self.result.metadata.validation_time_ms
             }
         });
 
-        (response, !self.is_valid)
+        (response, !self.result.is_valid)
     }
 }
 
@@ -331,11 +318,12 @@ impl CodeModeToolBuilder {
     pub fn build_validate_tool(&self) -> ToolInfo {
         ToolInfo::new(
             "validate_code",
-            Some(format!(
+            Some(
                 "Validates code and returns a business-language explanation with an approval token. \
                  The code is analyzed for security, complexity, and data access patterns. \
                  You MUST call this before execute_code."
-            )),
+                    .to_string(),
+            ),
             json!({
                 "type": "object",
                 "properties": {
