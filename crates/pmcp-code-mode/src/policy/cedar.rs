@@ -85,7 +85,7 @@ impl CedarPolicyEvaluator {
             EntityId::from_str(&operation.id).expect("valid entity id"),
         );
 
-        let mut attrs: HashMap<String, cedar_policy::RestrictedExpression> = HashMap::new();
+        let mut attrs: HashMap<String, cedar_policy::RestrictedExpression> = HashMap::with_capacity(11);
 
         attrs.insert(
             "operationType".to_string(),
@@ -143,7 +143,7 @@ impl CedarPolicyEvaluator {
             EntityId::from_str(&config.server_id).expect("valid entity id"),
         );
 
-        let mut attrs: HashMap<String, cedar_policy::RestrictedExpression> = HashMap::new();
+        let mut attrs: HashMap<String, cedar_policy::RestrictedExpression> = HashMap::with_capacity(10);
 
         attrs.insert(
             "serverId".to_string(),
@@ -230,7 +230,7 @@ impl super::PolicyEvaluator for CedarPolicyEvaluator {
                         "Write"
                     }
                 },
-                "subscription" => "Write",
+                "subscription" => "Read",
                 _ => "Read",
             }
         };
