@@ -17,6 +17,7 @@ use pmcp_code_mode::{
     TokenSecret, ValidationContext, ValidationPipeline,
 };
 use proptest::prelude::*;
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // HMAC Round-Trip Tests
@@ -326,7 +327,7 @@ async fn default_deny_without_noop() {
     let pipeline = ValidationPipeline::with_policy_evaluator(
         config,
         b"test-secret-key!".to_vec(),
-        Box::new(DenyAllEvaluator),
+        Arc::new(DenyAllEvaluator),
     );
 
     let ctx = ValidationContext::new("user-123", "session-456", "schema-hash", "perms-hash");
@@ -355,7 +356,7 @@ async fn noop_evaluator_allows_query() {
     let pipeline = ValidationPipeline::with_policy_evaluator(
         config,
         b"test-secret-key!".to_vec(),
-        Box::new(NoopPolicyEvaluator::new()),
+        Arc::new(NoopPolicyEvaluator::new()),
     );
 
     let ctx = ValidationContext::new("user-123", "session-456", "schema-hash", "perms-hash");

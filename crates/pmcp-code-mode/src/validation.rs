@@ -16,6 +16,7 @@ use crate::types::{
     PolicyViolation, UnifiedAction, ValidationError, ValidationMetadata, ValidationResult,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 #[cfg(feature = "openapi-code-mode")]
@@ -86,7 +87,7 @@ pub struct ValidationPipeline<
     javascript_validator: JavaScriptValidator,
     token_generator: T,
     explanation_generator: E,
-    policy_evaluator: Option<Box<dyn PolicyEvaluator>>,
+    policy_evaluator: Option<Arc<dyn PolicyEvaluator>>,
 }
 
 impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
@@ -132,7 +133,7 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
     pub fn with_policy_evaluator(
         config: CodeModeConfig,
         token_secret: impl Into<Vec<u8>>,
-        evaluator: Box<dyn PolicyEvaluator>,
+        evaluator: Arc<dyn PolicyEvaluator>,
     ) -> Self {
         Self {
             graphql_validator: GraphQLValidator::default(),
@@ -144,6 +145,18 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
             policy_evaluator: Some(evaluator),
             config,
         }
+    }
+
+    /// Create a pipeline from a [`TokenSecret`] with an `Arc` policy evaluator.
+    ///
+    /// Used by derive macro generated code where the policy evaluator is
+    /// stored as `Arc<dyn PolicyEvaluator>` on the parent struct.
+    pub fn from_token_secret_with_policy(
+        config: CodeModeConfig,
+        secret: &TokenSecret,
+        evaluator: Arc<dyn PolicyEvaluator>,
+    ) -> Self {
+        Self::with_policy_evaluator(config, secret.expose_secret().to_vec(), evaluator)
     }
 }
 
@@ -167,7 +180,7 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
     }
 
     /// Set the policy evaluator for this pipeline.
-    pub fn set_policy_evaluator(&mut self, evaluator: Box<dyn PolicyEvaluator>) {
+    pub fn set_policy_evaluator(&mut self, evaluator: Arc<dyn PolicyEvaluator>) {
         self.policy_evaluator = Some(evaluator);
     }
 
