@@ -28,6 +28,19 @@
 //! for flexibility. For v0.1.0, fixed names are simpler to implement and
 //! sufficient for the target use case.
 //!
+//! # Known Limitation (v0.1.0): Static Validation Context
+//!
+//! The generated `ValidateCodeHandler::handle` uses **placeholder values**
+//! (`"anonymous"`, `"session"`, `"schema"`, `"perms"`) for the `ValidationContext`.
+//! This means approval tokens are NOT bound to a specific user, session, or schema
+//! version. A token obtained in one session can be replayed in another.
+//!
+//! For production use, either:
+//! - Override the generated handler to supply real context from `RequestHandlerExtra`
+//! - Use the `CodeModeHandler` trait directly instead of the derive macro
+//!
+//! This will be addressed in v0.2.0 via attribute-based context configuration.
+//!
 //! # Generated Code
 //!
 //! The macro generates:
@@ -186,6 +199,18 @@ fn expand_code_mode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
                     let code = input.code.trim();
                     let dry_run = input.dry_run.unwrap_or(false);
 
+                    // WARNING: These are PLACEHOLDER values. The validation context
+                    // uses static strings, so approval tokens are NOT bound to a
+                    // specific user, session, or schema version. An attacker who
+                    // obtains a valid token can replay it across different users and
+                    // sessions until it expires.
+                    //
+                    // Production implementations MUST override the `ValidateCodeHandler::handle`
+                    // method to supply real user/session context from `_extra`, or use
+                    // the `CodeModeHandler` trait directly instead of the derive macro.
+                    //
+                    // TODO(v0.2.0): Accept a `fn(&RequestHandlerExtra) -> ValidationContext`
+                    // callback via the `#[code_mode(...)]` attribute.
                     let context = pmcp_code_mode::ValidationContext::new(
                         "anonymous",
                         "session",
@@ -318,14 +343,3 @@ fn expand_code_mode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
     Ok(expanded)
 }
 
-#[cfg(test)]
-mod tests {
-    /// Minimal smoke test that the proc macro crate compiles and the derive
-    /// function is exported. Full trybuild tests are in Task 2.
-    #[test]
-    fn derive_macro_is_exported() {
-        // This test verifies the proc macro crate builds correctly.
-        // The actual derive expansion is tested via trybuild in Task 2.
-        assert!(true);
-    }
-}
