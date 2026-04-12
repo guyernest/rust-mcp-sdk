@@ -287,7 +287,7 @@ See [CHANGELOG.md](./CHANGELOG.md) for the full list of changes.
 
 3. **No server-side token revocation.** Tokens are stateless (verified by HMAC). Once issued, a token is valid until it expires. Short TTL (5 min default) mitigates this.
 
-4. **`language` attribute is metadata-only.** Setting `#[code_mode(language = "javascript")]` changes the tool description but does not change the validation logic. All validation currently goes through the GraphQL parser regardless of the language attribute.
+4. **JavaScript validation is sync only.** `validate_javascript_code` is synchronous (no async variant). The derive macro handles this transparently — the generated async handler calls the sync method without `.await`.
 
 ## Crate Dependencies
 

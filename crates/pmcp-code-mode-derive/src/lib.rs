@@ -27,7 +27,14 @@
 //! | Attribute | Type | Default | Purpose |
 //! |-----------|------|---------|---------|
 //! | `context_from` | `String` | (none) | Method name returning `ValidationContext` |
-//! | `language` | `String` | `"graphql"` | Code language for tool metadata |
+//! | `language` | `String` | `"graphql"` | Selects validation path and tool metadata |
+//!
+//! Supported `language` values:
+//!
+//! | Value | Validation Method | Feature Required |
+//! |-------|-------------------|------------------|
+//! | `"graphql"` (default) | `validate_graphql_query_async` | *(none)* |
+//! | `"javascript"` | `validate_javascript_code` | `openapi-code-mode` |
 //!
 //! When `context_from` is specified, `register_code_mode_tools` requires
 //! `self: &Arc<Self>` and the generated handler calls `self.parent.{method}(&extra)`
@@ -110,7 +117,8 @@ struct CodeModeOpts {
     /// When specified, the generated registration method requires `self: &Arc<Self>`.
     #[darling(default)]
     context_from: Option<String>,
-    /// Code language for tool metadata. Defaults to `"graphql"`.
+    /// Code language — selects both the validation method and tool metadata.
+    /// Supported: `"graphql"` (default), `"javascript"` (requires `openapi-code-mode` feature).
     #[darling(default)]
     language: Option<String>,
 }
@@ -201,6 +209,28 @@ fn expand_code_mode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
     let language = opts.language.as_deref().unwrap_or("graphql");
     let language_lit = syn::LitStr::new(language, struct_name.span());
 
+    // Validate language is a known value and generate the validation call
+    let validation_call = match language {
+        "graphql" => quote! {
+            self.pipeline.validate_graphql_query_async(code, &context)
+                .await
+                .map_err(|e| pmcp::Error::Internal(format!("Validation error: {}", e)))?
+        },
+        "javascript" => quote! {
+            self.pipeline.validate_javascript_code(code, &context)
+                .map_err(|e| pmcp::Error::Internal(format!("Validation error: {}", e)))?
+        },
+        other => {
+            return Err(syn::Error::new_spanned(
+                &input.ident,
+                format!(
+                    "`language = \"{other}\"` is not a supported language. \
+                     Supported values: \"graphql\" (default), \"javascript\" (requires `openapi-code-mode` feature)"
+                ),
+            ));
+        }
+    };
+
     // Branch code generation based on context_from presence
     let expanded = if let Some(ref method_name) = opts.context_from {
         // Validate that context_from is a valid Rust identifier
@@ -211,10 +241,10 @@ fn expand_code_mode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
             ));
         }
         let method_ident = syn::Ident::new(method_name, struct_name.span());
-        expand_with_context_from(struct_name, &mod_name, &language_lit, &method_ident)
+        expand_with_context_from(struct_name, &mod_name, &language_lit, &method_ident, &validation_call)
     } else {
         // --- default path: placeholder context with deprecation warning ---
-        expand_without_context_from(struct_name, &mod_name, &language_lit)
+        expand_without_context_from(struct_name, &mod_name, &language_lit, &validation_call)
     };
 
     Ok(expanded)
@@ -229,6 +259,7 @@ fn expand_with_context_from(
     mod_name: &syn::Ident,
     language_lit: &syn::LitStr,
     method_ident: &syn::Ident,
+    validation_call: &proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     quote! {
         // Send + Sync compile-time assertion (D-08)
@@ -270,9 +301,7 @@ fn expand_with_context_from(
                     // Real ValidationContext from user-defined method
                     let context = self.parent.#method_ident(&extra);
 
-                    let result = self.pipeline.validate_graphql_query_async(code, &context)
-                        .await
-                        .map_err(|e| pmcp::Error::Internal(format!("Validation error: {}", e)))?;
+                    let result = #validation_call;
 
                     let response = pmcp_code_mode::ValidationResponse::success(
                         result.explanation.clone(),
@@ -408,6 +437,7 @@ fn expand_without_context_from(
     struct_name: &syn::Ident,
     mod_name: &syn::Ident,
     language_lit: &syn::LitStr,
+    validation_call: &proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     quote! {
         // Send + Sync compile-time assertion (D-08)
@@ -459,9 +489,7 @@ fn expand_without_context_from(
                         "perms",
                     );
 
-                    let result = self.pipeline.validate_graphql_query_async(code, &context)
-                        .await
-                        .map_err(|e| pmcp::Error::Internal(format!("Validation error: {}", e)))?;
+                    let result = #validation_call;
 
                     let response = pmcp_code_mode::ValidationResponse::success(
                         result.explanation.clone(),

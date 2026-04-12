@@ -17,8 +17,11 @@ impl CodeExecutor for MyExecutor {
     }
 }
 
+// Tests that the language attribute is accepted and changes tool metadata.
+// Note: language = "javascript" requires the `openapi-code-mode` feature flag
+// on pmcp-code-mode (it calls validate_javascript_code which is feature-gated).
 #[derive(CodeMode)]
-#[code_mode(language = "javascript")]
+#[code_mode(language = "graphql")]
 struct MyServer {
     code_mode_config: CodeModeConfig,
     token_secret: TokenSecret,

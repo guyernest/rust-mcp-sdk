@@ -80,12 +80,27 @@ let builder = server.register_code_mode_tools(pmcp::Server::builder())?;
 | Attribute | Type | Default | Effect |
 |-----------|------|---------|--------|
 | `context_from` | `"method_name"` | *(none)* | Method on your struct returning `ValidationContext`. Enables real token binding. Changes `register_code_mode_tools` receiver to `self: &Arc<Self>`. |
-| `language` | `"language_name"` | `"graphql"` | Sets the code language in `validate_code` and `execute_code` tool metadata. Currently metadata-only — does not change validation logic. |
+| `language` | `"language_name"` | `"graphql"` | Selects the validation method and tool metadata. See language table below. |
+
+**Supported `language` values:**
+
+| Value | Validation Method | Feature Required |
+|-------|-------------------|------------------|
+| `"graphql"` (default) | `validate_graphql_query_async` (async) | *(none)* |
+| `"javascript"` | `validate_javascript_code` (sync) | `openapi-code-mode` |
+
+Using `language = "javascript"` without enabling the `openapi-code-mode` feature on `pmcp-code-mode` will produce a compile error (`validate_javascript_code` is feature-gated). Unknown language values produce a compile error at macro expansion time.
 
 ```rust,ignore
+// GraphQL server (default)
 #[derive(CodeMode)]
-#[code_mode(context_from = "get_context", language = "graphql")]
-struct MyServer { /* ... */ }
+#[code_mode(context_from = "get_context")]
+struct MyGraphQLServer { /* ... */ }
+
+// JavaScript/OpenAPI server (requires openapi-code-mode feature)
+#[derive(CodeMode)]
+#[code_mode(context_from = "get_context", language = "javascript")]
+struct MyCostCoachServer { /* ... */ }
 ```
 
 **`context_from` method signature:**
@@ -215,7 +230,7 @@ Key questions for reviewers:
 
 - **Fixed field names vs. attribute mapping** — is `code_mode_config`/`token_secret`/`policy_evaluator`/`code_executor` workable, or do you need `#[code_mode(config = "my_field")]` style overrides?
 - **`context_from` sync only** — the context method is currently sync (`fn get_context(&self, extra) -> ValidationContext`). Do you need an async version for cases where context requires a network call (e.g., fetching permissions from a remote service)?
-- **`language` attribute scope** — currently metadata-only. Should it also select the parser/validator (GraphQL vs. JavaScript)?
+- **Additional languages** — SQL and MCP (composition) are planned. Should `language` accept these now with stub validation, or wait until the validators exist?
 - **Error handling** — is `TokenError` sufficient, or should `register_code_mode_tools` return a broader error type?
 
 File issues or discuss in the `#pmcp-sdk` channel.
