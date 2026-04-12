@@ -1,64 +1,8 @@
-//! # MCP SDK for Rust
-//!
-//! A high-quality Rust implementation of the Model Context Protocol (MCP) SDK.
-//!
-//! This crate provides both client and server implementations of MCP with:
-//! - Full protocol compatibility with the TypeScript SDK
-//! - Zero-copy parsing where possible
-//! - Comprehensive type safety
-//! - Multiple transport options (stdio, HTTP/SSE, WebSocket)
-//! - Built-in authentication support
-//!
-//! ## Quick Start
-//!
-//! ### Client Example
-//!
-//! ```rust
-//! use pmcp::{Client, StdioTransport, ClientCapabilities};
-//!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! // Create a client with stdio transport
-//! let transport = StdioTransport::new();
-//! let mut client = Client::new(transport);
-//!
-//! // Initialize the connection
-//! let server_info = client.initialize(ClientCapabilities::default()).await?;
-//!
-//! // List available tools
-//! let tools = client.list_tools(None).await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ### Server Example
-//!
-//! ```rust
-//! use pmcp::{Server, ServerCapabilities, ToolHandler};
-//! use async_trait::async_trait;
-//! use serde_json::Value;
-//!
-//! struct MyTool;
-//!
-//! #[async_trait]
-//! impl ToolHandler for MyTool {
-//!     async fn handle(&self, args: Value, _extra: pmcp::RequestHandlerExtra) -> Result<Value, pmcp::Error> {
-//!         Ok(serde_json::json!({"result": "success"}))
-//!     }
-//! }
-//!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let server = Server::builder()
-//!     .name("my-server")
-//!     .version("1.0.0")
-//!     .capabilities(ServerCapabilities::default())
-//!     .tool("my-tool", MyTool)
-//!     .build()?;
-//!
-//! // Run with stdio transport
-//! server.run_stdio().await?;
-//! # Ok(())
-//! # }
-//! ```
+// Crate-level rustdoc is sourced from CRATE-README.md via include_str! so that
+// docs.rs and GitHub render from a single authoritative source. Every
+// `rust,no_run` code block inside CRATE-README.md is compiled as a doctest
+// under `cargo test --doc`, which catches API drift automatically.
+#![doc = include_str!("../CRATE-README.md")]
 
 #![warn(
     missing_docs,
