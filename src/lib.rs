@@ -83,7 +83,6 @@ mod generated_contracts;
 pub mod assets;
 pub mod client;
 #[cfg(feature = "composition")]
-#[cfg_attr(docsrs, doc(cfg(feature = "composition")))]
 pub mod composition;
 pub mod error;
 pub mod runtime;
@@ -102,7 +101,6 @@ pub mod simd;
 /// [`RouterConfig`](axum::RouterConfig), and [`AllowedOrigins`](axum::AllowedOrigins)
 /// for ergonomic usage: `pmcp::axum::router(server)`.
 #[cfg(feature = "streamable-http")]
-#[cfg_attr(docsrs, doc(cfg(feature = "streamable-http")))]
 pub mod axum {
     pub use crate::server::axum_router::{
         router, router_with_config, AllowedOrigins, RouterConfig,

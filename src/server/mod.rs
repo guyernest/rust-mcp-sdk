@@ -104,7 +104,6 @@ pub mod ui;
 ///
 /// Provides adapters for `ChatGPT` Apps, MCP Apps (SEP-1865), and MCP-UI.
 #[cfg(all(not(target_arch = "wasm32"), feature = "mcp-apps"))]
-#[cfg_attr(docsrs, doc(cfg(feature = "mcp-apps")))]
 pub mod mcp_apps;
 
 /// Validation helpers for typed tools.
@@ -136,7 +135,6 @@ pub mod cancellation {
 }
 /// Axum Router convenience function for secure MCP server hosting.
 #[cfg(feature = "streamable-http")]
-#[cfg_attr(docsrs, doc(cfg(feature = "streamable-http")))]
 pub mod axum_router;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod dynamic;
@@ -154,7 +152,6 @@ pub mod streamable_http_server;
 pub mod subscriptions;
 /// Tower middleware layers for MCP HTTP security (DNS rebinding, security headers).
 #[cfg(feature = "streamable-http")]
-#[cfg_attr(docsrs, doc(cfg(feature = "streamable-http")))]
 pub mod tower_layers;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod transport;

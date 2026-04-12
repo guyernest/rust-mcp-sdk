@@ -22,7 +22,6 @@ pub mod ui;
 
 /// MCP Apps Extension types for interactive UI support (ChatGPT Apps, MCP-UI)
 #[cfg(feature = "mcp-apps")]
-#[cfg_attr(docsrs, doc(cfg(feature = "mcp-apps")))]
 pub mod mcp_apps;
 
 // Re-export transport message type
