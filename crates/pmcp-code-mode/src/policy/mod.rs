@@ -93,7 +93,7 @@ pub trait PolicyEvaluator: Send + Sync {
 /// # Example
 ///
 /// ```rust
-/// use pmcp_code_mode::NoopPolicyEvaluator;
+/// use pmcp_code_mode::{NoopPolicyEvaluator, PolicyEvaluator};
 ///
 /// // Test-only usage
 /// let evaluator = NoopPolicyEvaluator::new();
