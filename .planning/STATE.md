@@ -1,9 +1,9 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: Protocol Modernization
-status: Milestone complete
-stopped_at: Phase 67 context gathered
+milestone: v2.1
+milestone_name: rmcp Upgrades
+status: In progress
+stopped_at: Phase 67 complete; inserting 67.1 for Code Mode Support
 last_updated: "2026-04-12T02:45:38.064Z"
 progress:
   total_phases: 40
@@ -63,6 +63,7 @@ v2.1 decisions:
 ### Roadmap Evolution
 
 - Phases 65-68 added: v2.1 rmcp Upgrades milestone (examples cleanup, macros rewrite, docs.rs pipeline, documentation polish)
+- Phase 67.1 inserted after Phase 67: Code Mode Support (URGENT) — external developer support for code mode pattern (validation + execution) based on pmcp-run/built-in/shared/pmcp-code-mode SDK_DESIGN_SPEC.md
 
 ### Pending Todos
 

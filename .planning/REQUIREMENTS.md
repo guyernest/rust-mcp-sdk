@@ -36,6 +36,17 @@ Requirements for rmcp Upgrades milestone. Each maps to roadmap phases.
 - [ ] **PLSH-02**: CI enforcement: example file count matches Cargo.toml [[example]] count, cargo semver-checks on PRs
 - [ ] **PLSH-03**: Transport matrix table in lib.rs docs linking to actual transport types
 
+### Code Mode Support
+
+Inserted into v2.1 via Phase 67.1 (INSERTED, 2026-04-11) — blocker for an imminent MCP server launch. External developers must be able to add Code Mode (validate → approve → execute) to their servers consistently, without depending on the pmcp-run internal crate. See `.planning/phases/67.1-code-mode-support/67.1-DECISIONS.md` for the locked design decisions and `pmcp-run/built-in/shared/pmcp-code-mode/SDK_DESIGN_SPEC.md` for the source spec.
+
+- [ ] **CMSUP-01**: `crates/pmcp-code-mode/` exists in the rust-mcp-sdk workspace containing the moved Code Mode core — validation pipeline, `PolicyEvaluator` trait, `CedarPolicyEvaluator` (behind `cedar` feature), HMAC token infrastructure, GraphQL/JS/SQL validators — with all existing tests passing after the move and zero regressions against the pmcp-run source of truth
+- [ ] **CMSUP-02**: Security hardening lands alongside the move — `TokenSecret` newtype backed by `secrecy` + `zeroize` replaces plain `Vec<u8>` token storage, blocks `Debug`/`Display` printing, and is documented in a crate-level threat model (README section or SECURITY.md); `NoopPolicyEvaluator` exists in `pmcp-code-mode` for tests and local development; `pub use async_trait::async_trait;` is re-exported from `pmcp-code-mode/src/lib.rs`
+- [ ] **CMSUP-03**: `CodeExecutor` high-level trait exists in `pmcp-code-mode` with a single `execute(code, variables) -> Result<Value, ExecutionError>` method, supersedes per-server executor glue, and covers all four execution patterns (direct SQL, JS+HTTP, JS+SDK, JS+MCP); blanket impl for `PlanExecutor` explored and either implemented or explicitly documented as deferred
+- [ ] **CMSUP-04**: `crates/pmcp-code-mode-derive/` proc macro crate exists and provides `#[derive(CodeMode)]` which emits a `register_code_mode_tools(builder)` method registering `validate_code` + `execute_code` tools against a `pmcp::ServerBuilder`, enforces `Send + Sync` at compile time, uses `#[pmcp_code_mode::async_trait]` via the re-export to avoid version conflicts, and has `trybuild` compile-pass + compile-fail snapshot coverage (missing required fields, non-`Send` fields, wrong field types)
+- [ ] **CMSUP-05**: Contract YAMLs for `pmcp-code-mode` and `pmcp-code-mode-derive` exist under `../provable-contracts/contracts/` covering `PolicyEvaluator`/`CodeExecutor` trait invariants, HMAC token bind-to-code-hash semantics, derive-macro expansion contracts, and default-deny behavior; `pmat comply check` passes on both crates; property tests cover HMAC round-trip and validation-pipeline determinism; fuzz targets exist for GraphQL parser input, JavaScript parser input, and token verification in the core crate (macro-input fuzzing skipped as documented in 67.1-DECISIONS.md D7)
+- [ ] **CMSUP-06**: A complete worked example in `examples/` (e.g. `XX_code_mode_graphql.rs`) demonstrates the end-to-end flow: `#[derive(CodeMode)]` annotation → `register_code_mode_tools(builder)` → `validate_code` call → approval token issued → `execute_code` call with token → result — runnable via `cargo run --example XX_code_mode_graphql` using `NoopPolicyEvaluator`; `crates/pmcp-code-mode/` and `crates/pmcp-code-mode-derive/` are slotted into the publish order documented in CLAUDE.md (`pmcp-widget-utils → pmcp → pmcp-code-mode → pmcp-code-mode-derive → mcp-tester → mcp-preview → cargo-pmcp`) with CRATE-README files ready for docs.rs, and `make quality-gate` passes workspace-wide
+
 ## Previous Requirements
 
 <details>
@@ -115,12 +126,18 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PLSH-01 | Phase 68 | Pending |
 | PLSH-02 | Phase 68 | Pending |
 | PLSH-03 | Phase 68 | Pending |
+| CMSUP-01 | Phase 67.1 | Pending |
+| CMSUP-02 | Phase 67.1 | Pending |
+| CMSUP-03 | Phase 67.1 | Pending |
+| CMSUP-04 | Phase 67.1 | Pending |
+| CMSUP-05 | Phase 67.1 | Pending |
+| CMSUP-06 | Phase 67.1 | Pending |
 
 **Coverage:**
-- v2.1 requirements: 14 total
-- Mapped to phases: 14
+- v2.1 requirements: 20 total (14 original + 6 inserted via Phase 67.1)
+- Mapped to phases: 20
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-10*
-*Last updated: 2026-04-10 after roadmap creation*
+*Last updated: 2026-04-11 — added CMSUP-01..06 for Phase 67.1 Code Mode Support (INSERTED)*
