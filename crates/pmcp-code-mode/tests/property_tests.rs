@@ -325,7 +325,7 @@ async fn default_deny_without_noop() {
     let config = CodeModeConfig::enabled();
     let pipeline = ValidationPipeline::with_policy_evaluator(
         config,
-        b"test-secret".to_vec(),
+        b"test-secret-key!".to_vec(),
         Box::new(DenyAllEvaluator),
     );
 
@@ -354,7 +354,7 @@ async fn noop_evaluator_allows_query() {
     let config = CodeModeConfig::enabled();
     let pipeline = ValidationPipeline::with_policy_evaluator(
         config,
-        b"test-secret".to_vec(),
+        b"test-secret-key!".to_vec(),
         Box::new(NoopPolicyEvaluator::new()),
     );
 

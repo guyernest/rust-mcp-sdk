@@ -181,8 +181,25 @@ pub struct HmacTokenGenerator {
 }
 
 impl HmacTokenGenerator {
+    /// Minimum secret length in bytes for HMAC token generation.
+    ///
+    /// Secrets shorter than this are rejected to prevent trivially forgeable tokens.
+    /// 16 bytes (128 bits) is the minimum recommended for HMAC-SHA256.
+    pub const MIN_SECRET_LEN: usize = 16;
+
     /// Create a new HMAC token generator with a `TokenSecret`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the secret is shorter than [`Self::MIN_SECRET_LEN`] (16 bytes).
+    /// An empty or very short secret makes tokens trivially forgeable.
     pub fn new(secret: TokenSecret) -> Self {
+        assert!(
+            secret.expose_secret().len() >= Self::MIN_SECRET_LEN,
+            "HMAC token secret must be at least {} bytes, got {}",
+            Self::MIN_SECRET_LEN,
+            secret.expose_secret().len()
+        );
         Self { secret }
     }
 
@@ -244,19 +261,16 @@ impl TokenGenerator for HmacTokenGenerator {
             signature: String::new(),
         };
 
-        // Sign the payload
         token.signature = self.sign(&token.payload_bytes());
         token
     }
 
     fn verify(&self, token: &ApprovalToken) -> Result<(), ExecutionError> {
-        // Check expiry
         let now = chrono::Utc::now().timestamp();
         if now > token.expires_at {
             return Err(ExecutionError::TokenExpired);
         }
 
-        // Verify signature
         if !self.verify_signature(&token.payload_bytes(), &token.signature) {
             return Err(ExecutionError::TokenInvalid(
                 "signature verification failed".into(),
@@ -269,9 +283,19 @@ impl TokenGenerator for HmacTokenGenerator {
     fn verify_code(&self, code: &str, token: &ApprovalToken) -> Result<(), ExecutionError> {
         let current_hash = hash_code(code);
         if current_hash != token.code_hash {
+            let expected_prefix = if token.code_hash.len() >= 12 {
+                &token.code_hash[..12]
+            } else {
+                &token.code_hash
+            };
+            let actual_prefix = if current_hash.len() >= 12 {
+                &current_hash[..12]
+            } else {
+                &current_hash
+            };
             return Err(ExecutionError::CodeMismatch {
-                expected_hash: token.code_hash[..12].to_string(),
-                actual_hash: current_hash[..12].to_string(),
+                expected_hash: expected_prefix.to_string(),
+                actual_hash: actual_prefix.to_string(),
             });
         }
         Ok(())
@@ -298,12 +322,17 @@ pub fn hash_code(code: &str) -> String {
 /// - Windows vs Unix line endings (\r\n vs \n)
 /// - Blank lines between statements
 pub fn canonicalize_code(code: &str) -> String {
-    code.trim()
-        .lines()
-        .map(|line| line.trim())
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut result = String::new();
+    for line in code.trim().lines() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            if !result.is_empty() {
+                result.push('\n');
+            }
+            result.push_str(trimmed);
+        }
+    }
+    result
 }
 
 /// Compute a context hash from schema and permissions.
@@ -322,7 +351,7 @@ mod tests {
 
     #[test]
     fn test_token_generation_and_verification() {
-        let generator = HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key".to_vec()));
+        let generator = HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key!".to_vec()));
 
         let token = generator.generate(
             "query { users { id } }",
@@ -345,7 +374,7 @@ mod tests {
 
     #[test]
     fn test_code_mismatch() {
-        let generator = HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key".to_vec()));
+        let generator = HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key!".to_vec()));
 
         let token = generator.generate(
             "query { users { id } }",
@@ -364,7 +393,7 @@ mod tests {
 
     #[test]
     fn test_token_encode_decode() {
-        let generator = HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key".to_vec()));
+        let generator = HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key!".to_vec()));
 
         let token = generator.generate(
             "query { users { id } }",
@@ -397,5 +426,17 @@ mod tests {
         let canonical = canonicalize_code(code3);
         assert!(canonical.contains("query {"));
         assert!(canonical.contains("users {"));
+    }
+
+    #[test]
+    #[should_panic(expected = "HMAC token secret must be at least 16 bytes")]
+    fn test_empty_secret_rejected() {
+        let _generator = HmacTokenGenerator::new(TokenSecret::new(b"".to_vec()));
+    }
+
+    #[test]
+    #[should_panic(expected = "HMAC token secret must be at least 16 bytes")]
+    fn test_short_secret_rejected() {
+        let _generator = HmacTokenGenerator::new(TokenSecret::new(b"short".to_vec()));
     }
 }

@@ -673,7 +673,7 @@ mod tests {
     use crate::types::RiskLevel;
 
     fn test_pipeline() -> ValidationPipeline {
-        ValidationPipeline::new(CodeModeConfig::enabled(), b"test-secret".to_vec())
+        ValidationPipeline::new(CodeModeConfig::enabled(), b"test-secret-key!".to_vec())
     }
 
     fn test_context() -> ValidationContext {
@@ -700,7 +700,7 @@ mod tests {
         let mut config = CodeModeConfig::enabled();
         config.allow_mutations = false;
 
-        let pipeline = ValidationPipeline::new(config, b"test-secret".to_vec());
+        let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec());
         let ctx = test_context();
 
         let result = pipeline
@@ -717,7 +717,7 @@ mod tests {
     #[test]
     fn test_disabled_code_mode() {
         let config = CodeModeConfig::default();
-        let pipeline = ValidationPipeline::new(config, b"test-secret".to_vec());
+        let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec());
         let ctx = test_context();
 
         let result = pipeline.validate_graphql_query("query { users { id } }", &ctx);
