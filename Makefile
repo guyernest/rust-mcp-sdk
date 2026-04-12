@@ -408,6 +408,13 @@ doc-open: doc
 	@echo "$(BLUE)Opening API documentation...$(NC)"
 	$(CARGO) doc --all-features --no-deps --open
 
+.PHONY: doc-check
+doc-check:
+	@echo "$(BLUE)Checking rustdoc warnings (zero-tolerance)...$(NC)"
+	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --no-deps \
+		--features composition,http,http-client,jwt-auth,macros,mcp-apps,oauth,rayon,resource-watcher,schema-generation,simd,sse,streamable-http,validation,websocket
+	@echo "$(GREEN)✓ Zero rustdoc warnings$(NC)"
+
 # Book documentation
 .PHONY: book
 book:
