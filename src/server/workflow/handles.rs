@@ -1,6 +1,6 @@
 //! Type-safe handles for tools and resources
 //!
-//! Handles are lightweight identifiers using Arc<str> for O(1) cloning.
+//! Handles are lightweight identifiers using `Arc<str>` for O(1) cloning.
 
 use super::{error::WorkflowError, newtypes::Uri};
 use std::sync::Arc;

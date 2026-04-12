@@ -1,7 +1,7 @@
 //! Domain-specific newtypes for workflow system
 //!
 //! These newtypes prevent type confusion and encode domain invariants.
-//! All use Arc<str> for O(1) cloning.
+//! All use `Arc<str>` for O(1) cloning.
 
 use super::error::WorkflowError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
