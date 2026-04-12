@@ -4,13 +4,11 @@
 //! This enables local agent projects to get real Cedar policy enforcement
 //! without an AWS account.
 
-use super::types::{
-    AuthorizationDecision, OperationEntity, ServerConfigEntity,
-};
+use super::types::{AuthorizationDecision, OperationEntity, ServerConfigEntity};
 use super::PolicyEvaluationError;
 use cedar_policy::{
-    Authorizer, Context, Entities, Entity, EntityId, EntityTypeName, EntityUid,
-    PolicySet, Request, Schema,
+    Authorizer, Context, Entities, Entity, EntityId, EntityTypeName, EntityUid, PolicySet, Request,
+    Schema,
 };
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
@@ -36,18 +34,26 @@ pub struct CedarPolicyEvaluator {
 impl CedarPolicyEvaluator {
     /// Create a new evaluator from config.
     pub fn new(config: CedarPolicyConfig) -> Result<Self, PolicyEvaluationError> {
-        let schema_json = serde_json::to_string(&config.schema_json)
-            .map_err(|e| PolicyEvaluationError::ConfigError(format!("Invalid schema JSON: {}", e)))?;
+        let schema_json = serde_json::to_string(&config.schema_json).map_err(|e| {
+            PolicyEvaluationError::ConfigError(format!("Invalid schema JSON: {}", e))
+        })?;
 
-        let schema = Schema::from_json_str(&schema_json)
-            .map_err(|e| PolicyEvaluationError::ConfigError(format!("Invalid Cedar schema: {}", e)))?;
+        let schema = Schema::from_json_str(&schema_json).map_err(|e| {
+            PolicyEvaluationError::ConfigError(format!("Invalid Cedar schema: {}", e))
+        })?;
 
         let mut policy_set = PolicySet::new();
         for (id, _description, policy_text) in &config.policies {
-            let policy = cedar_policy::Policy::parse(Some(cedar_policy::PolicyId::from_str(id).unwrap()), policy_text)
-                .map_err(|e| PolicyEvaluationError::ConfigError(format!("Invalid policy '{}': {}", id, e)))?;
-            policy_set.add(policy)
-                .map_err(|e| PolicyEvaluationError::ConfigError(format!("Duplicate policy '{}': {}", id, e)))?;
+            let policy = cedar_policy::Policy::parse(
+                Some(cedar_policy::PolicyId::from_str(id).unwrap()),
+                policy_text,
+            )
+            .map_err(|e| {
+                PolicyEvaluationError::ConfigError(format!("Invalid policy '{}': {}", id, e))
+            })?;
+            policy_set.add(policy).map_err(|e| {
+                PolicyEvaluationError::ConfigError(format!("Duplicate policy '{}': {}", id, e))
+            })?;
         }
 
         Ok(Self {
@@ -81,33 +87,54 @@ impl CedarPolicyEvaluator {
 
         let mut attrs: HashMap<String, cedar_policy::RestrictedExpression> = HashMap::new();
 
-        attrs.insert("operationType".to_string(),
-            cedar_policy::RestrictedExpression::new_string(operation.operation_type.clone()));
-        attrs.insert("operationName".to_string(),
-            cedar_policy::RestrictedExpression::new_string(operation.operation_name.clone()));
-        attrs.insert("depth".to_string(),
-            cedar_policy::RestrictedExpression::new_long(operation.depth as i64));
-        attrs.insert("fieldCount".to_string(),
-            cedar_policy::RestrictedExpression::new_long(operation.field_count as i64));
-        attrs.insert("estimatedCost".to_string(),
-            cedar_policy::RestrictedExpression::new_long(operation.estimated_cost as i64));
-        attrs.insert("hasIntrospection".to_string(),
-            cedar_policy::RestrictedExpression::new_bool(operation.has_introspection));
-        attrs.insert("accessesSensitiveData".to_string(),
-            cedar_policy::RestrictedExpression::new_bool(operation.accesses_sensitive_data));
+        attrs.insert(
+            "operationType".to_string(),
+            cedar_policy::RestrictedExpression::new_string(operation.operation_type.clone()),
+        );
+        attrs.insert(
+            "operationName".to_string(),
+            cedar_policy::RestrictedExpression::new_string(operation.operation_name.clone()),
+        );
+        attrs.insert(
+            "depth".to_string(),
+            cedar_policy::RestrictedExpression::new_long(operation.depth as i64),
+        );
+        attrs.insert(
+            "fieldCount".to_string(),
+            cedar_policy::RestrictedExpression::new_long(operation.field_count as i64),
+        );
+        attrs.insert(
+            "estimatedCost".to_string(),
+            cedar_policy::RestrictedExpression::new_long(operation.estimated_cost as i64),
+        );
+        attrs.insert(
+            "hasIntrospection".to_string(),
+            cedar_policy::RestrictedExpression::new_bool(operation.has_introspection),
+        );
+        attrs.insert(
+            "accessesSensitiveData".to_string(),
+            cedar_policy::RestrictedExpression::new_bool(operation.accesses_sensitive_data),
+        );
 
         // Set attributes
-        attrs.insert("rootFields".to_string(),
-            Self::string_set_expr(&operation.root_fields));
-        attrs.insert("accessedTypes".to_string(),
-            Self::string_set_expr(&operation.accessed_types));
-        attrs.insert("accessedFields".to_string(),
-            Self::string_set_expr(&operation.accessed_fields));
-        attrs.insert("sensitiveCategories".to_string(),
-            Self::string_set_expr(&operation.sensitive_categories));
+        attrs.insert(
+            "rootFields".to_string(),
+            Self::string_set_expr(&operation.root_fields),
+        );
+        attrs.insert(
+            "accessedTypes".to_string(),
+            Self::string_set_expr(&operation.accessed_types),
+        );
+        attrs.insert(
+            "accessedFields".to_string(),
+            Self::string_set_expr(&operation.accessed_fields),
+        );
+        attrs.insert(
+            "sensitiveCategories".to_string(),
+            Self::string_set_expr(&operation.sensitive_categories),
+        );
 
-        Entity::new(uid, attrs, HashSet::new())
-            .expect("valid entity")
+        Entity::new(uid, attrs, HashSet::new()).expect("valid entity")
     }
 
     fn build_server_entity(&self, config: &ServerConfigEntity) -> Entity {
@@ -118,37 +145,59 @@ impl CedarPolicyEvaluator {
 
         let mut attrs: HashMap<String, cedar_policy::RestrictedExpression> = HashMap::new();
 
-        attrs.insert("serverId".to_string(),
-            cedar_policy::RestrictedExpression::new_string(config.server_id.clone()));
-        attrs.insert("serverType".to_string(),
-            cedar_policy::RestrictedExpression::new_string(config.server_type.clone()));
-        attrs.insert("allowWrite".to_string(),
-            cedar_policy::RestrictedExpression::new_bool(config.allow_write));
-        attrs.insert("allowDelete".to_string(),
-            cedar_policy::RestrictedExpression::new_bool(config.allow_delete));
-        attrs.insert("allowAdmin".to_string(),
-            cedar_policy::RestrictedExpression::new_bool(config.allow_admin));
-        attrs.insert("maxDepth".to_string(),
-            cedar_policy::RestrictedExpression::new_long(config.max_depth as i64));
-        attrs.insert("maxCost".to_string(),
-            cedar_policy::RestrictedExpression::new_long(config.max_cost as i64));
-        attrs.insert("maxApiCalls".to_string(),
-            cedar_policy::RestrictedExpression::new_long(config.max_api_calls as i64));
+        attrs.insert(
+            "serverId".to_string(),
+            cedar_policy::RestrictedExpression::new_string(config.server_id.clone()),
+        );
+        attrs.insert(
+            "serverType".to_string(),
+            cedar_policy::RestrictedExpression::new_string(config.server_type.clone()),
+        );
+        attrs.insert(
+            "allowWrite".to_string(),
+            cedar_policy::RestrictedExpression::new_bool(config.allow_write),
+        );
+        attrs.insert(
+            "allowDelete".to_string(),
+            cedar_policy::RestrictedExpression::new_bool(config.allow_delete),
+        );
+        attrs.insert(
+            "allowAdmin".to_string(),
+            cedar_policy::RestrictedExpression::new_bool(config.allow_admin),
+        );
+        attrs.insert(
+            "maxDepth".to_string(),
+            cedar_policy::RestrictedExpression::new_long(config.max_depth as i64),
+        );
+        attrs.insert(
+            "maxCost".to_string(),
+            cedar_policy::RestrictedExpression::new_long(config.max_cost as i64),
+        );
+        attrs.insert(
+            "maxApiCalls".to_string(),
+            cedar_policy::RestrictedExpression::new_long(config.max_api_calls as i64),
+        );
 
-        attrs.insert("allowedOperations".to_string(),
-            Self::string_set_expr(&config.allowed_operations));
-        attrs.insert("blockedOperations".to_string(),
-            Self::string_set_expr(&config.blocked_operations));
-        attrs.insert("blockedFields".to_string(),
-            Self::string_set_expr(&config.blocked_fields));
+        attrs.insert(
+            "allowedOperations".to_string(),
+            Self::string_set_expr(&config.allowed_operations),
+        );
+        attrs.insert(
+            "blockedOperations".to_string(),
+            Self::string_set_expr(&config.blocked_operations),
+        );
+        attrs.insert(
+            "blockedFields".to_string(),
+            Self::string_set_expr(&config.blocked_fields),
+        );
 
-        Entity::new(uid, attrs, HashSet::new())
-            .expect("valid entity")
+        Entity::new(uid, attrs, HashSet::new()).expect("valid entity")
     }
 
     fn string_set_expr(set: &HashSet<String>) -> cedar_policy::RestrictedExpression {
         cedar_policy::RestrictedExpression::new_set(
-            set.iter().map(|s| cedar_policy::RestrictedExpression::new_string(s.clone()))
+            set.iter()
+                .map(|s| cedar_policy::RestrictedExpression::new_string(s.clone())),
         )
     }
 }
@@ -180,7 +229,7 @@ impl super::PolicyEvaluator for CedarPolicyEvaluator {
                     } else {
                         "Write"
                     }
-                }
+                },
                 "subscription" => "Write",
                 _ => "Read",
             }
@@ -203,21 +252,23 @@ impl super::PolicyEvaluator for CedarPolicyEvaluator {
             .map_err(|e| PolicyEvaluationError::EvaluationError(format!("Entity error: {}", e)))?;
 
         let context = Context::from_pairs([
-            ("serverId".to_string(), cedar_policy::RestrictedExpression::new_string(server_config.server_id.clone())),
-            ("serverType".to_string(), cedar_policy::RestrictedExpression::new_string(server_config.server_type.clone())),
+            (
+                "serverId".to_string(),
+                cedar_policy::RestrictedExpression::new_string(server_config.server_id.clone()),
+            ),
+            (
+                "serverType".to_string(),
+                cedar_policy::RestrictedExpression::new_string(server_config.server_type.clone()),
+            ),
         ])
-            .map_err(|e| PolicyEvaluationError::EvaluationError(format!("Context error: {}", e)))?;
+        .map_err(|e| PolicyEvaluationError::EvaluationError(format!("Context error: {}", e)))?;
 
-        let request = Request::new(
-            principal,
-            action,
-            resource,
-            context,
-            Some(&self.schema),
-        )
-        .map_err(|e| PolicyEvaluationError::EvaluationError(format!("Request error: {}", e)))?;
+        let request = Request::new(principal, action, resource, context, Some(&self.schema))
+            .map_err(|e| PolicyEvaluationError::EvaluationError(format!("Request error: {}", e)))?;
 
-        let response = self.authorizer.is_authorized(&request, &self.policy_set, &entities);
+        let response = self
+            .authorizer
+            .is_authorized(&request, &self.policy_set, &entities);
 
         let allowed = matches!(response.decision(), cedar_policy::Decision::Allow);
 
@@ -247,8 +298,8 @@ impl super::PolicyEvaluator for CedarPolicyEvaluator {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::PolicyEvaluator;
+    use super::*;
 
     #[tokio::test]
     async fn test_cedar_evaluator_permits_reads() {
@@ -260,7 +311,9 @@ mod tests {
             operation_name: "GetUsers".to_string(),
             root_fields: ["users".to_string()].into_iter().collect(),
             accessed_types: ["User".to_string()].into_iter().collect(),
-            accessed_fields: ["User.id".to_string(), "User.name".to_string()].into_iter().collect(),
+            accessed_fields: ["User.id".to_string(), "User.name".to_string()]
+                .into_iter()
+                .collect(),
             depth: 2,
             field_count: 2,
             estimated_cost: 2,
@@ -271,8 +324,14 @@ mod tests {
 
         let server_config = ServerConfigEntity::default();
 
-        let decision = evaluator.evaluate_operation(&operation, &server_config).await.unwrap();
-        assert!(decision.allowed, "Read queries should be permitted by default");
+        let decision = evaluator
+            .evaluate_operation(&operation, &server_config)
+            .await
+            .unwrap();
+        assert!(
+            decision.allowed,
+            "Read queries should be permitted by default"
+        );
     }
 
     #[tokio::test]
@@ -299,7 +358,13 @@ mod tests {
             ..Default::default()
         };
 
-        let decision = evaluator.evaluate_operation(&operation, &server_config).await.unwrap();
-        assert!(!decision.allowed, "Mutations should be denied when allow_write is false");
+        let decision = evaluator
+            .evaluate_operation(&operation, &server_config)
+            .await
+            .unwrap();
+        assert!(
+            !decision.allowed,
+            "Mutations should be denied when allow_write is false"
+        );
     }
 }

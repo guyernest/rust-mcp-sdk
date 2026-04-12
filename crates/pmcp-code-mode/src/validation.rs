@@ -287,7 +287,9 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
             let decision = evaluator
                 .evaluate_operation(&operation_entity, &server_config)
                 .await
-                .map_err(|e| ValidationError::InternalError(format!("Policy evaluation error: {}", e)))?;
+                .map_err(|e| {
+                    ValidationError::InternalError(format!("Policy evaluation error: {}", e))
+                })?;
 
             if !decision.allowed {
                 let violations: Vec<PolicyViolation> = decision
@@ -572,9 +574,9 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
                     (UnifiedAction::Read, _) => max_action = inferred,
                     (UnifiedAction::Write, UnifiedAction::Delete | UnifiedAction::Admin) => {
                         max_action = inferred
-                    }
+                    },
                     (UnifiedAction::Delete, UnifiedAction::Admin) => max_action = inferred,
-                    _ => {}
+                    _ => {},
                 }
             }
             Some(max_action)

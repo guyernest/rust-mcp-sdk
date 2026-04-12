@@ -64,7 +64,8 @@ impl CodeExecutor for GraphQLExecutor {
 struct MyGraphQLServer {
     code_mode_config: CodeModeConfig,
     token_secret: TokenSecret,
-    #[allow(dead_code)] // Required by #[derive(CodeMode)] convention; used when policy evaluation is wired
+    #[allow(dead_code)]
+    // Required by #[derive(CodeMode)] convention; used when policy evaluation is wired
     policy_evaluator: Arc<NoopPolicyEvaluator>,
     code_executor: Arc<GraphQLExecutor>,
 }
@@ -131,10 +132,10 @@ async fn main() {
                     Err(e) => println!("\nExecution error: {e:?}"),
                 }
             }
-        }
+        },
         Err(e) => {
             println!("Validation: FAILED - {e:?}");
-        }
+        },
     }
 
     // --- REJECTION PATH ---
@@ -158,11 +159,11 @@ async fn main() {
                     result.approval_token.is_some()
                 );
             }
-        }
+        },
         Err(e) => {
             println!("Validation: REJECTED (expected) - {e:?}");
             println!("This demonstrates that invalid code does NOT receive an approval token.");
-        }
+        },
     }
 
     println!("\n=== Example Complete ===");

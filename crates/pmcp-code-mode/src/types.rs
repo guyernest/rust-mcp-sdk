@@ -97,7 +97,7 @@ impl UnifiedAction {
                     }
                 }
                 Self::Write
-            }
+            },
             _ => Self::Read,
         }
     }

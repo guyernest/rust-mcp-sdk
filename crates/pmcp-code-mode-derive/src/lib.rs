@@ -1,3 +1,6 @@
+// Allow needless_continue from darling's generated derive code
+#![allow(clippy::needless_continue)]
+
 //! Derive macro for Code Mode validation and execution in MCP servers.
 //!
 //! Provides `#[derive(CodeMode)]` which generates a `register_code_mode_tools`
@@ -93,27 +96,27 @@ struct CodeModeField {
 #[proc_macro_derive(CodeMode, attributes(code_mode))]
 pub fn code_mode_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    expand_code_mode(input)
+    expand_code_mode(&input)
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }
 
 /// Core expansion logic for `#[derive(CodeMode)]`.
-fn expand_code_mode(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
-    let opts = CodeModeOpts::from_derive_input(&input)
-        .map_err(|e| syn::Error::new_spanned(&input, e.to_string()))?;
+fn expand_code_mode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let opts = CodeModeOpts::from_derive_input(input)
+        .map_err(|e| syn::Error::new_spanned(input, e.to_string()))?;
 
     let struct_name = &opts.ident;
 
     // Extract named fields
     let fields = match &opts.data {
         darling::ast::Data::Struct(ref fields) => &fields.fields,
-        _ => {
+        darling::ast::Data::Enum(_) => {
             return Err(syn::Error::new_spanned(
-                &input,
+                input,
                 "#[derive(CodeMode)] can only be applied to structs with named fields",
             ));
-        }
+        },
     };
 
     let field_names: Vec<String> = fields

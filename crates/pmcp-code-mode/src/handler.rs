@@ -241,7 +241,7 @@ pub trait CodeModeHandler: Send + Sync {
             "validate_code" => {
                 self.handle_validate_code(arguments, user_id, session_id)
                     .await
-            }
+            },
             "execute_code" => self.handle_execute_code(arguments).await,
             _ => Err(format!("Unknown Code Mode tool: {}", name)),
         }

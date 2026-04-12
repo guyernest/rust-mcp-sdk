@@ -148,11 +148,11 @@ impl GraphQLValidator {
                     }
                     found_operation = true;
                     self.extract_operation_info(op, &mut info)?;
-                }
+                },
                 Definition::Fragment(frag) => {
                     info.has_fragments = true;
                     info.fragment_names.push(frag.name.to_string());
-                }
+                },
             }
         }
 
@@ -184,7 +184,7 @@ impl GraphQLValidator {
                     .map(|v| v.name.to_string())
                     .collect();
                 self.extract_selection_set(&q.selection_set, info, 1)?;
-            }
+            },
             OperationDefinition::Mutation(m) => {
                 info.operation_type = GraphQLOperationType::Mutation;
                 info.operation_name = m.name.map(|s| s.to_string());
@@ -195,7 +195,7 @@ impl GraphQLValidator {
                     .map(|v| v.name.to_string())
                     .collect();
                 self.extract_selection_set(&m.selection_set, info, 1)?;
-            }
+            },
             OperationDefinition::Subscription(s) => {
                 info.operation_type = GraphQLOperationType::Subscription;
                 info.operation_name = s.name.map(|s| s.to_string());
@@ -206,12 +206,12 @@ impl GraphQLValidator {
                     .map(|v| v.name.to_string())
                     .collect();
                 self.extract_selection_set(&s.selection_set, info, 1)?;
-            }
+            },
             OperationDefinition::SelectionSet(ss) => {
                 // Anonymous query
                 info.operation_type = GraphQLOperationType::Query;
                 self.extract_selection_set(ss, info, 1)?;
-            }
+            },
         }
         Ok(())
     }
@@ -252,16 +252,16 @@ impl GraphQLValidator {
 
                     // Recurse into nested selections
                     self.extract_selection_set(&field.selection_set, info, depth + 1)?;
-                }
+                },
                 Selection::FragmentSpread(spread) => {
                     info.fragment_names.push(spread.fragment_name.to_string());
-                }
+                },
                 Selection::InlineFragment(inline) => {
                     if let Some(type_cond) = &inline.type_condition {
                         info.types_accessed.insert(type_cond.to_string());
                     }
                     self.extract_selection_set(&inline.selection_set, info, depth + 1)?;
-                }
+                },
             }
         }
 

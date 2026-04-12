@@ -223,21 +223,21 @@ pub fn infer_category_and_risk_from_cedar(cedar: &str) -> (PolicyCategory, Polic
             } else {
                 PolicyRiskLevel::Low // Forbidding deletes is protective
             }
-        }
+        },
         PolicyCategory::Write => {
             if is_permit {
                 PolicyRiskLevel::Medium // Permitting writes is medium risk
             } else {
                 PolicyRiskLevel::Low // Forbidding writes is protective
             }
-        }
+        },
         PolicyCategory::Admin => {
             if is_permit {
                 PolicyRiskLevel::High // Permitting admin is high risk
             } else {
                 PolicyRiskLevel::Medium // Forbidding admin is protective but important
             }
-        }
+        },
         PolicyCategory::Read => PolicyRiskLevel::Low, // Reads are generally low risk
         PolicyCategory::Fields => PolicyRiskLevel::Medium, // Field restrictions are medium
     };
@@ -327,20 +327,20 @@ impl fmt::Display for PolicyValidationError {
         match self {
             PolicyValidationError::MissingAnnotation(ann) => {
                 write!(f, "Missing required annotation: {}", ann)
-            }
+            },
             PolicyValidationError::InvalidAnnotation {
                 annotation,
                 message,
             } => {
                 write!(f, "Invalid {}: {}", annotation, message)
-            }
+            },
             PolicyValidationError::CedarSyntaxError { line, message } => {
                 if let Some(line) = line {
                     write!(f, "Cedar syntax error at line {}: {}", line, message)
                 } else {
                     write!(f, "Cedar syntax error: {}", message)
                 }
-            }
+            },
         }
     }
 }
@@ -392,34 +392,34 @@ pub fn parse_policy_annotations(cedar: &str, policy_id: &str) -> PolicyMetadata 
                             metadata.is_baseline = true;
                             metadata.editable = false;
                         }
-                    }
+                    },
                     "description" => {
                         metadata.description = value.to_string();
                         in_description = true;
-                    }
+                    },
                     "category" => {
                         metadata.category = value.parse().unwrap_or_default();
                         found_category = true;
-                    }
+                    },
                     "risk" => {
                         metadata.risk = value.parse().unwrap_or_default();
                         found_risk = true;
-                    }
+                    },
                     "editable" => {
                         metadata.editable = value.eq_ignore_ascii_case("true");
-                    }
+                    },
                     "reason" => {
                         metadata.reason = Some(value.to_string());
-                    }
+                    },
                     "author" => {
                         metadata.author = Some(value.to_string());
-                    }
+                    },
                     "modified" => {
                         metadata.modified = Some(value.to_string());
-                    }
+                    },
                     _ => {
                         // Unknown annotation, ignore
-                    }
+                    },
                 }
             }
         } else if let Some(content) = line.strip_prefix("/// ") {

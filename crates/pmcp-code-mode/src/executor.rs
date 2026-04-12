@@ -119,7 +119,7 @@ pub fn filter_blocked_fields(value: JsonValue, blocked_fields: &HashSet<String>)
                 .collect();
 
             JsonValue::Object(filtered)
-        }
+        },
         JsonValue::Array(arr) => {
             // Recursively filter each element
             let filtered: Vec<JsonValue> = arr
@@ -128,7 +128,7 @@ pub fn filter_blocked_fields(value: JsonValue, blocked_fields: &HashSet<String>)
                 .collect();
 
             JsonValue::Array(filtered)
-        }
+        },
         // Non-container values pass through unchanged
         other => other,
     }
@@ -189,7 +189,7 @@ fn find_blocked_fields_recursive(
                 };
                 find_blocked_fields_recursive(v, blocked_fields, &new_path, violations);
             }
-        }
+        },
         JsonValue::Array(arr) => {
             for (i, v) in arr.iter().enumerate() {
                 let new_path = if path.is_empty() {
@@ -199,9 +199,9 @@ fn find_blocked_fields_recursive(
                 };
                 find_blocked_fields_recursive(v, blocked_fields, &new_path, violations);
             }
-        }
+        },
         // Non-container values don't need checking
-        _ => {}
+        _ => {},
     }
 }
 
@@ -735,12 +735,12 @@ impl PlanCompiler {
             match item {
                 ModuleItem::Stmt(stmt) => {
                     self.compile_statement(stmt, &mut steps)?;
-                }
+                },
                 _ => {
                     return Err(CompileError::UnsupportedStatement(
                         "import/export not allowed".into(),
                     ));
-                }
+                },
             }
         }
 
@@ -773,22 +773,22 @@ impl PlanCompiler {
                             Pat::Ident(ident) => {
                                 let var_name = ident.id.sym.to_string();
                                 self.compile_var_init(&var_name, init, steps)?;
-                            }
+                            },
                             Pat::Object(obj_pat) => {
                                 self.compile_object_destructuring(obj_pat, init, steps)?;
-                            }
+                            },
                             Pat::Array(arr_pat) => {
                                 self.compile_array_destructuring(arr_pat, init, steps)?;
-                            }
+                            },
                             _ => {
                                 return Err(CompileError::UnsupportedExpression(
                                     "complex destructuring pattern".into(),
                                 ));
-                            }
+                            },
                         }
                     }
                 }
-            }
+            },
 
             // Expression statement: await api.get(...), items.push(x), x = expr, etc.
             Stmt::Expr(expr_stmt) => {
@@ -814,7 +814,7 @@ impl PlanCompiler {
                             path,
                             body: body.map(|b| *b),
                         });
-                    }
+                    },
                     // SDK calls at statement level (discarded result)
                     ValueExpr::SdkCall { operation, args } => {
                         steps.push(PlanStep::SdkCall {
@@ -822,7 +822,7 @@ impl PlanCompiler {
                             operation,
                             args: args.map(|a| *a),
                         });
-                    }
+                    },
                     // Mutating array methods (push, concat) as statements:
                     // `items.push(x)` → assign the new array back to the variable
                     ValueExpr::ArrayMethod {
@@ -841,11 +841,11 @@ impl PlanCompiler {
                         }
                         // If array is not a simple variable (e.g., obj.arr.push(x)),
                         // silently discard — same as before.
-                    }
+                    },
                     // Other expressions at statement level are discarded
-                    _ => {}
+                    _ => {},
                 }
-            }
+            },
 
             // If statement
             Stmt::If(if_stmt) => {
@@ -863,7 +863,7 @@ impl PlanCompiler {
                     then_steps,
                     else_steps,
                 });
-            }
+            },
 
             // For-of statement: for (const x of arr) { ... } or for (const { a, b } of arr) { ... }
             Stmt::ForOf(for_of) => {
@@ -874,7 +874,7 @@ impl PlanCompiler {
                         } else {
                             return Err(CompileError::MissingVariableName);
                         }
-                    }
+                    },
                     ForHead::Pat(pat) => self.extract_loop_var(pat)?,
                     _ => return Err(CompileError::MissingVariableName),
                 };
@@ -893,14 +893,14 @@ impl PlanCompiler {
                     max_iterations,
                     body,
                 });
-            }
+            },
 
             // Block statement: { ... }
             Stmt::Block(block) => {
                 for stmt in &block.stmts {
                     self.compile_statement(stmt, steps)?;
                 }
-            }
+            },
 
             // Return statement
             Stmt::Return(ret) => {
@@ -910,10 +910,10 @@ impl PlanCompiler {
                     ValueExpr::Literal(JsonValue::Null)
                 };
                 steps.push(PlanStep::Return { value });
-            }
+            },
 
             // Empty statement
-            Stmt::Empty(_) => {}
+            Stmt::Empty(_) => {},
 
             // Try/catch statement
             Stmt::Try(try_stmt) => {
@@ -952,17 +952,17 @@ impl PlanCompiler {
                     catch_steps,
                     finally_steps,
                 });
-            }
+            },
 
             // Continue statement: skip to next loop iteration
             Stmt::Continue(_) => {
                 steps.push(PlanStep::Continue);
-            }
+            },
 
             // Break statement: exit the current loop
             Stmt::Break(_) => {
                 steps.push(PlanStep::Break);
-            }
+            },
 
             Stmt::Decl(decl) => {
                 let msg = match decl {
@@ -971,52 +971,52 @@ impl PlanCompiler {
                     _ => "This declaration type is not supported",
                 };
                 return Err(CompileError::UnsupportedStatement(msg.into()));
-            }
+            },
             Stmt::Switch(_) => {
                 return Err(CompileError::UnsupportedStatement(
                     "'switch' statements are not supported. Use if/else if/else instead".into(),
                 ));
-            }
+            },
             Stmt::Throw(_) => {
                 return Err(CompileError::UnsupportedStatement(
                     "'throw' statements are not supported. Use try/catch for error handling".into(),
                 ));
-            }
+            },
             Stmt::While(_) => {
                 return Err(CompileError::UnsupportedStatement(
                     "'while' loops are not supported. Use for-of with .slice() instead: for (const item of array.slice(0, N)) { }".into(),
                 ));
-            }
+            },
             Stmt::DoWhile(_) => {
                 return Err(CompileError::UnsupportedStatement(
                     "'do-while' loops are not supported. Use for-of with .slice() instead: for (const item of array.slice(0, N)) { }".into(),
                 ));
-            }
+            },
             Stmt::For(_) => {
                 return Err(CompileError::UnsupportedStatement(
                     "'for(;;)' loops are not supported. Use for-of with .slice() instead: for (const item of array.slice(0, N)) { }".into(),
                 ));
-            }
+            },
             Stmt::ForIn(_) => {
                 return Err(CompileError::UnsupportedStatement(
                     "'for-in' loops are not supported. Use for-of with .slice() instead".into(),
                 ));
-            }
+            },
             Stmt::Labeled(_) => {
                 return Err(CompileError::UnsupportedStatement(
                     "Labeled statements are not supported".into(),
                 ));
-            }
+            },
             Stmt::With(_) => {
                 return Err(CompileError::UnsupportedStatement(
                     "'with' statements are not supported".into(),
                 ));
-            }
+            },
             Stmt::Debugger(_) => {
                 return Err(CompileError::UnsupportedStatement(
                     "'debugger' statements are not supported".into(),
                 ));
-            }
+            },
         }
 
         Ok(())
@@ -1041,14 +1041,14 @@ impl PlanCompiler {
                             path,
                             body,
                         });
-                    }
+                    },
                     ExtractedCall::Sdk { operation, args } => {
                         steps.push(PlanStep::SdkCall {
                             result_var: var_name.into(),
                             operation,
                             args,
                         });
-                    }
+                    },
                 }
                 return Ok(());
             }
@@ -1106,11 +1106,11 @@ impl PlanCompiler {
                         path.clone(),
                         body.as_ref().map(|b| *b.clone()),
                     ));
-                }
+                },
                 _ => {
                     all_api_calls = false;
                     break;
-                }
+                },
             }
         }
 
@@ -1394,13 +1394,11 @@ impl PlanCompiler {
                         path,
                         body: body.map(Box::new),
                     })
-                }
-                ExtractedCall::Sdk { operation, args } => {
-                    Ok(ValueExpr::SdkCall {
-                        operation,
-                        args: args.map(Box::new),
-                    })
-                }
+                },
+                ExtractedCall::Sdk { operation, args } => Ok(ValueExpr::SdkCall {
+                    operation,
+                    args: args.map(Box::new),
+                }),
             };
         }
 
@@ -1459,7 +1457,7 @@ impl PlanCompiler {
                                     body: Box::new(body),
                                 },
                             });
-                        }
+                        },
                         "filter" => {
                             let (item_var, predicate) = self.extract_arrow_callback(call)?;
                             return Ok(ValueExpr::ArrayMethod {
@@ -1469,7 +1467,7 @@ impl PlanCompiler {
                                     predicate: Box::new(predicate),
                                 },
                             });
-                        }
+                        },
                         "find" => {
                             let (item_var, predicate) = self.extract_arrow_callback(call)?;
                             return Ok(ValueExpr::ArrayMethod {
@@ -1479,7 +1477,7 @@ impl PlanCompiler {
                                     predicate: Box::new(predicate),
                                 },
                             });
-                        }
+                        },
                         "some" => {
                             let (item_var, predicate) = self.extract_arrow_callback(call)?;
                             return Ok(ValueExpr::ArrayMethod {
@@ -1489,7 +1487,7 @@ impl PlanCompiler {
                                     predicate: Box::new(predicate),
                                 },
                             });
-                        }
+                        },
                         "every" => {
                             let (item_var, predicate) = self.extract_arrow_callback(call)?;
                             return Ok(ValueExpr::ArrayMethod {
@@ -1499,7 +1497,7 @@ impl PlanCompiler {
                                     predicate: Box::new(predicate),
                                 },
                             });
-                        }
+                        },
                         "flatMap" => {
                             let (item_var, body) = self.extract_arrow_callback(call)?;
                             return Ok(ValueExpr::ArrayMethod {
@@ -1509,7 +1507,7 @@ impl PlanCompiler {
                                     body: Box::new(body),
                                 },
                             });
-                        }
+                        },
                         "slice" => {
                             let start = self.extract_number_arg(call, 0)?.unwrap_or(0) as usize;
                             let end = self.extract_number_arg(call, 1)?.map(|n| n as usize);
@@ -1517,7 +1515,7 @@ impl PlanCompiler {
                                 array,
                                 method: ArrayMethodCall::Slice { start, end },
                             });
-                        }
+                        },
                         "push" => {
                             if let Some(arg) = call.args.first() {
                                 let item = Box::new(self.compile_expr(&arg.expr)?);
@@ -1526,7 +1524,7 @@ impl PlanCompiler {
                                     method: ArrayMethodCall::Push { item },
                                 });
                             }
-                        }
+                        },
                         "concat" => {
                             if let Some(arg) = call.args.first() {
                                 let other = Box::new(self.compile_expr(&arg.expr)?);
@@ -1535,7 +1533,7 @@ impl PlanCompiler {
                                     method: ArrayMethodCall::Concat { other },
                                 });
                             }
-                        }
+                        },
                         "includes" => {
                             if let Some(arg) = call.args.first() {
                                 let item = Box::new(self.compile_expr(&arg.expr)?);
@@ -1544,7 +1542,7 @@ impl PlanCompiler {
                                     method: ArrayMethodCall::Includes { item },
                                 });
                             }
-                        }
+                        },
                         "indexOf" => {
                             if let Some(arg) = call.args.first() {
                                 let item = Box::new(self.compile_expr(&arg.expr)?);
@@ -1553,7 +1551,7 @@ impl PlanCompiler {
                                     method: ArrayMethodCall::IndexOf { item },
                                 });
                             }
-                        }
+                        },
                         "join" => {
                             let separator = if let Some(arg) = call.args.first() {
                                 if let Expr::Lit(Lit::Str(s)) = arg.expr.as_ref() {
@@ -1568,17 +1566,16 @@ impl PlanCompiler {
                                 array,
                                 method: ArrayMethodCall::Join { separator },
                             });
-                        }
+                        },
                         "reverse" => {
                             return Ok(ValueExpr::ArrayMethod {
                                 array,
                                 method: ArrayMethodCall::Reverse,
                             });
-                        }
+                        },
                         "sort" => {
                             let comparator = if !call.args.is_empty() {
-                                let (a_var, b_var, body) =
-                                    self.extract_reduce_callback(call)?;
+                                let (a_var, b_var, body) = self.extract_reduce_callback(call)?;
                                 Some((a_var, b_var, Box::new(body)))
                             } else {
                                 None
@@ -1587,13 +1584,13 @@ impl PlanCompiler {
                                 array,
                                 method: ArrayMethodCall::Sort { comparator },
                             });
-                        }
+                        },
                         "flat" => {
                             return Ok(ValueExpr::ArrayMethod {
                                 array,
                                 method: ArrayMethodCall::Flat,
                             });
-                        }
+                        },
                         "at" => {
                             if let Some(n) = self.extract_number_arg(call, 0)? {
                                 if n == 0 {
@@ -1608,7 +1605,7 @@ impl PlanCompiler {
                                     });
                                 }
                             }
-                        }
+                        },
                         "reduce" => {
                             // reduce((acc, item) => expr, initialValue)
                             if call.args.len() >= 2 {
@@ -1625,7 +1622,7 @@ impl PlanCompiler {
                                     },
                                 });
                             }
-                        }
+                        },
                         "toFixed" => {
                             // Number.toFixed(digits) - treat as a number method
                             let digits = self.extract_number_arg(call, 0)?.unwrap_or(0) as usize;
@@ -1633,19 +1630,19 @@ impl PlanCompiler {
                                 number: array, // The "array" here is actually the number
                                 method: NumberMethodCall::ToFixed { digits },
                             });
-                        }
+                        },
                         "toLowerCase" => {
                             return Ok(ValueExpr::ArrayMethod {
                                 array,
                                 method: ArrayMethodCall::ToLowerCase,
                             });
-                        }
+                        },
                         "toUpperCase" => {
                             return Ok(ValueExpr::ArrayMethod {
                                 array,
                                 method: ArrayMethodCall::ToUpperCase,
                             });
-                        }
+                        },
                         "startsWith" => {
                             let arg = call.args.first().ok_or_else(|| {
                                 CompileError::UnsupportedExpression(
@@ -1657,7 +1654,7 @@ impl PlanCompiler {
                                 array,
                                 method: ArrayMethodCall::StartsWith { search },
                             });
-                        }
+                        },
                         "endsWith" => {
                             let arg = call.args.first().ok_or_else(|| {
                                 CompileError::UnsupportedExpression(
@@ -1669,13 +1666,13 @@ impl PlanCompiler {
                                 array,
                                 method: ArrayMethodCall::EndsWith { search },
                             });
-                        }
+                        },
                         "trim" => {
                             return Ok(ValueExpr::ArrayMethod {
                                 array,
                                 method: ArrayMethodCall::Trim,
                             });
-                        }
+                        },
                         "replace" => {
                             if call.args.len() < 2 {
                                 return Err(CompileError::UnsupportedExpression(
@@ -1683,8 +1680,7 @@ impl PlanCompiler {
                                 ));
                             }
                             let search = Box::new(self.compile_expr(&call.args[0].expr)?);
-                            let replacement =
-                                Box::new(self.compile_expr(&call.args[1].expr)?);
+                            let replacement = Box::new(self.compile_expr(&call.args[1].expr)?);
                             return Ok(ValueExpr::ArrayMethod {
                                 array,
                                 method: ArrayMethodCall::Replace {
@@ -1692,7 +1688,7 @@ impl PlanCompiler {
                                     replacement,
                                 },
                             });
-                        }
+                        },
                         "split" => {
                             let arg = call.args.first().ok_or_else(|| {
                                 CompileError::UnsupportedExpression(
@@ -1704,7 +1700,7 @@ impl PlanCompiler {
                                 array,
                                 method: ArrayMethodCall::Split { separator },
                             });
-                        }
+                        },
                         "substring" => {
                             let arg = call.args.first().ok_or_else(|| {
                                 CompileError::UnsupportedExpression(
@@ -1721,14 +1717,14 @@ impl PlanCompiler {
                                 array,
                                 method: ArrayMethodCall::Substring { start, end },
                             });
-                        }
+                        },
                         "toString" => {
                             return Ok(ValueExpr::ArrayMethod {
                                 array,
                                 method: ArrayMethodCall::ToString,
                             });
-                        }
-                        _ => {}
+                        },
+                        _ => {},
                     }
                 }
             }
@@ -1785,10 +1781,7 @@ impl PlanCompiler {
         Err(CompileError::UnsupportedExpression("function call".into()))
     }
 
-    fn try_extract_api_call(
-        &mut self,
-        expr: &Expr,
-    ) -> Result<Option<ExtractedCall>, CompileError> {
+    fn try_extract_api_call(&mut self, expr: &Expr) -> Result<Option<ExtractedCall>, CompileError> {
         let call = match expr {
             Expr::Call(c) => c,
             _ => return Ok(None),
@@ -1956,7 +1949,7 @@ impl PlanCompiler {
                     }
                 }
                 Ok(PathTemplate { parts })
-            }
+            },
 
             _ => Err(CompileError::InvalidPath(
                 "Path must be a string or template literal".into(),
@@ -2002,19 +1995,19 @@ impl PlanCompiler {
                                         bindings.push((var_name, expr));
                                     }
                                 }
-                            }
+                            },
                             // Return statement
                             Stmt::Return(ret) => {
                                 if let Some(arg) = &ret.arg {
                                     return_expr = Some(self.compile_expr(arg)?);
                                 }
                                 break; // Stop processing after return
-                            }
+                            },
                             // Expression statement (e.g., a side effect)
                             Stmt::Expr(_) => {
                                 // Ignore expression statements in arrow body for now
-                            }
-                            _ => {}
+                            },
+                            _ => {},
                         }
                     }
 
@@ -2028,9 +2021,9 @@ impl PlanCompiler {
                             return Err(CompileError::UnsupportedExpression(
                                 "callback block without return".into(),
                             ));
-                        }
+                        },
                     }
-                }
+                },
             };
 
             Ok((param_name, body))
@@ -2090,7 +2083,7 @@ impl PlanCompiler {
                     return Err(CompileError::UnsupportedExpression(
                         "callback block without return".into(),
                     ));
-                }
+                },
             };
 
             Ok((acc_name, item_name, body))
@@ -2165,7 +2158,7 @@ impl PlanCompiler {
                     })
                     .collect();
                 Ok((temp_var, steps))
-            }
+            },
             Pat::Array(arr_pat) => {
                 let temp_var = self.next_temp_var();
                 let mut steps = Vec::new();
@@ -2176,15 +2169,15 @@ impl PlanCompiler {
                             var: var_name,
                             expr: ValueExpr::ArrayIndex {
                                 array: Box::new(ValueExpr::Variable(temp_var.clone())),
-                                index: Box::new(ValueExpr::Literal(
-                                    JsonValue::Number((i as i64).into()),
-                                )),
+                                index: Box::new(ValueExpr::Literal(JsonValue::Number(
+                                    (i as i64).into(),
+                                ))),
                             },
                         });
                     }
                 }
                 Ok((temp_var, steps))
-            }
+            },
             _ => Err(CompileError::UnsupportedExpression(
                 "complex loop variable pattern".into(),
             )),
@@ -2207,7 +2200,7 @@ impl PlanCompiler {
                     }
                     let name = assign.key.sym.to_string();
                     bindings.push((name.clone(), name));
-                }
+                },
                 ObjectPatProp::KeyValue(kv) => {
                     // Renamed: `{ id: userId }`
                     let key = match &kv.key {
@@ -2217,7 +2210,7 @@ impl PlanCompiler {
                             return Err(CompileError::UnsupportedExpression(
                                 "computed destructuring key".into(),
                             ));
-                        }
+                        },
                     };
                     let var_name = match kv.value.as_ref() {
                         Pat::Ident(ident) => ident.id.sym.to_string(),
@@ -2225,15 +2218,15 @@ impl PlanCompiler {
                             return Err(CompileError::UnsupportedExpression(
                                 "nested destructuring".into(),
                             ));
-                        }
+                        },
                     };
                     bindings.push((var_name, key));
-                }
+                },
                 ObjectPatProp::Rest(_) => {
                     return Err(CompileError::UnsupportedExpression(
                         "rest pattern in destructuring".into(),
                     ));
-                }
+                },
             }
         }
         Ok(bindings)
@@ -2307,7 +2300,7 @@ impl PlanCompiler {
                         .map(JsonValue::Number)
                         .unwrap_or(JsonValue::Null)
                 }
-            }
+            },
             Lit::Bool(b) => JsonValue::Bool(b.value),
             Lit::Null(_) => JsonValue::Null,
             _ => JsonValue::Null,
@@ -2348,7 +2341,7 @@ impl PlanCompiler {
                 Err(CompileError::UnsupportedExpression(
                     "nullish coalescing".into(),
                 ))
-            }
+            },
             _ => Err(CompileError::UnsupportedExpression(format!(
                 "binary operator {:?}",
                 op
@@ -2846,13 +2839,13 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                         self.variables.insert(result_var.clone(), response);
                     }
                     Ok(None)
-                }
+                },
 
                 PlanStep::Assign { var, expr } => {
                     let value = self.evaluate(expr)?;
                     self.variables.insert(var.clone(), value);
                     Ok(None)
-                }
+                },
 
                 PlanStep::Conditional {
                     condition,
@@ -2872,7 +2865,7 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                         }
                     }
                     Ok(None)
-                }
+                },
 
                 PlanStep::BoundedLoop {
                     item_var,
@@ -2887,7 +2880,7 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                             return Err(ExecutionError::RuntimeError {
                                 message: "Loop collection must be an array".into(),
                             })
-                        }
+                        },
                     };
 
                     let limit = (*max_iterations).min(self.config.max_loop_iterations);
@@ -2902,7 +2895,7 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                         for step in body {
                             match self.execute_step(step).await {
                                 Ok(Some(value)) => return Ok(Some(value)),
-                                Ok(None) => {}
+                                Ok(None) => {},
                                 Err(ExecutionError::LoopContinue) => continue 'outer,
                                 Err(ExecutionError::LoopBreak) => break 'outer,
                                 Err(e) => return Err(e),
@@ -2910,12 +2903,12 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                         }
                     }
                     Ok(None)
-                }
+                },
 
                 PlanStep::Return { value } => {
                     let result = self.evaluate(value)?;
                     Ok(Some(result))
-                }
+                },
 
                 PlanStep::TryCatch {
                     try_steps,
@@ -2939,7 +2932,7 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                         Ok(return_value) => {
                             // Try block succeeded
                             return_value
-                        }
+                        },
                         Err(error) => {
                             // Try block failed, run catch
                             if let Some(var) = catch_var {
@@ -2960,7 +2953,7 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                                 }
                             }
                             catch_return
-                        }
+                        },
                     };
 
                     // Execute finally block (always runs)
@@ -2971,7 +2964,7 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                     }
 
                     Ok(result)
-                }
+                },
 
                 // Parallel API calls: await Promise.all([api.get(...), ...])
                 // Executed sequentially (true parallelism isn't needed for correctness),
@@ -3016,7 +3009,7 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                     self.variables
                         .insert(result_var.clone(), JsonValue::Array(results));
                     Ok(None)
-                }
+                },
 
                 // Continue: signal to skip to next loop iteration
                 PlanStep::Continue => Err(ExecutionError::LoopContinue),
@@ -3072,7 +3065,7 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                         self.variables.insert(result_var.clone(), result);
                     }
                     Ok(None)
-                }
+                },
 
                 // SDK call: await api.getCostAndUsage({ ... })
                 PlanStep::SdkCall {
@@ -3090,7 +3083,8 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                         });
                     }
 
-                    let resolved_args = args.as_ref().map(|expr| self.evaluate(expr)).transpose()?;
+                    let resolved_args =
+                        args.as_ref().map(|expr| self.evaluate(expr)).transpose()?;
 
                     let sdk_executor =
                         self.sdk
@@ -3117,7 +3111,7 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                         self.variables.insert(result_var.clone(), result);
                     }
                     Ok(None)
-                }
+                },
             }
         })
     }
@@ -3136,11 +3130,11 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                                 message: format!("Undefined variable in path: {}", var),
                             })?;
                     result.push_str(&shared_value_to_string(value));
-                }
+                },
                 PathPart::Expression(expr) => {
                     let value = self.evaluate(expr)?;
                     result.push_str(&shared_value_to_string(&value));
-                }
+                },
             }
         }
         Ok(result)
@@ -4048,31 +4042,31 @@ mod tests {
                         let a = args["a"].as_f64().unwrap_or(0.0);
                         let b = args["b"].as_f64().unwrap_or(0.0);
                         Ok(serde_json::json!({"result": a + b}))
-                    }
+                    },
                     "subtract" => {
                         let a = args["a"].as_f64().unwrap_or(0.0);
                         let b = args["b"].as_f64().unwrap_or(0.0);
                         Ok(serde_json::json!({"result": a - b}))
-                    }
+                    },
                     "multiply" => {
                         let a = args["a"].as_f64().unwrap_or(0.0);
                         let b = args["b"].as_f64().unwrap_or(0.0);
                         Ok(serde_json::json!({"result": a * b}))
-                    }
+                    },
                     "divide" => {
                         let a = args["a"].as_f64().unwrap_or(0.0);
                         let b = args["b"].as_f64().unwrap_or(1.0);
                         Ok(serde_json::json!({"result": a / b}))
-                    }
+                    },
                     "power" => {
                         let base = args["base"].as_f64().unwrap_or(0.0);
                         let exponent = args["exponent"].as_f64().unwrap_or(1.0);
                         Ok(serde_json::json!({"result": base.powf(exponent)}))
-                    }
+                    },
                     "sqrt" => {
                         let n = args["n"].as_f64().unwrap_or(0.0);
                         Ok(serde_json::json!({"result": n.sqrt()}))
-                    }
+                    },
                     _ => Err(ExecutionError::RuntimeError {
                         message: format!("Unknown tool: {}", tool_name),
                     }),
@@ -4474,7 +4468,9 @@ return { discriminant: discriminant.result, root_type: root_type, roots: [x1.res
             return x;
         "#;
         let mut compiler = PlanCompiler::new();
-        let plan = compiler.compile_code(code).expect("parseFloat should compile");
+        let plan = compiler
+            .compile_code(code)
+            .expect("parseFloat should compile");
         assert_eq!(plan.steps.len(), 2); // Assign + Return
     }
 
@@ -4485,7 +4481,9 @@ return { discriminant: discriminant.result, root_type: root_type, roots: [x1.res
             return x;
         "#;
         let mut compiler = PlanCompiler::new();
-        compiler.compile_code(code).expect("parseInt should compile");
+        compiler
+            .compile_code(code)
+            .expect("parseInt should compile");
     }
 
     #[test]
@@ -4495,7 +4493,9 @@ return { discriminant: discriminant.result, root_type: root_type, roots: [x1.res
             return x;
         "#;
         let mut compiler = PlanCompiler::new();
-        compiler.compile_code(code).expect("Math.abs should compile");
+        compiler
+            .compile_code(code)
+            .expect("Math.abs should compile");
     }
 
     #[test]
@@ -4505,7 +4505,9 @@ return { discriminant: discriminant.result, root_type: root_type, roots: [x1.res
             return x;
         "#;
         let mut compiler = PlanCompiler::new();
-        compiler.compile_code(code).expect("Math.max should compile");
+        compiler
+            .compile_code(code)
+            .expect("Math.max should compile");
     }
 
     #[test]
@@ -4516,7 +4518,9 @@ return { discriminant: discriminant.result, root_type: root_type, roots: [x1.res
             return keys;
         "#;
         let mut compiler = PlanCompiler::new();
-        compiler.compile_code(code).expect("Object.keys should compile");
+        compiler
+            .compile_code(code)
+            .expect("Object.keys should compile");
     }
 
     #[test]
@@ -4527,7 +4531,9 @@ return { discriminant: discriminant.result, root_type: root_type, roots: [x1.res
             return entries;
         "#;
         let mut compiler = PlanCompiler::new();
-        compiler.compile_code(code).expect("Object.entries should compile");
+        compiler
+            .compile_code(code)
+            .expect("Object.entries should compile");
     }
 
     #[test]
@@ -4548,7 +4554,9 @@ return { discriminant: discriminant.result, root_type: root_type, roots: [x1.res
             return sorted;
         "#;
         let mut compiler = PlanCompiler::new();
-        compiler.compile_code(code).expect("sort with comparator should compile");
+        compiler
+            .compile_code(code)
+            .expect("sort with comparator should compile");
     }
 
     #[test]
@@ -4559,7 +4567,9 @@ return { discriminant: discriminant.result, root_type: root_type, roots: [x1.res
             return sorted;
         "#;
         let mut compiler = PlanCompiler::new();
-        compiler.compile_code(code).expect("sort without comparator should compile");
+        compiler
+            .compile_code(code)
+            .expect("sort without comparator should compile");
     }
 
     // =========================================================================
@@ -4672,7 +4682,9 @@ return { discriminant: discriminant.result, root_type: root_type, roots: [x1.res
             return extended;
         "#;
         let mut compiler = PlanCompiler::new();
-        let plan = compiler.compile_code(code).expect("Object spread should compile");
+        let plan = compiler
+            .compile_code(code)
+            .expect("Object spread should compile");
         assert!(plan.steps.len() >= 2);
     }
 
@@ -4739,7 +4751,10 @@ return { discriminant: discriminant.result, root_type: root_type, roots: [x1.res
         let mut compiler = PlanCompiler::new();
         let plan = compiler.compile_code(code).unwrap();
         let mut mock_http = MockHttpExecutor::new();
-        mock_http.add_response("/config", serde_json::json!({ "key": "value", "enabled": true }));
+        mock_http.add_response(
+            "/config",
+            serde_json::json!({ "key": "value", "enabled": true }),
+        );
         let mut executor = PlanExecutor::new(mock_http, ExecutionConfig::default());
         let result = executor.execute(&plan).await.unwrap();
         assert_eq!(result.value["key"], serde_json::json!("value"));
@@ -4796,7 +4811,9 @@ return { discriminant: discriminant.result, root_type: root_type, roots: [x1.res
             return { id, name };
         "#;
         let mut compiler = PlanCompiler::new();
-        let plan = compiler.compile_code(code).expect("Object destructuring should compile");
+        let plan = compiler
+            .compile_code(code)
+            .expect("Object destructuring should compile");
         // Should have: Assign(obj), Assign(__destructure_0), Assign(id), Assign(name), Return
         assert!(plan.steps.len() >= 4);
     }

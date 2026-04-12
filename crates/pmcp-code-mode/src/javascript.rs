@@ -477,8 +477,7 @@ impl JavaScriptValidator {
             })?;
 
         // Visit the AST to extract information and check safety
-        let mut visitor = SafetyVisitor::new(&cm)
-            .with_sdk_operations(self.sdk_operations.clone());
+        let mut visitor = SafetyVisitor::new(&cm).with_sdk_operations(self.sdk_operations.clone());
         module.visit_with(&mut visitor);
 
         let mut info = visitor.into_info();
@@ -797,7 +796,7 @@ impl SafetyVisitor {
             Expr::Lit(Lit::Str(s)) => {
                 // Convert Wtf8Atom to String using to_string_lossy (handles WTF-8 encoding)
                 (s.value.to_string_lossy().into_owned(), false)
-            }
+            },
             Expr::Tpl(tpl) => {
                 // Template literal - extract static parts
                 let mut path = String::new();
@@ -809,7 +808,7 @@ impl SafetyVisitor {
                     }
                 }
                 (path, !tpl.exprs.is_empty())
-            }
+            },
             _ => ("dynamic".into(), true),
         }
     }
@@ -1083,7 +1082,7 @@ fn violation_to_security_issue(violation: SafetyViolationType) -> SecurityIssueT
         SafetyViolationType::PrototypeManipulation => SecurityIssueType::PotentialInjection,
         SafetyViolationType::UnboundedLoop | SafetyViolationType::UnboundedForLoop => {
             SecurityIssueType::UnboundedQuery
-        }
+        },
         _ => SecurityIssueType::HighComplexity,
     }
 }

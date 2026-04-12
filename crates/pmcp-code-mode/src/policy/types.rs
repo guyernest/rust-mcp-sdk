@@ -331,7 +331,7 @@ impl ScriptEntity {
                 } else {
                     "Write"
                 }
-            }
+            },
             _ => "Read",
         }
     }

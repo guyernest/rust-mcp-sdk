@@ -195,7 +195,7 @@ impl Operation {
                 // Pattern format: "METHOD /path/*" or "* /path/*"
                 let endpoint = format!("{} {}", method.to_uppercase(), path);
                 pattern_matches(pattern, &endpoint) || pattern_matches(pattern, &self.id)
-            }
+            },
             OperationDetails::GraphQL {
                 operation_type,
                 field_name,
@@ -204,7 +204,7 @@ impl Operation {
                 // Pattern format: "Type.field*" or "*.field"
                 let full_name = format!("{:?}.{}", operation_type, field_name);
                 pattern_matches(pattern, &full_name) || pattern_matches(pattern, &self.id)
-            }
+            },
             OperationDetails::Sql {
                 statement_type,
                 table,
@@ -214,7 +214,7 @@ impl Operation {
                 let full_name = format!("{:?} {}", statement_type, table);
                 pattern_matches(pattern, &full_name.to_lowercase())
                     || pattern_matches(pattern, &self.id)
-            }
+            },
             OperationDetails::Unknown => pattern_matches(pattern, &self.id),
         }
     }
@@ -412,7 +412,7 @@ impl ToolExposurePolicy {
                     }
                 }
                 Some(FilterReason::ToolNotInAllowlist)
-            }
+            },
             ExposureMode::Blocklist => None, // Already checked blocklist above
         }
     }
@@ -527,7 +527,7 @@ impl MethodExposurePolicy {
                 Some(FilterReason::MethodNotInAllowlist {
                     method_type: Self::method_type_name(operation),
                 })
-            }
+            },
             ExposureMode::Blocklist => None, // Already checked blocklist above
         }
     }
@@ -707,45 +707,45 @@ impl FilterReason {
         match self {
             FilterReason::GlobalBlocklistOperation { operation_id } => {
                 format!("Operation '{}' is in the global blocklist", operation_id)
-            }
+            },
             FilterReason::GlobalBlocklistPattern { pattern } => {
                 format!("Matches global blocklist pattern '{}'", pattern)
-            }
+            },
             FilterReason::GlobalBlocklistCategory { category } => {
                 format!("Category '{:?}' is blocked globally", category)
-            }
+            },
             FilterReason::GlobalBlocklistRiskLevel { level } => {
                 format!("Risk level '{:?}' is blocked globally", level)
-            }
+            },
             FilterReason::ToolBlocklist => "Operation is in the tool blocklist".to_string(),
             FilterReason::ToolBlocklistPattern { pattern } => {
                 format!("Matches tool blocklist pattern '{}'", pattern)
-            }
+            },
             FilterReason::ToolNotInAllowlist => {
                 "Operation is not in the tool allowlist".to_string()
-            }
+            },
             FilterReason::ToolDenyAllMode => "Tool exposure is set to deny_all".to_string(),
             FilterReason::CodeModeBlocklist => {
                 "Operation is in the Code Mode blocklist".to_string()
-            }
+            },
             FilterReason::CodeModeBlocklistPattern { pattern } => {
                 format!("Matches Code Mode blocklist pattern '{}'", pattern)
-            }
+            },
             FilterReason::MethodBlocklist { method_type } => {
                 format!("Operation is in the {} blocklist", method_type)
-            }
+            },
             FilterReason::MethodBlocklistPattern {
                 method_type,
                 pattern,
             } => {
                 format!("Matches {} blocklist pattern '{}'", method_type, pattern)
-            }
+            },
             FilterReason::MethodNotInAllowlist { method_type } => {
                 format!("Operation is not in the {} allowlist", method_type)
-            }
+            },
             FilterReason::MethodDenyAllMode { method_type } => {
                 format!("{} exposure is set to deny_all", method_type)
-            }
+            },
         }
     }
 }
@@ -1231,7 +1231,7 @@ impl SchemaDeriver {
                 } else {
                     doc.push_str(&format!("- **{}**: `{} {}`\n", op.name, method, path));
                 }
-            }
+            },
             OperationDetails::GraphQL {
                 operation_type,
                 field_name,
@@ -1241,7 +1241,7 @@ impl SchemaDeriver {
                     "- **{}**: `{:?}.{}`\n",
                     op.name, operation_type, field_name
                 ));
-            }
+            },
             OperationDetails::Sql {
                 statement_type,
                 table,
@@ -1251,10 +1251,10 @@ impl SchemaDeriver {
                     "- **{}**: `{:?} {}`\n",
                     op.name, statement_type, table
                 ));
-            }
+            },
             OperationDetails::Unknown => {
                 doc.push_str(&format!("- **{}** ({})\n", op.name, op.id));
-            }
+            },
         }
 
         if let Some(desc) = &op.description {

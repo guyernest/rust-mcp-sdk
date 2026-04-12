@@ -1,5 +1,27 @@
 // Originated from pmcp-run/built-in/shared/pmcp-code-mode (https://github.com/guyernest/pmcp-run)
 // Moved into rust-mcp-sdk workspace as a first-class SDK crate for Phase 67.1
+//
+// Clippy pedantic/nursery allows for code imported from pmcp-run.
+// These will be cleaned up incrementally in future phases.
+#![allow(clippy::use_self)]
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::needless_raw_string_hashes)]
+#![allow(clippy::needless_borrows_for_generic_args)]
+#![allow(clippy::if_same_then_else)]
+#![allow(clippy::map_unwrap_or)]
+#![allow(clippy::useless_format)]
+#![allow(clippy::unused_self)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::derivable_impls)]
+#![allow(clippy::needless_lifetimes)]
+#![allow(clippy::struct_excessive_bools)]
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::needless_collect)]
+#![allow(clippy::only_used_in_recursion)]
+#![allow(clippy::self_only_used_in_recursion)]
+#![allow(clippy::redundant_pub_crate)]
+#![allow(clippy::manual_is_variant_and)]
+#![allow(clippy::unnecessary_literal_bound)]
 
 //! Code Mode - LLM-generated query validation and execution.
 //!
@@ -98,29 +120,10 @@ pub use javascript::{
 // JavaScript execution runtime exports
 #[cfg(feature = "js-runtime")]
 pub use executor::{
-    filter_blocked_fields,
-    find_blocked_fields_in_output,
-    ApiCallLog,
-    ArrayMethodCall,
-    BinaryOperator,
-    BuiltinFunction,
-    CompileError,
-    ExecutionConfig,
-    ExecutionPlan,
-    ExecutionResult,
-    HttpExecutor,
-    JsExecutor,
-    MockExecutionMode,
-    MockHttpExecutor,
-    MockedCall,
-    PathPart,
-    PathTemplate,
-    PlanCompiler,
-    PlanExecutor,
-    PlanMetadata,
-    PlanStep,
-    UnaryOperator,
-    ValueExpr,
+    filter_blocked_fields, find_blocked_fields_in_output, ApiCallLog, ArrayMethodCall,
+    BinaryOperator, BuiltinFunction, CompileError, ExecutionConfig, ExecutionPlan, ExecutionResult,
+    HttpExecutor, JsExecutor, MockExecutionMode, MockHttpExecutor, MockedCall, PathPart,
+    PathTemplate, PlanCompiler, PlanExecutor, PlanMetadata, PlanStep, UnaryOperator, ValueExpr,
 };
 
 // MCP Code Mode executor
@@ -151,14 +154,14 @@ pub use handler::{
 
 // Policy types re-exports
 pub use policy::{
-    AuthorizationDecision, NoopPolicyEvaluator, OperationEntity, PolicyEvaluationError,
-    PolicyEvaluator, ServerConfigEntity, get_baseline_policies, get_code_mode_schema_json,
+    get_baseline_policies, get_code_mode_schema_json, AuthorizationDecision, NoopPolicyEvaluator,
+    OperationEntity, PolicyEvaluationError, PolicyEvaluator, ServerConfigEntity,
 };
 
 #[cfg(feature = "openapi-code-mode")]
 pub use policy::{
-    OpenAPIServerEntity, ScriptEntity, get_openapi_baseline_policies,
-    get_openapi_code_mode_schema_json, normalize_operation_format, normalize_path_to_pattern,
+    get_openapi_baseline_policies, get_openapi_code_mode_schema_json, normalize_operation_format,
+    normalize_path_to_pattern, OpenAPIServerEntity, ScriptEntity,
 };
 
 // Cedar policy evaluator
@@ -167,25 +170,8 @@ pub use policy::cedar::CedarPolicyEvaluator;
 
 // Schema Exposure Architecture types
 pub use schema_exposure::{
-    CodeModeExposurePolicy,
-    DerivationMetadata,
-    DerivationStats,
-    DerivedSchema,
-    ExposureMode,
-    FilterReason,
-    FilteredOperation,
-    GlobalBlocklist,
-    McpExposurePolicy,
-    MethodExposurePolicy,
-    Operation,
-    OperationCategory,
-    OperationDetails,
-    OperationParameter,
-    OperationRiskLevel,
-    SchemaDeriver,
-    SchemaFormat,
-    SchemaMetadata,
-    SchemaSource,
-    ToolExposurePolicy,
-    ToolOverride,
+    CodeModeExposurePolicy, DerivationMetadata, DerivationStats, DerivedSchema, ExposureMode,
+    FilterReason, FilteredOperation, GlobalBlocklist, McpExposurePolicy, MethodExposurePolicy,
+    Operation, OperationCategory, OperationDetails, OperationParameter, OperationRiskLevel,
+    SchemaDeriver, SchemaFormat, SchemaMetadata, SchemaSource, ToolExposurePolicy, ToolOverride,
 };
