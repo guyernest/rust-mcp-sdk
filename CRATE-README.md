@@ -112,7 +112,7 @@ before turning a flag on.
 | `jwt-auth` | JWT-based authentication helpers | `jsonwebtoken` + `http-client` |
 | `logging` | Structured logging via the `tracing` ecosystem | `tracing-subscriber` |
 | `macros` | Attribute proc macros (`#[mcp_tool]`, `#[mcp_server]`, `#[mcp_prompt]`) | `pmcp-macros`, `schemars` |
-| `mcp-apps` | ChatGPT Apps / MCP-UI / SEP-1865 interactive UI types | UI types (code-only, no extra deps) |
+| `mcp-apps` | `ChatGPT` Apps / MCP-UI / SEP-1865 interactive UI types | UI types (code-only, no extra deps) |
 | `oauth` | OAuth 2.0 CLI helper for local token flows | `webbrowser`, `dirs`, `rand` + `http-client` |
 | `rayon` | Parallel iterator support for batch operations | `rayon` |
 | `resource-watcher` | File-system watcher for MCP resource notifications | `notify`, `glob-match` |
