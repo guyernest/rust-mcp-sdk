@@ -124,9 +124,15 @@ impl ApprovalToken {
     }
 
     /// Get the payload bytes for signing/verification.
+    /// Build the canonical payload bytes for HMAC signing/verification.
+    ///
+    /// BREAKING CHANGE (v0.1.0 pre-release): This now uses `Display` formatting
+    /// for `risk_level` (stable "LOW"/"MEDIUM"/"HIGH"/"CRITICAL") instead of
+    /// `Debug` formatting. Tokens signed with the prior `Debug` format ("Low",
+    /// "Medium", etc.) will fail verification after this change.
     fn payload_bytes(&self) -> Vec<u8> {
         format!(
-            "{}|{}|{}|{}|{}|{}|{:?}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.request_id,
             self.code_hash,
             self.user_id,
