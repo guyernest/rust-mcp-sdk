@@ -1,0 +1,28 @@
+name: pmcp-code-mode-derive
+version: 0.1.0
+description: Derive macro for Code Mode in MCP servers
+contracts:
+  - name: compile_fail_missing_fields
+    type: compile-time
+    description: "Missing required fields (code_mode_config, token_secret, policy_evaluator, code_executor) produce clear compile errors"
+    verification: "cargo test -p pmcp-code-mode-derive --test code_mode_tests"
+
+  - name: send_sync_enforcement
+    type: compile-time
+    description: "Derived types enforce Send + Sync at compile time via generated const assertion"
+    verification: "cargo test -p pmcp-code-mode-derive --test code_mode_tests"
+
+  - name: token_type_enforcement
+    type: compile-time
+    description: "token_secret field must be TokenSecret type, not Vec<u8> or other types"
+    verification: "cargo test -p pmcp-code-mode-derive --test code_mode_tests"
+
+  - name: fixed_field_name_convention
+    type: compile-time
+    description: "Macro requires well-known field names: code_mode_config, token_secret, policy_evaluator, code_executor (v0.1.0 contract)"
+    verification: "cargo test -p pmcp-code-mode-derive --test code_mode_tests"
+
+  - name: register_code_mode_tools_generation
+    type: compile-time
+    description: "Macro generates register_code_mode_tools method with by-value ServerCoreBuilder pattern"
+    verification: "cargo test -p pmcp-code-mode-derive --test code_mode_tests"
