@@ -19,6 +19,11 @@ path = ".."
 default-features = false
 features = []
 
+[dependencies.pmcp-code-mode]
+path = "../crates/pmcp-code-mode"
+default-features = false
+features = ["openapi-code-mode"]
+
 [[bin]]
 name = "protocol_parsing"
 path = "fuzz_targets/protocol_parsing.rs"
@@ -43,6 +48,27 @@ bench = false
 [[bin]]
 name = "auth_flows"
 path = "fuzz_targets/auth_flows.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_graphql_code_mode"
+path = "fuzz_targets/fuzz_graphql_code_mode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_javascript_code_mode"
+path = "fuzz_targets/fuzz_javascript_code_mode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_token_code_mode"
+path = "fuzz_targets/fuzz_token_code_mode.rs"
 test = false
 doc = false
 bench = false
