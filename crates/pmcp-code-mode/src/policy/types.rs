@@ -337,14 +337,25 @@ impl ScriptEntity {
     }
 }
 
+/// Check whether a path segment looks like a UUID (8-4-4-4-12 hex pattern).
+#[cfg(feature = "openapi-code-mode")]
+fn is_uuid_like(segment: &str) -> bool {
+    if segment.len() != 36 {
+        return false;
+    }
+    let parts: Vec<&str> = segment.split('-').collect();
+    matches!(parts.as_slice(), [a, b, c, d, e]
+        if a.len() == 8 && b.len() == 4 && c.len() == 4
+        && d.len() == 4 && e.len() == 12
+        && segment.chars().all(|ch| ch.is_ascii_hexdigit() || ch == '-'))
+}
+
 /// Normalize a path to a pattern by replacing numeric/UUID segments with *.
 #[cfg(feature = "openapi-code-mode")]
 pub fn normalize_path_to_pattern(path: &str) -> String {
     path.split('/')
         .map(|segment| {
-            if segment.chars().all(|c| c.is_ascii_digit())
-                || (segment.len() == 36 && segment.contains('-'))
-            {
+            if segment.chars().all(|c| c.is_ascii_digit()) || is_uuid_like(segment) {
                 "*"
             } else {
                 segment
@@ -386,7 +397,7 @@ pub fn normalize_operation_format(op: &str) -> String {
                 "*"
             } else if segment.chars().all(|c| c.is_ascii_digit()) {
                 "*"
-            } else if segment.len() == 36 && segment.contains('-') {
+            } else if is_uuid_like(segment) {
                 "*"
             } else {
                 segment
