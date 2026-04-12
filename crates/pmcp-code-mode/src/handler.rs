@@ -174,10 +174,11 @@ pub trait CodeModeHandler: Send + Sync {
 
     /// Check if a policy evaluator is configured.
     ///
-    /// The default returns `true` for backward compatibility with tests.
-    /// Production implementations MUST override this.
+    /// Defaults to `false` (safe default). When `false`, `handle_tool` rejects
+    /// all requests with a "policy evaluator required" error. Implementations
+    /// that have configured a policy evaluator MUST override this to return `true`.
     fn is_policy_configured(&self) -> bool {
-        true
+        false
     }
 
     /// Deprecated alias for `is_policy_configured()`.
