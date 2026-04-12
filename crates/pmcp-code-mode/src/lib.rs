@@ -36,6 +36,9 @@
 //! let result = pipeline.validate_graphql_query("query { users { id name } }", &context)?;
 //! ```
 
+// High-level CodeExecutor trait (always available, no feature gate)
+mod code_executor;
+
 pub mod config;
 mod explanation;
 mod graphql;
@@ -74,6 +77,9 @@ mod eval;
 
 // Re-export async_trait to avoid version conflicts in derive macro output (D-07)
 pub use async_trait::async_trait;
+
+// High-level CodeExecutor trait (always available, no feature gate) (D-04)
+pub use code_executor::CodeExecutor;
 
 // Re-export public types
 pub use config::CodeModeConfig;
