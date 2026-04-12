@@ -138,9 +138,12 @@ fn expand_code_mode(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
         return Err(syn::Error::new_spanned(&input.ident, msg));
     }
 
-    // Generate the handler module name to avoid collision
+    // Generate the handler module name to avoid collision (snake_case to suppress warnings)
     let mod_name = syn::Ident::new(
-        &format!("__code_mode_impl_{}", struct_name),
+        &format!(
+            "__code_mode_impl_{}",
+            struct_name.to_string().to_lowercase()
+        ),
         struct_name.span(),
     );
 
@@ -152,9 +155,12 @@ fn expand_code_mode(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
         };
 
         #[doc(hidden)]
+        #[allow(non_snake_case)]
         mod #mod_name {
             use super::*;
             use std::sync::Arc;
+            // Import TokenGenerator trait to bring verify/verify_code into scope
+            use pmcp_code_mode::TokenGenerator as _;
 
             /// Internal state for the `validate_code` tool handler.
             pub(super) struct ValidateCodeHandler {
@@ -171,7 +177,7 @@ fn expand_code_mode(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                 ) -> pmcp::Result<serde_json::Value> {
                     let input: pmcp_code_mode::ValidateCodeInput =
                         serde_json::from_value(args).map_err(|e| {
-                            pmcp::Error::ToolError(format!("Invalid arguments: {}", e))
+                            pmcp::Error::Internal(format!("Invalid arguments: {}", e))
                         })?;
 
                     let code = input.code.trim();
@@ -185,7 +191,7 @@ fn expand_code_mode(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                     );
 
                     let result = self.pipeline.validate_graphql_query(code, &context)
-                        .map_err(|e| pmcp::Error::ToolError(format!("Validation error: {}", e)))?;
+                        .map_err(|e| pmcp::Error::Internal(format!("Validation error: {}", e)))?;
 
                     let response = pmcp_code_mode::ValidationResponse::success(
                         result.explanation.clone(),
@@ -225,7 +231,7 @@ fn expand_code_mode(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                 ) -> pmcp::Result<serde_json::Value> {
                     let input: pmcp_code_mode::ExecuteCodeInput =
                         serde_json::from_value(args).map_err(|e| {
-                            pmcp::Error::ToolError(format!("Invalid arguments: {}", e))
+                            pmcp::Error::Internal(format!("Invalid arguments: {}", e))
                         })?;
 
                     let code = input.code.trim();
@@ -233,19 +239,25 @@ fn expand_code_mode(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                     // Verify the approval token
                     let token_gen = self.pipeline.token_generator();
                     let token = pmcp_code_mode::ApprovalToken::decode(&input.approval_token)
-                        .map_err(|e| pmcp::Error::ToolError(
+                        .map_err(|e| pmcp::Error::Internal(
                             format!("Invalid approval token: {}", e),
                         ))?;
 
-                    if !token_gen.verify(&token, code) {
-                        return Err(pmcp::Error::ToolError(
-                            "Approval token verification failed: code does not match validated code".into(),
-                        ));
-                    }
+                    // Verify token signature and expiry
+                    token_gen.verify(&token)
+                        .map_err(|e| pmcp::Error::Internal(
+                            format!("Token verification failed: {}", e),
+                        ))?;
+
+                    // Verify code matches the token's code hash
+                    token_gen.verify_code(code, &token)
+                        .map_err(|e| pmcp::Error::Internal(
+                            format!("Code verification failed: {}", e),
+                        ))?;
 
                     // Execute the validated code
                     let result = self.executor.execute(code, input.variables.as_ref()).await
-                        .map_err(|e| pmcp::Error::ToolError(
+                        .map_err(|e| pmcp::Error::Internal(
                             format!("Execution error: {}", e),
                         ))?;
 
