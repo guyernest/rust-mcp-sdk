@@ -72,6 +72,9 @@ pub mod executor;
 #[cfg(feature = "js-runtime")]
 mod eval;
 
+// Re-export async_trait to avoid version conflicts in derive macro output (D-07)
+pub use async_trait::async_trait;
+
 // Re-export public types
 pub use config::CodeModeConfig;
 
@@ -142,8 +145,8 @@ pub use handler::{
 
 // Policy types re-exports
 pub use policy::{
-    AuthorizationDecision, OperationEntity, PolicyEvaluationError, PolicyEvaluator,
-    ServerConfigEntity, get_baseline_policies, get_code_mode_schema_json,
+    AuthorizationDecision, NoopPolicyEvaluator, OperationEntity, PolicyEvaluationError,
+    PolicyEvaluator, ServerConfigEntity, get_baseline_policies, get_code_mode_schema_json,
 };
 
 #[cfg(feature = "openapi-code-mode")]
