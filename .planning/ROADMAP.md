@@ -803,17 +803,17 @@ Plans:
   4. `HmacTokenGenerator::new` returns `Result` instead of panicking on short secrets
   5. Trybuild compile-fail tests cover `token_secret` and `code_executor` absent fields
   6. Generated handlers share a single `Arc<ValidationPipeline>` instead of constructing two
-  **Performance (IMPROVEMENTS.md P-01 through P-04):**
+  **Performance (IMPROVEMENTS.md P-01, P-03):**
   7. eval.rs array methods use scope-chain/push-pop instead of cloning entire HashMap per element (P-01)
-  8. JS validation passes parsed AST to execution, eliminating double SWC parse (P-02)
-  9. Async GraphQL validation fallback reuses parsed `query_info` instead of re-parsing (P-03)
+  8. Async GraphQL validation fallback reuses parsed `query_info` instead of re-parsing (P-03)
+  *Deferred: P-02 (double SWC parse) requires new `ValidatedCode` type threading AST across javascript.rs/executor.rs — deferred to a future phase*
   **Code quality (IMPROVEMENTS.md Q-01 through Q-04, R-01):**
-  10. `json_to_string` / `value_to_string` unified into one function (Q-01)
-  11. `LoopContinue`/`LoopBreak` moved to internal `StepOutcome` enum, removed from public `ExecutionError` (Q-04)
-  12. `ValidationResponse` wraps `ValidationResult` instead of duplicating all fields (R-01)
+  9. `json_to_string` / `value_to_string` unified into one function (Q-01)
+  10. `LoopContinue`/`LoopBreak` moved to internal `StepOutcome` enum, removed from public `ExecutionError` (Q-04)
+  11. `ValidationResponse` wraps `ValidationResult` instead of duplicating all fields (R-01)
   **Baseline:**
-  13. All existing tests pass, `cargo test -p pmcp-code-mode -p pmcp-code-mode-derive` green
-  14. Clippy suppressions reduced (trivially fixable: `useless_format`, `derivable_impls`, etc.)
+  12. All existing tests pass, `cargo test -p pmcp-code-mode -p pmcp-code-mode-derive` green
+  13. Clippy suppressions reduced (trivially fixable: `useless_format`, `derivable_impls`, etc.)
 **Plans:** 6 plans
 Plans:
 - [ ] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
