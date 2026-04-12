@@ -41,8 +41,8 @@ pub mod simd;
 
 /// Axum Router convenience API for secure MCP server hosting.
 ///
-/// Re-exports [`router()`](axum::router), [`router_with_config()`](axum::router_with_config),
-/// [`RouterConfig`](axum::RouterConfig), and [`AllowedOrigins`](axum::AllowedOrigins)
+/// Re-exports [`router`], [`router_with_config`],
+/// [`RouterConfig`], and [`AllowedOrigins`]
 /// for ergonomic usage: `pmcp::axum::router(server)`.
 #[cfg(feature = "streamable-http")]
 pub mod axum {
