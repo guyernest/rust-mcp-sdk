@@ -249,6 +249,47 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
             }
         }
 
+        // Query (read) authorization checks -- mirrors mutation enforcement above
+        if query_info.operation_type.is_read_only() {
+            let query_name = query_info.root_fields.first().cloned().unwrap_or_default();
+
+            if !self.config.blocked_queries.is_empty()
+                && self.config.blocked_queries.contains(&query_name)
+            {
+                return Ok(ValidationResult::failure(
+                    vec![PolicyViolation::new(
+                        "code_mode",
+                        "blocked_query",
+                        &format!("Query '{}' is blocked for this server", query_name),
+                    )
+                    .with_suggestion("This query is in the blocklist and cannot be executed")],
+                    self.build_metadata(&query_info, start.elapsed().as_millis() as u64),
+                ));
+            }
+
+            if !self.config.allowed_queries.is_empty()
+                && !self.config.allowed_queries.contains(&query_name)
+            {
+                return Ok(ValidationResult::failure(
+                    vec![PolicyViolation::new(
+                        "code_mode",
+                        "query_not_allowed",
+                        &format!("Query '{}' is not in the allowlist", query_name),
+                    )
+                    .with_suggestion(&format!(
+                        "Only these queries are allowed: {}",
+                        self.config
+                            .allowed_queries
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))],
+                    self.build_metadata(&query_info, start.elapsed().as_millis() as u64),
+                ));
+            }
+        }
+
         self.complete_validation(query, &query_info, context, start)
     }
 
@@ -747,5 +788,48 @@ mod tests {
         let hash2 = ctx2.context_hash();
 
         assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_blocked_query_rejected() {
+        let mut config = CodeModeConfig::enabled();
+        config
+            .blocked_queries
+            .insert("users".to_string());
+
+        let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec());
+        let ctx = test_context();
+
+        let result = pipeline
+            .validate_graphql_query("query { users { id } }", &ctx)
+            .unwrap();
+
+        assert!(!result.is_valid);
+        assert!(result
+            .violations
+            .iter()
+            .any(|v| v.rule == "blocked_query"));
+    }
+
+    #[test]
+    fn test_allowed_queries_enforced() {
+        let mut config = CodeModeConfig::enabled();
+        config
+            .allowed_queries
+            .insert("orders".to_string());
+
+        let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec());
+        let ctx = test_context();
+
+        // "users" is not in the allowlist -- should be rejected
+        let result = pipeline
+            .validate_graphql_query("query { users { id } }", &ctx)
+            .unwrap();
+
+        assert!(!result.is_valid);
+        assert!(result
+            .violations
+            .iter()
+            .any(|v| v.rule == "query_not_allowed"));
     }
 }
