@@ -120,7 +120,8 @@ struct CodeModeOpts {
     #[darling(default)]
     context_from: Option<String>,
     /// Code language — selects both the validation method and tool metadata.
-    /// Supported: `"graphql"` (default), `"javascript"` (requires `openapi-code-mode` feature).
+    /// Supported: `"graphql"` (default), `"javascript"`/`"js"`, `"sql"`, `"mcp"`.
+    /// Non-default languages require their respective feature flag on `pmcp-code-mode`.
     #[darling(default)]
     language: Option<String>,
 }
@@ -253,24 +254,21 @@ fn gen_validation_call(
     language: &str,
     error_span: &syn::Ident,
 ) -> Result<proc_macro2::TokenStream, syn::Error> {
+    let map_err = quote! {
+        .map_err(|e| pmcp::Error::Internal(format!("Validation error: {}", e)))?
+    };
     match language {
         "graphql" => Ok(quote! {
-            self.pipeline.validate_graphql_query_async(code, &context)
-                .await
-                .map_err(|e| pmcp::Error::Internal(format!("Validation error: {}", e)))?
+            self.pipeline.validate_graphql_query_async(code, &context).await #map_err
         }),
         "javascript" | "js" => Ok(quote! {
-            self.pipeline.validate_javascript_code(code, &context)
-                .map_err(|e| pmcp::Error::Internal(format!("Validation error: {}", e)))?
+            self.pipeline.validate_javascript_code(code, &context) #map_err
         }),
         "sql" => Ok(quote! {
-            self.pipeline.validate_sql_query(code, &context)
-                .map_err(|e| pmcp::Error::Internal(format!("Validation error: {}", e)))?
+            self.pipeline.validate_sql_query(code, &context) #map_err
         }),
         "mcp" => Ok(quote! {
-            self.pipeline.validate_mcp_composition(code, &context)
-                .await
-                .map_err(|e| pmcp::Error::Internal(format!("Validation error: {}", e)))?
+            self.pipeline.validate_mcp_composition(code, &context).await #map_err
         }),
         other => Err(syn::Error::new_spanned(
             error_span,

@@ -489,16 +489,18 @@ pub enum ExecutionError {
 /// Supported code languages for validation and execution.
 ///
 /// Each variant selects a different validation path in the pipeline and
-/// maps to the corresponding feature flag. The derive macro uses this
-/// enum at compile time to emit the correct validation call.
+/// maps to the corresponding feature flag. The derive macro mirrors these
+/// variants in `gen_validation_call()` (proc-macro crates cannot depend on
+/// runtime crates, so the string matching is duplicated by necessity).
+/// A sync test in the derive crate enforces both sides stay aligned.
 ///
 /// # Adding a New Language
 ///
-/// 1. Add a variant here
-/// 2. Add the `from_str` match arm below
-/// 3. Add the validation method to `ValidationPipeline` (feature-gated)
-/// 4. Add the `quote!` branch in `pmcp-code-mode-derive/src/lib.rs`
-/// 5. Update `CodeModeToolBuilder` for tool metadata
+/// 1. Add a variant here with `from_attr` / `as_str` / `required_feature` arms
+/// 2. Add the validation method to `ValidationPipeline` (feature-gated)
+/// 3. Add the `quote!` branch in `pmcp-code-mode-derive/src/lib.rs` `gen_validation_call()`
+/// 4. Update `CodeModeToolBuilder` for tool metadata
+/// 5. Add the new string to the sync test in the derive crate
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CodeLanguage {
