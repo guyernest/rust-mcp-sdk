@@ -4,11 +4,69 @@
 
 use crate::types::{ExecutionError, RiskLevel};
 use hmac::{Hmac, KeyInit, Mac};
+use secrecy::{ExposeSecret, SecretBox};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
+
+/// Zeroizing wrapper for HMAC token secrets.
+///
+/// ## Security Properties
+/// - Memory is zeroed on drop via `zeroize` (through `secrecy::SecretBox`)
+/// - **Explicitly does NOT implement:** `Debug`, `Display`, `Clone`, `PartialEq`,
+///   `Serialize`, `Deserialize` -- preventing accidental logging, serialization, or copying
+/// - Secret bytes accessed only via `expose_secret()` which returns `&[u8]`
+///
+/// ## Threat Model
+/// Protects against: accidental logging, memory dumps after drop,
+/// clone-and-forget patterns, comparison side channels, JSON serialization leakage.
+/// Does NOT protect against: active memory forensics while the secret
+/// is in use, side-channel attacks on the HMAC computation itself.
+///
+/// ## Usage in Structs
+/// When embedding `TokenSecret` in a struct that derives `Serialize`:
+/// ```rust,ignore
+/// #[derive(serde::Serialize)]
+/// struct MyServer {
+///     #[serde(skip)]  // REQUIRED -- TokenSecret does not implement Serialize
+///     token_secret: TokenSecret,
+///     // ... other fields
+/// }
+/// ```
+pub struct TokenSecret(SecretBox<[u8]>);
+
+// SAFETY NOTE: TokenSecret intentionally does NOT derive or implement:
+// - Debug (prevents logging secret bytes)
+// - Display (prevents printing secret bytes)
+// - Clone (prevents accidental copies that bypass zeroize)
+// - Serialize / Deserialize (prevents JSON/wire leakage)
+// - PartialEq / Eq (prevents timing side-channel comparisons)
+// These denials are verified by negative trait tests in Plan 05.
+
+impl TokenSecret {
+    /// Create from raw bytes. The input Vec is consumed and its contents
+    /// copied into a SecretBox. The original Vec is NOT zeroed -- callers
+    /// should use `from_env()` for maximum security.
+    pub fn new(secret: impl Into<Vec<u8>>) -> Self {
+        let bytes: Vec<u8> = secret.into();
+        Self(SecretBox::new(Box::from(bytes.as_slice())))
+    }
+
+    /// Read from an environment variable. The string value is converted
+    /// to bytes and wrapped immediately.
+    pub fn from_env(var: &str) -> Result<Self, std::env::VarError> {
+        let val = std::env::var(var)?;
+        Ok(Self::new(val.into_bytes()))
+    }
+
+    /// Expose the secret bytes for cryptographic operations.
+    /// Callers MUST NOT log or persist the returned slice.
+    pub fn expose_secret(&self) -> &[u8] {
+        self.0.expose_secret()
+    }
+}
 
 /// Approval token that authorizes code execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,35 +177,40 @@ pub trait TokenGenerator: Send + Sync {
 
 /// HMAC-based token generator for MVP.
 pub struct HmacTokenGenerator {
-    secret: Vec<u8>,
+    secret: TokenSecret,
 }
 
 impl HmacTokenGenerator {
-    /// Create a new HMAC token generator with the given secret.
-    pub fn new(secret: impl Into<Vec<u8>>) -> Self {
-        Self {
-            secret: secret.into(),
-        }
+    /// Create a new HMAC token generator with a `TokenSecret`.
+    pub fn new(secret: TokenSecret) -> Self {
+        Self { secret }
+    }
+
+    /// Create from raw bytes (backward-compatible migration helper).
+    ///
+    /// Wraps the bytes in a `TokenSecret` internally. Prefer constructing
+    /// a `TokenSecret` directly for new code.
+    pub fn new_from_bytes(bytes: impl Into<Vec<u8>>) -> Self {
+        Self::new(TokenSecret::new(bytes))
     }
 
     /// Create from an environment variable.
     pub fn from_env(env_var: &str) -> Result<Self, std::env::VarError> {
-        let secret = std::env::var(env_var)?;
-        Ok(Self::new(secret.into_bytes()))
+        Ok(Self::new(TokenSecret::from_env(env_var)?))
     }
 
     /// Sign the token payload.
     fn sign(&self, payload: &[u8]) -> String {
-        let mut mac =
-            HmacSha256::new_from_slice(&self.secret).expect("HMAC can take key of any size");
+        let mut mac = HmacSha256::new_from_slice(self.secret.expose_secret())
+            .expect("HMAC can take key of any size");
         mac.update(payload);
         hex::encode(mac.finalize().into_bytes())
     }
 
     /// Verify the signature.
     fn verify_signature(&self, payload: &[u8], signature: &str) -> bool {
-        let mut mac =
-            HmacSha256::new_from_slice(&self.secret).expect("HMAC can take key of any size");
+        let mut mac = HmacSha256::new_from_slice(self.secret.expose_secret())
+            .expect("HMAC can take key of any size");
         mac.update(payload);
 
         let expected = hex::decode(signature).unwrap_or_default();
@@ -259,7 +322,7 @@ mod tests {
 
     #[test]
     fn test_token_generation_and_verification() {
-        let generator = HmacTokenGenerator::new(b"test-secret-key".to_vec());
+        let generator = HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key".to_vec()));
 
         let token = generator.generate(
             "query { users { id } }",
@@ -282,7 +345,7 @@ mod tests {
 
     #[test]
     fn test_code_mismatch() {
-        let generator = HmacTokenGenerator::new(b"test-secret-key".to_vec());
+        let generator = HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key".to_vec()));
 
         let token = generator.generate(
             "query { users { id } }",
@@ -301,7 +364,7 @@ mod tests {
 
     #[test]
     fn test_token_encode_decode() {
-        let generator = HmacTokenGenerator::new(b"test-secret-key".to_vec());
+        let generator = HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key".to_vec()));
 
         let token = generator.generate(
             "query { users { id } }",

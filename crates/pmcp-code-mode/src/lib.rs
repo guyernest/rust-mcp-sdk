@@ -120,7 +120,7 @@ pub use executor::McpExecutor;
 
 pub use token::{
     canonicalize_code, compute_context_hash, hash_code, ApprovalToken, HmacTokenGenerator,
-    TokenGenerator,
+    TokenGenerator, TokenSecret,
 };
 
 pub use types::{

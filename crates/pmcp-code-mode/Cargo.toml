@@ -23,7 +23,9 @@ thiserror = "2"
 tracing = "0.1"
 base64 = "0.22"
 hmac = "0.13"
+secrecy = "0.10"
 sha2 = "0.11"
+zeroize = { version = "1.8", features = ["derive"] }
 uuid = { version = "1", features = ["v4"] }
 hex = "0.4"
 chrono = "0.4"

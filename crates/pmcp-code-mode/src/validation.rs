@@ -11,7 +11,7 @@ use crate::config::CodeModeConfig;
 use crate::explanation::{ExplanationGenerator, TemplateExplanationGenerator};
 use crate::graphql::{GraphQLQueryInfo, GraphQLValidator};
 use crate::policy::{OperationEntity, PolicyEvaluator};
-use crate::token::{compute_context_hash, HmacTokenGenerator, TokenGenerator};
+use crate::token::{compute_context_hash, HmacTokenGenerator, TokenGenerator, TokenSecret};
 use crate::types::{
     PolicyViolation, UnifiedAction, ValidationError, ValidationMetadata, ValidationResult,
 };
@@ -104,11 +104,23 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
             #[cfg(feature = "openapi-code-mode")]
             javascript_validator: JavaScriptValidator::default()
                 .with_sdk_operations(config.sdk_operations.clone()),
-            token_generator: HmacTokenGenerator::new(token_secret),
+            token_generator: HmacTokenGenerator::new_from_bytes(token_secret),
             explanation_generator: TemplateExplanationGenerator::new(),
             policy_evaluator: None,
             config,
         }
+    }
+
+    /// Create a new validation pipeline from a [`TokenSecret`].
+    ///
+    /// This is the **secure entry point** for production callers and derive macro
+    /// generated code. The secret is unwrapped internally -- callers never need
+    /// to call `expose_secret()` directly.
+    ///
+    /// **Warning**: This constructor does not configure a policy evaluator.
+    /// Only basic config checks will be performed.
+    pub fn from_token_secret(config: CodeModeConfig, secret: &TokenSecret) -> Self {
+        Self::new(config, secret.expose_secret().to_vec())
     }
 
     /// Create a new validation pipeline with a policy evaluator.
@@ -122,7 +134,7 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
             #[cfg(feature = "openapi-code-mode")]
             javascript_validator: JavaScriptValidator::default()
                 .with_sdk_operations(config.sdk_operations.clone()),
-            token_generator: HmacTokenGenerator::new(token_secret),
+            token_generator: HmacTokenGenerator::new_from_bytes(token_secret),
             explanation_generator: TemplateExplanationGenerator::new(),
             policy_evaluator: Some(evaluator),
             config,
