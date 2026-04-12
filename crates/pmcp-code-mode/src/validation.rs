@@ -113,9 +113,14 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
 
     /// Create a new validation pipeline from a [`TokenSecret`].
     ///
-    /// This is the **secure entry point** for production callers and derive macro
-    /// generated code. The secret is unwrapped internally -- callers never need
-    /// to call `expose_secret()` directly.
+    /// Convenience constructor for production callers and derive macro generated
+    /// code. Callers never need to call `expose_secret()` directly.
+    ///
+    /// **Security note**: Internally this creates an intermediate `Vec<u8>` copy
+    /// of the secret bytes that is **not** zeroized on drop. For maximum security,
+    /// prefer [`TokenSecret::from_env`] which minimizes secret copies. This
+    /// limitation will be addressed in a future version by adding a
+    /// `HmacTokenGenerator::from_secret_ref` constructor.
     ///
     /// **Warning**: This constructor does not configure a policy evaluator.
     /// Only basic config checks will be performed.
