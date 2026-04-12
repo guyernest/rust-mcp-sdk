@@ -744,10 +744,15 @@ Plans:
   4. A complete worked example in `examples/` (e.g. `XX_code_mode_graphql.rs`) demonstrates: struct annotation → `register_code_mode_tools` → `validate_code` → approval token → `execute_code` round trip using `NoopPolicyEvaluator`
   5. Contract YAMLs for `pmcp-code-mode` and `pmcp-code-mode-derive` exist under `../provable-contracts/contracts/` and `pmat comply check` passes on both
   6. `make quality-gate` passes workspace-wide (zero clippy warnings, zero SATD, all tests green, format clean) and both new crates are positioned in the publishing order documented in CLAUDE.md, ready for the next release phase
-**Plans:** 0 plans
+**Plans:** 6 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 67.1 to break down — see 67.1-DECISIONS.md for locked pre-planning decisions)
+- [ ] 67.1-01-PLAN.md — Crate scaffolding + source move into workspace
+- [ ] 67.1-02-PLAN.md — Security hardening (TokenSecret, NoopPolicyEvaluator, async_trait re-export)
+- [ ] 67.1-03-PLAN.md — CodeExecutor high-level trait
+- [ ] 67.1-04-PLAN.md — pmcp-code-mode-derive proc macro (#[derive(CodeMode)] + trybuild)
+- [ ] 67.1-05-PLAN.md — Property tests + fuzz targets
+- [ ] 67.1-06-PLAN.md — End-to-end example + CRATE-READMEs + SECURITY.md + quality-gate
 
 ### Phase 68: General Documentation Polish
 **Goal**: Crate-level documentation showcases current best practices (TypedToolWithOutput, proc macros), transport types are discoverable, and CI gates prevent future documentation drift
@@ -824,7 +829,7 @@ Plans:
 
 **Requirements:** TBD (depends on spike outcome)
 
-**Plans:** 0 plans
+**Plans:** 6 plans
 
 Plans:
 - [ ] TBD (promote with `/gsd:review-backlog` when ready)
