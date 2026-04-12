@@ -30,16 +30,14 @@
 //!
 //! # Known Limitation (v0.1.0): Static Validation Context
 //!
-//! The generated `ValidateCodeHandler::handle` uses **placeholder values**
-//! (`"anonymous"`, `"session"`, `"schema"`, `"perms"`) for the `ValidationContext`.
-//! This means approval tokens are NOT bound to a specific user, session, or schema
-//! version. A token obtained in one session can be replayed in another.
+//! The generated `ValidateCodeHandler::handle` now calls `validate_graphql_query_async`
+//! which **does** invoke `PolicyEvaluator::evaluate_operation()` for authorization.
+//! However, it still uses **placeholder values** (`"anonymous"`, `"session"`,
+//! `"schema"`, `"perms"`) for the `ValidationContext`. This means approval tokens
+//! are NOT bound to a specific user, session, or schema version.
 //!
-//! For production use, either:
-//! - Override the generated handler to supply real context from `RequestHandlerExtra`
-//! - Use the `CodeModeHandler` trait directly instead of the derive macro
-//!
-//! This will be addressed in v0.2.0 via attribute-based context configuration.
+//! This will be addressed in v0.2.0 via the `#[code_mode(context_from = "method")]`
+//! attribute.
 //!
 //! # Generated Code
 //!
@@ -180,7 +178,7 @@ fn expand_code_mode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
 
             /// Internal state for the `validate_code` tool handler.
             pub(super) struct ValidateCodeHandler {
-                pub(super) pipeline: pmcp_code_mode::ValidationPipeline,
+                pub(super) pipeline: Arc<pmcp_code_mode::ValidationPipeline>,
                 pub(super) config: pmcp_code_mode::CodeModeConfig,
             }
 
@@ -205,12 +203,10 @@ fn expand_code_mode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
                     // obtains a valid token can replay it across different users and
                     // sessions until it expires.
                     //
-                    // Production implementations MUST override the `ValidateCodeHandler::handle`
-                    // method to supply real user/session context from `_extra`, or use
-                    // the `CodeModeHandler` trait directly instead of the derive macro.
-                    //
-                    // TODO(v0.2.0): Accept a `fn(&RequestHandlerExtra) -> ValidationContext`
-                    // callback via the `#[code_mode(...)]` attribute.
+                    // NOTE: Policy evaluation IS now enforced via
+                    // validate_graphql_query_async, but the ValidationContext still
+                    // uses placeholder values. This will be addressed in v0.2.0
+                    // via the `#[code_mode(context_from = "method")]` attribute.
                     let context = pmcp_code_mode::ValidationContext::new(
                         "anonymous",
                         "session",
@@ -218,7 +214,8 @@ fn expand_code_mode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
                         "perms",
                     );
 
-                    let result = self.pipeline.validate_graphql_query(code, &context)
+                    let result = self.pipeline.validate_graphql_query_async(code, &context)
+                        .await
                         .map_err(|e| pmcp::Error::Internal(format!("Validation error: {}", e)))?;
 
                     let response = pmcp_code_mode::ValidationResponse::success(
@@ -246,7 +243,7 @@ fn expand_code_mode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
 
             /// Internal state for the `execute_code` tool handler.
             pub(super) struct ExecuteCodeHandler<E: pmcp_code_mode::CodeExecutor + 'static> {
-                pub(super) pipeline: pmcp_code_mode::ValidationPipeline,
+                pub(super) pipeline: Arc<pmcp_code_mode::ValidationPipeline>,
                 pub(super) executor: Arc<E>,
             }
 
@@ -314,22 +311,21 @@ fn expand_code_mode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
                 &self,
                 builder: pmcp::ServerBuilder,
             ) -> pmcp::ServerBuilder {
-                let pipeline_validate = pmcp_code_mode::ValidationPipeline::from_token_secret(
-                    self.code_mode_config.clone(),
-                    &self.token_secret,
-                );
-                let pipeline_execute = pmcp_code_mode::ValidationPipeline::from_token_secret(
-                    self.code_mode_config.clone(),
-                    &self.token_secret,
+                let pipeline = std::sync::Arc::new(
+                    pmcp_code_mode::ValidationPipeline::from_token_secret_with_policy(
+                        self.code_mode_config.clone(),
+                        &self.token_secret,
+                        std::sync::Arc::clone(&self.policy_evaluator) as std::sync::Arc<dyn pmcp_code_mode::PolicyEvaluator>,
+                    )
                 );
 
                 let validate_handler = #mod_name::ValidateCodeHandler {
-                    pipeline: pipeline_validate,
+                    pipeline: std::sync::Arc::clone(&pipeline),
                     config: self.code_mode_config.clone(),
                 };
 
                 let execute_handler = #mod_name::ExecuteCodeHandler {
-                    pipeline: pipeline_execute,
+                    pipeline,
                     executor: std::sync::Arc::clone(&self.code_executor),
                 };
 
