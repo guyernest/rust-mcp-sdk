@@ -50,24 +50,41 @@ let builder = server.register_code_mode_tools(pmcp::Server::builder())?;
 
 ### JavaScript/OpenAPI Server (e.g. Cost Coach)
 
-Requires the `openapi-code-mode` feature on `pmcp-code-mode`.
+Requires the `js-runtime` feature on `pmcp-code-mode`. Use the standard `JsCodeExecutor` adapter — no need to implement `CodeExecutor` manually.
 
 ```rust,ignore
+use pmcp_code_mode::{JsCodeExecutor, ExecutionConfig};
+
 #[derive(CodeMode)]
 #[code_mode(context_from = "get_context", language = "javascript")]
 struct CostCoachServer {
     code_mode_config: CodeModeConfig,
     token_secret: TokenSecret,
     policy_evaluator: Arc<NoopPolicyEvaluator>,
-    code_executor: Arc<JsExecutor>,  // Holds its own ExecutionConfig
+    code_executor: Arc<JsCodeExecutor<CostExplorerHttpExecutor>>,
 }
+
+// Setup:
+let http = CostExplorerHttpExecutor::new(clients.clone());
+let config = ExecutionConfig::default()
+    .with_blocked_fields(["password", "ssn"]);
+let code_executor = Arc::new(JsCodeExecutor::new(http, config));
 ```
 
-The generated handler calls `validate_javascript_code` (sync) instead of `validate_graphql_query_async`. The executor holds its own `ExecutionConfig` with `max_api_calls`, `timeout_seconds`, `max_loop_iterations` — no change to the `CodeExecutor` trait.
+The generated handler calls `validate_javascript_code` (sync) instead of `validate_graphql_query_async`. `JsCodeExecutor` compiles the JS code, executes it against your `HttpExecutor`, and logs execution metadata automatically.
+
+For SDK-backed servers (no HTTP), use `SdkCodeExecutor` instead:
+
+```rust,ignore
+use pmcp_code_mode::{SdkCodeExecutor, ExecutionConfig};
+
+let sdk = MyCostExplorerSdk::new(credentials);
+let code_executor = Arc::new(SdkCodeExecutor::new(sdk, ExecutionConfig::default()));
+```
 
 ### SQL Server
 
-Requires the `sql-code-mode` feature on `pmcp-code-mode`.
+Requires the `sql-code-mode` feature on `pmcp-code-mode`. SQL servers implement `CodeExecutor` directly (no adapter needed — your executor calls your database pool).
 
 ```rust,ignore
 #[derive(CodeMode)]
@@ -76,23 +93,28 @@ struct MySqlServer {
     code_mode_config: CodeModeConfig,
     token_secret: TokenSecret,
     policy_evaluator: Arc<NoopPolicyEvaluator>,
-    code_executor: Arc<SqlExecutor>,
+    code_executor: Arc<MySqlExecutor>,  // Implements CodeExecutor directly
 }
 ```
 
 ### MCP Composition Server
 
-Requires the `mcp-code-mode` feature on `pmcp-code-mode`.
+Requires the `mcp-code-mode` feature on `pmcp-code-mode`. Use the standard `McpCodeExecutor` adapter.
 
 ```rust,ignore
+use pmcp_code_mode::{McpCodeExecutor, ExecutionConfig};
+
 #[derive(CodeMode)]
 #[code_mode(context_from = "get_context", language = "mcp")]
 struct McpRouter {
     code_mode_config: CodeModeConfig,
     token_secret: TokenSecret,
     policy_evaluator: Arc<NoopPolicyEvaluator>,
-    code_executor: Arc<McpCompositionExecutor>,
+    code_executor: Arc<McpCodeExecutor<MyMcpRouter>>,
 }
+
+let mcp = MyMcpRouter::new(foundation_servers);
+let code_executor = Arc::new(McpCodeExecutor::new(mcp, ExecutionConfig::default()));
 ```
 
 ### Testing: Without `context_from`
@@ -269,12 +291,12 @@ This is a proc-macro crate. It depends on `syn`, `quote`, `proc-macro2`, and `da
 
 Key questions for reviewers:
 
+- **Standard adapters** — does `JsCodeExecutor`/`SdkCodeExecutor`/`McpCodeExecutor` cover your use case? If not, what adapter shape do you need?
+- **Variables forwarding** — the JS adapters pass `variables` as `args` in the execution plan. Does your server need a different binding strategy?
 - **Fixed field names vs. attribute mapping** — is `code_mode_config`/`token_secret`/`policy_evaluator`/`code_executor` workable, or do you need `#[code_mode(config = "my_field")]` style overrides?
-- **`context_from` sync only** — the context method is currently sync (`fn get_context(&self, extra) -> ValidationContext`). Do you need an async version for cases where context requires a network call?
-- **`CodeExecutor` per language** — the executor holds its own config (e.g., `ExecutionConfig` for JS). Is this pattern working for your backend, or do you need language-specific executor traits?
+- **`context_from` sync only** — the context method is currently sync. Do you need an async version for cases where context requires a network call?
 - **SQL dialect** — what SQL dialects and parameterization styles does your team need?
-- **MCP composition** — what validation should `validate_mcp_composition` perform? Schema compatibility, tool existence, or structural checks?
-- **Error handling** — is `TokenError` sufficient, or should `register_code_mode_tools` return a broader error type?
+- **MCP composition** — what should `validate_mcp_composition` check? Schema compatibility, tool existence, or structural validation?
 
 File issues or discuss in the `#pmcp-sdk` channel.
 

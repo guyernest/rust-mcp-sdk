@@ -184,11 +184,77 @@ impl CodeExecutor for MyGraphQLExecutor {
 }
 ```
 
-Execution patterns supported through this single trait:
-- **GraphQL:** Direct query execution against a GraphQL backend
-- **JavaScript/OpenAPI:** JS plan execution via HTTP/SDK/MCP calls (executor holds `ExecutionConfig` for limits)
-- **SQL:** Direct SQL execution against a database pool
-- **MCP composition:** Tool calls routed to other MCP servers
+For **GraphQL** and **SQL** servers, you implement `CodeExecutor` directly — your executor calls your database or GraphQL backend.
+
+For **JavaScript/OpenAPI**, **SDK**, and **MCP** servers, use the standard adapters instead of implementing `CodeExecutor` manually.
+
+### Standard Adapters (JS/SDK/MCP)
+
+These adapters bridge the low-level execution traits to `CodeExecutor`, eliminating ~75 lines of manual handler boilerplate per server. Each compiles JavaScript code via `PlanCompiler`, executes via `PlanExecutor`, and logs execution metadata automatically.
+
+**`JsCodeExecutor<H>`** — JavaScript + HTTP calls (Pattern B). Requires `js-runtime` feature.
+
+```rust
+use pmcp_code_mode::{JsCodeExecutor, ExecutionConfig};
+
+// Your HttpExecutor implementation (e.g., CostExplorerHttpExecutor)
+let http = CostExplorerHttpExecutor::new(clients.clone());
+let config = ExecutionConfig::default()
+    .with_blocked_fields(["password", "ssn"]);
+let code_executor = Arc::new(JsCodeExecutor::new(http, config));
+// Pass as code_executor field in your #[derive(CodeMode)] struct
+```
+
+**`SdkCodeExecutor<S>`** — JavaScript + SDK operations (Pattern C). Requires `js-runtime` feature.
+
+```rust
+use pmcp_code_mode::{SdkCodeExecutor, ExecutionConfig};
+
+let sdk = MyCostExplorerSdk::new(credentials);
+let config = ExecutionConfig::default();
+let code_executor = Arc::new(SdkCodeExecutor::new(sdk, config));
+```
+
+**`McpCodeExecutor<M>`** — JavaScript + MCP tool composition (Pattern D). Requires `mcp-code-mode` feature.
+
+```rust
+use pmcp_code_mode::{McpCodeExecutor, ExecutionConfig};
+
+let mcp = MyMcpRouter::new(foundation_servers);
+let config = ExecutionConfig::default();
+let code_executor = Arc::new(McpCodeExecutor::new(mcp, config));
+```
+
+All three adapters:
+- Create a fresh `PlanCompiler` + `PlanExecutor` per call (cheap — your `HttpExecutor`/`SdkExecutor`/`McpExecutor` holds `Arc`'d state)
+- Forward `variables` into the execution plan as `args` (available in JS code as the `args` variable)
+- Log `api_calls` count and `execution_time_ms` via `tracing::debug!`
+
+### End-to-End: Cost Coach with Derive Macro
+
+Before (manual handlers, ~75 lines):
+```rust,ignore
+struct ValidateState { pipeline: Arc<ValidationPipeline>, config: CodeModeConfig }
+struct ExecuteState { pipeline: Arc<ValidationPipeline>, http: CostExplorerHttpExecutor, config: ExecutionConfig }
+// ... implement ToolHandler for both, wire manually ...
+```
+
+After (derive macro + adapter, 8 lines):
+```rust,ignore
+#[derive(CodeMode)]
+#[code_mode(context_from = "get_context", language = "javascript")]
+struct CostCoachServer {
+    code_mode_config: CodeModeConfig,
+    token_secret: TokenSecret,
+    policy_evaluator: Arc<NoopPolicyEvaluator>,
+    code_executor: Arc<JsCodeExecutor<CostExplorerHttpExecutor>>,
+}
+
+let http = CostExplorerHttpExecutor::new(clients.clone());
+let code_executor = Arc::new(JsCodeExecutor::new(http, ExecutionConfig::default()));
+let server = Arc::new(CostCoachServer { /* ... */ });
+let builder = server.register_code_mode_tools(pmcp::Server::builder())?;
+```
 
 ## Key Types
 
@@ -199,6 +265,10 @@ Execution patterns supported through this single trait:
 | `CodeLanguage` | Enum of supported languages: `GraphQL`, `JavaScript`, `Sql`, `Mcp` |
 | `PolicyEvaluator` | Trait for pluggable authorization (Cedar, AWS Verified Permissions, custom) |
 | `CodeExecutor` | Trait for executing validated code against your backend |
+| `JsCodeExecutor<H>` | Standard adapter: `HttpExecutor` -> `CodeExecutor` (JS+HTTP, `js-runtime` feature) |
+| `SdkCodeExecutor<S>` | Standard adapter: `SdkExecutor` -> `CodeExecutor` (JS+SDK, `js-runtime` feature) |
+| `McpCodeExecutor<M>` | Standard adapter: `McpExecutor` -> `CodeExecutor` (JS+MCP, `mcp-code-mode` feature) |
+| `ExecutionConfig` | JS execution limits: `max_api_calls`, `timeout_seconds`, `max_loop_iterations`, blocked fields |
 | `TokenSecret` | Zeroizing HMAC secret — backed by `secrecy::SecretBox<[u8]>`, no Debug/Clone/Serialize |
 | `HmacTokenGenerator` | Creates HMAC-SHA256 tokens binding code hash + context to approval |
 | `TokenError` | Error type for constructor failures (e.g. HMAC secret too short) |
@@ -362,12 +432,12 @@ This demonstrates the full validate -> approve -> execute round trip, including 
 
 This is a pre-1.0 API. Key areas where we'd like team input:
 
-- **Derive macro ergonomics** — are the fixed field names (`code_mode_config`, `token_secret`, etc.) workable, or do you need attribute-based field mapping (e.g., `#[code_mode(config = "my_config")]`)?
-- **`context_from` pattern** — does returning `ValidationContext` from a method on your server struct work for your auth integration, or do you need an async version?
-- **`CodeExecutor` trait surface** — is `execute(code, variables) -> Result<Value, ExecutionError>` sufficient for all language backends, or do specific languages need additional context?
-- **`Result`-returning constructors** — are the `TokenError` variants clear enough for your error handling?
-- **SQL validation** — what SQL dialects do you need? Should the validator support parameterized queries, prepared statements, or raw SQL only?
-- **MCP composition** — what does your composition validation need? Schema compatibility checks, tool existence verification, or just structural validation?
+- **Standard adapters** — does `JsCodeExecutor`/`SdkCodeExecutor`/`McpCodeExecutor` cover your execution pattern, or do you need a different adapter shape?
+- **Variables forwarding** — the adapters pass `variables` as the `args` variable in JS plans. Does your server need a different variable binding strategy?
+- **Derive macro ergonomics** — are the fixed field names (`code_mode_config`, `token_secret`, etc.) workable, or do you need attribute-based field mapping?
+- **`context_from` pattern** — does returning `ValidationContext` from a sync method work for your auth integration, or do you need an async version?
+- **SQL validation** — what SQL dialects do you need? Parameterized queries, prepared statements, or raw SQL only?
+- **MCP composition** — what should `validate_mcp_composition` check? Schema compatibility, tool existence, or structural validation?
 - **Policy evaluation** — any use cases beyond Cedar and AVP?
 
 File issues or discuss in the `#pmcp-sdk` channel.
