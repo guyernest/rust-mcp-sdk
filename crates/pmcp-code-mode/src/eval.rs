@@ -481,6 +481,19 @@ pub fn json_to_string(value: &JsonValue) -> String {
     json_to_string_with_mode(value, JsonStringMode::JavaScript)
 }
 
+/// Restore a scope variable to its previous value, or remove it if it didn't exist before.
+#[inline]
+fn restore_scope_var(
+    scope: &mut HashMap<String, JsonValue>,
+    key: &str,
+    previous: Option<JsonValue>,
+) {
+    match previous {
+        Some(prev) => { scope.insert(key.to_string(), prev); },
+        None => { scope.remove(key); },
+    }
+}
+
 /// Evaluate an array method with scope.
 ///
 /// Supports dual-dispatch: methods like `.length`, `.includes()`, `.indexOf()`,
@@ -513,12 +526,9 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
             let mut results = Vec::with_capacity(arr.len());
             for item in arr {
                 let old = local_vars.insert(item_var.clone(), item);
-                let value = evaluate_with_scope(body, global_vars, local_vars)?;
-                match old {
-                    Some(prev) => { local_vars.insert(item_var.clone(), prev); },
-                    None => { local_vars.remove(item_var); },
-                }
-                results.push(value);
+                let value = evaluate_with_scope(body, global_vars, local_vars);
+                restore_scope_var(local_vars, item_var, old);
+                results.push(value?);
             }
             Ok(JsonValue::Array(results))
         },
@@ -530,12 +540,9 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
             let mut results = Vec::new();
             for item in arr {
                 let old = local_vars.insert(item_var.clone(), item.clone());
-                let keep = evaluate_with_scope(predicate, global_vars, local_vars)?;
-                match old {
-                    Some(prev) => { local_vars.insert(item_var.clone(), prev); },
-                    None => { local_vars.remove(item_var); },
-                }
-                if is_truthy(&keep) {
+                let keep = evaluate_with_scope(predicate, global_vars, local_vars);
+                restore_scope_var(local_vars, item_var, old);
+                if is_truthy(&keep?) {
                     results.push(item);
                 }
             }
@@ -548,12 +555,9 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
         } => {
             for item in arr {
                 let old = local_vars.insert(item_var.clone(), item.clone());
-                let found = evaluate_with_scope(predicate, global_vars, local_vars)?;
-                match old {
-                    Some(prev) => { local_vars.insert(item_var.clone(), prev); },
-                    None => { local_vars.remove(item_var); },
-                }
-                if is_truthy(&found) {
+                let found = evaluate_with_scope(predicate, global_vars, local_vars);
+                restore_scope_var(local_vars, item_var, old);
+                if is_truthy(&found?) {
                     return Ok(item);
                 }
             }
@@ -566,12 +570,9 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
         } => {
             for item in arr {
                 let old = local_vars.insert(item_var.clone(), item);
-                let found = evaluate_with_scope(predicate, global_vars, local_vars)?;
-                match old {
-                    Some(prev) => { local_vars.insert(item_var.clone(), prev); },
-                    None => { local_vars.remove(item_var); },
-                }
-                if is_truthy(&found) {
+                let found = evaluate_with_scope(predicate, global_vars, local_vars);
+                restore_scope_var(local_vars, item_var, old);
+                if is_truthy(&found?) {
                     return Ok(JsonValue::Bool(true));
                 }
             }
@@ -584,12 +585,9 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
         } => {
             for item in arr {
                 let old = local_vars.insert(item_var.clone(), item);
-                let found = evaluate_with_scope(predicate, global_vars, local_vars)?;
-                match old {
-                    Some(prev) => { local_vars.insert(item_var.clone(), prev); },
-                    None => { local_vars.remove(item_var); },
-                }
-                if !is_truthy(&found) {
+                let found = evaluate_with_scope(predicate, global_vars, local_vars);
+                restore_scope_var(local_vars, item_var, old);
+                if !is_truthy(&found?) {
                     return Ok(JsonValue::Bool(false));
                 }
             }
@@ -600,11 +598,9 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
             let mut results = Vec::new();
             for item in arr {
                 let old = local_vars.insert(item_var.clone(), item);
-                let value = evaluate_with_scope(body, global_vars, local_vars)?;
-                match old {
-                    Some(prev) => { local_vars.insert(item_var.clone(), prev); },
-                    None => { local_vars.remove(item_var); },
-                }
+                let value = evaluate_with_scope(body, global_vars, local_vars);
+                restore_scope_var(local_vars, item_var, old);
+                let value = value?;
                 if let JsonValue::Array(items) = value {
                     results.extend(items);
                 } else {
@@ -624,15 +620,10 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
             for item in arr {
                 let old_acc = local_vars.insert(acc_var.clone(), acc.clone());
                 let old_item = local_vars.insert(item_var.clone(), item);
-                acc = evaluate_with_scope(body, global_vars, local_vars)?;
-                match old_acc {
-                    Some(prev) => { local_vars.insert(acc_var.clone(), prev); },
-                    None => { local_vars.remove(acc_var); },
-                }
-                match old_item {
-                    Some(prev) => { local_vars.insert(item_var.clone(), prev); },
-                    None => { local_vars.remove(item_var); },
-                }
+                let result = evaluate_with_scope(body, global_vars, local_vars);
+                restore_scope_var(local_vars, acc_var, old_acc);
+                restore_scope_var(local_vars, item_var, old_item);
+                acc = result?;
             }
             Ok(acc)
         },

@@ -203,7 +203,13 @@ fn expand_code_mode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
 
     // Branch code generation based on context_from presence
     let expanded = if let Some(ref method_name) = opts.context_from {
-        // --- context_from path: real ValidationContext from user method ---
+        // Validate that context_from is a valid Rust identifier
+        if method_name.is_empty() || syn::parse_str::<syn::Ident>(method_name).is_err() {
+            return Err(syn::Error::new_spanned(
+                &input.ident,
+                format!("`context_from = \"{method_name}\"` is not a valid Rust identifier"),
+            ));
+        }
         let method_ident = syn::Ident::new(method_name, struct_name.span());
         expand_with_context_from(struct_name, &mod_name, &language_lit, &method_ident)
     } else {
@@ -286,8 +292,7 @@ fn expand_with_context_from(
                 }
 
                 fn metadata(&self) -> Option<pmcp::types::ToolInfo> {
-                    let tools = pmcp_code_mode::CodeModeToolBuilder::new(#language_lit).build_tools();
-                    tools.into_iter().find(|t| t.name == "validate_code")
+                    Some(pmcp_code_mode::CodeModeToolBuilder::new(#language_lit).build_validate_tool())
                 }
             }
 
@@ -340,8 +345,7 @@ fn expand_with_context_from(
                 }
 
                 fn metadata(&self) -> Option<pmcp::types::ToolInfo> {
-                    let tools = pmcp_code_mode::CodeModeToolBuilder::new(#language_lit).build_tools();
-                    tools.into_iter().find(|t| t.name == "execute_code")
+                    Some(pmcp_code_mode::CodeModeToolBuilder::new(#language_lit).build_execute_tool())
                 }
             }
         }
@@ -477,8 +481,7 @@ fn expand_without_context_from(
                 }
 
                 fn metadata(&self) -> Option<pmcp::types::ToolInfo> {
-                    let tools = pmcp_code_mode::CodeModeToolBuilder::new(#language_lit).build_tools();
-                    tools.into_iter().find(|t| t.name == "validate_code")
+                    Some(pmcp_code_mode::CodeModeToolBuilder::new(#language_lit).build_validate_tool())
                 }
             }
 
@@ -531,8 +534,7 @@ fn expand_without_context_from(
                 }
 
                 fn metadata(&self) -> Option<pmcp::types::ToolInfo> {
-                    let tools = pmcp_code_mode::CodeModeToolBuilder::new(#language_lit).build_tools();
-                    tools.into_iter().find(|t| t.name == "execute_code")
+                    Some(pmcp_code_mode::CodeModeToolBuilder::new(#language_lit).build_execute_tool())
                 }
             }
         }

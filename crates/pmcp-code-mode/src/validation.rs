@@ -218,7 +218,7 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
         &self,
         query_info: &GraphQLQueryInfo,
         start: Instant,
-    ) -> Result<(), Box<ValidationResult>> {
+    ) -> Option<ValidationResult> {
         // Mutation authorization checks
         if !query_info.operation_type.is_read_only() {
             let mutation_name = query_info.root_fields.first().cloned().unwrap_or_default();
@@ -226,7 +226,7 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
             if !self.config.blocked_mutations.is_empty()
                 && self.config.blocked_mutations.contains(&mutation_name)
             {
-                return Err(Box::new(ValidationResult::failure(
+                return Some(ValidationResult::failure(
                     vec![PolicyViolation::new(
                         "code_mode",
                         "blocked_mutation",
@@ -234,12 +234,12 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
                     )
                     .with_suggestion("This mutation is in the blocklist and cannot be executed")],
                     self.build_metadata(query_info, start.elapsed().as_millis() as u64),
-                )));
+                ));
             }
 
             if !self.config.allowed_mutations.is_empty() {
                 if !self.config.allowed_mutations.contains(&mutation_name) {
-                    return Err(Box::new(ValidationResult::failure(
+                    return Some(ValidationResult::failure(
                         vec![PolicyViolation::new(
                             "code_mode",
                             "mutation_not_allowed",
@@ -255,10 +255,10 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
                                 .join(", ")
                         ))],
                         self.build_metadata(query_info, start.elapsed().as_millis() as u64),
-                    )));
+                    ));
                 }
             } else if !self.config.allow_mutations {
-                return Err(Box::new(ValidationResult::failure(
+                return Some(ValidationResult::failure(
                     vec![PolicyViolation::new(
                         "code_mode",
                         "allow_mutations",
@@ -266,7 +266,7 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
                     )
                     .with_suggestion("Only read-only queries are allowed")],
                     self.build_metadata(query_info, start.elapsed().as_millis() as u64),
-                )));
+                ));
             }
         }
 
@@ -277,7 +277,7 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
             if !self.config.blocked_queries.is_empty()
                 && self.config.blocked_queries.contains(&query_name)
             {
-                return Err(Box::new(ValidationResult::failure(
+                return Some(ValidationResult::failure(
                     vec![PolicyViolation::new(
                         "code_mode",
                         "blocked_query",
@@ -285,13 +285,13 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
                     )
                     .with_suggestion("This query is in the blocklist and cannot be executed")],
                     self.build_metadata(query_info, start.elapsed().as_millis() as u64),
-                )));
+                ));
             }
 
             if !self.config.allowed_queries.is_empty()
                 && !self.config.allowed_queries.contains(&query_name)
             {
-                return Err(Box::new(ValidationResult::failure(
+                return Some(ValidationResult::failure(
                     vec![PolicyViolation::new(
                         "code_mode",
                         "query_not_allowed",
@@ -307,11 +307,11 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
                             .join(", ")
                     ))],
                     self.build_metadata(query_info, start.elapsed().as_millis() as u64),
-                )));
+                ));
             }
         }
 
-        Ok(())
+        None
     }
 
     /// Validate a GraphQL query using basic config checks only.
@@ -342,8 +342,8 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
         let query_info = self.graphql_validator.validate(query)?;
 
         // Config-based authorization checks (mutation blocklist/allowlist, query blocklist/allowlist)
-        if let Err(failure) = self.check_config_authorization(&query_info, start) {
-            return Ok(*failure);
+        if let Some(failure) = self.check_config_authorization(&query_info, start) {
+            return Ok(failure);
         }
 
         self.complete_validation(query, &query_info, context, start)
@@ -413,8 +413,8 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
                 "Falling back to basic config checks (no policy evaluator configured)"
             );
             // Reuse already-parsed query_info instead of re-parsing via validate_graphql_query
-            if let Err(failure) = self.check_config_authorization(&query_info, start) {
-                return Ok(*failure);
+            if let Some(failure) = self.check_config_authorization(&query_info, start) {
+                return Ok(failure);
             }
         }
 
