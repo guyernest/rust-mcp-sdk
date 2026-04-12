@@ -505,5 +505,22 @@ members = ["pmcp-macros", "crates/mcp-tester", "crates/mcp-preview", "crates/pmc
 exclude = ["fuzz", "examples/cloudflare-worker-mcp", "examples/26-server-tester", "examples/27-course-server-minimal", "examples/wasm-client", "examples/mcp-apps-chess", "examples/mcp-apps-map", "examples/mcp-apps-dataviz"]
 
 [package.metadata.docs.rs]
-all-features = true
+features = [
+    "composition",
+    "http",
+    "http-client",
+    "jwt-auth",
+    "macros",
+    "mcp-apps",
+    "oauth",
+    "rayon",
+    "resource-watcher",
+    "schema-generation",
+    "simd",
+    "sse",
+    "streamable-http",
+    "validation",
+    "websocket",
+]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
 rustdoc-args = ["--cfg", "docsrs"]
