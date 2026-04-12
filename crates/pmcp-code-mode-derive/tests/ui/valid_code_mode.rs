@@ -27,8 +27,8 @@ struct MyServer {
 
 fn main() {
     // Type-check: verify the generated method signature exists
-    fn _check_method_exists(server: &MyServer, builder: pmcp::server::builder::ServerCoreBuilder) {
-        let _builder: pmcp::server::builder::ServerCoreBuilder =
+    fn _check_method_exists(server: &MyServer, builder: pmcp::ServerBuilder) {
+        let _builder: pmcp::ServerBuilder =
             server.register_code_mode_tools(builder);
     }
 }

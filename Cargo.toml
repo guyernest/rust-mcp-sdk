@@ -145,7 +145,8 @@ clap = { version = "4.5", features = ["derive"] }
 env_logger = "0.11"
 dashmap = "6.1"  # Already in main deps but needed for examples
 pmcp-macros = { version = "0.5.0", path = "pmcp-macros" }  # For macro examples (s23_mcp_tool_macro)
-
+pmcp-code-mode = { version = "0.1.0", path = "crates/pmcp-code-mode" }  # For code mode example (s41)
+pmcp-code-mode-derive = { version = "0.1.0", path = "crates/pmcp-code-mode-derive" }  # For code mode example (s41)
 
 [features]
 default = ["logging"]
@@ -494,6 +495,11 @@ required-features = ["full"]
 [[example]]
 name = "s24_mcp_prompt_macro"
 path = "examples/s24_mcp_prompt_macro.rs"
+required-features = ["full"]
+
+[[example]]
+name = "s41_code_mode_graphql"
+path = "examples/s41_code_mode_graphql.rs"
 required-features = ["full"]
 
 [[bench]]

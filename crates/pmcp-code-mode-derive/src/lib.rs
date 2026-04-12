@@ -2,7 +2,7 @@
 //!
 //! Provides `#[derive(CodeMode)]` which generates a `register_code_mode_tools`
 //! method that registers `validate_code` and `execute_code` tools on a
-//! [`pmcp::server::builder::ServerCoreBuilder`].
+//! [`pmcp::ServerBuilder`].
 //!
 //! # Field Name Convention (v0.1.0)
 //!
@@ -30,7 +30,7 @@
 //! The macro generates:
 //!
 //! 1. A `register_code_mode_tools` method on the struct that takes a
-//!    `ServerCoreBuilder` **by value** and returns it (by-value fluent pattern).
+//!    `ServerBuilder` **by value** and returns it (by-value fluent pattern).
 //! 2. Two internal handler structs (`ValidateCodeHandler` and
 //!    `ExecuteCodeHandler`) that implement `pmcp::ToolHandler`.
 //! 3. A `Send + Sync` compile-time assertion (per D-08).
@@ -50,7 +50,7 @@
 //!     code_executor: Arc<MyExecutor>,
 //! }
 //!
-//! // Generated: MyServer::register_code_mode_tools(&self, builder) -> ServerCoreBuilder
+//! // Generated: MyServer::register_code_mode_tools(&self, builder) -> ServerBuilder
 //! ```
 
 use darling::FromDeriveInput;
@@ -275,17 +275,17 @@ fn expand_code_mode(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream>
             /// Register Code Mode tools (`validate_code` + `execute_code`) on the builder.
             ///
             /// Takes the builder **by value** and returns it (by-value fluent pattern),
-            /// matching `ServerCoreBuilder`'s API convention.
+            /// matching `ServerBuilder`'s API convention.
             ///
             /// # Example
             ///
             /// ```rust,ignore
-            /// let builder = server.register_code_mode_tools(ServerCoreBuilder::new());
+            /// let builder = server.register_code_mode_tools(Server::builder());
             /// ```
             pub fn register_code_mode_tools(
                 &self,
-                builder: pmcp::server::builder::ServerCoreBuilder,
-            ) -> pmcp::server::builder::ServerCoreBuilder {
+                builder: pmcp::ServerBuilder,
+            ) -> pmcp::ServerBuilder {
                 let pipeline_validate = pmcp_code_mode::ValidationPipeline::from_token_secret(
                     self.code_mode_config.clone(),
                     &self.token_secret,
