@@ -190,7 +190,10 @@ pub fn evaluate_with_scope<V: VariableProvider>(
         // Array methods: arr.map(), arr.filter(), etc.
         ValueExpr::ArrayMethod { array, method } => {
             let arr_value = evaluate_with_scope(array, global_vars, local_vars)?;
-            evaluate_array_method_with_scope(&arr_value, method, global_vars, local_vars)
+            // Clone scope once per array method call instead of N clones per element.
+            // The array method uses push/pop on this mutable scope.
+            let mut scope = local_vars.clone();
+            evaluate_array_method_with_scope(&arr_value, method, global_vars, &mut scope)
         },
 
         // Number methods: num.toFixed(), etc.
@@ -465,7 +468,7 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
     arr_value: &JsonValue,
     method: &ArrayMethodCall,
     global_vars: &V,
-    local_vars: &HashMap<String, JsonValue>,
+    local_vars: &mut HashMap<String, JsonValue>,
 ) -> Result<JsonValue, ExecutionError> {
     // String-compatible methods — dispatch before array handling
     if let JsonValue::String(s) = arr_value {
@@ -487,9 +490,12 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
         ArrayMethodCall::Map { item_var, body } => {
             let mut results = Vec::with_capacity(arr.len());
             for item in arr {
-                let mut merged = local_vars.clone();
-                merged.insert(item_var.clone(), item);
-                let value = evaluate_with_scope(body, global_vars, &merged)?;
+                let old = local_vars.insert(item_var.clone(), item);
+                let value = evaluate_with_scope(body, global_vars, local_vars)?;
+                match old {
+                    Some(prev) => { local_vars.insert(item_var.clone(), prev); },
+                    None => { local_vars.remove(item_var); },
+                }
                 results.push(value);
             }
             Ok(JsonValue::Array(results))
@@ -501,9 +507,12 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
         } => {
             let mut results = Vec::new();
             for item in arr {
-                let mut merged = local_vars.clone();
-                merged.insert(item_var.clone(), item.clone());
-                let keep = evaluate_with_scope(predicate, global_vars, &merged)?;
+                let old = local_vars.insert(item_var.clone(), item.clone());
+                let keep = evaluate_with_scope(predicate, global_vars, local_vars)?;
+                match old {
+                    Some(prev) => { local_vars.insert(item_var.clone(), prev); },
+                    None => { local_vars.remove(item_var); },
+                }
                 if is_truthy(&keep) {
                     results.push(item);
                 }
@@ -516,9 +525,12 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
             predicate,
         } => {
             for item in arr {
-                let mut merged = local_vars.clone();
-                merged.insert(item_var.clone(), item.clone());
-                let found = evaluate_with_scope(predicate, global_vars, &merged)?;
+                let old = local_vars.insert(item_var.clone(), item.clone());
+                let found = evaluate_with_scope(predicate, global_vars, local_vars)?;
+                match old {
+                    Some(prev) => { local_vars.insert(item_var.clone(), prev); },
+                    None => { local_vars.remove(item_var); },
+                }
                 if is_truthy(&found) {
                     return Ok(item);
                 }
@@ -531,9 +543,12 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
             predicate,
         } => {
             for item in arr {
-                let mut merged = local_vars.clone();
-                merged.insert(item_var.clone(), item);
-                let found = evaluate_with_scope(predicate, global_vars, &merged)?;
+                let old = local_vars.insert(item_var.clone(), item);
+                let found = evaluate_with_scope(predicate, global_vars, local_vars)?;
+                match old {
+                    Some(prev) => { local_vars.insert(item_var.clone(), prev); },
+                    None => { local_vars.remove(item_var); },
+                }
                 if is_truthy(&found) {
                     return Ok(JsonValue::Bool(true));
                 }
@@ -546,9 +561,12 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
             predicate,
         } => {
             for item in arr {
-                let mut merged = local_vars.clone();
-                merged.insert(item_var.clone(), item);
-                let found = evaluate_with_scope(predicate, global_vars, &merged)?;
+                let old = local_vars.insert(item_var.clone(), item);
+                let found = evaluate_with_scope(predicate, global_vars, local_vars)?;
+                match old {
+                    Some(prev) => { local_vars.insert(item_var.clone(), prev); },
+                    None => { local_vars.remove(item_var); },
+                }
                 if !is_truthy(&found) {
                     return Ok(JsonValue::Bool(false));
                 }
@@ -559,9 +577,12 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
         ArrayMethodCall::FlatMap { item_var, body } => {
             let mut results = Vec::new();
             for item in arr {
-                let mut merged = local_vars.clone();
-                merged.insert(item_var.clone(), item);
-                let value = evaluate_with_scope(body, global_vars, &merged)?;
+                let old = local_vars.insert(item_var.clone(), item);
+                let value = evaluate_with_scope(body, global_vars, local_vars)?;
+                match old {
+                    Some(prev) => { local_vars.insert(item_var.clone(), prev); },
+                    None => { local_vars.remove(item_var); },
+                }
                 if let JsonValue::Array(items) = value {
                     results.extend(items);
                 } else {
@@ -579,10 +600,17 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
         } => {
             let mut acc = evaluate_with_scope(initial, global_vars, local_vars)?;
             for item in arr {
-                let mut merged = local_vars.clone();
-                merged.insert(acc_var.clone(), acc.clone());
-                merged.insert(item_var.clone(), item);
-                acc = evaluate_with_scope(body, global_vars, &merged)?;
+                let old_acc = local_vars.insert(acc_var.clone(), acc.clone());
+                let old_item = local_vars.insert(item_var.clone(), item);
+                acc = evaluate_with_scope(body, global_vars, local_vars)?;
+                match old_acc {
+                    Some(prev) => { local_vars.insert(acc_var.clone(), prev); },
+                    None => { local_vars.remove(acc_var); },
+                }
+                match old_item {
+                    Some(prev) => { local_vars.insert(item_var.clone(), prev); },
+                    None => { local_vars.remove(item_var); },
+                }
             }
             Ok(acc)
         },
@@ -1656,5 +1684,135 @@ mod tests {
         };
         let result = evaluate(&expr, &vars).unwrap();
         assert_eq!(result, serde_json::json!(["apple", "banana", "cherry"]));
+    }
+
+    // =========================================================================
+    // Scope-chain push/pop optimization tests
+    // =========================================================================
+
+    #[test]
+    fn test_array_map_large_scope_performance() {
+        // Regression test: verifies push/pop optimization handles large arrays
+        // with many scope variables without excessive allocation.
+        // Before optimization: 1000 HashMap clones (one per element).
+        // After optimization: 1 HashMap clone (at array method entry).
+        use std::time::Instant;
+
+        let mut vars = HashMap::new();
+        // Pre-populate scope with 20 variables to make clone cost measurable
+        for i in 0..20 {
+            vars.insert(
+                format!("var_{i}"),
+                JsonValue::Number(serde_json::Number::from(i)),
+            );
+        }
+
+        // Build a 1000-element array
+        let arr: Vec<JsonValue> = (0..1000)
+            .map(|i| JsonValue::Number(serde_json::Number::from(i)))
+            .collect();
+        vars.insert("data".to_string(), JsonValue::Array(arr));
+
+        // Simple map: x => x (identity)
+        let expr = ValueExpr::ArrayMethod {
+            array: Box::new(ValueExpr::Variable("data".to_string())),
+            method: ArrayMethodCall::Map {
+                item_var: "x".to_string(),
+                body: Box::new(ValueExpr::Variable("x".to_string())),
+            },
+        };
+
+        let start = Instant::now();
+        let result = evaluate(&expr, &vars).unwrap();
+        let elapsed = start.elapsed();
+
+        let arr_result = result.as_array().unwrap();
+        assert_eq!(arr_result.len(), 1000);
+        // Verify first and last element values
+        assert_eq!(arr_result[0], JsonValue::Number(0.into()));
+        assert_eq!(arr_result[999], JsonValue::Number(999.into()));
+
+        // Sanity check: should complete in under 100ms even on slow CI
+        assert!(
+            elapsed.as_millis() < 100,
+            "Array map took {}ms, expected < 100ms",
+            elapsed.as_millis()
+        );
+    }
+
+    #[test]
+    fn test_array_filter_preserves_outer_scope() {
+        // Verifies that push/pop correctly restores scope after filter.
+        // The outer variable "x" should be unchanged after the filter runs.
+        let mut vars = HashMap::new();
+        vars.insert("x".to_string(), JsonValue::String("outer".into()));
+        vars.insert(
+            "arr".to_string(),
+            JsonValue::Array(vec![
+                JsonValue::Number(1.into()),
+                JsonValue::Number(2.into()),
+                JsonValue::Number(3.into()),
+            ]),
+        );
+
+        // Block: { filter using x as item_var, then return outer x }
+        let expr = ValueExpr::Block {
+            bindings: vec![(
+                "filtered".to_string(),
+                ValueExpr::ArrayMethod {
+                    array: Box::new(ValueExpr::Variable("arr".to_string())),
+                    method: ArrayMethodCall::Filter {
+                        item_var: "x".to_string(),
+                        predicate: Box::new(ValueExpr::BinaryOp {
+                            left: Box::new(ValueExpr::Variable("x".to_string())),
+                            op: BinaryOperator::Gt,
+                            right: Box::new(ValueExpr::Literal(JsonValue::Number(1.into()))),
+                        }),
+                    },
+                },
+            )],
+            result: Box::new(ValueExpr::Variable("x".to_string())),
+        };
+
+        let result = evaluate(&expr, &vars).unwrap();
+        // The outer "x" should still be "outer", not overwritten by the filter
+        assert_eq!(result, JsonValue::String("outer".into()));
+    }
+
+    #[test]
+    fn test_array_reduce_large_scope_performance() {
+        // Regression test for reduce with push/pop optimization at scale.
+        let mut vars = HashMap::new();
+        for i in 0..20 {
+            vars.insert(
+                format!("var_{i}"),
+                JsonValue::Number(serde_json::Number::from(i)),
+            );
+        }
+
+        // Sum 1000 numbers using reduce
+        let arr: Vec<JsonValue> = (0..1000)
+            .map(|i| JsonValue::Number(serde_json::Number::from(i)))
+            .collect();
+        vars.insert("data".to_string(), JsonValue::Array(arr));
+
+        let expr = ValueExpr::ArrayMethod {
+            array: Box::new(ValueExpr::Variable("data".to_string())),
+            method: ArrayMethodCall::Reduce {
+                acc_var: "acc".to_string(),
+                item_var: "x".to_string(),
+                body: Box::new(ValueExpr::BinaryOp {
+                    left: Box::new(ValueExpr::Variable("acc".to_string())),
+                    op: BinaryOperator::Add,
+                    right: Box::new(ValueExpr::Variable("x".to_string())),
+                }),
+                initial: Box::new(ValueExpr::Literal(JsonValue::Number(0.into()))),
+            },
+        };
+
+        let result = evaluate(&expr, &vars).unwrap();
+        // Sum of 0..1000 = 999 * 1000 / 2 = 499500
+        // Note: the evaluator's Add operation converts to f64, so the result is 499500.0
+        assert_eq!(result, serde_json::json!(499_500.0));
     }
 }
