@@ -4,8 +4,15 @@ Derive macro for Code Mode validation and execution in MCP servers. Generates `r
 
 ## Quick Start
 
+### Production: With `context_from`
+
+The `context_from` attribute binds approval tokens to real user/session context. This is the recommended path for production servers.
+
 ```rust,ignore
-use pmcp_code_mode::{CodeModeConfig, TokenSecret, NoopPolicyEvaluator, CodeExecutor, ExecutionError};
+use pmcp_code_mode::{
+    CodeModeConfig, TokenSecret, NoopPolicyEvaluator, CodeExecutor,
+    ExecutionError, ValidationContext,
+};
 use pmcp_code_mode_derive::CodeMode;
 use std::sync::Arc;
 
@@ -23,6 +30,7 @@ impl CodeExecutor for MyExecutor {
 }
 
 #[derive(CodeMode)]
+#[code_mode(context_from = "get_context")]
 struct MyServer {
     code_mode_config: CodeModeConfig,
     token_secret: TokenSecret,
@@ -30,14 +38,72 @@ struct MyServer {
     code_executor: Arc<MyExecutor>,
 }
 
-// Use the generated method to register tools
-let builder = pmcp::Server::builder();
-let builder = server.register_code_mode_tools(builder);
+impl MyServer {
+    fn get_context(&self, extra: &pmcp::RequestHandlerExtra) -> ValidationContext {
+        // Extract real user/session info from the MCP request
+        ValidationContext::new("user-123", "session-456", "schema-v1", "perms-v1")
+    }
+}
+
+// context_from requires Arc<Self> — the generated handler holds a reference
+let server = Arc::new(MyServer {
+    code_mode_config: CodeModeConfig::enabled(),
+    token_secret: TokenSecret::new(b"my-secret-key-at-least-16-bytes!".to_vec()),
+    policy_evaluator: Arc::new(NoopPolicyEvaluator::new()),
+    code_executor: Arc::new(MyExecutor),
+});
+
+// register_code_mode_tools returns Result (catches invalid HMAC secret at startup)
+let builder = server.register_code_mode_tools(pmcp::Server::builder())?;
 ```
 
-## Required Field Names (v0.1.0)
+### Testing: Without `context_from`
 
-The macro identifies fields by **well-known names**. All four fields must be present:
+Omitting `context_from` uses placeholder context values and marks the generated method `#[deprecated]` to guide toward the production path.
+
+```rust,ignore
+#[derive(CodeMode)]
+struct MyServer {
+    code_mode_config: CodeModeConfig,
+    token_secret: TokenSecret,
+    policy_evaluator: Arc<NoopPolicyEvaluator>,
+    code_executor: Arc<MyExecutor>,
+}
+
+// No Arc needed — &self is sufficient
+let builder = server.register_code_mode_tools(pmcp::Server::builder())?;
+// ^ Compiler emits: "use #[code_mode(context_from = ...)] to bind tokens to real user context"
+```
+
+## Struct-Level Attributes
+
+| Attribute | Type | Default | Effect |
+|-----------|------|---------|--------|
+| `context_from` | `"method_name"` | *(none)* | Method on your struct returning `ValidationContext`. Enables real token binding. Changes `register_code_mode_tools` receiver to `self: &Arc<Self>`. |
+| `language` | `"language_name"` | `"graphql"` | Sets the code language in `validate_code` and `execute_code` tool metadata. Currently metadata-only — does not change validation logic. |
+
+```rust,ignore
+#[derive(CodeMode)]
+#[code_mode(context_from = "get_context", language = "graphql")]
+struct MyServer { /* ... */ }
+```
+
+**`context_from` method signature:**
+
+```rust,ignore
+impl MyServer {
+    fn get_context(&self, extra: &pmcp::RequestHandlerExtra) -> ValidationContext {
+        // Build context from the MCP session/auth info
+        ValidationContext::new(user_id, session_id, schema_hash, permissions_hash)
+    }
+}
+```
+
+The method receives `&pmcp::RequestHandlerExtra` which carries the MCP request context (session ID, auth metadata, etc.). The returned `ValidationContext` is hashed into the approval token — tokens become bound to the specific user, session, and schema version.
+
+## Required Fields
+
+The macro identifies fields by **fixed well-known names**. All four must be present:
 
 | Field Name | Required Type | Purpose |
 |------------|---------------|---------|
@@ -46,53 +112,113 @@ The macro identifies fields by **well-known names**. All four fields must be pre
 | `policy_evaluator` | `Arc<impl PolicyEvaluator>` | Policy evaluation backend |
 | `code_executor` | `Arc<impl CodeExecutor>` | Code execution backend |
 
-If any required field is missing, the macro emits a **single** compile error listing all absent fields:
+Missing any field produces a compile error listing all absent fields:
 
 ```text
-error: #[derive(CodeMode)] is missing required field(s): `token_secret`, `code_executor`.
+error: #[derive(CodeMode)] requires field `token_secret` (type: TokenSecret).
        Required fields: code_mode_config, token_secret, policy_evaluator, code_executor
 ```
 
-**Note:** Attribute-based field mapping (e.g., `#[code_mode(evaluator = "my_eval")]`) is planned for v0.2.0. The v0.1.0 convention uses fixed names for simplicity and clarity.
-
 ## Generated Method
 
-The macro generates one method on your struct:
+The macro generates `register_code_mode_tools` on your struct:
 
 ```rust,ignore
+// With context_from:
 impl MyServer {
+    pub fn register_code_mode_tools(
+        self: &Arc<Self>,
+        builder: pmcp::ServerBuilder,
+    ) -> Result<pmcp::ServerBuilder, pmcp_code_mode::TokenError> { ... }
+}
+
+// Without context_from (deprecated):
+impl MyServer {
+    #[deprecated(note = "use #[code_mode(context_from = ...)] to bind tokens to real user context")]
     pub fn register_code_mode_tools(
         &self,
         builder: pmcp::ServerBuilder,
-    ) -> pmcp::ServerBuilder { ... }
+    ) -> Result<pmcp::ServerBuilder, pmcp_code_mode::TokenError> { ... }
 }
 ```
 
-This follows the by-value fluent pattern used throughout the PMCP SDK. The method:
+The method:
 
-1. Creates a `ValidationPipeline` from the struct's `code_mode_config` and `token_secret`
-2. Registers a `validate_code` tool handler (GraphQL validation + HMAC token generation)
+1. Creates a shared `Arc<ValidationPipeline>` from the struct's config, secret, and policy evaluator
+2. Registers a `validate_code` tool handler (async validation + policy evaluation + HMAC token)
 3. Registers an `execute_code` tool handler (token verification + `CodeExecutor::execute`)
-4. Returns the builder with both tools added
+4. Returns the builder with both tools added, or `TokenError` if the HMAC secret is invalid
+
+### Why `Result`?
+
+`register_code_mode_tools` returns `Result<ServerBuilder, TokenError>` because it constructs the `ValidationPipeline` internally, which validates the HMAC secret length. This catches misconfigured secrets at server startup rather than panicking at runtime.
+
+```rust,ignore
+// Fails at startup with a clear error:
+let secret = TokenSecret::new(b"short".to_vec()); // < 16 bytes
+let result = server.register_code_mode_tools(builder);
+// Err(TokenError::SecretTooShort { minimum: 16, actual: 5 })
+```
+
+### Why `Arc<Self>`?
+
+When `context_from` is set, the generated `ValidateCodeHandler` needs to call a method on your server struct during request handling. Since handlers are `Send + Sync + 'static` (they live inside the MCP server's async runtime), the handler holds an `Arc<MyServer>` reference. This requires the registration call to use `self: &Arc<Self>`.
+
+Without `context_from`, handlers don't reference the parent struct, so `&self` suffices.
 
 ## Compile-Time Safety
 
-The macro generates a `Send + Sync` assertion for the annotated struct. If any field is not `Send + Sync`, compilation fails with a clear error:
+The macro enforces several constraints at compile time:
+
+**Missing fields:** A single error lists all absent required fields with expected types.
+
+**`Send + Sync`:** The macro generates a compile-time assertion that the struct is `Send + Sync`. Non-threadsafe fields (e.g., `Rc<T>`) produce a clear compiler error:
 
 ```text
 error: `Rc<String>` cannot be sent between threads safely
 ```
 
-This ensures the server struct is safe to share across async tasks.
+**Invalid `context_from`:** If the `context_from` value is not a valid Rust identifier, the macro emits a compile error instead of panicking:
+
+```text
+error: `context_from = "not-valid"` is not a valid Rust identifier
+```
+
+**Missing `context_from` method:** If you specify `context_from = "get_context"` but don't define the method, the generated code produces a standard Rust "method not found" error pointing at your struct.
+
+## Breaking Changes in v0.1.0
+
+`register_code_mode_tools` now returns `Result<ServerBuilder, TokenError>` instead of `ServerBuilder`:
+
+```rust,ignore
+// Before (v0.0.x):
+let builder = server.register_code_mode_tools(builder);
+
+// After (v0.1.0):
+let builder = server.register_code_mode_tools(builder)?;
+```
+
+See [CHANGELOG.md](./CHANGELOG.md) for the full list of changes.
 
 ## Dependencies
 
-This is a proc-macro crate. It depends on `syn`, `quote`, `proc-macro2`, and `darling` for macro expansion. At runtime, the generated code depends on `pmcp` and `pmcp-code-mode`.
+This is a proc-macro crate. It depends on `syn`, `quote`, `proc-macro2`, and `darling` for attribute parsing and macro expansion. At runtime, the generated code depends on `pmcp` and `pmcp-code-mode`.
 
 ## Related Crates
 
-- [`pmcp-code-mode`](https://crates.io/crates/pmcp-code-mode) -- Core types, validation pipeline, and execution framework
-- [`pmcp`](https://crates.io/crates/pmcp) -- PMCP SDK with `ServerBuilder` and `ToolHandler`
+- [`pmcp-code-mode`](../pmcp-code-mode/README.md) — Core types, validation pipeline, and execution framework
+- [`pmcp`](https://crates.io/crates/pmcp) — PMCP SDK with `ServerBuilder` and `ToolHandler`
+
+## Feedback Welcome
+
+Key questions for reviewers:
+
+- **Fixed field names vs. attribute mapping** — is `code_mode_config`/`token_secret`/`policy_evaluator`/`code_executor` workable, or do you need `#[code_mode(config = "my_field")]` style overrides?
+- **`context_from` sync only** — the context method is currently sync (`fn get_context(&self, extra) -> ValidationContext`). Do you need an async version for cases where context requires a network call (e.g., fetching permissions from a remote service)?
+- **`language` attribute scope** — currently metadata-only. Should it also select the parser/validator (GraphQL vs. JavaScript)?
+- **Error handling** — is `TokenError` sufficient, or should `register_code_mode_tools` return a broader error type?
+
+File issues or discuss in the `#pmcp-sdk` channel.
 
 ## License
 
