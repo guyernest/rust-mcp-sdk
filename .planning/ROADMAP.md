@@ -192,12 +192,12 @@ Plans:
   4. The standalone `mcp-tester` binary uses the same flag conventions as `cargo pmcp test` (positional URL, --verbose/-v, --yes)
 **Plans:** 6 plans
 Plans:
-- [ ] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
-- [ ] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
-- [ ] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
-- [ ] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
-- [ ] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
-- [ ] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
+- [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
+- [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
+- [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [x] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
+- [x] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
+- [x] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
 ### Phase 31: New Commands
 **Goal**: Users have workspace diagnostics and shell completion generation built into the CLI
@@ -209,12 +209,12 @@ Plans:
   3. Both commands follow all established flag conventions (global flags, --format, help text patterns)
 **Plans:** 6 plans
 Plans:
-- [ ] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
-- [ ] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
-- [ ] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
-- [ ] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
-- [ ] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
-- [ ] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
+- [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
+- [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
+- [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [x] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
+- [x] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
+- [x] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
 ### Phase 32: Help Text Polish
 **Goal**: Every cargo pmcp command has professional, consistent help output ready for course recording
@@ -226,11 +226,11 @@ Plans:
   3. Running `cargo pmcp --help` shows a clean top-level overview with all subcommands and their one-line descriptions
 **Plans:** 6 plans
 Plans:
-- [ ] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
-- [ ] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
-- [ ] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
-- [ ] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
-- [ ] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
+- [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
+- [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
+- [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [x] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
+- [x] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
 - [ ] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
 ## Progress
@@ -741,11 +741,11 @@ Plans:
   4. No references to stale version numbers (e.g., `pmcp = { version = "1.*" }`) appear in the macros README
 **Plans:** 6 plans
 Plans:
-- [ ] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
-- [ ] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
-- [ ] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
-- [ ] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
-- [ ] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
+- [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
+- [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
+- [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [x] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
+- [x] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
 - [ ] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
 ### Phase 67: docs.rs Pipeline and Feature Flags
@@ -760,9 +760,9 @@ Plans:
   5. CI includes a `make doc-check` target that enforces zero rustdoc warnings on every PR
 **Plans:** 6 plans
 Plans:
-- [ ] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
-- [ ] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
-- [ ] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
+- [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
+- [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
 - [ ] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
 - [ ] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
 - [ ] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
@@ -814,10 +814,10 @@ Plans:
   **Baseline:**
   12. All existing tests pass, `cargo test -p pmcp-code-mode -p pmcp-code-mode-derive` green
   13. Clippy suppressions reduced (trivially fixable: `useless_format`, `derivable_impls`, etc.)
-**Plans:** 6 plans
+**Plans:** 6/6 plans complete
 Plans:
-- [ ] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
-- [ ] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
+- [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
+- [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
 - [ ] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
 - [ ] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
 - [ ] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)

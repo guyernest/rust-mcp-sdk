@@ -1,15 +1,15 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.1
-milestone_name: rmcp Upgrades
-status: In progress
-stopped_at: Phase 67 complete; inserting 67.1 for Code Mode Support
-last_updated: "2026-04-12T02:45:38.064Z"
+milestone: v2.0
+milestone_name: Protocol Modernization
+status: Milestone complete
+stopped_at: Phase 67 context gathered
+last_updated: "2026-04-12T17:20:21.545Z"
 progress:
-  total_phases: 40
-  completed_phases: 35
-  total_plans: 84
-  completed_plans: 84
+  total_phases: 13
+  completed_phases: 13
+  total_plans: 35
+  completed_plans: 35
   percent: 100
 ---
 
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 
 ## Current Position
 
-Phase: 67
+Phase: 67.2
 Plan: Not started
 
 ## Shipped Milestones
@@ -42,7 +42,7 @@ Plan: Not started
 
 **Velocity:**
 
-- Total plans completed: 87 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 11)
+- Total plans completed: 93 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 11)
 - Total phases completed: 29
 
 ## Accumulated Context
