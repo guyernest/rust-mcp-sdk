@@ -50,3 +50,4 @@ cedar = ["dep:cedar-policy"]
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 cedar-policy = "4.9"
+proptest = "1.7"
