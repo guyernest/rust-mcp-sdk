@@ -2,7 +2,7 @@
 //!
 //! MVP uses HMAC-SHA256 for token signing. Full implementation will use AWS KMS.
 
-use crate::types::{ExecutionError, RiskLevel};
+use crate::types::{ExecutionError, RiskLevel, TokenError};
 use hmac::{Hmac, KeyInit, Mac};
 use secrecy::{ExposeSecret, SecretBox};
 use serde::{Deserialize, Serialize};
@@ -195,31 +195,42 @@ impl HmacTokenGenerator {
 
     /// Create a new HMAC token generator with a `TokenSecret`.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the secret is shorter than [`Self::MIN_SECRET_LEN`] (16 bytes).
-    /// An empty or very short secret makes tokens trivially forgeable.
-    pub fn new(secret: TokenSecret) -> Self {
-        assert!(
-            secret.expose_secret().len() >= Self::MIN_SECRET_LEN,
-            "HMAC token secret must be at least {} bytes, got {}",
-            Self::MIN_SECRET_LEN,
-            secret.expose_secret().len()
-        );
-        Self { secret }
+    /// Returns [`TokenError::SecretTooShort`] if the secret is shorter than
+    /// [`Self::MIN_SECRET_LEN`] (16 bytes).
+    pub fn new(secret: TokenSecret) -> Result<Self, TokenError> {
+        if secret.expose_secret().len() < Self::MIN_SECRET_LEN {
+            return Err(TokenError::SecretTooShort {
+                minimum: Self::MIN_SECRET_LEN,
+                actual: secret.expose_secret().len(),
+            });
+        }
+        Ok(Self { secret })
     }
 
     /// Create from raw bytes (backward-compatible migration helper).
     ///
     /// Wraps the bytes in a `TokenSecret` internally. Prefer constructing
     /// a `TokenSecret` directly for new code.
-    pub fn new_from_bytes(bytes: impl Into<Vec<u8>>) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TokenError::SecretTooShort`] if the secret is shorter than
+    /// [`Self::MIN_SECRET_LEN`] (16 bytes).
+    pub fn new_from_bytes(bytes: impl Into<Vec<u8>>) -> Result<Self, TokenError> {
         Self::new(TokenSecret::new(bytes))
     }
 
     /// Create from an environment variable.
-    pub fn from_env(env_var: &str) -> Result<Self, std::env::VarError> {
-        Ok(Self::new(TokenSecret::from_env(env_var)?))
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the environment variable is not set or if the
+    /// secret is shorter than [`Self::MIN_SECRET_LEN`] (16 bytes).
+    pub fn from_env(env_var: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let secret = TokenSecret::from_env(env_var)?;
+        Ok(Self::new(secret)?)
     }
 
     /// Sign the token payload.
@@ -357,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_token_generation_and_verification() {
-        let generator = HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key!".to_vec()));
+        let generator = HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key!".to_vec())).unwrap();
 
         let token = generator.generate(
             "query { users { id } }",
@@ -380,7 +391,7 @@ mod tests {
 
     #[test]
     fn test_code_mismatch() {
-        let generator = HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key!".to_vec()));
+        let generator = HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key!".to_vec())).unwrap();
 
         let token = generator.generate(
             "query { users { id } }",
@@ -399,7 +410,7 @@ mod tests {
 
     #[test]
     fn test_token_encode_decode() {
-        let generator = HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key!".to_vec()));
+        let generator = HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key!".to_vec())).unwrap();
 
         let token = generator.generate(
             "query { users { id } }",
@@ -435,14 +446,26 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "HMAC token secret must be at least 16 bytes")]
     fn test_empty_secret_rejected() {
-        let _generator = HmacTokenGenerator::new(TokenSecret::new(b"".to_vec()));
+        let result = HmacTokenGenerator::new(TokenSecret::new(b"".to_vec()));
+        assert!(matches!(
+            result,
+            Err(TokenError::SecretTooShort {
+                minimum: 16,
+                actual: 0
+            })
+        ));
     }
 
     #[test]
-    #[should_panic(expected = "HMAC token secret must be at least 16 bytes")]
     fn test_short_secret_rejected() {
-        let _generator = HmacTokenGenerator::new(TokenSecret::new(b"short".to_vec()));
+        let result = HmacTokenGenerator::new(TokenSecret::new(b"short".to_vec()));
+        assert!(matches!(
+            result,
+            Err(TokenError::SecretTooShort {
+                minimum: 16,
+                actual: 5
+            })
+        ));
     }
 }

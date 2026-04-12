@@ -493,3 +493,16 @@ pub enum ExecutionError {
     #[error("Loop break")]
     LoopBreak,
 }
+
+/// Errors from token generator construction.
+#[derive(Debug, thiserror::Error)]
+pub enum TokenError {
+    /// HMAC secret is too short for secure token generation.
+    #[error("HMAC token secret must be at least {minimum} bytes, got {actual}")]
+    SecretTooShort {
+        /// Minimum required length in bytes.
+        minimum: usize,
+        /// Actual length provided.
+        actual: usize,
+    },
+}

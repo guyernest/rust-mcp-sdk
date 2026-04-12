@@ -137,7 +137,7 @@ pub use token::{
 
 pub use types::{
     CodeLocation, CodeType, Complexity, ExecutionError, PolicyViolation, RiskLevel,
-    SecurityAnalysis, SecurityIssue, SecurityIssueType, UnifiedAction, ValidationError,
+    SecurityAnalysis, SecurityIssue, SecurityIssueType, TokenError, UnifiedAction, ValidationError,
     ValidationMetadata, ValidationResult,
 };
 
