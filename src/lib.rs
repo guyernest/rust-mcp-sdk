@@ -3,7 +3,6 @@
 // `rust,no_run` code block inside CRATE-README.md is compiled as a doctest
 // under `cargo test --doc`, which catches API drift automatically.
 #![doc = include_str!("../CRATE-README.md")]
-
 #![warn(
     missing_docs,
     missing_debug_implementations,
