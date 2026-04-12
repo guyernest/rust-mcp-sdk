@@ -364,7 +364,7 @@ impl StreamableHttpServer {
     ///
     /// Applies the same Tower layer security stack as
     /// [`pmcp::axum::router()`](crate::server::axum_router::router):
-    /// - [`CorsLayer`] -- origin-locked CORS (no wildcard `*`)
+    /// - `CorsLayer` -- origin-locked CORS (no wildcard `*`)
     /// - [`DnsRebindingLayer`] -- Host/Origin header validation
     /// - [`SecurityHeadersLayer`] -- nosniff, DENY, no-store
     pub async fn start(self) -> Result<(SocketAddr, tokio::task::JoinHandle<()>)> {

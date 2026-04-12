@@ -1,7 +1,7 @@
 //! SDK-level task store trait and in-memory implementation.
 //!
-//! This module provides [`TaskStore`], the core trait for task lifecycle
-//! management within the SDK, and [`InMemoryTaskStore`], a thread-safe
+//! This module provides `TaskStore`, the core trait for task lifecycle
+//! management within the SDK, and `InMemoryTaskStore`, a thread-safe
 //! in-memory implementation suitable for development and testing.
 //!
 //! # Architecture
@@ -13,11 +13,11 @@
 //!
 //! # Differences from `pmcp-tasks`
 //!
-//! The SDK [`TaskStore`] trait is intentionally simplified compared to
-//! the `pmcp-tasks` [`TaskStore`](https://docs.rs/pmcp-tasks/latest/pmcp_tasks/store/trait.TaskStore.html):
+//! The SDK `TaskStore` trait is intentionally simplified compared to
+//! the `pmcp-tasks` `TaskStore` (see <https://docs.rs/pmcp-tasks/latest/pmcp_tasks/store/trait.TaskStore.html>):
 //! - No `set_variables` / `get_result` / `set_result` / `complete_with_result`
 //! - No `request_method` parameter on `create`
-//! - Returns [`Task`] (wire type) instead of `TaskRecord`
+//! - Returns `Task` (wire type) instead of `TaskRecord`
 //!
 //! These PMCP extensions remain in `pmcp-tasks`. The SDK trait covers
 //! the core MCP spec operations only.

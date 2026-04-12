@@ -334,7 +334,7 @@ impl WorkflowStep {
     ///
     /// When `retryable` is `true`, the execution engine treats tool errors
     /// from this step as potentially transient. This hint is carried into
-    /// the [`PauseReason::ToolError`] variant so clients know they can
+    /// the `PauseReason::ToolError` variant so clients know they can
     /// safely retry the same tool call.
     ///
     /// # Example

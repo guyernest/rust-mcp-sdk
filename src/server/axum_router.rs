@@ -1,6 +1,6 @@
 //! Axum Router convenience function for MCP servers.
 //!
-//! Provides [`router()`] and [`router_with_config()`] that return a
+//! Provides [`router`] and [`router_with_config`] that return a
 //! fully-configured [`axum::Router`] with DNS rebinding protection,
 //! security response headers, and origin-locked CORS applied as Tower
 //! Layers.

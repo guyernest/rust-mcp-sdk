@@ -2,9 +2,9 @@
 //!
 //! This trait provides the integration point for task-enabled servers
 //! without creating a circular dependency with the `pmcp-tasks` crate.
-//! The `pmcp-tasks` crate implements [`TaskRouter`] and provides the
+//! The `pmcp-tasks` crate implements `TaskRouter` and provides the
 //! concrete task lifecycle management, while `pmcp` defines the
-//! contract here so that [`ServerCoreBuilder`](super::builder::ServerCoreBuilder)
+//! contract here so that `ServerCoreBuilder`
 //! can accept a task router without depending on `pmcp-tasks`.
 
 use async_trait::async_trait;
@@ -95,7 +95,7 @@ pub trait TaskRouter: Send + Sync {
     ///
     /// * `workflow_name` - Name of the workflow (becomes the task title).
     /// * `owner_id` - Owner identity for the new task.
-    /// * `progress` - Serialized [`WorkflowProgress`] to store in task variables.
+    /// * `progress` - Serialized `WorkflowProgress` to store in task variables.
     ///
     /// # Default
     ///
