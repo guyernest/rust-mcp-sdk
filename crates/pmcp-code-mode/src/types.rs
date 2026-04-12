@@ -484,14 +484,6 @@ pub enum ExecutionError {
 
     #[error("Runtime error: {message}")]
     RuntimeError { message: String },
-
-    /// Loop continue signal (not a real error, used for control flow)
-    #[error("Loop continue")]
-    LoopContinue,
-
-    /// Loop break signal (not a real error, used for control flow)
-    #[error("Loop break")]
-    LoopBreak,
 }
 
 /// Errors from token generator construction.

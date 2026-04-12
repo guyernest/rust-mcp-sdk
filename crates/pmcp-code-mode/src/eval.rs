@@ -447,16 +447,38 @@ fn json_strict_equals(left: &JsonValue, right: &JsonValue) -> bool {
     }
 }
 
-/// Convert JSON value to string for concatenation.
-pub fn json_to_string(value: &JsonValue) -> String {
+/// Controls how non-primitive JSON values are rendered to string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JsonStringMode {
+    /// JavaScript-compatible: objects render as "[object Object]", arrays as JSON.
+    JavaScript,
+    /// JSON-compatible: all values render via `serde_json::to_string`.
+    Json,
+}
+
+/// Convert JSON value to string with configurable object rendering.
+pub fn json_to_string_with_mode(value: &JsonValue, mode: JsonStringMode) -> String {
     match value {
         JsonValue::Null => "null".to_string(),
         JsonValue::Bool(b) => b.to_string(),
         JsonValue::Number(n) => n.to_string(),
         JsonValue::String(s) => s.clone(),
-        JsonValue::Array(_) => value.to_string(),
-        JsonValue::Object(_) => "[object Object]".to_string(),
+        JsonValue::Array(_) => match mode {
+            JsonStringMode::JavaScript => value.to_string(),
+            JsonStringMode::Json => serde_json::to_string(value).unwrap_or_default(),
+        },
+        JsonValue::Object(_) => match mode {
+            JsonStringMode::JavaScript => "[object Object]".to_string(),
+            JsonStringMode::Json => serde_json::to_string(value).unwrap_or_default(),
+        },
     }
+}
+
+/// Convert JSON value to string (JavaScript-compatible mode).
+///
+/// Objects render as `"[object Object]"` matching JavaScript's `String()` behavior.
+pub fn json_to_string(value: &JsonValue) -> String {
+    json_to_string_with_mode(value, JsonStringMode::JavaScript)
 }
 
 /// Evaluate an array method with scope.
@@ -1075,16 +1097,6 @@ pub fn evaluate_number_method(
     }
 }
 
-/// Convert a JSON value to a string for use in path templates.
-pub fn value_to_string(value: &JsonValue) -> String {
-    match value {
-        JsonValue::String(s) => s.clone(),
-        JsonValue::Number(n) => n.to_string(),
-        JsonValue::Bool(b) => b.to_string(),
-        JsonValue::Null => "null".to_string(),
-        _ => serde_json::to_string(value).unwrap_or_default(),
-    }
-}
 
 /// Evaluate an expression with just a variable map (no local scope).
 /// This is a convenience wrapper for the common case.

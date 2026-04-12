@@ -32,11 +32,26 @@ use std::collections::{HashMap, HashSet};
 use crate::eval::{
     evaluate as shared_evaluate, evaluate_with_binding as shared_evaluate_with_binding,
     evaluate_with_two_bindings as shared_evaluate_with_two_bindings, is_truthy as shared_is_truthy,
-    value_to_string as shared_value_to_string,
+    json_to_string_with_mode as shared_json_to_string_with_mode, JsonStringMode,
 };
 use swc_common::{FileName, SourceMap};
 use swc_ecma_ast::*;
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax};
+
+/// Internal control flow outcome from executing a single plan step.
+///
+/// Replaces the previous pattern of abusing `ExecutionError::LoopContinue`
+/// and `ExecutionError::LoopBreak` for non-error control flow.
+pub(crate) enum StepOutcome {
+    /// Step completed, no value produced.
+    None,
+    /// Step produced a return value (exits function/plan).
+    Return(serde_json::Value),
+    /// Loop continue signal (skip to next iteration).
+    Continue,
+    /// Loop break signal (exit current loop).
+    Break,
+}
 
 /// Configuration for execution.
 #[derive(Debug, Clone)]
@@ -2752,9 +2767,12 @@ impl<H: HttpExecutor> PlanExecutor<H> {
         let mut return_value = JsonValue::Null;
 
         for step in &plan.steps {
-            if let Some(value) = self.execute_step(step).await? {
-                return_value = value;
-                break; // Early return — stop executing further steps
+            match self.execute_step(step).await? {
+                StepOutcome::Return(value) => {
+                    return_value = value;
+                    break; // Early return — stop executing further steps
+                },
+                StepOutcome::None | StepOutcome::Continue | StepOutcome::Break => {},
             }
         }
 
@@ -2779,14 +2797,14 @@ impl<H: HttpExecutor> PlanExecutor<H> {
         })
     }
 
-    /// Execute a single step, returning Some if it's a return statement.
+    /// Execute a single step, returning a `StepOutcome` for control flow.
     /// Uses Box::pin for recursive calls to avoid infinite future size.
     fn execute_step<'a>(
         &'a mut self,
         step: &'a PlanStep,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<Output = Result<Option<JsonValue>, ExecutionError>> + Send + 'a,
+            dyn std::future::Future<Output = Result<StepOutcome, ExecutionError>> + Send + 'a,
         >,
     > {
         Box::pin(async move {
@@ -2838,13 +2856,13 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                     if result_var != "_" {
                         self.variables.insert(result_var.clone(), response);
                     }
-                    Ok(None)
+                    Ok(StepOutcome::None)
                 },
 
                 PlanStep::Assign { var, expr } => {
                     let value = self.evaluate(expr)?;
                     self.variables.insert(var.clone(), value);
-                    Ok(None)
+                    Ok(StepOutcome::None)
                 },
 
                 PlanStep::Conditional {
@@ -2860,11 +2878,12 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                     };
 
                     for step in steps {
-                        if let Some(value) = self.execute_step(step).await? {
-                            return Ok(Some(value));
+                        match self.execute_step(step).await? {
+                            StepOutcome::None => {},
+                            outcome => return Ok(outcome),
                         }
                     }
-                    Ok(None)
+                    Ok(StepOutcome::None)
                 },
 
                 PlanStep::BoundedLoop {
@@ -2893,21 +2912,20 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                         self.variables.insert(item_var.clone(), item);
 
                         for step in body {
-                            match self.execute_step(step).await {
-                                Ok(Some(value)) => return Ok(Some(value)),
-                                Ok(None) => {},
-                                Err(ExecutionError::LoopContinue) => continue 'outer,
-                                Err(ExecutionError::LoopBreak) => break 'outer,
-                                Err(e) => return Err(e),
+                            match self.execute_step(step).await? {
+                                StepOutcome::Return(value) => return Ok(StepOutcome::Return(value)),
+                                StepOutcome::None => {},
+                                StepOutcome::Continue => continue 'outer,
+                                StepOutcome::Break => break 'outer,
                             }
                         }
                     }
-                    Ok(None)
+                    Ok(StepOutcome::None)
                 },
 
                 PlanStep::Return { value } => {
                     let result = self.evaluate(value)?;
-                    Ok(Some(result))
+                    Ok(StepOutcome::Return(result))
                 },
 
                 PlanStep::TryCatch {
@@ -2919,19 +2937,20 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                     // Execute try block
                     let try_result = async {
                         for step in try_steps {
-                            if let Some(value) = self.execute_step(step).await? {
-                                return Ok::<Option<JsonValue>, ExecutionError>(Some(value));
+                            match self.execute_step(step).await? {
+                                StepOutcome::None => {},
+                                outcome => return Ok::<StepOutcome, ExecutionError>(outcome),
                             }
                         }
-                        Ok(None)
+                        Ok(StepOutcome::None)
                     }
                     .await;
 
                     // If try succeeded, just run finally
                     let result = match try_result {
-                        Ok(return_value) => {
+                        Ok(outcome) => {
                             // Try block succeeded
-                            return_value
+                            outcome
                         },
                         Err(error) => {
                             // Try block failed, run catch
@@ -2945,21 +2964,25 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                             }
 
                             // Execute catch block
-                            let mut catch_return = None;
+                            let mut catch_outcome = StepOutcome::None;
                             for step in catch_steps {
-                                if let Some(value) = self.execute_step(step).await? {
-                                    catch_return = Some(value);
-                                    break;
+                                match self.execute_step(step).await? {
+                                    StepOutcome::None => {},
+                                    outcome => {
+                                        catch_outcome = outcome;
+                                        break;
+                                    },
                                 }
                             }
-                            catch_return
+                            catch_outcome
                         },
                     };
 
                     // Execute finally block (always runs)
                     for step in finally_steps {
-                        if let Some(value) = self.execute_step(step).await? {
-                            return Ok(Some(value));
+                        match self.execute_step(step).await? {
+                            StepOutcome::None => {},
+                            outcome => return Ok(outcome),
                         }
                     }
 
@@ -3008,14 +3031,14 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                     }
                     self.variables
                         .insert(result_var.clone(), JsonValue::Array(results));
-                    Ok(None)
+                    Ok(StepOutcome::None)
                 },
 
                 // Continue: signal to skip to next loop iteration
-                PlanStep::Continue => Err(ExecutionError::LoopContinue),
+                PlanStep::Continue => Ok(StepOutcome::Continue),
 
                 // Break: signal to exit the current loop
-                PlanStep::Break => Err(ExecutionError::LoopBreak),
+                PlanStep::Break => Ok(StepOutcome::Break),
 
                 // MCP tool call: await mcp.call('server', 'tool', { args })
                 #[cfg(feature = "mcp-code-mode")]
@@ -3064,7 +3087,7 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                     if result_var != "_" {
                         self.variables.insert(result_var.clone(), result);
                     }
-                    Ok(None)
+                    Ok(StepOutcome::None)
                 },
 
                 // SDK call: await api.getCostAndUsage({ ... })
@@ -3110,7 +3133,7 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                     if result_var != "_" {
                         self.variables.insert(result_var.clone(), result);
                     }
-                    Ok(None)
+                    Ok(StepOutcome::None)
                 },
             }
         })
@@ -3129,11 +3152,11 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                             .ok_or_else(|| ExecutionError::RuntimeError {
                                 message: format!("Undefined variable in path: {}", var),
                             })?;
-                    result.push_str(&shared_value_to_string(value));
+                    result.push_str(&shared_json_to_string_with_mode(value, JsonStringMode::Json));
                 },
                 PathPart::Expression(expr) => {
                     let value = self.evaluate(expr)?;
-                    result.push_str(&shared_value_to_string(&value));
+                    result.push_str(&shared_json_to_string_with_mode(&value, JsonStringMode::Json));
                 },
             }
         }
