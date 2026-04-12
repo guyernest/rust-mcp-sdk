@@ -486,6 +486,74 @@ pub enum ExecutionError {
     RuntimeError { message: String },
 }
 
+/// Supported code languages for validation and execution.
+///
+/// Each variant selects a different validation path in the pipeline and
+/// maps to the corresponding feature flag. The derive macro uses this
+/// enum at compile time to emit the correct validation call.
+///
+/// # Adding a New Language
+///
+/// 1. Add a variant here
+/// 2. Add the `from_str` match arm below
+/// 3. Add the validation method to `ValidationPipeline` (feature-gated)
+/// 4. Add the `quote!` branch in `pmcp-code-mode-derive/src/lib.rs`
+/// 5. Update `CodeModeToolBuilder` for tool metadata
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CodeLanguage {
+    /// GraphQL queries and mutations. Default, no feature flag required.
+    GraphQL,
+    /// JavaScript/OpenAPI plans. Requires `openapi-code-mode` feature.
+    JavaScript,
+    /// Raw SQL statements. Requires `sql-code-mode` feature.
+    Sql,
+    /// MCP tool composition. Requires `mcp-code-mode` feature.
+    Mcp,
+}
+
+impl CodeLanguage {
+    /// Parse a language string from a derive macro attribute.
+    ///
+    /// Returns `None` for unrecognized values — the caller should emit
+    /// a compile error listing supported values.
+    pub fn from_attr(s: &str) -> Option<Self> {
+        match s {
+            "graphql" => Some(Self::GraphQL),
+            "javascript" | "js" => Some(Self::JavaScript),
+            "sql" => Some(Self::Sql),
+            "mcp" => Some(Self::Mcp),
+            _ => None,
+        }
+    }
+
+    /// The string value used in tool metadata and serde serialization.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::GraphQL => "graphql",
+            Self::JavaScript => "javascript",
+            Self::Sql => "sql",
+            Self::Mcp => "mcp",
+        }
+    }
+
+    /// The feature flag required by this language, if any.
+    pub fn required_feature(&self) -> Option<&'static str> {
+        match self {
+            Self::GraphQL => None,
+            Self::JavaScript => Some("openapi-code-mode"),
+            Self::Sql => Some("sql-code-mode"),
+            Self::Mcp => Some("mcp-code-mode"),
+        }
+    }
+}
+
+impl std::fmt::Display for CodeLanguage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Errors from token generator construction.
 #[derive(Debug, thiserror::Error)]
 pub enum TokenError {

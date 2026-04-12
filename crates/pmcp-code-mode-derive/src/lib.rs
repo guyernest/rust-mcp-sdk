@@ -34,7 +34,9 @@
 //! | Value | Validation Method | Feature Required |
 //! |-------|-------------------|------------------|
 //! | `"graphql"` (default) | `validate_graphql_query_async` | *(none)* |
-//! | `"javascript"` | `validate_javascript_code` | `openapi-code-mode` |
+//! | `"javascript"` / `"js"` | `validate_javascript_code` | `openapi-code-mode` |
+//! | `"sql"` | `validate_sql_query` | `sql-code-mode` |
+//! | `"mcp"` | `validate_mcp_composition` | `mcp-code-mode` |
 //!
 //! When `context_from` is specified, `register_code_mode_tools` requires
 //! `self: &Arc<Self>` and the generated handler calls `self.parent.{method}(&extra)`
@@ -205,31 +207,12 @@ fn expand_code_mode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
         struct_name.span(),
     );
 
-    // Extract language (defaults to "graphql" for backward compat)
+    // Extract and validate language (defaults to "graphql").
+    // Known values mirror pmcp_code_mode::CodeLanguage — keep in sync.
     let language = opts.language.as_deref().unwrap_or("graphql");
     let language_lit = syn::LitStr::new(language, struct_name.span());
 
-    // Validate language is a known value and generate the validation call
-    let validation_call = match language {
-        "graphql" => quote! {
-            self.pipeline.validate_graphql_query_async(code, &context)
-                .await
-                .map_err(|e| pmcp::Error::Internal(format!("Validation error: {}", e)))?
-        },
-        "javascript" => quote! {
-            self.pipeline.validate_javascript_code(code, &context)
-                .map_err(|e| pmcp::Error::Internal(format!("Validation error: {}", e)))?
-        },
-        other => {
-            return Err(syn::Error::new_spanned(
-                &input.ident,
-                format!(
-                    "`language = \"{other}\"` is not a supported language. \
-                     Supported values: \"graphql\" (default), \"javascript\" (requires `openapi-code-mode` feature)"
-                ),
-            ));
-        }
-    };
+    let validation_call = gen_validation_call(language, &input.ident)?;
 
     // Branch code generation based on context_from presence
     let expanded = if let Some(ref method_name) = opts.context_from {
@@ -248,6 +231,56 @@ fn expand_code_mode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
     };
 
     Ok(expanded)
+}
+
+/// Generate the validation call token stream for the given language.
+///
+/// Each language maps to a specific `ValidationPipeline` method. The method may be
+/// sync or async — the generated handler is always async, so sync methods work fine.
+///
+/// # Supported Languages
+///
+/// | Language | Method | Async | Feature |
+/// |----------|--------|-------|---------|
+/// | `graphql` | `validate_graphql_query_async` | yes | *(none)* |
+/// | `javascript`/`js` | `validate_javascript_code` | no | `openapi-code-mode` |
+/// | `sql` | `validate_sql_query` | no | `sql-code-mode` |
+/// | `mcp` | `validate_mcp_composition` | yes | `mcp-code-mode` |
+///
+/// To add a new language: add a match arm here and a variant to `CodeLanguage` in
+/// `pmcp-code-mode/src/types.rs`.
+fn gen_validation_call(
+    language: &str,
+    error_span: &syn::Ident,
+) -> Result<proc_macro2::TokenStream, syn::Error> {
+    match language {
+        "graphql" => Ok(quote! {
+            self.pipeline.validate_graphql_query_async(code, &context)
+                .await
+                .map_err(|e| pmcp::Error::Internal(format!("Validation error: {}", e)))?
+        }),
+        "javascript" | "js" => Ok(quote! {
+            self.pipeline.validate_javascript_code(code, &context)
+                .map_err(|e| pmcp::Error::Internal(format!("Validation error: {}", e)))?
+        }),
+        "sql" => Ok(quote! {
+            self.pipeline.validate_sql_query(code, &context)
+                .map_err(|e| pmcp::Error::Internal(format!("Validation error: {}", e)))?
+        }),
+        "mcp" => Ok(quote! {
+            self.pipeline.validate_mcp_composition(code, &context)
+                .await
+                .map_err(|e| pmcp::Error::Internal(format!("Validation error: {}", e)))?
+        }),
+        other => Err(syn::Error::new_spanned(
+            error_span,
+            format!(
+                "`language = \"{other}\"` is not a supported language. \
+                 Supported values: \"graphql\" (default), \"javascript\" (requires `openapi-code-mode`), \
+                 \"sql\" (requires `sql-code-mode`), \"mcp\" (requires `mcp-code-mode`)"
+            ),
+        )),
+    }
 }
 
 /// Generate code when `context_from` is specified.
