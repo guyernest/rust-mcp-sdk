@@ -167,12 +167,24 @@ fn expand_code_mode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
         .collect();
 
     if !missing.is_empty() {
-        let missing_list = missing.join(", ");
         let all_required = REQUIRED_FIELDS.join(", ");
-        let msg = format!(
-            "#[derive(CodeMode)] is missing required field(s): `{missing_list}`.\n\
-             Required fields: {all_required}"
-        );
+        let missing_msgs: Vec<String> = missing
+            .iter()
+            .map(|&name| {
+                let type_hint = match name {
+                    "code_mode_config" => "CodeModeConfig",
+                    "token_secret" => "TokenSecret",
+                    "policy_evaluator" => "Arc<dyn PolicyEvaluator>",
+                    "code_executor" => "Arc<dyn CodeExecutor>",
+                    _ => "unknown",
+                };
+                format!(
+                    "#[derive(CodeMode)] requires field `{name}` (type: {type_hint}).\n\
+                     Required fields: {all_required}"
+                )
+            })
+            .collect();
+        let msg = missing_msgs.join("\n\n");
         return Err(syn::Error::new_spanned(&input.ident, msg));
     }
 
@@ -341,22 +353,27 @@ fn expand_with_context_from(
             /// each request. Requires `self: &Arc<Self>` to share the server reference
             /// with the generated handler.
             ///
+            /// # Errors
+            ///
+            /// Returns [`pmcp_code_mode::TokenError`] if the `token_secret` is too short
+            /// for secure HMAC token generation.
+            ///
             /// # Example
             ///
             /// ```rust,ignore
             /// let server = Arc::new(my_server);
-            /// let builder = server.register_code_mode_tools(Server::builder());
+            /// let builder = server.register_code_mode_tools(Server::builder())?;
             /// ```
             pub fn register_code_mode_tools(
                 self: &std::sync::Arc<Self>,
                 builder: pmcp::ServerBuilder,
-            ) -> pmcp::ServerBuilder {
+            ) -> Result<pmcp::ServerBuilder, pmcp_code_mode::TokenError> {
                 let pipeline = std::sync::Arc::new(
                     pmcp_code_mode::ValidationPipeline::from_token_secret_with_policy(
                         self.code_mode_config.clone(),
                         &self.token_secret,
                         std::sync::Arc::clone(&self.policy_evaluator) as std::sync::Arc<dyn pmcp_code_mode::PolicyEvaluator>,
-                    )
+                    )?
                 );
 
                 let validate_handler = #mod_name::ValidateCodeHandler {
@@ -370,9 +387,9 @@ fn expand_with_context_from(
                     executor: std::sync::Arc::clone(&self.code_executor),
                 };
 
-                builder
+                Ok(builder
                     .tool("validate_code", validate_handler)
-                    .tool("execute_code", execute_handler)
+                    .tool("execute_code", execute_handler))
             }
         }
     }
@@ -527,23 +544,28 @@ fn expand_without_context_from(
             /// `#[code_mode(context_from = "method_name")]` for production to bind
             /// approval tokens to real user identity and session.
             ///
+            /// # Errors
+            ///
+            /// Returns [`pmcp_code_mode::TokenError`] if the `token_secret` is too short
+            /// for secure HMAC token generation.
+            ///
             /// # Example
             ///
             /// ```rust,ignore
             /// #[allow(deprecated)]
-            /// let builder = server.register_code_mode_tools(Server::builder());
+            /// let builder = server.register_code_mode_tools(Server::builder())?;
             /// ```
             #[deprecated(note = "Use #[code_mode(context_from = \"method_name\")] for production. This uses placeholder ValidationContext.")]
             pub fn register_code_mode_tools(
                 &self,
                 builder: pmcp::ServerBuilder,
-            ) -> pmcp::ServerBuilder {
+            ) -> Result<pmcp::ServerBuilder, pmcp_code_mode::TokenError> {
                 let pipeline = std::sync::Arc::new(
                     pmcp_code_mode::ValidationPipeline::from_token_secret_with_policy(
                         self.code_mode_config.clone(),
                         &self.token_secret,
                         std::sync::Arc::clone(&self.policy_evaluator) as std::sync::Arc<dyn pmcp_code_mode::PolicyEvaluator>,
-                    )
+                    )?
                 );
 
                 let validate_handler = #mod_name::ValidateCodeHandler {
@@ -556,9 +578,9 @@ fn expand_without_context_from(
                     executor: std::sync::Arc::clone(&self.code_executor),
                 };
 
-                builder
+                Ok(builder
                     .tool("validate_code", validate_handler)
-                    .tool("execute_code", execute_handler)
+                    .tool("execute_code", execute_handler))
             }
         }
     }

@@ -36,6 +36,7 @@ impl MyServer {
 fn main() {
     // Type-check: verify the generated method requires Arc<Self>
     fn _check_arc_method(server: &Arc<MyServer>, builder: pmcp::ServerBuilder) {
-        let _builder: pmcp::ServerBuilder = server.register_code_mode_tools(builder);
+        let _builder: Result<pmcp::ServerBuilder, pmcp_code_mode::TokenError> =
+            server.register_code_mode_tools(builder);
     }
 }

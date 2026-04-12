@@ -13,7 +13,8 @@ use crate::graphql::{GraphQLQueryInfo, GraphQLValidator};
 use crate::policy::{OperationEntity, PolicyEvaluator};
 use crate::token::{compute_context_hash, HmacTokenGenerator, TokenGenerator, TokenSecret};
 use crate::types::{
-    PolicyViolation, UnifiedAction, ValidationError, ValidationMetadata, ValidationResult,
+    PolicyViolation, TokenError, UnifiedAction, ValidationError, ValidationMetadata,
+    ValidationResult,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -95,21 +96,26 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
     ///
     /// **Warning**: This constructor does not configure a policy evaluator.
     /// Only basic config checks will be performed.
-    pub fn new(config: CodeModeConfig, token_secret: impl Into<Vec<u8>>) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TokenError::SecretTooShort`] if the token secret is shorter
+    /// than [`HmacTokenGenerator::MIN_SECRET_LEN`] (16 bytes).
+    pub fn new(config: CodeModeConfig, token_secret: impl Into<Vec<u8>>) -> Result<Self, TokenError> {
         if config.enabled {
             warn_no_policy_configured();
         }
 
-        Self {
+        Ok(Self {
             graphql_validator: GraphQLValidator::default(),
             #[cfg(feature = "openapi-code-mode")]
             javascript_validator: JavaScriptValidator::default()
                 .with_sdk_operations(config.sdk_operations.clone()),
-            token_generator: HmacTokenGenerator::new_from_bytes(token_secret),
+            token_generator: HmacTokenGenerator::new_from_bytes(token_secret)?,
             explanation_generator: TemplateExplanationGenerator::new(),
             policy_evaluator: None,
             config,
-        }
+        })
     }
 
     /// Create a new validation pipeline from a [`TokenSecret`].
@@ -125,37 +131,52 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
     ///
     /// **Warning**: This constructor does not configure a policy evaluator.
     /// Only basic config checks will be performed.
-    pub fn from_token_secret(config: CodeModeConfig, secret: &TokenSecret) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TokenError::SecretTooShort`] if the token secret is shorter
+    /// than [`HmacTokenGenerator::MIN_SECRET_LEN`] (16 bytes).
+    pub fn from_token_secret(config: CodeModeConfig, secret: &TokenSecret) -> Result<Self, TokenError> {
         Self::new(config, secret.expose_secret().to_vec())
     }
 
     /// Create a new validation pipeline with a policy evaluator.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TokenError::SecretTooShort`] if the token secret is shorter
+    /// than [`HmacTokenGenerator::MIN_SECRET_LEN`] (16 bytes).
     pub fn with_policy_evaluator(
         config: CodeModeConfig,
         token_secret: impl Into<Vec<u8>>,
         evaluator: Arc<dyn PolicyEvaluator>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, TokenError> {
+        Ok(Self {
             graphql_validator: GraphQLValidator::default(),
             #[cfg(feature = "openapi-code-mode")]
             javascript_validator: JavaScriptValidator::default()
                 .with_sdk_operations(config.sdk_operations.clone()),
-            token_generator: HmacTokenGenerator::new_from_bytes(token_secret),
+            token_generator: HmacTokenGenerator::new_from_bytes(token_secret)?,
             explanation_generator: TemplateExplanationGenerator::new(),
             policy_evaluator: Some(evaluator),
             config,
-        }
+        })
     }
 
     /// Create a pipeline from a [`TokenSecret`] with an `Arc` policy evaluator.
     ///
     /// Used by derive macro generated code where the policy evaluator is
     /// stored as `Arc<dyn PolicyEvaluator>` on the parent struct.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TokenError::SecretTooShort`] if the token secret is shorter
+    /// than [`HmacTokenGenerator::MIN_SECRET_LEN`] (16 bytes).
     pub fn from_token_secret_with_policy(
         config: CodeModeConfig,
         secret: &TokenSecret,
         evaluator: Arc<dyn PolicyEvaluator>,
-    ) -> Self {
+    ) -> Result<Self, TokenError> {
         Self::with_policy_evaluator(config, secret.expose_secret().to_vec(), evaluator)
     }
 }
@@ -732,7 +753,7 @@ mod tests {
     use crate::types::RiskLevel;
 
     fn test_pipeline() -> ValidationPipeline {
-        ValidationPipeline::new(CodeModeConfig::enabled(), b"test-secret-key!".to_vec())
+        ValidationPipeline::new(CodeModeConfig::enabled(), b"test-secret-key!".to_vec()).unwrap()
     }
 
     fn test_context() -> ValidationContext {
@@ -759,7 +780,7 @@ mod tests {
         let mut config = CodeModeConfig::enabled();
         config.allow_mutations = false;
 
-        let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec());
+        let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec()).unwrap();
         let ctx = test_context();
 
         let result = pipeline
@@ -776,7 +797,7 @@ mod tests {
     #[test]
     fn test_disabled_code_mode() {
         let config = CodeModeConfig::default();
-        let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec());
+        let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec()).unwrap();
         let ctx = test_context();
 
         let result = pipeline.validate_graphql_query("query { users { id } }", &ctx);
@@ -815,7 +836,7 @@ mod tests {
             .blocked_queries
             .insert("users".to_string());
 
-        let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec());
+        let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec()).unwrap();
         let ctx = test_context();
 
         let result = pipeline
@@ -836,7 +857,7 @@ mod tests {
             .allowed_queries
             .insert("orders".to_string());
 
-        let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec());
+        let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec()).unwrap();
         let ctx = test_context();
 
         // "users" is not in the allowlist -- should be rejected

@@ -1,6 +1,4 @@
-use pmcp_code_mode::{
-    CodeExecutor, CodeModeConfig, ExecutionError, NoopPolicyEvaluator, TokenSecret,
-};
+use pmcp_code_mode::{CodeExecutor, CodeModeConfig, ExecutionError, NoopPolicyEvaluator};
 use pmcp_code_mode_derive::CodeMode;
 use std::sync::Arc;
 
@@ -18,18 +16,11 @@ impl CodeExecutor for MyExecutor {
 }
 
 #[derive(CodeMode)]
-struct MyServer {
+struct MissingTokenSecret {
     code_mode_config: CodeModeConfig,
-    token_secret: TokenSecret,
+    // token_secret is MISSING
     policy_evaluator: Arc<NoopPolicyEvaluator>,
     code_executor: Arc<MyExecutor>,
 }
 
-fn main() {
-    // Type-check: verify the generated method signature exists
-    #[allow(deprecated)]
-    fn _check_method_exists(server: &MyServer, builder: pmcp::ServerBuilder) {
-        let _builder: Result<pmcp::ServerBuilder, pmcp_code_mode::TokenError> =
-            server.register_code_mode_tools(builder);
-    }
-}
+fn main() {}

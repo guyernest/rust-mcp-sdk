@@ -33,7 +33,7 @@ proptest! {
         code in "[ -~]{1,500}"
     ) {
         let token_secret = TokenSecret::new(secret);
-        let generator = HmacTokenGenerator::new(token_secret);
+        let generator = HmacTokenGenerator::new(token_secret).unwrap();
 
         let token = generator.generate(
             &code,
@@ -62,7 +62,7 @@ proptest! {
         suffix in "[ -~]{1,50}"
     ) {
         let token_secret = TokenSecret::new(secret);
-        let generator = HmacTokenGenerator::new(token_secret);
+        let generator = HmacTokenGenerator::new(token_secret).unwrap();
 
         let token = generator.generate(
             &code,
@@ -115,7 +115,7 @@ proptest! {
         flip_position in 0usize..200,
     ) {
         let token_secret = TokenSecret::new(secret);
-        let generator = HmacTokenGenerator::new(token_secret);
+        let generator = HmacTokenGenerator::new(token_secret).unwrap();
 
         let token = generator.generate(
             &code,
@@ -162,8 +162,8 @@ proptest! {
     ) {
         prop_assume!(secret1 != secret2);
 
-        let gen1 = HmacTokenGenerator::new(TokenSecret::new(secret1));
-        let gen2 = HmacTokenGenerator::new(TokenSecret::new(secret2));
+        let gen1 = HmacTokenGenerator::new(TokenSecret::new(secret1)).unwrap();
+        let gen2 = HmacTokenGenerator::new(TokenSecret::new(secret2)).unwrap();
 
         // Generate token with gen1
         let token = gen1.generate(
@@ -328,7 +328,8 @@ async fn default_deny_without_noop() {
         config,
         b"test-secret-key!".to_vec(),
         Arc::new(DenyAllEvaluator),
-    );
+    )
+    .unwrap();
 
     let ctx = ValidationContext::new("user-123", "session-456", "schema-hash", "perms-hash");
 
@@ -357,7 +358,8 @@ async fn noop_evaluator_allows_query() {
         config,
         b"test-secret-key!".to_vec(),
         Arc::new(NoopPolicyEvaluator::new()),
-    );
+    )
+    .unwrap();
 
     let ctx = ValidationContext::new("user-123", "session-456", "schema-hash", "perms-hash");
 

@@ -10,6 +10,8 @@ fn code_mode_compile_tests() {
     // Compile-fail tests
     t.compile_fail("tests/ui/missing_config.rs");
     t.compile_fail("tests/ui/missing_policy_evaluator.rs");
+    t.compile_fail("tests/ui/missing_token_secret.rs");
+    t.compile_fail("tests/ui/missing_code_executor.rs");
     t.compile_fail("tests/ui/non_send_field.rs");
     t.compile_fail("tests/ui/wrong_token_type.rs");
     // Compile-pass tests

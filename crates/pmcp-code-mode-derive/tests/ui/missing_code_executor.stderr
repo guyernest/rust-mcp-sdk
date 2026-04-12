@@ -1,0 +1,6 @@
+error: #[derive(CodeMode)] requires field `code_executor` (type: Arc<dyn CodeExecutor>).
+       Required fields: code_mode_config, token_secret, policy_evaluator, code_executor
+ --> tests/ui/missing_code_executor.rs:6:8
+  |
+6 | struct MissingCodeExecutor {
+  |        ^^^^^^^^^^^^^^^^^^^

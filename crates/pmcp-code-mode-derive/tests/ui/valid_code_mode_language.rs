@@ -31,6 +31,7 @@ fn main() {
     // This proves backward compatibility -- non-context_from users keep &self
     #[allow(deprecated)]
     fn _check_method(server: &MyServer, builder: pmcp::ServerBuilder) {
-        let _builder: pmcp::ServerBuilder = server.register_code_mode_tools(builder);
+        let _builder: Result<pmcp::ServerBuilder, pmcp_code_mode::TokenError> =
+            server.register_code_mode_tools(builder);
     }
 }
