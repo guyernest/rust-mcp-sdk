@@ -11,6 +11,7 @@
 - **v1.6 CLI DX Overhaul** — Phases 27-32 (in progress)
 - ✅ **v1.7 SDK Maturation** — Phases 52-53 (shipped 2026-03-20)
 - **v2.0 Protocol Modernization** — Phases 54-59 (in progress)
+- **v2.1 rmcp Upgrades** — Phases 65-68 (in progress)
 
 ## Phases
 
@@ -189,7 +190,14 @@ Plans:
   2. User can run `cargo pmcp test tools <url>`, `cargo pmcp test resources <url>`, `cargo pmcp test prompts <url>`, and `cargo pmcp test health <url>` to inspect server capabilities
   3. All `cargo pmcp test` subcommands accept the same auth flags (--api-key, OAuth) and global flags (--verbose, --no-color, --quiet) established in prior phases
   4. The standalone `mcp-tester` binary uses the same flag conventions as `cargo pmcp test` (positional URL, --verbose/-v, --yes)
-**Plans**: TBD
+**Plans:** 6 plans
+Plans:
+- [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
+- [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
+- [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [x] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
+- [x] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
+- [x] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
 ### Phase 31: New Commands
 **Goal**: Users have workspace diagnostics and shell completion generation built into the CLI
@@ -199,7 +207,14 @@ Plans:
   1. User can run `cargo pmcp doctor` and see validation results for workspace structure, Rust toolchain, config files, and optionally server connectivity
   2. User can run `cargo pmcp completions bash` (or zsh/fish/powershell) and pipe the output to the appropriate shell config file
   3. Both commands follow all established flag conventions (global flags, --format, help text patterns)
-**Plans**: TBD
+**Plans:** 6 plans
+Plans:
+- [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
+- [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
+- [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [x] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
+- [x] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
+- [x] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
 ### Phase 32: Help Text Polish
 **Goal**: Every cargo pmcp command has professional, consistent help output ready for course recording
@@ -209,7 +224,14 @@ Plans:
   1. Every command's `--help` output includes a description, grouped options (by category: connection, auth, output, etc.), and a usage examples section via `after_help`
   2. All help text follows the same structural pattern: synopsis line, categorized options, examples section
   3. Running `cargo pmcp --help` shows a clean top-level overview with all subcommands and their one-line descriptions
-**Plans**: TBD
+**Plans:** 6 plans
+Plans:
+- [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
+- [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
+- [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [x] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
+- [x] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
+- [ ] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
 
 ## Progress
 
@@ -681,3 +703,209 @@ Plans:
 - [x] 64-01-PLAN.md -- Secret resolution logic + deploy pipeline integration (dotenvy, resolve_secrets, CDK env passthrough)
 - [x] 64-02-PLAN.md -- SDK pmcp::secrets thin reader module (get/require helpers, SecretError)
 - [ ] 64-03-PLAN.md -- Dev command .env loading + documentation (dev.rs injection, README, CLI help)
+
+### v2.1 rmcp Upgrades (In Progress)
+
+**Milestone Goal:** Close the credibility and developer-experience gaps where the official Rust MCP SDK (rmcp) outshines PMCP -- documentation accuracy, feature gate presentation, macro documentation, example index, and repo hygiene. No new runtime dependencies; all fixes are configuration changes, file rewrites, and targeted attribute additions.
+
+- [x] **Phase 65: Examples Cleanup and Protocol Accuracy** - Replace broken examples/README.md, fix protocol badge, resolve 17 orphan example files and 4 duplicate number prefixes (completed 2026-04-10)
+- [x] **Phase 66: Macros Documentation Rewrite** - Rewrite pmcp-macros README to document current #[mcp_tool]/#[mcp_server]/#[mcp_prompt]/#[mcp_resource] API with migration guide (completed 2026-04-11)
+- [x] **Phase 67: docs.rs Pipeline and Feature Flags** - Enable doc_auto_cfg for automatic feature badges, explicit feature list in docs.rs metadata, feature flag table, zero rustdoc warnings (completed 2026-04-12)
+- [ ] **Phase 68: General Documentation Polish** - Update lib.rs doctests to TypedToolWithOutput pattern, add transport matrix, CI enforcement gates for drift prevention
+
+## Phase Details (v2.1)
+
+### Phase 65: Examples Cleanup and Protocol Accuracy
+**Goal**: Developers browsing the examples/ directory and README see accurate PMCP content with correct protocol version, every example file is runnable, and no numbering collisions exist
+**Depends on**: Phase 64
+**Requirements**: EXMP-01, EXMP-02, EXMP-03, PROT-01
+**Success Criteria** (what must be TRUE):
+  1. `examples/README.md` contains a PMCP example index organized by category (transport, tools, resources, prompts, tasks, apps) with required features and run commands for each example
+  2. Every `.rs` file in `examples/` has a corresponding `[[example]]` entry in `Cargo.toml` with correct `required-features`, and `cargo run --example <name>` works for each
+  3. No two example files share the same numbered prefix -- `ls examples/*.rs | awk -F_ '{print $1}' | sort | uniq -d` returns empty
+  4. The README.md MCP-Compatible badge and compatibility table display protocol version `2025-11-25`, matching `LATEST_PROTOCOL_VERSION` in source code
+**Plans:** 3/3 plans complete
+Plans:
+- [x] 65-01-PLAN.md — Audit orphan examples + fix protocol badge (EXMP-02, PROT-01)
+- [x] 65-02-PLAN.md — Renumber all examples with role-prefix scheme (EXMP-03)
+- [x] 65-03-PLAN.md — Write examples/README.md index (EXMP-01)
+
+### Phase 66: Macros Documentation Rewrite
+**Goal**: A developer reading pmcp-macros documentation (on docs.rs or GitHub) sees accurate documentation of #[mcp_tool], #[mcp_server], #[mcp_prompt], and #[mcp_resource] as the primary API, with a clear migration path from deprecated macros
+**Depends on**: Phase 65
+**Requirements**: MACR-01, MACR-02, MACR-03
+**Success Criteria** (what must be TRUE):
+  1. `pmcp-macros/README.md` documents `#[mcp_tool]`, `#[mcp_server]`, `#[mcp_prompt]`, and `#[mcp_resource]` as the primary API with working code examples that compile
+  2. A migration section guides users from deprecated `#[tool]`/`#[tool_router]` to `#[mcp_tool]`/`#[mcp_server]` with before/after code comparisons
+  3. `pmcp-macros/src/lib.rs` uses `include_str!("../README.md")` so that `docs.rs/pmcp-macros` renders the rewritten README as the crate-level documentation
+  4. No references to stale version numbers (e.g., `pmcp = { version = "1.*" }`) appear in the macros README
+**Plans:** 6 plans
+Plans:
+- [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
+- [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
+- [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [x] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
+- [x] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
+- [ ] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
+
+### Phase 67: docs.rs Pipeline and Feature Flags
+**Goal**: docs.rs renders PMCP with automatic feature badges on all feature-gated items, an explicit feature list preventing internal APIs from surfacing, a documented feature flag table, and zero rustdoc warnings
+**Depends on**: Phase 66
+**Requirements**: DRSD-01, DRSD-02, DRSD-03, DRSD-04
+**Success Criteria** (what must be TRUE):
+  1. `src/lib.rs` contains `#![cfg_attr(docsrs, feature(doc_auto_cfg))]` and all ~145 feature-gated items on docs.rs display automatic feature availability badges
+  2. `Cargo.toml` `[package.metadata.docs.rs]` uses an explicit feature list (~13 user-facing features) instead of `all-features = true`, preventing test helpers and internal features from surfacing
+  3. A feature flag table in `lib.rs` doc comments documents all user-facing features with descriptions and what they enable
+  4. `RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps` exits with zero warnings -- all broken intra-doc links and unclosed HTML tags resolved
+  5. CI includes a `make doc-check` target that enforces zero rustdoc warnings on every PR
+**Plans:** 6 plans
+Plans:
+- [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
+- [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
+- [x] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [ ] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
+- [ ] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
+- [ ] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
+
+### Phase 67.1: Code Mode Support (INSERTED)
+
+**Goal:** External MCP server developers can add Code Mode (validate → approve → execute) to their servers using PMCP SDK crates, with a `#[derive(CodeMode)]` proc macro, pluggable `PolicyEvaluator` + `CodeExecutor` traits, zeroizing token secrets, and a complete worked example — unblocking an imminent MCP server launch that depends on this capability.
+**Depends on:** Phase 67
+**Requirements**: CMSUP-01, CMSUP-02, CMSUP-03, CMSUP-04, CMSUP-05, CMSUP-06
+**Success Criteria** (what must be TRUE):
+  1. `crates/pmcp-code-mode/` exists in the rust-mcp-sdk workspace containing the moved + hardened Code Mode core (validation pipeline, `PolicyEvaluator`, `CedarPolicyEvaluator`, `NoopPolicyEvaluator`, new `CodeExecutor` trait, new `TokenSecret` newtype with zeroization) and all existing tests pass
+  2. `crates/pmcp-code-mode-derive/` exists and provides a working `#[derive(CodeMode)]` proc macro that emits a `register_code_mode_tools(builder)` method, enforces `Send + Sync` at compile time, and has `trybuild` compile-pass + compile-fail snapshot coverage
+  3. `pmcp-code-mode/src/lib.rs` re-exports `async_trait` (`pub use async_trait::async_trait;`) and generated derive output uses `#[pmcp_code_mode::async_trait]` to avoid version conflicts
+  4. A complete worked example in `examples/` (e.g. `XX_code_mode_graphql.rs`) demonstrates: struct annotation → `register_code_mode_tools` → `validate_code` → approval token → `execute_code` round trip using `NoopPolicyEvaluator`
+  5. Contract YAMLs for `pmcp-code-mode` and `pmcp-code-mode-derive` exist under `../provable-contracts/contracts/` and `pmat comply check` passes on both
+  6. `make quality-gate` passes workspace-wide (zero clippy warnings, zero SATD, all tests green, format clean) and both new crates are positioned in the publishing order documented in CLAUDE.md, ready for the next release phase
+**Plans:** 6/6 plans complete
+
+Plans:
+- [x] 67.1-01-PLAN.md — Crate scaffolding + source move into workspace
+- [x] 67.1-02-PLAN.md — Security hardening (TokenSecret, NoopPolicyEvaluator, async_trait re-export)
+- [x] 67.1-03-PLAN.md — CodeExecutor high-level trait
+- [x] 67.1-04-PLAN.md — pmcp-code-mode-derive proc macro (#[derive(CodeMode)] + trybuild)
+- [x] 67.1-05-PLAN.md — Property tests + fuzz targets
+- [x] 67.1-06-PLAN.md — End-to-end example + CRATE-READMEs + SECURITY.md + quality-gate
+
+### Phase 67.2: Code Mode Derive Hardening (INSERTED)
+
+**Goal:** Fix critical derive macro issues from pmcp.run team review (policy_evaluator not called, static ValidationContext, hardcoded "graphql"), address review warnings, and resolve high-priority performance/quality issues from IMPROVEMENTS.md.
+**Depends on:** Phase 67.1
+**Requirements**: CMSUP-07, CMSUP-08, CMSUP-09, CMSUP-10
+**Success Criteria** (what must be TRUE):
+  **Derive macro — critical (pmcp.run review items 1-3):**
+  1. Generated `ValidateCodeHandler` calls `policy_evaluator.evaluate_operation()` between pipeline validation and token generation — the security contract is enforced
+  2. `#[code_mode(context_from = "method_name")]` attribute extracts real `ValidationContext` from `RequestHandlerExtra` or a struct method, replacing hardcoded placeholders
+  3. `#[code_mode(language = "graphql"|"javascript"|"sql")]` attribute parameterizes tool metadata — SQL/OpenAPI servers get correct tool schemas
+  **Derive macro — warnings (pmcp.run review items 4-8):**
+  4. `HmacTokenGenerator::new` returns `Result` instead of panicking on short secrets
+  5. Trybuild compile-fail tests cover `token_secret` and `code_executor` absent fields
+  6. Generated handlers share a single `Arc<ValidationPipeline>` instead of constructing two
+  **Performance (IMPROVEMENTS.md P-01, P-03):**
+  7. eval.rs array methods use scope-chain/push-pop instead of cloning entire HashMap per element (P-01)
+  8. Async GraphQL validation fallback reuses parsed `query_info` instead of re-parsing (P-03)
+  *Deferred: P-02 (double SWC parse) requires new `ValidatedCode` type threading AST across javascript.rs/executor.rs — deferred to a future phase*
+  **Code quality (IMPROVEMENTS.md Q-01 through Q-04, R-01):**
+  9. `json_to_string` / `value_to_string` unified into one function (Q-01)
+  10. `LoopContinue`/`LoopBreak` moved to internal `StepOutcome` enum, removed from public `ExecutionError` (Q-04)
+  11. `ValidationResponse` wraps `ValidationResult` instead of duplicating all fields (R-01)
+  **Baseline:**
+  12. All existing tests pass, `cargo test -p pmcp-code-mode -p pmcp-code-mode-derive` green
+  13. Clippy suppressions reduced (trivially fixable: `useless_format`, `derivable_impls`, etc.)
+**Plans:** 6/6 plans complete
+Plans:
+- [x] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
+- [x] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
+- [ ] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [ ] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
+- [ ] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
+- [ ] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
+
+### Phase 68: General Documentation Polish
+**Goal**: Crate-level documentation showcases current best practices (TypedToolWithOutput, proc macros), transport types are discoverable, and CI gates prevent future documentation drift
+**Depends on**: Phase 67
+**Requirements**: PLSH-01, PLSH-02, PLSH-03
+**Success Criteria** (what must be TRUE):
+  1. `lib.rs` crate-level doc examples compile and demonstrate the `TypedToolWithOutput` pattern and current builder APIs (not legacy `Server::builder()` or `ToolHandler`)
+  2. A transport matrix table in `lib.rs` doc comments lists all supported transports (stdio, streamable HTTP, SSE) with links to their actual module/type paths
+  3. CI enforces that the count of `[[example]]` entries in `Cargo.toml` matches the count of `.rs` files in `examples/`, failing the build on mismatch
+  4. `cargo semver-checks check-release` runs in CI on every PR to prevent accidental API breakage during documentation changes
+**Plans:** 6 plans
+Plans:
+- [ ] 67.2-01-PLAN.md — Wire policy_evaluator into generated handlers + switch to async validation
+- [ ] 67.2-02-PLAN.md — Add context_from and language darling attributes to derive macro
+- [ ] 67.2-03-PLAN.md — HmacTokenGenerator::new returns Result + trybuild compile-fail tests
+- [ ] 67.2-04-PLAN.md — eval.rs scope-chain optimization for array methods (P-01)
+- [ ] 67.2-05-PLAN.md — Async GraphQL double-parse elimination (P-03)
+- [ ] 67.2-06-PLAN.md — json_to_string unification + StepOutcome refactor + ValidationResponse wrapping + clippy cleanup
+
+## Progress (v2.1)
+
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 65. Examples Cleanup + Protocol Accuracy | v2.1 | 3/3 | Complete    | 2026-04-10 |
+| 66. Macros Documentation Rewrite | v2.1 | 5/5 | Complete    | 2026-04-11 |
+| 67. docs.rs Pipeline + Feature Flags | v2.1 | 6/6 | Complete    | 2026-04-12 |
+| 68. General Documentation Polish | v2.1 | 0/? | Not started | - |
+
+## Backlog
+
+Parking lot for unsequenced ideas. Items here aren't scheduled — promote with `/gsd:review-backlog` when ready.
+
+### Phase 999.1: Delete DEFAULT_PROTOCOL_VERSION constant and make callsites explicit (BACKLOG)
+
+**Goal:** Remove the public `DEFAULT_PROTOCOL_VERSION` re-export and replace each of its ~15 callsites with an explicit choice — either `LATEST_PROTOCOL_VERSION` (where the code is advertising what this SDK supports) or a literal `"2025-03-26"` with a `// backward-compat fallback` comment (where the code genuinely wants the widest-compatible version for un-negotiated peers). The name `DEFAULT` is misleading: nothing is actually "default" about it — it's a specific compat choice that happens to be older than `LATEST`, and that distinction is invisible at every callsite.
+
+**Scope:**
+- Breaking API change (public re-export at `src/lib.rs:307` + `src/types/mod.rs:32`) — requires minor version bump and release note
+- Callsites to audit and convert:
+  - `src/types/protocol/mod.rs:32` — `impl Default for ProtocolVersion`
+  - `src/server/streamable_http_server.rs` lines 560, 971, 979, 981, 985, 1225, 1231, 1233, 1236
+  - `src/server/core.rs:1329` and `:1376`
+  - `src/shared/event_store.rs:367`
+  - `src/lib.rs:286` — public doctest asserting the value
+  - `src/types/protocol/version.rs:51,65` — unit tests
+  - `benches/comprehensive_benchmarks.rs:421`
+
+**Why:** Phase 65 simplify review flagged the inconsistency — `LATEST_PROTOCOL_VERSION = "2025-11-25"` but `DEFAULT_PROTOCOL_VERSION = "2025-03-26"`. Mechanically bumping `DEFAULT` to match `LATEST` would be a silent behavior change for peers reaching the fallback path (they'd be assumed to speak the newer protocol before they've said so). The right fix is to delete the misleading abstraction, not flip its value.
+
+**Requirements:** TBD
+
+**Plans:** 6/6 plans complete
+
+Plans:
+- [ ] TBD (promote with `/gsd:review-backlog` when ready)
+
+### Phase 999.2: TOON data format feasibility and SDK integration (BACKLOG)
+
+**Goal:** Investigate whether PMCP should add built-in support for TOON as an alternative wire format to JSON for MCP tool outputs and resource payloads, specifically to optimize performance of MCP Apps that often ship large JSON payloads. Deliver a spike report + recommendation (adopt / pilot / reject), and if adoption is recommended, a follow-up implementation plan for a feature-gated `toon` format with encoder/decoder integrated into `Content`, tool output serialization, and the MCP App bridge so servers and Apps can opt in with a single flag.
+
+**Motivation:**
+- MCP Apps frequently serialize large structured payloads (tables, datasets, chart data) — the dataviz, hotel gallery, and venue map examples are all 10–100 KB of JSON per response
+- Both the LLM context window and the UI widget render path benefit from smaller payloads: fewer tokens consumed by tool output, faster postMessage bridge transfer, faster widget mount
+- TOON (Token-Oriented Object Notation) is designed explicitly for this use case — schema-aware compression that encodes repeated keys and types once, yielding ~30–60% size reductions on tabular data compared to JSON
+- If adoption works, MCP servers would flip a flag per-tool or per-resource to switch output format, and MCP Apps would transparently decode on the bridge side
+
+**Research questions (spike scope, not implementation):**
+1. Maturity of TOON — is the spec stable enough to commit a feature-gated SDK integration? Is there a Rust encoder/decoder crate, or would PMCP need to author one?
+2. Compatibility — can TOON payloads ride over existing MCP `Content` variants (probably via a new `TextContent` MIME type or a new `Content::Toon` variant), or does it need protocol changes that break v2025-11-25 compat?
+3. Measurement — what are the realistic size/token savings on representative MCP App payloads (dataviz, gallery, map from existing examples)? Do LLMs tokenize TOON efficiently, or does the token savings on the wire get lost when Claude/GPT re-tokenize the decoded content?
+4. Widget-side decoder — can the MCP App bridge (TypeScript) decode TOON in-browser without a heavy dependency, or is this a non-starter for the WASM/iframe sandbox?
+5. Opt-in UX — what does `#[mcp_tool(output_format = "toon")]` or equivalent look like on the server side? What's the per-call server-side negotiation story?
+
+**Why backlog (not an active phase):**
+- The user's framing is explicitly exploratory ("let's investigate if we can add it as a built-in support")
+- TOON is a newer format — the feasibility spike should happen before committing a phase slot
+- The v2.1 rmcp Upgrades milestone is scoped to documentation polish; runtime data-format work doesn't belong there
+- Natural home after spike: either seed of a "v2.2 Payload Optimization" milestone or early phase of a milestone focused on MCP Apps performance
+
+**Promotion path:** Run `/gsd:discuss-phase 999.2` to gather context, then `/gsd:research-phase 999.2` for the spike, then promote via `/gsd:review-backlog` into an active milestone with a concrete Phase N number.
+
+**Requirements:** TBD (depends on spike outcome)
+
+**Plans:** 6 plans
+
+Plans:
+- [ ] TBD (promote with `/gsd:review-backlog` when ready)

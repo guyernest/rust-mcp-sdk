@@ -75,7 +75,7 @@ Each layer catches different security concerns:
 // The request already has a validated token at this point
 
 #[derive(TypedTool)]
-#[tool(name = "query_sales", description = "Query sales data")]
+#[mcp_tool(name = "query_sales", description = "Query sales data")]
 pub struct QuerySales;
 
 impl QuerySales {

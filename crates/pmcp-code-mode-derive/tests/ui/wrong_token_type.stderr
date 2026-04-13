@@ -1,0 +1,17 @@
+error[E0308]: mismatched types
+  --> tests/ui/wrong_token_type.rs:18:10
+   |
+18 | #[derive(CodeMode)]
+   |          ^^^^^^^^
+   |          |
+   |          expected `&TokenSecret`, found `&Vec<u8>`
+   |          arguments to this function are incorrect
+   |
+   = note: expected reference `&TokenSecret`
+              found reference `&Vec<u8>`
+note: associated function defined here
+  --> $WORKSPACE/crates/pmcp-code-mode/src/validation.rs
+   |
+   |     pub fn from_token_secret_with_policy(
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the derive macro `CodeMode` (in Nightly builds, run with -Z macro-backtrace for more info)

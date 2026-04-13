@@ -1,6 +1,6 @@
 [package]
 name = "pmcp-macros"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "Procedural macros for PMCP SDK - Model Context Protocol"
@@ -38,4 +38,3 @@ proptest = "1.6"
 [features]
 default = []
 debug = []  # Enable debug output in macros
-tool_router_dev = []  # Enable WIP tool_router tests

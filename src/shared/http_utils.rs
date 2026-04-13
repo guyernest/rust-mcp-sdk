@@ -82,7 +82,7 @@ pub fn should_log_body_for_content_type(
 
 /// Redact query parameters from a URL.
 ///
-/// Returns the URL with query parameters replaced by "[REDACTED]".
+/// Returns the URL with query parameters replaced by `"[REDACTED]"`.
 ///
 /// # Arguments
 ///

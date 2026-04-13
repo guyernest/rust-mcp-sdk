@@ -1,88 +1,92 @@
-# Requirements: PMCP SDK Extensions
+# Requirements: PMCP SDK rmcp Upgrades
 
-**Defined:** 2026-03-03
-**Core Value:** Consistent, polished CLI experience for cargo pmcp ahead of course recording — every command follows the same conventions for URLs, flags, auth, and output.
+**Defined:** 2026-04-10
+**Core Value:** Close credibility and DX gaps where rmcp outshines PMCP — documentation accuracy, feature gate presentation, macro documentation, example index, and repo hygiene.
 
-## v1.6 Requirements
+## v2.1 Requirements
 
-Requirements for CLI DX Overhaul. Each maps to roadmap phases.
+Requirements for rmcp Upgrades milestone. Each maps to roadmap phases.
 
-### Flag Consistency
+### Examples Cleanup
 
-- [x] **FLAG-01**: All commands taking a server URL accept it as a positional argument (replace `--url`, `--endpoint`)
-- [x] **FLAG-02**: All pmcp.run server references use `--server` flag consistently (replace `--server-id`)
-- [x] **FLAG-03**: All verbose output flags use `--verbose` / `-v` (replace `--detailed`)
-- [x] **FLAG-04**: All confirmation-skip flags use `--yes` (replace `--force`)
-- [x] **FLAG-05**: All `--output` flags have `-o` short alias
-- [x] **FLAG-06**: Human-readable format values normalized to `text`/`json` across all `--format` flags
-- [x] **FLAG-07**: All clap derive attributes use `#[arg()]` style (replace `#[clap()]` in deploy)
-- [x] **FLAG-08**: `--no-color` available as global flag on all commands
-- [x] **FLAG-09**: `--quiet` available as global flag on all commands
+- [x] **EXMP-01**: Examples README replaced with accurate PMCP example index organized by category with required features and run commands
+- [x] **EXMP-02**: All example .rs files in examples/ are registered in Cargo.toml with correct required-features (17 orphans resolved)
+- [x] **EXMP-03**: No duplicate example number prefixes — each numbered prefix maps to exactly one file (08, 11, 12, 32 resolved)
 
-### Auth Propagation
+### Protocol Accuracy
 
-- [x] **AUTH-01**: `cargo pmcp test check` accepts `--api-key` and OAuth flags (issuer, client-id, scopes, no-cache, redirect-port)
-- [x] **AUTH-02**: `cargo pmcp test run` accepts `--api-key` and OAuth flags
-- [x] **AUTH-03**: `cargo pmcp test generate` accepts `--api-key` and OAuth flags
-- [x] **AUTH-04**: `cargo pmcp preview` accepts `--api-key` and OAuth flags
-- [x] **AUTH-05**: `cargo pmcp schema export` accepts `--api-key` and OAuth flags
-- [x] **AUTH-06**: `cargo pmcp connect` accepts `--api-key` and OAuth flags
+- [x] **PROT-01**: README MCP-Compatible badge and compatibility table show 2025-11-25, matching LATEST_PROTOCOL_VERSION in code
 
-### Tester Integration
+### Macros Documentation
 
-- [x] **TEST-01**: `cargo pmcp test compliance <url>` runs MCP spec compliance checks via mcp-tester
-- [x] **TEST-02**: `cargo pmcp test diagnose <url>` runs server diagnostics via mcp-tester
-- [x] **TEST-03**: `cargo pmcp test compare <url1> <url2>` compares two MCP servers via mcp-tester
-- [x] **TEST-04**: `cargo pmcp test tools <url>` lists and optionally tests server tools via mcp-tester
-- [x] **TEST-05**: `cargo pmcp test resources <url>` lists server resources via mcp-tester
-- [x] **TEST-06**: `cargo pmcp test prompts <url>` lists server prompts via mcp-tester
-- [x] **TEST-07**: `cargo pmcp test health <url>` checks server health via mcp-tester
-- [x] **TEST-08**: mcp-tester standalone binary flags aligned with cargo pmcp conventions (positional URL, `--verbose`/`-v`, `--yes`)
+- [ ] **MACR-01**: pmcp-macros README rewritten to document #[mcp_tool], #[mcp_server], #[mcp_prompt], #[mcp_resource] as primary APIs with working examples
+- [ ] **MACR-02**: Migration section guiding users from deprecated #[tool]/#[tool_router] to #[mcp_tool]/#[mcp_server]
+- [ ] **MACR-03**: pmcp-macros lib.rs uses include_str!("../README.md") so docs.rs shows the rewritten README
 
-### New Commands
+### docs.rs Pipeline
 
-- [x] **CMD-01**: `cargo pmcp doctor` validates workspace structure, toolchain, config files, and optionally tests server connectivity
-- [x] **CMD-02**: `cargo pmcp completions <shell>` generates shell completions for bash, zsh, fish, powershell
+- [ ] **DRSD-01**: lib.rs contains cfg_attr(docsrs, feature(doc_auto_cfg)) enabling automatic feature badges on all feature-gated items
+- [ ] **DRSD-02**: Cargo.toml [package.metadata.docs.rs] uses explicit feature list (~13 user-facing features) instead of all-features = true
+- [ ] **DRSD-03**: Feature flag table added to lib.rs doc comments documenting all user-facing features with descriptions
+- [ ] **DRSD-04**: Zero rustdoc warnings — all broken intra-doc links and unclosed HTML tags resolved, CI gate added
 
-### Help & Polish
+### General Polish
 
-- [x] **HELP-01**: All commands have consistent help text format with description and usage examples via `after_help`
-- [x] **HELP-02**: All `--help` output follows pattern: synopsis, options grouped by category, examples section
+- [ ] **PLSH-01**: lib.rs crate-level doctests updated to show TypedToolWithOutput and current builder patterns (not legacy Server::builder())
+- [ ] **PLSH-02**: CI enforcement: example file count matches Cargo.toml [[example]] count, cargo semver-checks on PRs
+- [ ] **PLSH-03**: Transport matrix table in lib.rs docs linking to actual transport types
 
-## Previous Requirements (v1.5 — Complete)
+### Code Mode Support
 
-### CLI Command
+Inserted into v2.1 via Phase 67.1 (INSERTED, 2026-04-11) — blocker for an imminent MCP server launch. External developers must be able to add Code Mode (validate → approve → execute) to their servers consistently, without depending on the pmcp-run internal crate. See `.planning/phases/67.1-code-mode-support/67.1-DECISIONS.md` for the locked design decisions and `pmcp-run/built-in/shared/pmcp-code-mode/SDK_DESIGN_SPEC.md` for the source spec.
 
-- [x] **CLI-01**: User can run `cargo pmcp loadtest upload` with `--server-id` and path to TOML config
-- [x] **CLI-02**: User receives clear error if TOML config is invalid or has no scenarios
-- [x] **CLI-03**: User sees upload success with config identifier and version from pmcp.run
-- [x] **CLI-04**: User sees next steps guidance (view on pmcp.run dashboard, trigger remote run)
+- [ ] **CMSUP-01**: `crates/pmcp-code-mode/` exists in the rust-mcp-sdk workspace containing the moved Code Mode core — validation pipeline, `PolicyEvaluator` trait, `CedarPolicyEvaluator` (behind `cedar` feature), HMAC token infrastructure, GraphQL/JS/SQL validators — with all existing tests passing after the move and zero regressions against the pmcp-run source of truth
+- [ ] **CMSUP-02**: Security hardening lands alongside the move — `TokenSecret` newtype backed by `secrecy` + `zeroize` replaces plain `Vec<u8>` token storage, blocks `Debug`/`Display` printing, and is documented in a crate-level threat model (README section or SECURITY.md); `NoopPolicyEvaluator` exists in `pmcp-code-mode` for tests and local development; `pub use async_trait::async_trait;` is re-exported from `pmcp-code-mode/src/lib.rs`
+- [ ] **CMSUP-03**: `CodeExecutor` high-level trait exists in `pmcp-code-mode` with a single `execute(code, variables) -> Result<Value, ExecutionError>` method, supersedes per-server executor glue, and covers all four execution patterns (direct SQL, JS+HTTP, JS+SDK, JS+MCP); blanket impl for `PlanExecutor` explored and either implemented or explicitly documented as deferred
+- [ ] **CMSUP-04**: `crates/pmcp-code-mode-derive/` proc macro crate exists and provides `#[derive(CodeMode)]` which emits a `register_code_mode_tools(builder)` method registering `validate_code` + `execute_code` tools against a `pmcp::ServerBuilder`, enforces `Send + Sync` at compile time, uses `#[pmcp_code_mode::async_trait]` via the re-export to avoid version conflicts, and has `trybuild` compile-pass + compile-fail snapshot coverage (missing required fields, non-`Send` fields, wrong field types)
+- [ ] **CMSUP-05**: Contract YAMLs for `pmcp-code-mode` and `pmcp-code-mode-derive` exist under `../provable-contracts/contracts/` covering `PolicyEvaluator`/`CodeExecutor` trait invariants, HMAC token bind-to-code-hash semantics, derive-macro expansion contracts, and default-deny behavior; `pmat comply check` passes on both crates; property tests cover HMAC round-trip and validation-pipeline determinism; fuzz targets exist for GraphQL parser input, JavaScript parser input, and token verification in the core crate (macro-input fuzzing skipped as documented in 67.1-DECISIONS.md D7)
+- [ ] **CMSUP-06**: A complete worked example in `examples/` (e.g. `XX_code_mode_graphql.rs`) demonstrates the end-to-end flow: `#[derive(CodeMode)]` annotation → `register_code_mode_tools(builder)` → `validate_code` call → approval token issued → `execute_code` call with token → result — runnable via `cargo run --example XX_code_mode_graphql` using `NoopPolicyEvaluator`; `crates/pmcp-code-mode/` and `crates/pmcp-code-mode-derive/` are slotted into the publish order documented in CLAUDE.md (`pmcp-widget-utils → pmcp → pmcp-code-mode → pmcp-code-mode-derive → mcp-tester → mcp-preview → cargo-pmcp`) with CRATE-README files ready for docs.rs, and `make quality-gate` passes workspace-wide
 
-### Upload
+## Previous Requirements
 
-- [x] **UPLD-01**: Loadtest TOML config content is uploaded via GraphQL mutation to pmcp.run
-- [x] **UPLD-02**: Upload reuses existing pmcp.run auth (OAuth, client credentials, access token)
-- [x] **UPLD-03**: Upload sends config content, format, name, and server association
+<details>
+<summary>v2.0 Protocol Type Construction DX (Complete)</summary>
 
-### Validation
+| ID | Phase | Status |
+|----|-------|--------|
+| PROTO-TYPE-DX | Phase 54.1 | Complete |
 
-- [x] **VALD-01**: Config file is parsed and validated before upload (valid TOML, has scenarios)
-- [x] **VALD-02**: User receives actionable error messages for invalid configs
+</details>
+
+<details>
+<summary>v1.6 CLI DX Overhaul (27/27 Complete)</summary>
+
+- [x] FLAG-01..09 (Phase 27-28)
+- [x] AUTH-01..06 (Phase 29)
+- [x] TEST-01..08 (Phase 30)
+- [x] CMD-01..02 (Phase 31)
+- [x] HELP-01..02 (Phase 32)
+
+</details>
+
+<details>
+<summary>v1.5 Cloud Load Testing Upload (6/6 Complete)</summary>
+
+- [x] CLI-01..04 (Phase 25-26)
+- [x] UPLD-01..03 (Phase 25-26)
+- [x] VALD-01..02 (Phase 25-26)
+
+</details>
 
 ## Future Requirements
 
-Deferred to future release. Tracked but not in current roadmap.
+Deferred to later milestone. Tracked but not in current roadmap.
 
-### Provider Abstraction
+### Documentation Depth
 
-- **PROV-01**: LoadtestProvider trait for pluggable cloud backends
-- **PROV-02**: Provider registry with target selection (`--target` flag)
-
-### Remote Execution
-
-- **REXE-01**: Trigger remote load test execution from CLI
-- **REXE-02**: Poll remote execution status from CLI
-- **REXE-03**: Download remote execution results to local JSON report
+- **DOCD-01**: Per-capability code examples in README (book/course fill this role today)
+- **DOCD-02**: Separate crate-level README distinct from repo README for docs.rs
+- **DOCD-03**: Community showcase ("Built with PMCP") section when real projects exist
 
 ### CLI Enhancements
 
@@ -92,74 +96,48 @@ Deferred to future release. Tracked but not in current roadmap.
 
 ## Out of Scope
 
+Explicitly excluded. Documented to prevent scope creep.
+
 | Feature | Reason |
 |---------|--------|
-| Deprecation aliases for old flag names | Clean break — course being recorded fresh, no existing users to support |
-| mcp-tester removal as standalone binary | Both `cargo pmcp test` and `mcp-tester` will coexist with aligned flags |
-| New transport types | CLI consistency only, no new protocol work |
-| Loadtest provider abstraction | Deferred to when second provider appears |
-| Book/course content updates | Will be part of course recording, not this milestone |
+| Copying rmcp's trait-based architecture docs | Different SDK architecture; would be misleading |
+| Per-capability inline README sections | Would make README 2000+ lines; book/course serve this role |
+| Example subdirectory reorganization | High churn for low gain; flat numbering works |
+| document-features crate | Adds build dep for something a manual table does equally well |
+| Removing book/course/ecosystem from README | These are genuine PMCP differentiators rmcp lacks |
 
 ## Traceability
 
+Which phases cover which requirements. Updated during roadmap creation.
+
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FLAG-01 | Phase 28 | Complete |
-| FLAG-02 | Phase 28 | Complete |
-| FLAG-03 | Phase 28 | Complete |
-| FLAG-04 | Phase 28 | Complete |
-| FLAG-05 | Phase 28 | Complete |
-| FLAG-06 | Phase 28 | Complete |
-| FLAG-07 | Phase 28 | Complete |
-| FLAG-08 | Phase 27 | Complete |
-| FLAG-09 | Phase 27 | Complete |
-| AUTH-01 | Phase 29 | Complete |
-| AUTH-02 | Phase 29 | Complete |
-| AUTH-03 | Phase 29 | Complete |
-| AUTH-04 | Phase 29 | Complete |
-| AUTH-05 | Phase 29 | Complete |
-| AUTH-06 | Phase 29 | Complete |
-| TEST-01 | Phase 30 | Complete |
-| TEST-02 | Phase 30 | Complete |
-| TEST-03 | Phase 30 | Complete |
-| TEST-04 | Phase 30 | Complete |
-| TEST-05 | Phase 30 | Complete |
-| TEST-06 | Phase 30 | Complete |
-| TEST-07 | Phase 30 | Complete |
-| TEST-08 | Phase 30 | Complete |
-| CMD-01 | Phase 31 | Complete |
-| CMD-02 | Phase 31 | Complete |
-| HELP-01 | Phase 32 | Complete |
-| HELP-02 | Phase 32 | Complete |
+| EXMP-01 | Phase 65 | Complete |
+| EXMP-02 | Phase 65 | Complete |
+| EXMP-03 | Phase 65 | Complete |
+| PROT-01 | Phase 65 | Complete |
+| MACR-01 | Phase 66 | Pending |
+| MACR-02 | Phase 66 | Pending |
+| MACR-03 | Phase 66 | Pending |
+| DRSD-01 | Phase 67 | Pending |
+| DRSD-02 | Phase 67 | Pending |
+| DRSD-03 | Phase 67 | Pending |
+| DRSD-04 | Phase 67 | Pending |
+| PLSH-01 | Phase 68 | Pending |
+| PLSH-02 | Phase 68 | Pending |
+| PLSH-03 | Phase 68 | Pending |
+| CMSUP-01 | Phase 67.1 | Pending |
+| CMSUP-02 | Phase 67.1 | Pending |
+| CMSUP-03 | Phase 67.1 | Pending |
+| CMSUP-04 | Phase 67.1 | Pending |
+| CMSUP-05 | Phase 67.1 | Pending |
+| CMSUP-06 | Phase 67.1 | Pending |
 
 **Coverage:**
-- v1.6 requirements: 27 total
-- Mapped to phases: 27
+- v2.1 requirements: 20 total (14 original + 6 inserted via Phase 67.1)
+- Mapped to phases: 20
 - Unmapped: 0
 
-## v2.0 Requirements
-
-### PROTO-TYPE-DX: Protocol Type Construction DX
-
-**Priority:** P1
-**Source:** Dev team feedback (v1.16→v1.20 upgrade)
-
-All protocol types (structs and enum variants) must be constructable by downstream users without specifying every optional field. This requires one or more of:
-1. `Default` impls on all protocol structs
-2. Builder methods for complex types
-3. Constructor functions (e.g., `::new()`) for types where only required fields are added
-4. Enum variant construction helpers for Content, MessageContent, etc.
-
-**Acceptance criteria:**
-- Every `#[non_exhaustive]` protocol struct has either a Default impl or a constructor/builder
-- Every Content/MessageContent enum variant has a construction helper
-- Downstream users can upgrade SDK versions without updating every construction site when new Optional fields are added
-- SDK's own test patterns (struct literals) are not the only way to construct types
-
-| ID | Phase | Status |
-|----|-------|--------|
-| PROTO-TYPE-DX | Phase 54.1 | Complete |
-
 ---
-*Requirements defined: 2026-03-03*
-*Last updated: 2026-03-20 — added v2.0 PROTO-TYPE-DX requirement*
+*Requirements defined: 2026-04-10*
+*Last updated: 2026-04-11 — added CMSUP-01..06 for Phase 67.1 Code Mode Support (INSERTED)*

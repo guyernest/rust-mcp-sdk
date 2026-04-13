@@ -1,398 +1,291 @@
-# Stack Research: MCP Apps Developer Experience (v1.3)
+# Stack Research: rmcp Documentation & DX Upgrades (v2.1)
 
-**Domain:** MCP Apps developer tooling — preview server, WASM test client, publishing, scaffolding
-**Researched:** 2026-02-24
-**Confidence:** HIGH (mcp-preview, WASM, Playwright), MEDIUM (MCP Apps spec, ChatGPT manifest format)
-**Mode:** Subsequent milestone — only NEW stack for v1.3, not re-researching v1.0/v1.1/v1.2 foundations
+**Domain:** Documentation quality, docs.rs presentation, README accuracy, macro documentation
+**Researched:** 2026-04-10
+**Confidence:** HIGH (all findings verified against actual codebase files in both repos)
+**Mode:** Subsequent milestone -- only documentation/DX gaps benchmarked against rmcp
 
 ## Executive Assessment
 
-**Five distinct areas need stack attention, most of which require zero new Rust crates.** The existing `mcp-preview` crate already has Axum 0.7, WebSocket, reqwest, rust-embed, and serde. The `wasm-client` already has wasm-bindgen 0.2 and web-sys. The `cargo-pmcp` CLI already has minijinja-style templating needs covered by its existing deps.
+PMCP has a **documentation presentation gap, not a documentation quantity gap**. PMCP actually has MORE documentation content than rmcp (682-line README, 252-line macros README, extensive rustdoc comments), but rmcp presents its documentation more effectively through three specific patterns that PMCP should adopt:
 
-The real work is:
-1. **mcp-preview widget bridge**: The iframe MCP bridge JavaScript is ~90% complete in `assets/index.html`. What's missing is the `ui://` resource URI resolution pattern per the MCP Apps spec v2026-01-26 — tools now declare `_meta.ui.resourceUri` pointing to `ui://` resources, not inline HTML. The current proxy assumes inline HTML in tool responses; it must also support fetching resources by `ui://` URI.
-2. **WASM widget bridge**: The WASM client (wasm-bindgen 0.2.100+) needs `web-sys` features for `MessageChannel`, `HtmlIframeElement`, and `Window.postMessage` to inject the bridge into an iframe. These are features on the existing `web-sys` dep, not new crates.
-3. **ChatGPT manifest generation**: No `manifest.json` file — OpenAI uses MCP server discovery via `_meta.ui.resourceUri` on tool annotations. The "manifest" is the MCP `tools/list` response with `ui` metadata annotations. Generation is pure `serde_json` templating, zero new deps.
-4. **Demo landing pages**: HTML generation for stakeholder demos. Use `minijinja` `"2"` (already the right choice for cargo-pmcp's scaffolding use case — minimal deps, Jinja2 syntax, no proc macros). This IS a new dep for `mcp-preview` but `cargo-pmcp` needs it for `new --mcp-apps`.
-5. **`cargo pmcp new --mcp-apps` scaffolding**: Template expansion with variable substitution. Use `minijinja` `"2"`. cargo-pmcp already has the CLI infrastructure; this is template files + minijinja dep.
+1. **Crate-level README as docs.rs landing page** via `include_str!`
+2. **`doc_auto_cfg`** for automatic feature-flag badges on every gated item
+3. **Focused crate READMEs** that work well in both GitHub and docs.rs contexts
 
-**Axum version mismatch is the one technical risk**: `mcp-preview` uses `axum = "0.7"` but the root `pmcp` crate uses `axum = "0.8.5"`. The route syntax changed (`/:param` → `/{param}`, `/*path` → `/{*path}`). `mcp-preview` must upgrade to `axum = "0.8"` to avoid dependency duplication and the path syntax already in `server.rs` uses the new `{*path}` style — so the code is written for 0.8 already but Cargo.toml says 0.7. Fix: bump `mcp-preview/Cargo.toml` to `axum = "0.8"`.
+No new crates or dependencies are needed. This is entirely configuration and content restructuring.
 
----
+## Gap Analysis: PMCP vs rmcp
 
-## Recommended Stack Additions
+### 1. docs.rs Feature Coverage Annotations
 
-### mcp-preview Crate — Changes Required
-
-| Technology | Current | Target | Change | Why |
-|------------|---------|--------|--------|-----|
-| `axum` | `"0.7"` | `"0.8"` | Version bump | Aligns with root `pmcp` crate. Route syntax `/{*path}` already used in server.rs matches 0.8 syntax. Avoids duplicate compilation. |
-| `tower-http` | `"0.6"` | `"0.6"` | No change | 0.6 is the version compatible with axum 0.8. Already correct. |
-| `minijinja` | (absent) | `"2"` | New dep | Needed for demo landing page HTML generation (configurable templates for stakeholder demos with server URL, tool list, branding). |
-
-**mcp-preview adds one dep: `minijinja = "2"`.**
-
-### cargo-pmcp Crate — Changes Required
-
-| Technology | Current | Target | Change | Why |
-|------------|---------|--------|--------|-----|
-| `minijinja` | (absent) | `"2"` | New dep | `cargo pmcp new --mcp-apps` scaffolding: expand template files with `{{project_name}}`, `{{server_url}}`, `{{tool_name}}` variables. minijinja has no proc macros, minimal compile footprint vs `tera`. |
-
-**cargo-pmcp adds one dep: `minijinja = "2"`.**
-
-### wasm-client (examples/wasm-client) — Changes Required
-
-| Technology | Current Version | Change | Why |
-|------------|----------------|--------|-----|
-| `wasm-bindgen` | `"0.2"` | Pin to `"0.2.100"` or keep `"0.2"` | Existing dep. Latest is 0.2.108 (Jan 2026). The `"0.2"` semver range already pulls the latest compatible version. No change needed. |
-| `web-sys` features | `["console", "WebSocket"]` | Add: `"MessageChannel"`, `"MessagePort"`, `"HtmlIframeElement"`, `"Window"`, `"EventTarget"` | Bridge injection into iframe requires postMessage API. These are all `web-sys` feature flags, NOT new crates. |
-
-**wasm-client changes: web-sys feature additions only. No new crates.**
-
-### Build Tooling — New Requirements
-
-| Tool | Version | Purpose | Where Used |
-|------|---------|---------|------------|
-| `wasm-pack` | latest (0.13.x) | Build WASM client to `pkg/` output for embedding | CI + developer local build. Already used implicitly but should be pinned in `just` tasks. |
-| `@playwright/test` | `^1.50.0` | E2E widget testing | Already in `tests/playwright/package.json`. Correct version. |
-
-**No new Rust toolchain crates. `wasm-pack` is already the standard WASM build tool for this stack.**
-
----
-
-## Detailed Recommendations by Feature Area
-
-### 1. mcp-preview Widget Iframe Rendering
-
-**Gap**: The current `handleToolResponse()` in `index.html` looks for inline HTML in `content[].text` with MIME type `text/html`. The MCP Apps spec (2026-01-26) defines tools as declaring `_meta.ui.resourceUri: "ui://..."` — the host fetches the resource separately, then injects the tool result as context into the already-rendered widget.
-
-**Stack implication**: The proxy (`proxy.rs`) needs a `read_resource(uri: &str)` method alongside `call_tool()`. The existing `reqwest::Client` handles this — zero new deps. The resource URI `ui://my-widget` maps to a `resources/read` JSON-RPC call.
-
-**Bridge JavaScript in `index.html`**: The `wrapWidgetHtml()` function is functional but uses `window.parent` direct access which breaks with `sandbox` iframe attributes. The correct pattern is `postMessage`/`addEventListener("message")` for cross-origin iframe communication. This is a JavaScript-only change in the embedded HTML, not a Rust dep change.
-
-**Recommended**: Keep the current approach (srcdoc iframe with injected bridge script) for the preview server since it runs same-origin. The postMessage pattern is needed only in the WASM in-browser test client where the iframe is from a different origin.
-
-### 2. WASM-Based In-Browser Test Client
-
-**Current state**: `examples/wasm-client/src/lib.rs` exports `WasmClient` with `connect()`, `list_tools()`, `call_tool()`. It has no bridge injection capability.
-
-**What's needed**: A `WasmAppsClient` that:
-1. Creates an `<iframe>` element (needs `web-sys::HtmlIframeElement` feature)
-2. Sets `srcdoc` to the widget HTML from `read_resource()`
-3. Injects bridge via `contentWindow.postMessage` (needs `web-sys::Window`, `web-sys::MessageEvent`)
-4. Listens for `mcpBridge.callTool()` calls from the iframe via `addEventListener("message")` (needs `web-sys::EventTarget`)
-5. Forwards to the MCP server via existing `WasmClient` methods
-
-**Required web-sys features** (add to `examples/wasm-client/Cargo.toml`):
+**rmcp approach:**
 ```toml
-web-sys = { version = "0.3", features = [
-  "console",
-  "WebSocket",
-  # New for bridge:
-  "MessageChannel",
-  "MessagePort",
-  "MessageEvent",
-  "HtmlIframeElement",
-  "HtmlElement",
-  "Window",
-  "EventTarget",
-  "Document",
-  "Element",
-] }
+# crates/rmcp/Cargo.toml
+[package.metadata.docs.rs]
+features = ["auth", "client", "macros", "server", "transport-io", ...]  # explicit list of 22 features
+rustdoc-args = ["--cfg", "docsrs"]
 ```
-
-Note: `Document` and `Window` are already in the root `pmcp` crate's WASM deps (in `Cargo.toml` line 103). The wasm-client is a separate crate excluded from the workspace, so it must declare them explicitly.
-
-### 3. ChatGPT Manifest Generation
-
-**What "manifest" means in practice**: OpenAI does not use a `manifest.json` file. The ChatGPT Apps SDK (as of Nov 2025) registers MCP Apps by:
-1. Providing an MCP server URL in the OpenAI platform dashboard
-2. The server responding to `tools/list` with tools that include `_meta.ui.resourceUri` annotations
-3. ChatGPT fetching `ui://` resources to prefetch widget templates
-
-**Generation strategy**: A `cargo pmcp manifest` command (or auto-generation during `deploy`) outputs a JSON summary document for developer reference — it is NOT submitted to OpenAI. The actual "registration" is the live MCP server.
-
-**Stack**: `serde_json` (already in `cargo-pmcp`). No new deps.
-
-**What to generate**: A human-readable JSON that documents the MCP server's tool-to-widget mapping, suitable for copy-pasting into the OpenAI platform dashboard submission form. Structure:
-
-```json
-{
-  "server_url": "https://...",
-  "tools": [
-    {
-      "name": "chess_board",
-      "description": "Interactive chess game",
-      "ui": { "resourceUri": "ui://chess-board" }
-    }
-  ]
-}
+```rust
+// lib.rs
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, allow(unused_attributes))]
 ```
+rmcp explicitly lists 22 features in `[package.metadata.docs.rs]` but does NOT use `#[doc(cfg(...))]` on individual items. It relies on `feature(doc_cfg)` which on nightly (docs.rs uses nightly) enables automatic `doc_auto_cfg` behavior -- items behind `#[cfg(feature = "...")]` get feature badges automatically.
 
-### 4. Demo Landing Page Generation
-
-**Purpose**: Auto-generated standalone HTML page that non-technical stakeholders can open in a browser to see a widget demo with a mock bridge (no live MCP server required).
-
-**Stack**: `minijinja = "2"` in `mcp-preview`. The template expands to a self-contained HTML file (inline CSS, inline JS, inline widget HTML).
-
-**Why minijinja over tera**:
-- `tera` pulls in `regex`, `globbing`, `serde_json` deep integration — heavier compile cost
-- `minijinja` version 2 is single-file, zero proc macros, ~2s compile overhead
-- Jinja2 syntax is broadly familiar
-- `minijinja` is used by the same author (mitsuhiko) who wrote Flask/Jinja2; the API is production-quality
-- Latest stable: 2.15.1 (MEDIUM confidence — web search result, no direct crates.io verification)
-
-**Why not handlebars**: handlebars-rs lacks filters and the template complexity for generating a full HTML page with conditional sections warrants Jinja2's `{% if %}` / `{% for %}` support.
-
-### 5. `cargo pmcp new --mcp-apps` Scaffolding
-
-**Current state**: `cargo-pmcp` has the CLI infra (clap, walkdir, colored). The `new` subcommand likely exists for basic projects. The `--mcp-apps` flag generates a project with:
-- `src/main.rs` (MCP server with mcp-apps feature, example tool)
-- `widgets/board.html` (starter widget HTML with bridge boilerplate)
-- `Cargo.toml` (with `pmcp` and `mcp-apps` feature)
-- `README.md`
-
-**Stack**: `minijinja = "2"`. Templates are embedded via `include_str!()` (already a Rust builtin — zero deps). Variables: `{{project_name}}`, `{{tool_name}}`, `{{server_port}}`.
-
-**Why not cargo-generate**: `cargo-generate` is a standalone external tool; users shouldn't need to install it separately. The scaffolding is simple enough (5 files, 3 variables) that `minijinja` + embedded templates are the right approach. cargo-generate's Liquid/Rhai complexity is overkill.
-
----
-
-## Existing Dependencies — No Changes Needed
-
-These are already in the relevant crates and do NOT need modification:
-
-### mcp-preview (already present)
-| Dep | Version | Used For | Status |
-|-----|---------|---------|--------|
-| `axum` | `"0.7"` → bump to `"0.8"` | HTTP server, WebSocket | Bump required (see above) |
-| `tokio` | `"1"` | Async runtime | Unchanged |
-| `tower-http` | `"0.6"` | CORS, static file serving | Unchanged |
-| `rust-embed` | `"8"` | Embedded static assets (`assets/index.html`) | Unchanged |
-| `mime_guess` | `"2"` | MIME type detection for asset serving | Unchanged |
-| `serde` / `serde_json` | `"1"` | Config, proxy serialization | Unchanged |
-| `reqwest` | `"0.12"` | HTTP proxy to MCP server | Unchanged — also handles `resources/read` for `ui://` URIs |
-| `uuid` | `"1"` | Request ID generation | Unchanged |
-| `tracing` | `"0.1"` | Logging | Unchanged |
-| `anyhow` | `"1"` | Error handling | Unchanged |
-| `futures` | `"0.3"` | WebSocket stream handling | Unchanged |
-
-### wasm-client (already present)
-| Dep | Version | Used For | Status |
-|-----|---------|---------|--------|
-| `pmcp` | `path = "../.."` | MCP protocol types + transports | Unchanged |
-| `wasm-bindgen` | `"0.2"` | JS/Rust interop | Unchanged (pulls 0.2.108) |
-| `wasm-bindgen-futures` | `"0.4"` | Async bridge | Unchanged |
-| `serde` / `serde_json` | `"1"` | Type serialization | Unchanged |
-| `serde-wasm-bindgen` | `"0.6"` | JsValue ↔ Rust conversion | Unchanged |
-| `web-sys` | `"0.3"` | Browser APIs | Feature additions only (see above) |
-| `console_error_panic_hook` | `"0.1"` | Panic messages in browser console | Unchanged |
-| `tracing-wasm` | `"0.2"` | Tracing in browser | Unchanged |
-
-### cargo-pmcp (already present)
-| Dep | Version | Used For | Status |
-|-----|---------|---------|--------|
-| `clap` | `"4"` | CLI parsing | Unchanged — `--mcp-apps` flag added to existing `new` subcommand |
-| `serde_json` | `"1"` | Manifest JSON generation | Unchanged |
-| `reqwest` | `"0.12"` | Publishing API calls | Unchanged |
-| `zip` | `"7.0"` | Landing page deployment archives | Unchanged |
-| `colored` | `"3"` | Scaffolding output formatting | Unchanged |
-| `indicatif` | `"0.18"` | Progress bars during build/deploy | Unchanged |
-
----
-
-## Updated Cargo.toml Snippets
-
-### `crates/mcp-preview/Cargo.toml` — Changes
-
+**PMCP approach:**
 ```toml
-[dependencies]
-# CHANGE: bump from "0.7" to "0.8" (route syntax in server.rs already uses 0.8 style)
-axum = { version = "0.8", features = ["ws"] }
-tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.6", features = ["cors", "fs"] }
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+```
+```rust
+#![cfg_attr(docsrs, feature(doc_cfg))]
+```
+PMCP uses `all-features = true` and has 6 manual `#[cfg_attr(docsrs, doc(cfg(...)))]` annotations across 145 feature-gated items.
 
-# Embedded assets
-rust-embed = "8"
-mime_guess = "2"
+**Gap:** PMCP's 6/145 coverage means 139 feature-gated items show NO feature badge on docs.rs. Users cannot tell which items require which feature flags.
 
-# Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+**Fix:** Add `#![cfg_attr(docsrs, feature(doc_auto_cfg))]` to `src/lib.rs`. This nightly-only feature (available on docs.rs since docs.rs uses nightly) automatically generates `doc(cfg(...))` for ALL `#[cfg(feature = "...")]` items. Zero manual annotation needed. The existing 6 manual annotations can be removed.
 
-# HTTP client for MCP proxy
-reqwest = { version = "0.12", features = ["json"] }
-
-# NEW: Template engine for demo landing page generation
-minijinja = "2"
-
-# Utilities
-uuid = { version = "1", features = ["v4"] }
-tracing = "0.1"
-anyhow = "1"
-futures = "0.3"
+```rust
+// src/lib.rs - add this line:
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 ```
 
-### `examples/wasm-client/Cargo.toml` — Changes
+**Why not explicit feature list like rmcp?** PMCP has more features (20+ in the `full` flag alone). `all-features = true` is simpler and correct. rmcp's explicit list is actually worse -- it requires manual maintenance when features are added.
 
-```toml
-[dependencies]
-pmcp = { path = "../..", default-features = false, features = ["wasm"] }
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-serde-wasm-bindgen = "0.6"
-# CHANGE: add web-sys features for bridge injection
-web-sys = { version = "0.3", features = [
-  "console",
-  "WebSocket",
-  "MessageChannel",
-  "MessagePort",
-  "MessageEvent",
-  "HtmlIframeElement",
-  "HtmlElement",
-  "Window",
-  "EventTarget",
-  "Document",
-  "Element",
-] }
-console_error_panic_hook = "0.1"
-tracing-wasm = "0.2"
+**Confidence:** HIGH -- verified both Cargo.toml files, counted actual annotations.
+
+### 2. Crate-Level README as docs.rs Landing Page
+
+**rmcp approach:**
+```rust
+// crates/rmcp/src/lib.rs
+#![doc = include_str!("../README.md")]
+```
+rmcp has a focused 66-line crate README (`crates/rmcp/README.md`) that:
+- Uses `<style>.rustdoc-hidden { display: none; }</style>` to hide GitHub badges from docs.rs
+- Documents feature flags in a clean table
+- Documents transport options
+- Links to the main repo README for full docs
+
+The MAIN repo README (991 lines) is separate and contains the full usage guide with tools, resources, prompts, sampling, roots, logging, completions, subscriptions, and examples.
+
+**rmcp-macros approach:**
+```rust
+// crates/rmcp-macros/src/lib.rs
+#![doc = include_str!("../README.md")]
+```
+81-line focused README with macro table, quick example, and link to main README.
+
+**PMCP approach:**
+- `src/lib.rs` has inline `//! # MCP SDK for Rust` doc comments (61 lines of module docs)
+- Does NOT use `include_str!`
+- The main README (682 lines) is specified as `readme = "README.md"` in Cargo.toml but is NOT rendered as the docs.rs landing page
+- `pmcp-macros/src/lib.rs` has inline `//!` doc comments (53 lines)
+
+**Gap:** PMCP's docs.rs landing page is the 61-line inline doc comment, not the README. The README content (feature flags, transports, quick start) is not visible on docs.rs. Meanwhile, rmcp users see feature flag tables and transport docs immediately on the docs.rs landing page.
+
+**Fix:** Create a focused `DOCS_RS.md` or rename approach -- but the simplest and best approach is:
+
+1. Create a concise crate-level README file (like rmcp's 66 lines) specifically for the docs.rs landing page
+2. Use `#![doc = include_str!("../crate-doc.md")]` in lib.rs
+3. Keep the main README.md for GitHub (repository landing page)
+
+OR (simpler, recommended):
+
+1. Add feature flag table and transport summary to the existing inline docs in lib.rs
+2. Expand the `//!` module doc from 61 lines to ~100-120 lines with feature flags table
+
+**Recommendation:** Use the `include_str!` approach with a focused crate doc file. This keeps documentation in markdown (easier to edit) and automatically stays in sync. The file should contain:
+- Feature flags table (like rmcp)
+- Transport summary
+- Quick start code snippet
+- Link to full README and docs
+
+**Confidence:** HIGH -- verified both lib.rs files and README content.
+
+### 3. Macro Documentation: README vs Inline Docs
+
+**rmcp-macros approach:**
+- 81-line README with `<style>.rustdoc-hidden { display: none; }</style>` for GitHub/docs.rs dual rendering
+- Concise table of all 7 macros with docs.rs links
+- Two quick examples (simple + advanced)
+- Uses `#![doc = include_str!("../README.md")]` so this IS the docs.rs landing
+- Each macro has detailed `///` doc comments in lib.rs (30-50 lines each with tables and examples)
+
+**pmcp-macros approach:**
+- 252-line README with detailed examples but several inaccuracies:
+  - States "Currently only supports tools (prompts and resources coming soon)" -- but `#[mcp_prompt]` and `#[mcp_resource]` already ship
+  - Version reference `pmcp = { version = "1.1" }` is outdated (current: 2.2.0)
+  - Does not document `#[mcp_tool]`, `#[mcp_prompt]`, `#[mcp_resource]`, `#[mcp_server]` macros
+  - Only documents the deprecated `#[tool]` and `#[tool_router]` macros
+- Does NOT use `include_str!` -- lib.rs has its own 53-line inline docs
+- Each macro has detailed `///` doc comments in lib.rs (good coverage, 10-40 lines each)
+
+**Gap:** The pmcp-macros README is fundamentally stale. It documents deprecated macros and claims features are missing that actually exist. The inline lib.rs docs are accurate but the README (what users see on crates.io and GitHub) is misleading.
+
+**Fix:**
+1. Rewrite `pmcp-macros/README.md` to match rmcp's pattern:
+   - Table of ALL current macros: `#[mcp_tool]`, `#[mcp_prompt]`, `#[mcp_resource]`, `#[mcp_server]`, plus legacy `#[tool]`, `#[tool_router]`
+   - Use `rustdoc-hidden` CSS trick for GitHub-only badges
+   - Quick example using CURRENT macros (not deprecated ones)
+   - Link to main README for full docs
+2. Add `#![doc = include_str!("../README.md")]` to pmcp-macros/src/lib.rs
+3. Remove inline `//!` module docs from lib.rs (README replaces them)
+
+**Confidence:** HIGH -- verified README content against actual lib.rs macro exports.
+
+### 4. Example Indexing Patterns
+
+**rmcp approach:**
+- Examples organized into subdirectories: `examples/servers/`, `examples/clients/`, `examples/transport/`, `examples/wasi/`
+- Each subdirectory has its own README with:
+  - Per-example descriptions (3-5 lines each)
+  - Run commands
+  - Dependencies list
+  - Common module documentation
+- Top-level `examples/README.md` is a quick-start guide, not an index
+
+**PMCP approach:**
+- All 60+ examples in flat `examples/` directory with numeric prefixes: `01_`, `02_`, etc.
+- `examples/README.md` exists but was not verified as current in this research
+- Examples registered in `Cargo.toml` with `[[example]]` entries and `required-features`
+- Some standalone examples in subdirectories: `examples/mcp-apps-chess/`, `examples/mcp-apps-map/`, etc.
+
+**Gap:** PMCP's flat directory works fine for discoverability (numeric prefixes are good). The gap is README accuracy -- the README must list every example with:
+- Correct name
+- What it demonstrates
+- Required features
+- Run command
+
+**Fix:** Rewrite `examples/README.md` with:
+- Category groupings (Core, Transport, Security, Workflows, MCP Apps, Macros)
+- Per-example: name, one-line description, required features, run command
+- Generate from `Cargo.toml` `[[example]]` entries if desired (but manual is fine for 60 examples)
+
+**Confidence:** HIGH -- verified actual example files against Cargo.toml entries.
+
+### 5. Crate-Level Doc Attributes
+
+**rmcp lib.rs attributes:**
+```rust
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![cfg_attr(docsrs, allow(unused_attributes))]
+#![doc = include_str!("../README.md")]
 ```
 
-### `cargo-pmcp/Cargo.toml` — Changes
-
-Add to `[dependencies]`:
-```toml
-# NEW: Template engine for --mcp-apps scaffolding
-minijinja = "2"
+**PMCP lib.rs attributes:**
+```rust
+#![warn(missing_docs, missing_debug_implementations, rust_2018_idioms, unreachable_pub)]
+#![deny(unsafe_code)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::return_self_not_must_use)]
+#![allow(clippy::multiple_crate_versions)]
+#![allow(clippy::used_underscore_binding)]
+#![allow(clippy::result_large_err)]
 ```
 
----
+**Gap:** PMCP actually has STRICTER lint attributes than rmcp (good). The only missing piece is `doc_auto_cfg` (covered in item 1 above) and `include_str!` (covered in item 2).
 
-## Alternatives Considered
+**Fix:** Add `#![cfg_attr(docsrs, feature(doc_auto_cfg))]` -- that is the only attribute change needed.
 
-| Category | Recommended | Alternative | Why Not |
-|----------|-------------|-------------|---------|
-| Template engine (scaffolding) | `minijinja "2"` | `tera "1"` | tera pulls regex + globbing; larger compile footprint. minijinja is purpose-built for this exact use case (Jinja2 templates in Rust CLI tools). |
-| Template engine (scaffolding) | `minijinja "2"` | `handlebars "6"` | handlebars has no filter support or block-level conditionals — insufficient for HTML generation with conditional sections. |
-| Template engine (scaffolding) | `minijinja "2"` | `askama` | askama is compile-time, not runtime. Scaffolding templates need to be embedded strings expanded at runtime. |
-| Scaffolding tool | Embedded templates + minijinja | `cargo-generate` | External tool; users must install separately. Our templates are simple (5 files, 3 variables). |
-| Bridge communication | srcdoc + same-origin access | postMessage cross-origin | srcdoc iframes are same-origin with their parent; direct `window.parent` access works. postMessage is the right choice only for the WASM test client where iframes are cross-origin. |
-| WASM packaging | `wasm-pack` | `trunk` | trunk is a full bundler (webpack-like) designed for full WASM SPAs. wasm-pack produces a `pkg/` directory we embed in the preview server or serve standalone. trunk adds unnecessary complexity. |
-| Manifest format | serde_json generation from tool metadata | Separate manifest.json | OpenAI does not use a manifest.json; registration is through the platform dashboard pointing at the live MCP server URL. A generated JSON is documentation only. |
-| Axum version | `"0.8"` | Keep `"0.7"` | The root `pmcp` crate already depends on `axum = "0.8.5"`. Two incompatible axum versions in one workspace would compile both, bloating the binary. |
+## Recommended Stack Changes
 
----
+### Configuration Changes (Zero Dependencies)
+
+| Change | File | What | Why |
+|--------|------|------|-----|
+| Add `doc_auto_cfg` | `src/lib.rs` | `#![cfg_attr(docsrs, feature(doc_auto_cfg))]` | Auto-generates feature badges for all 145 gated items on docs.rs |
+| Add `include_str!` | `src/lib.rs` | `#![doc = include_str!("../crate-doc.md")]` | Makes docs.rs landing page useful with feature tables |
+| Add `include_str!` | `pmcp-macros/src/lib.rs` | `#![doc = include_str!("../README.md")]` | Makes macros docs.rs page show the README |
+| Remove manual `doc(cfg)` | 6 locations in `src/` | Delete `#[cfg_attr(docsrs, doc(cfg(...)))]` | Redundant once `doc_auto_cfg` is enabled |
+
+### New Files (Zero Dependencies)
+
+| File | Purpose | Size |
+|------|---------|------|
+| `crate-doc.md` | Focused docs.rs landing page (feature tables, transports, quick start) | ~80-100 lines |
+
+### File Rewrites (Zero Dependencies)
+
+| File | What Changes | Why |
+|------|-------------|-----|
+| `pmcp-macros/README.md` | Complete rewrite: document current macros, drop deprecated-only coverage | README is stale, documents only deprecated macros |
+| `examples/README.md` | Comprehensive example index with categories, features, run commands | Current index may not match actual examples |
+
+### Makefile/CI Integration
+
+The existing `make doc` target already does the right thing:
+```makefile
+doc:
+    RUSTDOCFLAGS="--cfg docsrs" $(CARGO) doc --all-features --no-deps
+```
+
+Add a verification target:
+```makefile
+doc-check:
+    RUSTDOCFLAGS="--cfg docsrs -D warnings" $(CARGO) doc --all-features --no-deps
+```
+
+This catches broken doc links and missing docs before they reach docs.rs.
+
+### Local Testing Command
+
+```bash
+RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --all-features --no-deps --open
+```
+
+This previews exactly what docs.rs will render, including feature badges.
 
 ## What NOT to Add
 
-| Technology | Why Not | What to Use Instead |
-|------------|---------|---------------------|
-| `trunk` | Full SPA bundler — overkill for embedding a WASM client in a preview server. Requires webpack config, `index.html` entrypoint conventions, npm-style setup. | `wasm-pack build --target web` produces standalone ES module. |
-| `leptos` or `yew` | Frontend frameworks. The preview UI is intentionally vanilla JS (single HTML file, no build step). Adding a framework would require a JS build pipeline. | Plain JavaScript in `assets/index.html`. Already implemented. |
-| `axum-extra` | Optional axum extensions — none needed for this feature set. | Core `axum = "0.8"` with `ws` feature. |
-| `tower-serve-static` | Wrapper around tower-http for embedded files. `rust-embed` + a custom handler (already implemented in `handlers/assets.rs`) does the same thing without an extra dep. | Existing `rust-embed` + `handlers::assets`. |
-| `include_dir` | Alternative to `rust-embed`. No advantage here — `rust-embed` is already present and provides the same compile-time embedding. | `rust-embed = "8"` (already in mcp-preview). |
-| `cargo-generate` (as a lib) | Using cargo-generate as a library dep brings its full dependency tree (liquid template, git2, etc.) for a 5-file template. | `minijinja` for template expansion, `include_str!()` for embedding. |
-| `serde_dynamo` / DynamoDB / Redis | Out of scope for this milestone. Storage backends are v1.2 work. | Not applicable to MCP Apps DX. |
-| `oauth2` (new in mcp-preview) | Auth for the preview server is unnecessary — it runs localhost only. cargo-pmcp already has oauth2 for publishing flows. | No auth in preview server. |
+| Temptation | Why Avoid |
+|-----------|-----------|
+| `document-features` crate | Adds a build dependency just to extract Cargo.toml comments. Manual feature table in crate-doc.md is simpler and more flexible. |
+| README generation tooling (cargo-readme, etc.) | Over-engineering. PMCP has 2 READMEs to maintain. Manual is fine. |
+| Automated example index generation | The `[[example]]` entries in Cargo.toml are the source of truth. A script adds fragile tooling for a one-time rewrite task. |
+| Sphinx/mdBook for API docs | docs.rs + rustdoc is the standard. PMCP already has mdBook for book/course. |
+| Per-feature documentation pages | Feature badges on items are sufficient. Per-feature guide pages are the book/course's job. |
+| Copying rmcp's explicit feature list in docs.rs metadata | PMCP's `all-features = true` is correct and lower-maintenance. rmcp's explicit list requires updates on every feature addition. |
 
----
+## Implementation Priority
 
-## Version Compatibility
+1. **`doc_auto_cfg` attribute** -- Single line change, massive docs.rs improvement (139 items gain badges)
+2. **pmcp-macros README rewrite** -- Highest user-facing impact, current README actively misleads
+3. **`include_str!` for crate-doc.md** -- Makes docs.rs landing page useful
+4. **examples/README.md rewrite** -- Ensures example discoverability
+5. **Remove manual `doc(cfg)` annotations** -- Cleanup after `doc_auto_cfg` does it automatically
+6. **`make doc-check` target** -- CI enforcement
 
-| Package A | Version | Compatible With | Notes |
-|-----------|---------|-----------------|-------|
-| `axum` | `"0.8"` | `tower-http = "0.6"` | tower-http 0.6 is the correct companion to axum 0.8. Already in mcp-preview. |
-| `axum` | `"0.8"` | `tokio-tungstenite = "0.26+"` | axum 0.8 upgraded tokio-tungstenite to 0.26. The `ws` feature in axum 0.8 handles this. |
-| `wasm-bindgen` | `"0.2"` | `web-sys = "0.3"` | These are co-released; the `"0.2"` and `"0.3"` semver ranges always track together. No pinning needed. |
-| `minijinja` | `"2"` | `serde = "1"` | minijinja 2.x uses serde for value serialization. Compatible with existing serde 1.x. |
-| `minijinja` | `"2"` | `minijinja = "1"` (if present elsewhere) | They are separate major versions. If any dep transitively pulls minijinja 1, Cargo resolves both. Both are small; duplication is acceptable but avoid if possible. |
-| `pmcp` root | `axum = "0.8.5"` | `mcp-preview axum = "0.8"` | After the bump, both use the same semver range. Cargo deduplicates to a single axum 0.8.x compile. |
+## Version Matrix
 
----
-
-## MCP Apps Spec Impact on Architecture (Not Stack)
-
-The ext-apps specification (2026-01-26, now production-stable) defines:
-- Tools declare `_meta.ui.resourceUri: "ui://widget-name"`
-- Hosts call `resources/read` with that URI to get the HTML bundle
-- Communication is postMessage JSON-RPC between iframe and host
-
-**Stack consequence**: The `McpProxy` in `mcp-preview/src/proxy.rs` needs a `read_resource(uri: &str) -> Result<String>` method. This uses the existing `reqwest::Client` to call `resources/read` on the MCP server. **Zero new deps.** The existing `send_request()` private method handles this already.
-
-The preview server's WebSocket handler already supports `CallTool` messages. It needs a companion `ReadResource` message type. **Zero new deps** — just additional match arms in `handlers/websocket.rs`.
-
----
-
-## Playwright E2E Stack
-
-The Playwright setup is already correct:
-
-```json
-{
-  "@playwright/test": "^1.50.0",
-  "@types/node": "^22.0.0",
-  "typescript": "^5.7.0"
-}
-```
-
-The `serve.js` static file server, `playwright.config.ts`, `fixtures/mock-mcp-bridge.ts`, and `tests/chess-widget.spec.ts` are already written. What's missing is the widget HTML files being served at the expected paths (`/chess/board.html`, `/map/explorer.html`). The `serve.js` serves from `examples/` — the chess example's `preview.html` must be placed at the path the tests expect, or the test paths updated to match the examples' structure.
-
-**No new npm packages needed.** `@playwright/test 1.50.0` is current as of early 2026.
-
----
-
-## Build Pipeline for wasm-pack
-
-The WASM test client needs a build step before embedding:
-
-```bash
-# In examples/wasm-client/
-wasm-pack build --target web --out-dir pkg
-
-# The mcp-preview server then serves pkg/ assets
-# OR: pkg/ is embedded via rust-embed at compile time
-```
-
-**Recommended**: Add to `justfile` at workspace root:
-
-```just
-build-wasm:
-    cd examples/wasm-client && wasm-pack build --target web --out-dir pkg
-```
-
-The `mcp-preview` crate can then `include!` the built WASM via `rust-embed` pointing at the build output path (requires `BUILD_WASM=1` to run `build-wasm` before cargo build). This is standard practice; see examples in the wasm-pack documentation.
-
-**wasm-pack version**: Use whatever `cargo install wasm-pack` installs (0.13.x as of early 2026). No Cargo.toml dep — it's a standalone tool.
-
----
+| Component | Current Version | Required Change |
+|-----------|----------------|-----------------|
+| pmcp | 2.2.0 | lib.rs attributes only |
+| pmcp-macros | 0.4.1 | README rewrite + lib.rs `include_str!` |
+| Rust (local) | 1.83+ | No change needed |
+| docs.rs | nightly | Already compatible |
+| Makefile | existing | Add `doc-check` target |
 
 ## Sources
 
-- [MCP Apps ext-apps spec 2026-01-26](https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx) — `ui://` resource URI scheme, `_meta.ui.resourceUri` tool annotations, postMessage protocol (MEDIUM confidence — web search, structure described but not directly fetched)
-- [OpenAI Apps SDK docs](https://developers.openai.com/apps-sdk/) — No manifest.json; registration via platform dashboard + live MCP server (MEDIUM confidence)
-- [minijinja on crates.io](https://crates.io/crates/minijinja) — version 2.15.1 as of web search (MEDIUM confidence — web search result)
-- [wasm-bindgen on crates.io](https://crates.io/crates/wasm-bindgen) — latest 0.2.108 as of Jan 2026 (MEDIUM confidence — web search result)
-- [Announcing axum 0.8.0](https://tokio.rs/blog/2025-01-01-announcing-axum-0-8-0) — Breaking changes: path syntax `/{param}`, WebSocket Message uses Bytes (HIGH confidence — official tokio blog)
-- [web-sys docs](https://docs.rs/web-sys/latest/web_sys/) — MessageChannel, MessagePort, HtmlIframeElement, Window features available (HIGH confidence — official docs)
-- [Playwright npm package](https://www.npmjs.com/package/playwright) — version 1.50.0 is current in early 2026 (MEDIUM confidence — web search)
-- Codebase analysis: `crates/mcp-preview/Cargo.toml` — existing axum 0.7, current deps
-- Codebase analysis: `crates/mcp-preview/src/server.rs` — route uses `/{*path}` (axum 0.8 syntax, confirming the version mismatch)
-- Codebase analysis: `crates/mcp-preview/assets/index.html` — bridge JavaScript implementation status (~90% complete)
-- Codebase analysis: `examples/wasm-client/Cargo.toml` — existing web-sys features
-- Codebase analysis: `cargo-pmcp/Cargo.toml` — existing deps, no templating engine present
-- Codebase analysis: `tests/playwright/package.json`, `playwright.config.ts` — Playwright already set up
-- Project doc: `.planning/PROJECT.md` — v1.3 milestone scope
+All findings verified against actual files in:
+- `/Users/guy/Development/mcp/sdk/rust-mcp-sdk/` (PMCP codebase)
+- `/Users/guy/Development/mcp/sdk/rust-sdk/` (rmcp codebase)
 
----
-*Stack research for: MCP Apps Developer Experience (v1.3 milestone)*
-*Researched: 2026-02-24*
-*Key findings:*
-*1. THREE new deps total: `minijinja "2"` in mcp-preview, `minijinja "2"` in cargo-pmcp, web-sys feature additions in wasm-client.*
-*2. ONE critical fix: bump mcp-preview axum from "0.7" to "0.8" (server.rs already uses 0.8 route syntax).*
-*3. ChatGPT "manifest" is not a file — it's the tools/list response with _meta.ui annotations.*
-*4. Playwright E2E stack is already complete; missing piece is widget HTML files at expected paths.*
-*5. MCP Apps spec went production-stable 2026-01-26; PMCP's existing type support is aligned.*
+Key files examined:
+- rmcp: `crates/rmcp/Cargo.toml` (docs.rs metadata, 22 explicit features)
+- rmcp: `crates/rmcp/src/lib.rs` (3 crate attributes + `include_str!`)
+- rmcp: `crates/rmcp/README.md` (66-line focused crate doc)
+- rmcp: `crates/rmcp-macros/README.md` (81-line macro table + examples)
+- rmcp: `crates/rmcp-macros/src/lib.rs` (`include_str!` + detailed `///` docs)
+- pmcp: `Cargo.toml` (docs.rs metadata with `all-features = true`)
+- pmcp: `src/lib.rs` (145 feature gates, 6 doc(cfg) annotations)
+- pmcp: `pmcp-macros/README.md` (252 lines, stale content)
+- pmcp: `pmcp-macros/src/lib.rs` (inline docs, no `include_str!`)
+- rmcp docs.rs: https://docs.rs/rmcp
+- Rust doc_auto_cfg: https://doc.rust-lang.org/stable/unstable-book/language-features/doc-auto-cfg.html
+- docs.rs metadata: https://docs.rs/about/metadata

@@ -1,0 +1,32 @@
+[package]
+name = "pmcp-code-mode-derive"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/paiml/rust-mcp-sdk"
+description = "Derive macro for Code Mode validation and execution in MCP servers"
+readme = "README.md"
+keywords = ["mcp", "code-mode", "derive", "proc-macro"]
+categories = ["development-tools::procedural-macro-helpers"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2.0", features = ["full", "extra-traits"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+darling = "0.23"
+
+[dev-dependencies]
+pmcp = { version = "2.3.0", path = "../../" }
+pmcp-code-mode = { version = "0.1.0", path = "../pmcp-code-mode" }
+tokio = { version = "1", features = ["full"] }
+trybuild = "1.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-trait = "0.1"

@@ -1,0 +1,53 @@
+[package]
+name = "pmcp-code-mode"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/paiml/rust-mcp-sdk"
+description = "Code Mode validation and execution framework for MCP servers"
+readme = "README.md"
+keywords = ["mcp", "code-mode", "validation", "llm", "cedar"]
+categories = ["development-tools", "web-programming"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+pmcp = { version = "2.3.0", path = "../../" }
+async-trait = "0.1"
+tokio = { version = "1", features = ["sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+base64 = "0.22"
+hmac = "0.13"
+secrecy = "0.10"
+sha2 = "0.11"
+zeroize = { version = "1.8", features = ["derive"] }
+uuid = { version = "1", features = ["v4"] }
+hex = "0.4"
+chrono = "0.4"
+graphql-parser = "0.4"
+
+# JavaScript parsing (optional, for OpenAPI Code Mode)
+swc_ecma_parser = { version = "32", optional = true }
+swc_ecma_ast = { version = "19", optional = true }
+swc_ecma_visit = { version = "19", optional = true }
+swc_common = { version = "18", optional = true }
+
+# Local Cedar policy evaluation (optional)
+cedar-policy = { version = "4.9", optional = true }
+
+[features]
+default = []
+openapi-code-mode = ["dep:swc_ecma_parser", "dep:swc_ecma_ast", "dep:swc_ecma_visit", "dep:swc_common"]
+js-runtime = ["openapi-code-mode"]
+mcp-code-mode = ["js-runtime"]
+cedar = ["dep:cedar-policy"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+cedar-policy = "4.9"
+proptest = "1.7"

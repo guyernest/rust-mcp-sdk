@@ -113,9 +113,10 @@ The AI writes the code. Developers validate it. The compiler catches mistakes be
 
 This dramatically increases productivity for teams adopting MCP—especially teams new to Rust:
 
+<!-- Illustrative only; compile-ready form uses an args struct — see pmcp-macros README -->
 ```rust
 // AI-generated MCP tool implementation
-#[tool(
+#[mcp_tool(
     name = "query_sales",
     description = "Query sales data by region and quarter"
 )]

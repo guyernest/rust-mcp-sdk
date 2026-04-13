@@ -73,7 +73,7 @@ pub struct WorkflowStep {
     ///
     /// When `true`, the execution engine treats errors from this step as
     /// potentially transient and may set `retryable: true` in the
-    /// [`PauseReason::ToolError`] variant. The workflow author sets this
+    /// `PauseReason::ToolError` variant. The workflow author sets this
     /// flag because they know which steps are expected to experience
     /// transient failures (e.g., network calls, external APIs).
     ///
@@ -334,7 +334,7 @@ impl WorkflowStep {
     ///
     /// When `retryable` is `true`, the execution engine treats tool errors
     /// from this step as potentially transient. This hint is carried into
-    /// the [`PauseReason::ToolError`] variant so clients know they can
+    /// the `PauseReason::ToolError` variant so clients know they can
     /// safely retry the same tool call.
     ///
     /// # Example

@@ -1,0 +1,6 @@
+error: #[derive(CodeMode)] requires field `code_mode_config` (type: CodeModeConfig).
+       Required fields: code_mode_config, token_secret, policy_evaluator, code_executor
+  --> tests/ui/missing_config.rs:19:8
+   |
+19 | struct MyServer {
+   |        ^^^^^^^^

@@ -382,7 +382,7 @@ pub fn filter_meta_by_prefix(
 /// Emit the standard MCP Apps resource URI key into the nested `ui` object.
 ///
 /// Inserts `resourceUri` into `ui_obj` only. The companion flat key
-/// (`ui/resourceUri`) is emitted by [`insert_legacy_resource_uri_key`], which
+/// (`ui/resourceUri`) is emitted by `insert_legacy_resource_uri_key`, which
 /// callers should invoke on the top-level `_meta` map immediately after.
 ///
 /// Host-specific keys (e.g., `openai/outputTemplate` for `ChatGPT`) are added

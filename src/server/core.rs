@@ -850,7 +850,7 @@ impl ServerCore {
     /// Returns `None` if no task router is configured. When a task router is
     /// available, it delegates to [`TaskRouter::resolve_owner`] which uses
     /// the priority chain: OAuth subject > client ID > session ID > "local".
-    /// When only a [`TaskStore`] is configured (no [`TaskRouter`]), derives
+    /// When only a `TaskStore` is configured (no `TaskRouter`), derives
     /// the owner from the auth context directly.
     #[cfg(not(target_arch = "wasm32"))]
     fn resolve_task_owner(&self, auth_context: Option<&AuthContext>) -> Option<String> {

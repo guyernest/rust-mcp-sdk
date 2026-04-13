@@ -1,6 +1,6 @@
 //! Identity provider implementations.
 //!
-//! This module provides concrete implementations of the [`IdentityProvider`] trait
+//! This module provides concrete implementations of the `IdentityProvider` trait
 //! for popular OAuth/OIDC providers.
 //!
 //! # Built-in Providers

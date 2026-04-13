@@ -3,27 +3,28 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: Milestone complete
-stopped_at: Completed 64-03-PLAN.md
-last_updated: "2026-03-30T01:10:10.523Z"
+stopped_at: Phase 67 context gathered
+last_updated: "2026-04-12T17:20:21.545Z"
 progress:
-  total_phases: 41
-  completed_phases: 35
-  total_plans: 84
-  completed_plans: 84
+  total_phases: 13
+  completed_phases: 13
+  total_plans: 35
+  completed_plans: 35
+  percent: 100
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-03)
+See: .planning/PROJECT.md (updated 2026-04-10)
 
-**Core value:** Production-grade Rust MCP SDK with enterprise security, streamable HTTP focus, and Tasks with polling as the primary async pattern.
-**Current focus:** Phase 64 — secrets-deployment-integration
+**Core value:** Close credibility and DX gaps where rmcp outshines PMCP -- documentation accuracy, feature gate presentation, macro documentation, example index, repo hygiene.
+**Current focus:** Phase 65 — examples-cleanup-protocol-accuracy
 
 ## Current Position
 
-Phase: 64
+Phase: 67.2
 Plan: Not started
 
 ## Shipped Milestones
@@ -41,7 +42,7 @@ Plan: Not started
 
 **Velocity:**
 
-- Total plans completed: 76 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 11)
+- Total plans completed: 93 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 11)
 - Total phases completed: 29
 
 ## Accumulated Context
@@ -50,174 +51,20 @@ Plan: Not started
 
 See PROJECT.md Key Decisions table for full history.
 
-v1.6 decisions:
+v2.1 decisions:
 
-- 6 phases derived from 5 requirement categories: global flags, flag normalization, auth propagation, tester integration, new commands, help polish
-- Phase 31 (New Commands) depends on Phase 28 (not 30) since doctor/completions don't need tester or auth
-- Help polish is last phase since it touches every command and benefits from all prior changes being stable
-- GlobalFlags defined in commands/mod.rs (not main.rs) to avoid circular imports
-- no_color stores resolved effective value (CLI flag OR NO_COLOR env OR non-TTY)
-- should_output() guard pattern for direct global_flags access; PMCP_QUIET env var for nested functions
-- Secret module merges local --quiet with global --quiet via effective_quiet parameter
-- Verbose field kept with allow(dead_code) -- used in precedence logic, not yet by individual commands
-- [Phase 27]: Threaded not_quiet bool through validate.rs private functions rather than re-checking PMCP_QUIET env var in each function
-- [Phase 34]: Axum 0.8 wildcard routes use {*path} syntax; mcp-preview bumped to 0.1.2
-- [Phase 34-01]: Nested _meta.ui.resourceUri format with openai/outputTemplate for ChatGPT; HtmlMcpApp MIME type; dual-emit WidgetMeta prefersBorder
-- [Phase 36]: Used explicit match arms (no wildcards) in From/TryFrom bridge for compile-time exhaustiveness
-- [Phase 37]: Mirrored TypedTool::with_ui() exactly for TypedSyncTool and WasmTypedTool; WasmTypedTool tests wasm32-only gated
-- [Phase 38]: Cache is sole source of truth for metadata; no fallback to handler.metadata() in hot paths; prompt_workflow() caches directly
-- [Phase 39]: deep_merge in ui.rs for recursive JSON object merging; with_meta_entry on ToolInfo for composable _meta; arrays replaced not concatenated
-- [Phase 39-02]: TypedToolWithOutput::with_ui() mirrors TypedTool::with_ui() for API consistency; all four tool types use identical deep_merge pattern
-- [Phase 40-02]: redirect_domains excluded from nested ui.csp (ChatGPT-specific); nested csp uses spec camelCase field names; ModelOnly variant added to ToolVisibility
-- [Phase 40-01]: Added legacy flat "ui/resourceUri" key to build_meta_map() matching official ext-apps dual-emit behavior
-- [Phase 41-02]: AppBridge class in widget-runtime.mjs (not index.html); fall-through switch for backward compat; ui/notifications/initialized via setTimeout(0)
-- [Phase 41]: Used field name meta with serde rename to _meta since leading underscores not idiomatic Rust
-- [Phase 41-03]: Used TypedSyncTool::new().with_ui() in scaffold instead of tool_typed_sync_with_description() to enable tool-to-widget linking
-- [Phase 42-01]: outputSchema is top-level on ToolInfo (MCP spec 2025-06-18); pmcp:outputTypeName remains in annotations as PMCP codegen extension
-- [Phase 42-02]: cargo-pmcp local ToolSchema mirrors SDK ToolInfo with top-level output_schema; all docs and course content updated
-- [Phase 43-01]: ResourceInfo._meta field with serde rename; URI-to-tool-meta index on ServerCore; with_widget_enrichment filtered to openai/toolInvocation/* only
-- [Phase 43-02]: Post-process resources/list with clone and resources/read with deep_merge for _meta propagation from uri_to_tool_meta index
-- [Phase 44-01]: Hard-coded ChatGPT descriptor/invocation keys in api.rs (mcp-preview doesn't depend on pmcp crate); derive(Default) with #[default] for PreviewMode
-- [Phase 44-02]: AppBridge remains active in ChatGPT mode (postMessage is supplemental); skip iframe reload when same widget URI already loaded to preserve widget state
-- [Phase 45-01]: Standard-only metadata emission by default; build_meta_map returns only ui.resourceUri nested key; host layer enrichment at build time; build_uri_to_tool_meta indexes by standard key; ChatGptAdapter always emits openai/outputTemplate from URI
-- [Phase 45-02]: McpBridge refactored with extensions namespace; ChatGptExtensions isolates ChatGPT methods under extensions.chatgpt; Window intersection type for backward compat; buildChatGptExtensions() delegates to window.openai; legacy flat methods preserved with deprecation
-- [Phase 45-03]: mcp-preview enriches tool/resource _meta with ChatGPT keys in ChatGPT mode; enrich_meta_for_chatgpt derives openai/* from standard ui.resourceUri; pre-existing widget issues documented not fixed
-- [Phase 46-01]: Static lookup map for method name normalization in App class; McpApps bridge _onToolResult properties with getter/setter pairs; normalization in both widget-runtime and injected bridge scripts
-- [Phase 46-02]: mcp-preview deliverToolResult emits dual ui/toolResult (primary) + ui/notifications/tool-result (fallback); readiness signal replaces 300ms setTimeout with ui/notifications/initialized listener + 3s fallback
-- [Phase 47-01]: Resource URI cross-reference mismatch produces Warning not Failure; ChatGPT key absence is Warning; AppValidator applies strict mode internally
-- [Phase 47-02]: Apps subcommand follows check.rs pattern for UX consistency; resources listing failure non-fatal (empty vec) since cross-reference is advisory
-- [Phase 48-03]: THEME_PALETTES placed as module-level constant before PreviewRuntime class; THEME_PALETTES[this.theme] || {} for safe palette lookup
-- [Phase 48]: THEME_PALETTES placed as module-level constant before PreviewRuntime class; safe palette lookup with || {}
-- [Phase 48-01]: Used GUIDE.md as authoritative source for ch12-5 rewrite; eliminated ChatGptAdapter -- standard SDK APIs are primary documented pattern
-- [Phase 48]: Eliminated ChatGptAdapter, WidgetDir, window.mcpBridge from course -- standard SDK APIs (ToolInfo::with_ui, ext-apps App class) are primary
-- [Phase 28-01]: Retained #[allow(dead_code)] on GlobalFlags.verbose until Plans 02/03 add readers; ServerFlags makes both url and server optional for flexible flatten usage
-- [Phase 28]: Retained #[allow(dead_code)] on GlobalFlags.verbose until Plans 02/03 add readers
-- [Phase 28-02]: Removed #[allow(dead_code)] from GlobalFlags.verbose (now read by check, apps, run, validate, deploy); download format yaml->json default; schema diff url positional at index 2
-- [Phase 28-03]: Landing deploy handler parameter server_id kept as internal API name; CLI field renamed to server
-- [Phase 29-01]: allow(dead_code) on AuthMethod/resolve()/resolve_auth_middleware()/resolve_api_key() until Plans 02/03 add consumers; AuthMethod derives PartialEq for test assertions
-- [Phase 29-02]: Middleware-only auth for ServerTester (None for api_key, middleware for chain) to avoid double headers; warning approach for run/generate library functions without auth passthrough
-- [Phase 29-03]: McpProxy uses auth_header string (not middleware chain) since it uses raw reqwest; OAuth acquires token once at startup via get_access_token(); connect_inspector ignores auth; schema diff auth deferred
-- [Phase 49-01]: Use oauth2::reqwest::Client for oauth2 token exchange (oauth2 5.0 re-exports reqwest 0.12); MSRV bumped 1.82->1.83 for jsonschema 0.45; accept dual reqwest in lockfile
-- [Phase 50-01]: Rust target triples for asset naming; per-binary .sha256 files; macos-15-intel for x86_64, macos-14 for aarch64; ubuntu-24.04-arm for ARM Linux; fail-fast: false
-- [Phase 50]: Rust target triples for asset naming; per-binary .sha256 files; macos-15-intel for x86_64, macos-14 for aarch64; ubuntu-24.04-arm for ARM Linux
-- [Phase 50-02]: POSIX /bin/sh for install.sh; explicit repo URL in binstall pkg-url; pkg-fmt = bin for bare binaries; v{ version } prefix for tag convention
-- [Phase 50]: POSIX /bin/sh for install.sh; explicit repo URL in binstall pkg-url; pkg-fmt = bin for bare binaries; v{ version } prefix for tag convention
-- [Phase 51-01]: Used pmcp::server::Server (not ServerCore) as builder returns Server type; inserted pmcp-server after mcp-preview in workspace members
-- [Phase 51-02]: AppValidationMode "all" implemented by iterating Standard+ChatGpt+ClaudeDesktop; "claude" accepted as alias for "claude-desktop"; strict mode applies inline on Vec<TestResult>
-- [Phase 51-03]: Templates as const &str with {name} placeholder substitution; added get_server_version() to ServerTester; schema_export Rust codegen maps JSON Schema types to Rust types with Value fallback
-- [Phase 51-04]: Used Content::Resource variant for ReadResourceResult to include URI and MIME type per MCP spec
-- [Phase 51-04]: Const DOC_RESOURCES lookup table for URI routing avoids duplication between list() and read()
-- [Phase 51-04]: One struct per prompt handler for cleaner PromptHandler trait impl and independent metadata
-- [Phase 51-05]: Omitted explicit capabilities() since builder auto-sets on handler registration; publish order widget-utils->pmcp->mcp-tester->mcp-preview->pmcp-server->cargo-pmcp
-- [Phase 53]: [Phase 53-01]: Verified Rust missing 2025-11-25 protocol version (20+ new types including TaskSchema, IconSchema, AudioContent, ResourceLink, expanded capabilities)
-- [Phase 53]: [Phase 53-01]: Confirmed Rust ahead in MCP Apps (full adapter stack) but behind in Tasks capability negotiation (no ServerCapabilities.tasks/ClientCapabilities.tasks)
-- [Phase 53-02]: Proposed 4 follow-up phases: Protocol 2025-11-25 (P0), Conformance Tests (P1), Tower Middleware (P2), Advanced Conformance (P2)
-- [Phase 53-02]: 35 gaps identified across 6 domains; 15 areas where Rust leads TypeScript
-- [Phase 53-02]: Deferred WebSocket transport, WASM cross-runtime, auth conformance, TaskMessageQueue per CONTEXT.md
-- [Phase 54-01]: Protocol/mod.rs re-exports all domain types preserving crate::types::protocol::X paths; types/mod.rs uses single pub use protocol::* for flat access
-- [Phase 54-01]: negotiate_protocol_version returns LATEST_PROTOCOL_VERSION (not DEFAULT) for unsupported versions; 3-version rolling window drops 2024 versions
-- [Phase 54-01]: Domain module split pattern: types split by MCP domain (tools, resources, prompts, content, sampling, notifications) with re-export chain
-- [Phase 54-02]: Implementation::new(name, version) constructor for backward-compat; 25+ struct literal sites unchanged
-- [Phase 54-02]: ElicitRequestParams uses per-variant serde rename_all (not enum-level) for correct internally-tagged serialization
-- [Phase 54-02]: SamplingMessageContent consolidates SamplingResultContent -- single enum for SamplingMessage and CreateMessageResultWithTools
-- [Phase 54-02]: LogLevel kept as deprecated type alias; LoggingLevel is canonical 8-value enum with Notice, Alert, Emergency
-- [Phase 54-02]: TaskRouter trait kept Value params -- typed params converted at call sites to avoid breaking pmcp-tasks interface
-- [Phase 54-03]: LogLevel kept as deprecated alias (not removed) per Plan 02 decision for v2.0 backward compat
-- [Phase 54-03]: types-internal IconInfo references use super::protocol::IconInfo for clean module-local paths
-- [Phase 54-03]: ClientRequest enum variants now use canonical names (ListToolsRequest, CallToolRequest, etc.)
-- [Phase 54-03]: PromptMessage.content field type changed from MessageContent to Content (canonical name)
-- [Phase 54]: Used Implementation::new() across all test files instead of adding 4 optional fields to each struct literal
-- [Phase 54]: Rewrote elicitation example 19 using spec-compliant ElicitRequestParams instead of disabling
-- [Phase 54]: Added task type re-exports to protocol/mod.rs for flat pmcp::types:: access
-- [Phase 54.1]: Content enum variants keep struct literal syntax; #[non_exhaustive] only on structs per D-08
-- [Phase 54.1]: PromptMessage does not derive Default (both role and content required); uses ::new(role, content) + convenience ::user() ::assistant() ::system()
-- [Phase 54.1-02]: TaskStatus Default variant is Working (most common initial state for task creation)
-- [Phase 54.1-02]: Task::new() sets timestamps to empty strings -- .with_timestamps() sets both at once
-- [Phase 54.1-02]: ToolChoice uses static factory methods (auto/required/none) not ::new() since it wraps single enum field
-- [Phase 54.1-02]: CreateMessageParams has no Default (messages required) -- ::new(messages) only
-- [Phase 54.1]: Content enum variant syntax preserved per D-08 but replaced with Content::text()/resource() helpers where available for consistency
-- [Phase 55-01]: TTL serialization fixed -- removed skip_serializing_if from Task.ttl and TaskCreationParams.ttl so None serializes as null per MCP spec
-- [Phase 55-01]: TaskStatus utility methods (is_terminal, can_transition_to) replicate pmcp-tasks behavior for SDK canonical source of truth
-- [Phase 55-02]: Simplified TaskStore trait vs pmcp-tasks (no variables/result/request_method); returns Task wire type; TTL clamped not rejected; Instant-based expiration
-- [Phase 55-03]: TaskStore checked before TaskRouter in dispatch for tasks/get, tasks/list, tasks/cancel; tasks/result remains TaskRouter-only (PMCP extension)
-- [Phase 55-03]: ServerCapabilities.tasks (standard field) used for TaskStore path; experimental.tasks kept for TaskRouter backward compat
-- [Phase 56-01]: AllowedOrigins auto-detects localhost/127.0.0.1/[::1] for loopback and unspecified bind addresses
-- [Phase 56-01]: Missing Origin header permitted (non-browser clients like curl omit it); present but disallowed Origin returns 403
-- [Phase 56-01]: No HSTS header per D-12 (transport-layer concern for reverse proxies)
-- [Phase 56-01]: tower and tower-http gated behind existing streamable-http feature (no new feature flags)
-- [Phase 56-02]: Extracted build_mcp_router() and make_server_state() as pub(crate) for shared use by axum_router
-- [Phase 56-02]: Origin-locked CORS reflects request Origin when allowed, omits Access-Control-Allow-Origin for disallowed/missing
-- [Phase 56-02]: handle_options takes State+HeaderMap for CORS preflight; AllowedOrigins defaults to localhost() when None
-- [Phase 56-03]: AllowedOrigins resolved once in make_server_state(), stored as ServerState field -- zero per-request allocation
-- [Phase 56-03]: CorsLayer handles all CORS including preflight OPTIONS -- hand-rolled add_cors_headers deleted (13 call sites)
-- [Phase 56-03]: Handler signatures simplified by removing allowed_origins/request_origin params -- Tower layers handle CORS at middleware level
-- [Phase 56-03]: StreamableHttpServer::with_config() delegates to make_server_state() -- single construction path
-- [Phase 57-01]: Module name core_domain (not core) to avoid shadowing Rust core prelude
-- [Phase 57-01]: Capability-conditional testing: each non-core domain returns Skipped when capability absent
-- [Phase 57-01]: Core domain always runs first (handles initialize) -- other domains skip if core fails
-- [Phase 57-01]: Prompts/get with empty args returns Warning not Failed (prompts may require arguments)
-- [Phase 57-01]: Tasks domain uses _meta.task.ttl for task creation via tools/call
-- [Phase 57-02]: TestCategory gets PartialEq/Eq derive for domain summary filtering
-- [Phase 57-02]: Old run_compliance_tests preserved as deprecated wrapper for backward compat
-- [Phase 58]: Manual Clone impl on State<T> to avoid requiring T: Clone (Arc<T> is always Clone)
-- [Phase 58]: Unconditional schema generation in #[mcp_tool] -- schema IS the macro value proposition, no feature flag guard
-- [Phase 58]: Branching ToolInfo constructors (with_annotations vs new) since ToolInfo has no set_annotations method
-- [Phase 58]: Clone server_type before mutable strip to satisfy borrow checker in mcp_server expansion
-- [Phase 58-02]: McpToolArgs/McpToolAnnotations fields made pub(crate) for cross-module reuse; generate_tool_info_code shared between mcp_tool and mcp_server
-- [Phase 58]: Fixed #[mcp_tool] name collision by renaming inner function to __fn_impl; UUID-based Default for RequestHandlerExtra; pmcp-macros as dev-dep for examples; TRYBUILD=overwrite for .stderr bootstrapping
-- [Phase 59]: TypedPrompt requires JsonSchema bound unconditionally; string-only args documented; no annotations/ui on McpPromptArgs; prompts return GetPromptResult directly
-- [Phase 59]: mcp_prompt inside #[mcp_server] does not require separate import; register_tools renamed to register per D-15; PromptMethodInfo omits return_type/annotations
-- [Phase 60]: Renamed shared console-time CSS class to event-time after Console removal to fix orphaned styling
-- [Phase 60]: Renamed shared console-time CSS class to event-time after Console removal to fix orphaned styling
-- [Phase 55.1]: ToolExecution stored as Option<ToolExecution> and cloned in metadata/info -- matches existing annotations pattern
-- [Phase 55.1]: ToolCallOutcome enum at module scope for bifurcated task/result dispatch; task detection requires declared taskSupport + task_store (shape alone insufficient per D-06)
-- [Phase 61]: Used McpRequestError enum (adapted from plan ForwardError) since forward_raw did not exist; all public McpProxy methods return McpRequestError for consistent auth error propagation
-- [Phase 61]: OAuthManager instantiated unconditionally; activates only when oauth_config is set
-- [Phase 61]: oauth_config constructed before resolve_auth_header for graceful CLI-to-browser fallback
-- [Phase 62]: Worktree lacks AuthFlags -- PentestCommand uses inline --api-key flag; SARIF fingerprints via SHA-256 of id:endpoint:severity
-- [Phase 62]: Skip content array in marker echo detection to reduce false positives from normal tool echo
-- [Phase 62]: Known meta keys allowlist (ui, ui/resourceUri, pmcp:outputTypeName, annotations) for TP-02 unexpected key detection
-- [Phase 63]: PentestProfile defaults to Quick (3 MCP-specific categories); explicit --category overrides profile selection
-- [Phase 63]: Deep fuzzing targets PI-01/PI-02 with 5 mutation functions (URL-encode, double-encode, base64, NFKC, case-swap)
-- [Phase 63]: Protocol abuse uses raw reqwest for malformed messages; data exfiltration probes both resources/read and tool URI arguments
-- [Phase 63]: Separated evaluate_cors_headers for testability; custom base64url instead of crate; AF-01/AF-02 destructive-gated
-- [Phase 64]: Followed plan exactly for secrets module -- thin env-var wrappers, no global state per D-09/D-11
-- [Phase 64]: Used dotenvy::from_path_iter for .env parsing without process env mutation; transient extra_env HashMap on DeployExecutor for CDK secret injection (never persisted to deploy.toml)
-- [Phase 64]: D-13 precedence via std::env::var(key).is_err() before cmd.env(key, value) in dev command
+- 4 phases derived from 5 requirement categories following research-recommended dependency order: examples+protocol -> macros -> docs.rs pipeline -> polish
+- EXMP and PROT combined into Phase 65 (both are credibility fixes, no dependency between them, co-deliverable)
+- Phase ordering follows the docs.rs build pipeline dependency: content accuracy first, then rendering pipeline, then polish
+- No new runtime dependencies for this milestone -- all fixes are config, content, and attribute changes
+- [Phase 65]: All 17 orphan examples compile successfully -- registered all with import-derived feature flags (no deletions needed)
+- [Phase 65]: examples/README.md replaced with PMCP example index — 63 examples categorized by Role/Capability/Complexity + migration reference
 
 ### Roadmap Evolution
 
-- Phase 63 added: Advanced pentest attack modules — transport, auth, data exfiltration, protocol abuse, deep fuzzing, --profile quick/deep
-- [Phase 62]: Raw reqwest over ServerTester for session header manipulation; Shannon entropy threshold 3.0 bits; proptest select() over regex strategies
-
-### Roadmap Evolution
-
-- Phase 33 added: Fix mcp-tester failure with v1.12.0
-- Phase 34 added: Fix MCP Apps ChatGPT compatibility
-- Phases 35-39 added: MCP Apps code quality improvements (meta key constants, MIME type unification, TypedSyncTool UI, ToolInfo caching, ui meta merge)
-- Phase 40 added: Review ChatGPT Compatibility for Apps
-- Phase 41 added: ChatGPT MCP Apps Upgraded Version
-- Phase 42 added: Add outputSchema top level support
-- Phase 43 added: ChatGPT MCP Apps alignment
-- Phase 44 added: Improving mcp-preview to support ChatGPT version
-- Phase 45 added: Extend MCP Apps Support to Claude Desktop
-- Phase 46 added: MCP Bridge Review and Fixes
-- Phase 47 added: Add MCP App support to mcp-tester
-- Phase 48 added: MCP Apps Documentation and Education Refresh
-- Phase 49 added: Bump dependencies (reqwest 0.13, jsonschema 0.45)
-- Phase 50 added: Improve Binary Release
-- Phase 51 added: PMCP MCP Server
-- Phase 52 added: Reduce transitive dependencies
-- Phase 53 added: Review TypeScript SDK Updates
-- Phases 54-57 added: Protocol 2025-11-25 Support, Conformance Test Infrastructure, Tower Middleware, Conformance Extension (from Phase 53 gap analysis)
-- Phase 58 added: #[mcp_tool] proc macro (from composition team DX review)
-- Phase 59 added: TypedPrompt with auto-deserialization (from composition team DX review)
-- Phase 54.1 inserted after Phase 54: Protocol Type Construction DX — Default impls, builders, and constructors for all protocol types (URGENT)
-- Phase 60 added: Clean up mcp-preview side tabs
-- Phase 61 added: Add OAuth support to mcp-preview
-- Phase 55.1 inserted after Phase 55: Fix MCP Tasks support (URGENT)
-- Phase 62 added: MCP Pen Test — automated penetration testing for MCP endpoints (security attacks + general cyber attacks)
-- Phase 64 added: Secrets deployment integration — wire cargo pmcp secret into deploy targets as env vars, SDK helpers, local dev flow, docs
+- Phases 65-68 added: v2.1 rmcp Upgrades milestone (examples cleanup, macros rewrite, docs.rs pipeline, documentation polish)
+- Phase 67.1 inserted after Phase 67: Code Mode Support (URGENT) — external developer support for code mode pattern (validation + execution) based on pmcp-run/built-in/shared/pmcp-code-mode SDK_DESIGN_SPEC.md
+- Phase 67.2 inserted after Phase 67.1: Code Mode Derive Hardening (URGENT) — fix 3 critical derive macro issues from pmcp.run team review: policy_evaluator not called, static ValidationContext, hardcoded "graphql" code type
 
 ### Pending Todos
 
@@ -229,6 +76,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-30T00:59:53.342Z
-Stopped at: Completed 64-03-PLAN.md
-Resume: Phase 57 complete. Both plans shipped: Plan 01 (19-scenario conformance engine with 5 domains) and Plan 02 (CLI integration -- mcp-tester conformance and cargo pmcp test conformance with --strict/--domain flags and per-domain CI summary).
+Last session: 2026-04-11T22:45:14.496Z
+Stopped at: Phase 67 context gathered
+Resume: Run `/gsd:plan-phase 65` to begin Phase 65 planning.

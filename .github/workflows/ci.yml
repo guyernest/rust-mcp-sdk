@@ -202,6 +202,9 @@ jobs:
     - name: Check disk space before quality gate
       run: df -h
 
+    - name: Check rustdoc zero-warnings
+      run: make doc-check
+
     - name: Run quality gate
       run: make quality-gate
 

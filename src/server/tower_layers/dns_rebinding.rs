@@ -96,7 +96,7 @@ impl AllowedOrigins {
     /// deployments, DNS rebinding protection adds no security value because
     /// the MCP server is only reachable via loopback within the sandbox.
     ///
-    /// [`StreamableHttpServerConfig::stateless()`] uses this by default.
+    /// `StreamableHttpServerConfig::stateless()` uses this by default.
     ///
     /// # Security Note
     ///

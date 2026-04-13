@@ -426,7 +426,7 @@ impl ServerHttpLoggingMiddleware {
     ///
     /// - **Log level**: INFO
     /// - **Redacted headers**: authorization, cookie, x-api-key, x-amz-security-token, x-goog-api-key
-    /// - **Show auth scheme**: true (logs "Bearer [REDACTED]")
+    /// - **Show auth scheme**: true (logs `"Bearer [REDACTED]"`)
     /// - **Max header value length**: None (no truncation)
     /// - **Max body bytes**: None (don't log bodies by default)
     /// - **Redact query params**: false

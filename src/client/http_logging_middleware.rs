@@ -6,9 +6,9 @@
 //! # Security
 //!
 //! **Default-on redaction** prevents accidental leakage of sensitive information:
-//! - `authorization`: Redacted as "Bearer [REDACTED]" (scheme visible by default)
-//! - `cookie` / `set-cookie`: Redacted as "[REDACTED]"
-//! - `x-api-key`, `proxy-authorization`, `x-auth-token`: Redacted as "[REDACTED]"
+//! - `authorization`: Redacted as `"Bearer [REDACTED]"` (scheme visible by default)
+//! - `cookie` / `set-cookie`: Redacted as `"[REDACTED]"`
+//! - `x-api-key`, `proxy-authorization`, `x-auth-token`: Redacted as `"[REDACTED]"`
 //!
 //! # Examples
 //!
@@ -83,7 +83,7 @@ impl HttpLoggingMiddleware {
     ///   - x-api-key, x-auth-token
     ///   - x-amz-security-token (AWS)
     ///   - x-goog-api-key (Google Cloud)
-    /// - **Show auth scheme**: true (logs "Bearer [REDACTED]" instead of "[REDACTED]")
+    /// - **Show auth scheme**: true (logs `"Bearer [REDACTED]"` instead of `"[REDACTED]"`)
     /// - **Max header value length**: None (no truncation)
     /// - **Max body bytes**: None (don't log bodies by default)
     /// - **Redact query params**: false (customize via `.with_redact_query()`)
@@ -156,8 +156,8 @@ impl HttpLoggingMiddleware {
 
     /// Set whether to show the authentication scheme (e.g., "Bearer") in redacted Authorization headers.
     ///
-    /// If true: "Bearer [REDACTED]"
-    /// If false: "[REDACTED]"
+    /// If true: `"Bearer [REDACTED]"`
+    /// If false: `"[REDACTED]"`
     pub fn with_show_auth_scheme(mut self, show: bool) -> Self {
         self.show_auth_scheme = show;
         self

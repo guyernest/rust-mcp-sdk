@@ -54,19 +54,22 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 - ✓ Course Ch 12 Load Testing cross-reference section — v1.4
 - ✓ Course Ch 20 sub-chapters rewritten with WidgetDir/mcpBridge/adapter paradigm — v1.4
 - ✓ Course quizzes and exercises for load testing and MCP Apps content — v1.4
+- ✓ Examples cleanup: 17 orphans registered, 63 files role-prefixed (s/c/t/m), accurate PMCP README index, protocol badge 2025-11-25 — v2.1 (Phase 65)
+- ✓ Macros documentation rewrite: deleted deprecated `#[tool]`/`#[tool_router]`/stub `#[prompt]`/`#[resource]` from pmcp-macros (898 LOC, 46% of crate); rewrote pmcp-macros/README.md from scratch (355 lines, 5 compiling `rust,no_run` doctests for all four `mcp_*` macros) wired via `#![doc = include_str!("../README.md")]`; published pmcp-macros 0.5.0 and pmcp 2.3.0 with full MACR-02 migration guide — v2.1 (Phase 66)
+- ✓ docs.rs pipeline and feature flags: `Cargo.toml` `[package.metadata.docs.rs]` replaced `all-features = true` with explicit 15-feature list + dual targets (`x86_64-unknown-linux-gnu` + `aarch64-unknown-linux-gnu` for first-class ARM64/Graviton coverage); created crate-focused `CRATE-README.md` at repo root (171 lines, 18-row Cargo Features table) wired into `src/lib.rs` via `#![doc = include_str!("../CRATE-README.md")]` (matches Phase 66 pmcp-macros pattern, pulls DOCD-02 from Future Requirements into scope); fixed all 29 rustdoc warnings across 16 source files (+8 residual links orchestrator-applied) via the "demote to backticks" pattern; adopted `feature(doc_cfg)` (post-RFC 3631 now provides auto-cfg badging by default — original D-01 `doc_auto_cfg` flip was invalidated by Rust 1.92.0 upstream removal, amended mid-phase); added new `make doc-check` target (stable toolchain, D-16 feature list, TAB-indentation guarded) and CI `Check rustdoc zero-warnings` step inside the existing `quality-gate` job (deliberately NOT chained into local `make quality-gate` per D-27 to protect developer iteration speed); no pmcp version bump (D-28 — stays at 2.3.0, docs.rs re-renders on next unrelated release); human-verify nightly badge checkpoint APPROVED — v2.1 (Phase 67)
 
 ### Active
 
-## Current Milestone: v1.6 CLI DX Overhaul
+## Current Milestone: v2.1 rmcp Upgrades
 
-**Goal:** Normalize the cargo pmcp CLI for consistency and developer experience ahead of course recording — fix flag inconsistencies, propagate auth to all server-facing commands, surface mcp-tester via cargo pmcp test, and add doctor/completions commands.
+**Goal:** Close the credibility and developer-experience gaps where the official Rust MCP SDK (rmcp) outshines PMCP — documentation accuracy, feature gate presentation, macro documentation, example index, and repo hygiene.
 
 **Target features:**
-- Flag consistency: positional URL, unified --server, --verbose/-v, --yes, -o, --format
-- Auth propagation: OAuth + API key flags on test check/run/generate, preview, schema export
-- Tester integration: surface mcp-tester commands through cargo pmcp test with aligned flags
-- New commands: cargo pmcp doctor (workspace health), cargo pmcp completions (shell completions)
-- Help polish: consistent help text, usage examples, global --no-color/--quiet
+- Fix examples/README.md with accurate, coherent example index covering all transport types and use cases
+- Fix macros README drift — document full #[mcp_tool], #[mcp_prompt], #[mcp_server] support
+- Tighten feature gating and docs.rs presentation with explicit feature coverage annotations
+- Improve macro documentation and ergonomics — coherent pattern documentation
+- General repo hygiene — README accuracy, consistent doc quality, transport embedding story
 
 ### Future
 
@@ -83,7 +86,7 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ## Current State
 
-v1.6 in progress. All prior milestones (v1.0-v1.5) shipped.
+v2.1 in progress. All prior milestones (v1.0-v2.0) shipped.
 
 **Shipped milestones:**
 - v1.0: MCP Tasks Foundation (types, store, server integration)
@@ -92,6 +95,7 @@ v1.6 in progress. All prior milestones (v1.0-v1.5) shipped.
 - v1.3: MCP Apps Developer Experience (preview, WASM, authoring, publishing, examples, E2E)
 - v1.4: Book & Course Update (load testing docs, MCP Apps chapter refresh, quizzes, exercises)
 - v1.5: Cloud Load Testing Upload (loadtest config upload, OAuth for load testing)
+- v2.0: Protocol Modernization (protocol 2025-11-25, Tower middleware, conformance, proc macros, pentest, secrets)
 
 ### Out of Scope
 
@@ -165,4 +169,22 @@ Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, park
 | Standalone examples (workspace exclude) (v1.3) | Avoids feature flag unification conflicts | ✓ Good — each example builds independently |
 
 ---
-*Last updated: 2026-03-03 after v1.6 milestone start*
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd-transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd-complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
+
+---
+*Last updated: 2026-04-12 after Phase 67 (v2.1 docs.rs pipeline and feature flags — explicit 15-feature list, CRATE-README.md, 29 rustdoc warnings fixed, make doc-check CI gate, pmcp 2.3.0 unchanged) completion*

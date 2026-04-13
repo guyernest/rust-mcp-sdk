@@ -7,7 +7,7 @@
 //! 1. Creates a task via the [`TaskRouter`]
 //! 2. Runs its own step loop using the inner handler's `pub(crate)` helpers
 //! 3. Accumulates step results in memory during execution
-//! 4. Classifies failures into typed [`PauseReason`] variants
+//! 4. Classifies failures into typed `PauseReason` variants
 //! 5. Batch-writes all state (progress, results, pause reason) to the task store
 //! 6. Auto-completes the task when all steps succeed
 //! 7. Enriches the [`GetPromptResult`] with `_meta` containing task state
@@ -25,7 +25,7 @@
 //!
 //! # Architecture Note
 //!
-//! The typed [`PauseReason`], [`StepStatus`], and workflow progress types
+//! The typed `PauseReason`, `StepStatus`, and workflow progress types
 //! are defined in the `pmcp-tasks` crate. Because `pmcp-tasks` depends on
 //! `pmcp` (not the reverse), this module uses local mirror types that produce
 //! identical JSON. The task variable key constants are duplicated here to
