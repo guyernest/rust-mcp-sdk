@@ -80,13 +80,7 @@ impl ExplanationGenerator for TemplateExplanationGenerator {
         }
 
         // Security warnings
-        let sensitive_issues: Vec<_> = security
-            .potential_issues
-            .iter()
-            .filter(|i| i.is_sensitive())
-            .collect();
-
-        if !sensitive_issues.is_empty() {
+        if security.potential_issues.iter().any(|i| i.is_sensitive()) {
             parts.push("⚠️ This query accesses potentially sensitive data.".to_string());
         }
 

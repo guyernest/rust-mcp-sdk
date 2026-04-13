@@ -86,7 +86,10 @@ async fn main() {
     // 2. Register code mode tools on the builder
     // (In a real server, you would also add other tools and then build/run the server)
     let builder = pmcp::Server::builder();
-    let _builder = server.register_code_mode_tools(builder);
+    #[allow(deprecated)]
+    let _builder = server
+        .register_code_mode_tools(builder)
+        .expect("Failed to register code mode tools");
     println!("Registered validate_code and execute_code tools on builder.");
 
     // 3. Demonstrate the validation -> execution round trip
@@ -96,7 +99,8 @@ async fn main() {
     let pipeline = ValidationPipeline::from_token_secret(
         server.code_mode_config.clone(),
         &server.token_secret,
-    );
+    )
+    .expect("Failed to create validation pipeline — check token secret length");
 
     let context = ValidationContext::new("user-123", "session-456", "schema-hash", "perms-hash");
 
