@@ -101,7 +101,10 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
     ///
     /// Returns [`TokenError::SecretTooShort`] if the token secret is shorter
     /// than [`HmacTokenGenerator::MIN_SECRET_LEN`] (16 bytes).
-    pub fn new(config: CodeModeConfig, token_secret: impl Into<Vec<u8>>) -> Result<Self, TokenError> {
+    pub fn new(
+        config: CodeModeConfig,
+        token_secret: impl Into<Vec<u8>>,
+    ) -> Result<Self, TokenError> {
         if config.enabled {
             warn_no_policy_configured();
         }
@@ -136,7 +139,10 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
     ///
     /// Returns [`TokenError::SecretTooShort`] if the token secret is shorter
     /// than [`HmacTokenGenerator::MIN_SECRET_LEN`] (16 bytes).
-    pub fn from_token_secret(config: CodeModeConfig, secret: &TokenSecret) -> Result<Self, TokenError> {
+    pub fn from_token_secret(
+        config: CodeModeConfig,
+        secret: &TokenSecret,
+    ) -> Result<Self, TokenError> {
         Self::new(config, secret.expose_secret().to_vec())
     }
 
@@ -852,9 +858,7 @@ mod tests {
     #[test]
     fn test_blocked_query_rejected() {
         let mut config = CodeModeConfig::enabled();
-        config
-            .blocked_queries
-            .insert("users".to_string());
+        config.blocked_queries.insert("users".to_string());
 
         let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec()).unwrap();
         let ctx = test_context();
@@ -864,18 +868,13 @@ mod tests {
             .unwrap();
 
         assert!(!result.is_valid);
-        assert!(result
-            .violations
-            .iter()
-            .any(|v| v.rule == "blocked_query"));
+        assert!(result.violations.iter().any(|v| v.rule == "blocked_query"));
     }
 
     #[test]
     fn test_allowed_queries_enforced() {
         let mut config = CodeModeConfig::enabled();
-        config
-            .allowed_queries
-            .insert("orders".to_string());
+        config.allowed_queries.insert("orders".to_string());
 
         let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec()).unwrap();
         let ctx = test_context();

@@ -368,7 +368,8 @@ mod tests {
 
     #[test]
     fn test_token_generation_and_verification() {
-        let generator = HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key!".to_vec())).unwrap();
+        let generator =
+            HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key!".to_vec())).unwrap();
 
         let token = generator.generate(
             "query { users { id } }",
@@ -391,7 +392,8 @@ mod tests {
 
     #[test]
     fn test_code_mismatch() {
-        let generator = HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key!".to_vec())).unwrap();
+        let generator =
+            HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key!".to_vec())).unwrap();
 
         let token = generator.generate(
             "query { users { id } }",
@@ -410,7 +412,8 @@ mod tests {
 
     #[test]
     fn test_token_encode_decode() {
-        let generator = HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key!".to_vec())).unwrap();
+        let generator =
+            HmacTokenGenerator::new(TokenSecret::new(b"test-secret-key!".to_vec())).unwrap();
 
         let token = generator.generate(
             "query { users { id } }",

@@ -91,9 +91,11 @@ async fn compile_and_execute<H: crate::executor::HttpExecutor + 'static>(
     adapter: &str,
 ) -> Result<serde_json::Value, ExecutionError> {
     let mut compiler = crate::executor::PlanCompiler::with_config(config);
-    let plan = compiler.compile_code(code).map_err(|e| ExecutionError::RuntimeError {
-        message: format!("Compilation failed: {e}"),
-    })?;
+    let plan = compiler
+        .compile_code(code)
+        .map_err(|e| ExecutionError::RuntimeError {
+            message: format!("Compilation failed: {e}"),
+        })?;
     let mut executor = crate::executor::PlanExecutor::new(http, config.clone());
     if let Some(vars) = variables {
         executor.set_variable("args", vars.clone());
@@ -148,7 +150,15 @@ impl<H: crate::executor::HttpExecutor + Clone + 'static> CodeExecutor for JsCode
         code: &str,
         variables: Option<&serde_json::Value>,
     ) -> Result<serde_json::Value, ExecutionError> {
-        compile_and_execute(&self.config, self.http.clone(), code, variables, |_| {}, "js").await
+        compile_and_execute(
+            &self.config,
+            self.http.clone(),
+            code,
+            variables,
+            |_| {},
+            "js",
+        )
+        .await
     }
 }
 
@@ -190,9 +200,17 @@ impl<S: crate::executor::SdkExecutor + Clone + 'static> CodeExecutor for SdkCode
         variables: Option<&serde_json::Value>,
     ) -> Result<serde_json::Value, ExecutionError> {
         let sdk = self.sdk.clone();
-        compile_and_execute(&self.config, NoopHttpExecutor, code, variables, move |ex| {
-            ex.set_sdk_executor(sdk);
-        }, "sdk").await
+        compile_and_execute(
+            &self.config,
+            NoopHttpExecutor,
+            code,
+            variables,
+            move |ex| {
+                ex.set_sdk_executor(sdk);
+            },
+            "sdk",
+        )
+        .await
     }
 }
 
@@ -237,9 +255,17 @@ impl<M: crate::executor::McpExecutor + Clone + 'static> CodeExecutor for McpCode
         variables: Option<&serde_json::Value>,
     ) -> Result<serde_json::Value, ExecutionError> {
         let mcp = self.mcp.clone();
-        compile_and_execute(&self.config, NoopHttpExecutor, code, variables, move |ex| {
-            ex.set_mcp_executor(mcp);
-        }, "mcp").await
+        compile_and_execute(
+            &self.config,
+            NoopHttpExecutor,
+            code,
+            variables,
+            move |ex| {
+                ex.set_mcp_executor(mcp);
+            },
+            "mcp",
+        )
+        .await
     }
 }
 

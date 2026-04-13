@@ -94,7 +94,10 @@ impl GraphQLValidator {
     /// Create a new validator with custom settings.
     pub fn new(sensitive_fields: Vec<String>, max_depth: usize, max_complexity: usize) -> Self {
         Self {
-            sensitive_fields,
+            sensitive_fields: sensitive_fields
+                .into_iter()
+                .map(|s| s.to_lowercase())
+                .collect(),
             max_depth,
             max_complexity,
         }
@@ -287,7 +290,7 @@ impl GraphQLValidator {
             if self
                 .sensitive_fields
                 .iter()
-                .any(|s| field_lower.contains(&s.to_lowercase()))
+                .any(|s| field_lower.contains(s))
             {
                 analysis.potential_issues.push(SecurityIssue::new(
                     SecurityIssueType::SensitiveFields,
@@ -355,11 +358,11 @@ pub(crate) fn field_name_to_type(field_name: &str) -> String {
     };
 
     // Capitalize first letter
-    let mut chars: Vec<char> = singular.chars().collect();
-    if let Some(first) = chars.first_mut() {
-        *first = first.to_uppercase().next().unwrap_or(*first);
+    let mut c = singular.chars();
+    match c.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().to_string() + c.as_str(),
     }
-    chars.into_iter().collect()
 }
 
 #[cfg(test)]

@@ -2803,9 +2803,7 @@ impl<H: HttpExecutor> PlanExecutor<H> {
         &'a mut self,
         step: &'a PlanStep,
     ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<StepOutcome, ExecutionError>> + Send + 'a,
-        >,
+        Box<dyn std::future::Future<Output = Result<StepOutcome, ExecutionError>> + Send + 'a>,
     > {
         Box::pin(async move {
             match step {
@@ -2903,17 +2901,14 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                     };
 
                     let limit = (*max_iterations).min(self.config.max_loop_iterations);
-                    'outer: for (i, item) in items.into_iter().take(limit).enumerate() {
-                        // Enforce iteration limit
-                        if i >= limit {
-                            break;
-                        }
-
+                    'outer: for (_i, item) in items.into_iter().take(limit).enumerate() {
                         self.variables.insert(item_var.clone(), item);
 
                         for step in body {
                             match self.execute_step(step).await? {
-                                StepOutcome::Return(value) => return Ok(StepOutcome::Return(value)),
+                                StepOutcome::Return(value) => {
+                                    return Ok(StepOutcome::Return(value))
+                                },
                                 StepOutcome::None => {},
                                 StepOutcome::Continue => continue 'outer,
                                 StepOutcome::Break => break 'outer,
@@ -3152,11 +3147,17 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                             .ok_or_else(|| ExecutionError::RuntimeError {
                                 message: format!("Undefined variable in path: {}", var),
                             })?;
-                    result.push_str(&shared_json_to_string_with_mode(value, JsonStringMode::Json));
+                    result.push_str(&shared_json_to_string_with_mode(
+                        value,
+                        JsonStringMode::Json,
+                    ));
                 },
                 PathPart::Expression(expr) => {
                     let value = self.evaluate(expr)?;
-                    result.push_str(&shared_json_to_string_with_mode(&value, JsonStringMode::Json));
+                    result.push_str(&shared_json_to_string_with_mode(
+                        &value,
+                        JsonStringMode::Json,
+                    ));
                 },
             }
         }

@@ -225,7 +225,13 @@ fn expand_code_mode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
             ));
         }
         let method_ident = syn::Ident::new(method_name, struct_name.span());
-        expand_with_context_from(struct_name, &mod_name, &language_lit, &method_ident, &validation_call)
+        expand_with_context_from(
+            struct_name,
+            &mod_name,
+            &language_lit,
+            &method_ident,
+            &validation_call,
+        )
     } else {
         // --- default path: placeholder context with deprecation warning ---
         expand_without_context_from(struct_name, &mod_name, &language_lit, &validation_call)
@@ -646,4 +652,3 @@ fn expand_without_context_from(
         }
     }
 }
-

@@ -489,8 +489,12 @@ fn restore_scope_var(
     previous: Option<JsonValue>,
 ) {
     match previous {
-        Some(prev) => { scope.insert(key.to_string(), prev); },
-        None => { scope.remove(key); },
+        Some(prev) => {
+            scope.insert(key.to_string(), prev);
+        },
+        None => {
+            scope.remove(key);
+        },
     }
 }
 
@@ -1087,7 +1091,6 @@ pub fn evaluate_number_method(
         NumberMethodCall::ToString => Ok(JsonValue::String(num.to_string())),
     }
 }
-
 
 /// Evaluate an expression with just a variable map (no local scope).
 /// This is a convenience wrapper for the common case.
