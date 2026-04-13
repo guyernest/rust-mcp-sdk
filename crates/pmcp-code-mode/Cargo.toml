@@ -14,7 +14,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-pmcp = { version = "2.3.0", path = "../../" }
+pmcp = { version = ">=2.2.0", path = "../../" }
 async-trait = "0.1"
 tokio = { version = "1", features = ["sync"] }
 serde = { version = "1", features = ["derive"] }
