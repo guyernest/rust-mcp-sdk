@@ -535,7 +535,11 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
         }
     }
 
-    /// Validate JavaScript code for OpenAPI Code Mode.
+    /// Validate JavaScript code for OpenAPI Code Mode (sync, no policy evaluation).
+    ///
+    /// Runs config-level checks only. For policy evaluation (Cedar/AVP), use
+    /// [`validate_javascript_code_async`] instead. Retained for backward
+    /// compatibility with callers that don't need policy enforcement.
     #[cfg(feature = "openapi-code-mode")]
     pub fn validate_javascript_code(
         &self,
@@ -543,74 +547,21 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
         context: &ValidationContext,
     ) -> Result<ValidationResult, ValidationError> {
         let start = Instant::now();
-
-        if !self.config.enabled {
-            return Err(ValidationError::ConfigError(
-                "Code Mode is not enabled for this server".into(),
-            ));
+        let code_info = self.validate_js_preamble(code)?;
+        if let Some(failure) = self.check_js_config_authorization(&code_info, start) {
+            return Ok(failure);
         }
-
-        if code.len() > self.config.max_query_length {
-            return Err(ValidationError::SecurityError {
-                message: format!(
-                    "Code length {} exceeds maximum {}",
-                    code.len(),
-                    self.config.max_query_length
-                ),
-                issue: crate::types::SecurityIssueType::HighComplexity,
-            });
-        }
-
-        let code_info = self.javascript_validator.validate(code)?;
-
-        if !code_info.is_read_only {
-            for method in &code_info.methods_used {
-                if !self.config.openapi_blocked_writes.is_empty()
-                    && self.config.openapi_blocked_writes.contains(method)
-                {
-                    return Ok(ValidationResult::failure(
-                        vec![PolicyViolation::new(
-                            "code_mode",
-                            "blocked_method",
-                            &format!("HTTP method '{}' is blocked for this server", method),
-                        )
-                        .with_suggestion("This method is in the blocklist and cannot be used")],
-                        self.build_js_metadata(&code_info, start.elapsed().as_millis() as u64),
-                    ));
-                }
-            }
-
-            if !self.config.openapi_allowed_writes.is_empty() {
-                tracing::debug!(
-                    target: "code_mode",
-                    "Skipping method-level check - policy evaluator will check operation allowlist ({} entries)",
-                    self.config.openapi_allowed_writes.len()
-                );
-            } else if !self.config.openapi_allow_writes {
-                return Ok(ValidationResult::failure(
-                    vec![PolicyViolation::new(
-                        "code_mode",
-                        "allow_mutations",
-                        "Write HTTP methods (POST, PUT, DELETE, PATCH) are not enabled for this server",
-                    )
-                    .with_suggestion("Only read-only methods (GET, HEAD, OPTIONS) are allowed. Contact your administrator to enable write operations.")],
-                    self.build_js_metadata(&code_info, start.elapsed().as_millis() as u64),
-                ));
-            }
-        }
-
         self.complete_js_validation(code, &code_info, context, start)
     }
 
     /// Validate JavaScript code with async policy evaluation.
     ///
     /// Mirrors [`validate_graphql_query_async`] but for JavaScript/OpenAPI:
-    /// 1. Parse JS via SWC + config-level checks (same as sync version)
-    /// 2. Policy evaluation via [`PolicyEvaluator::evaluate_script`] (async)
+    /// 1. Parse JS via SWC + config-level checks (shared with sync version)
+    /// 2. Policy evaluation via [`PolicyEvaluator::evaluate_script`] (async, fail-closed)
     /// 3. Security analysis + token generation
     ///
-    /// When no policy evaluator is configured, falls back to config-only
-    /// checks (same behavior as the sync version).
+    /// When no policy evaluator is configured, falls back to config-only checks.
     #[cfg(feature = "openapi-code-mode")]
     pub async fn validate_javascript_code_async(
         &self,
@@ -620,7 +571,51 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
         use crate::policy::types::ScriptEntity;
 
         let start = Instant::now();
+        let code_info = self.validate_js_preamble(code)?;
+        if let Some(failure) = self.check_js_config_authorization(&code_info, start) {
+            return Ok(failure);
+        }
 
+        // Policy evaluation via evaluate_script (mirrors GraphQL's evaluate_operation)
+        if let Some(ref evaluator) = self.policy_evaluator {
+            let sensitive_patterns: Vec<String> =
+                self.config.openapi_blocked_paths.iter().cloned().collect();
+            let script_entity = ScriptEntity::from_javascript_info(&code_info, &sensitive_patterns);
+            let server_entity = self.config.to_openapi_server_entity();
+
+            let decision = evaluator
+                .evaluate_script(&script_entity, &server_entity)
+                .await
+                .map_err(|e| {
+                    ValidationError::InternalError(format!("Policy evaluation error: {}", e))
+                })?;
+
+            if !decision.allowed {
+                let violations: Vec<PolicyViolation> = decision
+                    .determining_policies
+                    .iter()
+                    .map(|policy_id| {
+                        PolicyViolation::new(
+                            "policy",
+                            policy_id.clone(),
+                            "Policy denied the script",
+                        )
+                    })
+                    .collect();
+
+                return Ok(ValidationResult::failure(
+                    violations,
+                    self.build_js_metadata(&code_info, start.elapsed().as_millis() as u64),
+                ));
+            }
+        }
+
+        self.complete_js_validation(code, &code_info, context, start)
+    }
+
+    /// Shared JavaScript preamble: enabled check, length check, parse.
+    #[cfg(feature = "openapi-code-mode")]
+    fn validate_js_preamble(&self, code: &str) -> Result<JavaScriptCodeInfo, ValidationError> {
         if !self.config.enabled {
             return Err(ValidationError::ConfigError(
                 "Code Mode is not enabled for this server".into(),
@@ -638,86 +633,59 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
             });
         }
 
-        let code_info = self.javascript_validator.validate(code)?;
+        Ok(self.javascript_validator.validate(code)?)
+    }
 
-        // Config-level checks (same as sync path)
-        if !code_info.is_read_only {
-            for method in &code_info.methods_used {
-                if !self.config.openapi_blocked_writes.is_empty()
-                    && self.config.openapi_blocked_writes.contains(method)
-                {
-                    return Ok(ValidationResult::failure(
-                        vec![PolicyViolation::new(
-                            "code_mode",
-                            "blocked_method",
-                            &format!("HTTP method '{}' is blocked for this server", method),
-                        )
-                        .with_suggestion("This method is in the blocklist and cannot be used")],
-                        self.build_js_metadata(&code_info, start.elapsed().as_millis() as u64),
-                    ));
-                }
-            }
+    /// Config-level authorization checks for JavaScript code.
+    ///
+    /// Returns `Some(failure)` if a config check denied the code,
+    /// `None` if all checks pass. Shared between sync and async paths
+    /// (mirrors `check_config_authorization` for GraphQL).
+    #[cfg(feature = "openapi-code-mode")]
+    fn check_js_config_authorization(
+        &self,
+        code_info: &JavaScriptCodeInfo,
+        start: Instant,
+    ) -> Option<ValidationResult> {
+        if code_info.is_read_only {
+            return None;
+        }
 
-            if !self.config.openapi_allowed_writes.is_empty() {
-                tracing::debug!(
-                    target: "code_mode",
-                    "Skipping method-level check - policy evaluator will check operation allowlist ({} entries)",
-                    self.config.openapi_allowed_writes.len()
-                );
-            } else if !self.config.openapi_allow_writes {
-                return Ok(ValidationResult::failure(
+        for method in &code_info.methods_used {
+            if !self.config.openapi_blocked_writes.is_empty()
+                && self.config.openapi_blocked_writes.contains(method)
+            {
+                return Some(ValidationResult::failure(
                     vec![PolicyViolation::new(
                         "code_mode",
-                        "allow_mutations",
-                        "Write HTTP methods (POST, PUT, DELETE, PATCH) are not enabled for this server",
+                        "blocked_method",
+                        &format!("HTTP method '{}' is blocked for this server", method),
                     )
-                    .with_suggestion("Only read-only methods (GET, HEAD, OPTIONS) are allowed. Contact your administrator to enable write operations.")],
-                    self.build_js_metadata(&code_info, start.elapsed().as_millis() as u64),
+                    .with_suggestion("This method is in the blocklist and cannot be used")],
+                    self.build_js_metadata(code_info, start.elapsed().as_millis() as u64),
                 ));
             }
         }
 
-        // Policy evaluation via evaluate_script (mirrors GraphQL's evaluate_operation)
-        if let Some(ref evaluator) = self.policy_evaluator {
-            let sensitive_patterns: Vec<String> =
-                self.config.openapi_blocked_paths.iter().cloned().collect();
-            let script_entity = ScriptEntity::from_javascript_info(&code_info, &sensitive_patterns);
-            let server_entity = self.config.to_openapi_server_entity();
-
-            match evaluator
-                .evaluate_script(&script_entity, &server_entity)
-                .await
-            {
-                Ok(decision) if !decision.allowed => {
-                    let violations: Vec<PolicyViolation> = decision
-                        .determining_policies
-                        .iter()
-                        .map(|policy_id| {
-                            PolicyViolation::new(
-                                "policy",
-                                policy_id.clone(),
-                                "Policy denied the script",
-                            )
-                        })
-                        .collect();
-
-                    return Ok(ValidationResult::failure(
-                        violations,
-                        self.build_js_metadata(&code_info, start.elapsed().as_millis() as u64),
-                    ));
-                },
-                Err(e) => {
-                    // Fail-open: log warning, continue with validation
-                    tracing::warn!(
-                        error = %e,
-                        "Policy evaluation failed for JavaScript code, continuing (fail-open)"
-                    );
-                },
-                _ => {}, // Allowed — continue
-            }
+        if !self.config.openapi_allowed_writes.is_empty() {
+            tracing::debug!(
+                target: "code_mode",
+                "Skipping method-level check - policy evaluator will check operation allowlist ({} entries)",
+                self.config.openapi_allowed_writes.len()
+            );
+        } else if !self.config.openapi_allow_writes {
+            return Some(ValidationResult::failure(
+                vec![PolicyViolation::new(
+                    "code_mode",
+                    "allow_mutations",
+                    "Write HTTP methods (POST, PUT, DELETE, PATCH) are not enabled for this server",
+                )
+                .with_suggestion("Only read-only methods (GET, HEAD, OPTIONS) are allowed. Contact your administrator to enable write operations.")],
+                self.build_js_metadata(code_info, start.elapsed().as_millis() as u64),
+            ));
         }
 
-        self.complete_js_validation(code, &code_info, context, start)
+        None
     }
 
     /// Complete JavaScript validation after policy checks pass.
