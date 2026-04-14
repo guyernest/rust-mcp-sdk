@@ -514,7 +514,8 @@ impl BinaryBuilder {
             .unix_permissions(0o644);
 
         // Add config.toml if found (for Code Mode operation extraction by pmcp.run)
-        let config_toml_included = self.add_config_toml_to_zip(&mut zip, file_options, config_toml_path.as_deref())?;
+        let config_toml_included =
+            self.add_config_toml_to_zip(&mut zip, file_options, config_toml_path.as_deref())?;
 
         // Add assets to assets/ subdirectory in the zip
         // Lambda will extract to $LAMBDA_TASK_ROOT/assets/
@@ -580,8 +581,7 @@ impl BinaryBuilder {
         print!("   Adding config.toml...");
         std::io::Write::flush(&mut std::io::stdout())?;
 
-        let config_data =
-            std::fs::read(config_path).context("Failed to read config.toml")?;
+        let config_data = std::fs::read(config_path).context("Failed to read config.toml")?;
         zip.start_file("config.toml", options)
             .context("Failed to add config.toml to zip")?;
         zip.write_all(&config_data)
