@@ -1,6 +1,6 @@
 [package]
 name = "pmcp-code-mode"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/paiml/rust-mcp-sdk"
@@ -40,12 +40,17 @@ swc_common = { version = "18", optional = true }
 # Local Cedar policy evaluation (optional)
 cedar-policy = { version = "4.9", optional = true }
 
+# AWS Verified Permissions (optional)
+aws-config = { version = "1", optional = true }
+aws-sdk-verifiedpermissions = { version = "1", optional = true }
+
 [features]
 default = []
 openapi-code-mode = ["dep:swc_ecma_parser", "dep:swc_ecma_ast", "dep:swc_ecma_visit", "dep:swc_common"]
 js-runtime = ["openapi-code-mode"]
 mcp-code-mode = ["js-runtime"]
 cedar = ["dep:cedar-policy"]
+avp = ["dep:aws-config", "dep:aws-sdk-verifiedpermissions"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
