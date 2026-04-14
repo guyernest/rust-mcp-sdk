@@ -227,7 +227,7 @@ pub struct OperationEntry {
 /// - **GraphQL:** `operation_type`, `destructive_hint`
 /// - **SQL:** `table`, `access_type`
 /// - **MCP-API:** `read_only_hint`, `destructive_hint`, `operation_category`
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperationMetadata {
     // OpenAPI fields
@@ -257,14 +257,7 @@ pub struct OperationMetadata {
 
 impl OperationMetadata {
     fn is_empty(&self) -> bool {
-        self.path.is_none()
-            && self.method.is_none()
-            && self.operation_type.is_none()
-            && self.table.is_none()
-            && self.access_type.is_none()
-            && self.read_only_hint.is_none()
-            && self.destructive_hint.is_none()
-            && self.operation_category.is_none()
+        *self == Self::default()
     }
 }
 

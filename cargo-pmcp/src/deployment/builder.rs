@@ -469,12 +469,11 @@ impl BinaryBuilder {
             Vec::new()
         };
 
-        // Check if config.toml exists (for Code Mode operation extraction)
-        let has_config_toml = self.project_root.join("config.toml").exists()
-            || self.find_single_instance_toml().is_some();
+        // Resolve config.toml once (for Code Mode operation extraction)
+        let config_toml_path = self.resolve_config_toml();
 
         // Only create ZIP if there's something to bundle beyond bootstrap
-        if asset_files.is_empty() && !has_config_toml {
+        if asset_files.is_empty() && config_toml_path.is_none() {
             return Ok(None);
         }
 
@@ -515,7 +514,7 @@ impl BinaryBuilder {
             .unix_permissions(0o644);
 
         // Add config.toml if found (for Code Mode operation extraction by pmcp.run)
-        let config_toml_included = self.add_config_toml_to_zip(&mut zip, file_options)?;
+        let config_toml_included = self.add_config_toml_to_zip(&mut zip, file_options, config_toml_path.as_deref())?;
 
         // Add assets to assets/ subdirectory in the zip
         // Lambda will extract to $LAMBDA_TASK_ROOT/assets/
@@ -563,16 +562,17 @@ impl BinaryBuilder {
         Ok(Some(zip_path))
     }
 
-    /// Find and add config.toml to the deploy ZIP for Code Mode operation extraction.
+    /// Add config.toml to the deploy ZIP for Code Mode operation extraction.
     ///
-    /// Uses `resolve_config_toml` to find the config file, then writes it to the ZIP
-    /// root as `config.toml`. Returns true if a config file was found and added.
+    /// Takes a pre-resolved config path (from `resolve_config_toml`) to avoid
+    /// redundant filesystem scanning. Returns true if a config file was added.
     fn add_config_toml_to_zip<W: std::io::Write + std::io::Seek>(
         &self,
         zip: &mut ZipWriter<W>,
         options: SimpleFileOptions,
+        config_path: Option<&Path>,
     ) -> Result<bool> {
-        let config_path = match self.resolve_config_toml() {
+        let config_path = match config_path {
             Some(path) => path,
             None => return Ok(false),
         };
@@ -581,7 +581,7 @@ impl BinaryBuilder {
         std::io::Write::flush(&mut std::io::stdout())?;
 
         let config_data =
-            std::fs::read(&config_path).context("Failed to read config.toml")?;
+            std::fs::read(config_path).context("Failed to read config.toml")?;
         zip.start_file("config.toml", options)
             .context("Failed to add config.toml to zip")?;
         zip.write_all(&config_data)
