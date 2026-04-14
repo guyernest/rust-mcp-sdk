@@ -4,7 +4,7 @@ Code Mode validation and execution framework for MCP servers built on the PMCP S
 
 Enables LLM-generated code (GraphQL, JavaScript, SQL, MCP compositions) to be **validated, explained, and executed** with HMAC-signed approval tokens that cryptographically bind code to its validation result.
 
-> **Status:** v0.1.0 — migrated from `pmcp-run/built-in/shared/pmcp-code-mode` into the SDK workspace in Phase 67.1. The public API is stabilizing; feedback is welcome before the 1.0 contract is locked.
+> **Status:** v0.3.0 — multi-language validation with policy enforcement, standard adapters, deploy-time config. The public API is stabilizing; feedback is welcome before the 1.0 contract is locked.
 
 ## How It Works
 
@@ -468,7 +468,9 @@ See [SECURITY.md](./SECURITY.md) for the full threat model.
 **Policy evaluation:**
 - Default-deny: without a configured `PolicyEvaluator`, only basic config checks run
 - Policy evaluator stored as `Arc<dyn PolicyEvaluator>` — shared safely across async handlers
+- **Both GraphQL and JavaScript** validation call their respective policy evaluation methods (`evaluate_operation` / `evaluate_script`) — fail-closed on policy errors
 - Cedar support via `cedar` feature flag (local evaluation, no network)
+- AVP (AWS Verified Permissions) support via external evaluator — policies configured in pmcp.run admin UI
 - `NoopPolicyEvaluator` for tests only — prominently documented with warnings
 
 ## Schema Exposure Architecture
@@ -515,6 +517,26 @@ pipeline.set_policy_evaluator(Arc::new(my_evaluator));
 
 `#[code_mode(language = "...")]` now dispatches to the correct language-specific validation method at compile time, not just tool metadata. Servers using JavaScript, SQL, or MCP can now use `#[derive(CodeMode)]` instead of manual handler structs.
 
+## Breaking Changes in v0.3.0
+
+### JavaScript derive macro now calls async validation with policy enforcement
+
+`#[derive(CodeMode)]` with `language = "javascript"` now calls `validate_javascript_code_async` instead of the sync `validate_javascript_code`. This means:
+
+- **Cedar policies are now enforced** for JavaScript servers using the derive macro
+- **AVP policies are now enforced** when deployed with `POLICY_STORE_ID` on pmcp.run
+- Policy evaluation failures are **fail-closed** (same as GraphQL) — a policy backend outage blocks requests rather than silently allowing them
+
+If your JavaScript server was relying on the absence of policy enforcement (e.g., using a custom `PolicyEvaluator` that only implemented `evaluate_operation` but not `evaluate_script`), the default `evaluate_script` implementation **denies all scripts**. Override `evaluate_script` in your evaluator to allow scripts, or use `NoopPolicyEvaluator` for testing.
+
+### Standard adapters added
+
+`JsCodeExecutor`, `SdkCodeExecutor`, and `McpCodeExecutor` are new. They don't break existing code, but if you were manually implementing `CodeExecutor` for JS plan execution, you can now replace ~75 lines of boilerplate with:
+
+```rust
+let code_executor = Arc::new(JsCodeExecutor::new(http_client, ExecutionConfig::default()));
+```
+
 See [CHANGELOG.md](./CHANGELOG.md) for the full list of changes.
 
 ## Known Limitations (v0.1.0)
@@ -525,9 +547,7 @@ See [CHANGELOG.md](./CHANGELOG.md) for the full list of changes.
 
 3. **No server-side token revocation.** Tokens are stateless (verified by HMAC). Once issued, a token is valid until it expires. Short TTL (5 min default) mitigates this.
 
-4. **JavaScript validation is sync only.** `validate_javascript_code` is synchronous (no async variant). The derive macro handles this transparently — the generated async handler calls the sync method without `.await`.
-
-5. **SQL and MCP validators are stub.** The `validate_sql_query` and `validate_mcp_composition` methods require their respective feature flags. These validators are being implemented — the derive macro dispatch is ready.
+4. **SQL and MCP validators are stub.** The `validate_sql_query` and `validate_mcp_composition` methods require their respective feature flags. These validators are being implemented — the derive macro dispatch is ready.
 
 ## Crate Dependencies
 
