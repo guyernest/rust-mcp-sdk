@@ -268,7 +268,7 @@ fn gen_validation_call(
             self.pipeline.validate_graphql_query_async(code, &context).await #map_err
         }),
         "javascript" | "js" => Ok(quote! {
-            self.pipeline.validate_javascript_code(code, &context) #map_err
+            self.pipeline.validate_javascript_code_async(code, &context).await #map_err
         }),
         "sql" => Ok(quote! {
             self.pipeline.validate_sql_query(code, &context) #map_err
