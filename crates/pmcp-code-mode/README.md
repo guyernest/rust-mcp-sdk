@@ -308,6 +308,134 @@ The pipeline enforces config-level authorization checks before policy evaluation
 - **Query control:** `blocked_queries` (blocklist), `allowed_queries` (allowlist). Same allowlist-takes-precedence semantics as mutations.
 - **Policy evaluation:** After config checks pass, `PolicyEvaluator::evaluate_operation()` runs (if configured) for fine-grained authorization.
 
+## Deployment Configuration (`config.toml`)
+
+When deploying with `cargo pmcp deploy`, the server's `config.toml` is automatically included in the deploy ZIP. The pmcp.run platform extracts operation metadata from this file to populate the Code Mode policy page in the admin UI — administrators can then enable/disable individual operations by category.
+
+### config.toml Schema
+
+The `[[code_mode.operations]]` section declares available operations. When present, it takes priority over `[[tools]]` for policy categorization.
+
+**OpenAPI server:**
+
+```toml
+[server]
+name = "cost-coach"
+type = "openapi-api"
+
+[code_mode]
+allow_writes = false
+allow_deletes = false
+
+[[code_mode.operations]]
+name = "getCostAndUsage"
+description = "Retrieve AWS cost and usage data"
+path = "/ce/GetCostAndUsage"
+method = "POST"
+
+[[code_mode.operations]]
+name = "getRecommendations"
+description = "Get cost optimization recommendations"
+path = "/ce/GetRightsizingRecommendation"
+method = "POST"
+
+[[code_mode.operations]]
+name = "deleteBudget"
+description = "Delete a budget"
+path = "/budgets/DeleteBudget"
+method = "POST"
+destructive_hint = true
+```
+
+**GraphQL server:**
+
+```toml
+[server]
+name = "open-images"
+type = "graphql-api"
+
+[code_mode]
+allow_writes = false
+
+[[code_mode.operations]]
+name = "searchImages"
+operation_type = "query"
+description = "Search the image catalog"
+
+[[code_mode.operations]]
+name = "createCollection"
+operation_type = "mutation"
+description = "Create a new image collection"
+
+[[code_mode.operations]]
+name = "deleteImage"
+operation_type = "mutation"
+description = "Permanently delete an image"
+destructive_hint = true
+```
+
+**SQL server:**
+
+```toml
+[server]
+name = "analytics"
+type = "sql"
+
+[code_mode]
+allow_writes = true
+allow_deletes = false
+blocked_tables = ["audit_log", "credentials"]
+
+[database]
+[[database.tables]]
+name = "orders"
+description = "Customer order history"
+
+[[database.tables]]
+name = "products"
+description = "Product catalog"
+```
+
+**MCP composition server:**
+
+```toml
+[server]
+name = "orchestrator"
+type = "mcp-api"
+
+[[code_mode.operations]]
+name = "analyze_costs"
+description = "Multi-step cost analysis workflow"
+operation_category = "read"
+
+[[code_mode.operations]]
+name = "provision_resources"
+description = "Provision cloud resources"
+operation_category = "admin"
+```
+
+### Categorization Rules
+
+Operations are automatically categorized based on server type:
+
+| Server Type | Read | Write | Delete | Admin |
+|-------------|------|-------|--------|-------|
+| **OpenAPI** | GET, HEAD, OPTIONS | POST, PUT, PATCH | DELETE | `operation_category = "admin"` |
+| **GraphQL** | query | mutation | mutation with `destructive_hint` or delete/remove/destroy prefix | `operation_category = "admin"` |
+| **SQL** | SELECT on non-blocked tables | INSERT, UPDATE (if `allow_writes`) | DELETE (if `allow_deletes`) | — |
+| **MCP-API** | `read_only_hint` / default | create/add/update/set name patterns | delete/remove/destroy patterns | `operation_category = "admin"` |
+
+The `operation_category` field overrides automatic categorization when set explicitly.
+
+### Config File Resolution
+
+`cargo pmcp deploy` finds the config file using this resolution order:
+
+1. `config.toml` in the server crate root
+2. Single `.toml` file in `instances/` directory
+
+The same file the server embeds via `include_str!()` in `main.rs`.
+
 ## Feature Flags
 
 | Feature | Default | What It Adds |
