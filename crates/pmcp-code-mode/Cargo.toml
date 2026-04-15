@@ -56,3 +56,4 @@ avp = ["dep:aws-config", "dep:aws-sdk-verifiedpermissions"]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 cedar-policy = "4.9"
 proptest = "1.7"
+toml = "0.8"

@@ -5,6 +5,55 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+/// A single declared operation in Code Mode configuration.
+/// Maps a raw API path to a canonical plain-name ID for Cedar policies.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationEntry {
+    /// Canonical operation ID (plain name, no method prefix).
+    /// This is what appears in Cedar policy calledOperations.
+    pub id: String,
+
+    /// Action category for AVP action routing.
+    /// Values: "read", "write", "delete", "admin"
+    pub category: String,
+
+    /// Human-readable description for admin UI and LLM context.
+    #[serde(default)]
+    pub description: String,
+
+    /// Raw API path this ID maps to (e.g., "/getCostAnomalies").
+    /// Used to match against api_call.path from JavaScript analysis.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+/// Registry built from [[code_mode.operations]] config entries.
+/// Maps raw paths to canonical operation IDs.
+#[derive(Debug, Clone, Default)]
+pub struct OperationRegistry {
+    path_to_id: HashMap<String, String>,
+}
+
+impl OperationRegistry {
+    pub fn from_entries(entries: &[OperationEntry]) -> Self {
+        let mut path_to_id = HashMap::new();
+        for entry in entries {
+            if let Some(ref path) = entry.path {
+                path_to_id.insert(path.clone(), entry.id.clone());
+            }
+        }
+        Self { path_to_id }
+    }
+
+    pub fn lookup(&self, path: &str) -> Option<&str> {
+        self.path_to_id.get(path).map(|s| s.as_str())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.path_to_id.is_empty()
+    }
+}
+
 /// Configuration for Code Mode.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeModeConfig {
@@ -141,6 +190,13 @@ pub struct CodeModeConfig {
     /// Operations are validated at compile time — unlisted names are rejected.
     #[serde(default)]
     pub sdk_operations: HashSet<String>,
+
+    /// Declared operations for plain-name ID mapping in Cedar entities.
+    /// Parsed from [[code_mode.operations]] TOML sections.
+    /// When non-empty, ScriptEntity calledOperations uses IDs from the registry
+    /// built from these entries. Unregistered paths fall back to METHOD:/path.
+    #[serde(default)]
+    pub operations: Vec<OperationEntry>,
 }
 
 impl Default for CodeModeConfig {
@@ -180,6 +236,7 @@ impl Default for CodeModeConfig {
             server_id: None,
             // SDK
             sdk_operations: HashSet::new(),
+            operations: Vec::new(),
         }
     }
 }
@@ -335,5 +392,102 @@ mod tests {
         assert!(!config.should_auto_approve(RiskLevel::Medium));
         assert!(!config.should_auto_approve(RiskLevel::High));
         assert!(!config.should_auto_approve(RiskLevel::Critical));
+    }
+
+    #[test]
+    fn test_operation_registry_from_entries() {
+        let entries = vec![
+            OperationEntry {
+                id: "getCostAnomalies".to_string(),
+                category: "read".to_string(),
+                description: "Get cost anomalies".to_string(),
+                path: Some("/getCostAnomalies".to_string()),
+            },
+            OperationEntry {
+                id: "listInstances".to_string(),
+                category: "read".to_string(),
+                description: "List EC2 instances".to_string(),
+                path: Some("/listInstances".to_string()),
+            },
+        ];
+        let registry = OperationRegistry::from_entries(&entries);
+        assert_eq!(registry.lookup("/getCostAnomalies"), Some("getCostAnomalies"));
+        assert_eq!(registry.lookup("/listInstances"), Some("listInstances"));
+    }
+
+    #[test]
+    fn test_operation_registry_lookup_unregistered() {
+        let entries = vec![OperationEntry {
+            id: "getCostAnomalies".to_string(),
+            category: "read".to_string(),
+            description: String::new(),
+            path: Some("/getCostAnomalies".to_string()),
+        }];
+        let registry = OperationRegistry::from_entries(&entries);
+        assert_eq!(registry.lookup("/unknownPath"), None);
+        assert_eq!(registry.lookup(""), None);
+    }
+
+    #[test]
+    fn test_operation_registry_is_empty() {
+        let empty_registry = OperationRegistry::from_entries(&[]);
+        assert!(empty_registry.is_empty());
+
+        let entries = vec![OperationEntry {
+            id: "op1".to_string(),
+            category: "read".to_string(),
+            description: String::new(),
+            path: Some("/op1".to_string()),
+        }];
+        let registry = OperationRegistry::from_entries(&entries);
+        assert!(!registry.is_empty());
+    }
+
+    #[test]
+    fn test_operation_entry_deserialization() {
+        let toml_str = r#"
+id = "getCostAnomalies"
+category = "read"
+description = "Get cost anomalies"
+path = "/getCostAnomalies"
+"#;
+        let entry: OperationEntry = toml::from_str(toml_str).expect("Failed to deserialize OperationEntry");
+        assert_eq!(entry.id, "getCostAnomalies");
+        assert_eq!(entry.category, "read");
+        assert_eq!(entry.description, "Get cost anomalies");
+        assert_eq!(entry.path, Some("/getCostAnomalies".to_string()));
+    }
+
+    #[test]
+    fn test_code_mode_config_with_operations() {
+        let toml_str = r#"
+enabled = true
+
+[[operations]]
+id = "getCostAnomalies"
+category = "read"
+description = "Get cost anomalies"
+path = "/getCostAnomalies"
+
+[[operations]]
+id = "listInstances"
+category = "read"
+path = "/listInstances"
+"#;
+        let config: CodeModeConfig = toml::from_str(toml_str).expect("Failed to deserialize");
+        assert!(config.enabled);
+        assert_eq!(config.operations.len(), 2);
+        assert_eq!(config.operations[0].id, "getCostAnomalies");
+        assert_eq!(config.operations[1].id, "listInstances");
+    }
+
+    #[test]
+    fn test_code_mode_config_without_operations_defaults_to_empty() {
+        let toml_str = r#"
+enabled = true
+"#;
+        let config: CodeModeConfig = toml::from_str(toml_str).expect("Failed to deserialize");
+        assert!(config.enabled);
+        assert!(config.operations.is_empty());
     }
 }
