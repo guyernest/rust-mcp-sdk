@@ -3,6 +3,7 @@
 //! These types represent the entities used in Cedar policy evaluation.
 //! They are pure domain types with no AWS SDK dependency.
 
+use crate::config::OperationRegistry;
 use crate::graphql::GraphQLQueryInfo;
 use std::collections::HashSet;
 
@@ -234,6 +235,7 @@ impl ScriptEntity {
     pub fn from_javascript_info(
         info: &crate::javascript::JavaScriptCodeInfo,
         sensitive_patterns: &[String],
+        registry: Option<&OperationRegistry>,
     ) -> Self {
         use crate::javascript::HttpMethod;
 
@@ -256,8 +258,13 @@ impl ScriptEntity {
             let pattern = normalize_path_to_pattern(&api_call.path);
             path_patterns.insert(pattern.clone());
 
-            // Build called operation string
-            called_operations.insert(format!("{}:{}", method_str, pattern));
+            // Build called operation string: use canonical ID from registry if available,
+            // fall back to METHOD:/path format when no registry entry matches.
+            let op_id = registry
+                .and_then(|r| r.lookup(&api_call.path))
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| format!("{}:{}", method_str, pattern));
+            called_operations.insert(op_id);
 
             // Count by method type
             match api_call.method {

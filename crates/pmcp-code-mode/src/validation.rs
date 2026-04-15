@@ -7,7 +7,7 @@
 //! 4. Explanation generation
 //! 5. Token generation
 
-use crate::config::CodeModeConfig;
+use crate::config::{CodeModeConfig, OperationRegistry};
 use crate::explanation::{ExplanationGenerator, TemplateExplanationGenerator};
 use crate::graphql::{GraphQLQueryInfo, GraphQLValidator};
 use crate::policy::{OperationEntity, PolicyEvaluator};
@@ -86,6 +86,8 @@ pub struct ValidationPipeline<
     graphql_validator: GraphQLValidator,
     #[cfg(feature = "openapi-code-mode")]
     javascript_validator: JavaScriptValidator,
+    #[cfg(feature = "openapi-code-mode")]
+    operation_registry: OperationRegistry,
     token_generator: T,
     explanation_generator: E,
     policy_evaluator: Option<Arc<dyn PolicyEvaluator>>,
@@ -109,11 +111,16 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
             warn_no_policy_configured();
         }
 
+        #[cfg(feature = "openapi-code-mode")]
+        let operation_registry = OperationRegistry::from_entries(&config.operations);
+
         Ok(Self {
             graphql_validator: GraphQLValidator::default(),
             #[cfg(feature = "openapi-code-mode")]
             javascript_validator: JavaScriptValidator::default()
                 .with_sdk_operations(config.sdk_operations.clone()),
+            #[cfg(feature = "openapi-code-mode")]
+            operation_registry,
             token_generator: HmacTokenGenerator::new_from_bytes(token_secret)?,
             explanation_generator: TemplateExplanationGenerator::new(),
             policy_evaluator: None,
@@ -157,11 +164,16 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
         token_secret: impl Into<Vec<u8>>,
         evaluator: Arc<dyn PolicyEvaluator>,
     ) -> Result<Self, TokenError> {
+        #[cfg(feature = "openapi-code-mode")]
+        let operation_registry = OperationRegistry::from_entries(&config.operations);
+
         Ok(Self {
             graphql_validator: GraphQLValidator::default(),
             #[cfg(feature = "openapi-code-mode")]
             javascript_validator: JavaScriptValidator::default()
                 .with_sdk_operations(config.sdk_operations.clone()),
+            #[cfg(feature = "openapi-code-mode")]
+            operation_registry,
             token_generator: HmacTokenGenerator::new_from_bytes(token_secret)?,
             explanation_generator: TemplateExplanationGenerator::new(),
             policy_evaluator: Some(evaluator),
@@ -194,11 +206,16 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
         token_generator: T,
         explanation_generator: E,
     ) -> Self {
+        #[cfg(feature = "openapi-code-mode")]
+        let operation_registry = OperationRegistry::from_entries(&config.operations);
+
         Self {
             graphql_validator: GraphQLValidator::default(),
             #[cfg(feature = "openapi-code-mode")]
             javascript_validator: JavaScriptValidator::default()
                 .with_sdk_operations(config.sdk_operations.clone()),
+            #[cfg(feature = "openapi-code-mode")]
+            operation_registry,
             token_generator,
             explanation_generator,
             policy_evaluator: None,
@@ -580,7 +597,12 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
         if let Some(ref evaluator) = self.policy_evaluator {
             let sensitive_patterns: Vec<String> =
                 self.config.openapi_blocked_paths.iter().cloned().collect();
-            let script_entity = ScriptEntity::from_javascript_info(&code_info, &sensitive_patterns);
+            let registry_ref = if self.operation_registry.is_empty() {
+                None
+            } else {
+                Some(&self.operation_registry)
+            };
+            let script_entity = ScriptEntity::from_javascript_info(&code_info, &sensitive_patterns, registry_ref);
             let server_entity = self.config.to_openapi_server_entity();
 
             let decision = evaluator
