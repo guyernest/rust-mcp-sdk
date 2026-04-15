@@ -241,7 +241,34 @@ impl Default for CodeModeConfig {
     }
 }
 
+/// Wrapper for deserializing the `[code_mode]` section from a full TOML config file.
+/// The file may contain other sections (`[server]`, `[[tools]]`, etc.) which are ignored.
+#[derive(Deserialize)]
+struct TomlWrapper {
+    #[serde(default)]
+    code_mode: CodeModeConfig,
+}
+
 impl CodeModeConfig {
+    /// Parse `CodeModeConfig` from a full TOML config string.
+    ///
+    /// Extracts the `[code_mode]` section (including `[[code_mode.operations]]`)
+    /// and ignores all other sections. This is the recommended way for external
+    /// servers to build their config from `config.toml`:
+    ///
+    /// ```rust,ignore
+    /// const CONFIG_TOML: &str = include_str!("../../config.toml");
+    ///
+    /// let config = CodeModeConfig::from_toml(CONFIG_TOML)
+    ///     .expect("Invalid code_mode section in config.toml");
+    /// ```
+    ///
+    /// If the TOML has no `[code_mode]` section, returns `CodeModeConfig::default()`.
+    pub fn from_toml(toml_str: &str) -> Result<Self, toml::de::Error> {
+        let wrapper: TomlWrapper = toml::from_str(toml_str)?;
+        Ok(wrapper.code_mode)
+    }
+
     /// Create a new config with Code Mode enabled.
     pub fn enabled() -> Self {
         Self {
@@ -493,5 +520,57 @@ enabled = true
         let config: CodeModeConfig = toml::from_str(toml_str).expect("Failed to deserialize");
         assert!(config.enabled);
         assert!(config.operations.is_empty());
+    }
+
+    #[test]
+    fn test_from_toml_extracts_code_mode_section() {
+        let toml_str = r#"
+[server]
+name = "cost-coach"
+type = "openapi-api"
+
+[code_mode]
+enabled = true
+token_ttl_seconds = 600
+server_id = "cost-coach"
+
+[[code_mode.operations]]
+id = "getCostAndUsage"
+category = "read"
+description = "Historical cost and usage data"
+path = "/getCostAndUsage"
+
+[[code_mode.operations]]
+id = "getCostAnomalies"
+category = "read"
+description = "Cost anomalies detected by AWS"
+path = "/getCostAnomalies"
+
+[[tools]]
+name = "some_tool"
+"#;
+        let config = CodeModeConfig::from_toml(toml_str).expect("Failed to parse");
+        assert!(config.enabled);
+        assert_eq!(config.token_ttl_seconds, 600);
+        assert_eq!(config.server_id, Some("cost-coach".to_string()));
+        assert_eq!(config.operations.len(), 2);
+        assert_eq!(config.operations[0].id, "getCostAndUsage");
+        assert_eq!(config.operations[1].id, "getCostAnomalies");
+        assert_eq!(
+            config.operations[0].path,
+            Some("/getCostAndUsage".to_string())
+        );
+    }
+
+    #[test]
+    fn test_from_toml_missing_code_mode_returns_default() {
+        let toml_str = r#"
+[server]
+name = "some-server"
+"#;
+        let config = CodeModeConfig::from_toml(toml_str).expect("Failed to parse");
+        assert!(!config.enabled);
+        assert!(config.operations.is_empty());
+        assert_eq!(config.token_ttl_seconds, 300); // default
     }
 }
