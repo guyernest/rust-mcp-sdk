@@ -7,7 +7,9 @@
 //! 4. Explanation generation
 //! 5. Token generation
 
-use crate::config::{CodeModeConfig, OperationRegistry};
+use crate::config::CodeModeConfig;
+#[cfg(feature = "openapi-code-mode")]
+use crate::config::OperationRegistry;
 use crate::explanation::{ExplanationGenerator, TemplateExplanationGenerator};
 use crate::graphql::{GraphQLQueryInfo, GraphQLValidator};
 use crate::policy::{OperationEntity, PolicyEvaluator};
@@ -602,7 +604,8 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
             } else {
                 Some(&self.operation_registry)
             };
-            let script_entity = ScriptEntity::from_javascript_info(&code_info, &sensitive_patterns, registry_ref);
+            let script_entity =
+                ScriptEntity::from_javascript_info(&code_info, &sensitive_patterns, registry_ref);
             let server_entity = self.config.to_openapi_server_entity();
 
             let decision = evaluator

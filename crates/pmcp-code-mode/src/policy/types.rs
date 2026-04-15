@@ -3,6 +3,7 @@
 //! These types represent the entities used in Cedar policy evaluation.
 //! They are pure domain types with no AWS SDK dependency.
 
+#[cfg(feature = "openapi-code-mode")]
 use crate::config::OperationRegistry;
 use crate::graphql::GraphQLQueryInfo;
 use std::collections::HashSet;

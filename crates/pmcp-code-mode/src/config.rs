@@ -36,7 +36,7 @@ pub struct OperationRegistry {
 
 impl OperationRegistry {
     pub fn from_entries(entries: &[OperationEntry]) -> Self {
-        let mut path_to_id = HashMap::new();
+        let mut path_to_id = HashMap::with_capacity(entries.len());
         for entry in entries {
             if let Some(ref path) = entry.path {
                 path_to_id.insert(path.clone(), entry.id.clone());
@@ -411,7 +411,10 @@ mod tests {
             },
         ];
         let registry = OperationRegistry::from_entries(&entries);
-        assert_eq!(registry.lookup("/getCostAnomalies"), Some("getCostAnomalies"));
+        assert_eq!(
+            registry.lookup("/getCostAnomalies"),
+            Some("getCostAnomalies")
+        );
         assert_eq!(registry.lookup("/listInstances"), Some("listInstances"));
     }
 
@@ -451,7 +454,8 @@ category = "read"
 description = "Get cost anomalies"
 path = "/getCostAnomalies"
 "#;
-        let entry: OperationEntry = toml::from_str(toml_str).expect("Failed to deserialize OperationEntry");
+        let entry: OperationEntry =
+            toml::from_str(toml_str).expect("Failed to deserialize OperationEntry");
         assert_eq!(entry.id, "getCostAnomalies");
         assert_eq!(entry.category, "read");
         assert_eq!(entry.description, "Get cost anomalies");
