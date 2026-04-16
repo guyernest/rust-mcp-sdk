@@ -165,6 +165,8 @@
   - [Capability Negotiation](./part8-advanced/ch21-02-capability-negotiation.md)
   - [Chapter 21 Exercises](./part8-advanced/ch21-exercises.md)
 
+- [Code Mode: Validated LLM Code Execution](./part8-advanced/ch22-code-mode.md)
+
 ---
 
 # Appendices

@@ -70,6 +70,11 @@ pub struct McpMetadata {
 
     /// Server capabilities (tools, resources, prompts)
     pub capabilities: ServerCapabilities,
+
+    /// Available operations for Code Mode policy enforcement.
+    /// Extracted from config.toml or set directly in CloudFormation Metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_operations: Option<AvailableOperations>,
 }
 
 /// Resource requirements for the server.
@@ -166,6 +171,94 @@ pub struct ServerCapabilities {
     /// Whether server supports composition (server-to-server calls)
     #[serde(default)]
     pub composition: bool,
+}
+
+/// Available operations for Code Mode policy enforcement.
+///
+/// Operations are categorized by access level (read/write/delete/admin) based
+/// on the server type. The pmcp.run admin UI uses this to populate the Code Mode
+/// settings page, allowing administrators to adjust policies per operation.
+///
+/// This is extracted from `config.toml` in the deploy ZIP, or set directly
+/// in CloudFormation Metadata as `mcp:availableOperations`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvailableOperations {
+    /// Read operations (GET, query, SELECT)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reads: Vec<OperationEntry>,
+
+    /// Write operations (POST/PUT/PATCH, mutation, INSERT/UPDATE)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub writes: Vec<OperationEntry>,
+
+    /// Delete operations (DELETE, destructive mutations, DELETE SQL)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deletes: Vec<OperationEntry>,
+
+    /// Admin operations (schema changes, user management, etc.)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub admin: Vec<OperationEntry>,
+
+    /// ISO 8601 timestamp of when operations were last extracted
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_updated: Option<String>,
+}
+
+/// A single operation available in Code Mode.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationEntry {
+    /// Operation identifier (tool name, query name, endpoint path, table name)
+    pub id: String,
+
+    /// Human-readable description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Server-type-specific metadata
+    #[serde(default, skip_serializing_if = "OperationMetadata::is_empty")]
+    pub metadata: OperationMetadata,
+}
+
+/// Server-type-specific metadata for an operation.
+///
+/// Different server types populate different fields:
+/// - **OpenAPI:** `path`, `method`
+/// - **GraphQL:** `operation_type`, `destructive_hint`
+/// - **SQL:** `table`, `access_type`
+/// - **MCP-API:** `read_only_hint`, `destructive_hint`, `operation_category`
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperationMetadata {
+    // OpenAPI fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+
+    // GraphQL fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation_type: Option<String>,
+
+    // SQL fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub table: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_type: Option<String>,
+
+    // MCP-API / shared fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_only_hint: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destructive_hint: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation_category: Option<String>,
+}
+
+impl OperationMetadata {
+    fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 // ============================================================================
@@ -282,6 +375,81 @@ pub(crate) struct InstanceConfig {
 
     #[serde(default)]
     pub observability: Option<ObservabilitySection>,
+
+    /// Code Mode configuration with operation declarations for policy enforcement
+    #[serde(default)]
+    pub code_mode: Option<CodeModeSection>,
+
+    /// Database tables (SQL servers)
+    #[serde(default)]
+    pub database: Option<DatabaseSection>,
+}
+
+/// Code Mode section in config.toml — declares available operations
+/// and policy settings. The pmcp.run handler reads this to populate
+/// the admin UI's Code Mode policy page.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[allow(dead_code)]
+pub(crate) struct CodeModeSection {
+    /// Whether write operations are allowed
+    #[serde(default)]
+    pub allow_writes: bool,
+
+    /// Whether delete operations are allowed
+    #[serde(default)]
+    pub allow_deletes: bool,
+
+    /// Tables blocked from Code Mode access (SQL servers)
+    #[serde(default)]
+    pub blocked_tables: Vec<String>,
+
+    /// Explicit operation declarations (preferred over [[tools]] when present)
+    #[serde(default)]
+    pub operations: Vec<CodeModeOperation>,
+}
+
+/// An operation declared in config.toml for Code Mode policy enforcement.
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub(crate) struct CodeModeOperation {
+    /// Operation name/identifier
+    pub name: String,
+
+    /// Human-readable description
+    pub description: Option<String>,
+
+    /// HTTP path (OpenAPI servers)
+    pub path: Option<String>,
+
+    /// HTTP method (OpenAPI servers)
+    pub method: Option<String>,
+
+    /// GraphQL operation type: "query" or "mutation"
+    pub operation_type: Option<String>,
+
+    /// Whether this is a destructive operation
+    #[serde(default)]
+    pub destructive_hint: bool,
+
+    /// Explicit category override: "read", "write", "delete", "admin"
+    pub operation_category: Option<String>,
+}
+
+/// Database section in config.toml (SQL servers).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[allow(dead_code)]
+pub(crate) struct DatabaseSection {
+    /// Available tables
+    #[serde(default)]
+    pub tables: Vec<DatabaseTable>,
+}
+
+/// A database table declaration.
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub(crate) struct DatabaseTable {
+    pub name: String,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -539,6 +707,7 @@ impl McpMetadata {
                 prompts: vec![],
                 composition: manifest.features.composition_enabled,
             },
+            available_operations: None,
         })
     }
 
@@ -597,6 +766,7 @@ impl McpMetadata {
                     prompts: vec![],
                     composition: false,
                 },
+                available_operations: None,
             });
         }
 
@@ -616,6 +786,7 @@ impl McpMetadata {
             template_version: None,
             resources: ResourceRequirements::default(),
             capabilities: ServerCapabilities::default(),
+            available_operations: None,
         })
     }
 
@@ -647,6 +818,7 @@ impl McpMetadata {
             template_version: None,
             resources: ResourceRequirements::default(),
             capabilities: ServerCapabilities::default(),
+            available_operations: None,
         })
     }
 
@@ -702,6 +874,10 @@ impl McpMetadata {
 
         if let Some(ref template_version) = self.template_version {
             metadata["mcp:templateVersion"] = serde_json::json!(template_version);
+        }
+
+        if let Some(ref ops) = self.available_operations {
+            metadata["mcp:availableOperations"] = serde_json::json!(ops);
         }
 
         metadata

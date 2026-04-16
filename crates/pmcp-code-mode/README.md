@@ -4,7 +4,7 @@ Code Mode validation and execution framework for MCP servers built on the PMCP S
 
 Enables LLM-generated code (GraphQL, JavaScript, SQL, MCP compositions) to be **validated, explained, and executed** with HMAC-signed approval tokens that cryptographically bind code to its validation result.
 
-> **Status:** v0.1.0 — migrated from `pmcp-run/built-in/shared/pmcp-code-mode` into the SDK workspace in Phase 67.1. The public API is stabilizing; feedback is welcome before the 1.0 contract is locked.
+> **Status:** v0.3.0 — multi-language validation with policy enforcement, standard adapters, deploy-time config. The public API is stabilizing; feedback is welcome before the 1.0 contract is locked.
 
 ## How It Works
 
@@ -308,6 +308,134 @@ The pipeline enforces config-level authorization checks before policy evaluation
 - **Query control:** `blocked_queries` (blocklist), `allowed_queries` (allowlist). Same allowlist-takes-precedence semantics as mutations.
 - **Policy evaluation:** After config checks pass, `PolicyEvaluator::evaluate_operation()` runs (if configured) for fine-grained authorization.
 
+## Deployment Configuration (`config.toml`)
+
+When deploying with `cargo pmcp deploy`, the server's `config.toml` is automatically included in the deploy ZIP. The pmcp.run platform extracts operation metadata from this file to populate the Code Mode policy page in the admin UI — administrators can then enable/disable individual operations by category.
+
+### config.toml Schema
+
+The `[[code_mode.operations]]` section declares available operations. When present, it takes priority over `[[tools]]` for policy categorization.
+
+**OpenAPI server:**
+
+```toml
+[server]
+name = "cost-coach"
+type = "openapi-api"
+
+[code_mode]
+allow_writes = false
+allow_deletes = false
+
+[[code_mode.operations]]
+name = "getCostAndUsage"
+description = "Retrieve AWS cost and usage data"
+path = "/ce/GetCostAndUsage"
+method = "POST"
+
+[[code_mode.operations]]
+name = "getRecommendations"
+description = "Get cost optimization recommendations"
+path = "/ce/GetRightsizingRecommendation"
+method = "POST"
+
+[[code_mode.operations]]
+name = "deleteBudget"
+description = "Delete a budget"
+path = "/budgets/DeleteBudget"
+method = "POST"
+destructive_hint = true
+```
+
+**GraphQL server:**
+
+```toml
+[server]
+name = "open-images"
+type = "graphql-api"
+
+[code_mode]
+allow_writes = false
+
+[[code_mode.operations]]
+name = "searchImages"
+operation_type = "query"
+description = "Search the image catalog"
+
+[[code_mode.operations]]
+name = "createCollection"
+operation_type = "mutation"
+description = "Create a new image collection"
+
+[[code_mode.operations]]
+name = "deleteImage"
+operation_type = "mutation"
+description = "Permanently delete an image"
+destructive_hint = true
+```
+
+**SQL server:**
+
+```toml
+[server]
+name = "analytics"
+type = "sql"
+
+[code_mode]
+allow_writes = true
+allow_deletes = false
+blocked_tables = ["audit_log", "credentials"]
+
+[database]
+[[database.tables]]
+name = "orders"
+description = "Customer order history"
+
+[[database.tables]]
+name = "products"
+description = "Product catalog"
+```
+
+**MCP composition server:**
+
+```toml
+[server]
+name = "orchestrator"
+type = "mcp-api"
+
+[[code_mode.operations]]
+name = "analyze_costs"
+description = "Multi-step cost analysis workflow"
+operation_category = "read"
+
+[[code_mode.operations]]
+name = "provision_resources"
+description = "Provision cloud resources"
+operation_category = "admin"
+```
+
+### Categorization Rules
+
+Operations are automatically categorized based on server type:
+
+| Server Type | Read | Write | Delete | Admin |
+|-------------|------|-------|--------|-------|
+| **OpenAPI** | GET, HEAD, OPTIONS | POST, PUT, PATCH | DELETE | `operation_category = "admin"` |
+| **GraphQL** | query | mutation | mutation with `destructive_hint` or delete/remove/destroy prefix | `operation_category = "admin"` |
+| **SQL** | SELECT on non-blocked tables | INSERT, UPDATE (if `allow_writes`) | DELETE (if `allow_deletes`) | — |
+| **MCP-API** | `read_only_hint` / default | create/add/update/set name patterns | delete/remove/destroy patterns | `operation_category = "admin"` |
+
+The `operation_category` field overrides automatic categorization when set explicitly.
+
+### Config File Resolution
+
+`cargo pmcp deploy` finds the config file using this resolution order:
+
+1. `config.toml` in the server crate root
+2. Single `.toml` file in `instances/` directory
+
+The same file the server embeds via `include_str!()` in `main.rs`.
+
 ## Feature Flags
 
 | Feature | Default | What It Adds |
@@ -340,7 +468,9 @@ See [SECURITY.md](./SECURITY.md) for the full threat model.
 **Policy evaluation:**
 - Default-deny: without a configured `PolicyEvaluator`, only basic config checks run
 - Policy evaluator stored as `Arc<dyn PolicyEvaluator>` — shared safely across async handlers
+- **Both GraphQL and JavaScript** validation call their respective policy evaluation methods (`evaluate_operation` / `evaluate_script`) — fail-closed on policy errors
 - Cedar support via `cedar` feature flag (local evaluation, no network)
+- AVP (AWS Verified Permissions) support via external evaluator — policies configured in pmcp.run admin UI
 - `NoopPolicyEvaluator` for tests only — prominently documented with warnings
 
 ## Schema Exposure Architecture
@@ -387,6 +517,26 @@ pipeline.set_policy_evaluator(Arc::new(my_evaluator));
 
 `#[code_mode(language = "...")]` now dispatches to the correct language-specific validation method at compile time, not just tool metadata. Servers using JavaScript, SQL, or MCP can now use `#[derive(CodeMode)]` instead of manual handler structs.
 
+## Breaking Changes in v0.3.0
+
+### JavaScript derive macro now calls async validation with policy enforcement
+
+`#[derive(CodeMode)]` with `language = "javascript"` now calls `validate_javascript_code_async` instead of the sync `validate_javascript_code`. This means:
+
+- **Cedar policies are now enforced** for JavaScript servers using the derive macro
+- **AVP policies are now enforced** when deployed with `POLICY_STORE_ID` on pmcp.run
+- Policy evaluation failures are **fail-closed** (same as GraphQL) — a policy backend outage blocks requests rather than silently allowing them
+
+If your JavaScript server was relying on the absence of policy enforcement (e.g., using a custom `PolicyEvaluator` that only implemented `evaluate_operation` but not `evaluate_script`), the default `evaluate_script` implementation **denies all scripts**. Override `evaluate_script` in your evaluator to allow scripts, or use `NoopPolicyEvaluator` for testing.
+
+### Standard adapters added
+
+`JsCodeExecutor`, `SdkCodeExecutor`, and `McpCodeExecutor` are new. They don't break existing code, but if you were manually implementing `CodeExecutor` for JS plan execution, you can now replace ~75 lines of boilerplate with:
+
+```rust
+let code_executor = Arc::new(JsCodeExecutor::new(http_client, ExecutionConfig::default()));
+```
+
 See [CHANGELOG.md](./CHANGELOG.md) for the full list of changes.
 
 ## Known Limitations (v0.1.0)
@@ -397,9 +547,7 @@ See [CHANGELOG.md](./CHANGELOG.md) for the full list of changes.
 
 3. **No server-side token revocation.** Tokens are stateless (verified by HMAC). Once issued, a token is valid until it expires. Short TTL (5 min default) mitigates this.
 
-4. **JavaScript validation is sync only.** `validate_javascript_code` is synchronous (no async variant). The derive macro handles this transparently — the generated async handler calls the sync method without `.await`.
-
-5. **SQL and MCP validators are stub.** The `validate_sql_query` and `validate_mcp_composition` methods require their respective feature flags. These validators are being implemented — the derive macro dispatch is ready.
+4. **SQL and MCP validators are stub.** The `validate_sql_query` and `validate_mcp_composition` methods require their respective feature flags. These validators are being implemented — the derive macro dispatch is ready.
 
 ## Crate Dependencies
 

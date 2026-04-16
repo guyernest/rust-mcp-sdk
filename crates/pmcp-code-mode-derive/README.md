@@ -71,7 +71,9 @@ let config = ExecutionConfig::default()
 let code_executor = Arc::new(JsCodeExecutor::new(http, config));
 ```
 
-The generated handler calls `validate_javascript_code` (sync) instead of `validate_graphql_query_async`. `JsCodeExecutor` compiles the JS code, executes it against your `HttpExecutor`, and logs execution metadata automatically.
+The generated handler calls `validate_javascript_code_async` — this runs config-level checks, then **async policy evaluation** via `PolicyEvaluator::evaluate_script` (Cedar/AVP), then token generation. This is the same security model as GraphQL servers. `JsCodeExecutor` compiles the JS code, executes it against your `HttpExecutor`, and logs execution metadata automatically.
+
+**Policy enforcement:** When deployed with `POLICY_STORE_ID` on pmcp.run, admin-configured operation blocklists are enforced at `validate_code` time. Locally, Cedar policies work the same way. `NoopPolicyEvaluator` allows everything (for testing only).
 
 For SDK-backed servers (no HTTP), use `SdkCodeExecutor` instead:
 
@@ -274,7 +276,17 @@ let builder = server.register_code_mode_tools(builder);
 let builder = server.register_code_mode_tools(builder)?;
 ```
 
-`language` attribute now selects the validation path, not just metadata. Servers that previously used `language = "javascript"` as a documentation hint will now get their code routed through `validate_javascript_code` instead of the GraphQL parser (which is the correct behavior).
+`language` attribute now selects the validation path, not just metadata. Servers that previously used `language = "javascript"` as a documentation hint will now get their code routed through the JavaScript validator instead of the GraphQL parser (which is the correct behavior).
+
+## Breaking Changes in v0.2.0
+
+`language = "javascript"` now calls `validate_javascript_code_async` (with policy evaluation) instead of the sync `validate_javascript_code`. This means:
+
+- **Cedar policies are enforced** for JavaScript servers using the derive macro
+- **AVP policies are enforced** when deployed with `POLICY_STORE_ID` on pmcp.run
+- Policy evaluation failures are **fail-closed** — same security model as GraphQL
+
+No code changes needed if you use `NoopPolicyEvaluator`. Custom evaluators must override `evaluate_script` (the trait default denies all scripts).
 
 See [CHANGELOG.md](./CHANGELOG.md) for the full list of changes.
 

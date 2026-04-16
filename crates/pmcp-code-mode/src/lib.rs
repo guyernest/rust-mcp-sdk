@@ -85,6 +85,10 @@ pub mod cedar_validation;
 #[cfg(feature = "openapi-code-mode")]
 mod javascript;
 
+// AWS Verified Permissions policy evaluator
+#[cfg(feature = "avp")]
+pub mod avp;
+
 // JavaScript execution runtime (AST-based execution in pure Rust)
 #[cfg(feature = "js-runtime")]
 pub mod executor;
@@ -171,6 +175,10 @@ pub use policy::{
 // Cedar policy evaluator
 #[cfg(feature = "cedar")]
 pub use policy::cedar::CedarPolicyEvaluator;
+
+// AVP (AWS Verified Permissions) policy evaluator
+#[cfg(feature = "avp")]
+pub use avp::{AvpClient, AvpConfig, AvpError, AvpPolicyEvaluator};
 
 // Schema Exposure Architecture types
 pub use schema_exposure::{

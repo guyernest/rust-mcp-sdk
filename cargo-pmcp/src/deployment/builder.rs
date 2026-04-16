@@ -462,22 +462,25 @@ impl BinaryBuilder {
     fn bundle_assets_if_configured(&self, binary_path: &Path) -> Result<Option<PathBuf>> {
         let config = crate::deployment::config::DeployConfig::load(&self.project_root)?;
 
-        // Check if any assets are configured
-        if !config.assets.has_assets() {
+        // Resolve asset files (empty vec if no assets configured)
+        let asset_files = if config.assets.has_assets() {
+            config.assets.resolve_files(&self.project_root)?
+        } else {
+            Vec::new()
+        };
+
+        // Resolve config.toml once (for Code Mode operation extraction)
+        let config_toml_path = self.resolve_config_toml();
+
+        // Only create ZIP if there's something to bundle beyond bootstrap
+        if asset_files.is_empty() && config_toml_path.is_none() {
             return Ok(None);
         }
 
-        println!("📦 Bundling assets...");
-
-        // Resolve asset files
-        let asset_files = config.assets.resolve_files(&self.project_root)?;
-
-        if asset_files.is_empty() {
-            println!("   No asset files found matching patterns");
-            return Ok(None);
+        println!("📦 Bundling deployment package...");
+        if !asset_files.is_empty() {
+            println!("   Found {} asset file(s)", asset_files.len());
         }
-
-        println!("   Found {} asset file(s)", asset_files.len());
 
         // Create deployment package directory
         let package_dir = self.project_root.join("deploy/.build");
@@ -506,6 +509,14 @@ impl BinaryBuilder {
             .context("Failed to write bootstrap to zip")?;
         println!(" ✅");
 
+        let file_options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .unix_permissions(0o644);
+
+        // Add config.toml if found (for Code Mode operation extraction by pmcp.run)
+        let config_toml_included =
+            self.add_config_toml_to_zip(&mut zip, file_options, config_toml_path.as_deref())?;
+
         // Add assets to assets/ subdirectory in the zip
         // Lambda will extract to $LAMBDA_TASK_ROOT/assets/
         let base_dir = config
@@ -514,10 +525,6 @@ impl BinaryBuilder {
             .as_ref()
             .map(|d| self.project_root.join(d))
             .unwrap_or_else(|| self.project_root.clone());
-
-        let asset_options = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated)
-            .unix_permissions(0o644);
 
         for asset_path in &asset_files {
             // Get relative path from base directory
@@ -532,7 +539,7 @@ impl BinaryBuilder {
 
             let asset_data = std::fs::read(asset_path)
                 .context(format!("Failed to read {}", asset_path.display()))?;
-            zip.start_file(&zip_path, asset_options)
+            zip.start_file(&zip_path, file_options)
                 .context(format!("Failed to add {} to zip", zip_path))?;
             zip.write_all(&asset_data)
                 .context(format!("Failed to write {} to zip", zip_path))?;
@@ -546,12 +553,76 @@ impl BinaryBuilder {
             .context("Failed to get zip size")?
             .len();
 
+        let extra_files = 1 + if config_toml_included { 1 } else { 0 }; // bootstrap + optional config.toml
         println!(
             "✅ Deployment package created: {:.2} MB ({} files)",
             zip_size as f64 / 1_048_576.0,
-            asset_files.len() + 1 // +1 for bootstrap
+            asset_files.len() + extra_files
         );
 
         Ok(Some(zip_path))
+    }
+
+    /// Add config.toml to the deploy ZIP for Code Mode operation extraction.
+    ///
+    /// Takes a pre-resolved config path (from `resolve_config_toml`) to avoid
+    /// redundant filesystem scanning. Returns true if a config file was added.
+    fn add_config_toml_to_zip<W: std::io::Write + std::io::Seek>(
+        &self,
+        zip: &mut ZipWriter<W>,
+        options: SimpleFileOptions,
+        config_path: Option<&Path>,
+    ) -> Result<bool> {
+        let config_path = match config_path {
+            Some(path) => path,
+            None => return Ok(false),
+        };
+
+        print!("   Adding config.toml...");
+        std::io::Write::flush(&mut std::io::stdout())?;
+
+        let config_data = std::fs::read(config_path).context("Failed to read config.toml")?;
+        zip.start_file("config.toml", options)
+            .context("Failed to add config.toml to zip")?;
+        zip.write_all(&config_data)
+            .context("Failed to write config.toml to zip")?;
+        println!(" ✅ ({})", config_path.display());
+        Ok(true)
+    }
+
+    /// Resolve the server's config.toml path.
+    ///
+    /// Resolution order (same as Rust servers using `include_str!()`):
+    /// 1. `config.toml` in the server crate root
+    /// 2. Single file in `instances/*.toml`
+    fn resolve_config_toml(&self) -> Option<PathBuf> {
+        let direct = self.project_root.join("config.toml");
+        if direct.exists() {
+            return Some(direct);
+        }
+        self.find_single_instance_toml()
+    }
+
+    /// Find a single .toml file in the `instances/` directory.
+    fn find_single_instance_toml(&self) -> Option<PathBuf> {
+        let instances_dir = self.project_root.join("instances");
+        if !instances_dir.is_dir() {
+            return None;
+        }
+        let toml_files: Vec<_> = std::fs::read_dir(&instances_dir)
+            .ok()?
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .map(|ext| ext == "toml")
+                    .unwrap_or(false)
+            })
+            .collect();
+        if toml_files.len() == 1 {
+            Some(toml_files[0].path())
+        } else {
+            None
+        }
     }
 }

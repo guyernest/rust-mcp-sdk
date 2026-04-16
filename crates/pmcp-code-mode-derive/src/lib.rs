@@ -268,7 +268,7 @@ fn gen_validation_call(
             self.pipeline.validate_graphql_query_async(code, &context).await #map_err
         }),
         "javascript" | "js" => Ok(quote! {
-            self.pipeline.validate_javascript_code(code, &context) #map_err
+            self.pipeline.validate_javascript_code_async(code, &context).await #map_err
         }),
         "sql" => Ok(quote! {
             self.pipeline.validate_sql_query(code, &context) #map_err
@@ -340,18 +340,14 @@ fn expand_with_context_from(
 
                     let result = #validation_call;
 
-                    let response = pmcp_code_mode::ValidationResponse::success(
-                        result.explanation.clone(),
-                        result.risk_level,
+                    let mut response = pmcp_code_mode::ValidationResponse::from_result(result);
+                    if response.result.is_valid {
                         if dry_run {
-                            String::new()
-                        } else {
-                            result.approval_token.clone().unwrap_or_default()
-                        },
-                        result.metadata.clone(),
-                    )
-                    .with_warnings(result.warnings.clone())
-                    .with_auto_approved(self.config.should_auto_approve(result.risk_level));
+                            response.result.approval_token = None;
+                        }
+                        let risk = response.result.risk_level;
+                        response = response.with_auto_approved(self.config.should_auto_approve(risk));
+                    }
 
                     let (json, _is_error) = response.to_json_response();
                     Ok(json)
@@ -528,18 +524,14 @@ fn expand_without_context_from(
 
                     let result = #validation_call;
 
-                    let response = pmcp_code_mode::ValidationResponse::success(
-                        result.explanation.clone(),
-                        result.risk_level,
+                    let mut response = pmcp_code_mode::ValidationResponse::from_result(result);
+                    if response.result.is_valid {
                         if dry_run {
-                            String::new()
-                        } else {
-                            result.approval_token.clone().unwrap_or_default()
-                        },
-                        result.metadata.clone(),
-                    )
-                    .with_warnings(result.warnings.clone())
-                    .with_auto_approved(self.config.should_auto_approve(result.risk_level));
+                            response.result.approval_token = None;
+                        }
+                        let risk = response.result.risk_level;
+                        response = response.with_auto_approved(self.config.should_auto_approve(risk));
+                    }
 
                     let (json, _is_error) = response.to_json_response();
                     Ok(json)
