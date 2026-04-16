@@ -12,6 +12,14 @@ ignore = [
     # Path: aws-smithy-http-client -> rustls 0.21 -> rustls-webpki 0.101
     "RUSTSEC-2026-0049",
 
+    # rustls-webpki 0.101.7: Name constraints for URI names incorrectly accepted
+    # Path: aws-smithy-http-client -> rustls 0.21 -> rustls-webpki 0.101
+    "RUSTSEC-2026-0098",
+
+    # rustls-webpki 0.101.7: Name constraints accepted for wildcard certificates
+    # Path: aws-smithy-http-client -> rustls 0.21 -> rustls-webpki 0.101
+    "RUSTSEC-2026-0099",
+
     # aws-lc-sys: Timing side-channel in AES-CCM tag verification
     "RUSTSEC-2026-0045",
 
