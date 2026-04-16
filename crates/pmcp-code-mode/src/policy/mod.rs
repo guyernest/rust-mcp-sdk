@@ -58,6 +58,23 @@ pub trait PolicyEvaluator: Send + Sync {
         })
     }
 
+    /// Evaluate a SQL statement against policies (SQL Code Mode).
+    /// Default: denies all statements (override for SQL support).
+    #[cfg(feature = "sql-code-mode")]
+    async fn evaluate_statement(
+        &self,
+        _statement: &StatementEntity,
+        _server: &SqlServerEntity,
+    ) -> Result<AuthorizationDecision, PolicyEvaluationError> {
+        Ok(AuthorizationDecision {
+            allowed: false,
+            determining_policies: vec!["default_deny_statements".to_string()],
+            errors: vec![
+                "SQL statement evaluation not supported by this policy evaluator".to_string(),
+            ],
+        })
+    }
+
     /// Batch evaluation (default: sequential).
     async fn batch_evaluate(
         &self,
@@ -140,6 +157,19 @@ impl PolicyEvaluator for NoopPolicyEvaluator {
         Ok(AuthorizationDecision {
             allowed: true,
             determining_policies: vec!["noop_allow_all_scripts".to_string()],
+            errors: vec![],
+        })
+    }
+
+    #[cfg(feature = "sql-code-mode")]
+    async fn evaluate_statement(
+        &self,
+        _statement: &StatementEntity,
+        _server: &SqlServerEntity,
+    ) -> Result<AuthorizationDecision, PolicyEvaluationError> {
+        Ok(AuthorizationDecision {
+            allowed: true,
+            determining_policies: vec!["noop_allow_all_statements".to_string()],
             errors: vec![],
         })
     }

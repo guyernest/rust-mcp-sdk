@@ -42,6 +42,9 @@ use crate::policy::{
 #[cfg(feature = "openapi-code-mode")]
 use crate::policy::{normalize_operation_format, OpenAPIServerEntity, ScriptEntity};
 
+#[cfg(feature = "sql-code-mode")]
+use crate::policy::{SqlServerEntity, StatementEntity};
+
 /// Configuration for the AVP client.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AvpConfig {
@@ -767,6 +770,161 @@ impl AvpClient {
     }
 }
 
+// ============================================================================
+// SQL Code Mode Support (Statement-based validation)
+// ============================================================================
+
+#[cfg(feature = "sql-code-mode")]
+impl AvpClient {
+    /// Check if a SQL statement is authorized (SQL Code Mode).
+    pub async fn is_statement_authorized(
+        &self,
+        statement: &StatementEntity,
+        server: &SqlServerEntity,
+    ) -> Result<AuthorizationDecision, AvpError> {
+        let entities = EntitiesDefinition::EntityList(vec![
+            self.build_statement_entity(statement),
+            self.build_sql_server_entity(server),
+        ]);
+
+        let response = self
+            .client
+            .is_authorized()
+            .policy_store_id(&self.policy_store_id)
+            .principal(
+                EntityIdentifier::builder()
+                    .entity_type("CodeMode::Statement")
+                    .entity_id(&statement.id)
+                    .build()
+                    .map_err(|e| AvpError::SdkError(e.to_string()))?,
+            )
+            .action(
+                ActionIdentifier::builder()
+                    .action_type("CodeMode::Action")
+                    .action_id(statement.action())
+                    .build()
+                    .map_err(|e| AvpError::SdkError(e.to_string()))?,
+            )
+            .resource(
+                EntityIdentifier::builder()
+                    .entity_type("CodeMode::Server")
+                    .entity_id(&server.server_id)
+                    .build()
+                    .map_err(|e| AvpError::SdkError(e.to_string()))?,
+            )
+            .entities(entities)
+            .send()
+            .await
+            .map_err(|e| AvpError::SdkError(e.to_string()))?;
+
+        Ok(self.parse_response(&response))
+    }
+
+    fn build_statement_entity(&self, statement: &StatementEntity) -> EntityItem {
+        let mut attrs: HashMap<String, AttributeValue> = HashMap::new();
+        attrs.insert(
+            "statementType".into(),
+            AttributeValue::String(statement.statement_type.clone()),
+        );
+        attrs.insert("tables".into(), Self::string_set(&statement.tables));
+        attrs.insert("columns".into(), Self::string_set(&statement.columns));
+        attrs.insert(
+            "hasWhere".into(),
+            AttributeValue::Boolean(statement.has_where),
+        );
+        attrs.insert(
+            "hasLimit".into(),
+            AttributeValue::Boolean(statement.has_limit),
+        );
+        attrs.insert(
+            "hasOrderBy".into(),
+            AttributeValue::Boolean(statement.has_order_by),
+        );
+        attrs.insert(
+            "estimatedRows".into(),
+            AttributeValue::Long(statement.estimated_rows as i64),
+        );
+        attrs.insert(
+            "joinCount".into(),
+            AttributeValue::Long(statement.join_count as i64),
+        );
+        attrs.insert(
+            "subqueryCount".into(),
+            AttributeValue::Long(statement.subquery_count as i64),
+        );
+
+        EntityItem::builder()
+            .identifier(
+                EntityIdentifier::builder()
+                    .entity_type("CodeMode::Statement")
+                    .entity_id(&statement.id)
+                    .build()
+                    .expect("valid entity identifier"),
+            )
+            .set_attributes(Some(attrs))
+            .build()
+    }
+
+    fn build_sql_server_entity(&self, server: &SqlServerEntity) -> EntityItem {
+        let mut attrs: HashMap<String, AttributeValue> = HashMap::new();
+        attrs.insert(
+            "serverId".into(),
+            AttributeValue::String(server.server_id.clone()),
+        );
+        attrs.insert(
+            "serverType".into(),
+            AttributeValue::String(server.server_type.clone()),
+        );
+        attrs.insert(
+            "allowWrite".into(),
+            AttributeValue::Boolean(server.allow_write),
+        );
+        attrs.insert(
+            "allowDelete".into(),
+            AttributeValue::Boolean(server.allow_delete),
+        );
+        attrs.insert(
+            "allowAdmin".into(),
+            AttributeValue::Boolean(server.allow_admin),
+        );
+        attrs.insert(
+            "maxRows".into(),
+            AttributeValue::Long(server.max_rows as i64),
+        );
+        attrs.insert(
+            "maxJoins".into(),
+            AttributeValue::Long(server.max_joins as i64),
+        );
+        attrs.insert(
+            "allowedOperations".into(),
+            Self::string_set(&server.allowed_operations),
+        );
+        attrs.insert(
+            "blockedOperations".into(),
+            Self::string_set(&server.blocked_operations),
+        );
+        attrs.insert(
+            "blockedTables".into(),
+            Self::string_set(&server.blocked_tables),
+        );
+        attrs.insert(
+            "blockedColumns".into(),
+            Self::string_set(&server.blocked_columns),
+        );
+
+        EntityItem::builder()
+            .identifier(
+                EntityIdentifier::builder()
+                    .entity_type("CodeMode::Server")
+                    .entity_id(&server.server_id)
+                    .build()
+                    .expect("valid entity identifier"),
+            )
+            .set_attributes(Some(attrs))
+            .build()
+    }
+}
+
 /// AVP-based policy evaluator implementing the [`PolicyEvaluator`] trait.
 ///
 /// This wraps [`AvpClient`] and provides the standard `PolicyEvaluator` interface
@@ -818,6 +976,18 @@ impl PolicyEvaluator for AvpPolicyEvaluator {
     ) -> Result<AuthorizationDecision, PolicyEvaluationError> {
         self.client
             .is_script_authorized(script, server)
+            .await
+            .map_err(|e| PolicyEvaluationError::EvaluationError(e.to_string()))
+    }
+
+    #[cfg(feature = "sql-code-mode")]
+    async fn evaluate_statement(
+        &self,
+        statement: &StatementEntity,
+        server: &SqlServerEntity,
+    ) -> Result<AuthorizationDecision, PolicyEvaluationError> {
+        self.client
+            .is_statement_authorized(statement, server)
             .await
             .map_err(|e| PolicyEvaluationError::EvaluationError(e.to_string()))
     }

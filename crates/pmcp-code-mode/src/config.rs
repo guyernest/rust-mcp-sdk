@@ -150,6 +150,59 @@ pub struct CodeModeConfig {
     pub openapi_require_output_declaration: bool,
 
     // ========================================================================
+    // SQL-specific settings
+    // ========================================================================
+    /// Whether SELECT statements are enabled (default: true).
+    #[serde(default = "default_true")]
+    pub sql_reads_enabled: bool,
+
+    /// Whether INSERT/UPDATE/MERGE statements are allowed globally.
+    #[serde(default)]
+    pub sql_allow_writes: bool,
+
+    /// Whether DELETE/TRUNCATE statements are allowed globally.
+    #[serde(default)]
+    pub sql_allow_deletes: bool,
+
+    /// Whether DDL (CREATE/ALTER/DROP/GRANT/REVOKE) is allowed globally.
+    /// Default is `false` — DDL is almost never appropriate for LLM-generated code.
+    #[serde(default)]
+    pub sql_allow_ddl: bool,
+
+    /// Allowed statement types ("SELECT"/"INSERT"/"UPDATE"/"DELETE"/"DDL").
+    /// If non-empty, only statement types in this set are allowed.
+    #[serde(default)]
+    pub sql_allowed_statements: HashSet<String>,
+
+    /// Blocked statement types. Always blocked even if globally allowed.
+    #[serde(default)]
+    pub sql_blocked_statements: HashSet<String>,
+
+    /// Tables that are always forbidden (blocklist mode).
+    #[serde(default)]
+    pub sql_blocked_tables: HashSet<String>,
+
+    /// If non-empty, only these tables can be accessed (allowlist mode).
+    #[serde(default)]
+    pub sql_allowed_tables: HashSet<String>,
+
+    /// Columns that may not be referenced in any statement (e.g., `password`, `ssn`).
+    #[serde(default)]
+    pub sql_blocked_columns: HashSet<String>,
+
+    /// Maximum row-count estimate allowed (based on LIMIT or default estimate).
+    #[serde(default = "default_sql_max_rows")]
+    pub sql_max_rows: u64,
+
+    /// Maximum number of JOINs in a single statement.
+    #[serde(default = "default_sql_max_joins")]
+    pub sql_max_joins: u32,
+
+    /// Whether to require a WHERE clause for UPDATE/DELETE statements.
+    #[serde(default = "default_true")]
+    pub sql_require_where_on_writes: bool,
+
+    // ========================================================================
     // Common settings
     // ========================================================================
     /// Action tags to override inferred actions for specific operations.
@@ -236,6 +289,19 @@ impl Default for CodeModeConfig {
             openapi_internal_blocked_fields: HashSet::new(),
             openapi_output_blocked_fields: HashSet::new(),
             openapi_require_output_declaration: false,
+            // SQL
+            sql_reads_enabled: true,
+            sql_allow_writes: false,
+            sql_allow_deletes: false,
+            sql_allow_ddl: false,
+            sql_allowed_statements: HashSet::new(),
+            sql_blocked_statements: HashSet::new(),
+            sql_blocked_tables: HashSet::new(),
+            sql_allowed_tables: HashSet::new(),
+            sql_blocked_columns: HashSet::new(),
+            sql_max_rows: default_sql_max_rows(),
+            sql_max_joins: default_sql_max_joins(),
+            sql_require_where_on_writes: true,
             // Common
             action_tags: HashMap::new(),
             max_depth: default_max_depth(),
@@ -369,6 +435,25 @@ impl CodeModeConfig {
             require_output_declaration: self.openapi_require_output_declaration,
         }
     }
+
+    /// Convert to `SqlServerEntity` for policy evaluation (SQL Code Mode).
+    #[cfg(feature = "sql-code-mode")]
+    pub fn to_sql_server_entity(&self) -> crate::policy::SqlServerEntity {
+        crate::policy::SqlServerEntity {
+            server_id: self.server_id().to_string(),
+            server_type: "sql".to_string(),
+            allow_write: self.sql_allow_writes,
+            allow_delete: self.sql_allow_deletes,
+            allow_admin: self.sql_allow_ddl,
+            max_rows: self.sql_max_rows,
+            max_joins: self.sql_max_joins,
+            allowed_operations: self.sql_allowed_statements.clone(),
+            blocked_operations: self.sql_blocked_statements.clone(),
+            blocked_tables: self.sql_blocked_tables.clone(),
+            blocked_columns: self.sql_blocked_columns.clone(),
+            allowed_tables: self.sql_allowed_tables.clone(),
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -405,6 +490,14 @@ fn default_max_field_count() -> u32 {
 
 fn default_max_cost() -> u32 {
     1000
+}
+
+fn default_sql_max_rows() -> u64 {
+    10_000
+}
+
+fn default_sql_max_joins() -> u32 {
+    5
 }
 
 #[cfg(test)]

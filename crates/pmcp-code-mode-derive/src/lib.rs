@@ -35,7 +35,7 @@
 //! |-------|-------------------|------------------|
 //! | `"graphql"` (default) | `validate_graphql_query_async` | *(none)* |
 //! | `"javascript"` / `"js"` | `validate_javascript_code` | `openapi-code-mode` |
-//! | `"sql"` | `validate_sql_query` | `sql-code-mode` |
+//! | `"sql"` | `validate_sql_query_async` | `sql-code-mode` |
 //! | `"mcp"` | `validate_mcp_composition` | `mcp-code-mode` |
 //!
 //! When `context_from` is specified, `register_code_mode_tools` requires
@@ -251,7 +251,7 @@ fn expand_code_mode(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
 /// |----------|--------|-------|---------|
 /// | `graphql` | `validate_graphql_query_async` | yes | *(none)* |
 /// | `javascript`/`js` | `validate_javascript_code` | no | `openapi-code-mode` |
-/// | `sql` | `validate_sql_query` | no | `sql-code-mode` |
+/// | `sql` | `validate_sql_query_async` | yes | `sql-code-mode` |
 /// | `mcp` | `validate_mcp_composition` | yes | `mcp-code-mode` |
 ///
 /// To add a new language: add a match arm here and a variant to `CodeLanguage` in
@@ -271,7 +271,7 @@ fn gen_validation_call(
             self.pipeline.validate_javascript_code_async(code, &context).await #map_err
         }),
         "sql" => Ok(quote! {
-            self.pipeline.validate_sql_query(code, &context) #map_err
+            self.pipeline.validate_sql_query_async(code, &context).await #map_err
         }),
         "mcp" => Ok(quote! {
             self.pipeline.validate_mcp_composition(code, &context).await #map_err

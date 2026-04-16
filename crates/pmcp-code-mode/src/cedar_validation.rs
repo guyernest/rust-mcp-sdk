@@ -561,6 +561,8 @@ mod tests {
     use crate::policy::types::{get_baseline_policies, get_code_mode_schema_json};
     #[cfg(feature = "openapi-code-mode")]
     use crate::policy::types::{get_openapi_baseline_policies, get_openapi_code_mode_schema_json};
+    #[cfg(feature = "sql-code-mode")]
+    use crate::policy::types::{get_sql_baseline_policies, get_sql_code_mode_schema_json};
     use crate::policy_annotations::{parse_policy_annotations, PolicyCategory, PolicyRiskLevel};
     use crate::schema_exposure::pattern_matches;
     use crate::templates::conditional;
@@ -961,5 +963,67 @@ mod tests {
                 .filter(|a| !const_op.contains(a))
                 .collect::<Vec<_>>(),
         );
+    }
+
+    #[cfg(feature = "sql-code-mode")]
+    #[test]
+    fn test_sql_schema_sources_in_sync() {
+        // cedar_validation.rs
+        let const_schema: serde_json::Value =
+            serde_json::from_str(SQL_CEDAR_SCHEMA).expect("const schema should parse");
+
+        // types.rs
+        let runtime_schema = get_sql_code_mode_schema_json();
+
+        // Server entity attributes must match
+        let const_server = extract_attrs(&const_schema, "Server");
+        let runtime_server = extract_attrs(&runtime_schema, "Server");
+        assert_eq!(
+            const_server,
+            runtime_server,
+            "SQL_CEDAR_SCHEMA Server attrs != get_sql_code_mode_schema_json() Server attrs\n\
+             const only: {:?}\n\
+             runtime only: {:?}",
+            const_server
+                .iter()
+                .filter(|a| !runtime_server.contains(a))
+                .collect::<Vec<_>>(),
+            runtime_server
+                .iter()
+                .filter(|a| !const_server.contains(a))
+                .collect::<Vec<_>>(),
+        );
+
+        // Statement entity attributes must match
+        let const_stmt = extract_attrs(&const_schema, "Statement");
+        let runtime_stmt = extract_attrs(&runtime_schema, "Statement");
+        assert_eq!(
+            const_stmt,
+            runtime_stmt,
+            "SQL_CEDAR_SCHEMA Statement attrs != get_sql_code_mode_schema_json() Statement attrs\n\
+             const only: {:?}\n\
+             runtime only: {:?}",
+            const_stmt
+                .iter()
+                .filter(|a| !runtime_stmt.contains(a))
+                .collect::<Vec<_>>(),
+            runtime_stmt
+                .iter()
+                .filter(|a| !const_stmt.contains(a))
+                .collect::<Vec<_>>(),
+        );
+
+        // Baseline policies should validate against the SQL schema
+        let schema = parse_schema(SQL_CEDAR_SCHEMA).expect("SQL schema should parse");
+        for (id, _desc, policy_text) in get_sql_baseline_policies() {
+            let policy = parse_policy(policy_text).expect("baseline policy should parse");
+            let result = validate_policy(&schema, &policy);
+            assert!(
+                result.is_ok(),
+                "SQL baseline policy '{}' failed validation: {:?}",
+                id,
+                result.err()
+            );
+        }
     }
 }

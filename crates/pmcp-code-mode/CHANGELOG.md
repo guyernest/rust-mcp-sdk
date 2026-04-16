@@ -2,6 +2,46 @@
 
 All notable changes to `pmcp-code-mode` will be documented in this file.
 
+## [0.5.0] - 2026-04-16
+
+### Added
+
+- **SQL Code Mode** — new `sql-code-mode` feature flag with `sqlparser 0.61` backend.
+  Enables `#[derive(CodeMode)] #[code_mode(language = "sql")]` for SQL-based MCP servers.
+- `ValidationPipeline::validate_sql_query` (sync, config-only checks) and
+  `validate_sql_query_async` (with `PolicyEvaluator::evaluate_statement` policy enforcement).
+  The derive macro now routes `language = "sql"` to `validate_sql_query_async` for
+  consistency with GraphQL/JS async patterns.
+- `sql` module: `SqlValidator`, `SqlStatementInfo`, `SqlStatementType` — classifies
+  SELECT/INSERT/UPDATE/DELETE/DDL and extracts tables, columns, JOINs, subqueries,
+  WHERE/LIMIT/ORDER BY flags, estimated rows.
+- `StatementEntity` + `SqlServerEntity` Cedar entities (behind `sql-code-mode`).
+- `PolicyEvaluator::evaluate_statement` default-deny trait method.
+- `AvpPolicyEvaluator::evaluate_statement` + `is_statement_authorized` + entity builders
+  (behind `avp + sql-code-mode`).
+- `NoopPolicyEvaluator::evaluate_statement` (allow-all, test use).
+- `get_sql_code_mode_schema_json()` and `get_sql_baseline_policies()` schema/policy exports.
+- `CodeModeConfig.to_sql_server_entity()` converts config to Cedar entity.
+- Schema sync test: `test_sql_schema_sources_in_sync` enforces that `SQL_CEDAR_SCHEMA`
+  and `get_sql_code_mode_schema_json()` stay aligned.
+
+### SQL Config Fields
+
+New `sql_*` prefixed fields in `CodeModeConfig` (feel natural to DB admins):
+
+- `sql_reads_enabled: bool` (default `true`) — SELECT statements enabled.
+- `sql_allow_writes: bool` — INSERT/UPDATE allowed globally.
+- `sql_allow_deletes: bool` — DELETE/TRUNCATE allowed globally.
+- `sql_allow_ddl: bool` — CREATE/ALTER/DROP/GRANT/REVOKE allowed (default `false`).
+- `sql_allowed_statements: HashSet<String>` — statement-type allowlist.
+- `sql_blocked_statements: HashSet<String>` — statement-type blocklist.
+- `sql_allowed_tables: HashSet<String>` — table allowlist (e.g., `["users", "orders"]`).
+- `sql_blocked_tables: HashSet<String>` — table blocklist (e.g., `["secrets"]`).
+- `sql_blocked_columns: HashSet<String>` — column blocklist (e.g., `["password", "ssn"]`).
+- `sql_max_rows: u64` (default `10_000`) — row-count estimate limit.
+- `sql_max_joins: u32` (default `5`) — JOIN count limit.
+- `sql_require_where_on_writes: bool` (default `true`) — UPDATE/DELETE require WHERE.
+
 ## [0.3.0] - 2026-04-14
 
 ### Breaking Changes
