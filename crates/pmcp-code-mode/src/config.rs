@@ -28,25 +28,39 @@ pub struct OperationEntry {
 }
 
 /// Registry built from [[code_mode.operations]] config entries.
-/// Maps raw paths to canonical operation IDs.
+/// Maps raw paths to canonical operation IDs and categories.
 #[derive(Debug, Clone, Default)]
 pub struct OperationRegistry {
     path_to_id: HashMap<String, String>,
+    path_to_category: HashMap<String, String>,
 }
 
 impl OperationRegistry {
     pub fn from_entries(entries: &[OperationEntry]) -> Self {
         let mut path_to_id = HashMap::with_capacity(entries.len());
+        let mut path_to_category = HashMap::with_capacity(entries.len());
         for entry in entries {
             if let Some(ref path) = entry.path {
                 path_to_id.insert(path.clone(), entry.id.clone());
+                if !entry.category.is_empty() {
+                    path_to_category.insert(path.clone(), entry.category.clone());
+                }
             }
         }
-        Self { path_to_id }
+        Self {
+            path_to_id,
+            path_to_category,
+        }
     }
 
     pub fn lookup(&self, path: &str) -> Option<&str> {
         self.path_to_id.get(path).map(|s| s.as_str())
+    }
+
+    /// Look up the declared category for a path (e.g., "read", "write", "delete", "admin").
+    /// Returns `None` if the path has no registry entry or no category declared.
+    pub fn lookup_category(&self, path: &str) -> Option<&str> {
+        self.path_to_category.get(path).map(|s| s.as_str())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -456,6 +470,53 @@ mod tests {
         let registry = OperationRegistry::from_entries(&entries);
         assert_eq!(registry.lookup("/unknownPath"), None);
         assert_eq!(registry.lookup(""), None);
+    }
+
+    #[test]
+    fn test_operation_registry_lookup_category() {
+        let entries = vec![
+            OperationEntry {
+                id: "getCostAnomalies".to_string(),
+                category: "read".to_string(),
+                description: String::new(),
+                path: Some("/getCostAnomalies".to_string()),
+            },
+            OperationEntry {
+                id: "deleteReservation".to_string(),
+                category: "delete".to_string(),
+                description: String::new(),
+                path: Some("/deleteReservation".to_string()),
+            },
+            OperationEntry {
+                id: "updateBudget".to_string(),
+                category: "write".to_string(),
+                description: String::new(),
+                path: Some("/updateBudget".to_string()),
+            },
+        ];
+        let registry = OperationRegistry::from_entries(&entries);
+        assert_eq!(registry.lookup_category("/getCostAnomalies"), Some("read"));
+        assert_eq!(
+            registry.lookup_category("/deleteReservation"),
+            Some("delete")
+        );
+        assert_eq!(registry.lookup_category("/updateBudget"), Some("write"));
+        assert_eq!(registry.lookup_category("/unknownPath"), None);
+    }
+
+    #[test]
+    fn test_operation_registry_empty_category_excluded() {
+        let entries = vec![OperationEntry {
+            id: "legacyOp".to_string(),
+            category: String::new(), // empty = not declared
+            description: String::new(),
+            path: Some("/legacyOp".to_string()),
+        }];
+        let registry = OperationRegistry::from_entries(&entries);
+        // ID lookup still works
+        assert_eq!(registry.lookup("/legacyOp"), Some("legacyOp"));
+        // Category lookup returns None for empty category
+        assert_eq!(registry.lookup_category("/legacyOp"), None);
     }
 
     #[test]

@@ -56,6 +56,7 @@ pub const GRAPHQL_CEDAR_SCHEMA: &str = r#"{
                         "maxDepth": { "type": "Long", "required": true },
                         "maxFieldCount": { "type": "Long", "required": true },
                         "maxCost": { "type": "Long", "required": true },
+                        "maxApiCalls": { "type": "Long", "required": true },
                         "allowWrite": { "type": "Boolean", "required": true },
                         "allowDelete": { "type": "Boolean", "required": true },
                         "allowAdmin": { "type": "Boolean", "required": true },
@@ -116,6 +117,7 @@ pub const OPENAPI_CEDAR_SCHEMA: &str = r#"{
                         "accessedPaths": { "type": "Set", "element": { "type": "String" } },
                         "accessedMethods": { "type": "Set", "element": { "type": "String" } },
                         "pathPatterns": { "type": "Set", "element": { "type": "String" } },
+                        "calledOperations": { "type": "Set", "element": { "type": "String" } },
                         "loopIterations": { "type": "Long", "required": true },
                         "nestingDepth": { "type": "Long", "required": true },
                         "scriptLength": { "type": "Long", "required": true },
@@ -134,6 +136,9 @@ pub const OPENAPI_CEDAR_SCHEMA: &str = r#"{
                     "attributes": {
                         "serverId": { "type": "String", "required": true },
                         "serverType": { "type": "String", "required": true },
+                        "writeMode": { "type": "String", "required": true },
+                        "maxDepth": { "type": "Long", "required": true },
+                        "maxCost": { "type": "Long", "required": true },
                         "maxApiCalls": { "type": "Long", "required": true },
                         "maxLoopIterations": { "type": "Long", "required": true },
                         "maxScriptLength": { "type": "Long", "required": true },
@@ -144,6 +149,7 @@ pub const OPENAPI_CEDAR_SCHEMA: &str = r#"{
                         "allowAdmin": { "type": "Boolean", "required": true },
                         "blockedOperations": { "type": "Set", "element": { "type": "String" } },
                         "allowedOperations": { "type": "Set", "element": { "type": "String" } },
+                        "blockedFields": { "type": "Set", "element": { "type": "String" } },
                         "allowedMethods": { "type": "Set", "element": { "type": "String" } },
                         "blockedMethods": { "type": "Set", "element": { "type": "String" } },
                         "allowedPathPatterns": { "type": "Set", "element": { "type": "String" } },
@@ -845,5 +851,115 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ==========================================================================
+    // SCHEMA SYNC TESTS (cedar_validation.rs ↔ types.rs must agree)
+    // ==========================================================================
+
+    /// Extract sorted attribute names from a Cedar JSON schema entity type.
+    fn extract_attrs(schema_json: &serde_json::Value, entity_type: &str) -> Vec<String> {
+        let attrs = &schema_json["CodeMode"]["entityTypes"][entity_type]["shape"]["attributes"];
+        let mut names: Vec<String> = attrs
+            .as_object()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    #[cfg(feature = "openapi-code-mode")]
+    #[test]
+    fn test_openapi_schema_sources_in_sync() {
+        // cedar_validation.rs (test const — also used by platform for AVP schema provisioning)
+        let const_schema: serde_json::Value =
+            serde_json::from_str(OPENAPI_CEDAR_SCHEMA).expect("const schema should parse");
+
+        // types.rs (runtime JSON export)
+        let runtime_schema = get_openapi_code_mode_schema_json();
+
+        // Server entity attributes must match
+        let const_server = extract_attrs(&const_schema, "Server");
+        let runtime_server = extract_attrs(&runtime_schema, "Server");
+        assert_eq!(
+            const_server, runtime_server,
+            "OPENAPI_CEDAR_SCHEMA Server attrs != get_openapi_code_mode_schema_json() Server attrs\n\
+             const only: {:?}\n\
+             runtime only: {:?}",
+            const_server
+                .iter()
+                .filter(|a| !runtime_server.contains(a))
+                .collect::<Vec<_>>(),
+            runtime_server
+                .iter()
+                .filter(|a| !const_server.contains(a))
+                .collect::<Vec<_>>(),
+        );
+
+        // Script entity attributes must match
+        let const_script = extract_attrs(&const_schema, "Script");
+        let runtime_script = extract_attrs(&runtime_schema, "Script");
+        assert_eq!(
+            const_script, runtime_script,
+            "OPENAPI_CEDAR_SCHEMA Script attrs != get_openapi_code_mode_schema_json() Script attrs\n\
+             const only: {:?}\n\
+             runtime only: {:?}",
+            const_script
+                .iter()
+                .filter(|a| !runtime_script.contains(a))
+                .collect::<Vec<_>>(),
+            runtime_script
+                .iter()
+                .filter(|a| !const_script.contains(a))
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn test_graphql_schema_sources_in_sync() {
+        // cedar_validation.rs
+        let const_schema: serde_json::Value =
+            serde_json::from_str(GRAPHQL_CEDAR_SCHEMA).expect("const schema should parse");
+
+        // types.rs
+        let runtime_schema = get_code_mode_schema_json();
+
+        // Server entity attributes must match
+        let const_server = extract_attrs(&const_schema, "Server");
+        let runtime_server = extract_attrs(&runtime_schema, "Server");
+        assert_eq!(
+            const_server,
+            runtime_server,
+            "GRAPHQL_CEDAR_SCHEMA Server attrs != get_code_mode_schema_json() Server attrs\n\
+             const only: {:?}\n\
+             runtime only: {:?}",
+            const_server
+                .iter()
+                .filter(|a| !runtime_server.contains(a))
+                .collect::<Vec<_>>(),
+            runtime_server
+                .iter()
+                .filter(|a| !const_server.contains(a))
+                .collect::<Vec<_>>(),
+        );
+
+        // Operation entity attributes must match
+        let const_op = extract_attrs(&const_schema, "Operation");
+        let runtime_op = extract_attrs(&runtime_schema, "Operation");
+        assert_eq!(
+            const_op,
+            runtime_op,
+            "GRAPHQL_CEDAR_SCHEMA Operation attrs != get_code_mode_schema_json() Operation attrs\n\
+             const only: {:?}\n\
+             runtime only: {:?}",
+            const_op
+                .iter()
+                .filter(|a| !runtime_op.contains(a))
+                .collect::<Vec<_>>(),
+            runtime_op
+                .iter()
+                .filter(|a| !const_op.contains(a))
+                .collect::<Vec<_>>(),
+        );
     }
 }

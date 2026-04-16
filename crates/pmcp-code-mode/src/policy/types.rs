@@ -267,11 +267,19 @@ impl ScriptEntity {
                 .unwrap_or_else(|| format!("{}:{}", method_str, pattern));
             called_operations.insert(op_id);
 
-            // Count by method type
-            match api_call.method {
-                HttpMethod::Get | HttpMethod::Head | HttpMethod::Options => read_calls += 1,
-                HttpMethod::Delete => delete_calls += 1,
-                _ => write_calls += 1,
+            // Count by declared category (from [[code_mode.operations]]) when available,
+            // fall back to HTTP method when no registry entry or no category declared.
+            let call_category = registry.and_then(|r| r.lookup_category(&api_call.path));
+            match call_category {
+                Some("read") => read_calls += 1,
+                Some("delete") => delete_calls += 1,
+                Some("write" | "admin") => write_calls += 1,
+                Some(_) => write_calls += 1,
+                None => match api_call.method {
+                    HttpMethod::Get | HttpMethod::Head | HttpMethod::Options => read_calls += 1,
+                    HttpMethod::Delete => delete_calls += 1,
+                    _ => write_calls += 1,
+                },
             }
 
             // Track dynamic paths
@@ -545,6 +553,7 @@ pub fn get_code_mode_schema_json() -> serde_json::Value {
                             "serverId": { "type": "String", "required": true },
                             "serverType": { "type": "String", "required": true },
                             "maxDepth": { "type": "Long", "required": true },
+                            "maxFieldCount": { "type": "Long", "required": true },
                             "maxCost": { "type": "Long", "required": true },
                             "maxApiCalls": { "type": "Long", "required": true },
                             "allowWrite": { "type": "Boolean", "required": true },
@@ -620,6 +629,7 @@ pub fn get_openapi_code_mode_schema_json() -> serde_json::Value {
                         "attributes": {
                             "serverId": { "type": "String", "required": true },
                             "serverType": { "type": "String", "required": true },
+                            "writeMode": { "type": "String", "required": true },
                             "maxDepth": { "type": "Long", "required": true },
                             "maxCost": { "type": "Long", "required": true },
                             "maxApiCalls": { "type": "Long", "required": true },
@@ -758,4 +768,139 @@ pub fn get_baseline_policies() -> Vec<(&'static str, &'static str, &'static str)
             r#"forbid(principal, action, resource) when { principal.estimatedCost > resource.maxCost };"#,
         ),
     ]
+}
+
+#[cfg(all(test, feature = "openapi-code-mode"))]
+mod tests {
+    use super::*;
+    use crate::config::{OperationEntry, OperationRegistry};
+    use crate::javascript::{ApiCall, HttpMethod, JavaScriptCodeInfo};
+
+    fn make_api_call(method: HttpMethod, path: &str) -> ApiCall {
+        ApiCall {
+            method,
+            path: path.to_string(),
+            is_dynamic_path: false,
+            line: 1,
+            column: 0,
+        }
+    }
+
+    fn make_info(calls: Vec<ApiCall>) -> JavaScriptCodeInfo {
+        JavaScriptCodeInfo {
+            api_calls: calls,
+            ..Default::default()
+        }
+    }
+
+    fn make_registry(entries: &[(&str, &str, &str)]) -> OperationRegistry {
+        let entries: Vec<OperationEntry> = entries
+            .iter()
+            .map(|(id, category, path)| OperationEntry {
+                id: id.to_string(),
+                category: category.to_string(),
+                description: String::new(),
+                path: Some(path.to_string()),
+            })
+            .collect();
+        OperationRegistry::from_entries(&entries)
+    }
+
+    #[test]
+    fn test_category_read_overrides_post_method() {
+        let registry = make_registry(&[("getCostAnomalies", "read", "/getCostAnomalies")]);
+        let info = make_info(vec![make_api_call(HttpMethod::Post, "/getCostAnomalies")]);
+
+        let entity = ScriptEntity::from_javascript_info(&info, &[], Some(&registry));
+
+        assert_eq!(entity.read_calls, 1);
+        assert_eq!(entity.write_calls, 0);
+        assert_eq!(entity.script_type, "read_only");
+        assert_eq!(entity.action(), "Read");
+    }
+
+    #[test]
+    fn test_category_write_overrides_get_method() {
+        let registry = make_registry(&[("triggerExport", "write", "/triggerExport")]);
+        let info = make_info(vec![make_api_call(HttpMethod::Get, "/triggerExport")]);
+
+        let entity = ScriptEntity::from_javascript_info(&info, &[], Some(&registry));
+
+        assert_eq!(entity.write_calls, 1);
+        assert_eq!(entity.read_calls, 0);
+        assert_eq!(entity.script_type, "write_only");
+        assert_eq!(entity.action(), "Write");
+    }
+
+    #[test]
+    fn test_category_delete_routes_correctly() {
+        let registry = make_registry(&[("deleteReservation", "delete", "/deleteReservation")]);
+        let info = make_info(vec![make_api_call(HttpMethod::Post, "/deleteReservation")]);
+
+        let entity = ScriptEntity::from_javascript_info(&info, &[], Some(&registry));
+
+        assert_eq!(entity.delete_calls, 1);
+        assert_eq!(entity.has_deletes, true);
+        assert_eq!(entity.action(), "Delete");
+    }
+
+    #[test]
+    fn test_no_registry_falls_back_to_http_method() {
+        let info = make_info(vec![
+            make_api_call(HttpMethod::Get, "/getCostAnomalies"),
+            make_api_call(HttpMethod::Post, "/updateBudget"),
+        ]);
+
+        let entity = ScriptEntity::from_javascript_info(&info, &[], None);
+
+        assert_eq!(entity.read_calls, 1);
+        assert_eq!(entity.write_calls, 1);
+        assert_eq!(entity.script_type, "mixed");
+        assert_eq!(entity.action(), "Write");
+    }
+
+    #[test]
+    fn test_unregistered_path_falls_back_to_http_method() {
+        let registry = make_registry(&[("getCostAnomalies", "read", "/getCostAnomalies")]);
+        let info = make_info(vec![make_api_call(HttpMethod::Post, "/unknownEndpoint")]);
+
+        let entity = ScriptEntity::from_javascript_info(&info, &[], Some(&registry));
+
+        // POST with no category → write (HTTP method fallback)
+        assert_eq!(entity.write_calls, 1);
+        assert_eq!(entity.read_calls, 0);
+        assert_eq!(entity.script_type, "write_only");
+    }
+
+    #[test]
+    fn test_mixed_categories_produce_mixed_script() {
+        let registry = make_registry(&[
+            ("getCostAnomalies", "read", "/getCostAnomalies"),
+            ("updateBudget", "write", "/updateBudget"),
+        ]);
+        let info = make_info(vec![
+            make_api_call(HttpMethod::Post, "/getCostAnomalies"),
+            make_api_call(HttpMethod::Post, "/updateBudget"),
+        ]);
+
+        let entity = ScriptEntity::from_javascript_info(&info, &[], Some(&registry));
+
+        assert_eq!(entity.read_calls, 1);
+        assert_eq!(entity.write_calls, 1);
+        assert_eq!(entity.script_type, "mixed");
+        assert_eq!(entity.action(), "Write");
+    }
+
+    #[test]
+    fn test_empty_category_falls_back_to_http_method() {
+        // category = "" (from #[serde(default)]) → no category → HTTP method fallback
+        let registry = make_registry(&[("legacyOp", "", "/legacyOp")]);
+        let info = make_info(vec![make_api_call(HttpMethod::Post, "/legacyOp")]);
+
+        let entity = ScriptEntity::from_javascript_info(&info, &[], Some(&registry));
+
+        // POST with empty category → write (HTTP method fallback)
+        assert_eq!(entity.write_calls, 1);
+        assert_eq!(entity.script_type, "write_only");
+    }
 }

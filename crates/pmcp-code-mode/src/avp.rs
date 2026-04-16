@@ -172,7 +172,10 @@ impl AvpClient {
             .entities(entities)
             .send()
             .await
-            .map_err(|e| AvpError::SdkError(e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(error = ?e, "AVP is_authorized failed");
+                AvpError::SdkError(e.to_string())
+            })?;
 
         Ok(self.parse_response(&response))
     }
@@ -219,7 +222,10 @@ impl AvpClient {
             .entities(EntitiesDefinition::EntityList(entities))
             .send()
             .await
-            .map_err(|e| AvpError::SdkError(e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(error = ?e, "AVP is_authorized failed");
+                AvpError::SdkError(e.to_string())
+            })?;
 
         Ok(self.parse_response(&response))
     }
@@ -277,7 +283,10 @@ impl AvpClient {
                 .entities(EntitiesDefinition::EntityList(all_entities))
                 .send()
                 .await
-                .map_err(|e| AvpError::SdkError(e.to_string()))?;
+                .map_err(|e| {
+                    tracing::error!(error = ?e, "AVP is_authorized failed");
+                    AvpError::SdkError(e.to_string())
+                })?;
 
             for result in response.results() {
                 let allowed =
@@ -527,7 +536,10 @@ impl AvpClient {
             .entities(entities)
             .send()
             .await
-            .map_err(|e| AvpError::SdkError(e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(error = ?e, "AVP is_authorized failed");
+                AvpError::SdkError(e.to_string())
+            })?;
 
         Ok(self.parse_response(&response))
     }

@@ -145,7 +145,7 @@ impl CedarPolicyEvaluator {
         );
 
         let mut attrs: HashMap<String, cedar_policy::RestrictedExpression> =
-            HashMap::with_capacity(10);
+            HashMap::with_capacity(12);
 
         attrs.insert(
             "serverId".to_string(),
@@ -170,6 +170,10 @@ impl CedarPolicyEvaluator {
         attrs.insert(
             "maxDepth".to_string(),
             cedar_policy::RestrictedExpression::new_long(config.max_depth as i64),
+        );
+        attrs.insert(
+            "maxFieldCount".to_string(),
+            cedar_policy::RestrictedExpression::new_long(config.max_field_count as i64),
         );
         attrs.insert(
             "maxCost".to_string(),
