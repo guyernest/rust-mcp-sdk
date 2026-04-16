@@ -108,7 +108,7 @@ pub use async_trait::async_trait;
 pub use code_executor::CodeExecutor;
 
 // Re-export public types
-pub use config::CodeModeConfig;
+pub use config::{resolve_server_id_from_env, CodeModeConfig};
 
 pub use explanation::{ExplanationGenerator, TemplateExplanationGenerator};
 

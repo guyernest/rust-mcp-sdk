@@ -4,7 +4,48 @@ All notable changes to `pmcp-code-mode` will be documented in this file.
 
 ## [0.5.0] - 2026-04-16
 
-### Added
+### Added — Developer Experience
+
+- **Auto-resolve `server_id` from environment.** `CodeModeConfig::resolve_server_id()`
+  auto-fills `server_id` from `PMCP_SERVER_ID` or `AWS_LAMBDA_FUNCTION_NAME` env vars
+  (in that order) when not set in TOML. All `ValidationPipeline` constructors call
+  this automatically, so wrappers no longer need to implement their own resolution
+  chain. When a policy evaluator is configured but `server_id` is still unresolved,
+  `with_policy_evaluator` emits a tracing warning — this used to produce silent
+  default-deny failures.
+- `CodeModeConfig::require_server_id()` — fail-fast accessor returning
+  `Result<&str, ValidationError::ConfigError>` for code paths that need AVP authorization.
+- `resolve_server_id_from_env()` — exposed as a free function for tests and
+  non-pipeline callers.
+
+- **SQL TOML DX.** `sql_*` config fields now accept both prefixed (`sql_allow_writes`)
+  and unprefixed (`allow_writes`) names via `#[serde(alias = ...)]`. Downstream SQL
+  servers can use the natural vocabulary in their `[code_mode]` block without
+  manual conversion:
+
+  ```toml
+  [code_mode]
+  enabled = true
+  allow_writes = false     # same as sql_allow_writes
+  blocked_tables = ["secrets"]
+  max_rows = 5000
+  ```
+
+  Aliased fields: `allow_writes`, `allow_deletes`, `allow_ddl`, `reads_enabled`,
+  `allowed_statements`, `blocked_statements`, `allowed_tables`, `blocked_tables`,
+  `blocked_columns`, `max_rows`, `max_joins`, `require_where_on_writes`.
+
+- **Debuggable default-deny.** When a policy evaluator returns `allowed: false`
+  with empty `determining_policies` (the canonical "no Permit matched" case), the
+  SDK previously returned `violations: []` — impossible to debug from the client.
+  The new `build_policy_violations` helper (applied to all three language paths):
+  1. Maps each `determining_policies` entry to a `policy` violation (existing)
+  2. Maps each `decision.errors` entry to an `evaluation_error` violation (new —
+     surfaces Cedar schema errors, missing attributes, etc.)
+  3. If both are empty, injects a synthetic `default_deny` violation naming the
+     `server_id` and `action` so the client has context to debug
+
+### Added — SQL Code Mode
 
 - **SQL Code Mode** — new `sql-code-mode` feature flag with `sqlparser 0.61` backend.
   Enables `#[derive(CodeMode)] #[code_mode(language = "sql")]` for SQL-based MCP servers.

@@ -28,6 +28,60 @@ use crate::javascript::{JavaScriptCodeInfo, JavaScriptValidator};
 /// Static flag to ensure the "no policy evaluator" warning is only logged once per process.
 static NO_POLICY_WARNING_LOGGED: AtomicBool = AtomicBool::new(false);
 
+/// Build the `Vec<PolicyViolation>` for a denied authorization decision.
+///
+/// Flows all available diagnostic information from the decision into violations
+/// so the client sees *why* a request was denied:
+///
+/// - Each `determining_policies` entry becomes a `policy` violation naming that policy
+/// - Each `decision.errors` entry becomes a `policy_error` violation surfacing the
+///   underlying Cedar/AVP error (e.g., "entity does not conform to schema")
+/// - If both lists are empty (the canonical "default-deny: no Permit matched" case)
+///   a synthetic `default_deny` violation is injected with context about the
+///   server_id and action, so the client has *something* to debug against
+///
+/// Without this, default-deny would surface as `valid:false, violations:[]` —
+/// impossible to debug from the client.
+fn build_policy_violations(
+    decision: &crate::policy::AuthorizationDecision,
+    server_id: &str,
+    action: impl std::fmt::Display,
+    denied_subject: &str,
+) -> Vec<PolicyViolation> {
+    let capacity = decision.determining_policies.len() + decision.errors.len() + 1;
+    let mut violations: Vec<PolicyViolation> = Vec::with_capacity(capacity);
+
+    for policy_id in &decision.determining_policies {
+        violations.push(PolicyViolation::new(
+            "policy",
+            policy_id.clone(),
+            format!("Policy denied the {}", denied_subject),
+        ));
+    }
+
+    for err in &decision.errors {
+        violations.push(PolicyViolation::new(
+            "policy_error",
+            "evaluation_error",
+            err.clone(),
+        ));
+    }
+
+    if violations.is_empty() {
+        violations.push(PolicyViolation::new(
+            "policy",
+            "default_deny",
+            format!(
+                "Authorization default-deny: no Permit policy matched for \
+                 server_id={server_id} action={action}. Check that Cedar \
+                 policies exist for this server and that server_id is set correctly."
+            ),
+        ));
+    }
+
+    violations
+}
+
 /// Log a warning when Code Mode is enabled without a policy evaluator.
 fn warn_no_policy_configured() {
     if !NO_POLICY_WARNING_LOGGED.swap(true, Ordering::SeqCst) {
@@ -106,12 +160,14 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
     /// Returns [`TokenError::SecretTooShort`] if the token secret is shorter
     /// than [`HmacTokenGenerator::MIN_SECRET_LEN`] (16 bytes).
     pub fn new(
-        config: CodeModeConfig,
+        mut config: CodeModeConfig,
         token_secret: impl Into<Vec<u8>>,
     ) -> Result<Self, TokenError> {
         if config.enabled {
             warn_no_policy_configured();
         }
+
+        config.resolve_server_id();
 
         #[cfg(feature = "openapi-code-mode")]
         let operation_registry = OperationRegistry::from_entries(&config.operations);
@@ -162,10 +218,20 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
     /// Returns [`TokenError::SecretTooShort`] if the token secret is shorter
     /// than [`HmacTokenGenerator::MIN_SECRET_LEN`] (16 bytes).
     pub fn with_policy_evaluator(
-        config: CodeModeConfig,
+        mut config: CodeModeConfig,
         token_secret: impl Into<Vec<u8>>,
         evaluator: Arc<dyn PolicyEvaluator>,
     ) -> Result<Self, TokenError> {
+        config.resolve_server_id();
+        if config.server_id.is_none() {
+            tracing::warn!(
+                target: "code_mode",
+                "CodeModeConfig.server_id is not set — AVP/Cedar authorization will use 'unknown' \
+                 as the resource entity ID and will likely default-deny silently. \
+                 Set server_id in config.toml, or the PMCP_SERVER_ID or AWS_LAMBDA_FUNCTION_NAME env var."
+            );
+        }
+
         #[cfg(feature = "openapi-code-mode")]
         let operation_registry = OperationRegistry::from_entries(&config.operations);
 
@@ -204,10 +270,12 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
 impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
     /// Create a pipeline with custom generators.
     pub fn with_generators(
-        config: CodeModeConfig,
+        mut config: CodeModeConfig,
         token_generator: T,
         explanation_generator: E,
     ) -> Self {
+        config.resolve_server_id();
+
         #[cfg(feature = "openapi-code-mode")]
         let operation_registry = OperationRegistry::from_entries(&config.operations);
 
@@ -414,17 +482,15 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
                 })?;
 
             if !decision.allowed {
-                let violations: Vec<PolicyViolation> = decision
-                    .determining_policies
-                    .iter()
-                    .map(|policy_id| {
-                        PolicyViolation::new(
-                            "policy",
-                            policy_id.clone(),
-                            "Policy denied the operation",
-                        )
-                    })
-                    .collect();
+                let op_type_str = format!("{:?}", query_info.operation_type);
+                let action =
+                    UnifiedAction::from_graphql(&op_type_str, query_info.operation_name.as_deref());
+                let violations = build_policy_violations(
+                    &decision,
+                    self.config.server_id(),
+                    action,
+                    "operation",
+                );
 
                 return Ok(ValidationResult::failure(
                     violations,
@@ -616,17 +682,12 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
                 })?;
 
             if !decision.allowed {
-                let violations: Vec<PolicyViolation> = decision
-                    .determining_policies
-                    .iter()
-                    .map(|policy_id| {
-                        PolicyViolation::new(
-                            "policy",
-                            policy_id.clone(),
-                            "Policy denied the script",
-                        )
-                    })
-                    .collect();
+                let violations = build_policy_violations(
+                    &decision,
+                    self.config.server_id(),
+                    script_entity.action(),
+                    "script",
+                );
 
                 return Ok(ValidationResult::failure(
                     violations,
@@ -919,17 +980,12 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
                 })?;
 
             if !decision.allowed {
-                let violations: Vec<PolicyViolation> = decision
-                    .determining_policies
-                    .iter()
-                    .map(|policy_id| {
-                        PolicyViolation::new(
-                            "policy",
-                            policy_id.clone(),
-                            "Policy denied the SQL statement",
-                        )
-                    })
-                    .collect();
+                let violations = build_policy_violations(
+                    &decision,
+                    self.config.server_id(),
+                    statement_entity.action(),
+                    "SQL statement",
+                );
 
                 return Ok(ValidationResult::failure(
                     violations,
@@ -1590,6 +1646,99 @@ mod tests {
             let result = pipeline.validate_sql_query("SELEC id FRM users", &ctx);
 
             assert!(matches!(result, Err(ValidationError::ParseError { .. })));
+        }
+
+        struct FixedDenyEvaluator {
+            errors: Vec<String>,
+        }
+
+        #[async_trait::async_trait]
+        impl PolicyEvaluator for FixedDenyEvaluator {
+            async fn evaluate_operation(
+                &self,
+                _op: &crate::policy::OperationEntity,
+                _cfg: &crate::policy::ServerConfigEntity,
+            ) -> Result<crate::policy::AuthorizationDecision, crate::policy::PolicyEvaluationError>
+            {
+                Ok(crate::policy::AuthorizationDecision {
+                    allowed: false,
+                    determining_policies: vec![],
+                    errors: self.errors.clone(),
+                })
+            }
+
+            #[cfg(feature = "sql-code-mode")]
+            async fn evaluate_statement(
+                &self,
+                _stmt: &crate::policy::StatementEntity,
+                _server: &crate::policy::SqlServerEntity,
+            ) -> Result<crate::policy::AuthorizationDecision, crate::policy::PolicyEvaluationError>
+            {
+                Ok(crate::policy::AuthorizationDecision {
+                    allowed: false,
+                    determining_policies: vec![],
+                    errors: self.errors.clone(),
+                })
+            }
+
+            fn name(&self) -> &str {
+                "fixed-deny-test"
+            }
+        }
+
+        fn sql_pipeline_with_evaluator(evaluator: Arc<dyn PolicyEvaluator>) -> ValidationPipeline {
+            let mut config = CodeModeConfig::enabled();
+            config.server_id = Some("test-server".to_string());
+            ValidationPipeline::with_policy_evaluator(
+                config,
+                b"test-secret-key!".to_vec(),
+                evaluator,
+            )
+            .unwrap()
+        }
+
+        #[tokio::test]
+        async fn default_deny_produces_synthetic_violation() {
+            let evaluator =
+                Arc::new(FixedDenyEvaluator { errors: vec![] }) as Arc<dyn PolicyEvaluator>;
+            let pipeline = sql_pipeline_with_evaluator(evaluator);
+            let ctx = test_context();
+
+            let result = pipeline
+                .validate_sql_query_async("SELECT id FROM users LIMIT 10", &ctx)
+                .await
+                .unwrap();
+
+            assert!(!result.is_valid);
+            let default_deny = result
+                .violations
+                .iter()
+                .find(|v| v.rule == "default_deny")
+                .expect("expected a synthetic default_deny violation");
+            assert!(default_deny.message.contains("test-server"));
+            assert!(default_deny.message.contains("Read"));
+        }
+
+        #[tokio::test]
+        async fn policy_errors_flow_to_violations() {
+            let evaluator = Arc::new(FixedDenyEvaluator {
+                errors: vec!["schema validation: missing required attribute X".to_string()],
+            }) as Arc<dyn PolicyEvaluator>;
+            let pipeline = sql_pipeline_with_evaluator(evaluator);
+            let ctx = test_context();
+
+            let result = pipeline
+                .validate_sql_query_async("SELECT id FROM users LIMIT 10", &ctx)
+                .await
+                .unwrap();
+
+            assert!(!result.is_valid);
+            let policy_error = result
+                .violations
+                .iter()
+                .find(|v| v.rule == "evaluation_error")
+                .expect("expected a policy_error violation");
+            assert!(policy_error.message.contains("schema validation"));
         }
 
         #[test]
