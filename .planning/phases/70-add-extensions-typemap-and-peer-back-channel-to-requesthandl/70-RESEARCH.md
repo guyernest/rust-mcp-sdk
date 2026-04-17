@@ -659,6 +659,23 @@ Before any feature implementation lands:
 
 > `security_enforcement` is not set in config.json — default enabled.
 
+### Phase 70 Threat ID Map
+
+Canonical mapping of T-70-XX IDs used across Plan 01/02/03 threat models to the STRIDE categories and components they cover.
+
+| Threat ID | STRIDE | Component | Disposition | Owning Plan |
+|-----------|--------|-----------|-------------|-------------|
+| T-70-01 | Information Disclosure | RequestHandlerExtra::fmt (Debug impl) — Extensions leak | mitigate | Plan 01 |
+| T-70-02 | Tampering | DispatchPeerHandle session routing | mitigate | Plan 02 |
+| T-70-03 | Elevation of Privilege | Values stored in Extensions outliving request scope | mitigate | Plan 01 |
+| T-70-04 | Denial of Service | Malformed CreateMessageParams serde boundary | transfer | Plan 02 (existing fuzz) + Plan 03 (new fuzz_peer_handle) |
+| T-70-05 | Denial of Service | peer.sample/list_roots timeout exhaustion | mitigate | Plan 02 |
+| T-70-06 | Spoofing | 12 positional struct-literal test sites in prompt_handler.rs | accept | Plan 01 |
+| T-70-07 | Information Disclosure | DispatchPeerHandle leaked via RequestHandlerExtra Debug | mitigate | Plan 02 |
+| T-70-08 | Elevation of Privilege | Peer inheriting caller auth scope without explicit check | accept | Plan 02 |
+| T-70-09 | Information Disclosure | Example code modelling unsafe Extensions logging | mitigate | Plan 03 |
+| T-70-10 | Repudiation | Missing rustdoc on new public API (silent feature) | mitigate | Plan 03 |
+
 ### Applicable ASVS Categories
 
 | ASVS Category | Applies | Standard Control |
@@ -730,7 +747,7 @@ Before any feature implementation lands:
 **How to avoid:** For v2.2, do nothing — this is not a hot path yet. Note in follow-on research if perf benchmarks show the issue.
 **Warning signs:** `benches/client_server_operations.rs` shows regression after the merge.
 
-## Risks & Open Questions
+## Risks & Open Questions (RESOLVED)
 
 ### Risk 1: session_id not threaded through `ProtocolHandler::handle_request` signature
 **Impact:** Plan 02 requires the session_id to construct a session-scoped `DispatchPeerHandle`. Today, `ProtocolHandler::handle_request(id, request, auth_context)` does NOT include session_id explicitly.
@@ -756,16 +773,21 @@ Before any feature implementation lands:
 **What we know:** ElicitationManager uses 5 min (`src/server/elicitation.rs:45`).
 **What's unclear:** Should `peer.sample()` use the same default? 5 minutes seems long for LLM sampling; most real LLM calls are 10-60s.
 **Recommendation:** Default 60s with a builder override. Document in rustdoc.
+**RESOLVED (Plan 02 Task 3):** 60s default adopted via `DEFAULT_PEER_SAMPLE_TIMEOUT: Duration = Duration::from_secs(60)` in `src/server/peer_impl.rs`; builder override available via `DispatchPeerHandle::new(tx, session_id, timeout_duration)`.
 
 ### Open Question 2: Should `list_resources` dispatch sites get peer too?
 **What we know:** The proposal scope says "tool/prompt/resource handlers" — which includes `list_resources`. But listing is usually a cheap enumeration that doesn't need LLM sampling.
 **What's unclear:** Low value vs 100% consistency across dispatch sites.
 **Recommendation:** Include peer in all dispatch sites for consistency. Cost is zero — just a field on the extra.
+**RESOLVED (Plan 02 Task 4):** Peer wired into `list_resources` dispatch sites in both `src/server/core.rs:594` and `src/server/mod.rs:1228` for consistency across all 9 dispatch sites.
 
 ### Open Question 3: Should we mark `RequestHandlerExtra` `#[non_exhaustive]`?
 **What we know:** rmcp does this on `RequestContext`. Protects against future-field-addition breakage.
 **What's unclear:** Breaking change for external code that spells struct literals.
 **Recommendation:** YES — mark `#[non_exhaustive]`. The only known struct-literal users are in pmcp's own test code (12 sites we control). External users should use `::new()` + builder methods anyway. If downstream breakage is reported post-release, remove the attribute in v2.3.1 — it's one-line.
+**RESOLVED (Plan 01 Task 1):** `#[non_exhaustive]` applied to `RequestHandlerExtra` in both `src/server/cancellation.rs` and `src/shared/cancellation.rs`; Plan 01 Task 2 mechanically converts all 12 positional struct-literal sites in `src/server/workflow/prompt_handler.rs` to `::new()` + builder form to avoid the non-exhaustive breakage.
+
+**All three open questions above are resolved within the Phase 70 plan set.** Q1 landed in Plan 02 Task 3 (timeout constant + override), Q2 in Plan 02 Task 4 (list_resources wiring), Q3 in Plan 01 Tasks 1 and 2 (non_exhaustive marker + mechanical struct-literal refactor). No carry-over to follow-on phases.
 
 ## Assumptions Log
 

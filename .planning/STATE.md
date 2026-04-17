@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
-status: Executing Phase 69
+status: Ready to execute
 stopped_at: Phase 69 complete — follow-on proposals ready for ROADMAP slotting
-last_updated: "2026-04-17T04:48:35Z"
+last_updated: "2026-04-17T05:48:14.172Z"
 progress:
   total_phases: 40
-  completed_phases: 36
-  total_plans: 88
-  completed_plans: 88
-  percent: 90
+  completed_phases: 35
+  total_plans: 84
+  completed_plans: 84
+  percent: 100
 ---
 
 # Project State
@@ -70,6 +70,7 @@ v2.1 decisions:
 - Phase 67.1 inserted after Phase 67: Code Mode Support (URGENT) — external developer support for code mode pattern (validation + execution) based on pmcp-run/built-in/shared/pmcp-code-mode SDK_DESIGN_SPEC.md
 - Phase 67.2 inserted after Phase 67.1: Code Mode Derive Hardening (URGENT) — fix 3 critical derive macro issues from pmcp.run team review: policy_evaluator not called, static ValidationContext, hardcoded "graphql" code type
 - Phase 69 added (initially added as duplicate Phase 68, renumbered 2026-04-16 to avoid collision with existing "Phase 68: General Documentation Polish"): rmcp parity research — scope narrowed to ergonomics-only + follow-on phase proposals; transports/examples/docs-coverage intentionally excluded to eliminate overlap with Phase 68. Deliverables: 69-RESEARCH.md (gap matrix) + 69-PROPOSALS.md (2–5 phase proposals seeded from High-severity gaps).
+- Phase 70 added: Add Extensions typemap and peer back-channel to RequestHandlerExtra (PARITY-HANDLER-01) — bundles HANDLER-02 (Extensions typemap) + HANDLER-05 (peer handle) on the shared RequestHandlerExtra edit site per 69-PROPOSALS.md.
 
 ### Pending Todos
 
