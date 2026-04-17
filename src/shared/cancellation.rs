@@ -1,4 +1,17 @@
-//! A runtime-agnostic cancellation token.
+//! Runtime-agnostic (wasm-friendly) cancellation token and shadow of
+//! [`RequestHandlerExtra`].
+//!
+//! See the canonical [`crate::server::cancellation`] module for the full API
+//! and Phase 70 migration notes (extensions typemap, peer back-channel,
+//! semver posture, session_id plumbing limitation).
+//!
+//! # Phase 70 (v2.2, 2026-04)
+//!
+//! This shared shadow gained `extensions: http::Extensions` in parity with
+//! the canonical struct and was marked `#[non_exhaustive]` — see the
+//! canonical module doc for the semver posture discussion. The `peer` field
+//! does **not** exist here because the peer back-channel is non-wasm only
+//! and lives on the canonical struct.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

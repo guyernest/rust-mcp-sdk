@@ -1,4 +1,64 @@
-//! Request cancellation support for MCP server.
+//! Cancellation token infrastructure and the canonical
+//! [`RequestHandlerExtra`] request-context struct handed to every tool,
+//! prompt, and resource handler.
+//!
+//! # Phase 70 (v2.2, 2026-04): `RequestHandlerExtra` gained two new fields
+//!
+//! - `extensions: http::Extensions` — typed-key typemap for cross-middleware
+//!   state transfer. Insert/retrieve typed values via
+//!   [`RequestHandlerExtra::extensions_mut`] / [`RequestHandlerExtra::extensions`].
+//! - `peer: Option<Arc<dyn PeerHandle>>` — server-to-client back-channel
+//!   exposing `sample()`, `list_roots()`, and `progress_notify()` from inside
+//!   tool/prompt/resource handlers. Non-wasm only. `None` when the enclosing
+//!   [`crate::server::core::ServerCore`] was not configured with a
+//!   [`crate::server::server_request_dispatcher::ServerRequestDispatcher`]
+//!   (tests, custom integrations).
+//!
+//! # Semver posture
+//!
+//! [`RequestHandlerExtra`] is now `#[non_exhaustive]`. This is a **breaking
+//! change** for any downstream crate that constructed `RequestHandlerExtra`
+//! with a positional struct literal. It is **not breaking** for code that
+//! uses [`RequestHandlerExtra::new`], [`RequestHandlerExtra::default`], or
+//! the `.with_*(...)` builder chain. Migration path: switch positional
+//! literals to
+//! `RequestHandlerExtra::new(request_id, cancellation_token)
+//!     .with_auth_context(...)
+//!     .with_peer(...)`.
+//!
+//! # Known limitation: session-id plumbing
+//!
+//! The `session_id` field on [`RequestHandlerExtra`] is not populated at
+//! dispatch time in v2.2 — [`crate::server::auth::AuthContext`] does not
+//! carry a `session_id` and `ProtocolHandler::handle_request` does not thread
+//! one. Peer session isolation is therefore enforced at the
+//! [`crate::server::Server`] level: each `Server` instance owns one
+//! dispatcher bound to one transport, so cross-session confusion requires
+//! cross-process access which is out of the current threat model. Follow-on
+//! work can plumb `session_id` through `ProtocolHandler::handle_request` when
+//! rmcp-parity for session-scoped auth becomes a scheduled phase goal.
+//!
+//! # Usage
+//!
+//! ```rust,no_run
+//! use pmcp::RequestHandlerExtra;
+//!
+//! #[derive(Clone)]
+//! struct RequestContext { user_id: u64 }
+//!
+//! // Middleware populates cross-cutting state before the handler runs.
+//! let mut extra = RequestHandlerExtra::default();
+//! extra.extensions_mut().insert(RequestContext { user_id: 42 });
+//!
+//! // Handler retrieves the typed value.
+//! let ctx = extra.extensions().get::<RequestContext>().cloned();
+//! assert!(ctx.is_some());
+//! ```
+//!
+//! For an end-to-end runnable demonstration see
+//! `examples/s42_handler_extensions.rs` (extensions) and
+//! `examples/s43_handler_peer_sample.rs` (peer.sample from inside a
+//! `ToolHandler`).
 
 use crate::error::Result;
 use crate::server::progress::ProgressReporter;
