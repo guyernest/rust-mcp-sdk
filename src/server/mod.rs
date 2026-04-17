@@ -315,6 +315,11 @@ pub struct Server {
     subscription_manager: Arc<RwLock<subscriptions::SubscriptionManager>>,
     /// Elicitation manager for user input requests
     elicitation_manager: Option<Arc<elicitation::ElicitationManager>>,
+    /// Outbound server-to-client request dispatcher with response correlation
+    /// (Phase 70 / PARITY-HANDLER-01). Wired in `Server::run`; `None` outside
+    /// the run lifecycle.
+    #[allow(clippy::struct_field_names)]
+    server_request_dispatcher: Option<Arc<server_request_dispatcher::ServerRequestDispatcher>>,
     /// Authentication provider for validating requests
     auth_provider: Option<Arc<dyn auth::AuthProvider>>,
     /// Tool authorizer for fine-grained access control
@@ -714,11 +719,24 @@ impl Server {
                 }));
         }
 
+        // Phase 70 / PARITY-HANDLER-01: outbound server-to-client request
+        // channel + dispatcher. Drain task wraps each `(correlation_id,
+        // ServerRequest)` as `TransportMessage::Request` and forwards to
+        // the transport; `handle_transport_message` routes responses back
+        // through `dispatcher.handle_response`.
+        let (outbound_tx, outbound_rx) =
+            mpsc::channel::<(String, crate::types::ServerRequest)>(100);
+        let dispatcher = Arc::new(
+            server_request_dispatcher::ServerRequestDispatcher::new_with_channel(outbound_tx),
+        );
+        self.server_request_dispatcher = Some(dispatcher);
+
         let server = Arc::new(self);
         let transport = Arc::new(RwLock::new(transport));
         let protocol = Arc::new(RwLock::new(Protocol::new(ProtocolOptions::default())));
 
         Self::spawn_notification_handler(transport.clone(), notification_rx);
+        server_request_dispatcher::spawn_server_request_drain(transport.clone(), outbound_rx);
         Self::spawn_message_handler(server.clone(), transport.clone(), protocol);
 
         // Keep the main task alive
@@ -792,8 +810,31 @@ impl Server {
             TransportMessage::Request { id, request } => {
                 Self::handle_request_message(server, transport, id, request).await
             },
-            TransportMessage::Response(_) => {
-                Self::log_warning("Server received unexpected response message").await;
+            TransportMessage::Response(response) => {
+                // Phase 70 / PARITY-HANDLER-01: route correlated client
+                // responses through the dispatcher so pending dispatches
+                // resolve. Previously this arm dropped the response.
+                if let Some(dispatcher) = &server.server_request_dispatcher {
+                    let correlation_id = response.id.to_string();
+                    let payload = match &response.payload {
+                        crate::types::jsonrpc::ResponsePayload::Result(value) => value.clone(),
+                        crate::types::jsonrpc::ResponsePayload::Error(err) => {
+                            // Represent errors as a JSON object so callers can
+                            // distinguish — dispatch() returns the Value as-is.
+                            serde_json::to_value(err).unwrap_or(Value::Null)
+                        },
+                    };
+                    if let Err(e) = dispatcher.handle_response(&correlation_id, payload).await {
+                        Self::log_warning(&format!(
+                            "Failed to route response {}: {}",
+                            correlation_id, e
+                        ))
+                        .await;
+                    }
+                } else {
+                    Self::log_warning("Server received response but no dispatcher configured")
+                        .await;
+                }
                 Ok(())
             },
             TransportMessage::Notification(notification) => {
@@ -3179,6 +3220,7 @@ impl ServerBuilder {
             roots_manager: Arc::new(RwLock::new(self.roots_manager)),
             subscription_manager: Arc::new(RwLock::new(subscriptions::SubscriptionManager::new())),
             elicitation_manager: None,
+            server_request_dispatcher: None,
             auth_provider: self.auth_provider,
             tool_authorizer,
             #[cfg(not(target_arch = "wasm32"))]

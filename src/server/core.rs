@@ -274,6 +274,19 @@ pub struct ServerCore {
 
     /// Payload and resource limits for denial-of-service protection
     payload_limits: PayloadLimits,
+
+    /// Outbound server-to-client request dispatcher
+    /// (Phase 70 / PARITY-HANDLER-01).
+    ///
+    /// Populated by the enclosing `Server` via
+    /// [`ServerCore::with_server_request_dispatcher`]. Plan 03 consumes
+    /// this at the 9 dispatch sites to construct per-request peer handles.
+    /// `None` by default to preserve the graceful-fallback contract for
+    /// every existing `ServerCore::new()` call site.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::struct_field_names)]
+    server_request_dispatcher:
+        Option<Arc<crate::server::server_request_dispatcher::ServerRequestDispatcher>>,
 }
 
 /// Outcome of a tool handler call — either a normal result or a task creation.
@@ -335,7 +348,27 @@ impl ServerCore {
             task_store,
             stateless_mode,
             payload_limits,
+            #[cfg(not(target_arch = "wasm32"))]
+            server_request_dispatcher: None,
         }
+    }
+
+    /// Attach a server-to-client request dispatcher
+    /// (Phase 70 / PARITY-HANDLER-01).
+    ///
+    /// The dispatcher is the outbound-plus-correlation layer that future
+    /// peer-handle wiring (Plan 03) will consume at each of the 9 dispatch
+    /// sites, so tool handlers can invoke `extra.peer()?.sample(...)`
+    /// mid-execution. Calling this is optional — when absent, existing
+    /// behaviour (no peer handle) is preserved.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn with_server_request_dispatcher(
+        mut self,
+        dispatcher: Arc<crate::server::server_request_dispatcher::ServerRequestDispatcher>,
+    ) -> Self {
+        self.server_request_dispatcher = Some(dispatcher);
+        self
     }
 
     /// Get the configured payload limits.
