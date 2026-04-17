@@ -140,9 +140,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CMSUP-04 | Phase 67.1 | Pending |
 | CMSUP-05 | Phase 67.1 | Pending |
 | CMSUP-06 | Phase 67.1 | Pending |
-| PARITY-HANDLER-01 | TBD | Pending |
-| PARITY-CLIENT-01 | Phase 70 | Pending |
-| PARITY-MACRO-01 | Phase 71 | Pending |
+| PARITY-HANDLER-01 | Phase 70 | Pending |
+| PARITY-CLIENT-01 | TBD | Pending |
+| PARITY-MACRO-01 | TBD | Pending |
 
 **Coverage:**
 - v2.1 requirements: 23 total (20 pre-seed + 3 seeded by Phase 69)
