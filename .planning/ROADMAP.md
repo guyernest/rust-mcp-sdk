@@ -925,4 +925,4 @@ Plans:
 Plans:
 - [x] 69-01-PLAN.md — Produce the rmcp vs pmcp ergonomics gap matrix (69-RESEARCH.md) across 6 surfaces
 - [x] 69-02-PLAN.md — Derive follow-on phase proposals from High-severity gaps (69-PROPOSALS.md)
-- [ ] 69-03-PLAN.md — Quality gate + land PARITY-* requirement IDs + update STATE/PROJECT
+- [x] 69-03-PLAN.md — Quality gate + land PARITY-* requirement IDs + update STATE/PROJECT
