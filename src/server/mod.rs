@@ -58,6 +58,10 @@ pub mod preset;
 /// Progress reporting support for long-running operations.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod progress;
+/// Outbound server-to-client request dispatcher with response correlation
+/// (Phase 70 / PARITY-HANDLER-01 plumbing foundation).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod server_request_dispatcher;
 /// Simple prompt implementations with metadata support.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod simple_prompt;
