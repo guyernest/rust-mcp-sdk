@@ -920,7 +920,9 @@ Plans:
 
 **Requirements**: TBD (derived from research findings; expected to seed new v2.1/v2.2 requirement IDs)
 **Depends on:** Phase 68
-**Plans:** 0 plans (research phase — single research plan, no execution plans)
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 69 to break down)
+- [x] 69-01-PLAN.md — Produce the rmcp vs pmcp ergonomics gap matrix (69-RESEARCH.md) across 6 surfaces
+- [x] 69-02-PLAN.md — Derive follow-on phase proposals from High-severity gaps (69-PROPOSALS.md)
+- [ ] 69-03-PLAN.md — Quality gate + land PARITY-* requirement IDs + update STATE/PROJECT

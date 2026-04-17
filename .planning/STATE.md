@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: Executing Phase 69
-stopped_at: Completed 69-01-PLAN.md (research gap matrix)
-last_updated: "2026-04-16T12:00:00.000Z"
+stopped_at: Completed 69-02-PLAN.md (3 follow-on phase proposals drafted)
+last_updated: "2026-04-16T13:00:00.000Z"
 progress:
   total_phases: 40
   completed_phases: 35
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 69 (rmcp-parity-research-gap-analysis-across-ergonomics-transpor) — EXECUTING
-Plan: 2 of 3 (Plan 01 complete — 69-RESEARCH.md delivered with 32-row gap matrix)
+Plan: 3 of 3 (Plan 02 complete — 69-PROPOSALS.md delivered with 3 proposals, 4 High Row IDs covered)
 
 ## Shipped Milestones
 
@@ -61,6 +61,7 @@ v2.1 decisions:
 - [Phase 65]: examples/README.md replaced with PMCP example index — 63 examples categorized by Role/Capability/Complexity + migration reference
 - [Phase 69.1]: Pinned rmcp comparison baseline at 1.5.0 (latest stable on crates.io as of 2026-04-16, tag rmcp-v1.5.0); pmcp baseline is v2.3.0 + feat/sql-code-mode at commit dbaee6cc
 - [Phase 69.1]: 4 High-severity ergonomics gaps identified — MACRO-02 (rustdoc fallback for tool description), HANDLER-02 (Extensions typemap on RequestHandlerExtra), HANDLER-05 (peer handle in RequestHandlerExtra), CLIENT-02 (typed call_tool + list_all_* pagination helpers). Plan 02 will derive one follow-on phase proposal per High row.
+- [Phase 69.2]: 3 follow-on phase proposals drafted in 69-PROPOSALS.md — PARITY-HANDLER-01 (bundling HANDLER-02 + HANDLER-05 on shared RequestHandlerExtra edit site, target v2.2, 4 plans), PARITY-CLIENT-01 (CLIENT-02, target late v2.1, 3 plans), PARITY-MACRO-01 (MACRO-02, target late v2.1, 3 plans). Row-ID bijection verified: all 4 High Row IDs cited in Derived-from + Rationale subsections. Flagged regex bug in Task 2 verify block for Plan 03 correction (pipe-table trailing `|` not matched).
 
 ### Roadmap Evolution
 
@@ -79,6 +80,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-16T12:00:00.000Z
-Stopped at: Completed 69-01-PLAN.md (gap matrix delivered)
-Resume: Run `/gsd:execute-phase 69` to begin Plan 02 (derive follow-on phase proposals from High-severity Row IDs).
+Last session: 2026-04-16T13:00:00.000Z
+Stopped at: Completed 69-02-PLAN.md (3 follow-on phase proposals drafted, bijection verified)
+Resume: Run `/gsd:execute-phase 69` to begin Plan 03 (quality gate + land PARITY-* REQ-IDs in REQUIREMENTS.md + finalize STATE/PROJECT).
