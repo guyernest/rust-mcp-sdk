@@ -157,6 +157,21 @@ pub struct RequestHandlerExtra {
     /// `RequestHandlerExtra`. `::new(...)`, `::default()`, and the `.with_*(...)` builder chain are
     /// fully source-compatible.
     pub extensions: http::Extensions,
+    /// Server-to-client back-channel (Phase 70, PARITY-HANDLER-01 / HANDLER-05 half).
+    ///
+    /// `None` when the request originated from a code path (wasm dispatch, unit-test
+    /// fixture, any `ServerCore::new(...)` without
+    /// [`crate::server::core::ServerCore::with_server_request_dispatcher`]) that did
+    /// not configure a `ServerRequestDispatcher`. Tool/prompt/resource handlers
+    /// running under a fully-configured `ServerCore` receive a populated peer handle
+    /// that routes `sample` / `list_roots` / `progress_notify` back to the originating
+    /// client.
+    ///
+    /// # Session isolation
+    /// Each `Server` instance owns its own dispatcher, so peer handles are scoped to
+    /// the enclosing `Server` — cross-session confusion requires cross-process access.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub peer: Option<Arc<dyn crate::shared::peer::PeerHandle>>,
 }
 
 impl RequestHandlerExtra {
@@ -172,6 +187,8 @@ impl RequestHandlerExtra {
             progress_reporter: None,
             task_request: None,
             extensions: http::Extensions::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            peer: None,
         }
     }
 
@@ -237,6 +254,42 @@ impl RequestHandlerExtra {
     /// ```
     pub fn extensions_mut(&mut self) -> &mut http::Extensions {
         &mut self.extensions
+    }
+
+    /// Attach a peer handle for server-to-client RPCs (Phase 70, PARITY-HANDLER-01).
+    ///
+    /// When set, tool/prompt/resource handlers can invoke `extra.peer().unwrap().sample(...)`
+    /// (or `list_roots` / `progress_notify`) to make outbound requests back to the
+    /// originating client. The peer handle is populated by the enclosing
+    /// `ServerCore` at each dispatch site when a
+    /// [`crate::server::server_request_dispatcher::ServerRequestDispatcher`]
+    /// has been attached — tests or ad-hoc constructions that skip the dispatcher
+    /// leave this as `None`, and handlers should treat `None` as "no client
+    /// available for back-channel".
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # #[cfg(not(target_arch = "wasm32"))]
+    /// # {
+    /// use pmcp::RequestHandlerExtra;
+    /// use std::sync::Arc;
+    /// # fn build_peer() -> Arc<dyn pmcp::PeerHandle> { unimplemented!() }
+    /// let extra = RequestHandlerExtra::default().with_peer(build_peer());
+    /// # }
+    /// ```
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_peer(mut self, peer: Arc<dyn crate::shared::peer::PeerHandle>) -> Self {
+        self.peer = Some(peer);
+        self
+    }
+
+    /// Returns the peer handle, if one was attached.
+    ///
+    /// Handlers should treat `None` as "no client back-channel available" and
+    /// skip any sample/list_roots-dependent code paths gracefully.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn peer(&self) -> Option<&Arc<dyn crate::shared::peer::PeerHandle>> {
+        self.peer.as_ref()
     }
 
     /// Returns `true` if the client requested task-augmented behavior.
@@ -328,6 +381,8 @@ impl Default for RequestHandlerExtra {
             progress_reporter: None,
             task_request: None,
             extensions: http::Extensions::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            peer: None,
         }
     }
 }
@@ -362,7 +417,8 @@ impl std::fmt::Debug for RequestHandlerExtra {
             })
             .collect();
 
-        f.debug_struct("RequestHandlerExtra")
+        let mut debug = f.debug_struct("RequestHandlerExtra");
+        debug
             .field("cancellation_token", &self.cancellation_token)
             .field("request_id", &self.request_id)
             .field("session_id", &self.session_id)
@@ -370,8 +426,10 @@ impl std::fmt::Debug for RequestHandlerExtra {
             .field("auth_context", &self.auth_context)
             .field("metadata", &redacted_metadata)
             .field("task_request", &self.task_request.is_some())
-            .field("extensions", &self.extensions)
-            .finish()
+            .field("extensions", &self.extensions);
+        #[cfg(not(target_arch = "wasm32"))]
+        debug.field("peer", &self.peer.as_ref().map(|_| "Arc<dyn PeerHandle>"));
+        debug.finish()
     }
 }
 

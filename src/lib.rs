@@ -104,6 +104,7 @@ pub use shared::peer::PeerHandle;
 #[doc(hidden)]
 #[cfg(not(target_arch = "wasm32"))]
 pub mod __test_support {
+    pub use crate::server::peer_impl::DispatchPeerHandle;
     pub use crate::server::server_request_dispatcher::{
         spawn_server_request_drain, ServerRequestDispatcher, DEFAULT_DISPATCH_TIMEOUT,
     };

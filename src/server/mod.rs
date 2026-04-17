@@ -53,6 +53,10 @@ pub mod http_middleware;
 /// Middleware executor abstraction for consistent tool execution.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod middleware_executor;
+/// Concrete `PeerHandle` implementation delegating to the
+/// `ServerRequestDispatcher` (Phase 70 / PARITY-HANDLER-01).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod peer_impl;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod preset;
 /// Progress reporting support for long-running operations.
