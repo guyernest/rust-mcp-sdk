@@ -1,5 +1,5 @@
 //! Concrete [`PeerHandle`] implementation that delegates to the
-//! [`ServerRequestDispatcher`] (Phase 70 / PARITY-HANDLER-01).
+//! [`ServerRequestDispatcher`].
 //!
 //! `DispatchPeerHandle` does NOT own a channel. It holds an
 //! `Arc<ServerRequestDispatcher>` and delegates every outbound RPC to

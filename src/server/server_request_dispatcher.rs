@@ -1,12 +1,11 @@
 //! Outbound server-to-client request dispatcher with response correlation.
 //!
-//! Phase 70 / PARITY-HANDLER-01 — plumbing foundation for the peer
-//! back-channel. Adapts the `ElicitationManager` pattern
-//! (`mpsc::Sender<ServerRequest>` + pending-oneshot `HashMap` +
-//! `tokio::time::timeout`) into a generalized dispatcher that can fulfill
-//! any server-to-client RPC — CreateMessage, ListRoots, or any future
-//! addition. Keyed by correlation id so a single dispatcher multiplexes
-//! many in-flight requests.
+//! Plumbing foundation for the peer back-channel. Adapts the
+//! `ElicitationManager` pattern (`mpsc::Sender<ServerRequest>` +
+//! pending-oneshot `HashMap` + `tokio::time::timeout`) into a generalized
+//! dispatcher that can fulfill any server-to-client RPC — CreateMessage,
+//! ListRoots, or any future addition. Keyed by correlation id so a single
+//! dispatcher multiplexes many in-flight requests.
 //!
 //! This module is non-wasm only; wasm targets do not run the legacy
 //! `Server` transport loop this integrates with.
@@ -182,7 +181,8 @@ impl ServerRequestDispatcher {
         }
     }
 
-    /// Number of pending dispatches (observability + tests).
+    /// Number of pending dispatches. Used by integration tests; no in-tree
+    /// library call sites yet, hence the `dead_code` allow.
     #[allow(dead_code)]
     pub async fn pending_count(&self) -> usize {
         self.pending.read().await.len()

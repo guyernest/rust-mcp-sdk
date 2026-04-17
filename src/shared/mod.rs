@@ -7,8 +7,7 @@ pub mod http_utils;
 pub mod logging;
 pub mod middleware;
 pub mod middleware_presets;
-/// Peer back-channel trait for server-to-client RPCs from inside request handlers
-/// (Phase 70 / PARITY-HANDLER-01).
+/// Peer back-channel trait for server-to-client RPCs from inside request handlers.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod peer;
 pub mod protocol;

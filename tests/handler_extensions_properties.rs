@@ -1,8 +1,7 @@
-//! Property-based tests for RequestHandlerExtra.extensions typemap (PARITY-HANDLER-01 / Phase 70).
+//! Property-based tests for RequestHandlerExtra.extensions typemap.
 //!
-//! ALWAYS Requirement (CLAUDE.md): property tests for every new feature.
-//! Covers VALIDATION.md rows 70-01-02 and 70-01-04.
-//! Addresses Codex review LOW: adds remove<T>() coverage and mixed-type coexistence coverage.
+//! Covers: insert/get round-trip, key-collision returns old value, clone
+//! preserves extensions, remove::<T>() round-trip, mixed-type coexistence.
 
 use pmcp::RequestHandlerExtra;
 use proptest::prelude::*;

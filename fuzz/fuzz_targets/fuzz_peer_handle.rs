@@ -6,10 +6,10 @@ use pmcp::types::sampling::{CreateMessageParams, CreateMessageResult};
 use serde_json::{from_slice, from_value, Value};
 
 // Fuzz the serde boundary that `DispatchPeerHandle::sample` and
-// `DispatchPeerHandle::list_roots` (Phase 70 Plan 03) rely on when
-// deserializing client responses via `serde_json::from_value`. The dispatcher
-// returns an arbitrary `Value`; the peer impl must never panic on adversarial
-// JSON — valid inputs round-trip, invalid inputs produce `Err`.
+// `DispatchPeerHandle::list_roots` rely on when deserializing client
+// responses via `serde_json::from_value`. The dispatcher returns an
+// arbitrary `Value`; the peer impl must never panic on adversarial JSON —
+// valid inputs round-trip, invalid inputs produce `Err`.
 //
 // Target surfaces:
 // - `CreateMessageParams`  — outbound request (client may echo shape back)

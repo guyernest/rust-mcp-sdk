@@ -1,7 +1,5 @@
 //! Peer back-channel trait for server-to-client RPCs from inside request handlers.
 //!
-//! Phase 70 / PARITY-HANDLER-01 (HANDLER-05 half).
-//!
 //! Implementations route outbound RPCs (`sampling/createMessage`, `roots/list`,
 //! `notifications/progress`) to the client that originated the current request.
 //! The trait is object-safe so [`crate::RequestHandlerExtra`] can hold

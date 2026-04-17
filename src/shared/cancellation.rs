@@ -1,15 +1,12 @@
 //! Runtime-agnostic (wasm-friendly) cancellation token and shadow of
 //! [`RequestHandlerExtra`].
 //!
-//! See the canonical [`crate::server::cancellation`] module for the full API
-//! and Phase 70 migration notes (extensions typemap, peer back-channel,
-//! semver posture, session_id plumbing limitation).
+//! See the canonical [`crate::server::cancellation`] module for the full API,
+//! extensions typemap semantics, semver posture, and session-id plumbing
+//! limitation.
 //!
-//! # Phase 70 (v2.2, 2026-04)
-//!
-//! This shared shadow gained `extensions: http::Extensions` in parity with
-//! the canonical struct and was marked `#[non_exhaustive]` — see the
-//! canonical module doc for the semver posture discussion. The `peer` field
+//! This shared shadow carries `extensions: http::Extensions` in parity with
+//! the canonical struct and is marked `#[non_exhaustive]`. The `peer` field
 //! does **not** exist here because the peer back-channel is non-wasm only
 //! and lives on the canonical struct.
 
@@ -62,14 +59,14 @@ pub struct RequestHandlerExtra {
     /// Validated authentication context (if auth is enabled)
     #[cfg(not(target_arch = "wasm32"))]
     pub auth_context: Option<crate::server::auth::AuthContext>,
-    /// Typed request-scoped state for middleware→handler transfer (Phase 70, PARITY-HANDLER-01).
+    /// Typed request-scoped state for middleware→handler transfer.
     ///
     /// Inserting values requires `T: Clone + Send + Sync + 'static`. Debug prints type names only,
     /// not values, making this safe for logging. Cloning `RequestHandlerExtra` clones the entire
     /// extensions map — prefer `Arc<T>` for large values.
     ///
     /// # Semver note
-    /// The enclosing struct carries `#[non_exhaustive]` starting in v2.2. This is a breaking change
+    /// The enclosing struct carries `#[non_exhaustive]`. This is a breaking change
     /// only for downstream code that used POSITIONAL struct-literal construction of
     /// `RequestHandlerExtra`. `::new(...)`, `::default()`, and the `.with_*(...)` builder chain are
     /// fully source-compatible.

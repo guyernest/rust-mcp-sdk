@@ -1,9 +1,8 @@
 //! Integration test for `DispatchPeerHandle` end-to-end round-trip through
-//! the Plan 02 `ServerRequestDispatcher` (Phase 70 / PARITY-HANDLER-01).
+//! the `ServerRequestDispatcher`.
 //!
 //! Proves: `peer.sample()` / `peer.list_roots()` → `dispatcher.dispatch()` →
-//! outbound channel → `handle_response()` → typed result parsing. This is
-//! the SC#2 path: "one in-handler `peer.sample()` round-trip."
+//! outbound channel → `handle_response()` → typed result parsing.
 //!
 //! Uses the `#[doc(hidden)] pub mod __test_support` re-exports from
 //! `src/lib.rs` — not part of the stable API surface.

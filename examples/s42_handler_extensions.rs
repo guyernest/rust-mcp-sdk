@@ -1,8 +1,8 @@
 //! Example: cross-middleware state transfer via `RequestHandlerExtra.extensions`.
 //!
-//! Phase 70 / PARITY-HANDLER-01. Demonstrates typed-key middleware→handler
-//! state passing. The handler retrieves a typed value that middleware would
-//! have inserted before the handler runs.
+//! Demonstrates typed-key middleware→handler state passing. The handler
+//! retrieves a typed value that middleware would have inserted before the
+//! handler runs.
 //!
 //! Run with: `cargo run --example s42_handler_extensions`
 

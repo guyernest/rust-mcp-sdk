@@ -2,7 +2,7 @@
 //! [`RequestHandlerExtra`] request-context struct handed to every tool,
 //! prompt, and resource handler.
 //!
-//! # Phase 70 (v2.2, 2026-04): `RequestHandlerExtra` gained two new fields
+//! [`RequestHandlerExtra`] carries two cross-cutting request-scoped surfaces:
 //!
 //! - `extensions: http::Extensions` — typed-key typemap for cross-middleware
 //!   state transfer. Insert/retrieve typed values via
@@ -205,19 +205,13 @@ pub struct RequestHandlerExtra {
     /// When `None`, the client does not support tasks or did not request
     /// task mode — the tool should return results synchronously.
     pub task_request: Option<serde_json::Value>,
-    /// Typed request-scoped state for middleware→handler transfer (Phase 70, PARITY-HANDLER-01).
+    /// Typed request-scoped state for middleware→handler transfer.
     ///
     /// Inserting values requires `T: Clone + Send + Sync + 'static`. Debug prints type names only,
     /// not values, making this safe for logging. Cloning `RequestHandlerExtra` clones the entire
     /// extensions map — prefer `Arc<T>` for large values.
-    ///
-    /// # Semver note
-    /// The enclosing struct carries `#[non_exhaustive]` starting in v2.2. This is a breaking change
-    /// only for downstream code that used POSITIONAL struct-literal construction of
-    /// `RequestHandlerExtra`. `::new(...)`, `::default()`, and the `.with_*(...)` builder chain are
-    /// fully source-compatible.
     pub extensions: http::Extensions,
-    /// Server-to-client back-channel (Phase 70, PARITY-HANDLER-01 / HANDLER-05 half).
+    /// Server-to-client back-channel for `sample` / `list_roots` / `progress_notify`.
     ///
     /// `None` when the request originated from a code path (wasm dispatch, unit-test
     /// fixture, any `ServerCore::new(...)` without
@@ -316,7 +310,7 @@ impl RequestHandlerExtra {
         &mut self.extensions
     }
 
-    /// Attach a peer handle for server-to-client RPCs (Phase 70, PARITY-HANDLER-01).
+    /// Attach a peer handle for server-to-client RPCs.
     ///
     /// When set, tool/prompt/resource handlers can invoke `extra.peer().unwrap().sample(...)`
     /// (or `list_roots` / `progress_notify`) to make outbound requests back to the

@@ -1,9 +1,9 @@
 //! Example: calling `extra.peer().sample()` from INSIDE a real
 //! [`ToolHandler`].
 //!
-//! Phase 70 / PARITY-HANDLER-01. Contrasts against
-//! `examples/s30_tool_with_sampling.rs` which uses the registration-time
-//! `SamplingHandler` trait. This example demonstrates BOTH halves of Phase 70:
+//! Contrasts against `examples/s30_tool_with_sampling.rs` which uses the
+//! registration-time `SamplingHandler` trait. This example demonstrates two
+//! handler-scoped surfaces in one tool:
 //!
 //!   1. Cross-middleware `extensions` insert/retrieve (inside handler)
 //!   2. In-handler `peer.sample()` round-trip (against an in-example
@@ -39,7 +39,6 @@ struct MockPeer;
 #[async_trait]
 impl PeerHandle for MockPeer {
     async fn sample(&self, _params: CreateMessageParams) -> pmcp::Result<CreateMessageResult> {
-        // Use REAL constructor — `CreateMessageResult` has no Default impl.
         Ok(CreateMessageResult::new(
             Content::text("mock response"),
             "mock-model",
@@ -62,8 +61,7 @@ impl PeerHandle for MockPeer {
 }
 
 /// Real [`ToolHandler`] that reads middleware-populated state AND calls
-/// `peer.sample()` from inside its `handle()` body. This is the intended
-/// Phase 70 usage pattern.
+/// `peer.sample()` from inside its `handle()` body.
 struct PeerSamplingTool;
 
 #[async_trait]
@@ -78,8 +76,6 @@ impl ToolHandler for PeerSamplingTool {
 
         // --- Half 2: in-handler peer.sample() round-trip ---
         let sample_result = if let Some(peer) = extra.peer() {
-            // Use REAL constructor — `CreateMessageParams` has no Default
-            // impl.
             let params = CreateMessageParams::new(Vec::new());
             let result = peer.sample(params).await?;
             format!("peer sampled via model: {}", result.model)

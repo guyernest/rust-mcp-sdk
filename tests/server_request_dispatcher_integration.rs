@@ -1,13 +1,10 @@
-//! Integration test for `ServerRequestDispatcher` end-to-end round-trip
-//! (Phase 70 / PARITY-HANDLER-01 — plumbing foundation).
+//! Integration test for `ServerRequestDispatcher` end-to-end round-trip.
 //!
 //! Proves the correlation layer works outside the lib-internal unit tests:
 //! `dispatch(ServerRequest::X)` enqueues onto an outbound mpsc channel, a
 //! drain-like reader can read the correlated pair, and
 //! `handle_response(id, value)` routes the response back to the awaiting
-//! caller. Covers Codex review Finding 3 — the gap that existed before
-//! Phase 70 Plan 02 landed: client responses were dropped by
-//! `Server::spawn_message_handler`.
+//! caller.
 
 #![cfg(not(target_arch = "wasm32"))]
 

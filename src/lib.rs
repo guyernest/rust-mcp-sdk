@@ -90,12 +90,11 @@ pub use pmcp_macros::{mcp_prompt, mcp_server, mcp_tool};
 #[cfg(not(target_arch = "wasm32"))]
 pub use shared::StdioTransport;
 
-/// Peer back-channel trait for server-to-client RPCs from inside request handlers
-/// (Phase 70 / PARITY-HANDLER-01).
+/// Peer back-channel trait for server-to-client RPCs from inside request handlers.
 #[cfg(not(target_arch = "wasm32"))]
 pub use shared::peer::PeerHandle;
 
-/// Unstable test-support re-exports for internal Phase 70 integration tests.
+/// Unstable test-support re-exports for internal integration tests.
 ///
 /// **Not part of the stable API surface.** This module is hidden from docs
 /// and may change or be removed without notice; it exists solely so the
