@@ -72,3 +72,10 @@ path = "fuzz_targets/fuzz_token_code_mode.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_peer_handle"
+path = "fuzz_targets/fuzz_peer_handle.rs"
+test = false
+doc = false
+bench = false
