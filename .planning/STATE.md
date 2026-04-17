@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: Milestone complete
-stopped_at: Phase 67 context gathered
-last_updated: "2026-04-12T17:20:21.545Z"
+stopped_at: Phase 69 context gathered
+last_updated: "2026-04-17T02:08:10.064Z"
 progress:
-  total_phases: 13
-  completed_phases: 13
-  total_plans: 35
-  completed_plans: 35
+  total_phases: 40
+  completed_phases: 35
+  total_plans: 84
+  completed_plans: 84
   percent: 100
 ---
 
@@ -65,6 +65,7 @@ v2.1 decisions:
 - Phases 65-68 added: v2.1 rmcp Upgrades milestone (examples cleanup, macros rewrite, docs.rs pipeline, documentation polish)
 - Phase 67.1 inserted after Phase 67: Code Mode Support (URGENT) — external developer support for code mode pattern (validation + execution) based on pmcp-run/built-in/shared/pmcp-code-mode SDK_DESIGN_SPEC.md
 - Phase 67.2 inserted after Phase 67.1: Code Mode Derive Hardening (URGENT) — fix 3 critical derive macro issues from pmcp.run team review: policy_evaluator not called, static ValidationContext, hardcoded "graphql" code type
+- Phase 69 added (initially added as duplicate Phase 68, renumbered 2026-04-16 to avoid collision with existing "Phase 68: General Documentation Polish"): rmcp parity research — scope narrowed to ergonomics-only + follow-on phase proposals; transports/examples/docs-coverage intentionally excluded to eliminate overlap with Phase 68. Deliverables: 69-RESEARCH.md (gap matrix) + 69-PROPOSALS.md (2–5 phase proposals seeded from High-severity gaps).
 
 ### Pending Todos
 
@@ -76,6 +77,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-11T22:45:14.496Z
-Stopped at: Phase 67 context gathered
+Last session: 2026-04-17T02:08:10.060Z
+Stopped at: Phase 69 context gathered
 Resume: Run `/gsd:plan-phase 65` to begin Phase 65 planning.
