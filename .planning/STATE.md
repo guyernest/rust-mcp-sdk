@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: Executing Phase 69
-stopped_at: Completed 69-02-PLAN.md (3 follow-on phase proposals drafted)
-last_updated: "2026-04-16T13:00:00.000Z"
+stopped_at: Phase 69 complete — follow-on proposals ready for ROADMAP slotting
+last_updated: "2026-04-17T04:48:35Z"
 progress:
   total_phases: 40
-  completed_phases: 35
-  total_plans: 85
-  completed_plans: 85
-  percent: 100
+  completed_phases: 36
+  total_plans: 88
+  completed_plans: 88
+  percent: 90
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Close credibility and DX gaps where rmcp outshines PMCP -- documentation accuracy, feature gate presentation, macro documentation, example index, repo hygiene.
-**Current focus:** Phase 69 — rmcp-parity-research-gap-analysis-across-ergonomics-transpor
+**Current focus:** Phase 69 — rmcp parity research (complete); follow-on proposals pending ROADMAP slotting
 
 ## Current Position
 
-Phase: 69 (rmcp-parity-research-gap-analysis-across-ergonomics-transpor) — EXECUTING
-Plan: 3 of 3 (Plan 02 complete — 69-PROPOSALS.md delivered with 3 proposals, 4 High Row IDs covered)
+Phase: 69
+Plan: 03 (complete)
 
 ## Shipped Milestones
 
@@ -62,6 +62,7 @@ v2.1 decisions:
 - [Phase 69.1]: Pinned rmcp comparison baseline at 1.5.0 (latest stable on crates.io as of 2026-04-16, tag rmcp-v1.5.0); pmcp baseline is v2.3.0 + feat/sql-code-mode at commit dbaee6cc
 - [Phase 69.1]: 4 High-severity ergonomics gaps identified — MACRO-02 (rustdoc fallback for tool description), HANDLER-02 (Extensions typemap on RequestHandlerExtra), HANDLER-05 (peer handle in RequestHandlerExtra), CLIENT-02 (typed call_tool + list_all_* pagination helpers). Plan 02 will derive one follow-on phase proposal per High row.
 - [Phase 69.2]: 3 follow-on phase proposals drafted in 69-PROPOSALS.md — PARITY-HANDLER-01 (bundling HANDLER-02 + HANDLER-05 on shared RequestHandlerExtra edit site, target v2.2, 4 plans), PARITY-CLIENT-01 (CLIENT-02, target late v2.1, 3 plans), PARITY-MACRO-01 (MACRO-02, target late v2.1, 3 plans). Row-ID bijection verified: all 4 High Row IDs cited in Derived-from + Rationale subsections. Flagged regex bug in Task 2 verify block for Plan 03 correction (pipe-table trailing `|` not matched).
+- [Phase 69]: rmcp parity research complete — 69-RESEARCH.md (gap matrix, 32 rows total, 4 High-severity) + 69-PROPOSALS.md (3 proposals). 3 PARITY-* requirement IDs landed in REQUIREMENTS.md (one per proposal); follow-on phases not yet scheduled.
 
 ### Roadmap Evolution
 
@@ -80,6 +81,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-16T13:00:00.000Z
-Stopped at: Completed 69-02-PLAN.md (3 follow-on phase proposals drafted, bijection verified)
-Resume: Run `/gsd:execute-phase 69` to begin Plan 03 (quality gate + land PARITY-* REQ-IDs in REQUIREMENTS.md + finalize STATE/PROJECT).
+Last session: 2026-04-17T04:48:35Z
+Stopped at: Phase 69 complete — follow-on proposals ready for ROADMAP slotting
+Resume: Run /gsd:add-phase to slot a 69-PROPOSALS.md entry into the roadmap, or /gsd-plan-phase for a scheduled v2.1 phase.
