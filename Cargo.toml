@@ -502,6 +502,14 @@ name = "s41_code_mode_graphql"
 path = "examples/s41_code_mode_graphql.rs"
 required-features = ["full"]
 
+[[example]]
+name = "s42_handler_extensions"
+path = "examples/s42_handler_extensions.rs"
+
+[[example]]
+name = "s43_handler_peer_sample"
+path = "examples/s43_handler_peer_sample.rs"
+
 [[bench]]
 name = "comprehensive_benchmarks"
 harness = false
