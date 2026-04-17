@@ -166,4 +166,14 @@ Addresses MACRO-02. Gap cell for MACRO-02 reads: "pmcp requires explicit `descri
 
 ---
 
-**Validated:** All 3 proposals cross-checked against 69-RESEARCH.md High Row IDs on 2026-04-16. One PARITY-<SURFACE>-NN REQ-ID per proposal. Plan 03 performs final quality gate.
+**Validated:** All 3 proposals cross-checked against 69-RESEARCH.md High Row IDs on 2026-04-16 (Task 2 validation sweep).
+
+- Template completeness: every proposal has all 6 required subsections (Goal, Scope with In/Out, Success Criteria, Suggested Requirement ID, Estimated Plan Count, Rationale / Evidence).
+- Goal sentence-1 verbs: Proposal 1 "Extend", Proposal 2 "Add", Proposal 3 "Enable" — all functional-capability verbs per D-18.
+- Single REQ-ID per proposal: PARITY-HANDLER-01, PARITY-CLIENT-01, PARITY-MACRO-01 — unique across the document, each appearing exactly twice (Summary table row + Suggested Requirement ID block).
+- Row-ID bijection: all 4 High Row IDs in 69-RESEARCH.md (MACRO-02, HANDLER-02, HANDLER-05, CLIENT-02) appear in at least one proposal's Derived-from line AND Rationale subsection. No fabricated Row IDs. Non-High Row IDs (e.g., CLIENT-03, CLIENT-04, MACRO-04) appear only in Out-of-scope bullets as explicit exclusions referencing the Medium-severity future-work classification per D-16.
+- Plan counts: 4, 3, 3 — all within {3, 4, 5} per D-17.
+- Success Criteria bullet counts: 5, 5, 5 — all within the 3–5 range.
+- No forbidden phrasing ("adopt rmcp's", "copy rmcp's") — every fix is framed in pmcp-native terms per REQUIREMENTS.md Out-of-Scope rule.
+
+**Note to Plan 03:** The Task 2 `<verify>` Python block in this plan has a regex bug — its RESEARCH.md row matcher `^\| ... \| (High|Medium|Low) *$` misses the trailing `|` delimiter on markdown pipe-table rows (actual line endings are `| High |`). When Plan 03 re-runs this bijection check, it must allow an optional trailing `|` (e.g., `\| (High|Medium|Low) \|?\s*$`) to correctly extract the matrix rows. A manual run with the corrected regex confirms 4/4 High Row IDs cited → bijection OK.
