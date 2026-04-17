@@ -932,7 +932,9 @@ Plans:
 **Goal:** Extend `RequestHandlerExtra` with two drop-in additive capabilities — a typed-key `Extensions` map (HANDLER-02) for request-scoped user data crossing middleware/handler boundaries, and an optional `PeerHandle` back-channel (HANDLER-05) exposing `sample` / `list_roots` / `progress_notify` from inside tool/prompt/resource handlers — without breaking any existing `::new(...)` or `::with_session(...)` call site.
 **Requirements**: PARITY-HANDLER-01
 **Depends on:** Phase 69
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 70 to break down)
+- [ ] 70-01-PLAN.md — Extensions typemap field on both RequestHandlerExtra structs + #[non_exhaustive] + proptests + refactor 12 struct-literal test sites (Wave 1)
+- [ ] 70-02-PLAN.md — PeerHandle trait + DispatchPeerHandle impl + wire .with_peer(...) into 9 dispatch sites + session-routing integration test (Wave 2)
+- [ ] 70-03-PLAN.md — Examples s42 + s43 + fuzz target + rustdoc migration prose + make quality-gate (Wave 3)
