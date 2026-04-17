@@ -1108,6 +1108,16 @@ impl Server {
         .with_auth_context(validated_auth_context)
         .with_progress_reporter(progress_reporter);
 
+        // Phase 70 / PARITY-HANDLER-01: conditional peer wiring on the
+        // legacy Server dispatch path. Graceful fallback when no dispatcher.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dispatcher) = self.server_request_dispatcher.as_ref() {
+            let peer: Arc<dyn crate::shared::peer::PeerHandle> = Arc::new(
+                crate::server::peer_impl::DispatchPeerHandle::new(dispatcher.clone()),
+            );
+            extra = extra.with_peer(peer);
+        }
+
         // Execute tool with middleware (native-only)
         #[cfg(not(target_arch = "wasm32"))]
         let result = {
@@ -1239,12 +1249,21 @@ impl Server {
                 })
             });
 
-        let extra = crate::server::cancellation::RequestHandlerExtra::new(
+        #[allow(unused_mut)]
+        let mut extra = crate::server::cancellation::RequestHandlerExtra::new(
             request_id_str.clone(),
             cancellation_token,
         )
         .with_auth_context(auth_context)
         .with_progress_reporter(progress_reporter);
+        // Phase 70 / PARITY-HANDLER-01: conditional peer wiring.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dispatcher) = self.server_request_dispatcher.as_ref() {
+            let peer: Arc<dyn crate::shared::peer::PeerHandle> = Arc::new(
+                crate::server::peer_impl::DispatchPeerHandle::new(dispatcher.clone()),
+            );
+            extra = extra.with_peer(peer);
+        }
         let result = match handler.handle(req.arguments, extra).await {
             Ok(v) => {
                 self.cancellation_manager
@@ -1274,11 +1293,20 @@ impl Server {
                 .cancellation_manager
                 .create_token(request_id_str.clone())
                 .await;
-            let extra = crate::server::cancellation::RequestHandlerExtra::new(
+            #[allow(unused_mut)]
+            let mut extra = crate::server::cancellation::RequestHandlerExtra::new(
                 request_id_str.clone(),
                 cancellation_token,
             )
             .with_auth_context(auth_context);
+            // Phase 70 / PARITY-HANDLER-01: conditional peer wiring.
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(dispatcher) = self.server_request_dispatcher.as_ref() {
+                let peer: Arc<dyn crate::shared::peer::PeerHandle> = Arc::new(
+                    crate::server::peer_impl::DispatchPeerHandle::new(dispatcher.clone()),
+                );
+                extra = extra.with_peer(peer);
+            }
             let mut result = match handler.list(req.cursor, extra).await {
                 Ok(v) => {
                     self.cancellation_manager
@@ -1347,12 +1375,21 @@ impl Server {
                 })
             });
 
-        let extra = crate::server::cancellation::RequestHandlerExtra::new(
+        #[allow(unused_mut)]
+        let mut extra = crate::server::cancellation::RequestHandlerExtra::new(
             request_id_str.clone(),
             cancellation_token,
         )
         .with_auth_context(auth_context)
         .with_progress_reporter(progress_reporter);
+        // Phase 70 / PARITY-HANDLER-01: conditional peer wiring.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dispatcher) = self.server_request_dispatcher.as_ref() {
+            let peer: Arc<dyn crate::shared::peer::PeerHandle> = Arc::new(
+                crate::server::peer_impl::DispatchPeerHandle::new(dispatcher.clone()),
+            );
+            extra = extra.with_peer(peer);
+        }
         let mut result = match handler.read(&req.uri, extra).await {
             Ok(v) => {
                 self.cancellation_manager
@@ -1404,10 +1441,19 @@ impl Server {
             .cancellation_manager
             .create_token(request_id_str.clone())
             .await;
-        let extra = crate::server::cancellation::RequestHandlerExtra::new(
+        #[allow(unused_mut)]
+        let mut extra = crate::server::cancellation::RequestHandlerExtra::new(
             request_id_str.clone(),
             cancellation_token,
         );
+        // Phase 70 / PARITY-HANDLER-01: conditional peer wiring.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dispatcher) = self.server_request_dispatcher.as_ref() {
+            let peer: Arc<dyn crate::shared::peer::PeerHandle> = Arc::new(
+                crate::server::peer_impl::DispatchPeerHandle::new(dispatcher.clone()),
+            );
+            extra = extra.with_peer(peer);
+        }
         let result = match handler.create_message(req, extra).await {
             Ok(v) => {
                 self.cancellation_manager

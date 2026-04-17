@@ -450,6 +450,17 @@ impl ServerCore {
         .with_auth_context(auth_context)
         .with_task_request(req.task.clone());
 
+        // Phase 70 / PARITY-HANDLER-01: wire the peer back-channel when a
+        // ServerRequestDispatcher is configured. Graceful fallback: tests
+        // and legacy constructions without a dispatcher leave peer = None.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dispatcher) = self.server_request_dispatcher.as_ref() {
+            let peer: Arc<dyn crate::shared::peer::PeerHandle> = Arc::new(
+                crate::server::peer_impl::DispatchPeerHandle::new(dispatcher.clone()),
+            );
+            extra = extra.with_peer(peer);
+        }
+
         // Execute tool with or without middleware depending on platform
         #[cfg(not(target_arch = "wasm32"))]
         let result = {
@@ -604,13 +615,23 @@ impl ServerCore {
 
         // Create request handler extra data with auth_context
         let request_id = format!("prompt_{}", req.name);
-        let extra = RequestHandlerExtra::new(
+        #[allow(unused_mut)]
+        let mut extra = RequestHandlerExtra::new(
             request_id.clone(),
             self.cancellation_manager
                 .create_token(request_id.clone())
                 .await,
         )
         .with_auth_context(auth_context);
+
+        // Phase 70 / PARITY-HANDLER-01: conditional peer wiring.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dispatcher) = self.server_request_dispatcher.as_ref() {
+            let peer: Arc<dyn crate::shared::peer::PeerHandle> = Arc::new(
+                crate::server::peer_impl::DispatchPeerHandle::new(dispatcher.clone()),
+            );
+            extra = extra.with_peer(peer);
+        }
 
         handler.handle(req.arguments.clone(), extra).await
     }
@@ -624,13 +645,22 @@ impl ServerCore {
         let mut result = match &self.resources {
             Some(handler) => {
                 let request_id = "list_resources".to_string();
-                let extra = RequestHandlerExtra::new(
+                #[allow(unused_mut)]
+                let mut extra = RequestHandlerExtra::new(
                     request_id.clone(),
                     self.cancellation_manager
                         .create_token(request_id.clone())
                         .await,
                 )
                 .with_auth_context(auth_context);
+                // Phase 70 / PARITY-HANDLER-01: conditional peer wiring.
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(dispatcher) = self.server_request_dispatcher.as_ref() {
+                    let peer: Arc<dyn crate::shared::peer::PeerHandle> = Arc::new(
+                        crate::server::peer_impl::DispatchPeerHandle::new(dispatcher.clone()),
+                    );
+                    extra = extra.with_peer(peer);
+                }
                 handler.list(req.cursor.clone(), extra).await?
             },
             None => ListResourcesResult {
@@ -666,13 +696,23 @@ impl ServerCore {
         })?;
 
         let request_id = format!("read_{}", req.uri);
-        let extra = RequestHandlerExtra::new(
+        #[allow(unused_mut)]
+        let mut extra = RequestHandlerExtra::new(
             request_id.clone(),
             self.cancellation_manager
                 .create_token(request_id.clone())
                 .await,
         )
         .with_auth_context(auth_context);
+
+        // Phase 70 / PARITY-HANDLER-01: conditional peer wiring.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dispatcher) = self.server_request_dispatcher.as_ref() {
+            let peer: Arc<dyn crate::shared::peer::PeerHandle> = Arc::new(
+                crate::server::peer_impl::DispatchPeerHandle::new(dispatcher.clone()),
+            );
+            extra = extra.with_peer(peer);
+        }
 
         let mut result = handler.read(&req.uri, extra).await?;
 
