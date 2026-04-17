@@ -118,3 +118,43 @@ Covers top-level error enum shape, `thiserror` usage, `?`-operator friction (Fro
 **Out-of-scope reminder:** Tower / service integration (D-11) was handled in Phase 56 and is NOT compared here. Transport construction API shape (D-12) is deferred — the matrix did not surface it as a High-severity ergonomics gap, so it remains outside Phase 69's proposal scope. If a future hands-on spike reveals a High-severity transport-construction ergonomics issue, it can enter the pipeline via `69-PROPOSALS.md` amendment or a separate phase proposal.
 
 **Reproducibility note:** Running this research against a different rmcp version or a different pmcp commit will produce different line numbers, and potentially different gap severities as either SDK evolves. The pinned versions in the document header (rmcp 1.5.0 at tag `rmcp-v1.5.0`; pmcp v2.3.0 + main at commit `dbaee6cc`) are the canonical baseline for this document. Plan 02 proposals derived from this matrix remain valid as long as the cited Row IDs still map to the gaps described; if rmcp publishes a new version that closes a High-severity gap on its side, the corresponding pmcp proposal should be re-evaluated rather than auto-executed.
+
+## Phase 69 Quality Gate Report
+
+Generated 2026-04-16 by Plan 03 Task 1. Cross-checks `69-RESEARCH.md` and `69-PROPOSALS.md` against every CONTEXT.md MUST (D-05..D-19) and evidence standard. Row-ID bijection (H2) uses the corrected regex per the Plan 02 `**Validated:**` footer (accounts for trailing `|` delimiter on markdown pipe-table rows).
+
+| Check | Category | Result | Detail |
+|-------|----------|--------|--------|
+| A1 | MUST surfaces (D-05) | PASS | 7 MACRO-NN rows (threshold ≥5) |
+| A2 | MUST surfaces (D-06) | PASS | 5 BUILDER-NN rows (threshold ≥4) |
+| A3 | MUST surfaces (D-07) | PASS | 5 TYPED-NN rows (threshold ≥4) |
+| A4 | MUST surfaces (D-08) | PASS | 5 HANDLER-NN rows (threshold ≥4) |
+| A5 | INCLUDE surfaces (D-09) | PASS | 5 CLIENT-NN rows (threshold ≥4) |
+| A6 | INCLUDE surfaces (D-10) | PASS | 5 ERR-NN rows (threshold ≥4) |
+| B1 | Baseline pinning (D-01) | PASS | rmcp version `1.5.0` pinned in header |
+| B2 | Baseline pinning (D-01) | PASS | rmcp source tag URL `github.com/modelcontextprotocol/rust-sdk/releases/tag/rmcp-v1.5.0` pinned |
+| B3 | Baseline pinning (D-04) | PASS | pmcp baseline SHA `dbaee6cc` pinned |
+| B4 | Baseline tags (reviewer M-2) | PASS | 71 `[v2.3.0]`/`[main]` tags over 69 `.rs:NN` citations → ratio 1.03 (≥0.80) |
+| B5 | No unreleased rmcp (D-02) | PASS | No rows rely on unreleased rmcp work for severity scoring |
+| C1 | file:line citations (D-03) | PASS | 69 `.rs:N` citations across all surfaces (≥25 threshold) |
+| C2 | rmcp URL anchors (D-03) | PASS | 45 GitHub blob URLs with `#L<n>` fragments |
+| C3 | Evidence ratio (reviewer M-3) | PASS | 45/45 blob URLs (ratio 1.00; ≥0.80) |
+| C4 | Row-level evidence (reviewer M-3) | PASS | 32 rows; spot-check confirms both evidence columns populated |
+| D1 | Severity rubric (D-14) | PASS | 32 Severity cells, all ∈ {High, Medium, Low} |
+| D2 | High-gap action verbs (D-14) | PASS | 4 High rows (MACRO-02, HANDLER-02, HANDLER-05, CLIENT-02); Gap cells articulate clean fixes |
+| D3 | Parity/Strength = Low (D-14) | PASS | 0 Parity/Strength rows with non-Low severity |
+| D4 | Row IDs unique & sequential | PASS | 32 IDs, all unique; counters sequential per surface |
+| E1 | Proposal count header (D-17) | PASS | Declared count 3 == actual 3 |
+| E2 | Template completeness (D-18) | PASS | All 3 proposals have Goal / Scope / Success Criteria / Suggested Requirement ID / Estimated Plan Count / Rationale / Evidence |
+| E3 | Plan counts in {3,4,5} (D-17) | PASS | Plan counts: 4, 3, 3 |
+| E4 | Success-Criteria bullet counts | PASS | All proposals have 3–5 bulleted success criteria (observed: 5, 5, 5) |
+| E5 | Derived-from cites Row IDs (D-18) | PASS | Every proposal's `Derived from:` line AND Rationale subsection cite ≥1 `<SURFACE>-NN` ID |
+| E6 | One PARITY ID per proposal (D-18) | PASS | Each proposal has EXACTLY ONE `PARITY-<SURFACE>-NN` ID in its `### Suggested Requirement ID` block |
+| E7 | Functional-capability verbs (D-18) | PASS | Goal sentence-1 verbs: Extend (P1), Add (P2), Enable (P3) |
+| F1 | Two distinct files (D-19) | PASS | `69-RESEARCH.md` and `69-PROPOSALS.md` both present in phase directory |
+| G1 | No rmcp-mimicry framing | PASS | Proposal bodies contain no "adopt rmcp's" / "copy rmcp's" / "mimick" phrasing (Validated footer meta-reference excluded from scan per intent) |
+| G2 | No negative rmcp framing | PASS | Matrix frames rmcp as "what rmcp does better" / "strength to preserve" per CONTEXT.md "Specific Ideas" rule |
+| H1 | Proposal cardinality (D-15) | PASS | 3 proposals (within expected 2–5 range) |
+| H2 | Row-ID bijection | PASS | S_research_high = {MACRO-02, HANDLER-02, HANDLER-05, CLIENT-02}; S_cited (Derived-from + Rationale) = {MACRO-02, HANDLER-02, HANDLER-05, CLIENT-02}; surjective ∧ injective |
+
+**Summary:** 31/31 checks PASS. Both deliverables satisfy the full CONTEXT.md MUST checklist (D-05..D-19). Row-ID bijection (H2) verified with the corrected regex from Plan 02's `**Validated:**` footer — all 4 High-severity Row IDs in `69-RESEARCH.md` are cited by at least one proposal's `Derived from:` line or `### Rationale / Evidence` subsection, and no proposal cites a non-High Row ID in those contexts (Medium-severity Row IDs like CLIENT-03, CLIENT-04, MACRO-04 appear only in Out-of-scope bullets as explicit exclusions, consistent with D-16).
