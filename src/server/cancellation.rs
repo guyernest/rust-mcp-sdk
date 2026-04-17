@@ -115,6 +115,7 @@ impl std::fmt::Debug for CancellationManager {
 
 /// Extra context passed to request handlers.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct RequestHandlerExtra {
     /// Cancellation token for the request
     pub cancellation_token: CancellationToken,
@@ -144,6 +145,18 @@ pub struct RequestHandlerExtra {
     /// When `None`, the client does not support tasks or did not request
     /// task mode — the tool should return results synchronously.
     pub task_request: Option<serde_json::Value>,
+    /// Typed request-scoped state for middleware→handler transfer (Phase 70, PARITY-HANDLER-01).
+    ///
+    /// Inserting values requires `T: Clone + Send + Sync + 'static`. Debug prints type names only,
+    /// not values, making this safe for logging. Cloning `RequestHandlerExtra` clones the entire
+    /// extensions map — prefer `Arc<T>` for large values.
+    ///
+    /// # Semver note
+    /// The enclosing struct carries `#[non_exhaustive]` starting in v2.2. This is a breaking change
+    /// only for downstream code that used POSITIONAL struct-literal construction of
+    /// `RequestHandlerExtra`. `::new(...)`, `::default()`, and the `.with_*(...)` builder chain are
+    /// fully source-compatible.
+    pub extensions: http::Extensions,
 }
 
 impl RequestHandlerExtra {
@@ -158,6 +171,7 @@ impl RequestHandlerExtra {
             metadata: HashMap::new(),
             progress_reporter: None,
             task_request: None,
+            extensions: http::Extensions::new(),
         }
     }
 
@@ -199,6 +213,30 @@ impl RequestHandlerExtra {
     pub fn with_task_request(mut self, task_request: Option<serde_json::Value>) -> Self {
         self.task_request = task_request;
         self
+    }
+
+    /// Returns a reference to the typed extensions map.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use pmcp::RequestHandlerExtra;
+    /// let extra = RequestHandlerExtra::default();
+    /// let _: Option<&String> = extra.extensions().get::<String>();
+    /// ```
+    pub fn extensions(&self) -> &http::Extensions {
+        &self.extensions
+    }
+
+    /// Returns a mutable reference to the typed extensions map.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use pmcp::RequestHandlerExtra;
+    /// let mut extra = RequestHandlerExtra::default();
+    /// extra.extensions_mut().insert(42u64);
+    /// ```
+    pub fn extensions_mut(&mut self) -> &mut http::Extensions {
+        &mut self.extensions
     }
 
     /// Returns `true` if the client requested task-augmented behavior.
@@ -289,6 +327,7 @@ impl Default for RequestHandlerExtra {
             metadata: HashMap::new(),
             progress_reporter: None,
             task_request: None,
+            extensions: http::Extensions::new(),
         }
     }
 }
@@ -331,6 +370,7 @@ impl std::fmt::Debug for RequestHandlerExtra {
             .field("auth_context", &self.auth_context)
             .field("metadata", &redacted_metadata)
             .field("task_request", &self.task_request.is_some())
+            .field("extensions", &self.extensions)
             .finish()
     }
 }
@@ -513,5 +553,30 @@ mod tests {
             "Non-sensitive metadata should not be redacted: {}",
             debug_output
         );
+    }
+
+    #[tokio::test]
+    async fn test_extensions_default_empty() {
+        let extra = RequestHandlerExtra::default();
+        assert!(extra.extensions().get::<String>().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_extensions_insert_overwrite_returns_old() {
+        let mut extra = RequestHandlerExtra::default();
+        assert_eq!(extra.extensions_mut().insert(42u64), None);
+        assert_eq!(extra.extensions_mut().insert(99u64), Some(42u64));
+        assert_eq!(extra.extensions().get::<u64>(), Some(&99u64));
+    }
+
+    #[tokio::test]
+    async fn test_debug_extensions_prints_type_names_only() {
+        let mut extra = RequestHandlerExtra::default();
+        extra
+            .extensions_mut()
+            .insert("SECRET_VALUE_DO_NOT_LEAK".to_string());
+        let debug_out = format!("{:?}", extra);
+        // http::Extensions Debug prints type names, not field values
+        assert!(!debug_out.contains("SECRET_VALUE_DO_NOT_LEAK"));
     }
 }
