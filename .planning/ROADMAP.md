@@ -909,3 +909,18 @@ Plans:
 
 Plans:
 - [ ] TBD (promote with `/gsd:review-backlog` when ready)
+
+### Phase 69: rmcp parity research — ergonomics gap analysis + follow-on phase proposals
+
+**Goal:** Produce a rigorous, evidence-backed gap matrix comparing pmcp vs rmcp on *ergonomics* (macro DX, builder APIs, typed wrappers, handler shapes, state/extra patterns) and use it to propose 2–4 concrete follow-on phases to close the credibility/DX gap. Transports, examples polish, and docs coverage are intentionally out of scope — Phase 68 handles those surfaces at the polish layer.
+
+**Deliverables:**
+- `69-RESEARCH.md` — gap matrix (per-feature: rmcp approach, pmcp approach, gap severity, evidence citations)
+- `69-PROPOSALS.md` — 2–4 follow-on phase proposals with goals, scope, and rough success criteria, ready to slot into v2.1 or seed v2.2
+
+**Requirements**: TBD (derived from research findings; expected to seed new v2.1/v2.2 requirement IDs)
+**Depends on:** Phase 68
+**Plans:** 0 plans (research phase — single research plan, no execution plans)
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 69 to break down)
