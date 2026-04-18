@@ -218,3 +218,45 @@ fn test_prompt_only_server() {
     // If this compiles, prompt-only registration works
     drop(builder);
 }
+
+// ==========================================================================
+// Phase 71: Impl-block rustdoc harvest (PARITY-MACRO-01 symmetry)
+// ==========================================================================
+//
+// This test proves that `#[mcp_tool]` on an impl-block method harvests rustdoc
+// symmetrically with the standalone `#[mcp_tool]` fn — both parse sites route
+// through `mcp_common::resolve_tool_args`, so behavior MUST be byte-identical.
+//
+// Implementation note: #[mcp_server] generates `struct SquareToolHandler { server: Arc<...> }`
+// in this same integration-test module (default visibility). Because the
+// generated struct + field are visible within the same module, the test can
+// construct the handler directly and read its `.metadata()` — no need for a
+// public accessor on the server type.
+
+use pmcp::ToolHandler as _RustdocToolHandler;
+
+struct RustdocHarvestServer;
+
+#[mcp_server]
+impl RustdocHarvestServer {
+    /// Compute the square of a number.
+    #[mcp_tool]
+    async fn square(&self, args: AddArgs) -> pmcp::Result<serde_json::Value> {
+        Ok(serde_json::json!({"result": args.a * args.a}))
+    }
+}
+
+#[test]
+fn test_impl_block_rustdoc_harvest() {
+    let server = std::sync::Arc::new(RustdocHarvestServer);
+    let handler = SquareToolHandler {
+        server: server.clone(),
+    };
+    let meta = handler.metadata().expect("metadata should exist");
+    assert_eq!(meta.name, "square", "tool name derives from method ident");
+    assert_eq!(
+        meta.description.as_deref(),
+        Some("Compute the square of a number."),
+        "impl-block #[mcp_tool] must harvest rustdoc symmetrically with standalone fn"
+    );
+}
