@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
-status: Executing Phase 70
+status: Executing Phase 71
 stopped_at: Phase 69 complete — follow-on proposals ready for ROADMAP slotting
-last_updated: "2026-04-17T18:06:46.194Z"
+last_updated: "2026-04-18T20:49:09.524Z"
 progress:
   total_phases: 40
   completed_phases: 35
@@ -20,11 +20,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Close credibility and DX gaps where rmcp outshines PMCP -- documentation accuracy, feature gate presentation, macro documentation, example index, repo hygiene.
-**Current focus:** Phase 70 — Add Extensions typemap and peer back-channel to RequestHandlerExtra (PARITY-HANDLER-01)
+**Current focus:** Phase 71 — rustdoc-fallback-for-mcp-tool-tool-descriptions-parity-macro
 
 ## Current Position
 
-Phase: 70 (Add Extensions typemap and peer back-channel to RequestHandlerExtra (PARITY-HANDLER-01)) — EXECUTING
+Phase: 71 (rustdoc-fallback-for-mcp-tool-tool-descriptions-parity-macro) — EXECUTING
 Plan: 1 of 4
 
 ## Shipped Milestones
