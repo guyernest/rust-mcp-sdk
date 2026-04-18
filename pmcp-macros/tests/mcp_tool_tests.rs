@@ -258,4 +258,6 @@ fn compile_fail_tests() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/ui/mcp_tool_missing_description.rs");
     t.compile_fail("tests/ui/mcp_tool_multiple_args.rs");
+    t.compile_fail("tests/ui/mcp_tool_missing_description_and_rustdoc.rs");
+    t.compile_fail("tests/ui/mcp_tool_nonempty_args_missing_description_and_rustdoc.rs");
 }
