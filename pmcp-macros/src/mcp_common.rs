@@ -327,9 +327,9 @@ mod tests {
 }
 
 /// Error message used when `#[mcp_tool]` has neither a `description = "..."`
-/// attribute nor a rustdoc comment. Kept as a `pub(crate) const` so both
+/// attribute nor a rustdoc comment. Kept as a `pub const` so both
 /// parse sites emit byte-identical diagnostics.
-pub(crate) const MCP_TOOL_MISSING_DESCRIPTION_ERROR: &str =
+pub const MCP_TOOL_MISSING_DESCRIPTION_ERROR: &str =
     "mcp_tool requires either a `description = \"...\"` attribute or a rustdoc comment on the function";
 
 /// Build a synthetic `description = "..."` nested-meta from a plain string.
@@ -338,18 +338,18 @@ pub(crate) const MCP_TOOL_MISSING_DESCRIPTION_ERROR: &str =
 /// to guarantee correct handling of embedded quotes, backslashes, and
 /// arbitrary UTF-8.
 ///
-/// Visibility is `pub(crate)` for testability only — production call sites
+/// Visibility is `pub` (crate-internal by module-privacy) for testability only — production call sites
 /// MUST route through `resolve_tool_args`, not call this helper directly.
-pub(crate) fn build_description_meta(desc: &str) -> darling::ast::NestedMeta {
+pub fn build_description_meta(desc: &str) -> darling::ast::NestedMeta {
     let lit = syn::LitStr::new(desc, proc_macro2::Span::call_site());
     let meta: syn::Meta = syn::parse_quote! { description = #lit };
     darling::ast::NestedMeta::Meta(meta)
 }
 
-/// True iff `metas` already contains a `description = ...` NameValue entry.
+/// True iff `metas` already contains a `description = ...` `NameValue` entry.
 /// Note: empty string `description = ""` counts as present — explicit empty
 /// wins silently over rustdoc.
-pub(crate) fn has_description_meta(metas: &[darling::ast::NestedMeta]) -> bool {
+pub fn has_description_meta(metas: &[darling::ast::NestedMeta]) -> bool {
     metas.iter().any(|m| {
         matches!(
             m,
@@ -379,7 +379,7 @@ pub(crate) fn has_description_meta(metas: &[darling::ast::NestedMeta]) -> bool {
 /// A `Vec<NestedMeta>` guaranteed to contain a `description = ...` entry,
 /// ready to feed into `McpToolArgs::from_list`. Or `Err` with the canonical
 /// missing-description error if neither source supplied a description.
-pub(crate) fn resolve_tool_args(
+pub fn resolve_tool_args(
     args_tokens: proc_macro2::TokenStream,
     item_attrs: &[syn::Attribute],
     error_span_ident: &syn::Ident,

@@ -1,7 +1,7 @@
 //! Property-based tests for RequestHandlerExtra.extensions typemap.
 //!
 //! Covers: insert/get round-trip, key-collision returns old value, clone
-//! preserves extensions, remove::<T>() round-trip, mixed-type coexistence.
+//! preserves extensions, `remove::<T>()` round-trip, mixed-type coexistence.
 
 use pmcp::RequestHandlerExtra;
 use proptest::prelude::*;
