@@ -138,33 +138,6 @@ pub fn add_async_trait_bounds(mut generics: Generics) -> Generics {
     generics
 }
 
-/// Parse a doc comment from attributes
-pub fn extract_doc_comment(attrs: &[syn::Attribute]) -> Option<String> {
-    let mut doc_lines = Vec::new();
-
-    for attr in attrs {
-        if attr.path().is_ident("doc") {
-            // Simple extraction from doc comments
-            let attr_str = quote!(#attr).to_string();
-            if let Some(doc_start) = attr_str.find('"') {
-                let doc_start = doc_start + 1;
-                if let Some(doc_end) = attr_str[doc_start..].find('"') {
-                    let line = &attr_str[doc_start..doc_start + doc_end];
-                    // Remove leading space if present
-                    let line = line.strip_prefix(' ').unwrap_or(line);
-                    doc_lines.push(line.to_string());
-                }
-            }
-        }
-    }
-
-    if doc_lines.is_empty() {
-        None
-    } else {
-        Some(doc_lines.join("\n"))
-    }
-}
-
 /// Generate error handling code for different error types
 pub fn generate_error_conversion(error_type: &Type) -> TokenStream {
     // Check if it's already pmcp::Error

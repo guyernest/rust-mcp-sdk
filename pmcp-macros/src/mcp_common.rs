@@ -326,17 +326,6 @@ mod tests {
     }
 }
 
-// =========================================================================
-// Phase 71: Rustdoc-fallback resolver for `#[mcp_tool]` (PARITY-MACRO-01).
-//
-// The resolver is the SINGLE entry point for both `#[mcp_tool]` parse sites
-// (standalone fn in mcp_tool.rs and impl-block method in mcp_server.rs).
-// Callers MUST go through `resolve_tool_args` — do not call
-// `build_description_meta` or `pmcp_macros_support::rustdoc::extract_doc_description`
-// directly from the parse sites. Keeping the logic behind one function
-// prevents the drift risk flagged by Codex review MEDIUM-1.
-// =========================================================================
-
 /// Error message used when `#[mcp_tool]` has neither a `description = "..."`
 /// attribute nor a rustdoc comment. Kept as a `pub(crate) const` so both
 /// parse sites emit byte-identical diagnostics.
@@ -347,8 +336,7 @@ pub(crate) const MCP_TOOL_MISSING_DESCRIPTION_ERROR: &str =
 ///
 /// Uses `syn::LitStr::new` + `parse_quote!` rather than string formatting
 /// to guarantee correct handling of embedded quotes, backslashes, and
-/// arbitrary UTF-8 (supersedes the darling round-trip concern flagged in
-/// 71-RESEARCH Open Question 4).
+/// arbitrary UTF-8.
 ///
 /// Visibility is `pub(crate)` for testability only — production call sites
 /// MUST route through `resolve_tool_args`, not call this helper directly.
@@ -359,8 +347,8 @@ pub(crate) fn build_description_meta(desc: &str) -> darling::ast::NestedMeta {
 }
 
 /// True iff `metas` already contains a `description = ...` NameValue entry.
-/// Note: empty string `description = ""` counts as present (see MEDIUM-3
-/// semantic decision in 71-REVIEWS.md — explicit empty wins silently).
+/// Note: empty string `description = ""` counts as present — explicit empty
+/// wins silently over rustdoc.
 pub(crate) fn has_description_meta(metas: &[darling::ast::NestedMeta]) -> bool {
     metas.iter().any(|m| {
         matches!(
@@ -403,13 +391,15 @@ pub(crate) fn resolve_tool_args(
         .map(|p| p.into_iter().collect::<Vec<_>>())
         .unwrap_or_default();
 
-    if !has_description_meta(&nested_metas) {
+    let mut has_desc = has_description_meta(&nested_metas);
+    if !has_desc {
         if let Some(doc_desc) = pmcp_macros_support::rustdoc::extract_doc_description(item_attrs) {
             nested_metas.push(build_description_meta(&doc_desc));
+            has_desc = true;
         }
     }
 
-    if !has_description_meta(&nested_metas) {
+    if !has_desc {
         return Err(syn::Error::new_spanned(
             error_span_ident,
             MCP_TOOL_MISSING_DESCRIPTION_ERROR,
@@ -550,8 +540,7 @@ mod rustdoc_fallback_tests {
         // `#[doc = include_str!("...")]` is Expr::Macro, not Expr::Lit(Str).
         // The support-crate helper skips it silently. With no other
         // description source, the resolver errors with the canonical wording.
-        let attr: syn::Attribute =
-            syn::parse_quote! { #[doc = include_str!("nonexistent.md")] };
+        let attr: syn::Attribute = syn::parse_quote! { #[doc = include_str!("nonexistent.md")] };
         let ident = sample_ident();
         let err = resolve_tool_args(proc_macro2::TokenStream::new(), &[attr], &ident)
             .expect_err("include_str!() doc must not satisfy description");
@@ -566,8 +555,7 @@ mod rustdoc_fallback_tests {
         // `#[cfg_attr(doc, doc = "...")]` is a `#[cfg_attr(...)]` attribute
         // whose path is `cfg_attr`, NOT `doc`. The harvest helper only
         // inspects attrs whose path is `doc`, so this is silently skipped.
-        let attr: syn::Attribute =
-            syn::parse_quote! { #[cfg_attr(doc, doc = "conditional doc")] };
+        let attr: syn::Attribute = syn::parse_quote! { #[cfg_attr(doc, doc = "conditional doc")] };
         let ident = sample_ident();
         let err = resolve_tool_args(proc_macro2::TokenStream::new(), &[attr], &ident)
             .expect_err("cfg_attr-gated doc must not satisfy description");

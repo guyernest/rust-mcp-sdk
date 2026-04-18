@@ -1,6 +1,6 @@
 //! Property-based tests for pmcp-macros-support rustdoc-harvest normalization.
 //!
-//! Covers (PARITY-MACRO-01 ALWAYS-PROPERTY requirement):
+//! Invariants:
 //! - reference-equivalence: real helper matches the plain-Rust oracle
 //! - determinism: same input → same output
 //! - no-panic: never panics on arbitrary UTF-8
@@ -101,9 +101,9 @@ proptest! {
         }
     }
 
-    /// Invariant 4: mixed-attr-shape robustness (LOW-3 from 71-REVIEWS.md).
-    /// For arbitrary mixes of `#[doc = "..."]`, `#[doc(hidden)]`, and
-    /// non-doc attrs, the helper terminates AND its output equals
+    /// Invariant 4: mixed-attr-shape robustness. For arbitrary mixes of
+    /// `#[doc = "..."]`, `#[doc(hidden)]`, and non-doc attrs, the helper
+    /// terminates AND its output equals
     /// `reference_normalize(extracted_plain_doc_lines)`.
     #[test]
     fn prop_mixed_attr_shapes_robust(

@@ -55,11 +55,12 @@ pub mod rustdoc {
             else {
                 continue;
             };
-            let trimmed = lit_str.value().trim().to_string();
+            let raw = lit_str.value();
+            let trimmed = raw.trim();
             if trimmed.is_empty() {
                 continue;
             }
-            lines.push(trimmed);
+            lines.push(trimmed.to_string());
         }
         if lines.is_empty() {
             None
@@ -69,22 +70,22 @@ pub mod rustdoc {
     }
 
     /// Reference implementation of the normalization algorithm over raw
-    /// line strings.
-    ///
-    /// Used as the property-test oracle AND as a convenience for the fuzz
-    /// target (Plan 03) to avoid the `syn::parse_str` round-trip. This is
-    /// the authoritative plain-Rust spec of the normalization semantics.
+    /// line strings — the plain-Rust oracle used by property tests and
+    /// fuzz targets. Not public API; kept `pub` only so integration tests
+    /// and fuzz targets in sibling crates can import it.
+    #[doc(hidden)]
     #[must_use]
     pub fn reference_normalize(lines: &[String]) -> Option<String> {
-        let filtered: Vec<String> = lines
+        let joined = lines
             .iter()
-            .map(|l| l.trim().to_string())
+            .map(|l| l.trim())
             .filter(|l| !l.is_empty())
-            .collect();
-        if filtered.is_empty() {
+            .collect::<Vec<&str>>()
+            .join("\n");
+        if joined.is_empty() {
             None
         } else {
-            Some(filtered.join("\n"))
+            Some(joined)
         }
     }
 }
@@ -103,7 +104,7 @@ mod tests {
             .collect()
     }
 
-    // ==== 10 normalization vectors from 71-RESEARCH.md §"Test vectors" ====
+    // ==== 10 normalization vectors ====
 
     #[test]
     fn vec1_single_line() {
@@ -182,7 +183,7 @@ mod tests {
         );
     }
 
-    // ==== Unsupported rustdoc forms (MEDIUM-3 from 71-REVIEWS.md) ====
+    // ==== Unsupported rustdoc forms ====
 
     #[test]
     fn unsupported_include_str_skipped() {
@@ -228,11 +229,7 @@ mod tests {
 
     #[test]
     fn ref_idempotent_on_normalized_output() {
-        let once = reference_normalize(&[
-            " A ".to_string(),
-            String::new(),
-            "B".to_string(),
-        ]);
+        let once = reference_normalize(&[" A ".to_string(), String::new(), "B".to_string()]);
         let s = once.as_ref().unwrap();
         let twice = reference_normalize(&s.split('\n').map(String::from).collect::<Vec<_>>());
         assert_eq!(twice.as_deref(), Some(s.as_str()));

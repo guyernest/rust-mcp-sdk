@@ -574,16 +574,19 @@ fn collect_tool_methods(impl_block: &ItemImpl) -> syn::Result<Vec<ToolMethodInfo
     Ok(methods)
 }
 
-/// Parse `#[mcp_tool(...)]` attribute into `McpToolArgs`.
+/// Parse `#[mcp_tool(...)]` on an impl-block method into `McpToolArgs`.
+///
+/// Delegates to `mcp_common::resolve_tool_args` so the rustdoc-fallback
+/// and missing-description-error logic is byte-symmetric with the
+/// standalone parse site in `mcp_tool.rs`.
 fn parse_mcp_tool_attr(attr: &syn::Attribute, method: &ImplItemFn) -> syn::Result<McpToolArgs> {
     let tokens = match &attr.meta {
         syn::Meta::List(list) => list.tokens.clone(),
-        syn::Meta::Path(_) => {
-            return Err(syn::Error::new_spanned(
-                &method.sig.ident,
-                "mcp_tool requires at least `description = \"...\"` attribute",
-            ));
-        },
+        // `#[mcp_tool]` with no parens — fall through to the resolver with
+        // an empty token stream. The resolver will consult rustdoc.
+        syn::Meta::Path(_) => proc_macro2::TokenStream::new(),
+        // `#[mcp_tool = "..."]` is an orthogonal syntax error — keep the
+        // pre-existing early-return.
         syn::Meta::NameValue(_) => {
             return Err(syn::Error::new_spanned(
                 attr,
@@ -592,12 +595,8 @@ fn parse_mcp_tool_attr(attr: &syn::Attribute, method: &ImplItemFn) -> syn::Resul
         },
     };
 
-    let parser =
-        syn::punctuated::Punctuated::<darling::ast::NestedMeta, syn::Token![,]>::parse_terminated;
-    let nested_metas = parser
-        .parse2(tokens)
-        .map(|p| p.into_iter().collect::<Vec<_>>())
-        .unwrap_or_default();
+    let nested_metas =
+        crate::mcp_common::resolve_tool_args(tokens, &method.attrs, &method.sig.ident)?;
 
     McpToolArgs::from_list(&nested_metas)
         .map_err(|e| syn::Error::new_spanned(&method.sig.ident, e.to_string()))
