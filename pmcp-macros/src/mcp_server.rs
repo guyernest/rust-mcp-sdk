@@ -577,8 +577,7 @@ fn collect_tool_methods(impl_block: &ItemImpl) -> syn::Result<Vec<ToolMethodInfo
 /// Parse `#[mcp_tool(...)]` on an impl-block method into `McpToolArgs`.
 ///
 /// Delegates to `mcp_common::resolve_tool_args` so the rustdoc-fallback
-/// and missing-description-error logic is byte-symmetric with the
-/// standalone parse site in `mcp_tool.rs`.
+/// and missing-description-error logic matches the standalone parse site.
 fn parse_mcp_tool_attr(attr: &syn::Attribute, method: &ImplItemFn) -> syn::Result<McpToolArgs> {
     let tokens = match &attr.meta {
         syn::Meta::List(list) => list.tokens.clone(),

@@ -192,7 +192,7 @@ fn test_builder_registration() {
 }
 
 // ==========================================================================
-// Phase 71: Rustdoc fallback integration tests (PARITY-MACRO-01)
+// Rustdoc fallback integration tests
 // ==========================================================================
 
 /// Add two numbers together.

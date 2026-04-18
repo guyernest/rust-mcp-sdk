@@ -12,8 +12,7 @@ fuzz_target!(|data: &[u8]| {
     if let Ok(token_str) = std::str::from_utf8(data) {
         // Try to decode and verify random token strings
         if let Ok(token) = ApprovalToken::decode(token_str) {
-            let secret =
-                TokenSecret::new(b"fuzz-secret-key-32-bytes-long!!!".to_vec());
+            let secret = TokenSecret::new(b"fuzz-secret-key-32-bytes-long!!!".to_vec());
             let generator = HmacTokenGenerator::new(secret);
             // verify() should return Err for random tokens, never panic
             let _ = generator.verify(&token);
@@ -30,8 +29,7 @@ fuzz_target!(|data: &[u8]| {
             std::str::from_utf8(&data[split..]),
         ) {
             if let Ok(token) = ApprovalToken::decode(token_str) {
-                let secret =
-                    TokenSecret::new(b"fuzz-secret-key-32-bytes-long!!!".to_vec());
+                let secret = TokenSecret::new(b"fuzz-secret-key-32-bytes-long!!!".to_vec());
                 let generator = HmacTokenGenerator::new(secret);
                 let _ = generator.verify(&token);
                 let _ = generator.verify_code(code, &token);

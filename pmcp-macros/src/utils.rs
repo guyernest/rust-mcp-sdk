@@ -126,18 +126,6 @@ pub fn strip_lifetimes(generics: &Generics) -> Generics {
     new_generics
 }
 
-/// Generate where clause for async trait bounds
-pub fn add_async_trait_bounds(mut generics: Generics) -> Generics {
-    for param in &mut generics.params {
-        if let GenericParam::Type(type_param) = param {
-            type_param.bounds.push(syn::parse_quote!(Send));
-            type_param.bounds.push(syn::parse_quote!(Sync));
-            type_param.bounds.push(syn::parse_quote!('static));
-        }
-    }
-    generics
-}
-
 /// Generate error handling code for different error types
 pub fn generate_error_conversion(error_type: &Type) -> TokenStream {
     // Check if it's already pmcp::Error

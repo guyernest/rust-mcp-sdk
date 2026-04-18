@@ -7,8 +7,7 @@ struct Args {
     x: i32,
 }
 
-// No rustdoc AND empty args -- should fail at compile time (PARITY-MACRO-01).
-// Exercises the empty-args branch of the missing-description error path.
+// No rustdoc and empty args — should fail at compile time.
 #[mcp_tool()]
 async fn bad_tool(args: Args) -> pmcp::Result<serde_json::Value> {
     Ok(serde_json::json!({}))

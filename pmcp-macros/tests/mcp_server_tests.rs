@@ -220,18 +220,12 @@ fn test_prompt_only_server() {
 }
 
 // ==========================================================================
-// Phase 71: Impl-block rustdoc harvest (PARITY-MACRO-01 symmetry)
+// Impl-block rustdoc harvest — symmetry with standalone parse site
 // ==========================================================================
 //
-// This test proves that `#[mcp_tool]` on an impl-block method harvests rustdoc
-// symmetrically with the standalone `#[mcp_tool]` fn — both parse sites route
-// through `mcp_common::resolve_tool_args`, so behavior MUST be byte-identical.
-//
-// Implementation note: #[mcp_server] generates `struct SquareToolHandler { server: Arc<...> }`
-// in this same integration-test module (default visibility). Because the
-// generated struct + field are visible within the same module, the test can
-// construct the handler directly and read its `.metadata()` — no need for a
-// public accessor on the server type.
+// Both parse sites route through `mcp_common::resolve_tool_args`, so an
+// impl-block method with a rustdoc comment must produce the same description
+// as a free function with the same rustdoc.
 
 use pmcp::ToolHandler as _RustdocToolHandler;
 

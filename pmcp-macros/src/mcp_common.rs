@@ -337,10 +337,7 @@ pub const MCP_TOOL_MISSING_DESCRIPTION_ERROR: &str =
 /// Uses `syn::LitStr::new` + `parse_quote!` rather than string formatting
 /// to guarantee correct handling of embedded quotes, backslashes, and
 /// arbitrary UTF-8.
-///
-/// Visibility is `pub` (crate-internal by module-privacy) for testability only — production call sites
-/// MUST route through `resolve_tool_args`, not call this helper directly.
-pub fn build_description_meta(desc: &str) -> darling::ast::NestedMeta {
+fn build_description_meta(desc: &str) -> darling::ast::NestedMeta {
     let lit = syn::LitStr::new(desc, proc_macro2::Span::call_site());
     let meta: syn::Meta = syn::parse_quote! { description = #lit };
     darling::ast::NestedMeta::Meta(meta)
@@ -349,7 +346,7 @@ pub fn build_description_meta(desc: &str) -> darling::ast::NestedMeta {
 /// True iff `metas` already contains a `description = ...` `NameValue` entry.
 /// Note: empty string `description = ""` counts as present — explicit empty
 /// wins silently over rustdoc.
-pub fn has_description_meta(metas: &[darling::ast::NestedMeta]) -> bool {
+fn has_description_meta(metas: &[darling::ast::NestedMeta]) -> bool {
     metas.iter().any(|m| {
         matches!(
             m,
@@ -359,12 +356,7 @@ pub fn has_description_meta(metas: &[darling::ast::NestedMeta]) -> bool {
     })
 }
 
-/// Shared resolver — the ONE place where rustdoc fallback logic lives.
-///
-/// Both `#[mcp_tool]` parse sites (`mcp_tool.rs::expand_mcp_tool` and
-/// `mcp_server.rs::parse_mcp_tool_attr`) call this function. Do NOT inline
-/// any of its steps at the call sites — doing so reintroduces the drift
-/// risk resolved by this function's existence.
+/// Shared resolver — the one place where rustdoc fallback logic lives.
 ///
 /// # Arguments
 /// - `args_tokens`: the `(...)` inside `#[mcp_tool(...)]`. Pass an empty
@@ -377,8 +369,9 @@ pub fn has_description_meta(metas: &[darling::ast::NestedMeta]) -> bool {
 ///
 /// # Returns
 /// A `Vec<NestedMeta>` guaranteed to contain a `description = ...` entry,
-/// ready to feed into `McpToolArgs::from_list`. Or `Err` with the canonical
-/// missing-description error if neither source supplied a description.
+/// ready to feed into `McpToolArgs::from_list`. Or `Err` with a parse error
+/// (if `args_tokens` is malformed) or the canonical missing-description
+/// error (if neither source supplied a description).
 pub fn resolve_tool_args(
     args_tokens: proc_macro2::TokenStream,
     item_attrs: &[syn::Attribute],
@@ -386,10 +379,8 @@ pub fn resolve_tool_args(
 ) -> syn::Result<Vec<darling::ast::NestedMeta>> {
     let parser =
         syn::punctuated::Punctuated::<darling::ast::NestedMeta, syn::Token![,]>::parse_terminated;
-    let mut nested_metas: Vec<darling::ast::NestedMeta> = parser
-        .parse2(args_tokens)
-        .map(|p| p.into_iter().collect::<Vec<_>>())
-        .unwrap_or_default();
+    let mut nested_metas: Vec<darling::ast::NestedMeta> =
+        parser.parse2(args_tokens)?.into_iter().collect();
 
     let mut has_desc = has_description_meta(&nested_metas);
     if !has_desc {
@@ -488,8 +479,8 @@ mod rustdoc_fallback_tests {
 
     #[test]
     fn resolve_empty_string_description_with_rustdoc_keeps_empty() {
-        // MEDIUM-3 semantic: `description = ""` is PRESENT, so rustdoc is
-        // NOT consulted and the empty string passes through.
+        // `description = ""` is PRESENT, so rustdoc is not consulted and
+        // the empty string passes through.
         let attrs = doc_attrs(&[" IGNORED rustdoc."]);
         let ident = sample_ident();
         let args: proc_macro2::TokenStream = syn::parse_str(r#"description = """#).unwrap();
