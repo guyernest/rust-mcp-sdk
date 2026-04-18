@@ -53,7 +53,7 @@ Seeded by Phase 69 research (`.planning/phases/69-rmcp-parity-research-gap-analy
 
 - [ ] **PARITY-HANDLER-01**: Enrich `RequestHandlerExtra` with a typed-key extensions map and an optional peer back-channel, so middleware state transfer and in-handler server-to-client RPCs work without out-of-band plumbing.
 - [ ] **PARITY-CLIENT-01**: Ship typed-input `call_tool_typed` / `call_prompt_typed` helpers and auto-paginating `list_all_tools` / `list_all_prompts` / `list_all_resources` convenience methods on `Client`, reducing client boilerplate to one call per operation.
-- [ ] **PARITY-MACRO-01**: Support rustdoc as a fallback source for `#[mcp_tool]` descriptions, so well-documented tool functions do not have to repeat themselves in the macro attribute.
+- [x] **PARITY-MACRO-01**: Support rustdoc as a fallback source for `#[mcp_tool]` descriptions, so well-documented tool functions do not have to repeat themselves in the macro attribute.
 
 ## Previous Requirements
 
@@ -142,7 +142,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CMSUP-06 | Phase 67.1 | Pending |
 | PARITY-HANDLER-01 | Phase 70 | Pending |
 | PARITY-CLIENT-01 | TBD | Pending |
-| PARITY-MACRO-01 | TBD | Pending |
+| PARITY-MACRO-01 | Phase 71 | Complete |
 
 **Coverage:**
 - v2.1 requirements: 23 total (20 pre-seed + 3 seeded by Phase 69)
@@ -152,3 +152,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 ---
 *Requirements defined: 2026-04-10*
 *Last updated: 2026-04-16 — added 3 PARITY-* IDs seeded by Phase 69 rmcp parity research*
+*Last updated: 2026-04-17 — PARITY-MACRO-01 closed by Phase 71 (pmcp 2.4.0 / pmcp-macros 0.6.0 / pmcp-macros-support 0.1.0 — rustdoc fallback)*
