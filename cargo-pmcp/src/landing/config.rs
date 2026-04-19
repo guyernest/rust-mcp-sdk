@@ -15,6 +15,38 @@ pub struct LandingConfig {
     /// Deployment configuration
     #[serde(default)]
     pub deployment: DeploymentSection,
+
+    /// Login-page branding pushed to the Cognito Managed Login hosted UI by
+    /// the pmcp.run deploy-landing Lambda. Independent of `landing.branding`,
+    /// which styles the landing site chrome — `login` styles the Cognito
+    /// hosted pages that end-users see when an MCP client triggers OAuth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login: Option<LoginConfig>,
+}
+
+/// Cognito Managed Login branding configuration
+///
+/// Fields here map to the Cognito `UpdateManagedLoginBranding` API and are
+/// applied to every (server × MCP client type) pair registered for a server.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LoginConfig {
+    /// Primary brand color (hex, #rrggbb or #rgb). Applied to primary buttons
+    /// and accent elements in the hosted UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_color: Option<String>,
+
+    /// Page background color (hex, #rrggbb or #rgb). Applied to the hosted UI
+    /// page background in light mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<String>,
+
+    /// Logo asset reference. Either:
+    ///   - `s3://bucket/key` — fetched from the landing assets bucket
+    ///   - `https://<landing-bucket>/path` — same bucket, different URL form
+    ///
+    /// Any other URL form is rejected by the platform (S3-only logo pattern).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo: Option<String>,
 }
 
 /// Landing page content and branding
@@ -106,6 +138,22 @@ fn default_target() -> String {
     "pmcp.run".to_string()
 }
 
+fn validate_hex_color(color: &str, field: &str) -> Result<()> {
+    if !color.starts_with('#') || (color.len() != 4 && color.len() != 7) {
+        anyhow::bail!(
+            "{} must be a valid hex color (e.g., #fff or #ffffff)",
+            field
+        );
+    }
+    if !color[1..].chars().all(|c| c.is_ascii_hexdigit()) {
+        anyhow::bail!(
+            "{} must be a valid hex color (e.g., #fff or #ffffff)",
+            field
+        );
+    }
+    Ok(())
+}
+
 impl LandingConfig {
     /// Load configuration from a TOML file
     pub fn load(path: &Path) -> Result<Self> {
@@ -151,10 +199,16 @@ impl LandingConfig {
 
         // Validate primary color if provided
         if let Some(ref color) = self.landing.branding.primary_color {
-            if !color.starts_with('#') || (color.len() != 4 && color.len() != 7) {
-                anyhow::bail!(
-                    "landing.branding.primary_color must be a valid hex color (e.g., #fff or #ffffff)"
-                );
+            validate_hex_color(color, "landing.branding.primary_color")?;
+        }
+
+        // Validate login branding colors if provided
+        if let Some(ref login) = self.login {
+            if let Some(ref color) = login.primary_color {
+                validate_hex_color(color, "login.primary_color")?;
+            }
+            if let Some(ref color) = login.background_color {
+                validate_hex_color(color, "login.background_color")?;
             }
         }
 
@@ -198,6 +252,7 @@ impl LandingConfig {
                 server_id: None,
                 endpoint: None,
             },
+            login: None,
         }
     }
 }
@@ -260,5 +315,71 @@ mod tests {
 
         config.landing.branding.primary_color = Some("ffffff".to_string());
         assert!(config.validate().is_err());
+
+        // Non-hex characters are rejected too
+        config.landing.branding.primary_color = Some("#gggggg".to_string());
+        assert!(config.validate().is_err());
+    }
+
+    /// Regression test for pmcp.run platform CR-01: `[login]` sections were
+    /// silently dropped by serde because the struct had no `login` field,
+    /// so Cognito `UpdateManagedLoginBranding` was never fired end-to-end
+    /// from a real developer deploy.
+    #[test]
+    fn test_login_section_round_trips_through_toml() {
+        let toml = r##"
+[landing]
+server_name = "example"
+
+[login]
+primary_color = "#0972d3"
+background_color = "#ffffff"
+logo = "s3://pmcp-landings-dev/example/logo.png"
+"##;
+
+        let config: LandingConfig = toml::from_str(toml).expect("parse");
+        let login = config.login.as_ref().expect("[login] section preserved");
+        assert_eq!(login.primary_color.as_deref(), Some("#0972d3"));
+        assert_eq!(login.background_color.as_deref(), Some("#ffffff"));
+        assert_eq!(
+            login.logo.as_deref(),
+            Some("s3://pmcp-landings-dev/example/logo.png")
+        );
+
+        // Round-trip: serialize back and re-parse, values must survive
+        let emitted = toml::to_string(&config).expect("serialize");
+        let reparsed: LandingConfig = toml::from_str(&emitted).expect("reparse");
+        let login2 = reparsed.login.as_ref().expect("login survives round-trip");
+        assert_eq!(login2.primary_color.as_deref(), Some("#0972d3"));
+    }
+
+    #[test]
+    fn test_login_section_optional_backward_compatible() {
+        // Config with no [login] — must still parse and validate cleanly.
+        let toml = r#"
+[landing]
+server_name = "example"
+"#;
+        let config: LandingConfig = toml::from_str(toml).expect("parse");
+        assert!(config.login.is_none());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_login_color_validation_rejects_bad_hex() {
+        let mut config = LandingConfig::default_for_server("test".to_string());
+        config.login = Some(LoginConfig {
+            primary_color: Some("not-a-color".to_string()),
+            background_color: None,
+            logo: None,
+        });
+        assert!(config.validate().is_err());
+
+        config.login = Some(LoginConfig {
+            primary_color: Some("#fff".to_string()),
+            background_color: Some("#0972d3".to_string()),
+            logo: Some("s3://bucket/logo.png".to_string()),
+        });
+        assert!(config.validate().is_ok());
     }
 }

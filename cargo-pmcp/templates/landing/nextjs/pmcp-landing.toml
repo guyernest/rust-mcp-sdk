@@ -14,3 +14,13 @@ primary_color = "{{PRIMARY_COLOR}}"
 [deployment]
 target = "pmcp.run"
 # server_id and endpoint are auto-populated from deployment
+
+# [login] styles the Cognito Managed Login hosted UI that end-users see when
+# an MCP client triggers OAuth. This is distinct from [landing.branding] above,
+# which styles the landing site chrome. Uncomment and customize to push custom
+# colors and logo to your server's hosted login pages.
+#
+# [login]
+# primary_color = "#0972d3"
+# background_color = "#ffffff"
+# logo = "s3://pmcp-landings-<env>/<server>/logo.png"  # S3 URL; same bucket as landing assets
