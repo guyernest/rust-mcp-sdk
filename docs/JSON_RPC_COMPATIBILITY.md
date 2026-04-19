@@ -170,6 +170,6 @@ The Rust MCP SDK now:
 If you're experiencing connection issues with Claude Code:
 1. Check your pmcp version: `cargo tree | grep pmcp`
 2. If < 1.4.0, upgrade: `cargo update -p pmcp`
-3. See the [Migration Guide](../MIGRATION_GUIDE.md) for detailed steps
+3. See the [Migration Guide](archive/MIGRATION_GUIDE.md) for detailed steps
 
 No code changes are needed beyond upgrading the dependency version.
