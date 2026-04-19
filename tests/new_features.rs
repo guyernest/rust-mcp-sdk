@@ -5,7 +5,7 @@ use std::sync::Arc;
 #[cfg(feature = "websocket")]
 #[tokio::test]
 async fn test_websocket_transport() {
-    use pmcp::{WebSocketConfig, WebSocketTransport};
+    use pmcp::{Transport, WebSocketConfig, WebSocketTransport};
     use url::Url;
 
     let config = WebSocketConfig {
@@ -21,7 +21,7 @@ async fn test_websocket_transport() {
 #[cfg(feature = "http")]
 #[tokio::test]
 async fn test_http_transport() {
-    use pmcp::{HttpConfig, HttpTransport};
+    use pmcp::{HttpConfig, HttpTransport, Transport};
     use url::Url;
 
     let config = HttpConfig {

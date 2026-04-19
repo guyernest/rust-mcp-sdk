@@ -285,8 +285,7 @@ fn is_node_available() -> bool {
     Command::new("node")
         .arg("--version")
         .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|output| output.status.success())
 }
 
 fn install_typescript_sdk() -> std::result::Result<(), Box<dyn std::error::Error>> {

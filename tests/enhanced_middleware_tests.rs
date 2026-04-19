@@ -202,7 +202,7 @@ async fn test_middleware_chain_creation() {
 async fn test_middleware_performance() {
     let circuit_breaker = CircuitBreakerMiddleware::new(
         100, // High threshold for performance testing
-        Duration::from_millis(1000),
+        Duration::from_secs(1),
         Duration::from_millis(100),
     );
 
