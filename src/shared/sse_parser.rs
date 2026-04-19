@@ -224,11 +224,9 @@ impl SseParser {
                     self.current_event.data.push_str(value);
                 }
             },
-            "id" => {
-                if !value.contains('\0') {
-                    self.current_event.id = Some(value.to_string());
-                    self.last_event_id = Some(value.to_string());
-                }
+            "id" if !value.contains('\0') => {
+                self.current_event.id = Some(value.to_string());
+                self.last_event_id = Some(value.to_string());
             },
             "retry" => {
                 if let Ok(retry) = value.parse::<u64>() {

@@ -313,20 +313,14 @@ impl Validator {
 
                 // Type-specific validation
                 match type_str {
-                    "text" => {
-                        if !obj.contains_key("text") {
-                            result.add_error("Text content item missing 'text' field");
-                        }
+                    "text" if !obj.contains_key("text") => {
+                        result.add_error("Text content item missing 'text' field");
                     },
-                    "image" => {
-                        if !obj.contains_key("data") && !obj.contains_key("url") {
-                            result.add_error("Image content item must have 'data' or 'url'");
-                        }
+                    "image" if !obj.contains_key("data") && !obj.contains_key("url") => {
+                        result.add_error("Image content item must have 'data' or 'url'");
                     },
-                    "resource" => {
-                        if !obj.contains_key("uri") {
-                            result.add_error("Resource content item missing 'uri' field");
-                        }
+                    "resource" if !obj.contains_key("uri") => {
+                        result.add_error("Resource content item missing 'uri' field");
                     },
                     _ => {},
                 }

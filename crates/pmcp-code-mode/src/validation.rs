@@ -28,6 +28,60 @@ use crate::javascript::{JavaScriptCodeInfo, JavaScriptValidator};
 /// Static flag to ensure the "no policy evaluator" warning is only logged once per process.
 static NO_POLICY_WARNING_LOGGED: AtomicBool = AtomicBool::new(false);
 
+/// Build the `Vec<PolicyViolation>` for a denied authorization decision.
+///
+/// Flows all available diagnostic information from the decision into violations
+/// so the client sees *why* a request was denied:
+///
+/// - Each `determining_policies` entry becomes a `policy` violation naming that policy
+/// - Each `decision.errors` entry becomes a `policy_error` violation surfacing the
+///   underlying Cedar/AVP error (e.g., "entity does not conform to schema")
+/// - If both lists are empty (the canonical "default-deny: no Permit matched" case)
+///   a synthetic `default_deny` violation is injected with context about the
+///   server_id and action, so the client has *something* to debug against
+///
+/// Without this, default-deny would surface as `valid:false, violations:[]` —
+/// impossible to debug from the client.
+fn build_policy_violations(
+    decision: &crate::policy::AuthorizationDecision,
+    server_id: &str,
+    action: impl std::fmt::Display,
+    denied_subject: &str,
+) -> Vec<PolicyViolation> {
+    let capacity = decision.determining_policies.len() + decision.errors.len() + 1;
+    let mut violations: Vec<PolicyViolation> = Vec::with_capacity(capacity);
+
+    for policy_id in &decision.determining_policies {
+        violations.push(PolicyViolation::new(
+            "policy",
+            policy_id.clone(),
+            format!("Policy denied the {}", denied_subject),
+        ));
+    }
+
+    for err in &decision.errors {
+        violations.push(PolicyViolation::new(
+            "policy_error",
+            "evaluation_error",
+            err.clone(),
+        ));
+    }
+
+    if violations.is_empty() {
+        violations.push(PolicyViolation::new(
+            "policy",
+            "default_deny",
+            format!(
+                "Authorization default-deny: no Permit policy matched for \
+                 server_id={server_id} action={action}. Check that Cedar \
+                 policies exist for this server and that server_id is set correctly."
+            ),
+        ));
+    }
+
+    violations
+}
+
 /// Log a warning when Code Mode is enabled without a policy evaluator.
 fn warn_no_policy_configured() {
     if !NO_POLICY_WARNING_LOGGED.swap(true, Ordering::SeqCst) {
@@ -106,12 +160,14 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
     /// Returns [`TokenError::SecretTooShort`] if the token secret is shorter
     /// than [`HmacTokenGenerator::MIN_SECRET_LEN`] (16 bytes).
     pub fn new(
-        config: CodeModeConfig,
+        mut config: CodeModeConfig,
         token_secret: impl Into<Vec<u8>>,
     ) -> Result<Self, TokenError> {
         if config.enabled {
             warn_no_policy_configured();
         }
+
+        config.resolve_server_id();
 
         #[cfg(feature = "openapi-code-mode")]
         let operation_registry = OperationRegistry::from_entries(&config.operations);
@@ -162,10 +218,20 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
     /// Returns [`TokenError::SecretTooShort`] if the token secret is shorter
     /// than [`HmacTokenGenerator::MIN_SECRET_LEN`] (16 bytes).
     pub fn with_policy_evaluator(
-        config: CodeModeConfig,
+        mut config: CodeModeConfig,
         token_secret: impl Into<Vec<u8>>,
         evaluator: Arc<dyn PolicyEvaluator>,
     ) -> Result<Self, TokenError> {
+        config.resolve_server_id();
+        if config.server_id.is_none() {
+            tracing::warn!(
+                target: "code_mode",
+                "CodeModeConfig.server_id is not set — AVP/Cedar authorization will use 'unknown' \
+                 as the resource entity ID and will likely default-deny silently. \
+                 Set server_id in config.toml, or the PMCP_SERVER_ID or AWS_LAMBDA_FUNCTION_NAME env var."
+            );
+        }
+
         #[cfg(feature = "openapi-code-mode")]
         let operation_registry = OperationRegistry::from_entries(&config.operations);
 
@@ -204,10 +270,12 @@ impl ValidationPipeline<HmacTokenGenerator, TemplateExplanationGenerator> {
 impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
     /// Create a pipeline with custom generators.
     pub fn with_generators(
-        config: CodeModeConfig,
+        mut config: CodeModeConfig,
         token_generator: T,
         explanation_generator: E,
     ) -> Self {
+        config.resolve_server_id();
+
         #[cfg(feature = "openapi-code-mode")]
         let operation_registry = OperationRegistry::from_entries(&config.operations);
 
@@ -414,17 +482,15 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
                 })?;
 
             if !decision.allowed {
-                let violations: Vec<PolicyViolation> = decision
-                    .determining_policies
-                    .iter()
-                    .map(|policy_id| {
-                        PolicyViolation::new(
-                            "policy",
-                            policy_id.clone(),
-                            "Policy denied the operation",
-                        )
-                    })
-                    .collect();
+                let op_type_str = format!("{:?}", query_info.operation_type);
+                let action =
+                    UnifiedAction::from_graphql(&op_type_str, query_info.operation_name.as_deref());
+                let violations = build_policy_violations(
+                    &decision,
+                    self.config.server_id(),
+                    action,
+                    "operation",
+                );
 
                 return Ok(ValidationResult::failure(
                     violations,
@@ -616,17 +682,12 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
                 })?;
 
             if !decision.allowed {
-                let violations: Vec<PolicyViolation> = decision
-                    .determining_policies
-                    .iter()
-                    .map(|policy_id| {
-                        PolicyViolation::new(
-                            "policy",
-                            policy_id.clone(),
-                            "Policy denied the script",
-                        )
-                    })
-                    .collect();
+                let violations = build_policy_violations(
+                    &decision,
+                    self.config.server_id(),
+                    script_entity.action(),
+                    "script",
+                );
 
                 return Ok(ValidationResult::failure(
                     violations,
@@ -868,6 +929,448 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
         parts.join(" ")
     }
 
+    /// Validate a SQL statement using basic config checks only (no policy evaluator).
+    ///
+    /// For policy evaluation (Cedar/AVP), use [`validate_sql_query_async`] instead.
+    #[cfg(feature = "sql-code-mode")]
+    pub fn validate_sql_query(
+        &self,
+        sql: &str,
+        context: &ValidationContext,
+    ) -> Result<ValidationResult, ValidationError> {
+        let start = Instant::now();
+        let info = self.validate_sql_preamble(sql)?;
+        if let Some(failure) = self.check_sql_config_authorization(&info, start) {
+            return Ok(failure);
+        }
+        self.complete_sql_validation(sql, &info, context, start)
+    }
+
+    /// Validate a SQL statement with async policy evaluation.
+    ///
+    /// Mirrors [`validate_graphql_query_async`] and [`validate_javascript_code_async`]:
+    /// 1. Parse SQL via sqlparser + config-level checks (shared with sync version)
+    /// 2. Policy evaluation via [`PolicyEvaluator::evaluate_statement`] (async, fail-closed)
+    /// 3. Security analysis + token generation
+    ///
+    /// When no policy evaluator is configured, falls back to config-only checks.
+    #[cfg(feature = "sql-code-mode")]
+    pub async fn validate_sql_query_async(
+        &self,
+        sql: &str,
+        context: &ValidationContext,
+    ) -> Result<ValidationResult, ValidationError> {
+        use crate::policy::StatementEntity;
+
+        let start = Instant::now();
+        let info = self.validate_sql_preamble(sql)?;
+        if let Some(failure) = self.check_sql_config_authorization(&info, start) {
+            return Ok(failure);
+        }
+
+        if let Some(ref evaluator) = self.policy_evaluator {
+            let statement_entity = StatementEntity::from_sql_info(&info);
+            let server_entity = self.config.to_sql_server_entity();
+
+            let decision = evaluator
+                .evaluate_statement(&statement_entity, &server_entity)
+                .await
+                .map_err(|e| {
+                    ValidationError::InternalError(format!("Policy evaluation error: {}", e))
+                })?;
+
+            if !decision.allowed {
+                let violations = build_policy_violations(
+                    &decision,
+                    self.config.server_id(),
+                    statement_entity.action(),
+                    "SQL statement",
+                );
+
+                return Ok(ValidationResult::failure(
+                    violations,
+                    self.build_sql_metadata(&info, start.elapsed().as_millis() as u64),
+                ));
+            }
+        } else {
+            warn_no_policy_configured();
+        }
+
+        self.complete_sql_validation(sql, &info, context, start)
+    }
+
+    /// Shared SQL preamble: enabled check, length check, parse.
+    #[cfg(feature = "sql-code-mode")]
+    fn validate_sql_preamble(
+        &self,
+        sql: &str,
+    ) -> Result<crate::sql::SqlStatementInfo, ValidationError> {
+        if !self.config.enabled {
+            return Err(ValidationError::ConfigError(
+                "Code Mode is not enabled for this server".into(),
+            ));
+        }
+
+        if sql.len() > self.config.max_query_length {
+            return Err(ValidationError::SecurityError {
+                message: format!(
+                    "SQL length {} exceeds maximum {}",
+                    sql.len(),
+                    self.config.max_query_length
+                ),
+                issue: crate::types::SecurityIssueType::HighComplexity,
+            });
+        }
+
+        let validator = crate::sql::SqlValidator::new();
+        validator.validate(sql)
+    }
+
+    /// Config-level authorization checks for SQL.
+    ///
+    /// Returns `Some(failure)` if a config check denied the statement,
+    /// `None` if all checks pass.
+    #[cfg(feature = "sql-code-mode")]
+    fn check_sql_config_authorization(
+        &self,
+        info: &crate::sql::SqlStatementInfo,
+        start: Instant,
+    ) -> Option<ValidationResult> {
+        use crate::sql::SqlStatementType;
+
+        let stype = info.statement_type.as_str();
+
+        // Statement-type blocklist
+        if self.config.sql_blocked_statements.contains(stype) {
+            return Some(ValidationResult::failure(
+                vec![PolicyViolation::new(
+                    "code_mode",
+                    "blocked_statement",
+                    format!("Statement type '{}' is blocked for this server", stype),
+                )],
+                self.build_sql_metadata(info, start.elapsed().as_millis() as u64),
+            ));
+        }
+
+        // Statement-type allowlist
+        if !self.config.sql_allowed_statements.is_empty()
+            && !self.config.sql_allowed_statements.contains(stype)
+        {
+            return Some(ValidationResult::failure(
+                vec![PolicyViolation::new(
+                    "code_mode",
+                    "statement_not_allowed",
+                    format!("Statement type '{}' is not in the allowlist", stype),
+                )],
+                self.build_sql_metadata(info, start.elapsed().as_millis() as u64),
+            ));
+        }
+
+        // Global action flags
+        match info.statement_type {
+            SqlStatementType::Select => {
+                if !self.config.sql_reads_enabled {
+                    return Some(ValidationResult::failure(
+                        vec![PolicyViolation::new(
+                            "code_mode",
+                            "reads_disabled",
+                            "SELECT statements are not enabled for this server",
+                        )],
+                        self.build_sql_metadata(info, start.elapsed().as_millis() as u64),
+                    ));
+                }
+            },
+            SqlStatementType::Insert | SqlStatementType::Update => {
+                if !self.config.sql_allow_writes {
+                    return Some(ValidationResult::failure(
+                        vec![PolicyViolation::new(
+                            "code_mode",
+                            "writes_disabled",
+                            "INSERT/UPDATE statements are not enabled for this server",
+                        )
+                        .with_suggestion("Contact your administrator to enable sql_allow_writes.")],
+                        self.build_sql_metadata(info, start.elapsed().as_millis() as u64),
+                    ));
+                }
+                // WHERE requirement applies to UPDATE only — INSERTs never have WHERE.
+                if matches!(info.statement_type, SqlStatementType::Update)
+                    && self.config.sql_require_where_on_writes
+                    && !info.has_where
+                {
+                    return Some(ValidationResult::failure(
+                        vec![PolicyViolation::new(
+                            "code_mode",
+                            "missing_where",
+                            format!("{} without WHERE clause is not allowed", info.verb),
+                        )],
+                        self.build_sql_metadata(info, start.elapsed().as_millis() as u64),
+                    ));
+                }
+            },
+            SqlStatementType::Delete => {
+                if !self.config.sql_allow_deletes {
+                    return Some(ValidationResult::failure(
+                        vec![PolicyViolation::new(
+                            "code_mode",
+                            "deletes_disabled",
+                            "DELETE statements are not enabled for this server",
+                        )],
+                        self.build_sql_metadata(info, start.elapsed().as_millis() as u64),
+                    ));
+                }
+                if self.config.sql_require_where_on_writes && !info.has_where {
+                    return Some(ValidationResult::failure(
+                        vec![PolicyViolation::new(
+                            "code_mode",
+                            "missing_where",
+                            "DELETE without WHERE clause is not allowed",
+                        )],
+                        self.build_sql_metadata(info, start.elapsed().as_millis() as u64),
+                    ));
+                }
+            },
+            SqlStatementType::Ddl => {
+                if !self.config.sql_allow_ddl {
+                    return Some(ValidationResult::failure(
+                        vec![PolicyViolation::new(
+                            "code_mode",
+                            "ddl_disabled",
+                            "DDL (CREATE/ALTER/DROP/GRANT/REVOKE) is not enabled for this server",
+                        )],
+                        self.build_sql_metadata(info, start.elapsed().as_millis() as u64),
+                    ));
+                }
+            },
+            SqlStatementType::Other => {
+                return Some(ValidationResult::failure(
+                    vec![PolicyViolation::new(
+                        "code_mode",
+                        "unsupported_statement",
+                        format!("Statement type '{}' is not supported", info.verb),
+                    )],
+                    self.build_sql_metadata(info, start.elapsed().as_millis() as u64),
+                ));
+            },
+        }
+
+        // Table-level blocklist
+        if !self.config.sql_blocked_tables.is_empty() {
+            for table in &info.tables {
+                if self.config.sql_blocked_tables.contains(table) {
+                    return Some(ValidationResult::failure(
+                        vec![PolicyViolation::new(
+                            "code_mode",
+                            "blocked_table",
+                            format!("Table '{}' is blocked for this server", table),
+                        )],
+                        self.build_sql_metadata(info, start.elapsed().as_millis() as u64),
+                    ));
+                }
+            }
+        }
+
+        // Table-level allowlist
+        if !self.config.sql_allowed_tables.is_empty() {
+            for table in &info.tables {
+                if !self.config.sql_allowed_tables.contains(table) {
+                    return Some(ValidationResult::failure(
+                        vec![PolicyViolation::new(
+                            "code_mode",
+                            "table_not_allowed",
+                            format!("Table '{}' is not in the allowlist", table),
+                        )],
+                        self.build_sql_metadata(info, start.elapsed().as_millis() as u64),
+                    ));
+                }
+            }
+        }
+
+        // Column-level blocklist
+        if !self.config.sql_blocked_columns.is_empty() {
+            for col in &info.columns {
+                if self.config.sql_blocked_columns.contains(col) {
+                    return Some(ValidationResult::failure(
+                        vec![PolicyViolation::new(
+                            "code_mode",
+                            "blocked_column",
+                            format!("Column '{}' is blocked for this server", col),
+                        )],
+                        self.build_sql_metadata(info, start.elapsed().as_millis() as u64),
+                    ));
+                }
+            }
+        }
+
+        // Structural limits
+        if info.join_count > self.config.sql_max_joins {
+            return Some(ValidationResult::failure(
+                vec![PolicyViolation::new(
+                    "code_mode",
+                    "excessive_joins",
+                    format!(
+                        "Query has {} JOINs, exceeds limit of {}",
+                        info.join_count, self.config.sql_max_joins
+                    ),
+                )],
+                self.build_sql_metadata(info, start.elapsed().as_millis() as u64),
+            ));
+        }
+
+        if info.estimated_rows > self.config.sql_max_rows {
+            return Some(ValidationResult::failure(
+                vec![PolicyViolation::new(
+                    "code_mode",
+                    "excessive_rows",
+                    format!(
+                        "Estimated rows {} exceeds limit of {}",
+                        info.estimated_rows, self.config.sql_max_rows
+                    ),
+                )],
+                self.build_sql_metadata(info, start.elapsed().as_millis() as u64),
+            ));
+        }
+
+        None
+    }
+
+    /// Complete SQL validation after config/policy checks pass.
+    #[cfg(feature = "sql-code-mode")]
+    fn complete_sql_validation(
+        &self,
+        sql: &str,
+        info: &crate::sql::SqlStatementInfo,
+        context: &ValidationContext,
+        start: Instant,
+    ) -> Result<ValidationResult, ValidationError> {
+        let validator = crate::sql::SqlValidator::new();
+        let security_analysis = validator.analyze_security(info);
+        let risk_level = security_analysis.assess_risk();
+
+        if security_analysis
+            .potential_issues
+            .iter()
+            .any(|i| i.is_critical())
+        {
+            let violations: Vec<PolicyViolation> = security_analysis
+                .potential_issues
+                .iter()
+                .filter(|i| i.is_critical())
+                .map(|i| {
+                    PolicyViolation::new("security", format!("{:?}", i.issue_type), &i.message)
+                })
+                .collect();
+
+            return Ok(ValidationResult::failure(
+                violations,
+                self.build_sql_metadata(info, start.elapsed().as_millis() as u64),
+            ));
+        }
+
+        let context_hash = context.context_hash();
+        let token = self.token_generator.generate(
+            sql,
+            &context.user_id,
+            &context.session_id,
+            self.config.server_id(),
+            &context_hash,
+            risk_level,
+            self.config.token_ttl_seconds,
+        );
+
+        let token_string = token.encode().map_err(|e| {
+            ValidationError::InternalError(format!("Failed to encode token: {}", e))
+        })?;
+
+        let explanation = self.generate_sql_explanation(info, &security_analysis);
+        let metadata = self.build_sql_metadata(info, start.elapsed().as_millis() as u64);
+
+        let mut result = ValidationResult::success(explanation, risk_level, token_string, metadata);
+
+        for issue in &security_analysis.potential_issues {
+            if !issue.is_critical() {
+                result.warnings.push(issue.message.clone());
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Build metadata from SQL statement info.
+    #[cfg(feature = "sql-code-mode")]
+    fn build_sql_metadata(
+        &self,
+        info: &crate::sql::SqlStatementInfo,
+        validation_time_ms: u64,
+    ) -> ValidationMetadata {
+        let inferred = UnifiedAction::from_sql(info.statement_type.as_str());
+        let action = UnifiedAction::resolve(inferred, &self.config.action_tags, &info.verb);
+
+        ValidationMetadata {
+            is_read_only: info.statement_type.is_read_only(),
+            estimated_rows: Some(info.estimated_rows),
+            accessed_types: info.tables.iter().cloned().collect(),
+            accessed_fields: info.columns.iter().cloned().collect(),
+            has_aggregation: info.has_aggregation,
+            code_type: Some(if info.statement_type.is_read_only() {
+                crate::types::CodeType::SqlQuery
+            } else {
+                crate::types::CodeType::SqlMutation
+            }),
+            action: Some(action),
+            validation_time_ms,
+        }
+    }
+
+    /// Generate a human-readable explanation for a SQL statement.
+    #[cfg(feature = "sql-code-mode")]
+    fn generate_sql_explanation(
+        &self,
+        info: &crate::sql::SqlStatementInfo,
+        security_analysis: &crate::types::SecurityAnalysis,
+    ) -> String {
+        let mut parts = Vec::new();
+
+        let verb_phrase = match info.statement_type.as_str() {
+            "SELECT" => "This query reads data",
+            "INSERT" => "This statement inserts rows",
+            "UPDATE" => "This statement updates rows",
+            "DELETE" => "This statement deletes rows",
+            "DDL" => "This statement changes schema or permissions",
+            _ => "This statement",
+        };
+
+        let tables_phrase = if info.tables.is_empty() {
+            String::new()
+        } else {
+            let mut ts: Vec<&String> = info.tables.iter().collect();
+            ts.sort();
+            format!(
+                " in table(s): {}",
+                ts.into_iter().cloned().collect::<Vec<_>>().join(", ")
+            )
+        };
+
+        parts.push(format!("{}{}.", verb_phrase, tables_phrase));
+
+        if info.has_where {
+            parts.push("Filtered with WHERE clause.".to_string());
+        }
+        if info.has_limit {
+            parts.push(format!("Limited to {} rows.", info.estimated_rows));
+        }
+        if info.join_count > 0 {
+            parts.push(format!("Uses {} JOIN(s).", info.join_count));
+        }
+        if info.subquery_count > 0 {
+            parts.push(format!("Contains {} subquer(ies).", info.subquery_count));
+        }
+
+        let risk = security_analysis.assess_risk();
+        parts.push(format!("Risk: {}", risk));
+
+        parts.join(" ")
+    }
+
     /// Check if a validation result should be auto-approved.
     pub fn should_auto_approve(&self, result: &ValidationResult) -> bool {
         result.is_valid && self.config.should_auto_approve(result.risk_level)
@@ -1000,5 +1503,265 @@ mod tests {
             .violations
             .iter()
             .any(|v| v.rule == "query_not_allowed"));
+    }
+
+    // ============================================================================
+    // SQL Code Mode tests
+    // ============================================================================
+
+    #[cfg(feature = "sql-code-mode")]
+    mod sql_tests {
+        use super::*;
+
+        fn sql_pipeline() -> ValidationPipeline {
+            ValidationPipeline::new(CodeModeConfig::enabled(), b"test-secret-key!".to_vec())
+                .unwrap()
+        }
+
+        #[test]
+        fn validates_select() {
+            let pipeline = sql_pipeline();
+            let ctx = test_context();
+
+            let result = pipeline
+                .validate_sql_query("SELECT id, name FROM users LIMIT 10", &ctx)
+                .unwrap();
+
+            assert!(result.is_valid);
+            assert!(result.approval_token.is_some());
+        }
+
+        #[test]
+        fn rejects_insert_when_writes_disabled() {
+            let pipeline = sql_pipeline();
+            let ctx = test_context();
+
+            let result = pipeline
+                .validate_sql_query("INSERT INTO users (id, name) VALUES (1, 'Alice')", &ctx)
+                .unwrap();
+
+            assert!(!result.is_valid);
+            assert!(result
+                .violations
+                .iter()
+                .any(|v| v.rule == "writes_disabled"));
+        }
+
+        #[test]
+        fn permits_insert_when_writes_enabled() {
+            let mut config = CodeModeConfig::enabled();
+            config.sql_allow_writes = true;
+            let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec()).unwrap();
+            let ctx = test_context();
+
+            let result = pipeline
+                .validate_sql_query("INSERT INTO users (id, name) VALUES (1, 'Alice')", &ctx)
+                .unwrap();
+
+            assert!(result.is_valid);
+        }
+
+        #[test]
+        fn rejects_update_without_where_by_default() {
+            let mut config = CodeModeConfig::enabled();
+            config.sql_allow_writes = true;
+            let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec()).unwrap();
+            let ctx = test_context();
+
+            let result = pipeline
+                .validate_sql_query("UPDATE users SET active = 0", &ctx)
+                .unwrap();
+
+            assert!(!result.is_valid);
+            assert!(result.violations.iter().any(|v| v.rule == "missing_where"));
+        }
+
+        #[test]
+        fn rejects_blocked_table() {
+            let mut config = CodeModeConfig::enabled();
+            config.sql_blocked_tables.insert("secrets".to_string());
+            let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec()).unwrap();
+            let ctx = test_context();
+
+            let result = pipeline
+                .validate_sql_query("SELECT * FROM secrets LIMIT 10", &ctx)
+                .unwrap();
+
+            assert!(!result.is_valid);
+            assert!(result.violations.iter().any(|v| v.rule == "blocked_table"));
+        }
+
+        #[test]
+        fn rejects_non_allowlisted_table() {
+            let mut config = CodeModeConfig::enabled();
+            config.sql_allowed_tables.insert("users".to_string());
+            let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec()).unwrap();
+            let ctx = test_context();
+
+            // "orders" is not in the allowlist
+            let result = pipeline
+                .validate_sql_query("SELECT id FROM orders LIMIT 10", &ctx)
+                .unwrap();
+
+            assert!(!result.is_valid);
+            assert!(result
+                .violations
+                .iter()
+                .any(|v| v.rule == "table_not_allowed"));
+        }
+
+        #[test]
+        fn rejects_blocked_column() {
+            let mut config = CodeModeConfig::enabled();
+            config.sql_blocked_columns.insert("password".to_string());
+            let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec()).unwrap();
+            let ctx = test_context();
+
+            let result = pipeline
+                .validate_sql_query("SELECT id, password FROM users LIMIT 10", &ctx)
+                .unwrap();
+
+            assert!(!result.is_valid);
+            assert!(result.violations.iter().any(|v| v.rule == "blocked_column"));
+        }
+
+        #[test]
+        fn rejects_ddl_by_default() {
+            let pipeline = sql_pipeline();
+            let ctx = test_context();
+
+            let result = pipeline
+                .validate_sql_query("CREATE TABLE foo (id INT)", &ctx)
+                .unwrap();
+
+            assert!(!result.is_valid);
+            assert!(result.violations.iter().any(|v| v.rule == "ddl_disabled"));
+        }
+
+        #[test]
+        fn rejects_syntax_error() {
+            let pipeline = sql_pipeline();
+            let ctx = test_context();
+
+            let result = pipeline.validate_sql_query("SELEC id FRM users", &ctx);
+
+            assert!(matches!(result, Err(ValidationError::ParseError { .. })));
+        }
+
+        struct FixedDenyEvaluator {
+            errors: Vec<String>,
+        }
+
+        #[async_trait::async_trait]
+        impl PolicyEvaluator for FixedDenyEvaluator {
+            async fn evaluate_operation(
+                &self,
+                _op: &crate::policy::OperationEntity,
+                _cfg: &crate::policy::ServerConfigEntity,
+            ) -> Result<crate::policy::AuthorizationDecision, crate::policy::PolicyEvaluationError>
+            {
+                Ok(crate::policy::AuthorizationDecision {
+                    allowed: false,
+                    determining_policies: vec![],
+                    errors: self.errors.clone(),
+                })
+            }
+
+            #[cfg(feature = "sql-code-mode")]
+            async fn evaluate_statement(
+                &self,
+                _stmt: &crate::policy::StatementEntity,
+                _server: &crate::policy::SqlServerEntity,
+            ) -> Result<crate::policy::AuthorizationDecision, crate::policy::PolicyEvaluationError>
+            {
+                Ok(crate::policy::AuthorizationDecision {
+                    allowed: false,
+                    determining_policies: vec![],
+                    errors: self.errors.clone(),
+                })
+            }
+
+            fn name(&self) -> &str {
+                "fixed-deny-test"
+            }
+        }
+
+        fn sql_pipeline_with_evaluator(evaluator: Arc<dyn PolicyEvaluator>) -> ValidationPipeline {
+            let mut config = CodeModeConfig::enabled();
+            config.server_id = Some("test-server".to_string());
+            ValidationPipeline::with_policy_evaluator(
+                config,
+                b"test-secret-key!".to_vec(),
+                evaluator,
+            )
+            .unwrap()
+        }
+
+        #[tokio::test]
+        async fn default_deny_produces_synthetic_violation() {
+            let evaluator =
+                Arc::new(FixedDenyEvaluator { errors: vec![] }) as Arc<dyn PolicyEvaluator>;
+            let pipeline = sql_pipeline_with_evaluator(evaluator);
+            let ctx = test_context();
+
+            let result = pipeline
+                .validate_sql_query_async("SELECT id FROM users LIMIT 10", &ctx)
+                .await
+                .unwrap();
+
+            assert!(!result.is_valid);
+            let default_deny = result
+                .violations
+                .iter()
+                .find(|v| v.rule == "default_deny")
+                .expect("expected a synthetic default_deny violation");
+            assert!(default_deny.message.contains("test-server"));
+            assert!(default_deny.message.contains("Read"));
+        }
+
+        #[tokio::test]
+        async fn policy_errors_flow_to_violations() {
+            let evaluator = Arc::new(FixedDenyEvaluator {
+                errors: vec!["schema validation: missing required attribute X".to_string()],
+            }) as Arc<dyn PolicyEvaluator>;
+            let pipeline = sql_pipeline_with_evaluator(evaluator);
+            let ctx = test_context();
+
+            let result = pipeline
+                .validate_sql_query_async("SELECT id FROM users LIMIT 10", &ctx)
+                .await
+                .unwrap();
+
+            assert!(!result.is_valid);
+            let policy_error = result
+                .violations
+                .iter()
+                .find(|v| v.rule == "evaluation_error")
+                .expect("expected a policy_error violation");
+            assert!(policy_error.message.contains("schema validation"));
+        }
+
+        #[test]
+        fn rejects_excessive_joins() {
+            let mut config = CodeModeConfig::enabled();
+            config.sql_max_joins = 1;
+            let pipeline = ValidationPipeline::new(config, b"test-secret-key!".to_vec()).unwrap();
+            let ctx = test_context();
+
+            let result = pipeline
+                .validate_sql_query(
+                    "SELECT u.id FROM users u \
+                     JOIN orders o ON u.id = o.user_id \
+                     JOIN items i ON o.id = i.order_id LIMIT 10",
+                    &ctx,
+                )
+                .unwrap();
+
+            assert!(!result.is_valid);
+            assert!(result
+                .violations
+                .iter()
+                .any(|v| v.rule == "excessive_joins"));
+        }
     }
 }

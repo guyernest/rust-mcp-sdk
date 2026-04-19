@@ -1,9 +1,31 @@
 //! Code Mode configuration.
 
-use crate::types::RiskLevel;
+use crate::types::{RiskLevel, ValidationError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
+
+/// Resolve a `server_id` from environment variables.
+///
+/// Checks, in order:
+/// 1. `PMCP_SERVER_ID`
+/// 2. `AWS_LAMBDA_FUNCTION_NAME` (Lambda runtime)
+///
+/// Returns `None` if neither is set. Empty strings are treated as unset.
+///
+/// This is the same resolution chain used by
+/// [`CodeModeConfig::resolve_server_id`] — exposed as a free function so tests
+/// and non-pipeline code can share it.
+pub fn resolve_server_id_from_env() -> Option<String> {
+    let candidate = std::env::var("PMCP_SERVER_ID")
+        .ok()
+        .or_else(|| std::env::var("AWS_LAMBDA_FUNCTION_NAME").ok())?;
+    if candidate.is_empty() {
+        None
+    } else {
+        Some(candidate)
+    }
+}
 
 /// A single declared operation in Code Mode configuration.
 /// Maps a raw API path to a canonical plain-name ID for Cedar policies.
@@ -150,6 +172,70 @@ pub struct CodeModeConfig {
     pub openapi_require_output_declaration: bool,
 
     // ========================================================================
+    // SQL-specific settings
+    //
+    // SQL fields accept both their prefixed name (`sql_allow_writes`) and the
+    // unprefixed natural form (`allow_writes`). Downstream SQL servers can use
+    // the unprefixed names in their `[code_mode]` block without a manual
+    // conversion layer:
+    //
+    //     [code_mode]
+    //     reads_enabled = true    # same as sql_reads_enabled
+    //     allow_writes = false    # same as sql_allow_writes
+    //     blocked_tables = ["secrets"]
+    //     max_rows = 5000
+    // ========================================================================
+    /// Whether SELECT statements are enabled (default: true).
+    #[serde(default = "default_true", alias = "reads_enabled")]
+    pub sql_reads_enabled: bool,
+
+    /// Whether INSERT/UPDATE/MERGE statements are allowed globally.
+    #[serde(default, alias = "allow_writes")]
+    pub sql_allow_writes: bool,
+
+    /// Whether DELETE/TRUNCATE statements are allowed globally.
+    #[serde(default, alias = "allow_deletes")]
+    pub sql_allow_deletes: bool,
+
+    /// Whether DDL (CREATE/ALTER/DROP/GRANT/REVOKE) is allowed globally.
+    /// Default is `false` — DDL is almost never appropriate for LLM-generated code.
+    #[serde(default, alias = "allow_ddl")]
+    pub sql_allow_ddl: bool,
+
+    /// Allowed statement types ("SELECT"/"INSERT"/"UPDATE"/"DELETE"/"DDL").
+    /// If non-empty, only statement types in this set are allowed.
+    #[serde(default, alias = "allowed_statements")]
+    pub sql_allowed_statements: HashSet<String>,
+
+    /// Blocked statement types. Always blocked even if globally allowed.
+    #[serde(default, alias = "blocked_statements")]
+    pub sql_blocked_statements: HashSet<String>,
+
+    /// Tables that are always forbidden (blocklist mode).
+    #[serde(default, alias = "blocked_tables")]
+    pub sql_blocked_tables: HashSet<String>,
+
+    /// If non-empty, only these tables can be accessed (allowlist mode).
+    #[serde(default, alias = "allowed_tables")]
+    pub sql_allowed_tables: HashSet<String>,
+
+    /// Columns that may not be referenced in any statement (e.g., `password`, `ssn`).
+    #[serde(default, alias = "blocked_columns")]
+    pub sql_blocked_columns: HashSet<String>,
+
+    /// Maximum row-count estimate allowed (based on LIMIT or default estimate).
+    #[serde(default = "default_sql_max_rows", alias = "max_rows")]
+    pub sql_max_rows: u64,
+
+    /// Maximum number of JOINs in a single statement.
+    #[serde(default = "default_sql_max_joins", alias = "max_joins")]
+    pub sql_max_joins: u32,
+
+    /// Whether to require a WHERE clause for UPDATE/DELETE statements.
+    #[serde(default = "default_true", alias = "require_where_on_writes")]
+    pub sql_require_where_on_writes: bool,
+
+    // ========================================================================
     // Common settings
     // ========================================================================
     /// Action tags to override inferred actions for specific operations.
@@ -236,6 +322,19 @@ impl Default for CodeModeConfig {
             openapi_internal_blocked_fields: HashSet::new(),
             openapi_output_blocked_fields: HashSet::new(),
             openapi_require_output_declaration: false,
+            // SQL
+            sql_reads_enabled: true,
+            sql_allow_writes: false,
+            sql_allow_deletes: false,
+            sql_allow_ddl: false,
+            sql_allowed_statements: HashSet::new(),
+            sql_blocked_statements: HashSet::new(),
+            sql_blocked_tables: HashSet::new(),
+            sql_allowed_tables: HashSet::new(),
+            sql_blocked_columns: HashSet::new(),
+            sql_max_rows: default_sql_max_rows(),
+            sql_max_joins: default_sql_max_joins(),
+            sql_require_where_on_writes: true,
             // Common
             action_tags: HashMap::new(),
             max_depth: default_max_depth(),
@@ -302,8 +401,46 @@ impl CodeModeConfig {
     }
 
     /// Get the server ID, falling back to a default.
+    ///
+    /// **Note:** The `"unknown"` fallback produces silent AVP default-deny failures
+    /// (no Cedar policy matches a server_id of `"unknown"`). Prefer
+    /// [`resolve_server_id`](Self::resolve_server_id) to auto-fill from environment,
+    /// or [`require_server_id`](Self::require_server_id) to fail fast.
     pub fn server_id(&self) -> &str {
         self.server_id.as_deref().unwrap_or("unknown")
+    }
+
+    /// Auto-resolve `server_id` from environment if not already set.
+    ///
+    /// Resolution order:
+    /// 1. `self.server_id` (if already set, e.g., from TOML) — no change
+    /// 2. `PMCP_SERVER_ID` env var
+    /// 3. `AWS_LAMBDA_FUNCTION_NAME` env var (Lambda runtime)
+    /// 4. Left as `None` — caller is responsible for handling
+    ///
+    /// [`ValidationPipeline`](crate::ValidationPipeline) constructors call this
+    /// automatically, so wrappers rarely need to invoke it directly.
+    pub fn resolve_server_id(&mut self) {
+        if self.server_id.is_some() {
+            return;
+        }
+        self.server_id = resolve_server_id_from_env();
+    }
+
+    /// Return the `server_id`, or an error if not resolved.
+    ///
+    /// Use this in production code paths that require AVP authorization —
+    /// it fails fast with a clear message instead of letting `"unknown"`
+    /// reach AVP and produce a silent default-deny.
+    pub fn require_server_id(&self) -> Result<&str, ValidationError> {
+        self.server_id.as_deref().ok_or_else(|| {
+            ValidationError::ConfigError(
+                "server_id is not set. Set it in config.toml, PMCP_SERVER_ID env var, \
+                 or AWS_LAMBDA_FUNCTION_NAME (Lambda). Without it, AVP authorization \
+                 will default-deny silently."
+                    .into(),
+            )
+        })
     }
 
     /// Convert to ServerConfigEntity for policy evaluation.
@@ -369,6 +506,25 @@ impl CodeModeConfig {
             require_output_declaration: self.openapi_require_output_declaration,
         }
     }
+
+    /// Convert to `SqlServerEntity` for policy evaluation (SQL Code Mode).
+    #[cfg(feature = "sql-code-mode")]
+    pub fn to_sql_server_entity(&self) -> crate::policy::SqlServerEntity {
+        crate::policy::SqlServerEntity {
+            server_id: self.server_id().to_string(),
+            server_type: "sql".to_string(),
+            allow_write: self.sql_allow_writes,
+            allow_delete: self.sql_allow_deletes,
+            allow_admin: self.sql_allow_ddl,
+            max_rows: self.sql_max_rows,
+            max_joins: self.sql_max_joins,
+            allowed_operations: self.sql_allowed_statements.clone(),
+            blocked_operations: self.sql_blocked_statements.clone(),
+            blocked_tables: self.sql_blocked_tables.clone(),
+            blocked_columns: self.sql_blocked_columns.clone(),
+            allowed_tables: self.sql_allowed_tables.clone(),
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -405,6 +561,14 @@ fn default_max_field_count() -> u32 {
 
 fn default_max_cost() -> u32 {
     1000
+}
+
+fn default_sql_max_rows() -> u64 {
+    10_000
+}
+
+fn default_sql_max_joins() -> u32 {
+    5
 }
 
 #[cfg(test)]
@@ -633,5 +797,167 @@ name = "some-server"
         assert!(!config.enabled);
         assert!(config.operations.is_empty());
         assert_eq!(config.token_ttl_seconds, 300); // default
+    }
+
+    // =========================================================================
+    // server_id resolution tests
+    //
+    // These tests mutate process-wide env vars. Cargo parallelizes tests across
+    // threads in the same process, so a shared Mutex serializes them — without
+    // this, set_var/remove_var in one test would race with another.
+    // =========================================================================
+
+    use std::sync::Mutex;
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl EnvGuard {
+        fn acquire() -> Self {
+            let lock = ENV_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            std::env::remove_var("PMCP_SERVER_ID");
+            std::env::remove_var("AWS_LAMBDA_FUNCTION_NAME");
+            Self { _lock: lock }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            std::env::remove_var("PMCP_SERVER_ID");
+            std::env::remove_var("AWS_LAMBDA_FUNCTION_NAME");
+        }
+    }
+
+    #[test]
+    fn resolve_server_id_from_explicit_config_takes_precedence() {
+        let _g = EnvGuard::acquire();
+        std::env::set_var("PMCP_SERVER_ID", "from-env");
+
+        let mut config = CodeModeConfig {
+            server_id: Some("from-config".to_string()),
+            ..Default::default()
+        };
+        config.resolve_server_id();
+
+        assert_eq!(config.server_id.as_deref(), Some("from-config"));
+    }
+
+    #[test]
+    fn resolve_server_id_from_pmcp_env() {
+        let _g = EnvGuard::acquire();
+        std::env::set_var("PMCP_SERVER_ID", "my-server");
+
+        let mut config = CodeModeConfig::default();
+        config.resolve_server_id();
+
+        assert_eq!(config.server_id.as_deref(), Some("my-server"));
+    }
+
+    #[test]
+    fn resolve_server_id_from_lambda_env() {
+        let _g = EnvGuard::acquire();
+        std::env::set_var("AWS_LAMBDA_FUNCTION_NAME", "my-lambda-fn");
+
+        let mut config = CodeModeConfig::default();
+        config.resolve_server_id();
+
+        assert_eq!(config.server_id.as_deref(), Some("my-lambda-fn"));
+    }
+
+    #[test]
+    fn resolve_server_id_pmcp_wins_over_lambda() {
+        let _g = EnvGuard::acquire();
+        std::env::set_var("PMCP_SERVER_ID", "explicit");
+        std::env::set_var("AWS_LAMBDA_FUNCTION_NAME", "lambda-fn");
+
+        let mut config = CodeModeConfig::default();
+        config.resolve_server_id();
+
+        assert_eq!(config.server_id.as_deref(), Some("explicit"));
+    }
+
+    #[test]
+    fn resolve_server_id_leaves_none_when_unset() {
+        let _g = EnvGuard::acquire();
+        let mut config = CodeModeConfig::default();
+        config.resolve_server_id();
+        assert!(config.server_id.is_none());
+    }
+
+    #[test]
+    fn require_server_id_errors_when_unset() {
+        let config = CodeModeConfig::default();
+        let result = config.require_server_id();
+        assert!(matches!(result, Err(ValidationError::ConfigError(_))));
+    }
+
+    #[test]
+    fn require_server_id_returns_value_when_set() {
+        let config = CodeModeConfig {
+            server_id: Some("my-server".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(config.require_server_id().unwrap(), "my-server");
+    }
+
+    #[test]
+    fn resolve_server_id_from_env_free_fn_treats_empty_as_unset() {
+        let _g = EnvGuard::acquire();
+        std::env::set_var("PMCP_SERVER_ID", "");
+        assert_eq!(resolve_server_id_from_env(), None);
+    }
+
+    // =========================================================================
+    // SQL TOML DX tests (serde aliases)
+    // =========================================================================
+
+    #[test]
+    fn sql_config_accepts_unprefixed_toml_names() {
+        let toml_str = r#"
+enabled = true
+allow_writes = true
+allow_deletes = true
+allow_ddl = true
+allowed_tables = ["users", "orders"]
+blocked_tables = ["secrets"]
+blocked_columns = ["password", "ssn"]
+max_rows = 5000
+max_joins = 3
+require_where_on_writes = false
+"#;
+        let config: CodeModeConfig =
+            toml::from_str(toml_str).expect("Failed to deserialize with unprefixed aliases");
+
+        assert!(config.enabled);
+        assert!(config.sql_allow_writes);
+        assert!(config.sql_allow_deletes);
+        assert!(config.sql_allow_ddl);
+        assert!(config.sql_allowed_tables.contains("users"));
+        assert!(config.sql_allowed_tables.contains("orders"));
+        assert!(config.sql_blocked_tables.contains("secrets"));
+        assert!(config.sql_blocked_columns.contains("password"));
+        assert_eq!(config.sql_max_rows, 5000);
+        assert_eq!(config.sql_max_joins, 3);
+        assert!(!config.sql_require_where_on_writes);
+    }
+
+    #[test]
+    fn sql_config_accepts_prefixed_toml_names() {
+        let toml_str = r#"
+enabled = true
+sql_allow_writes = true
+sql_blocked_tables = ["secrets"]
+sql_max_rows = 5000
+"#;
+        let config: CodeModeConfig =
+            toml::from_str(toml_str).expect("Failed to deserialize with prefixed names");
+
+        assert!(config.sql_allow_writes);
+        assert!(config.sql_blocked_tables.contains("secrets"));
+        assert_eq!(config.sql_max_rows, 5000);
     }
 }

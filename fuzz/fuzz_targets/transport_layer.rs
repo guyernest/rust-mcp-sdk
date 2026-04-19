@@ -1,8 +1,8 @@
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
-use bytes::{BytesMut, BufMut};
 use arbitrary::{Arbitrary, Unstructured};
+use bytes::{BufMut, BytesMut};
+use libfuzzer_sys::fuzz_target;
 
 // Custom types for fuzzing transport behavior
 #[derive(Debug, Arbitrary)]
@@ -35,25 +35,25 @@ struct FuzzMetadata {
 fn simulate_transport_operations(data: &[u8]) {
     // 1. Test message framing
     let mut buffer = BytesMut::new();
-    
+
     // Add length prefix
     if data.len() < 65536 {
         buffer.put_u16(data.len() as u16);
         buffer.put_slice(data);
-        
+
         // Try to read back
         if buffer.len() >= 2 {
             let len = u16::from_be_bytes([buffer[0], buffer[1]]) as usize;
             if buffer.len() >= 2 + len {
-                let _message = &buffer[2..2+len];
+                let _message = &buffer[2..2 + len];
             }
         }
     }
-    
+
     // 2. Test message chunking
     let chunk_size = 1024;
     let chunks: Vec<_> = data.chunks(chunk_size).collect();
-    
+
     let mut reassembled = Vec::new();
     for chunk in chunks {
         reassembled.extend_from_slice(chunk);
@@ -63,9 +63,10 @@ fn simulate_transport_operations(data: &[u8]) {
         // This should never happen, but if it does, just return
         return;
     }
-    
+
     // 3. Test message compression simulation
-    if data.len() > 10 && data.len() < 10000 {  // Add upper bound to prevent issues
+    if data.len() > 10 && data.len() < 10000 {
+        // Add upper bound to prevent issues
         // Simulate simple run-length encoding
         let mut compressed = Vec::new();
         let max_compressed_size = 20000; // Limit compressed size too
@@ -80,7 +81,7 @@ fn simulate_transport_operations(data: &[u8]) {
             compressed.push(byte);
             i += count;
         }
-        
+
         // Decompress with size limit to prevent memory exhaustion
         let mut decompressed = Vec::new();
         let max_decompressed_size = 100_000; // Reasonable limit for fuzzing
@@ -108,12 +109,12 @@ fn test_websocket_framing(data: &[u8]) {
     if data.len() < 2 {
         return;
     }
-    
+
     let _fin = (data[0] & 0x80) != 0;
     let opcode = data[0] & 0x0F;
     let masked = (data[1] & 0x80) != 0;
     let payload_len = data[1] & 0x7F;
-    
+
     let mut offset = 2;
     let actual_len = if payload_len == 126 {
         if data.len() < offset + 2 {
@@ -128,8 +129,14 @@ fn test_websocket_framing(data: &[u8]) {
             return;
         }
         let len = u64::from_be_bytes([
-            data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
-            data[offset + 4], data[offset + 5], data[offset + 6], data[offset + 7],
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+            data[offset + 4],
+            data[offset + 5],
+            data[offset + 6],
+            data[offset + 7],
         ]);
         offset += 8;
         // Limit to reasonable size for fuzzing - prevent huge allocations
@@ -137,34 +144,40 @@ fn test_websocket_framing(data: &[u8]) {
     } else {
         payload_len as usize
     };
-    
+
     let mask_key = if masked {
         if data.len() < offset + 4 {
             return;
         }
-        let key = [data[offset], data[offset + 1], data[offset + 2], data[offset + 3]];
+        let key = [
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ];
         offset += 4;
         Some(key)
     } else {
         None
     };
-    
+
     // Make sure we don't try to read more than available
     let safe_len = actual_len.min(data.len().saturating_sub(offset));
     if data.len() >= offset + safe_len && safe_len > 0 {
         let mut payload = data[offset..offset + safe_len].to_vec();
-        
+
         // Unmask if needed
         if let Some(key) = mask_key {
             for i in 0..payload.len() {
                 payload[i] ^= key[i % 4];
             }
         }
-        
+
         // Process based on opcode
         match opcode {
             0x0 => {}, // Continuation
-            0x1 => {   // Text frame
+            0x1 => {
+                // Text frame
                 let _ = String::from_utf8(payload);
             },
             0x2 => {}, // Binary frame
@@ -179,13 +192,13 @@ fn test_websocket_framing(data: &[u8]) {
 fuzz_target!(|data: &[u8]| {
     // 1. Test basic transport operations
     simulate_transport_operations(data);
-    
+
     // 2. Test WebSocket-like framing
     test_websocket_framing(data);
-    
+
     // 3. Generate structured transport messages
     let mut u = Unstructured::new(data);
-    
+
     if let Ok(fuzz_msg) = FuzzTransportMessage::arbitrary(&mut u) {
         // Validate message types
         match fuzz_msg.message_type {
@@ -203,13 +216,13 @@ fuzz_target!(|data: &[u8]| {
             _ => {},
         }
     }
-    
+
     // 4. Test transport buffering and flow control
     if data.len() > 0 {
         // Limit buffer size to prevent excessive allocation
         let buffer_size = ((data[0] as usize) * 256).min(1_000_000);
         let mut buffer = Vec::with_capacity(buffer_size);
-        
+
         for chunk in data.chunks(256) {
             if buffer.len() + chunk.len() <= buffer_size {
                 buffer.extend_from_slice(chunk);
@@ -220,11 +233,11 @@ fuzz_target!(|data: &[u8]| {
             }
         }
     }
-    
+
     // 5. Test message ordering and sequencing
     let mut messages = Vec::new();
     let mut seq = 0u32;
-    
+
     for chunk in data.chunks(16) {
         if chunk.len() >= 4 {
             let msg_seq = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
@@ -232,20 +245,21 @@ fuzz_target!(|data: &[u8]| {
         }
         seq = seq.wrapping_add(1);
     }
-    
+
     // Sort by sequence number
     messages.sort_by_key(|(s, _)| *s);
-    
+
     // 6. Test connection state transitions
     let states = ["connecting", "connected", "closing", "closed"];
     if data.len() > 0 {
         let state_idx = (data[0] as usize) % states.len();
         let _current_state = states[state_idx];
-        
+
         // Simulate state transitions
         match state_idx {
             0 => {}, // Connecting - wait for handshake
-            1 => {   // Connected - can send/receive
+            1 => {
+                // Connected - can send/receive
                 let can_send = data.len() > 1 && data[1] & 0x01 != 0;
                 let can_receive = data.len() > 1 && data[1] & 0x02 != 0;
                 // In a connected state, at least one capability should be present

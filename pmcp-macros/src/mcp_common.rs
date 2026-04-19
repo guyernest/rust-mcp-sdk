@@ -5,6 +5,7 @@
 
 use proc_macro2::TokenStream;
 use quote::quote;
+use syn::parse::Parser;
 use syn::{FnArg, GenericParam, Generics, Type, TypePath};
 
 /// Parameter slot for call-site argument ordering.
@@ -322,5 +323,236 @@ mod tests {
     fn test_type_name_matches_extra_qualified() {
         let ty: Type = parse_quote!(pmcp::RequestHandlerExtra);
         assert!(type_name_matches(&ty, "RequestHandlerExtra"));
+    }
+}
+
+/// Error message used when `#[mcp_tool]` has neither a `description = "..."`
+/// attribute nor a rustdoc comment. Kept as a `pub const` so both
+/// parse sites emit byte-identical diagnostics.
+pub const MCP_TOOL_MISSING_DESCRIPTION_ERROR: &str =
+    "mcp_tool requires either a `description = \"...\"` attribute or a rustdoc comment on the function";
+
+/// Build a synthetic `description = "..."` nested-meta from a plain string.
+///
+/// Uses `syn::LitStr::new` + `parse_quote!` rather than string formatting
+/// to guarantee correct handling of embedded quotes, backslashes, and
+/// arbitrary UTF-8.
+fn build_description_meta(desc: &str) -> darling::ast::NestedMeta {
+    let lit = syn::LitStr::new(desc, proc_macro2::Span::call_site());
+    let meta: syn::Meta = syn::parse_quote! { description = #lit };
+    darling::ast::NestedMeta::Meta(meta)
+}
+
+/// True iff `metas` already contains a `description = ...` `NameValue` entry.
+/// Note: empty string `description = ""` counts as present — explicit empty
+/// wins silently over rustdoc.
+fn has_description_meta(metas: &[darling::ast::NestedMeta]) -> bool {
+    metas.iter().any(|m| {
+        matches!(
+            m,
+            darling::ast::NestedMeta::Meta(syn::Meta::NameValue(nv))
+                if nv.path.is_ident("description")
+        )
+    })
+}
+
+/// Shared resolver — the one place where rustdoc fallback logic lives.
+///
+/// # Arguments
+/// - `args_tokens`: the `(...)` inside `#[mcp_tool(...)]`. Pass an empty
+///   `TokenStream` for `#[mcp_tool]` with no parens.
+/// - `item_attrs`: the annotated item's attributes (function-level for the
+///   standalone site, method-level for the impl-block site) — the rustdoc
+///   harvest source.
+/// - `error_span_ident`: the identifier used for the `Span` of the
+///   missing-description compile error (typically `&sig.ident`).
+///
+/// # Returns
+/// A `Vec<NestedMeta>` guaranteed to contain a `description = ...` entry,
+/// ready to feed into `McpToolArgs::from_list`. Or `Err` with a parse error
+/// (if `args_tokens` is malformed) or the canonical missing-description
+/// error (if neither source supplied a description).
+pub fn resolve_tool_args(
+    args_tokens: proc_macro2::TokenStream,
+    item_attrs: &[syn::Attribute],
+    error_span_ident: &syn::Ident,
+) -> syn::Result<Vec<darling::ast::NestedMeta>> {
+    let parser =
+        syn::punctuated::Punctuated::<darling::ast::NestedMeta, syn::Token![,]>::parse_terminated;
+    let mut nested_metas: Vec<darling::ast::NestedMeta> =
+        parser.parse2(args_tokens)?.into_iter().collect();
+
+    let mut has_desc = has_description_meta(&nested_metas);
+    if !has_desc {
+        if let Some(doc_desc) = pmcp_macros_support::rustdoc::extract_doc_description(item_attrs) {
+            nested_metas.push(build_description_meta(&doc_desc));
+            has_desc = true;
+        }
+    }
+
+    if !has_desc {
+        return Err(syn::Error::new_spanned(
+            error_span_ident,
+            MCP_TOOL_MISSING_DESCRIPTION_ERROR,
+        ));
+    }
+
+    Ok(nested_metas)
+}
+
+#[cfg(test)]
+mod rustdoc_fallback_tests {
+    use super::{
+        build_description_meta, has_description_meta, resolve_tool_args,
+        MCP_TOOL_MISSING_DESCRIPTION_ERROR,
+    };
+    use quote::ToTokens;
+
+    fn sample_ident() -> syn::Ident {
+        syn::Ident::new("sample", proc_macro2::Span::call_site())
+    }
+
+    fn doc_attrs(lines: &[&str]) -> Vec<syn::Attribute> {
+        lines
+            .iter()
+            .map(|line| {
+                let lit = syn::LitStr::new(line, proc_macro2::Span::call_site());
+                syn::parse_quote! { #[doc = #lit] }
+            })
+            .collect()
+    }
+
+    fn description_value(metas: &[darling::ast::NestedMeta]) -> Option<String> {
+        metas.iter().find_map(|m| {
+            if let darling::ast::NestedMeta::Meta(syn::Meta::NameValue(nv)) = m {
+                if nv.path.is_ident("description") {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(s),
+                        ..
+                    }) = &nv.value
+                    {
+                        return Some(s.value());
+                    }
+                }
+            }
+            None
+        })
+    }
+
+    #[test]
+    fn resolve_empty_args_with_rustdoc_synthesizes() {
+        let attrs = doc_attrs(&[" Hello from rustdoc."]);
+        let ident = sample_ident();
+        let metas = resolve_tool_args(proc_macro2::TokenStream::new(), &attrs, &ident)
+            .expect("should synthesize from rustdoc");
+        assert_eq!(
+            description_value(&metas).as_deref(),
+            Some("Hello from rustdoc.")
+        );
+    }
+
+    #[test]
+    fn resolve_with_description_ignores_rustdoc() {
+        let attrs = doc_attrs(&[" IGNORED"]);
+        let ident = sample_ident();
+        let args: proc_macro2::TokenStream = syn::parse_str(r#"description = "WINS""#).unwrap();
+        let metas = resolve_tool_args(args.to_token_stream(), &attrs, &ident)
+            .expect("attribute should win");
+        assert_eq!(description_value(&metas).as_deref(), Some("WINS"));
+    }
+
+    #[test]
+    fn resolve_neither_present_errors_with_canonical_wording() {
+        let ident = sample_ident();
+        let err = resolve_tool_args(proc_macro2::TokenStream::new(), &[], &ident)
+            .expect_err("should error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("mcp_tool requires either"),
+            "error should contain canonical prefix, got: {msg}"
+        );
+        assert!(
+            msg.contains("or a rustdoc comment on the function"),
+            "error should mention rustdoc fallback, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_empty_string_description_with_rustdoc_keeps_empty() {
+        // `description = ""` is PRESENT, so rustdoc is not consulted and
+        // the empty string passes through.
+        let attrs = doc_attrs(&[" IGNORED rustdoc."]);
+        let ident = sample_ident();
+        let args: proc_macro2::TokenStream = syn::parse_str(r#"description = """#).unwrap();
+        let metas = resolve_tool_args(args.to_token_stream(), &attrs, &ident)
+            .expect("empty string is valid input");
+        assert_eq!(description_value(&metas).as_deref(), Some(""));
+    }
+
+    #[test]
+    fn resolve_empty_string_description_no_rustdoc_keeps_empty() {
+        // Same as above but NO rustdoc. Empty string still counts as
+        // present — no error, no synthesis.
+        let ident = sample_ident();
+        let args: proc_macro2::TokenStream = syn::parse_str(r#"description = """#).unwrap();
+        let metas = resolve_tool_args(args.to_token_stream(), &[], &ident)
+            .expect("empty string is valid input");
+        assert_eq!(description_value(&metas).as_deref(), Some(""));
+    }
+
+    #[test]
+    fn mcp_tool_missing_error_wording_exact() {
+        assert_eq!(
+            MCP_TOOL_MISSING_DESCRIPTION_ERROR,
+            "mcp_tool requires either a `description = \"...\"` attribute or a rustdoc comment on the function"
+        );
+    }
+
+    #[test]
+    fn has_description_meta_true_when_present() {
+        let meta = build_description_meta("hello");
+        assert!(has_description_meta(&[meta]));
+    }
+
+    #[test]
+    fn has_description_meta_false_when_absent() {
+        let metas: Vec<darling::ast::NestedMeta> = Vec::new();
+        assert!(!has_description_meta(&metas));
+    }
+
+    #[test]
+    fn build_description_meta_roundtrips_embedded_quotes() {
+        let meta = build_description_meta("he said \"hi\"");
+        assert!(has_description_meta(&[meta]));
+    }
+
+    #[test]
+    fn resolve_skips_include_str_doc_and_errors_if_no_other_source() {
+        // `#[doc = include_str!("...")]` is Expr::Macro, not Expr::Lit(Str).
+        // The support-crate helper skips it silently. With no other
+        // description source, the resolver errors with the canonical wording.
+        let attr: syn::Attribute = syn::parse_quote! { #[doc = include_str!("nonexistent.md")] };
+        let ident = sample_ident();
+        let err = resolve_tool_args(proc_macro2::TokenStream::new(), &[attr], &ident)
+            .expect_err("include_str!() doc must not satisfy description");
+        assert!(
+            err.to_string().contains("mcp_tool requires either"),
+            "include_str!-only should trigger canonical error"
+        );
+    }
+
+    #[test]
+    fn resolve_skips_cfg_attr_doc_and_errors_if_no_other_source() {
+        // `#[cfg_attr(doc, doc = "...")]` is a `#[cfg_attr(...)]` attribute
+        // whose path is `cfg_attr`, NOT `doc`. The harvest helper only
+        // inspects attrs whose path is `doc`, so this is silently skipped.
+        let attr: syn::Attribute = syn::parse_quote! { #[cfg_attr(doc, doc = "conditional doc")] };
+        let ident = sample_ident();
+        let err = resolve_tool_args(proc_macro2::TokenStream::new(), &[attr], &ident)
+            .expect_err("cfg_attr-gated doc must not satisfy description");
+        assert!(
+            err.to_string().contains("mcp_tool requires either"),
+            "cfg_attr-only should trigger canonical error"
+        );
     }
 }

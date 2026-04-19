@@ -216,11 +216,11 @@ async fn parse_rpc_response(response: reqwest::Response) -> Result<JsonRpcRespon
     }
 }
 
-/// MCP HTTP Proxy with session-once initialization.
-///
-/// The proxy initializes the MCP session exactly once on the first
-/// request and reuses it for all subsequent calls. The session can
-/// be reset via `reset_session()` for reconnect scenarios.
+// MCP HTTP Proxy with session-once initialization.
+//
+// The proxy initializes the MCP session exactly once on the first
+// request and reuses it for all subsequent calls. The session can
+// be reset via `reset_session()` for reconnect scenarios.
 
 /// Error type for MCP requests that preserves upstream HTTP status for auth failures.
 #[derive(Debug)]
@@ -418,7 +418,7 @@ impl McpProxy {
 
         let rpc_response: JsonRpcResponse = parse_rpc_response(response)
             .await
-            .map_err(|e| McpRequestError::Other(e))?;
+            .map_err(McpRequestError::Other)?;
 
         if let Some(error) = rpc_response.error {
             return Err(McpRequestError::Other(anyhow::anyhow!(

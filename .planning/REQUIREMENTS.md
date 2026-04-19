@@ -47,6 +47,14 @@ Inserted into v2.1 via Phase 67.1 (INSERTED, 2026-04-11) — blocker for an immi
 - [ ] **CMSUP-05**: Contract YAMLs for `pmcp-code-mode` and `pmcp-code-mode-derive` exist under `../provable-contracts/contracts/` covering `PolicyEvaluator`/`CodeExecutor` trait invariants, HMAC token bind-to-code-hash semantics, derive-macro expansion contracts, and default-deny behavior; `pmat comply check` passes on both crates; property tests cover HMAC round-trip and validation-pipeline determinism; fuzz targets exist for GraphQL parser input, JavaScript parser input, and token verification in the core crate (macro-input fuzzing skipped as documented in 67.1-DECISIONS.md D7)
 - [ ] **CMSUP-06**: A complete worked example in `examples/` (e.g. `XX_code_mode_graphql.rs`) demonstrates the end-to-end flow: `#[derive(CodeMode)]` annotation → `register_code_mode_tools(builder)` → `validate_code` call → approval token issued → `execute_code` call with token → result — runnable via `cargo run --example XX_code_mode_graphql` using `NoopPolicyEvaluator`; `crates/pmcp-code-mode/` and `crates/pmcp-code-mode-derive/` are slotted into the publish order documented in CLAUDE.md (`pmcp-widget-utils → pmcp → pmcp-code-mode → pmcp-code-mode-derive → mcp-tester → mcp-preview → cargo-pmcp`) with CRATE-README files ready for docs.rs, and `make quality-gate` passes workspace-wide
 
+### rmcp Parity (Phase 69 research — seeds follow-on phases)
+
+Seeded by Phase 69 research (`.planning/phases/69-rmcp-parity-research-gap-analysis-across-ergonomics-transpor/69-PROPOSALS.md`). One REQ-ID per proposal, mapping to the proposal as a whole; the proposal's 3–5 success criteria are its internal acceptance tests. Status remains pending until the follow-on phase ships.
+
+- [ ] **PARITY-HANDLER-01**: Enrich `RequestHandlerExtra` with a typed-key extensions map and an optional peer back-channel, so middleware state transfer and in-handler server-to-client RPCs work without out-of-band plumbing.
+- [ ] **PARITY-CLIENT-01**: Ship typed-input `call_tool_typed` / `call_prompt_typed` helpers and auto-paginating `list_all_tools` / `list_all_prompts` / `list_all_resources` convenience methods on `Client`, reducing client boilerplate to one call per operation.
+- [x] **PARITY-MACRO-01**: Support rustdoc as a fallback source for `#[mcp_tool]` descriptions, so well-documented tool functions do not have to repeat themselves in the macro attribute.
+
 ## Previous Requirements
 
 <details>
@@ -132,12 +140,16 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CMSUP-04 | Phase 67.1 | Pending |
 | CMSUP-05 | Phase 67.1 | Pending |
 | CMSUP-06 | Phase 67.1 | Pending |
+| PARITY-HANDLER-01 | Phase 70 | Pending |
+| PARITY-CLIENT-01 | TBD | Pending |
+| PARITY-MACRO-01 | Phase 71 | Complete |
 
 **Coverage:**
-- v2.1 requirements: 20 total (14 original + 6 inserted via Phase 67.1)
-- Mapped to phases: 20
+- v2.1 requirements: 23 total (20 pre-seed + 3 seeded by Phase 69)
+- Mapped to phases: 23
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-10*
-*Last updated: 2026-04-11 — added CMSUP-01..06 for Phase 67.1 Code Mode Support (INSERTED)*
+*Last updated: 2026-04-16 — added 3 PARITY-* IDs seeded by Phase 69 rmcp parity research*
+*Last updated: 2026-04-17 — PARITY-MACRO-01 closed by Phase 71 (pmcp 2.4.0 / pmcp-macros 0.6.0 / pmcp-macros-support 0.1.0 — rustdoc fallback)*

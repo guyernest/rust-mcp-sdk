@@ -1018,6 +1018,7 @@ description = "A test tool"
                 prompts: vec![],
                 composition: false,
             },
+            available_operations: None,
         };
 
         let context = metadata.to_cdk_context();
@@ -1044,6 +1045,7 @@ description = "A test tool"
             template_version: None,
             resources: ResourceRequirements::default(),
             capabilities: ServerCapabilities::default(),
+            available_operations: None,
         };
 
         let cf_metadata = metadata.to_cloudformation_metadata();

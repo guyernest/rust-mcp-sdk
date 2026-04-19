@@ -289,9 +289,7 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     let pattern = pattern.replace('?', ".");
     let pattern = format!("^{}$", pattern);
 
-    regex::Regex::new(&pattern)
-        .map(|re| re.is_match(text))
-        .unwrap_or(false)
+    regex::Regex::new(&pattern).is_ok_and(|re| re.is_match(text))
 }
 
 /// Create a secure path validator for a directory

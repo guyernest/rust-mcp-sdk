@@ -245,11 +245,7 @@ fn mean_u64(values: impl Iterator<Item = u64>) -> u64 {
         sum = sum.saturating_add(v);
         count += 1;
     }
-    if count == 0 {
-        0
-    } else {
-        sum / count
-    }
+    sum.checked_div(count).unwrap_or(0)
 }
 
 #[cfg(test)]

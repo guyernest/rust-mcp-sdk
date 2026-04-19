@@ -85,6 +85,10 @@ pub mod cedar_validation;
 #[cfg(feature = "openapi-code-mode")]
 mod javascript;
 
+// SQL validation for SQL Code Mode (requires sqlparser)
+#[cfg(feature = "sql-code-mode")]
+pub mod sql;
+
 // AWS Verified Permissions policy evaluator
 #[cfg(feature = "avp")]
 pub mod avp;
@@ -104,7 +108,7 @@ pub use async_trait::async_trait;
 pub use code_executor::CodeExecutor;
 
 // Re-export public types
-pub use config::CodeModeConfig;
+pub use config::{resolve_server_id_from_env, CodeModeConfig};
 
 pub use explanation::{ExplanationGenerator, TemplateExplanationGenerator};
 
@@ -116,6 +120,10 @@ pub use javascript::{
     ApiCall, HttpMethod, JavaScriptCodeInfo, JavaScriptValidator, OutputDeclaration,
     SafetyViolation, SafetyViolationType,
 };
+
+// SQL Code Mode exports
+#[cfg(feature = "sql-code-mode")]
+pub use sql::{SqlStatementInfo, SqlStatementType, SqlValidator};
 
 // JavaScript execution runtime exports
 #[cfg(feature = "js-runtime")]
@@ -170,6 +178,11 @@ pub use policy::{
 pub use policy::{
     get_openapi_baseline_policies, get_openapi_code_mode_schema_json, normalize_operation_format,
     normalize_path_to_pattern, OpenAPIServerEntity, ScriptEntity,
+};
+
+#[cfg(feature = "sql-code-mode")]
+pub use policy::{
+    get_sql_baseline_policies, get_sql_code_mode_schema_json, SqlServerEntity, StatementEntity,
 };
 
 // Cedar policy evaluator

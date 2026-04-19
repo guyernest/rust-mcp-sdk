@@ -226,11 +226,9 @@ impl RecoveryMetrics {
     pub fn average_recovery_time(&self) -> Duration {
         let total_time = self.total_recovery_time_us.load(Ordering::Relaxed);
         let attempts = self.total_attempts.load(Ordering::Relaxed);
-        if attempts > 0 {
-            Duration::from_micros(total_time / attempts)
-        } else {
-            Duration::ZERO
-        }
+        total_time
+            .checked_div(attempts)
+            .map_or(Duration::ZERO, Duration::from_micros)
     }
 
     /// Get circuit breaker trip count.

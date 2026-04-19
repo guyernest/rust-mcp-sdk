@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-04-17
+
+### Added
+- **pmcp-macros 0.6.0**: `#[mcp_tool]` now harvests the annotated function's rustdoc comment as the tool description when the `description = "..."` attribute is omitted (PARITY-MACRO-01). Explicit attributes always win over rustdoc; when neither is present, the macro fails with a clear error naming both options. Backwards-compatible — all existing call sites continue to work unchanged.
+- **pmcp-macros-support 0.1.0** (new workspace crate): pure non-proc-macro helpers for `pmcp-macros`, extracted so property tests and fuzz targets can consume the rustdoc-harvest normalizer without running into the proc-macro crate's public-API restrictions. Workspace-internal — external users should depend on `pmcp` (with the `macros` feature) or `pmcp-macros` directly, not on this crate.
+- **pmcp-macros README**: New "Rustdoc-derived descriptions (pmcp-macros 0.6.0+)" migration section with a compiling `rust,no_run` doctest, plus a "Limitations" subsection enumerating unsupported rustdoc forms (`#[doc = include_str!(...)]`, `#[cfg_attr(..., doc = "...")]`, indented code fences, explicit empty-string descriptions).
+
+### Changed
+- **pmcp-macros**: Error message for `#[mcp_tool]` without a description updated from ``mcp_tool requires at least `description = "..."` attribute`` to ``mcp_tool requires either a `description = "..."` attribute or a rustdoc comment on the function`` — names both fallback sources.
+- **pmcp**: Minor version bump 2.3.0 → 2.4.0. The macro surface accepts a newly valid source form (rustdoc-only tool functions); this is additive feature surface, conventionally a minor bump (rustdoc fallback).
+- Bumped `pmcp-macros` 0.5.0 → 0.6.0 (additive, backwards-compatible minor bump).
+- **cargo-pmcp**: Patch bump 0.7.0 → 0.7.1 (concurrent downstream bump per CLAUDE.md §"Version Bump Rules" — even though the `pmcp = "2.2.0"` caret pin accepts 2.4.0 without edit, the rule is honored literally to avoid release-captain ambiguity).
+- **mcp-tester**: Patch bump 0.5.0 → 0.5.1 (same rationale).
+
+### Internal
+- New workspace crate `crates/pmcp-macros-support/` scaffolded with the pure normalization helper, unit tests for normalization vectors + unsupported-form cases, and 4 proptest invariants at 1000 cases each (reference-equivalence, determinism, no-panic on arbitrary UTF-8, mixed-attr-shape robustness).
+- New trybuild compile-fail snapshots `mcp_tool_missing_description_and_rustdoc.rs` (empty-args) and `mcp_tool_nonempty_args_missing_description_and_rustdoc.rs` (non-empty-args) lock the new error wording against regression.
+- New fuzz target `fuzz/fuzz_targets/rustdoc_normalize.rs` exercises the normalizer via `pmcp-macros-support` with mixed attribute shapes (plain doc + `#[doc(hidden)]` + `#[doc(alias = ...)]` + non-doc attrs).
+- Shared resolver `pmcp-macros/src/mcp_common.rs::resolve_tool_args` is the single entry point consumed by both `#[mcp_tool]` parse sites (standalone fn in `mcp_tool.rs`, impl-block method in `mcp_server.rs::parse_mcp_tool_attr`) — eliminates the drift risk of duplicated call sequences.
+
 ## [2.3.0] - 2026-04-11
 
 ### `pmcp` 2.3.0 — no behavioral change, pmcp-macros bump signal

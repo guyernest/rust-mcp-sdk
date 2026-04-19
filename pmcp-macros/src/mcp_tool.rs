@@ -27,7 +27,6 @@ use darling::FromMeta;
 use heck::ToUpperCamelCase;
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
-use syn::parse::Parser;
 use syn::{ItemFn, ReturnType, Type};
 
 /// Parsed attributes for `#[mcp_tool(...)]`.
@@ -67,19 +66,9 @@ pub struct McpToolAnnotations {
 pub fn expand_mcp_tool(args: TokenStream, input: &ItemFn) -> syn::Result<TokenStream> {
     use mcp_common::ParamSlot;
 
-    // Parse macro attributes via darling.
-    let nested_metas = if args.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &input.sig.ident,
-            "mcp_tool requires at least `description = \"...\"` attribute",
-        ));
-    } else {
-        let parser = syn::punctuated::Punctuated::<darling::ast::NestedMeta, syn::Token![,]>::parse_terminated;
-        parser
-            .parse2(args)
-            .map(|p| p.into_iter().collect::<Vec<_>>())
-            .unwrap_or_default()
-    };
+    // Parse macro attributes via darling, routing through the shared resolver
+    // so the rustdoc-fallback logic stays in one place (see mcp_common.rs).
+    let nested_metas = crate::mcp_common::resolve_tool_args(args, &input.attrs, &input.sig.ident)?;
 
     let macro_args = McpToolArgs::from_list(&nested_metas)
         .map_err(|e| syn::Error::new_spanned(&input.sig.ident, e.to_string()))?;

@@ -1,4 +1,14 @@
-//! A runtime-agnostic cancellation token.
+//! Runtime-agnostic (wasm-friendly) cancellation token and shadow of
+//! [`RequestHandlerExtra`].
+//!
+//! See the canonical [`crate::server::cancellation`] module for the full API,
+//! extensions typemap semantics, semver posture, and session-id plumbing
+//! limitation.
+//!
+//! This shared shadow carries `extensions: http::Extensions` in parity with
+//! the canonical struct and is marked `#[non_exhaustive]`. The `peer` field
+//! does **not** exist here because the peer back-channel is non-wasm only
+//! and lives on the canonical struct.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -36,6 +46,7 @@ impl CancellationToken {
 ///
 /// This struct is runtime-agnostic and uses the shared `CancellationToken`.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct RequestHandlerExtra {
     /// Cancellation token for the request
     pub cancellation_token: CancellationToken,
@@ -48,6 +59,18 @@ pub struct RequestHandlerExtra {
     /// Validated authentication context (if auth is enabled)
     #[cfg(not(target_arch = "wasm32"))]
     pub auth_context: Option<crate::server::auth::AuthContext>,
+    /// Typed request-scoped state for middleware→handler transfer.
+    ///
+    /// Inserting values requires `T: Clone + Send + Sync + 'static`. Debug prints type names only,
+    /// not values, making this safe for logging. Cloning `RequestHandlerExtra` clones the entire
+    /// extensions map — prefer `Arc<T>` for large values.
+    ///
+    /// # Semver note
+    /// The enclosing struct carries `#[non_exhaustive]`. This is a breaking change
+    /// only for downstream code that used POSITIONAL struct-literal construction of
+    /// `RequestHandlerExtra`. `::new(...)`, `::default()`, and the `.with_*(...)` builder chain are
+    /// fully source-compatible.
+    pub extensions: http::Extensions,
 }
 
 impl RequestHandlerExtra {
@@ -60,6 +83,7 @@ impl RequestHandlerExtra {
             auth_info: None,
             #[cfg(not(target_arch = "wasm32"))]
             auth_context: None,
+            extensions: http::Extensions::new(),
         }
     }
 
@@ -94,5 +118,27 @@ impl RequestHandlerExtra {
     /// Check if the request has been cancelled.
     pub fn is_cancelled(&self) -> bool {
         self.cancellation_token.is_cancelled()
+    }
+
+    /// Returns a reference to the typed extensions map.
+    pub fn extensions(&self) -> &http::Extensions {
+        &self.extensions
+    }
+
+    /// Returns a mutable reference to the typed extensions map.
+    pub fn extensions_mut(&mut self) -> &mut http::Extensions {
+        &mut self.extensions
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_shared_extensions_parity() {
+        let mut extra = RequestHandlerExtra::new("r1".to_string(), CancellationToken::new());
+        extra.extensions_mut().insert(42u64);
+        assert_eq!(extra.extensions().get::<u64>(), Some(&42u64));
     }
 }

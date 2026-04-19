@@ -1,4 +1,64 @@
-//! Request cancellation support for MCP server.
+//! Cancellation token infrastructure and the canonical
+//! [`RequestHandlerExtra`] request-context struct handed to every tool,
+//! prompt, and resource handler.
+//!
+//! [`RequestHandlerExtra`] carries two cross-cutting request-scoped surfaces:
+//!
+//! - `extensions: http::Extensions` — typed-key typemap for cross-middleware
+//!   state transfer. Insert/retrieve typed values via
+//!   [`RequestHandlerExtra::extensions_mut`] / [`RequestHandlerExtra::extensions`].
+//! - `peer: Option<Arc<dyn PeerHandle>>` — server-to-client back-channel
+//!   exposing `sample()`, `list_roots()`, and `progress_notify()` from inside
+//!   tool/prompt/resource handlers. Non-wasm only. `None` when the enclosing
+//!   [`crate::server::core::ServerCore`] was not configured with a
+//!   [`crate::server::server_request_dispatcher::ServerRequestDispatcher`]
+//!   (tests, custom integrations).
+//!
+//! # Semver posture
+//!
+//! [`RequestHandlerExtra`] is now `#[non_exhaustive]`. This is a **breaking
+//! change** for any downstream crate that constructed `RequestHandlerExtra`
+//! with a positional struct literal. It is **not breaking** for code that
+//! uses [`RequestHandlerExtra::new`], [`RequestHandlerExtra::default`], or
+//! the `.with_*(...)` builder chain. Migration path: switch positional
+//! literals to
+//! `RequestHandlerExtra::new(request_id, cancellation_token)
+//!     .with_auth_context(...)
+//!     .with_peer(...)`.
+//!
+//! # Known limitation: session-id plumbing
+//!
+//! The `session_id` field on [`RequestHandlerExtra`] is not populated at
+//! dispatch time in v2.2 — [`crate::server::auth::AuthContext`] does not
+//! carry a `session_id` and `ProtocolHandler::handle_request` does not thread
+//! one. Peer session isolation is therefore enforced at the
+//! [`crate::server::Server`] level: each `Server` instance owns one
+//! dispatcher bound to one transport, so cross-session confusion requires
+//! cross-process access which is out of the current threat model. Follow-on
+//! work can plumb `session_id` through `ProtocolHandler::handle_request` when
+//! rmcp-parity for session-scoped auth becomes a scheduled phase goal.
+//!
+//! # Usage
+//!
+//! ```rust,no_run
+//! use pmcp::RequestHandlerExtra;
+//!
+//! #[derive(Clone)]
+//! struct RequestContext { user_id: u64 }
+//!
+//! // Middleware populates cross-cutting state before the handler runs.
+//! let mut extra = RequestHandlerExtra::default();
+//! extra.extensions_mut().insert(RequestContext { user_id: 42 });
+//!
+//! // Handler retrieves the typed value.
+//! let ctx = extra.extensions().get::<RequestContext>().cloned();
+//! assert!(ctx.is_some());
+//! ```
+//!
+//! For an end-to-end runnable demonstration see
+//! `examples/s42_handler_extensions.rs` (extensions) and
+//! `examples/s43_handler_peer_sample.rs` (peer.sample from inside a
+//! `ToolHandler`).
 
 use crate::error::Result;
 use crate::server::progress::ProgressReporter;
@@ -115,6 +175,7 @@ impl std::fmt::Debug for CancellationManager {
 
 /// Extra context passed to request handlers.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct RequestHandlerExtra {
     /// Cancellation token for the request
     pub cancellation_token: CancellationToken,
@@ -144,6 +205,27 @@ pub struct RequestHandlerExtra {
     /// When `None`, the client does not support tasks or did not request
     /// task mode — the tool should return results synchronously.
     pub task_request: Option<serde_json::Value>,
+    /// Typed request-scoped state for middleware→handler transfer.
+    ///
+    /// Inserting values requires `T: Clone + Send + Sync + 'static`. Debug prints type names only,
+    /// not values, making this safe for logging. Cloning `RequestHandlerExtra` clones the entire
+    /// extensions map — prefer `Arc<T>` for large values.
+    pub extensions: http::Extensions,
+    /// Server-to-client back-channel for `sample` / `list_roots` / `progress_notify`.
+    ///
+    /// `None` when the request originated from a code path (wasm dispatch, unit-test
+    /// fixture, any `ServerCore::new(...)` without
+    /// [`crate::server::core::ServerCore::with_server_request_dispatcher`]) that did
+    /// not configure a `ServerRequestDispatcher`. Tool/prompt/resource handlers
+    /// running under a fully-configured `ServerCore` receive a populated peer handle
+    /// that routes `sample` / `list_roots` / `progress_notify` back to the originating
+    /// client.
+    ///
+    /// # Session isolation
+    /// Each `Server` instance owns its own dispatcher, so peer handles are scoped to
+    /// the enclosing `Server` — cross-session confusion requires cross-process access.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub peer: Option<Arc<dyn crate::shared::peer::PeerHandle>>,
 }
 
 impl RequestHandlerExtra {
@@ -158,6 +240,9 @@ impl RequestHandlerExtra {
             metadata: HashMap::new(),
             progress_reporter: None,
             task_request: None,
+            extensions: http::Extensions::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            peer: None,
         }
     }
 
@@ -199,6 +284,66 @@ impl RequestHandlerExtra {
     pub fn with_task_request(mut self, task_request: Option<serde_json::Value>) -> Self {
         self.task_request = task_request;
         self
+    }
+
+    /// Returns a reference to the typed extensions map.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use pmcp::RequestHandlerExtra;
+    /// let extra = RequestHandlerExtra::default();
+    /// let _: Option<&String> = extra.extensions().get::<String>();
+    /// ```
+    pub fn extensions(&self) -> &http::Extensions {
+        &self.extensions
+    }
+
+    /// Returns a mutable reference to the typed extensions map.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// use pmcp::RequestHandlerExtra;
+    /// let mut extra = RequestHandlerExtra::default();
+    /// extra.extensions_mut().insert(42u64);
+    /// ```
+    pub fn extensions_mut(&mut self) -> &mut http::Extensions {
+        &mut self.extensions
+    }
+
+    /// Attach a peer handle for server-to-client RPCs.
+    ///
+    /// When set, tool/prompt/resource handlers can invoke `extra.peer().unwrap().sample(...)`
+    /// (or `list_roots` / `progress_notify`) to make outbound requests back to the
+    /// originating client. The peer handle is populated by the enclosing
+    /// `ServerCore` at each dispatch site when a
+    /// [`crate::server::server_request_dispatcher::ServerRequestDispatcher`]
+    /// has been attached — tests or ad-hoc constructions that skip the dispatcher
+    /// leave this as `None`, and handlers should treat `None` as "no client
+    /// available for back-channel".
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # #[cfg(not(target_arch = "wasm32"))]
+    /// # {
+    /// use pmcp::RequestHandlerExtra;
+    /// use std::sync::Arc;
+    /// # fn build_peer() -> Arc<dyn pmcp::PeerHandle> { unimplemented!() }
+    /// let extra = RequestHandlerExtra::default().with_peer(build_peer());
+    /// # }
+    /// ```
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_peer(mut self, peer: Arc<dyn crate::shared::peer::PeerHandle>) -> Self {
+        self.peer = Some(peer);
+        self
+    }
+
+    /// Returns the peer handle, if one was attached.
+    ///
+    /// Handlers should treat `None` as "no client back-channel available" and
+    /// skip any sample/list_roots-dependent code paths gracefully.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn peer(&self) -> Option<&Arc<dyn crate::shared::peer::PeerHandle>> {
+        self.peer.as_ref()
     }
 
     /// Returns `true` if the client requested task-augmented behavior.
@@ -289,6 +434,9 @@ impl Default for RequestHandlerExtra {
             metadata: HashMap::new(),
             progress_reporter: None,
             task_request: None,
+            extensions: http::Extensions::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            peer: None,
         }
     }
 }
@@ -323,7 +471,8 @@ impl std::fmt::Debug for RequestHandlerExtra {
             })
             .collect();
 
-        f.debug_struct("RequestHandlerExtra")
+        let mut debug = f.debug_struct("RequestHandlerExtra");
+        debug
             .field("cancellation_token", &self.cancellation_token)
             .field("request_id", &self.request_id)
             .field("session_id", &self.session_id)
@@ -331,7 +480,10 @@ impl std::fmt::Debug for RequestHandlerExtra {
             .field("auth_context", &self.auth_context)
             .field("metadata", &redacted_metadata)
             .field("task_request", &self.task_request.is_some())
-            .finish()
+            .field("extensions", &self.extensions);
+        #[cfg(not(target_arch = "wasm32"))]
+        debug.field("peer", &self.peer.as_ref().map(|_| "Arc<dyn PeerHandle>"));
+        debug.finish()
     }
 }
 
@@ -513,5 +665,30 @@ mod tests {
             "Non-sensitive metadata should not be redacted: {}",
             debug_output
         );
+    }
+
+    #[tokio::test]
+    async fn test_extensions_default_empty() {
+        let extra = RequestHandlerExtra::default();
+        assert!(extra.extensions().get::<String>().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_extensions_insert_overwrite_returns_old() {
+        let mut extra = RequestHandlerExtra::default();
+        assert_eq!(extra.extensions_mut().insert(42u64), None);
+        assert_eq!(extra.extensions_mut().insert(99u64), Some(42u64));
+        assert_eq!(extra.extensions().get::<u64>(), Some(&99u64));
+    }
+
+    #[tokio::test]
+    async fn test_debug_extensions_prints_type_names_only() {
+        let mut extra = RequestHandlerExtra::default();
+        extra
+            .extensions_mut()
+            .insert("SECRET_VALUE_DO_NOT_LEAK".to_string());
+        let debug_out = format!("{:?}", extra);
+        // http::Extensions Debug prints type names, not field values
+        assert!(!debug_out.contains("SECRET_VALUE_DO_NOT_LEAK"));
     }
 }

@@ -507,6 +507,139 @@ impl Default for OpenAPIServerEntity {
     }
 }
 
+/// SQL statement entity for policy evaluation (SQL Code Mode).
+///
+/// Mirrors the `Statement` entity in `SQL_CEDAR_SCHEMA` —
+/// see `cedar_validation.rs` for the schema definition.
+#[cfg(feature = "sql-code-mode")]
+#[derive(Debug, Clone)]
+pub struct StatementEntity {
+    /// Unique ID for this statement validation.
+    pub id: String,
+
+    /// Statement type: "SELECT", "INSERT", "UPDATE", "DELETE", "DDL", "OTHER".
+    pub statement_type: String,
+
+    /// Tables referenced by the statement.
+    pub tables: HashSet<String>,
+
+    /// Columns referenced by the statement. `*` for wildcards.
+    pub columns: HashSet<String>,
+
+    /// Whether the statement has a WHERE clause.
+    pub has_where: bool,
+
+    /// Whether the statement has a LIMIT clause.
+    pub has_limit: bool,
+
+    /// Whether the statement has an ORDER BY clause.
+    pub has_order_by: bool,
+
+    /// Estimated rows affected.
+    pub estimated_rows: u64,
+
+    /// Number of JOIN clauses.
+    pub join_count: u32,
+
+    /// Number of nested subqueries.
+    pub subquery_count: u32,
+}
+
+#[cfg(feature = "sql-code-mode")]
+impl StatementEntity {
+    /// Build from [`SqlStatementInfo`](crate::sql::SqlStatementInfo).
+    pub fn from_sql_info(info: &crate::sql::SqlStatementInfo) -> Self {
+        Self {
+            id: format!(
+                "{}:{}",
+                info.statement_type.as_str(),
+                first_or_default(&info.tables)
+            ),
+            statement_type: info.statement_type.as_str().to_string(),
+            tables: info.tables.clone(),
+            columns: info.columns.clone(),
+            has_where: info.has_where,
+            has_limit: info.has_limit,
+            has_order_by: info.has_order_by,
+            estimated_rows: info.estimated_rows,
+            join_count: info.join_count,
+            subquery_count: info.subquery_count,
+        }
+    }
+
+    /// Get the Cedar action for this statement using unified action model.
+    pub fn action(&self) -> &'static str {
+        match self.statement_type.as_str() {
+            "SELECT" => "Read",
+            "INSERT" | "UPDATE" => "Write",
+            "DELETE" => "Delete",
+            "DDL" => "Admin",
+            _ => "Read",
+        }
+    }
+}
+
+/// Helper for building a deterministic statement ID.
+#[cfg(feature = "sql-code-mode")]
+fn first_or_default(set: &HashSet<String>) -> String {
+    let mut names: Vec<&String> = set.iter().collect();
+    names.sort();
+    names
+        .first()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "statement".to_string())
+}
+
+/// Server configuration for SQL Code Mode.
+///
+/// Fields use `sql_*` config prefixes externally so DBA administrators
+/// can set "this is a SQL server's config" vocabulary in `config.toml`.
+/// Field names here drop the prefix for concision in policy code.
+#[cfg(feature = "sql-code-mode")]
+#[derive(Debug, Clone)]
+pub struct SqlServerEntity {
+    pub server_id: String,
+    pub server_type: String,
+
+    // Unified action flags
+    pub allow_write: bool,
+    pub allow_delete: bool,
+    pub allow_admin: bool,
+
+    // SQL-specific limits
+    pub max_rows: u64,
+    pub max_joins: u32,
+
+    // Unified operation lists (statement-type level, e.g., "SELECT"/"INSERT")
+    pub allowed_operations: HashSet<String>,
+    pub blocked_operations: HashSet<String>,
+
+    // SQL-specific table/column controls
+    pub blocked_tables: HashSet<String>,
+    pub blocked_columns: HashSet<String>,
+    pub allowed_tables: HashSet<String>,
+}
+
+#[cfg(feature = "sql-code-mode")]
+impl Default for SqlServerEntity {
+    fn default() -> Self {
+        Self {
+            server_id: "unknown".to_string(),
+            server_type: "sql".to_string(),
+            allow_write: false,
+            allow_delete: false,
+            allow_admin: false,
+            max_rows: 10_000,
+            max_joins: 5,
+            allowed_operations: HashSet::new(),
+            blocked_operations: HashSet::new(),
+            blocked_tables: HashSet::new(),
+            blocked_columns: HashSet::new(),
+            allowed_tables: HashSet::new(),
+        }
+    }
+}
+
 /// Get the Cedar schema in JSON format.
 ///
 /// Uses unified action model with Read/Write/Delete/Admin actions.
@@ -766,6 +899,121 @@ pub fn get_baseline_policies() -> Vec<(&'static str, &'static str, &'static str)
             "forbid_excessive_cost",
             "Enforce maximum query cost",
             r#"forbid(principal, action, resource) when { principal.estimatedCost > resource.maxCost };"#,
+        ),
+    ]
+}
+
+/// Get the Cedar schema for SQL Code Mode in JSON format.
+///
+/// Matches `SQL_CEDAR_SCHEMA` in `cedar_validation.rs`. A schema-sync test
+/// in `cedar_validation.rs` enforces this stays aligned.
+#[cfg(feature = "sql-code-mode")]
+pub fn get_sql_code_mode_schema_json() -> serde_json::Value {
+    let applies_to = serde_json::json!({
+        "principalTypes": ["Statement"],
+        "resourceTypes": ["Server"],
+        "context": {
+            "type": "Record",
+            "attributes": {
+                "serverId": { "type": "String", "required": true },
+                "serverType": { "type": "String", "required": true },
+                "userId": { "type": "String", "required": false },
+                "sessionId": { "type": "String", "required": false }
+            }
+        }
+    });
+
+    serde_json::json!({
+        "CodeMode": {
+            "entityTypes": {
+                "Statement": {
+                    "shape": {
+                        "type": "Record",
+                        "attributes": {
+                            "statementType": { "type": "String", "required": true },
+                            "tables": { "type": "Set", "element": { "type": "String" } },
+                            "columns": { "type": "Set", "element": { "type": "String" } },
+                            "hasWhere": { "type": "Boolean", "required": true },
+                            "hasLimit": { "type": "Boolean", "required": true },
+                            "hasOrderBy": { "type": "Boolean", "required": true },
+                            "estimatedRows": { "type": "Long", "required": true },
+                            "joinCount": { "type": "Long", "required": true },
+                            "subqueryCount": { "type": "Long", "required": true }
+                        }
+                    }
+                },
+                "Server": {
+                    "shape": {
+                        "type": "Record",
+                        "attributes": {
+                            "serverId": { "type": "String", "required": true },
+                            "serverType": { "type": "String", "required": true },
+                            "maxRows": { "type": "Long", "required": true },
+                            "maxJoins": { "type": "Long", "required": true },
+                            "allowWrite": { "type": "Boolean", "required": true },
+                            "allowDelete": { "type": "Boolean", "required": true },
+                            "allowAdmin": { "type": "Boolean", "required": true },
+                            "blockedOperations": { "type": "Set", "element": { "type": "String" } },
+                            "allowedOperations": { "type": "Set", "element": { "type": "String" } },
+                            "blockedTables": { "type": "Set", "element": { "type": "String" } },
+                            "blockedColumns": { "type": "Set", "element": { "type": "String" } }
+                        }
+                    }
+                }
+            },
+            "actions": {
+                "Read": { "appliesTo": applies_to },
+                "Write": { "appliesTo": applies_to },
+                "Delete": { "appliesTo": applies_to },
+                "Admin": { "appliesTo": applies_to }
+            }
+        }
+    })
+}
+
+/// Get baseline Cedar policies for SQL Code Mode.
+#[cfg(feature = "sql-code-mode")]
+pub fn get_sql_baseline_policies() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
+        (
+            "permit_reads",
+            "Permit all SELECT statements",
+            r#"permit(principal, action == CodeMode::Action::"Read", resource);"#,
+        ),
+        (
+            "permit_writes",
+            "Permit INSERT/UPDATE when enabled",
+            r#"permit(principal, action == CodeMode::Action::"Write", resource) when { resource.allowWrite == true };"#,
+        ),
+        (
+            "permit_deletes",
+            "Permit DELETE when enabled",
+            r#"permit(principal, action == CodeMode::Action::"Delete", resource) when { resource.allowDelete == true };"#,
+        ),
+        (
+            "permit_admin",
+            "Permit DDL when enabled",
+            r#"permit(principal, action == CodeMode::Action::"Admin", resource) when { resource.allowAdmin == true };"#,
+        ),
+        (
+            "forbid_blocked_tables",
+            "Block statements touching blocked tables",
+            r#"forbid(principal, action, resource) when { principal.tables.containsAny(resource.blockedTables) };"#,
+        ),
+        (
+            "forbid_blocked_columns",
+            "Block statements touching blocked columns",
+            r#"forbid(principal, action, resource) when { principal.columns.containsAny(resource.blockedColumns) };"#,
+        ),
+        (
+            "forbid_excessive_rows",
+            "Enforce row-count limit",
+            r#"forbid(principal, action, resource) when { principal.estimatedRows > resource.maxRows };"#,
+        ),
+        (
+            "forbid_excessive_joins",
+            "Enforce JOIN-count limit",
+            r#"forbid(principal, action, resource) when { principal.joinCount > resource.maxJoins };"#,
         ),
     ]
 }

@@ -44,8 +44,10 @@ enforces a `description` at compile time, and supports shared state via `State<T
 
 ### Attributes
 
-- `description = "..."` — **required**. Human-readable description exposed via the
-  MCP `tools/list` response.
+- `description = "..."` — optional as of pmcp-macros 0.6.0. Human-readable description
+  exposed via the MCP `tools/list` response. If omitted, the function's rustdoc
+  comment is used instead (see "Rustdoc-derived descriptions" below). If both are
+  present, the attribute wins.
 - `name = "..."` — optional. Defaults to the function name.
 - `annotations(...)` — optional. MCP standard annotations: `read_only = bool`,
   `destructive = bool`, `idempotent = bool`, `open_world = bool`.
@@ -92,6 +94,75 @@ async fn main() -> pmcp::Result<()> {
 The macro expands the annotated function into a zero-arg constructor (`add()`) that
 returns a generated `AddTool` struct implementing `ToolHandler`. Register it with
 `ServerBuilder::tool(name, handler)`.
+
+### Rustdoc-derived descriptions (pmcp-macros 0.6.0+)
+
+When you omit the `description = "..."` attribute, pmcp-macros harvests the
+function's rustdoc comment and uses it as the tool description. This eliminates
+the duplication of writing the same prose in both a `///` block and the macro
+attribute.
+
+```rust,no_run
+use pmcp::{mcp_tool, ServerBuilder, ServerCapabilities};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AddArgs { a: f64, b: f64 }
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct AddResult { sum: f64 }
+
+/// Add two numbers and return their sum.
+#[mcp_tool]
+async fn add(args: AddArgs) -> pmcp::Result<AddResult> {
+    Ok(AddResult { sum: args.a + args.b })
+}
+
+# fn main() { let _ = add(); }
+```
+
+**Precedence:** when both a rustdoc comment and a `description = "..."` attribute
+are present, the attribute wins. This is silent — no compiler warning — so that
+rustdoc can be used freely for meta-commentary above tools that already specify
+an explicit description.
+
+**Normalization:** each rustdoc line is trimmed (leading/trailing whitespace
+stripped); empty post-trim lines are dropped; remaining lines are joined with
+`"\n"`.
+
+**Error when both are absent:** if a `#[mcp_tool]`-annotated function has no
+rustdoc and no `description = "..."` attribute, compilation fails with:
+
+```text
+error: mcp_tool requires either a `description = "..."` attribute or a rustdoc comment on the function
+```
+
+**Requires:** pmcp-macros ≥ 0.6.0 (shipped with pmcp ≥ 2.4.0 — see CHANGELOG).
+
+#### Limitations
+
+The rustdoc harvester supports the common `/// doc comment` and `#[doc = "..."]`
+string-literal forms. The following forms are NOT supported in pmcp-macros 0.6.0
+and may be revisited in a later phase:
+
+- **`#[doc = include_str!("...")]`** — the `include_str!` macro expansion is
+  not evaluated at attribute-harvest time, so the attribute is silently skipped.
+  Workaround: pass the file contents via an explicit `description = "..."` attribute,
+  or inline the documentation directly as `///` lines.
+- **`#[cfg_attr(condition, doc = "...")]`** — the outer attribute path is
+  `cfg_attr`, not `doc`, so the conditional doc contribution is silently skipped.
+  Workaround: use unconditional `///` lines for text that should appear in the
+  tool description.
+- **Indented code fences inside doc blocks** — each rustdoc line is trimmed
+  independently, so indentation inside a ```fenced code block``` is lost.
+  This is acceptable because MCP clients render tool descriptions as plain text,
+  not as rustdoc HTML. For rich formatting, use `description = "..."` with the
+  desired whitespace preserved.
+- **Explicit empty description (`description = ""`)** — treated as PRESENT, not
+  absent. The empty string wins silently, rustdoc fallback is NOT triggered, and
+  the tool metadata's description is the empty string. If you want rustdoc to
+  supply the description, omit the `description` attribute entirely.
 
 ### Shared state with `State<T>`
 

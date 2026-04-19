@@ -90,6 +90,26 @@ pub use pmcp_macros::{mcp_prompt, mcp_server, mcp_tool};
 #[cfg(not(target_arch = "wasm32"))]
 pub use shared::StdioTransport;
 
+/// Peer back-channel trait for server-to-client RPCs from inside request handlers.
+#[cfg(not(target_arch = "wasm32"))]
+pub use shared::peer::PeerHandle;
+
+/// Unstable test-support re-exports for internal integration tests.
+///
+/// **Not part of the stable API surface.** This module is hidden from docs
+/// and may change or be removed without notice; it exists solely so the
+/// integration tests under `tests/server_request_dispatcher_integration.rs`
+/// can exercise the otherwise-`pub(crate)` dispatcher.
+#[doc(hidden)]
+#[cfg(not(target_arch = "wasm32"))]
+pub mod __test_support {
+    pub use crate::server::peer_impl::DispatchPeerHandle;
+    pub use crate::server::server_request_dispatcher::{
+        spawn_server_request_drain, ServerRequestDispatcher, DEFAULT_DISPATCH_TIMEOUT,
+    };
+    pub use crate::types::ServerRequest;
+}
+
 /// Tower middleware layers for MCP HTTP security.
 #[cfg(feature = "streamable-http")]
 pub use server::tower_layers::{AllowedOrigins, DnsRebindingLayer, SecurityHeadersLayer};

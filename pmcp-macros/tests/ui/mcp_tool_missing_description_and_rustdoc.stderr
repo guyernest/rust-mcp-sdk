@@ -1,0 +1,5 @@
+error: mcp_tool requires either a `description = "..."` attribute or a rustdoc comment on the function
+  --> tests/ui/mcp_tool_missing_description_and_rustdoc.rs:12:10
+   |
+12 | async fn bad_tool(args: Args) -> pmcp::Result<serde_json::Value> {
+   |          ^^^^^^^^

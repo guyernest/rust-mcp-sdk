@@ -320,15 +320,15 @@ mod tests {
 
         assert_eq!(
             config.timeout_for("fast"),
-            std::time::Duration::from_millis(5000)
+            std::time::Duration::from_secs(5)
         );
         assert_eq!(
             config.timeout_for("slow"),
-            std::time::Duration::from_millis(60000)
+            std::time::Duration::from_secs(60)
         );
         assert_eq!(
             config.timeout_for("unknown"),
-            std::time::Duration::from_millis(60000)
+            std::time::Duration::from_secs(60)
         );
     }
 

@@ -274,6 +274,25 @@ pub struct ServerCore {
 
     /// Payload and resource limits for denial-of-service protection
     payload_limits: PayloadLimits,
+
+    /// Outbound server-to-client request dispatcher.
+    ///
+    /// Populated by the enclosing `Server` via
+    /// [`ServerCore::with_server_request_dispatcher`]. Consumed at dispatch
+    /// sites to construct per-request peer handles via `attach_peer`.
+    /// `None` preserves the graceful-fallback contract for every existing
+    /// `ServerCore::new()` call site.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::struct_field_names)]
+    server_request_dispatcher:
+        Option<Arc<crate::server::server_request_dispatcher::ServerRequestDispatcher>>,
+
+    /// Cached peer handle built alongside the dispatcher.
+    /// One Arc allocation at setup time; dispatch sites clone this Arc
+    /// (refcount bump) rather than constructing a fresh `DispatchPeerHandle`
+    /// per request.
+    #[cfg(not(target_arch = "wasm32"))]
+    peer_handle: Option<Arc<dyn crate::shared::peer::PeerHandle>>,
 }
 
 /// Outcome of a tool handler call — either a normal result or a task creation.
@@ -335,7 +354,46 @@ impl ServerCore {
             task_store,
             stateless_mode,
             payload_limits,
+            #[cfg(not(target_arch = "wasm32"))]
+            server_request_dispatcher: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            peer_handle: None,
         }
+    }
+
+    /// Attach a server-to-client request dispatcher.
+    ///
+    /// The dispatcher is the outbound-plus-correlation layer consumed at
+    /// handler dispatch sites so tool handlers can invoke
+    /// `extra.peer()?.sample(...)` mid-execution. Calling this is optional —
+    /// when absent, existing behaviour (no peer handle) is preserved.
+    ///
+    /// Also constructs and caches a reusable `Arc<dyn PeerHandle>` so
+    /// per-request dispatch only clones the Arc (refcount bump), not
+    /// allocating a new `DispatchPeerHandle` each time.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn with_server_request_dispatcher(
+        mut self,
+        dispatcher: Arc<crate::server::server_request_dispatcher::ServerRequestDispatcher>,
+    ) -> Self {
+        let peer: Arc<dyn crate::shared::peer::PeerHandle> = Arc::new(
+            crate::server::peer_impl::DispatchPeerHandle::new(dispatcher.clone()),
+        );
+        self.peer_handle = Some(peer);
+        self.server_request_dispatcher = Some(dispatcher);
+        self
+    }
+
+    /// Attach the cached peer handle to `extra` when a dispatcher is configured.
+    /// No-op on wasm32 (peer is non-wasm) and when no dispatcher is attached.
+    #[inline]
+    fn attach_peer(&self, extra: RequestHandlerExtra) -> RequestHandlerExtra {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(peer) = self.peer_handle.as_ref() {
+            return extra.with_peer(peer.clone());
+        }
+        extra
     }
 
     /// Get the configured payload limits.
@@ -406,16 +464,19 @@ impl ServerCore {
             }
         }
 
-        // Create request handler extra data with auth_context and task request
+        // Create request handler extra data with auth_context and task request.
+        // Middleware below takes `&mut extra`, so bind as mut.
         let request_id = format!("tool_{}", req.name);
-        let mut extra = RequestHandlerExtra::new(
-            request_id.clone(),
-            self.cancellation_manager
-                .create_token(request_id.clone())
-                .await,
-        )
-        .with_auth_context(auth_context)
-        .with_task_request(req.task.clone());
+        let mut extra = self.attach_peer(
+            RequestHandlerExtra::new(
+                request_id.clone(),
+                self.cancellation_manager
+                    .create_token(request_id.clone())
+                    .await,
+            )
+            .with_auth_context(auth_context)
+            .with_task_request(req.task.clone()),
+        );
 
         // Execute tool with or without middleware depending on platform
         #[cfg(not(target_arch = "wasm32"))]
@@ -571,13 +632,15 @@ impl ServerCore {
 
         // Create request handler extra data with auth_context
         let request_id = format!("prompt_{}", req.name);
-        let extra = RequestHandlerExtra::new(
-            request_id.clone(),
-            self.cancellation_manager
-                .create_token(request_id.clone())
-                .await,
-        )
-        .with_auth_context(auth_context);
+        let extra = self.attach_peer(
+            RequestHandlerExtra::new(
+                request_id.clone(),
+                self.cancellation_manager
+                    .create_token(request_id.clone())
+                    .await,
+            )
+            .with_auth_context(auth_context),
+        );
 
         handler.handle(req.arguments.clone(), extra).await
     }
@@ -591,13 +654,15 @@ impl ServerCore {
         let mut result = match &self.resources {
             Some(handler) => {
                 let request_id = "list_resources".to_string();
-                let extra = RequestHandlerExtra::new(
-                    request_id.clone(),
-                    self.cancellation_manager
-                        .create_token(request_id.clone())
-                        .await,
-                )
-                .with_auth_context(auth_context);
+                let extra = self.attach_peer(
+                    RequestHandlerExtra::new(
+                        request_id.clone(),
+                        self.cancellation_manager
+                            .create_token(request_id.clone())
+                            .await,
+                    )
+                    .with_auth_context(auth_context),
+                );
                 handler.list(req.cursor.clone(), extra).await?
             },
             None => ListResourcesResult {
@@ -633,13 +698,15 @@ impl ServerCore {
         })?;
 
         let request_id = format!("read_{}", req.uri);
-        let extra = RequestHandlerExtra::new(
-            request_id.clone(),
-            self.cancellation_manager
-                .create_token(request_id.clone())
-                .await,
-        )
-        .with_auth_context(auth_context);
+        let extra = self.attach_peer(
+            RequestHandlerExtra::new(
+                request_id.clone(),
+                self.cancellation_manager
+                    .create_token(request_id.clone())
+                    .await,
+            )
+            .with_auth_context(auth_context),
+        );
 
         let mut result = handler.read(&req.uri, extra).await?;
 

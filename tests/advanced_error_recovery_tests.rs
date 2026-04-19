@@ -59,7 +59,7 @@ async fn test_recovery_metrics() {
 
 #[tokio::test]
 async fn test_jitter_strategies() {
-    let base_delay = Duration::from_millis(1000);
+    let base_delay = Duration::from_secs(1);
 
     // No jitter should return exact delay
     let no_jitter = JitterCalculator::calculate_delay(base_delay, JitterStrategy::None);

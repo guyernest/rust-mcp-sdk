@@ -191,6 +191,66 @@ fn test_builder_registration() {
     drop(builder);
 }
 
+// ==========================================================================
+// Rustdoc fallback integration tests
+// ==========================================================================
+
+/// Add two numbers together.
+#[mcp_tool]
+async fn rustdoc_only_tool(args: EchoArgs) -> pmcp::Result<serde_json::Value> {
+    Ok(serde_json::json!({"echoed": args.message}))
+}
+
+#[test]
+fn test_rustdoc_only_description() {
+    let tool = rustdoc_only_tool();
+    let meta = tool.metadata().expect("metadata should exist");
+    assert_eq!(
+        meta.description.as_deref(),
+        Some("Add two numbers together."),
+        "rustdoc-only tool should harvest `/// Add two numbers together.`"
+    );
+}
+
+/// IGNORED (rustdoc must not win).
+#[mcp_tool(description = "WINS")]
+async fn precedence_tool(args: EchoArgs) -> pmcp::Result<serde_json::Value> {
+    Ok(serde_json::json!({"echoed": args.message}))
+}
+
+#[test]
+fn test_attribute_wins_over_rustdoc() {
+    let tool = precedence_tool();
+    let meta = tool.metadata().expect("metadata should exist");
+    assert_eq!(
+        meta.description.as_deref(),
+        Some("WINS"),
+        "attribute description MUST win over rustdoc silently"
+    );
+}
+
+/// First line of the description.
+/// Second line with more detail.
+///
+/// Third line after a blank middle.
+#[mcp_tool]
+async fn multiline_rustdoc_tool(args: EchoArgs) -> pmcp::Result<serde_json::Value> {
+    Ok(serde_json::json!({"echoed": args.message}))
+}
+
+#[test]
+fn test_multiline_rustdoc_normalization() {
+    let tool = multiline_rustdoc_tool();
+    let meta = tool.metadata().expect("metadata should exist");
+    assert_eq!(
+        meta.description.as_deref(),
+        Some(
+            "First line of the description.\nSecond line with more detail.\nThird line after a blank middle."
+        ),
+        "multi-line rustdoc must be trim-joined with blank lines dropped"
+    );
+}
+
 // === Compile-fail tests (trybuild) ===
 
 #[test]
@@ -198,4 +258,6 @@ fn compile_fail_tests() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/ui/mcp_tool_missing_description.rs");
     t.compile_fail("tests/ui/mcp_tool_multiple_args.rs");
+    t.compile_fail("tests/ui/mcp_tool_missing_description_and_rustdoc.rs");
+    t.compile_fail("tests/ui/mcp_tool_nonempty_args_missing_description_and_rustdoc.rs");
 }

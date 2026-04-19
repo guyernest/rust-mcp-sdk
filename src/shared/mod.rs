@@ -7,6 +7,9 @@ pub mod http_utils;
 pub mod logging;
 pub mod middleware;
 pub mod middleware_presets;
+/// Peer back-channel trait for server-to-client RPCs from inside request handlers.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod peer;
 pub mod protocol;
 pub mod protocol_helpers;
 #[cfg(not(target_arch = "wasm32"))]

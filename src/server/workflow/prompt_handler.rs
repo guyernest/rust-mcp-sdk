@@ -1052,16 +1052,7 @@ mod tests {
         args.insert("project".to_string(), "Website".to_string());
         args.insert("task".to_string(), "Fix bug".to_string());
 
-        let extra = RequestHandlerExtra {
-            cancellation_token: Default::default(),
-            request_id: "test-1".to_string(),
-            session_id: None,
-            auth_info: None,
-            auth_context: None,
-            metadata: std::collections::HashMap::new(),
-            progress_reporter: None,
-            task_request: None,
-        };
+        let extra = RequestHandlerExtra::new("test-1".to_string(), Default::default());
 
         let result = handler
             .handle(args, extra)
@@ -1235,16 +1226,7 @@ mod tests {
         args.insert("project".to_string(), "Website".to_string());
         args.insert("task".to_string(), "Fix login bug".to_string());
 
-        let extra = RequestHandlerExtra {
-            cancellation_token: Default::default(),
-            request_id: "test-integration".to_string(),
-            session_id: None,
-            auth_info: None,
-            auth_context: None,
-            metadata: std::collections::HashMap::new(),
-            progress_reporter: None,
-            task_request: None,
-        };
+        let extra = RequestHandlerExtra::new("test-integration".to_string(), Default::default());
 
         let result = handler
             .handle(args, extra)
@@ -1344,16 +1326,10 @@ mod tests {
         args.insert("task".to_string(), "Fix bug".to_string());
         // Note: priority is NOT provided
 
-        let extra = crate::server::cancellation::RequestHandlerExtra {
-            cancellation_token: Default::default(),
-            request_id: "test".to_string(),
-            session_id: None,
-            auth_info: None,
-            auth_context: None,
-            metadata: std::collections::HashMap::new(),
-            progress_reporter: None,
-            task_request: None,
-        };
+        let extra = crate::server::cancellation::RequestHandlerExtra::new(
+            "test".to_string(),
+            Default::default(),
+        );
 
         let result = handler
             .handle(args.clone(), extra.clone())
@@ -1438,16 +1414,10 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("input".to_string(), "test".to_string());
 
-        let extra = crate::server::cancellation::RequestHandlerExtra {
-            cancellation_token: Default::default(),
-            request_id: "test".to_string(),
-            session_id: None,
-            auth_info: None,
-            auth_context: None,
-            metadata: std::collections::HashMap::new(),
-            progress_reporter: None,
-            task_request: None,
-        };
+        let extra = crate::server::cancellation::RequestHandlerExtra::new(
+            "test".to_string(),
+            Default::default(),
+        );
 
         let result = handler
             .handle(args, extra)
@@ -1570,16 +1540,10 @@ mod tests {
         args.insert("project".to_string(), "MCP Tester".to_string());
         args.insert("task".to_string(), "Fix workflow bug".to_string());
 
-        let extra = crate::server::cancellation::RequestHandlerExtra {
-            cancellation_token: Default::default(),
-            request_id: "test".to_string(),
-            session_id: None,
-            auth_info: None,
-            auth_context: None,
-            metadata: std::collections::HashMap::new(),
-            progress_reporter: None,
-            task_request: None,
-        };
+        let extra = crate::server::cancellation::RequestHandlerExtra::new(
+            "test".to_string(),
+            Default::default(),
+        );
 
         let result = handler
             .handle(args, extra)
@@ -1701,16 +1665,10 @@ mod tests {
         args.insert("name".to_string(), "Alice".to_string());
         args.insert("action".to_string(), "login".to_string());
 
-        let extra = crate::server::cancellation::RequestHandlerExtra {
-            cancellation_token: Default::default(),
-            request_id: "test".to_string(),
-            session_id: None,
-            auth_info: None,
-            auth_context: None,
-            metadata: std::collections::HashMap::new(),
-            progress_reporter: None,
-            task_request: None,
-        };
+        let extra = crate::server::cancellation::RequestHandlerExtra::new(
+            "test".to_string(),
+            Default::default(),
+        );
 
         let result = handler
             .handle(args, extra)
@@ -1769,16 +1727,10 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("name".to_string(), "Bob".to_string());
 
-        let extra = crate::server::cancellation::RequestHandlerExtra {
-            cancellation_token: Default::default(),
-            request_id: "test".to_string(),
-            session_id: None,
-            auth_info: None,
-            auth_context: None,
-            metadata: std::collections::HashMap::new(),
-            progress_reporter: None,
-            task_request: None,
-        };
+        let extra = crate::server::cancellation::RequestHandlerExtra::new(
+            "test".to_string(),
+            Default::default(),
+        );
 
         let result = handler
             .handle(args, extra)
@@ -1848,16 +1800,10 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("input".to_string(), "test".to_string());
 
-        let extra = crate::server::cancellation::RequestHandlerExtra {
-            cancellation_token: Default::default(),
-            request_id: "test".to_string(),
-            session_id: None,
-            auth_info: None,
-            auth_context: None,
-            metadata: std::collections::HashMap::new(),
-            progress_reporter: None,
-            task_request: None,
-        };
+        let extra = crate::server::cancellation::RequestHandlerExtra::new(
+            "test".to_string(),
+            Default::default(),
+        );
 
         let result = handler
             .handle(args, extra)
@@ -1945,16 +1891,10 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("input".to_string(), "test".to_string());
 
-        let extra = crate::server::cancellation::RequestHandlerExtra {
-            cancellation_token: Default::default(),
-            request_id: "test".to_string(),
-            session_id: None,
-            auth_info: None,
-            auth_context: None,
-            metadata: std::collections::HashMap::new(),
-            progress_reporter: None,
-            task_request: None,
-        };
+        let extra = crate::server::cancellation::RequestHandlerExtra::new(
+            "test".to_string(),
+            Default::default(),
+        );
 
         let result = handler
             .handle(args, extra)
@@ -2078,16 +2018,10 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("task".to_string(), "Fix bug".to_string());
 
-        let extra = crate::server::cancellation::RequestHandlerExtra {
-            cancellation_token: Default::default(),
-            request_id: "test".to_string(),
-            session_id: None,
-            auth_info: None,
-            auth_context: None,
-            metadata: std::collections::HashMap::new(),
-            progress_reporter: None,
-            task_request: None,
-        };
+        let extra = crate::server::cancellation::RequestHandlerExtra::new(
+            "test".to_string(),
+            Default::default(),
+        );
 
         let result = handler
             .handle(args, extra)
@@ -2220,16 +2154,10 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("task".to_string(), "Fix bug".to_string());
 
-        let extra = crate::server::cancellation::RequestHandlerExtra {
-            cancellation_token: Default::default(),
-            request_id: "test".to_string(),
-            session_id: None,
-            auth_info: None,
-            auth_context: None,
-            metadata: std::collections::HashMap::new(),
-            progress_reporter: None,
-            task_request: None,
-        };
+        let extra = crate::server::cancellation::RequestHandlerExtra::new(
+            "test".to_string(),
+            Default::default(),
+        );
 
         let result = handler
             .handle(args, extra)
@@ -2335,16 +2263,10 @@ mod tests {
         let mut args = HashMap::new();
         args.insert("task".to_string(), "Fix bug".to_string());
 
-        let extra = crate::server::cancellation::RequestHandlerExtra {
-            cancellation_token: Default::default(),
-            request_id: "test".to_string(),
-            session_id: None,
-            auth_info: None,
-            auth_context: None,
-            metadata: std::collections::HashMap::new(),
-            progress_reporter: None,
-            task_request: None,
-        };
+        let extra = crate::server::cancellation::RequestHandlerExtra::new(
+            "test".to_string(),
+            Default::default(),
+        );
 
         let result = handler
             .handle(args, extra)

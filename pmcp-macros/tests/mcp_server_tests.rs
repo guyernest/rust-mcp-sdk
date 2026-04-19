@@ -218,3 +218,39 @@ fn test_prompt_only_server() {
     // If this compiles, prompt-only registration works
     drop(builder);
 }
+
+// ==========================================================================
+// Impl-block rustdoc harvest — symmetry with standalone parse site
+// ==========================================================================
+//
+// Both parse sites route through `mcp_common::resolve_tool_args`, so an
+// impl-block method with a rustdoc comment must produce the same description
+// as a free function with the same rustdoc.
+
+use pmcp::ToolHandler as _RustdocToolHandler;
+
+struct RustdocHarvestServer;
+
+#[mcp_server]
+impl RustdocHarvestServer {
+    /// Compute the square of a number.
+    #[mcp_tool]
+    async fn square(&self, args: AddArgs) -> pmcp::Result<serde_json::Value> {
+        Ok(serde_json::json!({"result": args.a * args.a}))
+    }
+}
+
+#[test]
+fn test_impl_block_rustdoc_harvest() {
+    let server = std::sync::Arc::new(RustdocHarvestServer);
+    let handler = SquareToolHandler {
+        server: server.clone(),
+    };
+    let meta = handler.metadata().expect("metadata should exist");
+    assert_eq!(meta.name, "square", "tool name derives from method ident");
+    assert_eq!(
+        meta.description.as_deref(),
+        Some("Compute the square of a number."),
+        "impl-block #[mcp_tool] must harvest rustdoc symmetrically with standalone fn"
+    );
+}

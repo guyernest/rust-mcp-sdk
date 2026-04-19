@@ -167,6 +167,7 @@ Tech stack: `pmcp-tasks` (serde, async-trait, dashmap, uuid, chrono, tokio, park
 | WidgetDir disk reads on every call (v1.3) | Zero-config hot-reload without file watchers | ✓ Good — simplest approach, no caching bugs |
 | chromiumoxide over Playwright (v1.3) | Pure Rust E2E tests, no Node.js dependency | ✓ Good — 20 tests pass, auto-downloads Chromium |
 | Standalone examples (workspace exclude) (v1.3) | Avoids feature flag unification conflicts | ✓ Good — each example builds independently |
+| rmcp parity research scoped to ergonomics-only with severity-graduated proposals (Phase 69) | Avoid overlap with Phase 68 polish; produce actionable follow-on phases not vague gap reports | ✓ Good — 4 High-severity gaps surfaced, 3 follow-on proposals (PARITY-HANDLER/CLIENT/MACRO-01) with concrete plan-count estimates |
 
 ---
 ## Evolution

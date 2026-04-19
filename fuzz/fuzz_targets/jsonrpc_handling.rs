@@ -1,8 +1,8 @@
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
-use serde_json::{Value, from_slice, json};
 use arbitrary::{Arbitrary, Unstructured};
+use libfuzzer_sys::fuzz_target;
+use serde_json::{from_slice, json, Value};
 
 // Custom types for fuzzing JSON-RPC internals
 #[derive(Debug, Arbitrary)]
@@ -46,7 +46,7 @@ impl FuzzValue {
             FuzzValue::Object(obj) => {
                 let map = obj.iter().map(|(k, v)| (k.clone(), v.to_json())).collect();
                 Value::Object(map)
-            }
+            },
         }
     }
 }
@@ -62,7 +62,7 @@ fuzz_target!(|data: &[u8]| {
             if let Some(Value::String(version)) = obj.get("jsonrpc") {
                 let _is_valid_version = version == "2.0" || version == "1.0";
             }
-            
+
             // Check for required fields
             // Note: We don't assert here because fuzz testing should handle invalid
             // JSON-RPC gracefully rather than panicking
@@ -77,10 +77,10 @@ fuzz_target!(|data: &[u8]| {
             }
         }
     }
-    
+
     // 2. Generate structured JSON-RPC messages from arbitrary data
     let mut u = Unstructured::new(data);
-    
+
     // Generate and test request
     if let Ok(fuzz_req) = FuzzJsonRpcRequest::arbitrary(&mut u) {
         let json_req = json!({
@@ -101,16 +101,16 @@ fuzz_target!(|data: &[u8]| {
                 }
             }),
         });
-        
+
         // Validate the generated JSON
         let _ = serde_json::to_string(&json_req);
     }
-    
+
     // 3. Test batch request handling
     if data.len() > 0 {
         let batch_size = (data[0] % 10) as usize;
         let mut batch = Vec::new();
-        
+
         for i in 0..batch_size {
             batch.push(json!({
                 "jsonrpc": "2.0",
@@ -119,13 +119,13 @@ fuzz_target!(|data: &[u8]| {
                 "params": json!({"index": i})
             }));
         }
-        
+
         if !batch.is_empty() {
             let batch_json = Value::Array(batch);
             let _ = serde_json::to_string(&batch_json);
         }
     }
-    
+
     // 4. Test error handling edge cases
     let error_codes = vec![
         -32700, // Parse error
@@ -135,7 +135,7 @@ fuzz_target!(|data: &[u8]| {
         -32603, // Internal error
         -32000, // Server error
     ];
-    
+
     for code in error_codes {
         let error = json!({
             "code": code,

@@ -1,6 +1,6 @@
 [package]
 name = "pmcp"
-version = "2.3.0"
+version = "2.4.0"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility"
@@ -50,7 +50,7 @@ exclude = [
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["raw_value", "preserve_order"] }
 schemars = { version = "1.0", optional = true }
-pmcp-macros = { version = "0.5.0", path = "pmcp-macros", optional = true }
+pmcp-macros = { version = "0.6.0", path = "pmcp-macros", optional = true }
 async-trait = "0.1"
 thiserror = "2.0"
 anyhow = "1.0"
@@ -144,8 +144,8 @@ tokio-util = { version = "0.7", features = ["rt"] }
 clap = { version = "4.5", features = ["derive"] }
 env_logger = "0.11"
 dashmap = "6.1"  # Already in main deps but needed for examples
-pmcp-macros = { version = "0.5.0", path = "pmcp-macros" }  # For macro examples (s23_mcp_tool_macro)
-pmcp-code-mode = { version = "0.4.0", path = "crates/pmcp-code-mode" }  # For code mode example (s41)
+pmcp-macros = { version = "0.6.0", path = "pmcp-macros" }  # For macro examples (s23_mcp_tool_macro)
+pmcp-code-mode = { version = "0.5.0", path = "crates/pmcp-code-mode" }  # For code mode example (s41)
 pmcp-code-mode-derive = { version = "0.2.0", path = "crates/pmcp-code-mode-derive" }  # For code mode example (s41)
 
 [features]
@@ -502,11 +502,19 @@ name = "s41_code_mode_graphql"
 path = "examples/s41_code_mode_graphql.rs"
 required-features = ["full"]
 
+[[example]]
+name = "s42_handler_extensions"
+path = "examples/s42_handler_extensions.rs"
+
+[[example]]
+name = "s43_handler_peer_sample"
+path = "examples/s43_handler_peer_sample.rs"
+
 [[bench]]
 name = "comprehensive_benchmarks"
 harness = false
 [workspace]
-members = ["pmcp-macros", "crates/mcp-tester", "crates/mcp-preview", "crates/pmcp-server", "crates/pmcp-server/pmcp-server-lambda", "crates/pmcp-tasks", "crates/mcp-e2e-tests", "crates/pmcp-widget-utils", "crates/pmcp-code-mode", "crates/pmcp-code-mode-derive", "examples/25-oauth-basic", "examples/test-basic", "cargo-pmcp"]
+members = ["pmcp-macros", "crates/pmcp-macros-support", "crates/mcp-tester", "crates/mcp-preview", "crates/pmcp-server", "crates/pmcp-server/pmcp-server-lambda", "crates/pmcp-tasks", "crates/mcp-e2e-tests", "crates/pmcp-widget-utils", "crates/pmcp-code-mode", "crates/pmcp-code-mode-derive", "examples/25-oauth-basic", "examples/test-basic", "cargo-pmcp"]
 # WASM examples and standalone examples are excluded from regular workspace tests
 exclude = ["fuzz", "examples/cloudflare-worker-mcp", "examples/26-server-tester", "examples/27-course-server-minimal", "examples/wasm-client", "examples/mcp-apps-chess", "examples/mcp-apps-map", "examples/mcp-apps-dataviz"]
 
