@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
-status: Ready to execute
+status: "Phase 70+71 shipped — PR #239"
 stopped_at: Phase 69 complete — follow-on proposals ready for ROADMAP slotting
-last_updated: "2026-04-18T21:45:57.648Z"
+last_updated: "2026-04-19T01:17:26.483Z"
 progress:
   total_phases: 40
   completed_phases: 35
