@@ -22,6 +22,24 @@ pub struct LandingConfig {
     /// hosted pages that end-users see when an MCP client triggers OAuth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub login: Option<LoginConfig>,
+
+    /// Sign-up flow configuration. The landing template's `/signup` route
+    /// redirects to the server's Cognito hosted UI; this controls where the
+    /// user lands afterwards. Consumed by the platform at deploy time and
+    /// injected into the Next.js build as `NEXT_PUBLIC_SIGNUP_REDIRECT_AFTER`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signup: Option<SignupConfig>,
+}
+
+/// Sign-up flow configuration
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SignupConfig {
+    /// Path on the landing site to redirect users to after they complete
+    /// the Cognito hosted UI sign-up flow. Must be a relative path starting
+    /// with `/` — absolute URLs and protocol-relative URLs (`//host`) are
+    /// rejected to prevent open-redirect misuse. Defaults to `/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redirect_after: Option<String>,
 }
 
 /// Cognito Managed Login branding configuration
@@ -154,6 +172,37 @@ fn validate_hex_color(color: &str, field: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate a same-site relative redirect path.
+///
+/// Rejects absolute URLs (`http://...`, `https://...`), protocol-relative URLs
+/// (`//evil.com/...`), and anything that doesn't start with a single `/`.
+/// This prevents the value from being used as an open-redirect vector when
+/// the landing template consumes `NEXT_PUBLIC_SIGNUP_REDIRECT_AFTER`.
+fn validate_relative_path(path: &str, field: &str) -> Result<()> {
+    if !path.starts_with('/') {
+        anyhow::bail!(
+            "{} must be a relative path starting with '/' (got {:?})",
+            field,
+            path
+        );
+    }
+    if path.starts_with("//") {
+        anyhow::bail!(
+            "{} must not start with '//' (protocol-relative URLs are rejected to prevent open redirects)",
+            field
+        );
+    }
+    // Cheap heuristic: anything containing "://" is clearly an absolute URL
+    if path.contains("://") {
+        anyhow::bail!(
+            "{} must be a relative path, not an absolute URL (got {:?})",
+            field,
+            path
+        );
+    }
+    Ok(())
+}
+
 impl LandingConfig {
     /// Load configuration from a TOML file
     pub fn load(path: &Path) -> Result<Self> {
@@ -212,6 +261,13 @@ impl LandingConfig {
             }
         }
 
+        // Validate signup redirect if provided
+        if let Some(ref signup) = self.signup {
+            if let Some(ref path) = signup.redirect_after {
+                validate_relative_path(path, "signup.redirect_after")?;
+            }
+        }
+
         Ok(())
     }
 
@@ -253,6 +309,7 @@ impl LandingConfig {
                 endpoint: None,
             },
             login: None,
+            signup: None,
         }
     }
 }
@@ -381,5 +438,85 @@ server_name = "example"
             logo: Some("s3://bucket/logo.png".to_string()),
         });
         assert!(config.validate().is_ok());
+    }
+
+    /// Regression test for CR-02: `[signup]` section must round-trip through
+    /// TOML so the platform deploy-landing Lambda can read `redirect_after`
+    /// and inject `NEXT_PUBLIC_SIGNUP_REDIRECT_AFTER` into the build env.
+    #[test]
+    fn test_signup_section_round_trips_through_toml() {
+        let toml = r#"
+[landing]
+server_name = "example"
+
+[signup]
+redirect_after = "/connect"
+"#;
+        let config: LandingConfig = toml::from_str(toml).expect("parse");
+        let signup = config.signup.as_ref().expect("[signup] section preserved");
+        assert_eq!(signup.redirect_after.as_deref(), Some("/connect"));
+
+        let emitted = toml::to_string(&config).expect("serialize");
+        let reparsed: LandingConfig = toml::from_str(&emitted).expect("reparse");
+        assert_eq!(
+            reparsed
+                .signup
+                .as_ref()
+                .and_then(|s| s.redirect_after.as_deref()),
+            Some("/connect")
+        );
+    }
+
+    #[test]
+    fn test_signup_section_optional_backward_compatible() {
+        let toml = r#"
+[landing]
+server_name = "example"
+"#;
+        let config: LandingConfig = toml::from_str(toml).expect("parse");
+        assert!(config.signup.is_none());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_signup_redirect_after_rejects_open_redirect_vectors() {
+        let mut config = LandingConfig::default_for_server("test".to_string());
+
+        // Absolute URLs: rejected
+        config.signup = Some(SignupConfig {
+            redirect_after: Some("https://evil.com/connect".to_string()),
+        });
+        assert!(config.validate().is_err(), "absolute https URL must reject");
+
+        config.signup = Some(SignupConfig {
+            redirect_after: Some("http://evil.com/connect".to_string()),
+        });
+        assert!(config.validate().is_err(), "absolute http URL must reject");
+
+        // Protocol-relative: rejected
+        config.signup = Some(SignupConfig {
+            redirect_after: Some("//evil.com/connect".to_string()),
+        });
+        assert!(
+            config.validate().is_err(),
+            "protocol-relative URL must reject"
+        );
+
+        // Missing leading slash: rejected
+        config.signup = Some(SignupConfig {
+            redirect_after: Some("connect".to_string()),
+        });
+        assert!(
+            config.validate().is_err(),
+            "path without leading / must reject"
+        );
+
+        // Valid same-site paths: accepted
+        for ok in &["/", "/connect", "/signup/complete", "/a/b/c"] {
+            config.signup = Some(SignupConfig {
+                redirect_after: Some((*ok).to_string()),
+            });
+            assert!(config.validate().is_ok(), "{} should be accepted", ok);
+        }
     }
 }

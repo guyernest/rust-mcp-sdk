@@ -24,3 +24,12 @@ target = "pmcp.run"
 # primary_color = "#0972d3"
 # background_color = "#ffffff"
 # logo = "s3://pmcp-landings-<env>/<server>/logo.png"  # S3 URL; same bucket as landing assets
+
+# [signup] controls the /signup flow the landing template ships. Post-sign-up,
+# the hosted UI callback redirects users to `redirect_after` on this site
+# (must be a relative path — absolute URLs are rejected to prevent open
+# redirects). Default: "/". Recommended: "/connect" — the connect page this
+# template ships with copy-paste snippets for Claude Desktop, Claude Code, etc.
+#
+# [signup]
+# redirect_after = "/connect"
