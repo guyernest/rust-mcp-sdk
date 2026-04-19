@@ -135,11 +135,9 @@ impl PerformanceMetrics {
     pub fn average_time(&self) -> Duration {
         let total_time = self.total_time_us.load(Ordering::Relaxed);
         let count = self.request_count.load(Ordering::Relaxed);
-        if count > 0 {
-            Duration::from_micros(total_time / count)
-        } else {
-            Duration::ZERO
-        }
+        total_time
+            .checked_div(count)
+            .map_or(Duration::ZERO, Duration::from_micros)
     }
 }
 
@@ -1255,11 +1253,7 @@ impl MetricsMiddleware {
             .get(method)
             .map_or(0, |d| d.load(Ordering::Relaxed));
         let count = self.get_request_count(method);
-        if count > 0 {
-            total_duration / count
-        } else {
-            0
-        }
+        total_duration.checked_div(count).unwrap_or(0)
     }
 }
 

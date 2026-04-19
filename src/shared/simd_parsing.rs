@@ -250,11 +250,7 @@ impl SimdJsonParser {
         let simd_ops = self.metrics.simd_ops.load(Ordering::Relaxed);
         let fallback_ops = self.metrics.fallback_ops.load(Ordering::Relaxed);
 
-        let average_parse_time_ns = if total_docs > 0 {
-            total_time_ns / total_docs
-        } else {
-            0
-        };
+        let average_parse_time_ns = total_time_ns.checked_div(total_docs).unwrap_or(0);
 
         let documents_per_second = if total_time_ns > 0 {
             (total_docs as f64) / (total_time_ns as f64 / 1_000_000_000.0)

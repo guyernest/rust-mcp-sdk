@@ -1,6 +1,5 @@
 //! Integration tests for new features in v0.3.0
 
-use pmcp::*;
 use std::sync::Arc;
 
 #[cfg(feature = "websocket")]

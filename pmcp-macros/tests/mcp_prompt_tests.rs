@@ -148,7 +148,9 @@ fn test_optional_arg_metadata() {
 #[mcp_prompt(name = "custom_name", description = "Custom named prompt")]
 async fn my_prompt(args: ReviewArgs) -> pmcp::Result<GetPromptResult> {
     Ok(GetPromptResult::new(
-        vec![PromptMessage::user(Content::text(args.language.to_string()))],
+        vec![PromptMessage::user(Content::text(
+            args.language.to_string(),
+        ))],
         None,
     ))
 }
