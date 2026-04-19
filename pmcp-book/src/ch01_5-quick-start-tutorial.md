@@ -823,7 +823,7 @@ Try:
 
 ### Join the Community
 
-- Read the [full TUTORIAL.md](../../TUTORIAL.md) for more details
+- Read the [full TUTORIAL.md](../../docs/TUTORIAL.md) for more details
 - Check [GitHub discussions](https://github.com/paiml/rust-mcp-sdk/discussions)
 - Contribute your own examples!
 
