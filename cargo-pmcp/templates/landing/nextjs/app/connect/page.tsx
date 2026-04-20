@@ -1,20 +1,35 @@
+'use client'
+
 import Header from '../components/Header'
 import ConnectSnippet from '../components/ConnectSnippet'
-
-// `MCP_SERVER_NAME` is injected by the pmcp.run deploy-landing Lambda (it's
-// already the canonical identifier used in `pmcp proxy <name>` commands).
-const serverName = process.env.MCP_SERVER_NAME || 'your-server'
-
-const mcpClientConfig = {
-  mcpServers: {
-    [serverName]: {
-      command: 'pmcp',
-      args: ['proxy', serverName],
-    },
-  },
-}
+import { useLandingConfig } from '@/lib/useLandingConfig'
 
 export default function Connect() {
+  const cfg = useLandingConfig()
+
+  if (cfg === null) {
+    return (
+      <>
+        <Header />
+        <main className="mx-auto max-w-3xl px-6 py-12">
+          <p className="text-gray-600">Loading connection instructions…</p>
+        </main>
+      </>
+    )
+  }
+  if (cfg === 'error') {
+    return (
+      <>
+        <Header />
+        <main className="mx-auto max-w-3xl px-6 py-12">
+          <p className="text-gray-600">
+            Connection instructions unavailable. Please try again.
+          </p>
+        </main>
+      </>
+    )
+  }
+
   return (
     <>
       <Header />
@@ -30,24 +45,24 @@ export default function Connect() {
         <ConnectSnippet
           title="Claude Desktop"
           instructions="Add this to your claude_desktop_config.json, then restart Claude Desktop."
-          config={mcpClientConfig}
+          config={{ mcpServers: { server: { url: cfg.mcpEndpoint } } }}
         />
 
         <ConnectSnippet
           title="Claude Code"
-          instructions="Add this to ~/.claude/claude.json, or run `claude mcp add` with the same values."
-          config={mcpClientConfig}
+          instructions="Add this to ~/.claude/claude.json, or run the equivalent `claude mcp add` command."
+          command={`claude mcp add server ${cfg.mcpEndpoint}`}
         />
 
         <ConnectSnippet
           title="ChatGPT"
-          instructions={`Open ChatGPT → Settings → MCP Connectors → Add, and paste the URL: https://${serverName}.us-east.true-mcp.com`}
+          instructions={`Open ChatGPT → Settings → Beta features → MCP Connectors → Add, and paste the URL: ${cfg.mcpEndpoint}`}
         />
 
         <ConnectSnippet
           title="Generic MCP CLI"
-          instructions="Run this in your terminal with the pmcp CLI installed."
-          command={`pmcp connect ${serverName}`}
+          instructions="Run this in your terminal with an MCP-capable CLI installed."
+          command={`npx mcp-client ${cfg.mcpEndpoint}`}
         />
       </main>
     </>
