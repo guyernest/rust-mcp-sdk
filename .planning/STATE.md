@@ -4,7 +4,7 @@ milestone: v2.0
 milestone_name: Protocol Modernization
 status: Ready to execute
 stopped_at: Phase 69 complete — follow-on proposals ready for ROADMAP slotting
-last_updated: "2026-04-20T04:16:10.051Z"
+last_updated: "2026-04-20T04:56:55.781Z"
 progress:
   total_phases: 40
   completed_phases: 35
@@ -74,6 +74,7 @@ v2.1 decisions:
 - Phase 71 added: Rustdoc fallback for #[mcp_tool] tool descriptions (PARITY-MACRO-01) — rustdoc-harvest fallback in pmcp-macros when `description = "..."` attribute is omitted, per 69-PROPOSALS.md Proposal 3 (MACRO-02).
 - Phase 71 planned + replanned (2026-04-17): initial 3 plans → replanned to **4 plans / 12 tasks / 4 waves** after Codex cross-AI review surfaced 2 HIGH findings. HIGH-1 resolved via new `crates/pmcp-macros-support/` sibling crate (proc-macro crates cannot export public items; Option A adopted). HIGH-2 resolved via explicit `^pmcp = ` ripple audit + concurrent `cargo-pmcp 0.6.0→0.6.1` + `mcp-tester 0.5.0→0.5.1` patch bumps per CLAUDE.md §"Version Bump Rules". Semver posture revised: **pmcp 2.3.0→2.4.0 (minor, not patch)** — rustdoc-only macro source form is additive feature. Final VERIFICATION PASSED after 2 revision iterations.
 - Phase 72 added (2026-04-19): Investigate rmcp as foundations for pmcp — evaluate using rmcp for the protocol layer while repositioning pmcp + tooling as the pragmatic, batteries-included SDK for enterprise use cases. Goal is a research/decision phase to reduce protocol-spec maintenance burden and focus pmcp on higher-level DX.
+- Phase 72 planned + replanned (2026-04-19): initial 3 plans → replanned to **3 plans / 12 tasks / 3 waves** after Gemini + Codex cross-AI review (72-REVIEWS.md) surfaced 3 HIGH findings. HIGH-1 (consensus, default-to-B bias) resolved by removing the default-to-B rule and replacing it with an explicit decision tree (N<3→DEFER, N=3..4→D, N≥5→highest-scoring); valid recommendation set tightened to {A, B, C1, C2, D, DEFER} — E is prohibited as an outcome (contingency-only footnote). HIGH-2 (consensus, PoC/threshold resolution gap) resolved by adding Plan 02 Task 1b which EXECUTES PoC Slice 1 on a throwaway branch `spike/72-poc-slice-1` with a 4-hour hard time-box, producing 72-POC-RESULTS.md with real T4_compile_errors + T4_loc_delta, then deletes the branch + scratch dir. HIGH-3 (Codex-only, weak inventory evidence) resolved by upgrading 72-01 Task 2 row schema from 5 to 9 columns (adding exact symbols, public API surface, owned impls/macros, serde compat risk, feature flags, downstream crates). Also: strategy matrix rows changed {A,B,C,D,E}→{A,B,C1,C2,D} + E as footnote; rubric expanded T1..T9 including T8 (historical churn, 180d git log on src/types/+src/shared/) and T9 (enterprise-feature-preservation checklist for TypedTool/workflow/mcp_apps/auth/middleware/mcp-preview/cargo-pmcp); T2 expanded to include PR merge latency + codified gh fallback URL; Plan 01 Task 0 creates 72-CONTEXT.md locking T6/T7; Plan 03 Task 1b runs an awk semantic audit that auto-downgrades to DEFER if any `### Criterion` subsection fails to cite a T-ID + inventory/matrix row. 7 deliverables total (was 5). Final VERIFICATION PASSED on first revision iteration.
 
 ### Pending Todos
 
