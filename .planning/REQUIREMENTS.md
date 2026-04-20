@@ -61,8 +61,8 @@ Seeded by Phase 72 rmcp-foundations research (`.planning/phases/72-investigate-r
 
 - [ ] **RMCP-EVAL-01**: Produce a source-citation-backed inversion inventory covering every module family in `src/types/` and `src/shared/` (and `src/server/cancellation.rs`), identifying the nearest rmcp 1.5.0 equivalent and an overlap rating (EXACT / Partial / pmcp-superset / pmcp-exclusive / UNVERIFIED). Each row MUST carry a 9-column evidence schema: (1) pmcp module family, (2) pmcp defining `file:line`, (3) rmcp docs.rs anchor or GitHub blob URL, (4) exact symbols touched, (5) public API surface impacted, (6) owned impls/macros affected, (7) serde compatibility risk, (8) feature flag(s), (9) downstream crates touched.
 - [ ] **RMCP-EVAL-02**: Score the five architectural options (A. Full adopt / B. Hybrid wrapper / C1. Selective borrow — types only / C2. Selective borrow — transports only / D. Status quo + upstream PRs) against five criteria (maintenance reduction, migration cost, breaking-change surface, enterprise feature preservation, upgrade agility). All 25 cells scored with rationale; no `TBD`. E (Fork) documented as a contingency footnote only, not a scored row.
-- [ ] **RMCP-EVAL-03**: Propose 2-3 candidate PoC slices, each `≤500` LOC touched, each with explicit files list, hypothesis tested, pass criterion, and disqualifying outcome. One slice must be executable in `≤3` days. Plan 02 additionally EXECUTES Slice 1 as a throwaway time-boxed spike to resolve T3/T4 with real data.
-- [ ] **RMCP-EVAL-04**: Publish a decision rubric with `≥5` falsifiable thresholds (numeric or boolean), each citing a named data source (git log query, gh CLI query, mcp-tester run, PoC branch output, or CONTEXT.md entry). Post-reviews rubric adds T8 (historical churn on `src/types/` + `src/shared/`) and T9 (enterprise-feature preservation checklist) and updates T2 (PR merge latency) and T4 (broken-APIs + broken-examples + broken-downstream-crates subcounts).
+- [x] **RMCP-EVAL-03**: Propose 2-3 candidate PoC slices, each `≤500` LOC touched, each with explicit files list, hypothesis tested, pass criterion, and disqualifying outcome. One slice must be executable in `≤3` days. Plan 02 additionally EXECUTES Slice 1 as a throwaway time-boxed spike to resolve T3/T4 with real data.
+- [x] **RMCP-EVAL-04**: Publish a decision rubric with `≥5` falsifiable thresholds (numeric or boolean), each citing a named data source (git log query, gh CLI query, mcp-tester run, PoC branch output, or CONTEXT.md entry). Post-reviews rubric adds T8 (historical churn on `src/types/` + `src/shared/`) and T9 (enterprise-feature preservation checklist) and updates T2 (PR merge latency) and T4 (broken-APIs + broken-examples + broken-downstream-crates subcounts).
 - [ ] **RMCP-EVAL-05**: Publish a final recommendation picking exactly one of {A, B, C1, C2, D, DEFER}, with a per-criterion subsection that engages every rubric criterion from RMCP-EVAL-04 and cites the inventory row(s) and matrix cell(s) supporting its conclusion. DEFER is an explicit, valid outcome when net-resolved thresholds < 3; E (Fork) is NOT a valid recommendation.
 
 ## Previous Requirements
@@ -155,8 +155,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PARITY-MACRO-01 | Phase 71 | Complete |
 | RMCP-EVAL-01 | Phase 72 | Pending |
 | RMCP-EVAL-02 | Phase 72 | Pending |
-| RMCP-EVAL-03 | Phase 72 | Pending |
-| RMCP-EVAL-04 | Phase 72 | Pending |
+| RMCP-EVAL-03 | Phase 72 | Complete |
+| RMCP-EVAL-04 | Phase 72 | Complete |
 | RMCP-EVAL-05 | Phase 72 | Pending |
 
 **Coverage:**
