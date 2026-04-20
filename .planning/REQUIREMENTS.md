@@ -63,7 +63,7 @@ Seeded by Phase 72 rmcp-foundations research (`.planning/phases/72-investigate-r
 - [ ] **RMCP-EVAL-02**: Score the five architectural options (A. Full adopt / B. Hybrid wrapper / C1. Selective borrow — types only / C2. Selective borrow — transports only / D. Status quo + upstream PRs) against five criteria (maintenance reduction, migration cost, breaking-change surface, enterprise feature preservation, upgrade agility). All 25 cells scored with rationale; no `TBD`. E (Fork) documented as a contingency footnote only, not a scored row.
 - [x] **RMCP-EVAL-03**: Propose 2-3 candidate PoC slices, each `≤500` LOC touched, each with explicit files list, hypothesis tested, pass criterion, and disqualifying outcome. One slice must be executable in `≤3` days. Plan 02 additionally EXECUTES Slice 1 as a throwaway time-boxed spike to resolve T3/T4 with real data.
 - [x] **RMCP-EVAL-04**: Publish a decision rubric with `≥5` falsifiable thresholds (numeric or boolean), each citing a named data source (git log query, gh CLI query, mcp-tester run, PoC branch output, or CONTEXT.md entry). Post-reviews rubric adds T8 (historical churn on `src/types/` + `src/shared/`) and T9 (enterprise-feature preservation checklist) and updates T2 (PR merge latency) and T4 (broken-APIs + broken-examples + broken-downstream-crates subcounts).
-- [ ] **RMCP-EVAL-05**: Publish a final recommendation picking exactly one of {A, B, C1, C2, D, DEFER}, with a per-criterion subsection that engages every rubric criterion from RMCP-EVAL-04 and cites the inventory row(s) and matrix cell(s) supporting its conclusion. DEFER is an explicit, valid outcome when net-resolved thresholds < 3; E (Fork) is NOT a valid recommendation.
+- [x] **RMCP-EVAL-05**: Publish a final recommendation picking exactly one of {A, B, C1, C2, D, DEFER}, with a per-criterion subsection that engages every rubric criterion from RMCP-EVAL-04 and cites the inventory row(s) and matrix cell(s) supporting its conclusion. DEFER is an explicit, valid outcome when net-resolved thresholds < 3; E (Fork) is NOT a valid recommendation.
 
 ## Previous Requirements
 
@@ -157,7 +157,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | RMCP-EVAL-02 | Phase 72 | Pending |
 | RMCP-EVAL-03 | Phase 72 | Complete |
 | RMCP-EVAL-04 | Phase 72 | Complete |
-| RMCP-EVAL-05 | Phase 72 | Pending |
+| RMCP-EVAL-05 | Phase 72 | Complete |
 
 **Coverage:**
 - v2.1 requirements: 28 total (20 pre-seed + 3 seeded by Phase 69 + 5 seeded by Phase 72)
@@ -169,3 +169,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 *Last updated: 2026-04-16 — added 3 PARITY-* IDs seeded by Phase 69 rmcp parity research*
 *Last updated: 2026-04-17 — PARITY-MACRO-01 closed by Phase 71 (pmcp 2.4.0 / pmcp-macros 0.6.0 / pmcp-macros-support 0.1.0 — rustdoc fallback)*
 *Last updated: 2026-04-19 — added 5 RMCP-EVAL-* IDs seeded by Phase 72 rmcp foundation evaluation research (reviews-mode revised)*
+*Last updated: 2026-04-20 — Phase 72 Plan 03 closed RMCP-EVAL-05 (recommendation = D). Traceability updated.*
