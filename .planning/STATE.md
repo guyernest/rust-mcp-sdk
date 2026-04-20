@@ -73,6 +73,7 @@ v2.1 decisions:
 - Phase 70 added: Add Extensions typemap and peer back-channel to RequestHandlerExtra (PARITY-HANDLER-01) — bundles HANDLER-02 (Extensions typemap) + HANDLER-05 (peer handle) on the shared RequestHandlerExtra edit site per 69-PROPOSALS.md.
 - Phase 71 added: Rustdoc fallback for #[mcp_tool] tool descriptions (PARITY-MACRO-01) — rustdoc-harvest fallback in pmcp-macros when `description = "..."` attribute is omitted, per 69-PROPOSALS.md Proposal 3 (MACRO-02).
 - Phase 71 planned + replanned (2026-04-17): initial 3 plans → replanned to **4 plans / 12 tasks / 4 waves** after Codex cross-AI review surfaced 2 HIGH findings. HIGH-1 resolved via new `crates/pmcp-macros-support/` sibling crate (proc-macro crates cannot export public items; Option A adopted). HIGH-2 resolved via explicit `^pmcp = ` ripple audit + concurrent `cargo-pmcp 0.6.0→0.6.1` + `mcp-tester 0.5.0→0.5.1` patch bumps per CLAUDE.md §"Version Bump Rules". Semver posture revised: **pmcp 2.3.0→2.4.0 (minor, not patch)** — rustdoc-only macro source form is additive feature. Final VERIFICATION PASSED after 2 revision iterations.
+- Phase 72 added (2026-04-19): Investigate rmcp as foundations for pmcp — evaluate using rmcp for the protocol layer while repositioning pmcp + tooling as the pragmatic, batteries-included SDK for enterprise use cases. Goal is a research/decision phase to reduce protocol-spec maintenance burden and focus pmcp on higher-level DX.
 
 ### Pending Todos
 
