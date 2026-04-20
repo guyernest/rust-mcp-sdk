@@ -65,6 +65,12 @@ Seeded by Phase 72 rmcp-foundations research (`.planning/phases/72-investigate-r
 - [x] **RMCP-EVAL-04**: Publish a decision rubric with `≥5` falsifiable thresholds (numeric or boolean), each citing a named data source (git log query, gh CLI query, mcp-tester run, PoC branch output, or CONTEXT.md entry). Post-reviews rubric adds T8 (historical churn on `src/types/` + `src/shared/`) and T9 (enterprise-feature preservation checklist) and updates T2 (PR merge latency) and T4 (broken-APIs + broken-examples + broken-downstream-crates subcounts).
 - [x] **RMCP-EVAL-05**: Publish a final recommendation picking exactly one of {A, B, C1, C2, D, DEFER}, with a per-criterion subsection that engages every rubric criterion from RMCP-EVAL-04 and cites the inventory row(s) and matrix cell(s) supporting its conclusion. DEFER is an explicit, valid outcome when net-resolved thresholds < 3; E (Fork) is NOT a valid recommendation.
 
+### Landing template runtime config (Phase 72.1)
+
+Urgent INSERTED phase driven by CR-03 rev-2 from the pmcp.run platform team. The platform's Phase 71.1 actively strips `NEXT_PUBLIC_*` env vars on every landing deploy, leaving the current `cargo-pmcp` landing template non-functional for signup. See `.planning/phases/72.1-finalize-landing-support/72.1-CR-03-SOURCE.md` for the authoritative spec.
+
+- [ ] **LAND-CR03-01**: `cargo-pmcp 0.8.1` — landing template uses a runtime fetch of `/landing-config` via a new required shared `useLandingConfig` hook. All four template consumers (`app/signup/page.tsx`, `app/signup/callback/page.tsx`, `app/connect/page.tsx`, `app/components/Header.tsx`) route through the hook; all `NEXT_PUBLIC_COGNITO_*` / `NEXT_PUBLIC_LANDING_CLIENT_ID` / `NEXT_PUBLIC_SIGNUP_REDIRECT_AFTER` reads are deleted; `MCP_SERVER_NAME` branding reads stay; three stale rustdoc references in `cargo-pmcp/src/landing/config.rs` are rewritten to describe the runtime mechanism; patch version bump `0.8.0 → 0.8.1`. Verified by the 12 grep/build acceptance criteria in CR-03 §Acceptance criteria.
+
 ## Previous Requirements
 
 <details>
@@ -158,10 +164,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | RMCP-EVAL-03 | Phase 72 | Complete |
 | RMCP-EVAL-04 | Phase 72 | Complete |
 | RMCP-EVAL-05 | Phase 72 | Complete |
+| LAND-CR03-01 | Phase 72.1 | Pending |
 
 **Coverage:**
-- v2.1 requirements: 28 total (20 pre-seed + 3 seeded by Phase 69 + 5 seeded by Phase 72)
-- Mapped to phases: 28
+- v2.1 requirements: 29 total (20 pre-seed + 3 seeded by Phase 69 + 5 seeded by Phase 72 + 1 seeded by Phase 72.1 CR-03)
+- Mapped to phases: 29
 - Unmapped: 0
 
 ---
@@ -170,3 +177,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 *Last updated: 2026-04-17 — PARITY-MACRO-01 closed by Phase 71 (pmcp 2.4.0 / pmcp-macros 0.6.0 / pmcp-macros-support 0.1.0 — rustdoc fallback)*
 *Last updated: 2026-04-19 — added 5 RMCP-EVAL-* IDs seeded by Phase 72 rmcp foundation evaluation research (reviews-mode revised)*
 *Last updated: 2026-04-20 — Phase 72 Plan 03 closed RMCP-EVAL-05 (recommendation = D). Traceability updated.*
+*Last updated: 2026-04-20 — added LAND-CR03-01 seeded by Phase 72.1 CR-03 rev-2 (cargo-pmcp 0.8.1 landing runtime fetch).*

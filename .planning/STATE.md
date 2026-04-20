@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
-status: Phase complete — ready for verification
+status: Ready to execute
 stopped_at: Phase 73 context gathered
-last_updated: "2026-04-20T18:09:06.193Z"
+last_updated: "2026-04-20T18:55:44.126Z"
 progress:
-  total_phases: 40
-  completed_phases: 35
-  total_plans: 84
-  completed_plans: 84
-  percent: 100
+  total_phases: 27
+  completed_phases: 22
+  total_plans: 76
+  completed_plans: 75
+  percent: 99
 ---
 
 # Project State
@@ -79,6 +79,8 @@ v2.1 decisions:
 - Phase 72 planned + replanned (2026-04-19): initial 3 plans → replanned to **3 plans / 12 tasks / 3 waves** after Gemini + Codex cross-AI review (72-REVIEWS.md) surfaced 3 HIGH findings. HIGH-1 (consensus, default-to-B bias) resolved by removing the default-to-B rule and replacing it with an explicit decision tree (N<3→DEFER, N=3..4→D, N≥5→highest-scoring); valid recommendation set tightened to {A, B, C1, C2, D, DEFER} — E is prohibited as an outcome (contingency-only footnote). HIGH-2 (consensus, PoC/threshold resolution gap) resolved by adding Plan 02 Task 1b which EXECUTES PoC Slice 1 on a throwaway branch `spike/72-poc-slice-1` with a 4-hour hard time-box, producing 72-POC-RESULTS.md with real T4_compile_errors + T4_loc_delta, then deletes the branch + scratch dir. HIGH-3 (Codex-only, weak inventory evidence) resolved by upgrading 72-01 Task 2 row schema from 5 to 9 columns (adding exact symbols, public API surface, owned impls/macros, serde compat risk, feature flags, downstream crates). Also: strategy matrix rows changed {A,B,C,D,E}→{A,B,C1,C2,D} + E as footnote; rubric expanded T1..T9 including T8 (historical churn, 180d git log on src/types/+src/shared/) and T9 (enterprise-feature-preservation checklist for TypedTool/workflow/mcp_apps/auth/middleware/mcp-preview/cargo-pmcp); T2 expanded to include PR merge latency + codified gh fallback URL; Plan 01 Task 0 creates 72-CONTEXT.md locking T6/T7; Plan 03 Task 1b runs an awk semantic audit that auto-downgrades to DEFER if any `### Criterion` subsection fails to cite a T-ID + inventory/matrix row. 7 deliverables total (was 5). Final VERIFICATION PASSED on first revision iteration.
 - Phase 72 executed + verified (2026-04-20): 3 waves shipped; final **Recommendation: D** (Maintain pmcp as authoritative Rust MCP SDK). N=7/9 resolved thresholds (T6/T7 remain UNKNOWN). Slice 1 spike executed on throwaway branch — T4_compile_errors=0, T4_loc_delta=537, serde `params: null` round-trip FAILS against rmcp 1.5.0, downgrading inventory row 1 from EXACT to compatible-via-adapter (strongest counterargument to A/B). 72-REVIEWS.md HIGH findings all resolved in final artifacts. Verification PASSED 15/15 after 1 gap-closure iteration (C3/C5 matrix-citation regex fixes + REQUIREMENTS.md -01/-02 ledger sync). Phase 69's parity phases remain the forward path.
 - Phase 73 added (2026-04-20): Typed client helpers + list_all pagination (PARITY-CLIENT-01) — implements 69-PROPOSALS.md Proposal 2 (CLIENT-02). Adds `call_tool_typed<T>` / `call_prompt_typed<T>` (typed-arg serialization) and `list_all_tools` / `list_all_prompts` / `list_all_resources` (auto-paginating on next_cursor with max-iteration safety cap) to `Client`. Additive, non-breaking; 3 plans expected; minor semver bump.
+- Phase 72.1 inserted after Phase 72 (2026-04-20): **Finalize landing support (URGENT)** — implements pmcp-run team CR-03 rev-2 (runtime `/landing-config` fetch replacing the four `NEXT_PUBLIC_*` build-time env vars in `cargo-pmcp/templates/landing/nextjs/`). HIGH priority; blocks pmcp.run Phase 71 UAT Test 7 and Cost Coach prod launch. Scope: template-only + required `useLandingConfig` shared hook + 3-line rustdoc fix in `src/landing/config.rs`. `MCP_SERVER_NAME` branding stays. Target: `cargo-pmcp 0.8.1` patch. CR source copied to `72.1-CR-03-SOURCE.md`.
+- ROADMAP.md headings `## Phase Details (v2.1)` / `## Progress (v2.1)` renamed to `## Phase Details — Current Milestone` / `## Progress — Current Milestone` (2026-04-20) to prevent `extractCurrentMilestone` regex from clipping the v2.1 section at the Phase Details sub-heading; STATE.md frontmatter `milestone` also corrected from `v2.0` → `v2.1` (v2.0 shipped phases 54-59 per ROADMAP line 13; Phase 72+ is v2.1 territory).
 
 ### Pending Todos
 
