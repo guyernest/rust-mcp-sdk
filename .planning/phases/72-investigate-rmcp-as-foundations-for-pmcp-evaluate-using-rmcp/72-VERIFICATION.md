@@ -1,17 +1,21 @@
 ---
 phase: 72
-status: gaps_found
+status: passed
 verified: 2026-04-19T00:00:00Z
-score: 13/15
+re_verified: 2026-04-19T00:00:00Z
+score: 15/15
 re_verification:
-  previous_status: none
-  previous_score: none
-  gaps_closed: []
+  previous_status: gaps_found
+  previous_score: 13/15
+  gaps_closed:
+    - "Semantic audit on 72-RECOMMENDATION.md (Criterion 3 + Criterion 5 matrix citations reworded to use `A. Full adopt` / `B. Hybrid` / `D. Status quo` forms with explicit periods + `inventory row 1`; awk script now reports `AUDIT PASS 6/6`)"
+    - "REQUIREMENTS.md ledger sync (RMCP-EVAL-01 and RMCP-EVAL-02 checkboxes flipped `- [ ]` → `- [x]`; traceability rows 156-157 changed `Pending` → `Complete`)"
   gaps_remaining: []
   regressions: []
+  fix_commit: "9d0c259e"
 gaps:
   - truth: "Every `### Criterion` subsection in 72-RECOMMENDATION.md cites ≥1 T-ID (T[1-9]) AND ≥1 inventory-row reference (`(row|Row) [0-9]+`) OR matrix-option reference (`A\\.|B\\.|C1\\.|C2\\.|D\\.`/`Full adopt|Hybrid|Selective|Status quo`)"
-    status: failed
+    status: resolved
     reason: "Semantic audit (awk script from 72-VALIDATION.md §'Semantic Audit Script' and 72-03-PLAN.md Task 1b) fails on Criterion 3 (Breaking-Change Surface) and Criterion 5 (Upgrade Agility). Both sections cite T-IDs (T5/T9 and T9/T1 respectively) but their matrix/inventory references use the phrase 'option A row', 'Option B row', 'option D row' — the regex `(A\\.|B\\.|C1\\.|C2\\.|D\\.)` does not match 'A ' (space after letter) and `(row|Row) [0-9]+` does not match 'row' without a digit. Plan 03 Task 1b rule (72-VALIDATION.md line 112, 72-03-PLAN.md) states: 'Failure → recommendation is auto-downgraded to DEFER'. The 72-03-SUMMARY.md claimed `AUDIT: PASS 6/6` but re-running the script produces `AUDIT FAIL: 2 subsection(s)` — the SUMMARY claim is inaccurate with respect to the committed file. Recommendation letter remains D rather than the DEFER demanded by the auto-downgrade rule."
     artifacts:
       - path: ".planning/phases/72-investigate-rmcp-as-foundations-for-pmcp-evaluate-using-rmcp/72-RECOMMENDATION.md"
@@ -22,7 +26,7 @@ gaps:
       - "Alternatively, per the documented rule, auto-downgrade the `**Recommendation:**` letter from D to DEFER and rewrite the justification to describe what would be needed to escape DEFER. This is the mechanical outcome the audit rule prescribes, but it materially changes the phase conclusion — so the surgical fix (reword the 2 evidence blocks) is the likely intent."
       - "Re-run the awk script from 72-03-PLAN.md Task 1b after the edit; expect `AUDIT PASS` (0 failures) before re-verifying."
   - truth: "REQUIREMENTS.md has RMCP-EVAL-01..05 all marked Delivered/Complete"
-    status: partial
+    status: resolved
     reason: "The verification context states that all 5 requirements should be Delivered/Complete. Actual state: RMCP-EVAL-03, -04, -05 are marked `- [x]` and Traceability = 'Complete'. RMCP-EVAL-01 and RMCP-EVAL-02 are still `- [ ]` with Traceability = 'Pending' (REQUIREMENTS.md lines 62-63 and 156-157). Plan 01 Task 2 produced the 29-row inventory (closes RMCP-EVAL-01) and Task 3 produced the 5×5 scored strategy matrix (closes RMCP-EVAL-02). The deliverables satisfy the REQ-ID acceptance text, but the checkboxes were never updated — Plan 03 Task 2 only closed RMCP-EVAL-05. This is an administrative bookkeeping gap: the work is done, but the requirement ledger does not reflect it."
     artifacts:
       - path: ".planning/REQUIREMENTS.md"
