@@ -181,9 +181,11 @@ entirely under pmcp's control.
 - **T9** (upgrade agility): pmcp is currently at 2.4.0 under its own semver
   contract; pmcp sets the deprecation timeline. Under Option A, pmcp inherits
   rmcp's timeline.
-- **Strategy-matrix option A row, Option B row**: both score adverse on this
-  criterion; option D scores best because pmcp's breaking-change contract
-  remains governed by pmcp.
+- **Strategy matrix rows A. Full adopt and B. Hybrid**: both score adverse on
+  this criterion (inventory row 1 `JsonRpcRequest` serde shape diverges per
+  POC-RESULTS — any adopt-path inherits rmcp's pre-1.0 breaking cadence into
+  pmcp's public contract); D. Status quo scores best because pmcp's
+  breaking-change contract remains governed by pmcp.
 
 ### Counterargument
 rmcp will eventually reach 1.0 and stabilize. If pmcp migrates early, the
@@ -254,9 +256,9 @@ arrives first — effectively set to the **max** of both.
   batched cadence aligned to enterprise user expectations (v2.x semver).
 - **T1**: both repos are active, but pmcp's activity is feature-driven under
   a stable contract, rmcp's is pre-1.0 churn.
-- **Strategy-matrix option D row** vs. **option A row** / **option B row**:
-  D is the only option that does not couple pmcp's release cadence to an
-  external project.
+- **Strategy matrix row D. Status quo** vs. **A. Full adopt** and **B. Hybrid**
+  (inventory row 1, protocol layer): D is the only option that does not couple
+  pmcp's release cadence to an external project.
 
 ### Counterargument
 Being on the "leading edge" of rmcp means pmcp picks up protocol improvements
