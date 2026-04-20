@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
-status: Ready to execute
-stopped_at: Phase 73 context gathered
-last_updated: "2026-04-20T18:55:44.126Z"
+status: Phase 72.1 complete — ready to execute Phase 73
+stopped_at: Phase 72.1 Plan 01 complete (cargo-pmcp 0.8.1 landing template runtime fetch shipped)
+last_updated: "2026-04-20T19:45:00.000Z"
 progress:
-  total_phases: 27
-  completed_phases: 22
-  total_plans: 76
-  completed_plans: 75
-  percent: 99
+  total_phases: 40
+  completed_phases: 35
+  total_plans: 84
+  completed_plans: 84
+  percent: 100
 ---
 
 # Project State
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Close credibility and DX gaps where rmcp outshines PMCP -- documentation accuracy, feature gate presentation, macro documentation, example index, repo hygiene.
-**Current focus:** Phase 72 — investigate-rmcp-as-foundations-for-pmcp-evaluate-using-rmcp
+**Current focus:** Phase 73 — Typed client helpers + list_all pagination (PARITY-CLIENT-01)
 
 ## Current Position
 
-Phase: 72 (investigate-rmcp-as-foundations-for-pmcp-evaluate-using-rmcp) — EXECUTING
-Plan: 3 of 3
+Phase: 72.1 (Finalize landing support) — COMPLETE (Plan 01 shipped 2026-04-20)
+Next: Phase 73 (Typed client helpers + list_all pagination, PARITY-CLIENT-01)
 
 ## Shipped Milestones
 
@@ -65,6 +65,7 @@ v2.1 decisions:
 - [Phase 69]: rmcp parity research complete — 69-RESEARCH.md (gap matrix, 32 rows total, 4 High-severity) + 69-PROPOSALS.md (3 proposals). 3 PARITY-* requirement IDs landed in REQUIREMENTS.md (one per proposal); follow-on phases not yet scheduled.
 - [Phase 72]: [Phase 72 Plan 02]: PoC Slice 1 spike EXECUTED on throwaway branch — T4_compile_errors=0, T4_loc_delta=537, ~15 min wall-clock under 4-hour hard time-box; serde-shape divergence found (rmcp requires params: {}; rejects null/missing) downgrades INVENTORY row 1 EXACT→compatible-via-adapter
 - [Phase 72]: [Phase 72 Plan 02]: Rubric shipped 9 thresholds T1..T9; T8 historical churn + T9 enterprise-feature-preservation added; T2 expanded with PR merge latency; gh fallback URL codified verbatim; default-to-B logic removed per HIGH-1
+- [Phase 72.1]: CR-03 rev-2 shipped — cargo-pmcp 0.8.0 -> 0.8.1 (patch, additive). Landing Next.js template now uses runtime `fetch('/landing-config')` via shared `useLandingConfig` hook; 4 consumers (signup, callback, connect [server->client flip], Header [conditional button]) routed through the hook; 4 NEXT_PUBLIC_* reads deleted; 3 stale rustdoc refs in `src/landing/config.rs` rewritten. MCP_SERVER_NAME branding preserved (CR-03 §0). 12/12 CR-03 ACs PASS; G1..G8 guardrails green (G7 scaffold smoke added per Codex M3; G8 77-line LOC delta ≤100 budget). AC-11 manual offline gate approved by operator guy 2026-04-20. Unblocks pmcp.run Phase 71 UAT Test 7 + Cost Coach prod launch. crates.io release is a separate follow-up (git tag v0.8.1 triggers .github/workflows/release.yml).
 
 ### Roadmap Evolution
 
@@ -92,6 +93,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-20T18:09:06.181Z
-Stopped at: Phase 73 context gathered
-Resume: Run /gsd:add-phase to slot a 69-PROPOSALS.md entry into the roadmap, or /gsd-plan-phase for a scheduled v2.1 phase.
+Last session: 2026-04-20T19:45:00.000Z
+Stopped at: Phase 72.1 Plan 01 complete (cargo-pmcp 0.8.1 landing template runtime fetch shipped; AC-11 manual offline gate approved by operator guy)
+Resume: Run /gsd-plan-phase for Phase 73 (Typed client helpers + list_all pagination, PARITY-CLIENT-01) — context was pre-gathered in .planning/phases/73-*/73-CONTEXT.md; or ship cargo-pmcp 0.8.1 via `git tag -a v0.8.1 && git push upstream v0.8.1`.
