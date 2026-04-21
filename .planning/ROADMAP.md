@@ -979,8 +979,8 @@ Plans:
 
 ### Phase 74: Add cargo pmcp auth subcommand with multi-server OAuth token management
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Consolidate OAuth handling for cargo-pmcp's server-connecting commands into a dedicated `auth login/logout/status/token/refresh` command group with a per-server-keyed token cache. Add SDK-level Dynamic Client Registration (RFC 7591) so any PMCP-built client can auto-register, and expose it via a `--client <name>` flag on `auth login` for testing pmcp.run's client-branded login pages.
+**Requirements**: SDK-DCR-01, CLI-AUTH-01
 **Depends on:** Phase 72.1
 **Plans:** 0 plans
 
