@@ -682,32 +682,39 @@ pub async fn execute(args: TokenArgs) -> Result<()> {
 
 **Assumption mitigation:** All assumptions above are validated by the planner in PLAN-CHECK phase OR by discuss-phase before implementation starts. A1 is the only one that could force a plan rewrite.
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+All open questions have been resolved during PLAN-CHECK revision (iteration 1). Each question below carries an inline **RESOLVED:** annotation with the disposition applied in Plan 01 / Plan 02.
 
 1. **Should `OAuthConfig::client_id` become `Option<String>`?**
    - What we know: D-03 requires `client_id.is_none()` check. Current field is `String`.
    - What's unclear: Whether CONTEXT.md's "additive, backward-compatible" (D-02) means "no public-API source-level breakage" OR "no semantic breakage for existing users who provide a client_id".
    - Recommendation: Adopt `Option<String>`. Pre-1.0 v2.x is in the "breaking-change window" per `MEMORY.md v2.0 cleanup philosophy`. Update the two in-tree call sites (`cargo-pmcp/src/commands/auth.rs:36` + example) to wrap in `Some(...)`. Planner should confirm with user in any pre-execution review.
+   - **RESOLVED:** `Option<String>` adopted per CONTEXT.md D-02 (operator decision confirmed in discuss-phase). Plan 01 Task 1.1 performs the field-type flip AND updates every in-tree caller discovered during revision: `cargo-pmcp/src/commands/auth.rs`, `cargo-pmcp/src/commands/flags.rs`, `examples/c07_oidc_discovery.rs`, `examples/m01_basic_middleware.rs`, `benches/comprehensive_benchmarks.rs`, AND `crates/mcp-tester/src/main.rs:598` (added during Blocker #1 fix). `cargo-pmcp/src/commands/preview.rs:75` explicitly excluded — different struct (see Q2 resolution notes).
 
 2. **Should DCR live in `src/client/oauth.rs` or `src/client/dcr.rs`?**
    - What we know: `src/client/oauth.rs` is 693 LOC today. Adding ~150 LOC for DCR (types re-export + one async method + one example code path) puts it at ~850 LOC.
    - What's unclear: Project style preference for max file length.
    - Recommendation: **Inline in `src/client/oauth.rs`** since the DCR flow is tightly coupled to `OAuthHelper`'s PKCE path. Split only if the file crosses 1500 LOC after full implementation. (Planner decides at code-write time.)
+   - **RESOLVED:** Keep DCR inline in `src/client/oauth.rs`. 693 LOC base + ~250 LOC added (DCR method + AuthorizationResult + resolver + tests) ~= 940 LOC, comfortably under the 1500 LOC split threshold. Tight coupling to the PKCE flow (DCR returns the client_id the PKCE step consumes) makes a separate file harmful. Revision note: Plan 01 Task 1.1 Step 5 explicitly lists `cargo-pmcp/src/commands/preview.rs` as DO-NOT-MODIFY — that file constructs `mcp_preview::OAuthPreviewConfig` (different crate, different struct at `crates/mcp-preview/src/handlers/api.rs:33`), NOT the SDK's `pmcp::client::oauth::OAuthConfig`.
 
 3. **Should the cache file include an `updated_at: u64` top-level timestamp?**
    - What we know: D-07 schema specifies `schema_version` + `entries`. No `updated_at`.
    - What's unclear: Whether users would want this for diagnostics.
    - Recommendation: **Defer.** Cache freshness can be read from `mtime` via `fs::metadata`. One less surface to bikeshed.
+   - **RESOLVED:** Deferred from v1 schema. `fs::metadata().modified()` provides equivalent information without schema surface. Re-evaluate if a user asks for in-file diagnostics; would be a `schema_version: 2` additive field.
 
 4. **Do we promote `normalize_cache_key` into the SDK public API?**
    - What we know: `OAuthHelper::extract_base_url` at `src/client/oauth.rs:113` is identical logic but private.
    - What's unclear: Whether library users have asked for cache-key normalization.
    - Recommendation: **Defer.** Keep it CLI-local in `cargo-pmcp/src/commands/auth_cmd/cache.rs`. Promote only if a second caller emerges.
+   - **RESOLVED:** Deferred. `normalize_cache_key` stays internal to `cargo-pmcp` (not re-exported). If a second consumer appears (e.g., a future PMCP CLI plugin), promote then — YAGNI for now.
 
 5. **Does `pentest.rs` migration to `AuthFlags` include re-running the existing pentest test suite for flag-parsing regressions?**
    - What we know: D-21 is a straight flag-surface consolidation.
    - What's unclear: Whether pentest has integration tests that assert on `--api-key` alone.
    - Recommendation: Planner adds one task "run full pentest test suite post-migration" to the G-matrix.
+   - **RESOLVED:** Plan 02 Task 2.4 covers this (T-74-F/pentest scope). Task 2.4 Step 1 migrates `pentest.rs` to `AuthFlags`; Task 2.4 `verify` block runs `cargo test -p cargo-pmcp` which exercises existing pentest tests. Regression coverage is passive (any pre-existing `--api-key`-asserting tests will fail if backward compat breaks). If no such tests exist, the `cargo run -p cargo-pmcp -- pentest --api-key foo https://x` smoke command in the plan-level verification confirms the backward-compat path.
 
 ## Environment Availability
 
