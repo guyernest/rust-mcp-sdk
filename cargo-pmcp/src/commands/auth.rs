@@ -187,11 +187,9 @@ mod cache_fallback_tests {
     /// crashing when the cache file does not exist OR exists without this key.
     #[tokio::test]
     async fn cache_miss_returns_none() {
-        let result = try_cache_token(
-            "https://nonexistent-this-should-not-be-cached-74.example",
-        )
-        .await
-        .unwrap();
+        let result = try_cache_token("https://nonexistent-this-should-not-be-cached-74.example")
+            .await
+            .unwrap();
         assert!(result.is_none());
     }
 }

@@ -125,7 +125,10 @@ pub async fn execute(args: LoginArgs, global_flags: &GlobalFlags) -> Result<()> 
         } else {
             result.scopes.join(",")
         };
-        let issuer_str = result.issuer.clone().unwrap_or_else(|| "<auto>".to_string());
+        let issuer_str = result
+            .issuer
+            .clone()
+            .unwrap_or_else(|| "<auto>".to_string());
         let expires_str = match result.expires_at {
             Some(exp) => {
                 let now = std::time::SystemTime::now()

@@ -25,9 +25,7 @@ pub struct StatusArgs {
 pub async fn execute(args: StatusArgs, global_flags: &GlobalFlags) -> Result<()> {
     let cache = TokenCacheV1::read(&default_multi_cache_path())?;
     if cache.entries.is_empty() {
-        println!(
-            "No cached credentials. Run `cargo pmcp auth login <url>` to authenticate."
-        );
+        println!("No cached credentials. Run `cargo pmcp auth login <url>` to authenticate.");
         return Ok(());
     }
 
@@ -42,11 +40,7 @@ pub async fn execute(args: StatusArgs, global_flags: &GlobalFlags) -> Result<()>
                 },
             }
         },
-        None => cache
-            .entries
-            .iter()
-            .map(|(k, v)| (k.clone(), v))
-            .collect(),
+        None => cache.entries.iter().map(|(k, v)| (k.clone(), v)).collect(),
     };
 
     // Warning #8 fix — apply color AFTER width formatting; honor --no-color.
