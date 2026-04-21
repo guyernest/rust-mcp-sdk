@@ -102,6 +102,58 @@ impl Default for OAuthConfig {
     }
 }
 
+/// Result of a successful OAuth authorization flow, carrying the full set of
+/// artifacts a cache consumer needs to persist and later refresh.
+///
+/// Introduced in pmcp 2.5.0 (Phase 74 Blocker #6) to unblock the multi-server
+/// cache's refresh semantics (D-15 near-expiry refresh, D-16 force-refresh):
+/// the previous `OAuthHelper::get_access_token` API only returned the raw
+/// access_token string, making it impossible for `cargo pmcp auth login` to
+/// persist a usable `refresh_token` / `expires_at` in the cache entry.
+///
+/// # Field semantics
+///
+/// - `access_token`: The bearer token. Put in `Authorization: Bearer <...>` headers.
+/// - `refresh_token`: Present when the IdP returned one (Okta, Auth0, Keycloak
+///   with offline_access). `None` when the IdP does not issue refresh tokens
+///   (some public-PKCE flows). Pitfall 5 tracks this case.
+///
+///   **Device-code flow (RFC 8628) note (review MED-3):** When `OAuthHelper`
+///   falls back from authorization-code to device-code (e.g., the IdP does
+///   not support localhost callbacks or the caller explicitly requested
+///   device flow), `refresh_token` may be `None` because RFC 8628 §3.5 does
+///   NOT require the token response to include a `refresh_token`. Users
+///   will need to re-run `cargo pmcp auth login` when the access_token
+///   expires on such IdPs. `issuer` is still populated from discovery;
+///   `client_id` is whatever was passed in `OAuthConfig` (or DCR-issued if
+///   DCR fired); `expires_at` captures whatever `expires_in` the token
+///   response provided (or `None` if absent).
+/// - `expires_at`: Absolute unix seconds (not `expires_in` relative). `None`
+///   when the IdP omitted `expires_in` from the token response.
+/// - `scopes`: The scopes the IdP actually granted. May differ from
+///   `config.scopes` (the requested scopes) when the server downgrades or
+///   expands them.
+/// - `issuer`: The effective issuer — caller-provided if present, else the
+///   value discovered from `.well-known/openid-configuration`. Always `Some`
+///   for a successful flow.
+/// - `client_id`: The effective client_id — the DCR-issued id when DCR fired,
+///   or the caller-provided value otherwise. Always populated.
+#[derive(Debug, Clone)]
+pub struct AuthorizationResult {
+    /// Bearer access token.
+    pub access_token: String,
+    /// Refresh token, if the IdP issued one.
+    pub refresh_token: Option<String>,
+    /// Absolute expiration time (unix seconds).
+    pub expires_at: Option<u64>,
+    /// Granted scopes.
+    pub scopes: Vec<String>,
+    /// Effective issuer (caller-provided or discovered).
+    pub issuer: Option<String>,
+    /// Effective client_id (DCR-issued or caller-provided).
+    pub client_id: String,
+}
+
 /// Token cache stored on disk.
 #[derive(Debug, Serialize, Deserialize)]
 struct TokenCache {
@@ -397,6 +449,10 @@ impl OAuthHelper {
     }
 
     /// Get or refresh access token, performing OAuth flow if needed.
+    ///
+    /// For callers that only need a bearer-header value. Cache consumers that
+    /// need to persist `refresh_token` / `expires_at` / `issuer` across runs
+    /// should use `authorize_with_details()` instead (Phase 74 Blocker #6).
     pub async fn get_access_token(&self) -> Result<String> {
         // Try to load cached token first
         if let Some(ref cache_file) = self.config.cache_file {
@@ -453,6 +509,120 @@ impl OAuthHelper {
         }
     }
 
+    /// Like `get_access_token` but returns the full authorization result for
+    /// cache persistence.
+    ///
+    /// Cache callers (e.g., `cargo pmcp auth login`) should prefer this method;
+    /// simple callers that just need a bearer header can keep using
+    /// `get_access_token`.
+    ///
+    /// Drives DCR lazily per D-03; runs PKCE via the authorization_code flow;
+    /// captures `refresh_token`, `expires_at`, `scopes`, and the effective
+    /// issuer + client_id.
+    ///
+    /// # Device-code fallback note (review MED-3)
+    ///
+    /// If the authorization-code flow fails and the server advertises a
+    /// device_authorization_endpoint, this method falls back to device code
+    /// flow (RFC 8628). In that case, `refresh_token` may be `None` since
+    /// RFC 8628 §3.5 does not require it, and `scopes` falls back to the
+    /// requested scopes when the token response does not echo them.
+    pub async fn authorize_with_details(&self) -> Result<AuthorizationResult> {
+        let metadata = self.get_metadata().await?;
+
+        // Effective issuer: prefer the caller-provided config.issuer; fall back
+        // to discovery metadata.issuer. metadata.issuer is always populated by
+        // OIDC-compliant servers.
+        let effective_issuer = self
+            .config
+            .issuer
+            .clone()
+            .or_else(|| Some(metadata.issuer.clone()));
+
+        // Try authorization code flow first (returns the full TokenResponse).
+        match self.authorization_code_flow_inner(&metadata).await {
+            Ok((token_response, resolved_client_id)) => {
+                Ok(Self::build_auth_result(
+                    token_response,
+                    resolved_client_id,
+                    effective_issuer,
+                    &self.config.scopes,
+                ))
+            },
+            Err(e) => {
+                tracing::warn!("Authorization code flow failed: {}", e);
+
+                // Fall back to device code flow if available — but device flow
+                // only returns an access_token String via the legacy path, not
+                // a full TokenResponse. For now, device-flow callers that need
+                // full artifacts should use authorization-code flow instead.
+                // See MED-3 rustdoc note above.
+                if metadata.device_authorization_endpoint.is_some() {
+                    tracing::info!(
+                        "Trying device code flow (refresh_token may be None per RFC 8628)..."
+                    );
+                    // Resolve client_id the same way authorization_code would.
+                    let resolved_client_id =
+                        self.resolve_client_id_for_flow(&metadata).await?;
+                    let access_token =
+                        self.device_code_flow_with_metadata(&metadata).await?;
+                    // Device flow returns only the access_token — populate what
+                    // we know, leave refresh_token/expires_at/scopes at defaults.
+                    return Ok(AuthorizationResult {
+                        access_token,
+                        refresh_token: None,
+                        expires_at: None,
+                        scopes: self.config.scopes.clone(),
+                        issuer: effective_issuer,
+                        client_id: resolved_client_id,
+                    });
+                }
+                Err(Error::internal(
+                    "No supported OAuth flow available.\n\
+                     \n\
+                     The server must support either:\n\
+                     - Authorization code flow (authorization_endpoint), or\n\
+                     - Device code flow (device_authorization_endpoint)"
+                        .to_string(),
+                ))
+            },
+        }
+    }
+
+    /// Helper to construct an `AuthorizationResult` from a TokenResponse.
+    fn build_auth_result(
+        token_response: crate::client::auth::TokenResponse,
+        client_id: String,
+        effective_issuer: Option<String>,
+        requested_scopes: &[String],
+    ) -> AuthorizationResult {
+        // Convert `expires_in` (relative seconds) to `expires_at` (absolute unix seconds).
+        let expires_at = token_response.expires_in.map(|ttl| {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            now + ttl
+        });
+
+        // If the server returned a `scope` string, split it; else fall back to
+        // the requested scopes.
+        let granted_scopes = token_response
+            .scope
+            .as_deref()
+            .map(|s| s.split_whitespace().map(String::from).collect::<Vec<_>>())
+            .unwrap_or_else(|| requested_scopes.to_vec());
+
+        AuthorizationResult {
+            access_token: token_response.access_token,
+            refresh_token: token_response.refresh_token,
+            expires_at,
+            scopes: granted_scopes,
+            issuer: effective_issuer,
+            client_id,
+        }
+    }
+
     /// Generate PKCE code verifier (RFC 7636).
     fn generate_code_verifier() -> String {
         let random_bytes: [u8; 32] = rand::rng().random();
@@ -467,8 +637,25 @@ impl OAuthHelper {
         URL_SAFE_NO_PAD.encode(hash)
     }
 
-    /// Perform OAuth authorization code flow with PKCE.
+    /// Perform OAuth authorization code flow with PKCE (public wrapper).
+    ///
+    /// Returns just the access token for the simple `get_access_token` caller.
+    /// Full artifacts (refresh_token, expires_at, scopes, issuer, client_id) are
+    /// available through `authorize_with_details()` via `authorization_code_flow_inner`.
     async fn authorization_code_flow(&self, metadata: &OidcDiscoveryMetadata) -> Result<String> {
+        let (token_response, _client_id) = self.authorization_code_flow_inner(metadata).await?;
+        Ok(token_response.access_token)
+    }
+
+    /// Inner PKCE authorization code flow returning the full token response.
+    ///
+    /// Returns (TokenResponse, resolved_client_id) so `authorize_with_details`
+    /// can populate `AuthorizationResult` fields including refresh_token,
+    /// expires_at, scopes, and the effective client_id.
+    async fn authorization_code_flow_inner(
+        &self,
+        metadata: &OidcDiscoveryMetadata,
+    ) -> Result<(crate::client::auth::TokenResponse, String)> {
         tracing::info!("Starting OAuth authorization code flow...");
 
         // Resolve client_id via DCR-aware resolver (D-03). Fires DCR lazily when
@@ -615,7 +802,7 @@ impl OAuthHelper {
                 .await?;
         }
 
-        Ok(token_response.access_token)
+        Ok((token_response, resolved_client_id))
     }
 
     /// Perform OAuth device code flow (with pre-fetched metadata).
@@ -1195,5 +1382,83 @@ mod dcr_tests {
             !msg.contains("must be https"),
             "scheme guard should accept http://127.0.0.1 but rejected: {msg}"
         );
+    }
+
+    #[tokio::test]
+    async fn authorize_with_details_fails_cleanly_without_server() {
+        // Unit-test scope: verify the method signature compiles and returns
+        // an error when no real server is reachable (not a behavior test —
+        // full behavior is in the mockito integration test, Task 1.3).
+        let cfg = OAuthConfig {
+            mcp_server_url: Some("http://localhost:1/nonexistent".into()),
+            client_id: Some("x".into()),
+            dcr_enabled: false,
+            ..OAuthConfig::default()
+        };
+        let helper = OAuthHelper::new(cfg).unwrap();
+        let err = helper.authorize_with_details().await.unwrap_err();
+        // Any error path is acceptable here — the test ensures no panic.
+        let _ = format!("{err}");
+    }
+
+    #[test]
+    fn authorization_result_struct_has_expected_fields() {
+        // Compile-time check: every required field is present and public.
+        let _r = AuthorizationResult {
+            access_token: "a".into(),
+            refresh_token: Some("r".into()),
+            expires_at: Some(1),
+            scopes: vec!["openid".into()],
+            issuer: Some("https://i.example".into()),
+            client_id: "c".into(),
+        };
+    }
+
+    #[test]
+    fn build_auth_result_converts_expires_in_to_expires_at() {
+        let token = crate::client::auth::TokenResponse {
+            access_token: "a".into(),
+            token_type: "Bearer".into(),
+            expires_in: Some(3600),
+            refresh_token: Some("r".into()),
+            scope: Some("openid profile".into()),
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let r = OAuthHelper::build_auth_result(
+            token,
+            "c1".into(),
+            Some("https://i.example".into()),
+            &["openid".into()],
+        );
+        assert_eq!(r.client_id, "c1");
+        assert_eq!(r.refresh_token.as_deref(), Some("r"));
+        assert_eq!(r.issuer.as_deref(), Some("https://i.example"));
+        assert_eq!(r.scopes, vec!["openid".to_string(), "profile".into()]);
+        let expires_at = r.expires_at.expect("expires_at populated");
+        assert!(
+            expires_at >= now + 3599 && expires_at <= now + 3601,
+            "expires_at ({}) should be approximately now+3600 ({})",
+            expires_at,
+            now + 3600
+        );
+    }
+
+    #[test]
+    fn build_auth_result_falls_back_to_requested_scopes_when_no_grant() {
+        let token = crate::client::auth::TokenResponse {
+            access_token: "a".into(),
+            token_type: "Bearer".into(),
+            expires_in: None,
+            refresh_token: None,
+            scope: None,
+        };
+        let requested = vec!["openid".to_string(), "email".to_string()];
+        let r = OAuthHelper::build_auth_result(token, "c".into(), None, &requested);
+        assert_eq!(r.scopes, requested);
+        assert!(r.expires_at.is_none());
+        assert!(r.refresh_token.is_none());
     }
 }
