@@ -54,7 +54,9 @@ zip = "8.1"                             # Zip file creation for landing page dep
 
 # For schema discovery and code generation
 console = "0.16"                        # Terminal styling for schema commands
+tempfile = "3"                          # Atomic token cache writes (auth_cmd::cache)
 thiserror = "2"                         # Error types for generated code
+url = "2"                               # URL normalization for cache keys
 
 # For secrets management
 secrecy = { version = "0.10", features = ["serde"] }  # Secure secret handling with zeroization
@@ -73,7 +75,7 @@ sha2 = "0.11"
 base64 = "0.22"
 
 [dev-dependencies]
-tempfile = "3"
+mockito = "1"
 proptest = "1"
 
 [features]

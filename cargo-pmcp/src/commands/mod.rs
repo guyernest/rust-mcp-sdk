@@ -1,6 +1,7 @@
 pub mod add;
 pub mod app;
 pub mod auth;
+pub mod auth_cmd;
 pub mod connect;
 pub mod deploy;
 pub mod dev;
