@@ -45,14 +45,17 @@ Two complementary deliverables shipped together because the CLI work depends on 
 
 ### SDK: Dynamic Client Registration (D-01..D-05)
 - **D-01:** DCR support is a **general-purpose SDK feature** in `src/client/oauth.rs` (or new `src/client/dcr.rs`) — not a CLI-only wiring. The SDK owns the DCR types, request/response handling, and discovery integration. Library users (not just cargo-pmcp) can build clients that auto-register.
-- **D-02:** `OAuthConfig` gains two new fields (additive, backward-compatible):
+- **D-02:** `OAuthConfig` gains two new fields AND the existing `client_id` field changes type:
   ```rust
   pub struct OAuthConfig {
       // ... existing fields ...
-      pub client_name: Option<String>,   // RFC 7591 client_name for DCR
-      pub dcr_enabled: bool,             // default: true — fire DCR when eligible
+      pub client_id: Option<String>,     // WAS: String (required). NOW: Option<String>.
+                                          // None → SDK auto-performs DCR when eligible (D-03).
+      pub client_name: Option<String>,   // NEW — RFC 7591 client_name for DCR (D-04)
+      pub dcr_enabled: bool,             // NEW — default: true; fire DCR when eligible
   }
   ```
+  **Breaking change:** `client_id: String → Option<String>` is a breaking struct field change. Per MEMORY.md "v2.0 cleanup philosophy — during breaking-change window, consolidate aggressively," this is accepted in the v2.x line. Migration for external callers: replace `client_id: "x".to_string()` with `client_id: Some("x".to_string())`. All in-repo callers get fixed in the same phase. Semver: **pmcp minor bump** (not major) with an explicit CHANGELOG migration note. See also D-22.
 - **D-03:** **DCR fires automatically when all of the following are true:**
   1. `dcr_enabled == true`
   2. `client_id` is absent (i.e., not provided by caller)
