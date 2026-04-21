@@ -35,7 +35,30 @@ use crate::client::oauth_middleware::{BearerToken, OAuthClientMiddleware};
 use crate::error::{Error, Result};
 use crate::server::auth::oauth2::OidcDiscoveryMetadata;
 
+// Re-export RFC 7591 DCR types from the authoritative server-side definitions
+// so library users can construct DCR requests via `pmcp::client::oauth::DcrRequest`.
+// Source of truth: src/server/auth/provider.rs:302-382.
+pub use crate::server::auth::provider::{DcrRequest, DcrResponse};
+
 /// OAuth configuration for CLI authentication flows.
+///
+/// # Migration note (pmcp 2.5.0, Phase 74)
+///
+/// The `client_id` field type changed `String` -> `Option<String>` to support
+/// RFC 7591 Dynamic Client Registration. Existing callers that passed a
+/// pre-registered id must now wrap it in `Some(...)`:
+///
+/// ```rust,ignore
+/// // Before (pmcp < 2.5.0):
+/// OAuthConfig { client_id: "my-client".to_string(), /* ... */ }
+/// // After (pmcp 2.5.0+):
+/// OAuthConfig {
+///     client_id: Some("my-client".to_string()),
+///     client_name: None,
+///     dcr_enabled: false,
+///     /* ... */
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct OAuthConfig {
     /// OAuth issuer URL (e.g., `https://auth.example.com`).
@@ -43,14 +66,40 @@ pub struct OAuthConfig {
     pub issuer: Option<String>,
     /// MCP server URL for auto-discovery (required if issuer is `None`).
     pub mcp_server_url: Option<String>,
-    /// OAuth client ID.
-    pub client_id: String,
+    /// OAuth client ID. When `None` and `dcr_enabled` is `true` and the
+    /// discovery metadata advertises a `registration_endpoint`, the SDK
+    /// auto-performs RFC 7591 Dynamic Client Registration to obtain one.
+    pub client_id: Option<String>,
+    /// Client name advertised to the authorization server during DCR
+    /// (RFC 7591 §2). Only consulted when DCR fires. Falls back to the
+    /// literal `"pmcp-sdk"` if `None` at DCR time.
+    pub client_name: Option<String>,
+    /// Enable RFC 7591 Dynamic Client Registration when `client_id` is
+    /// `None` and the server advertises a `registration_endpoint`.
+    /// Defaults to `true` via `Default::default()`; set to `false` to
+    /// opt out and require an explicit `client_id`.
+    pub dcr_enabled: bool,
     /// OAuth scopes to request.
     pub scopes: Vec<String>,
     /// Cache file path for storing tokens.
     pub cache_file: Option<PathBuf>,
     /// Redirect port for localhost callback (default: 8080).
     pub redirect_port: u16,
+}
+
+impl Default for OAuthConfig {
+    fn default() -> Self {
+        Self {
+            issuer: None,
+            mcp_server_url: None,
+            client_id: None,
+            client_name: None,
+            dcr_enabled: true,
+            scopes: Vec::new(),
+            cache_file: None,
+            redirect_port: 8080,
+        }
+    }
 }
 
 /// Token cache stored on disk.
@@ -105,6 +154,21 @@ impl OAuthHelper {
             .map_err(|e| Error::internal(format!("Failed to create HTTP client: {e}")))?;
 
         Ok(Self { config, client })
+    }
+
+    /// Resolve `client_id` for the CURRENT in-flight flow.
+    ///
+    /// Returns the configured id when present. When `None`, this is a
+    /// programmer error in Task 1.1's scope (Task 1.2 replaces callers with
+    /// the DCR-aware resolver). The error message points at D-03.
+    fn current_client_id(&self) -> Result<&str> {
+        self.config.client_id.as_deref().ok_or_else(|| {
+            Error::internal(
+                "OAuthConfig::client_id is None but DCR has not been performed — \
+                 enable dcr_enabled or provide a pre-registered client_id"
+                    .to_string(),
+            )
+        })
     }
 
     /// Extract base URL from MCP server URL.
@@ -261,6 +325,9 @@ impl OAuthHelper {
     async fn authorization_code_flow(&self, metadata: &OidcDiscoveryMetadata) -> Result<String> {
         tracing::info!("Starting OAuth authorization code flow...");
 
+        // Resolve client_id (Task 1.1 placeholder; Task 1.2 replaces with DCR-aware resolver).
+        let resolved_client_id = self.current_client_id()?.to_string();
+
         // Generate PKCE challenge
         let code_verifier = Self::generate_code_verifier();
         let code_challenge = Self::generate_code_challenge(&code_verifier);
@@ -295,7 +362,7 @@ impl OAuthHelper {
 
         auth_url
             .query_pairs_mut()
-            .append_pair("client_id", &self.config.client_id)
+            .append_pair("client_id", &resolved_client_id)
             .append_pair("response_type", "code")
             .append_pair("redirect_uri", &redirect_uri)
             .append_pair("scope", &self.config.scopes.join(" "))
@@ -380,7 +447,7 @@ impl OAuthHelper {
             .exchange_code(
                 &metadata.token_endpoint,
                 &authorization_code,
-                &self.config.client_id,
+                &resolved_client_id,
                 None, // No client secret for public clients
                 &redirect_uri,
                 Some(&code_verifier), // PKCE verifier
@@ -435,6 +502,9 @@ impl OAuthHelper {
         metadata: &OidcDiscoveryMetadata,
         device_auth_endpoint: &str,
     ) -> Result<String> {
+        // Resolve client_id (Task 1.1 placeholder; Task 1.2 replaces with DCR-aware resolver).
+        let resolved_client_id = self.current_client_id()?.to_string();
+
         // Step 1: Request device code
         let scope = self.config.scopes.join(" ");
 
@@ -442,7 +512,7 @@ impl OAuthHelper {
             .client
             .post(device_auth_endpoint)
             .form(&[
-                ("client_id", self.config.client_id.as_str()),
+                ("client_id", resolved_client_id.as_str()),
                 ("scope", &scope),
             ])
             .send()
@@ -490,7 +560,7 @@ impl OAuthHelper {
                 .client
                 .post(token_endpoint)
                 .form(&[
-                    ("client_id", self.config.client_id.as_str()),
+                    ("client_id", resolved_client_id.as_str()),
                     ("device_code", &device_auth.device_code),
                     ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
                 ])
@@ -547,11 +617,17 @@ impl OAuthHelper {
         let metadata = self.get_metadata().await?;
         let token_endpoint = &metadata.token_endpoint;
 
+        // Refresh requires a previously-established client_id — DCR is not
+        // re-run on refresh (cached entry implies we already have one).
+        let client_id = self.config.client_id.as_deref().ok_or_else(|| {
+            Error::internal("cannot refresh token without a cached client_id".to_string())
+        })?;
+
         let response = self
             .client
             .post(token_endpoint)
             .form(&[
-                ("client_id", self.config.client_id.as_str()),
+                ("client_id", client_id),
                 ("refresh_token", refresh_token),
                 ("grant_type", "refresh_token"),
             ])
@@ -676,7 +752,9 @@ pub fn default_cache_path() -> PathBuf {
 /// let config = OAuthConfig {
 ///     issuer: Some("https://auth.example.com".to_string()),
 ///     mcp_server_url: None,
-///     client_id: "my-client".to_string(),
+///     client_id: Some("my-client".to_string()),
+///     client_name: None,
+///     dcr_enabled: false,
 ///     scopes: vec!["openid".to_string()],
 ///     cache_file: None,
 ///     redirect_port: 8080,
@@ -689,4 +767,63 @@ pub fn default_cache_path() -> PathBuf {
 pub async fn create_oauth_middleware(config: OAuthConfig) -> Result<Arc<HttpMiddlewareChain>> {
     let helper = OAuthHelper::new(config)?;
     helper.create_middleware_chain().await
+}
+
+#[cfg(test)]
+mod oauth_config_tests {
+    use super::*;
+
+    #[test]
+    fn oauth_config_default_has_dcr_enabled_and_none_client_id() {
+        let c = OAuthConfig::default();
+        assert!(
+            c.client_id.is_none(),
+            "default client_id must be None for DCR auto-fire"
+        );
+        assert!(c.dcr_enabled, "default dcr_enabled must be true");
+        assert!(c.client_name.is_none(), "default client_name is None");
+    }
+
+    #[test]
+    fn oauth_config_struct_literal_with_some_client_id_compiles() {
+        let _c = OAuthConfig {
+            issuer: None,
+            mcp_server_url: Some("https://x.example".into()),
+            client_id: Some("my-client".into()),
+            client_name: None,
+            dcr_enabled: false,
+            scopes: vec![],
+            cache_file: None,
+            redirect_port: 8080,
+        };
+    }
+
+    #[test]
+    fn dcr_types_are_reexported() {
+        // Compile-only: verifies pub use lands `DcrRequest` / `DcrResponse`
+        // at `pmcp::client::oauth::*` per D-01.
+        let _r: super::DcrRequest = super::DcrRequest {
+            redirect_uris: vec!["http://localhost:8080/callback".into()],
+            client_name: Some("test".into()),
+            client_uri: None,
+            logo_uri: None,
+            contacts: vec![],
+            token_endpoint_auth_method: Some("none".into()),
+            grant_types: vec!["authorization_code".into()],
+            response_types: vec![],
+            scope: None,
+            software_id: None,
+            software_version: None,
+            extra: Default::default(),
+        };
+        let _rsp = super::DcrResponse {
+            client_id: "x".into(),
+            client_secret: None,
+            client_secret_expires_at: None,
+            registration_access_token: None,
+            registration_client_uri: None,
+            token_endpoint_auth_method: None,
+            extra: Default::default(),
+        };
+    }
 }

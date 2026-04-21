@@ -33,7 +33,9 @@ fn build_oauth_helper(
     let config = OAuthConfig {
         issuer: issuer.clone(),
         mcp_server_url: Some(mcp_server_url.to_string()),
-        client_id: client_id.to_string(),
+        client_id: Some(client_id.to_string()),
+        client_name: None,
+        dcr_enabled: false,
         scopes: scopes.to_vec(),
         cache_file,
         redirect_port,
