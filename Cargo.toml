@@ -317,6 +317,11 @@ path = "examples/c07_oidc_discovery.rs"
 required-features = ["http-client"]
 
 [[example]]
+name = "c08_oauth_dcr"
+path = "examples/c08_oauth_dcr.rs"
+required-features = ["oauth"]
+
+[[example]]
 name = "t04_streamable_http_stateful"
 path = "examples/t04_streamable_http_stateful.rs"
 required-features = ["streamable-http"]

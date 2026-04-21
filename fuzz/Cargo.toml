@@ -19,7 +19,7 @@ syn = { version = "2", features = ["full", "parsing", "extra-traits"] }
 [dependencies.pmcp]
 path = ".."
 default-features = false
-features = []
+features = ["oauth"]
 
 [dependencies.pmcp-code-mode]
 path = "../crates/pmcp-code-mode"
@@ -85,6 +85,13 @@ bench = false
 [[bin]]
 name = "rustdoc_normalize"
 path = "fuzz_targets/rustdoc_normalize.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dcr_response_parser"
+path = "fuzz_targets/dcr_response_parser.rs"
 test = false
 doc = false
 bench = false

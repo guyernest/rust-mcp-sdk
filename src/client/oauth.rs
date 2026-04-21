@@ -356,14 +356,18 @@ impl OAuthHelper {
     /// Test-only hook: drive the discovery + DCR resolver path without invoking
     /// the browser PKCE flow. Used by `tests/oauth_dcr_integration.rs`.
     ///
-    /// Review LOW-6 — narrowed from `cfg(any(test, feature = "oauth"))` to
-    /// `cfg(test)` only. The previous gate exposed this test-only hook in
-    /// release builds that enable the `oauth` feature, broadening the public
-    /// API. Integration tests under `tests/` are compiled with the test cfg
-    /// AND link against the `oauth` feature, so `#[cfg(test)]` alone is
-    /// sufficient for their access.
+    /// Review LOW-6 deviation (Rule 3 - Blocker): the original review said to
+    /// narrow from `cfg(any(test, feature = "oauth"))` to `cfg(test)` only,
+    /// but integration tests under `tests/` are a SEPARATE compilation unit
+    /// from the library — the library's `cfg(test)` is NOT active when
+    /// building `tests/*.rs`. With `cfg(test)` alone, the integration test
+    /// could not link to this symbol (rustc: "method not found"). The
+    /// pragmatic resolution keeps the broader gate but pairs it with
+    /// `#[doc(hidden)]` and a `test_`-prefixed name to strongly discourage
+    /// external use. External callers should use `authorize_with_details()`
+    /// (which drives the full PKCE flow) instead.
     #[doc(hidden)]
-    #[cfg(test)]
+    #[cfg(any(test, feature = "oauth"))]
     pub async fn test_resolve_client_id_from_discovery(&self) -> Result<String> {
         let metadata = self.get_metadata().await?;
         self.resolve_client_id_for_flow(&metadata).await
@@ -1460,5 +1464,106 @@ mod dcr_tests {
         assert_eq!(r.scopes, requested);
         assert!(r.expires_at.is_none());
         assert!(r.refresh_token.is_none());
+    }
+}
+
+#[cfg(test)]
+mod dcr_proptest {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn arb_dcr_request() -> impl Strategy<Value = crate::server::auth::provider::DcrRequest> {
+        (
+            prop::collection::vec("[a-z][a-z0-9-]{2,30}", 1..3),
+            prop::option::of("[a-zA-Z][a-zA-Z0-9 _-]{1,40}"),
+            prop::option::of(
+                prop::string::string_regex("(none|client_secret_basic|client_secret_post)")
+                    .unwrap(),
+            ),
+        )
+            .prop_map(|(uris, name, auth_method)| {
+                let redirect_uris = uris
+                    .into_iter()
+                    .map(|u| format!("http://localhost:8080/{u}"))
+                    .collect();
+                crate::server::auth::provider::DcrRequest {
+                    redirect_uris,
+                    client_name: name,
+                    client_uri: None,
+                    logo_uri: None,
+                    contacts: vec![],
+                    token_endpoint_auth_method: auth_method,
+                    grant_types: vec!["authorization_code".into()],
+                    response_types: vec!["code".into()],
+                    scope: None,
+                    software_id: None,
+                    software_version: None,
+                    extra: Default::default(),
+                }
+            })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+        #[test]
+        fn dcr_request_serde_roundtrip(req in arb_dcr_request()) {
+            let v = serde_json::to_value(&req).unwrap();
+            let back: crate::server::auth::provider::DcrRequest =
+                serde_json::from_value(v).unwrap();
+            prop_assert_eq!(req.redirect_uris, back.redirect_uris);
+            prop_assert_eq!(req.client_name, back.client_name);
+            prop_assert_eq!(req.token_endpoint_auth_method, back.token_endpoint_auth_method);
+        }
+
+        #[test]
+        fn oauth_config_builder_allows_all_combinations(
+            has_id in any::<bool>(),
+            has_name in any::<bool>(),
+            dcr in any::<bool>(),
+        ) {
+            let cfg = OAuthConfig {
+                client_id: has_id.then(|| "id".into()),
+                client_name: has_name.then(|| "name".into()),
+                dcr_enabled: dcr,
+                mcp_server_url: Some("https://x.example".into()),
+                ..OAuthConfig::default()
+            };
+            OAuthHelper::new(cfg).unwrap();
+        }
+    }
+}
+
+// In-tree proptest smoke check for DCR response parsing. The authoritative
+// robustness gate is the cargo-fuzz target at `fuzz/fuzz_targets/dcr_response_parser.rs`
+// (CLAUDE.md ALWAYS / FUZZ Testing). This module exists for fast per-PR
+// regression coverage that runs as part of `cargo test`.
+#[cfg(test)]
+mod dcr_parser_fuzz {
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+        #[test]
+        fn parser_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..4096)) {
+            // Must return Result, never panic. Error paths are acceptable.
+            let _ = serde_json::from_slice::<
+                crate::server::auth::provider::DcrResponse
+            >(&bytes);
+        }
+
+        #[test]
+        fn parser_accepts_minimal_valid_response(
+            id in "[a-zA-Z0-9-]{8,40}",
+            has_secret in any::<bool>(),
+        ) {
+            let mut v = serde_json::json!({"client_id": id});
+            if has_secret {
+                v["client_secret"] = serde_json::json!("s3cret");
+            }
+            let parsed: crate::server::auth::provider::DcrResponse =
+                serde_json::from_value(v).unwrap();
+            prop_assert_eq!(parsed.client_id, id);
+            prop_assert_eq!(parsed.client_secret.is_some(), has_secret);
+        }
     }
 }
