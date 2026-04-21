@@ -4,7 +4,7 @@ milestone: v2.0
 milestone_name: Protocol Modernization
 status: Ready to execute
 stopped_at: Phase 74 context gathered
-last_updated: "2026-04-21T22:09:48.711Z"
+last_updated: "2026-04-21T22:53:36.655Z"
 progress:
   total_phases: 40
   completed_phases: 35
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 74 (Add cargo pmcp auth subcommand with multi-server OAuth token management) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Next: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
 After: Phase 73 (Typed client helpers + list_all pagination, PARITY-CLIENT-01)
 
@@ -68,6 +68,7 @@ v2.1 decisions:
 - [Phase 72]: [Phase 72 Plan 02]: PoC Slice 1 spike EXECUTED on throwaway branch — T4_compile_errors=0, T4_loc_delta=537, ~15 min wall-clock under 4-hour hard time-box; serde-shape divergence found (rmcp requires params: {}; rejects null/missing) downgrades INVENTORY row 1 EXACT→compatible-via-adapter
 - [Phase 72]: [Phase 72 Plan 02]: Rubric shipped 9 thresholds T1..T9; T8 historical churn + T9 enterprise-feature-preservation added; T2 expanded with PR merge latency; gh fallback URL codified verbatim; default-to-B logic removed per HIGH-1
 - [Phase 72.1]: CR-03 rev-2 shipped — cargo-pmcp 0.8.0 -> 0.8.1 (patch, additive). Landing Next.js template now uses runtime `fetch('/landing-config')` via shared `useLandingConfig` hook; 4 consumers (signup, callback, connect [server->client flip], Header [conditional button]) routed through the hook; 4 NEXT_PUBLIC_* reads deleted; 3 stale rustdoc refs in `src/landing/config.rs` rewritten. MCP_SERVER_NAME branding preserved (CR-03 §0). 12/12 CR-03 ACs PASS; G1..G8 guardrails green (G7 scaffold smoke added per Codex M3; G8 77-line LOC delta ≤100 budget). AC-11 manual offline gate approved by operator guy 2026-04-20. Unblocks pmcp.run Phase 71 UAT Test 7 + Cost Coach prod launch. crates.io release is a separate follow-up (git tag v0.8.1 triggers .github/workflows/release.yml).
+- [Phase ?]: Phase 74 release state landed — pmcp 2.5.0 + cargo-pmcp 0.9.0 + mcp-tester 0.5.2; 8 pins bumped; CHANGELOG dated 2026-04-21; quality-gate green. Tagging is operator-driven.
 
 ### Roadmap Evolution
 
@@ -97,6 +98,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-21T22:09:48.704Z
+Last session: 2026-04-21T22:53:20.664Z
 Stopped at: Phase 74 context gathered
 Resume: Run /gsd-plan-phase 74 (cargo pmcp auth subcommand with multi-server OAuth token management) — reordered ahead of Phase 73 on 2026-04-21; or ship cargo-pmcp 0.8.1 via `git tag -a v0.8.1 && git push upstream v0.8.1`.
