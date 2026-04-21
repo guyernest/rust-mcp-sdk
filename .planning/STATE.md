@@ -4,7 +4,7 @@ milestone: v2.0
 milestone_name: Protocol Modernization
 status: Ready to execute
 stopped_at: Phase 74 context gathered
-last_updated: "2026-04-21T21:27:26.335Z"
+last_updated: "2026-04-21T22:09:48.711Z"
 progress:
   total_phases: 40
   completed_phases: 35
@@ -24,7 +24,8 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 
 ## Current Position
 
-Phase: 72.1 (Finalize landing support) — COMPLETE (Plan 01 shipped 2026-04-20)
+Phase: 74 (Add cargo pmcp auth subcommand with multi-server OAuth token management) — EXECUTING
+Plan: 2 of 3
 Next: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
 After: Phase 73 (Typed client helpers + list_all pagination, PARITY-CLIENT-01)
 
@@ -96,6 +97,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-21T17:12:36.597Z
+Last session: 2026-04-21T22:09:48.704Z
 Stopped at: Phase 74 context gathered
 Resume: Run /gsd-plan-phase 74 (cargo pmcp auth subcommand with multi-server OAuth token management) — reordered ahead of Phase 73 on 2026-04-21; or ship cargo-pmcp 0.8.1 via `git tag -a v0.8.1 && git push upstream v0.8.1`.
