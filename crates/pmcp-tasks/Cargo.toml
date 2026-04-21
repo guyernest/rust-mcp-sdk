@@ -7,7 +7,7 @@ license = "MIT"
 rust-version = "1.82.0"
 
 [dependencies]
-pmcp = { version = "2.2.0", path = "../..", default-features = false }
+pmcp = { version = "2.5.0", path = "../..", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 async-trait = "0.1"
@@ -29,7 +29,7 @@ redis = ["dep:redis"]
 redis-tests = ["redis"]
 
 [dev-dependencies]
-pmcp = { version = "2.2.0", path = "../..", features = ["full"] }
+pmcp = { version = "2.5.0", path = "../..", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 pretty_assertions = "1.4"
