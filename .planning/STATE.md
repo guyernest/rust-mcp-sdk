@@ -2,7 +2,7 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
-status: Phase 72.1 complete — ready to execute Phase 73
+status: Phase 72.1 complete — ready to plan Phase 74
 stopped_at: Phase 72.1 Plan 01 complete (cargo-pmcp 0.8.1 landing template runtime fetch shipped)
 last_updated: "2026-04-20T19:45:00.000Z"
 progress:
@@ -20,12 +20,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Close credibility and DX gaps where rmcp outshines PMCP -- documentation accuracy, feature gate presentation, macro documentation, example index, repo hygiene.
-**Current focus:** Phase 73 — Typed client helpers + list_all pagination (PARITY-CLIENT-01)
+**Current focus:** Phase 74 — Add cargo pmcp auth subcommand with multi-server OAuth token management
 
 ## Current Position
 
 Phase: 72.1 (Finalize landing support) — COMPLETE (Plan 01 shipped 2026-04-20)
-Next: Phase 73 (Typed client helpers + list_all pagination, PARITY-CLIENT-01)
+Next: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
+After: Phase 73 (Typed client helpers + list_all pagination, PARITY-CLIENT-01)
 
 ## Shipped Milestones
 
@@ -82,6 +83,8 @@ v2.1 decisions:
 - Phase 73 added (2026-04-20): Typed client helpers + list_all pagination (PARITY-CLIENT-01) — implements 69-PROPOSALS.md Proposal 2 (CLIENT-02). Adds `call_tool_typed<T>` / `call_prompt_typed<T>` (typed-arg serialization) and `list_all_tools` / `list_all_prompts` / `list_all_resources` (auto-paginating on next_cursor with max-iteration safety cap) to `Client`. Additive, non-breaking; 3 plans expected; minor semver bump.
 - Phase 72.1 inserted after Phase 72 (2026-04-20): **Finalize landing support (URGENT)** — implements pmcp-run team CR-03 rev-2 (runtime `/landing-config` fetch replacing the four `NEXT_PUBLIC_*` build-time env vars in `cargo-pmcp/templates/landing/nextjs/`). HIGH priority; blocks pmcp.run Phase 71 UAT Test 7 and Cost Coach prod launch. Scope: template-only + required `useLandingConfig` shared hook + 3-line rustdoc fix in `src/landing/config.rs`. `MCP_SERVER_NAME` branding stays. Target: `cargo-pmcp 0.8.1` patch. CR source copied to `72.1-CR-03-SOURCE.md`.
 - ROADMAP.md headings `## Phase Details (v2.1)` / `## Progress (v2.1)` renamed to `## Phase Details — Current Milestone` / `## Progress — Current Milestone` (2026-04-20) to prevent `extractCurrentMilestone` regex from clipping the v2.1 section at the Phase Details sub-heading; STATE.md frontmatter `milestone` also corrected from `v2.0` → `v2.1` (v2.0 shipped phases 54-59 per ROADMAP line 13; Phase 72+ is v2.1 territory).
+- Phase 74 added (2026-04-21): Add cargo pmcp auth subcommand with multi-server OAuth token management — consolidate the existing OAuth PKCE flow (currently nested inside every server-connecting command via `AuthFlags`) into a dedicated `cargo pmcp auth` command group: `login <url>`, `logout [<url> | --all]`, `status [<url>]`, `token <url>`, `refresh <url>`. Evolve `~/.pmcp/oauth-tokens.json` into a per-server-keyed cache so multiple OAuth-protected servers can be logged in concurrently (e.g. dev + staging + prod). Additive; `cargo-pmcp` patch/minor bump. Motivation: remove the per-command browser prompt friction for developers running `test conformance`, `test run`, `loadtest`, `preview` against OAuth-protected servers.
+- Phase 73 ↔ 74 order swapped (2026-04-21): Phase 74 (cargo pmcp auth) promoted ahead of Phase 73 (typed client helpers) per operator direction. Phase numbers preserved (no directory/reference churn); only ROADMAP.md ordering + "Depends on" chain flipped: Phase 74 now depends on Phase 72.1, Phase 73 now depends on Phase 74. Rationale: developer-facing DX unblocker (OAuth friction while testing OAuth-protected servers) takes priority over additive client ergonomics.
 
 ### Pending Todos
 
@@ -95,4 +98,4 @@ None.
 
 Last session: 2026-04-20T19:45:00.000Z
 Stopped at: Phase 72.1 Plan 01 complete (cargo-pmcp 0.8.1 landing template runtime fetch shipped; AC-11 manual offline gate approved by operator guy)
-Resume: Run /gsd-plan-phase for Phase 73 (Typed client helpers + list_all pagination, PARITY-CLIENT-01) — context was pre-gathered in .planning/phases/73-*/73-CONTEXT.md; or ship cargo-pmcp 0.8.1 via `git tag -a v0.8.1 && git push upstream v0.8.1`.
+Resume: Run /gsd-plan-phase 74 (cargo pmcp auth subcommand with multi-server OAuth token management) — reordered ahead of Phase 73 on 2026-04-21; or ship cargo-pmcp 0.8.1 via `git tag -a v0.8.1 && git push upstream v0.8.1`.

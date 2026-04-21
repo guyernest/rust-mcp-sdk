@@ -977,11 +977,21 @@ Plans:
 Plans:
 - [x] 72.1-01-PLAN.md — Create `lib/useLandingConfig.ts` hook; rewrite 4 consumers (signup, callback, connect [server->client flip], Header [conditional button]); fix 3 rustdoc comments in `src/landing/config.rs`; bump `Cargo.toml` 0.8.0 -> 0.8.1; run `make quality-gate` + `cargo doc` + template `tsc`/`next build` + grep guardrails G1..G6 + manual AC-11 offline gate (Wave 1)
 
+### Phase 74: Add cargo pmcp auth subcommand with multi-server OAuth token management
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 72.1
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 74 to break down)
+
 ### Phase 73: Typed client helpers + list_all pagination (PARITY-CLIENT-01)
 
 **Goal:** [To be planned]
 **Requirements**: TBD
-**Depends on:** Phase 72
+**Depends on:** Phase 74
 **Plans:** 0 plans
 
 Plans:
