@@ -321,10 +321,7 @@ impl OAuthHelper {
     ///
     /// Returns `Err` with an actionable message when DCR is needed but the
     /// server does not advertise a `registration_endpoint` (D-03 last clause).
-    async fn resolve_client_id_for_flow(
-        &self,
-        metadata: &OidcDiscoveryMetadata,
-    ) -> Result<String> {
+    async fn resolve_client_id_for_flow(&self, metadata: &OidcDiscoveryMetadata) -> Result<String> {
         // Fast path: caller provided a client_id — use it verbatim, skip DCR entirely
         // (D-20 escape hatch).
         if let Some(ref id) = self.config.client_id {
@@ -347,8 +344,7 @@ impl OAuthHelper {
                 Ok(response.client_id)
             },
             None => Err(Error::internal(
-                "server does not support DCR — pass a pre-registered client_id"
-                    .to_string(),
+                "server does not support DCR — pass a pre-registered client_id".to_string(),
             )),
         }
     }
@@ -545,14 +541,12 @@ impl OAuthHelper {
 
         // Try authorization code flow first (returns the full TokenResponse).
         match self.authorization_code_flow_inner(&metadata).await {
-            Ok((token_response, resolved_client_id)) => {
-                Ok(Self::build_auth_result(
-                    token_response,
-                    resolved_client_id,
-                    effective_issuer,
-                    &self.config.scopes,
-                ))
-            },
+            Ok((token_response, resolved_client_id)) => Ok(Self::build_auth_result(
+                token_response,
+                resolved_client_id,
+                effective_issuer,
+                &self.config.scopes,
+            )),
             Err(e) => {
                 tracing::warn!("Authorization code flow failed: {}", e);
 
@@ -566,10 +560,8 @@ impl OAuthHelper {
                         "Trying device code flow (refresh_token may be None per RFC 8628)..."
                     );
                     // Resolve client_id the same way authorization_code would.
-                    let resolved_client_id =
-                        self.resolve_client_id_for_flow(&metadata).await?;
-                    let access_token =
-                        self.device_code_flow_with_metadata(&metadata).await?;
+                    let resolved_client_id = self.resolve_client_id_for_flow(&metadata).await?;
+                    let access_token = self.device_code_flow_with_metadata(&metadata).await?;
                     // Device flow returns only the access_token — populate what
                     // we know, leave refresh_token/expires_at/scopes at defaults.
                     return Ok(AuthorizationResult {

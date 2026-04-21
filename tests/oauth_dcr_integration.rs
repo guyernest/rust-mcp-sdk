@@ -5,7 +5,7 @@
 //!
 //! Covers G9 from 74-VALIDATION.md plus regression guards for:
 //! - HIGH-1: RFC 7591 §3.1 `response_types: ["code"]` must appear in the wire body
-//! - T-74-A (scheme guard): `http://`-non-localhost registration_endpoint rejected
+//! - T-74-A (scheme guard): `http://`-non-localhost `registration_endpoint` rejected
 //! - LOW-11: DCR response body capped at 1 MiB
 
 #![cfg(feature = "oauth")]
