@@ -5,6 +5,12 @@
 //!
 //! ALWAYS Requirement: Property tests for all new features
 
+// Phase 73 list_all_* property tests share MockTransport + builders with
+// tests/list_all_pagination.rs via this single `#[path]` declaration —
+// `mod mock_paginated` MUST NOT be redeclared inside any nested module.
+#[path = "common/mock_paginated.rs"]
+mod mock_paginated;
+
 use pmcp::types::*;
 use proptest::prelude::*;
 
@@ -519,6 +525,129 @@ mod phase73_typed_helpers {
             } else {
                 prop_assert_eq!(recovered, Some(expected));
             }
+        }
+    }
+}
+
+// === Phase 73: list_all_* properties (PARITY-CLIENT-01) ===
+//
+// The `#[path = "common/mock_paginated.rs"] mod mock_paginated;` declaration
+// lives ONCE at the top of this file — do NOT redeclare it here.
+#[cfg(test)]
+mod phase73_list_all_properties {
+    use super::mock_paginated::{
+        build_paginated_responses, init_response, MockTransport, PaginationCapability,
+    };
+    use pmcp::{types::ClientCapabilities, Client, ClientOptions, Error};
+    use proptest::prelude::*;
+    use serde_json::{json, Value};
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 64, .. ProptestConfig::default() })]
+
+        /// D-12 flat-concatenation: for any N-page sequence (N in 1..=7),
+        /// `list_all_tools` returns the in-order concatenation of tool names
+        /// across all pages.
+        #[test]
+        fn prop_list_all_tools_flat_concatenation(
+            pages in prop::collection::vec(
+                prop::collection::vec("[a-z]{1,6}", 0..4),
+                1..8,
+            ),
+        ) {
+            let page_payloads: Vec<Vec<Value>> = pages
+                .iter()
+                .map(|names| {
+                    names
+                        .iter()
+                        .map(|n| json!({"name": n, "description": "", "inputSchema": {}}))
+                        .collect()
+                })
+                .collect();
+            let responses = build_paginated_responses(
+                init_response(),
+                page_payloads,
+                PaginationCapability::Tools,
+            );
+            let expected: Vec<String> = pages.into_iter().flatten().collect();
+
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let observed = rt.block_on(async move {
+                let mut client = Client::new(MockTransport::with_responses(responses));
+                client
+                    .initialize(ClientCapabilities::minimal())
+                    .await
+                    .unwrap();
+                client.list_all_tools().await.unwrap()
+            });
+            let observed_names: Vec<String> = observed.into_iter().map(|t| t.name).collect();
+            prop_assert_eq!(observed_names, expected);
+        }
+
+        /// D-10 cap enforcement: `max_iterations = cap` + `cap + 2` scripted
+        /// pages forces the cap-exceeded branch to fire with
+        /// `Error::Validation`.
+        ///
+        /// Rationale for `cap + 2` (MUST, not "try cap + 1 first"):
+        ///   `build_paginated_responses` ALWAYS assigns `next_cursor: None`
+        ///   to the FINAL scripted page. If we scripted `cap + 1` pages, the
+        ///   `cap`-th iteration of the loop would happen to see that terminal
+        ///   `None` and the helper would exit with `Ok(_)` — the cap-exceeded
+        ///   branch would be UNREACHABLE and the property would pass
+        ///   vacuously. Scripting `cap + 2` pages guarantees every page that
+        ///   sits inside the budget (`0..cap`) carries `Some(_)`, so the
+        ///   `cap`-th iteration observes a non-terminal cursor and the
+        ///   for-loop's cap branch fires with `Error::Validation`. A
+        ///   returned `Ok(_)` is NOT acceptable under this property and is
+        ///   treated as a counter-example.
+        #[test]
+        fn prop_list_all_tools_cap_enforced(cap in 1usize..20) {
+            // Primary prescription: script cap + 2 pages (see rationale).
+            let page_count = cap + 2;
+            let page_payloads: Vec<Vec<Value>> = (0..page_count)
+                .map(|i| {
+                    vec![json!({
+                        "name": format!("t{i}"),
+                        "description": "",
+                        "inputSchema": {}
+                    })]
+                })
+                .collect();
+            let responses = build_paginated_responses(
+                init_response(),
+                page_payloads,
+                PaginationCapability::Tools,
+            );
+
+            let opts = ClientOptions::default().with_max_iterations(cap);
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let result = rt.block_on(async move {
+                let mut client = Client::with_client_options(
+                    MockTransport::with_responses(responses),
+                    opts,
+                );
+                client
+                    .initialize(ClientCapabilities::minimal())
+                    .await
+                    .unwrap();
+                client.list_all_tools().await
+            });
+
+            // Counter-example annotation: Ok(_) is a property violation.
+            prop_assert!(
+                result.is_err(),
+                "cap-enforced property violated: helper returned Ok(_) when it should have errored with Error::Validation after {cap} iterations"
+            );
+            let e = result.unwrap_err();
+            prop_assert!(
+                matches!(e, Error::Validation(_)),
+                "expected Error::Validation, got a different error variant: {e}"
+            );
+            let msg = format!("{e}");
+            prop_assert!(
+                msg.contains("list_all_tools"),
+                "method name missing from validation error: {msg}"
+            );
         }
     }
 }
