@@ -216,10 +216,11 @@ High-performance Rust implementation of the MCP protocol.
 - **MCP Apps**: Rich HTML UI widgets with live preview and browser DevTools
 - **MCP Tasks**: Shared client/server state with task lifecycle management
 - **Tower Middleware**: DNS rebinding protection, CORS, security headers
+- **Typed Client Helpers**: `call_tool_typed`, `get_prompt_typed`, and auto-paginating `list_all_*` with bounded safety cap
 - **Performance**: 16x faster than TypeScript, SIMD-accelerated parsing
 - **Quality**: Zero `unwrap()`, comprehensive error handling
 
-**Latest Version:** `pmcp = "2.0"`
+**Latest Version:** `pmcp = "2.6"`
 
 **Documentation:**
 - [API Reference](https://docs.rs/pmcp)

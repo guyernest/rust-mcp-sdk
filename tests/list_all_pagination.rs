@@ -3,10 +3,10 @@
 //!
 //! Drives the shared `mock_paginated::MockTransport` with scripted multi-page
 //! response sequences and asserts:
-//!   1. Aggregation across pages preserves order (tools + resource_templates).
+//!   1. Aggregation across pages preserves order (tools + `resource_templates`).
 //!   2. Termination on `next_cursor: None`.
 //!   3. `max_iterations` cap enforcement returns `Error::Validation`
-//!      (tools + resource_templates — the latter uses the distinct
+//!      (tools + `resource_templates` — the latter uses the distinct
 //!      `resources/templates/list` capability).
 
 #![cfg(not(target_arch = "wasm32"))]

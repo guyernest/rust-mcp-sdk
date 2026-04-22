@@ -1,6 +1,6 @@
 //! Shared test helpers for Phase 73 `list_all_*` auto-pagination tests.
 //!
-//! Encapsulates the MockTransport reverse-push quirk: callers pass pages in
+//! Encapsulates the `MockTransport` reverse-push quirk: callers pass pages in
 //! NATURAL order; [`build_paginated_responses`] internally reverses, chains
 //! cursors, and appends the init response at the correct pop position.
 //!
@@ -24,7 +24,7 @@ use serde::Serialize;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 
-/// MockTransport variant shared across integration + property tests.
+/// `MockTransport` variant shared across integration + property tests.
 ///
 /// `receive()` pops from the TAIL of `responses`. Responses must therefore
 /// be pushed in REVERSE arrival order — the [`build_paginated_responses`]
@@ -64,7 +64,7 @@ impl Transport for MockTransport {
 
 /// Canonical protocol init response advertising `tools`, `prompts`, and
 /// `resources` server capabilities. `resources/templates/list` is gated by
-/// the `resources` capability, so this suffices for all four list_all_*
+/// the `resources` capability, so this suffices for all four `list_all_*`
 /// families.
 pub fn init_response() -> TransportMessage {
     TransportMessage::Response(JSONRPCResponse {
@@ -136,7 +136,7 @@ pub fn build_paginated_responses<T: Serialize>(
             }
             TransportMessage::Response(JSONRPCResponse {
                 jsonrpc: "2.0".to_string(),
-                id: RequestId::from((i as i64) + 2),
+                id: RequestId::from(i64::try_from(i).unwrap_or(i64::MAX) + 2),
                 payload: ResponsePayload::Result(payload),
             })
         })

@@ -917,9 +917,9 @@ impl<T: Transport> Client<T> {
     /// ).await?;
     /// # Ok(()) }
     /// ```
-    pub async fn call_tool_typed<A: serde::Serialize + ?Sized>(
+    pub async fn call_tool_typed<A: serde::Serialize + ?Sized + Sync>(
         &self,
-        name: impl Into<String>,
+        name: impl Into<String> + Send,
         args: &A,
     ) -> Result<CallToolResult> {
         let value = serde_json::to_value(args)
@@ -942,9 +942,9 @@ impl<T: Transport> Client<T> {
     /// let _ = client.call_tool_typed_with_task("scan", &Args { file: "a.rs".into() }).await?;
     /// # Ok(()) }
     /// ```
-    pub async fn call_tool_typed_with_task<A: serde::Serialize + ?Sized>(
+    pub async fn call_tool_typed_with_task<A: serde::Serialize + ?Sized + Sync>(
         &self,
-        name: impl Into<String>,
+        name: impl Into<String> + Send,
         args: &A,
     ) -> Result<ToolCallResponse> {
         let value = serde_json::to_value(args)
@@ -975,9 +975,9 @@ impl<T: Transport> Client<T> {
     /// ).await?;
     /// # Ok(()) }
     /// ```
-    pub async fn call_tool_typed_and_poll<A: serde::Serialize + ?Sized>(
+    pub async fn call_tool_typed_and_poll<A: serde::Serialize + ?Sized + Sync>(
         &self,
-        name: impl Into<String>,
+        name: impl Into<String> + Send,
         args: &A,
         max_polls: usize,
     ) -> Result<CallToolResult> {
@@ -1014,25 +1014,22 @@ impl<T: Transport> Client<T> {
     /// ).await?;
     /// # Ok(()) }
     /// ```
-    pub async fn get_prompt_typed<A: serde::Serialize + ?Sized>(
+    pub async fn get_prompt_typed<A: serde::Serialize + ?Sized + Sync>(
         &self,
-        name: impl Into<String>,
+        name: impl Into<String> + Send,
         args: &A,
     ) -> Result<GetPromptResult> {
         let value = serde_json::to_value(args)
             .map_err(|e| Error::validation(format!("get_prompt_typed arguments: {e}")))?;
-        let obj = match value {
-            serde_json::Value::Object(map) => map,
-            _ => {
-                return Err(Error::validation(
-                    "prompts/get arguments must serialize to a JSON object",
-                ))
-            },
+        let serde_json::Value::Object(obj) = value else {
+            return Err(Error::validation(
+                "prompts/get arguments must serialize to a JSON object",
+            ));
         };
         let mut out: HashMap<String, String> = HashMap::with_capacity(obj.len());
         for (k, v) in obj {
             match v {
-                serde_json::Value::Null => continue,
+                serde_json::Value::Null => {},
                 serde_json::Value::String(s) => {
                     out.insert(k, s);
                 },
@@ -1307,7 +1304,7 @@ impl<T: Transport> Client<T> {
     /// `next_cursor`.
     ///
     /// Uses the distinct `resources/templates/list` capability path (all
-    /// other list_all_* helpers hit their own methods). Semantics otherwise
+    /// other `list_all_*` helpers hit their own methods). Semantics otherwise
     /// identical to [`Self::list_all_tools`]: bounded by
     /// `self.options.max_iterations`, terminates only on `next_cursor: None`,
     /// returns [`Error::Validation`] on cap exceeded.
@@ -2835,7 +2832,7 @@ mod tests {
         let msg = format!("{err}");
         assert!(matches!(err, Error::Validation(_)), "got: {msg}");
         assert!(msg.contains("list_all_tools"), "method name missing: {msg}");
-        assert!(msg.contains("3"), "cap value missing: {msg}");
+        assert!(msg.contains('3'), "cap value missing: {msg}");
     }
 
     #[tokio::test]
@@ -2887,7 +2884,7 @@ mod tests {
         let err = client.list_all_tools().await.unwrap_err();
         let msg = format!("{err}");
         assert!(matches!(err, Error::Validation(_)), "got: {msg}");
-        assert!(msg.contains("0"), "cap value missing: {msg}");
+        assert!(msg.contains('0'), "cap value missing: {msg}");
         assert!(msg.contains("list_all_tools"), "method name missing: {msg}");
 
         let sent_after = sent_ref.lock().unwrap().clone();

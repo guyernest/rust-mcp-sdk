@@ -1317,7 +1317,10 @@ mod dcr_tests {
         let result = helper
             .do_dynamic_client_registration(&format!("{}/register", server.url()))
             .await;
-        assert!(result.is_ok(), "DCR body did not pin 127.0.0.1 redirect_uri");
+        assert!(
+            result.is_ok(),
+            "DCR body did not pin 127.0.0.1 redirect_uri"
+        );
         mock.assert_async().await;
     }
 

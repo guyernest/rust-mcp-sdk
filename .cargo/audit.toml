@@ -20,6 +20,12 @@ ignore = [
     # Path: aws-smithy-http-client -> rustls 0.21 -> rustls-webpki 0.101
     "RUSTSEC-2026-0099",
 
+    # rustls-webpki 0.101.7: Reachable panic in CRL parsing
+    # Path: aws-smithy-http-client -> rustls 0.21 -> rustls-webpki 0.101
+    # Published 2026-04-22; same transitive-dep constraint as the sibling
+    # RUSTSEC-2026-0049/0098/0099 entries above.
+    "RUSTSEC-2026-0104",
+
     # aws-lc-sys: Timing side-channel in AES-CCM tag verification
     "RUSTSEC-2026-0045",
 

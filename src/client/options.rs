@@ -3,7 +3,7 @@
 //! [`ClientOptions`] is the additive surface for configuring a [`crate::Client`]
 //! beyond the protocol-level [`crate::shared::ProtocolOptions`]. This type is
 //! marked `#[non_exhaustive]` so future knobs (Phase 73 deferred ideas —
-//! StrictMode / typed-output for PARITY-CLIENT-02) can be added without a
+//! `StrictMode` / typed-output for PARITY-CLIENT-02) can be added without a
 //! breaking change.
 
 /// Client-level configuration.
