@@ -6,10 +6,8 @@
 [![Technical Debt](https://img.shields.io/badge/Tech%20Debt-0h-brightgreen)](https://github.com/paiml/rust-mcp-sdk/actions/workflows/quality-badges.yml)
 <!-- QUALITY BADGES END -->
 
-[![CI](https://github.com/paiml/pmcp/actions/workflows/ci.yml/badge.svg)](https://github.com/paiml/pmcp/actions/workflows/ci.yml)
-[![Quality Gate](https://img.shields.io/badge/Quality%20Gate-passing-brightgreen)](https://github.com/paiml/rust-mcp-sdk/actions/workflows/quality-badges.yml)
-[![TDG Score](https://img.shields.io/badge/TDG%20Score-0.76-green)](https://github.com/paiml/rust-mcp-sdk/actions/workflows/quality-badges.yml)
-[![Coverage](https://img.shields.io/badge/coverage-52%25-yellow.svg)](https://github.com/paiml/pmcp)
+[![CI](https://github.com/paiml/rust-mcp-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/paiml/rust-mcp-sdk/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/badge/coverage-52%25-yellow.svg)](https://github.com/paiml/rust-mcp-sdk)
 [![Crates.io](https://img.shields.io/crates/v/pmcp.svg)](https://crates.io/crates/pmcp)
 [![Documentation](https://docs.rs/pmcp/badge.svg)](https://docs.rs/pmcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)

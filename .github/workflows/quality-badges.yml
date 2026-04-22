@@ -38,8 +38,9 @@ jobs:
     
     - name: Install PMAT
       run: |
-        # Install PMAT (Pragmatic Modular Analysis Toolkit)
-        cargo install pmat-cli || echo "PMAT installation failed, continuing..."
+        # The crate is published as `pmat`, not `pmat-cli`. Fail loudly if
+        # install breaks so we don't silently fall back to sentinel badges.
+        cargo install pmat --locked
     
     - name: Generate TDG Score Badge
       run: |
