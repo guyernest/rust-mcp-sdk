@@ -1,24 +1,19 @@
 //! `cargo pmcp auth` — manage OAuth credentials for MCP servers.
 //!
-//! Provides five subcommands that together give developers one-time browser
-//! login per server, then transparent bearer-token reuse across every
-//! `cargo pmcp test/*`, `connect`, `preview`, `schema`, `dev`, `loadtest/run`,
-//! and `pentest` invocation.
+//! Five subcommands that give developers one-time browser login per server,
+//! then transparent bearer-token reuse across every `cargo pmcp test/*`,
+//! `connect`, `preview`, `schema`, `dev`, `loadtest/run`, and `pentest`
+//! invocation.
 //!
 //! Per-server token cache: `~/.pmcp/oauth-cache.json` (schema_version: 1).
-//! See `.planning/phases/74-.../74-CONTEXT.md` D-06..D-16 for command semantics.
 //!
-//! # Concurrency (review MED-4)
+//! # Concurrency
 //!
 //! Parallel `auth login` invocations are not safe; prefer sequential logins.
 //! The cache file uses last-writer-wins atomic-rename semantics
-//! (`tempfile::NamedTempFile::persist`), which means BOTH same-URL and
-//! different-URL concurrent `auth login` calls may result in lost entries.
-//! This matches `gh auth login` / `aws sso login` behavior and is an
-//! accepted tradeoff — genuine simultaneous browser logins are rare during
-//! initial developer setup. If this becomes a real friction point, a
-//! future phase will introduce advisory file locking or a read-merge-retry
-//! loop. See T-74-F in the phase threat model.
+//! (`tempfile::NamedTempFile::persist`), so concurrent logins to either the
+//! same URL or different URLs may result in lost entries. Matches
+//! `gh auth login` / `aws sso login` behavior.
 
 pub mod cache;
 pub mod login;

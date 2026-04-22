@@ -1,12 +1,10 @@
 //! Integration tests for Dynamic Client Registration (RFC 7591) in `OAuthHelper`.
 //!
-//! Uses mockito (pmcp dev-dep since 1.5.0) to simulate a real OAuth discovery
-//! server + DCR endpoint without needing network access.
-//!
-//! Covers G9 from 74-VALIDATION.md plus regression guards for:
-//! - HIGH-1: RFC 7591 §3.1 `response_types: ["code"]` must appear in the wire body
-//! - T-74-A (scheme guard): `http://`-non-localhost `registration_endpoint` rejected
-//! - LOW-11: DCR response body capped at 1 MiB
+//! Uses mockito to simulate a real OAuth discovery server + DCR endpoint
+//! without needing network access. Covers:
+//! - RFC 7591 §3.1 `response_types: ["code"]` must appear in the wire body
+//! - Scheme guard: `http://`-non-localhost `registration_endpoint` rejected
+//! - DCR response body capped at 1 MiB
 
 #![cfg(feature = "oauth")]
 
@@ -46,10 +44,8 @@ async fn dcr_fires_when_eligible() {
         .create_async()
         .await;
 
-    // Review HIGH-1 — assert the POST body contains response_types:["code"].
-    // Using match_body with a PartialJsonString ensures the mock only matches
-    // when RFC 7591 §3.1 response_types is present. If the SDK ever regresses
-    // and drops the field, mockito will return 501 and the test fails.
+    // Mock only matches when RFC 7591 §3.1 `response_types` is in the body;
+    // a regression that drops the field will produce a 501 and fail the test.
     let _m_dcr = server
         .mock("POST", "/register")
         .match_header("content-type", Matcher::Regex("application/json.*".into()))
@@ -89,7 +85,6 @@ async fn dcr_body_matches_rfc7591() {
         .create_async()
         .await;
 
-    // Assert POST body contains D-05 shape.
     let _r = server
         .mock("POST", "/register")
         .match_body(Matcher::PartialJsonString(
@@ -120,9 +115,9 @@ async fn dcr_body_matches_rfc7591() {
 
 #[tokio::test]
 async fn dcr_rejects_http_non_localhost_registration_endpoint_against_live_mock() {
-    // Warning #15 fix — strengthens T-74-A with a mockito-backed negative test.
-    // Mock server exposes discovery advertising a non-localhost http registration_endpoint,
-    // expects ZERO calls to /register, confirms the SDK rejects the non-https non-localhost URL.
+    // Mock server's discovery advertises a non-localhost http registration
+    // endpoint and expects ZERO calls to /register — confirms the SDK rejects
+    // the URL before issuing any HTTP request.
     let mut server = Server::new_async().await;
     let base = server.url();
 
@@ -171,9 +166,9 @@ async fn dcr_rejects_http_non_localhost_registration_endpoint_against_live_mock(
     let msg = format!("{err}");
     assert!(
         msg.contains("must be https"),
-        "expected T-74-A scheme-guard error, got: {msg}"
+        "expected scheme-guard error, got: {msg}"
     );
-    reg_guard.assert_async().await; // confirms zero hits
+    reg_guard.assert_async().await;
 }
 
 #[tokio::test]
@@ -211,8 +206,8 @@ async fn dcr_not_fired_when_client_id_present() {
 
 #[tokio::test]
 async fn dcr_rejects_response_larger_than_1mib() {
-    // Review LOW-11 (Gemini) — defense-in-depth. The SDK caps DCR response
-    // bodies at 1 MiB to mitigate DoS from a hostile registration_endpoint.
+    // Defense-in-depth: the SDK caps DCR response bodies at 1 MiB to mitigate
+    // DoS from a hostile registration_endpoint.
     let mut server = Server::new_async().await;
     let base = server.url();
 

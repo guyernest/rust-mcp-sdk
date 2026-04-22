@@ -21,7 +21,7 @@ pub struct StatusArgs {
 /// Execute the `status` subcommand.
 ///
 /// Renders a tabular view of the multi-server cache: URL | ISSUER | SCOPES |
-/// EXPIRES | REFRESHABLE. Never prints the raw access_token (D-10 + T-74-E).
+/// EXPIRES | REFRESHABLE. Never prints the raw access_token.
 pub async fn execute(args: StatusArgs, global_flags: &GlobalFlags) -> Result<()> {
     let cache = TokenCacheV1::read(&default_multi_cache_path())?;
     if cache.entries.is_empty() {
@@ -43,7 +43,8 @@ pub async fn execute(args: StatusArgs, global_flags: &GlobalFlags) -> Result<()>
         None => cache.entries.iter().map(|(k, v)| (k.clone(), v)).collect(),
     };
 
-    // Warning #8 fix — apply color AFTER width formatting; honor --no-color.
+    // Apply color after width formatting — ANSI escapes would otherwise be
+    // counted by `{:<N}` and miscompute column padding.
     if global_flags.no_color {
         colored::control::set_override(false);
     }

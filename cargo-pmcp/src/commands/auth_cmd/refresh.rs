@@ -18,8 +18,8 @@ pub struct RefreshArgs {
 
 /// Execute the `refresh` subcommand.
 ///
-/// Calls [`refresh_and_persist`] unconditionally (ignoring expiry). Errors with
-/// an actionable message when `entry.refresh_token.is_none()` (D-16).
+/// Calls [`refresh_and_persist`] unconditionally, ignoring expiry. Errors with
+/// an actionable message when `entry.refresh_token.is_none()`.
 pub async fn execute(args: RefreshArgs, global_flags: &GlobalFlags) -> Result<()> {
     let cache_path = default_multi_cache_path();
     let cache = TokenCacheV1::read(&cache_path)?;
@@ -32,8 +32,6 @@ pub async fn execute(args: RefreshArgs, global_flags: &GlobalFlags) -> Result<()
         )
     })?;
 
-    // D-16: force-refresh regardless of expiry. refresh_and_persist errors
-    // actionably if entry.refresh_token.is_none().
     refresh_and_persist(&cache_path, &key, entry).await?;
 
     if global_flags.should_output() {

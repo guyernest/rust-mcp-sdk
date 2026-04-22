@@ -4,12 +4,11 @@
 //!
 //! # Concurrency
 //! Writes are atomic per file via `tempfile::NamedTempFile::persist`; concurrent
-//! `auth login` from two terminals is last-writer-wins (per 74-RESEARCH Pitfall 4).
-//! This is an accepted tradeoff — genuine simultaneous browser logins are rare.
+//! `auth login` from two terminals is last-writer-wins.
 //!
 //! # Permissions (Unix)
 //! Parent dir (`~/.pmcp/`) is chmod'd to `0o700` on first write; cache file is
-//! chmod'd to `0o600` before the atomic rename. (Mitigates T-74-G.)
+//! chmod'd to `0o600` before the atomic rename.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -34,9 +33,9 @@ pub struct TokenCacheV1 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenCacheEntry {
     /// Bearer access token. Sensitive — NEVER logged, never printed except by
-    /// `cargo pmcp auth token <url>` (D-11).
+    /// `cargo pmcp auth token <url>`.
     pub access_token: String,
-    /// Refresh token, if the IdP issued one (Pitfall 5 — some IdPs don't).
+    /// Refresh token, if the IdP issued one. Not all IdPs return one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
     /// Absolute expiration time (unix seconds).
@@ -125,7 +124,7 @@ impl TokenCacheV1 {
 }
 
 /// Returns `~/.pmcp/oauth-cache.json` (or `./.pmcp/oauth-cache.json` as a fallback).
-/// Distinct from the legacy SDK single-server cache at `~/.pmcp/oauth-tokens.json` (D-07).
+/// Distinct from the legacy SDK single-server cache at `~/.pmcp/oauth-tokens.json`.
 pub fn default_multi_cache_path() -> PathBuf {
     let mut p = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     p.push(".pmcp");
@@ -136,7 +135,7 @@ pub fn default_multi_cache_path() -> PathBuf {
 /// Normalize an MCP server URL to a stable cache key.
 ///
 /// `scheme://host[:port]` — lowercase host, strip path, strip trailing slash,
-/// strip default ports (80 for http, 443 for https). Mitigates T-74-D.
+/// strip default ports (80 for http, 443 for https).
 pub fn normalize_cache_key(mcp_server_url: &str) -> Result<String> {
     let parsed = Url::parse(mcp_server_url)
         .map_err(|e| anyhow::anyhow!("Invalid MCP server URL '{}': {e}", mcp_server_url))?;
@@ -155,8 +154,8 @@ pub fn normalize_cache_key(mcp_server_url: &str) -> Result<String> {
     Ok(base)
 }
 
-/// Refresh grace window constant — transparent refresh triggers when the
-/// cached access_token is within `REFRESH_WINDOW_SECS` of expiry (D-15).
+/// Transparent refresh fires when the cached access_token is within this
+/// many seconds of expiry.
 pub const REFRESH_WINDOW_SECS: u64 = 60;
 
 /// Returns `true` when `entry.expires_at` is within `grace_secs` of now.
@@ -174,8 +173,8 @@ pub fn is_near_expiry(entry: &TokenCacheEntry, grace_secs: u64) -> bool {
 
 /// Force-refresh the access_token for one cache entry and persist the result.
 ///
-/// Returns the NEW access_token. Errors with an actionable message when
-/// `entry.refresh_token.is_none()` (Pitfall 5 + D-16).
+/// Returns the new access_token. Errors with an actionable message when
+/// `entry.refresh_token.is_none()`.
 pub async fn refresh_and_persist(
     cache_path: &Path,
     key: &str,
@@ -186,17 +185,12 @@ pub async fn refresh_and_persist(
             "no refresh_token cached for {key} — run `cargo pmcp auth login {key}` to re-authenticate"
         )
     })?;
-    // Post-Blocker-#6 login.rs always writes `issuer = result.issuer` which is
-    // always `Some` for a successful authorize_with_details flow. The None
-    // branch below remains as a defensive guard for pre-2.5 cache entries
-    // or direct external writes to the cache file.
     let issuer = entry.issuer.as_deref().ok_or_else(|| {
         anyhow::anyhow!(
             "cached entry for {key} has no issuer — run `cargo pmcp auth login {key}` to re-authenticate"
         )
     })?;
 
-    // Mirror src/client/oauth.rs refresh HTTP pattern.
     let discovery_url = format!(
         "{}/.well-known/openid-configuration",
         issuer.trim_end_matches('/')

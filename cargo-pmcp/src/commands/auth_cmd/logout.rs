@@ -23,10 +23,8 @@ pub struct LogoutArgs {
 
 /// Execute the `logout` subcommand.
 ///
-/// With no args: errors with `"specify a server URL or --all to log out of everything"`
-/// (D-09). `--all` clears all entries; a positional URL removes one.
+/// With no args: errors out. `--all` clears all entries; a positional URL removes one.
 pub async fn execute(args: LogoutArgs, global_flags: &GlobalFlags) -> Result<()> {
-    // D-09: no args errors out.
     if args.url.is_none() && !args.all {
         anyhow::bail!("specify a server URL or --all to log out of everything");
     }
@@ -91,7 +89,7 @@ mod tests {
         .unwrap_err();
         assert!(
             format!("{err}").contains("specify a server URL or --all"),
-            "expected D-09 copy, got: {err}"
+            "unexpected error message: {err}"
         );
     }
 

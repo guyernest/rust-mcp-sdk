@@ -18,9 +18,9 @@ pub struct TokenArgs {
 
 /// Execute the `token` subcommand.
 ///
-/// Looks up the cached entry, auto-refreshes if near expiry (D-15), then
-/// prints the raw token to stdout with a trailing newline. Errors go to
-/// stderr via `anyhow`. No banners. (D-11)
+/// Prints the cached token raw to stdout with a trailing newline, auto-refreshing
+/// when within `REFRESH_WINDOW_SECS` of expiry. Status messages go to stderr so
+/// stdout stays scriptable (`TOKEN=$(cargo pmcp auth token URL)`).
 pub async fn execute(args: TokenArgs, _global_flags: &GlobalFlags) -> Result<()> {
     let cache_path = default_multi_cache_path();
     let cache = TokenCacheV1::read(&cache_path)?;
@@ -33,27 +33,13 @@ pub async fn execute(args: TokenArgs, _global_flags: &GlobalFlags) -> Result<()>
         )
     })?;
 
-    // D-15: transparent refresh when within REFRESH_WINDOW_SECS of expiry.
     let token = if is_near_expiry(entry, REFRESH_WINDOW_SECS) {
-        // Status message to stderr so stdout stays clean (D-11).
         eprintln!("Refreshing cached token for {}...", key);
         refresh_and_persist(&cache_path, &key, entry).await?
     } else {
         entry.access_token.clone()
     };
 
-    // D-11: raw token to stdout, newline-terminated, NO other output on success.
     println!("{}", token);
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    // stderr/stdout discipline is verified by integration test in
-    // cargo-pmcp/tests/auth_integration.rs (Task 2.4).
-
-    #[test]
-    fn it_compiles() {
-        // placeholder to ensure the module is test-discoverable
-    }
 }

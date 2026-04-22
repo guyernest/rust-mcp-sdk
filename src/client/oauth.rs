@@ -42,11 +42,11 @@ pub use crate::server::auth::provider::{DcrRequest, DcrResponse};
 
 /// OAuth configuration for CLI authentication flows.
 ///
-/// # Migration note (pmcp 2.5.0, Phase 74)
+/// # Migration note (pmcp 2.5.0)
 ///
-/// The `client_id` field type changed `String` -> `Option<String>` to support
-/// RFC 7591 Dynamic Client Registration. Existing callers that passed a
-/// pre-registered id must now wrap it in `Some(...)`:
+/// `client_id` changed from `String` to `Option<String>` to support RFC 7591
+/// Dynamic Client Registration. Existing callers that passed a pre-registered
+/// id must now wrap it in `Some(...)`:
 ///
 /// ```rust,ignore
 /// // Before (pmcp < 2.5.0):
@@ -105,24 +105,16 @@ impl Default for OAuthConfig {
 /// Result of a successful OAuth authorization flow, carrying the full set of
 /// artifacts a cache consumer needs to persist and later refresh.
 ///
-/// Introduced in pmcp 2.5.0 (Phase 74 Blocker #6) to unblock the multi-server
-/// cache's refresh semantics (D-15 near-expiry refresh, D-16 force-refresh):
-/// the previous `OAuthHelper::get_access_token` API only returned the raw
-/// access_token string, making it impossible for `cargo pmcp auth login` to
-/// persist a usable `refresh_token` / `expires_at` in the cache entry.
-///
 /// # Field semantics
 ///
 /// - `access_token`: The bearer token. Put in `Authorization: Bearer <...>` headers.
 /// - `refresh_token`: Present when the IdP returned one (Okta, Auth0, Keycloak
-///   with offline_access). `None` when the IdP does not issue refresh tokens
-///   (some public-PKCE flows). Pitfall 5 tracks this case.
+///   with offline_access). `None` when the IdP does not issue refresh tokens.
 ///
-///   **Device-code flow (RFC 8628) note (review MED-3):** When `OAuthHelper`
-///   falls back from authorization-code to device-code (e.g., the IdP does
-///   not support localhost callbacks or the caller explicitly requested
-///   device flow), `refresh_token` may be `None` because RFC 8628 §3.5 does
-///   NOT require the token response to include a `refresh_token`. Users
+///   **Device-code flow (RFC 8628):** When `OAuthHelper` falls back from
+///   authorization-code to device-code (e.g., the IdP does not support
+///   localhost callbacks), `refresh_token` may be `None` because RFC 8628 §3.5
+///   does NOT require the token response to include a `refresh_token`. Users
 ///   will need to re-run `cargo pmcp auth login` when the access_token
 ///   expires on such IdPs. `issuer` is still populated from discovery;
 ///   `client_id` is whatever was passed in `OAuthConfig` (or DCR-issued if
@@ -210,29 +202,19 @@ impl OAuthHelper {
 
     /// Perform RFC 7591 Dynamic Client Registration against `registration_endpoint`.
     ///
-    /// D-04: `client_name` falls back to `"pmcp-sdk"` when `self.config.client_name` is `None`.
-    /// D-05: body is a public PKCE shape — `token_endpoint_auth_method: "none"`, no secret requested.
-    /// T-74-A: rejects non-`https://` endpoints except localhost/127.0.0.1/::1 to prevent
-    /// discovery-spoofing.
-    ///
-    /// Review HIGH-1: `response_types: ["code"]` is REQUIRED per RFC 7591 §3.1 — pmcp.run's
-    /// `ClientRegistrationRequest` parser requires this field; with `#[serde(skip_serializing_if =
-    /// "Vec::is_empty")]` on the struct, an empty Vec would silently drop the field from the
-    /// wire body.
-    ///
-    /// Review LOW-11: response body size is capped at 1 MiB to defend against a hostile
-    /// registration_endpoint that streams a huge response.
+    /// Body is a public PKCE shape (`token_endpoint_auth_method: "none"`, no secret
+    /// requested). `client_name` falls back to `"pmcp-sdk"` when the config value is
+    /// `None`. Non-`https://` endpoints are rejected except for localhost loopback
+    /// variants, guarding against discovery-spoofing. Response body size is capped
+    /// at 1 MiB.
     async fn do_dynamic_client_registration(
         &self,
         registration_endpoint: &str,
     ) -> Result<crate::server::auth::provider::DcrResponse> {
-        // T-74-A scheme guard
         let parsed = Url::parse(registration_endpoint)
             .map_err(|e| Error::internal(format!("Invalid registration_endpoint URL: {e}")))?;
-        // Review LOW-7 — IPv6 loopback ("::1") added to the allowlist alongside
-        // "localhost" and "127.0.0.1". Note: `url::Url::host_str()` returns
-        // IPv6 literals WITH brackets (e.g., `http://[::1]/register` ->
-        // host_str() == Some("[::1]")), so we match both bracketed and raw forms.
+        // `url::Url::host_str()` returns IPv6 literals WITH brackets (e.g.
+        // `http://[::1]/register` -> `Some("[::1]")`); match both forms.
         let scheme_ok = parsed.scheme() == "https"
             || (parsed.scheme() == "http"
                 && matches!(
@@ -262,11 +244,9 @@ impl OAuthHelper {
             contacts: vec![],
             token_endpoint_auth_method: Some("none".to_string()),
             grant_types: vec!["authorization_code".to_string()],
-            // Review HIGH-1 fix — RFC 7591 §3.1 requires response_types in the DCR body
-            // (pmcp.run's ClientRegistrationRequest parser requires this field). Previously
-            // vec![] which, combined with `#[serde(skip_serializing_if = "Vec::is_empty")]`,
-            // DROPPED the field from the wire body and caused DCR to fail. Must be
-            // vec!["code".to_string()] for the authorization-code public-PKCE flow.
+            // `DcrRequest` has `#[serde(skip_serializing_if = "Vec::is_empty")]`;
+            // RFC 7591 §3.1 requires `response_types` in the body, so it must be
+            // non-empty. `"code"` is the authorization-code public-PKCE flow.
             response_types: vec!["code".to_string()],
             scope: None,
             software_id: None,
@@ -293,10 +273,8 @@ impl OAuthHelper {
             )));
         }
 
-        // Review LOW-11 (Gemini) — defense-in-depth: cap DCR response body at 1 MiB
-        // to mitigate DoS from a hostile registration_endpoint that streams a huge
-        // response. reqwest does not have a direct bytes-limit API, so we read
-        // the body as bytes, enforce the cap, then parse from slice.
+        // reqwest has no direct bytes-limit API — read the body as bytes, enforce
+        // the cap, then parse from slice.
         const MAX_DCR_RESPONSE_BYTES: usize = 1_048_576; // 1 MiB
         let bytes = response
             .bytes()
@@ -314,16 +292,15 @@ impl OAuthHelper {
     }
 
     /// Resolve the `client_id` for the current OAuth flow, performing DCR
-    /// lazily when eligible per D-03:
+    /// lazily when all three conditions hold:
     ///   1. `self.config.dcr_enabled == true`
     ///   2. `self.config.client_id.is_none()`
     ///   3. `metadata.registration_endpoint.is_some()`
     ///
     /// Returns `Err` with an actionable message when DCR is needed but the
-    /// server does not advertise a `registration_endpoint` (D-03 last clause).
+    /// server does not advertise a `registration_endpoint`.
     async fn resolve_client_id_for_flow(&self, metadata: &OidcDiscoveryMetadata) -> Result<String> {
-        // Fast path: caller provided a client_id — use it verbatim, skip DCR entirely
-        // (D-20 escape hatch).
+        // Caller-provided client_id skips DCR entirely.
         if let Some(ref id) = self.config.client_id {
             return Ok(id.clone());
         }
@@ -352,16 +329,9 @@ impl OAuthHelper {
     /// Test-only hook: drive the discovery + DCR resolver path without invoking
     /// the browser PKCE flow. Used by `tests/oauth_dcr_integration.rs`.
     ///
-    /// Review LOW-6 deviation (Rule 3 - Blocker): the original review said to
-    /// narrow from `cfg(any(test, feature = "oauth"))` to `cfg(test)` only,
-    /// but integration tests under `tests/` are a SEPARATE compilation unit
-    /// from the library — the library's `cfg(test)` is NOT active when
-    /// building `tests/*.rs`. With `cfg(test)` alone, the integration test
-    /// could not link to this symbol (rustc: "method not found"). The
-    /// pragmatic resolution keeps the broader gate but pairs it with
-    /// `#[doc(hidden)]` and a `test_`-prefixed name to strongly discourage
-    /// external use. External callers should use `authorize_with_details()`
-    /// (which drives the full PKCE flow) instead.
+    /// Integration tests under `tests/` compile as a separate crate, so the
+    /// library's `#[cfg(test)]` does not apply. The `oauth` feature gate plus
+    /// `#[doc(hidden)]` and the `test_` prefix discourage external use.
     #[doc(hidden)]
     #[cfg(any(test, feature = "oauth"))]
     pub async fn test_resolve_client_id_from_discovery(&self) -> Result<String> {
@@ -452,7 +422,7 @@ impl OAuthHelper {
     ///
     /// For callers that only need a bearer-header value. Cache consumers that
     /// need to persist `refresh_token` / `expires_at` / `issuer` across runs
-    /// should use `authorize_with_details()` instead (Phase 74 Blocker #6).
+    /// should use [`authorize_with_details`](Self::authorize_with_details) instead.
     pub async fn get_access_token(&self) -> Result<String> {
         // Try to load cached token first
         if let Some(ref cache_file) = self.config.cache_file {
@@ -516,14 +486,14 @@ impl OAuthHelper {
     /// simple callers that just need a bearer header can keep using
     /// `get_access_token`.
     ///
-    /// Drives DCR lazily per D-03; runs PKCE via the authorization_code flow;
-    /// captures `refresh_token`, `expires_at`, `scopes`, and the effective
-    /// issuer + client_id.
+    /// Drives DCR lazily when eligible; runs PKCE via the authorization_code
+    /// flow; captures `refresh_token`, `expires_at`, `scopes`, and the
+    /// effective issuer + client_id.
     ///
-    /// # Device-code fallback note (review MED-3)
+    /// # Device-code fallback
     ///
     /// If the authorization-code flow fails and the server advertises a
-    /// device_authorization_endpoint, this method falls back to device code
+    /// `device_authorization_endpoint`, this method falls back to device code
     /// flow (RFC 8628). In that case, `refresh_token` may be `None` since
     /// RFC 8628 §3.5 does not require it, and `scopes` falls back to the
     /// requested scopes when the token response does not echo them.
@@ -550,11 +520,9 @@ impl OAuthHelper {
             Err(e) => {
                 tracing::warn!("Authorization code flow failed: {}", e);
 
-                // Fall back to device code flow if available — but device flow
-                // only returns an access_token String via the legacy path, not
-                // a full TokenResponse. For now, device-flow callers that need
-                // full artifacts should use authorization-code flow instead.
-                // See MED-3 rustdoc note above.
+                // Device flow only returns an access_token string via the legacy
+                // path — `refresh_token` / full `TokenResponse` are unavailable.
+                // See the rustdoc on this function for the device-code caveat.
                 if metadata.device_authorization_endpoint.is_some() {
                     tracing::info!(
                         "Trying device code flow (refresh_token may be None per RFC 8628)..."
@@ -654,9 +622,6 @@ impl OAuthHelper {
     ) -> Result<(crate::client::auth::TokenResponse, String)> {
         tracing::info!("Starting OAuth authorization code flow...");
 
-        // Resolve client_id via DCR-aware resolver (D-03). Fires DCR lazily when
-        // config.client_id is None, dcr_enabled is true, and the server advertises
-        // a registration_endpoint.
         let resolved_client_id = self.resolve_client_id_for_flow(metadata).await?;
 
         // Generate PKCE challenge
@@ -833,7 +798,6 @@ impl OAuthHelper {
         metadata: &OidcDiscoveryMetadata,
         device_auth_endpoint: &str,
     ) -> Result<String> {
-        // Resolve client_id via DCR-aware resolver (D-03).
         let resolved_client_id = self.resolve_client_id_for_flow(metadata).await?;
 
         // Step 1: Request device code
@@ -1132,7 +1096,7 @@ mod oauth_config_tests {
     #[test]
     fn dcr_types_are_reexported() {
         // Compile-only: verifies pub use lands `DcrRequest` / `DcrResponse`
-        // at `pmcp::client::oauth::*` per D-01.
+        // at `pmcp::client::oauth::*`.
         let _r: super::DcrRequest = super::DcrRequest {
             redirect_uris: vec!["http://localhost:8080/callback".into()],
             client_name: Some("test".into()),
@@ -1296,10 +1260,9 @@ mod dcr_tests {
 
     #[test]
     fn dcr_request_body_contains_response_types_code() {
-        // Review HIGH-1 regression guard — RFC 7591 §3.1 + pmcp.run's
-        // ClientRegistrationRequest parser require response_types.
-        // This is a serde-level guard that fires if the DcrRequest struct
-        // or its serde attributes ever change in a way that drops the field.
+        // Serde-level guard: `DcrRequest` has
+        // `#[serde(skip_serializing_if = "Vec::is_empty")]` on `response_types`,
+        // so an accidental empty-Vec default would silently drop the field.
         let req = crate::server::auth::provider::DcrRequest {
             redirect_uris: vec!["http://localhost:8080/callback".into()],
             client_name: Some("pmcp-sdk".into()),
@@ -1323,9 +1286,9 @@ mod dcr_tests {
 
     #[tokio::test]
     async fn dcr_accepts_ipv6_loopback_registration_endpoint() {
-        // Review LOW-7 — [::1] IPv6 loopback must be accepted alongside
-        // localhost and 127.0.0.1. The guard rejects BEFORE the HTTP call,
-        // so we expect a non-scheme-guard error (connection failure is fine).
+        // The guard must accept `[::1]` alongside `localhost` and `127.0.0.1`.
+        // It rejects BEFORE the HTTP call, so a connection failure on port 9
+        // is the expected non-scheme-guard error here.
         let cfg = OAuthConfig {
             dcr_enabled: true,
             ..OAuthConfig::default()

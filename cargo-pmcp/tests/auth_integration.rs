@@ -2,12 +2,11 @@
 //!
 //! Covers:
 //! - TokenCacheV1 round-trip via `cache::*` helpers
-//! - URL normalization edge cases (T-74-D)
-//! - logout no-args error (D-09)
-//! - auth token stdout discipline (D-11)
-//! - precedence: explicit `--api-key` wins over cached OAuth token (D-13, LOW-10)
+//! - URL normalization edge cases
+//! - logout no-args error
+//! - auth token stdout discipline
+//! - precedence: explicit `--api-key` wins over cached OAuth token
 
-// Review MED-5 — use the narrow `test_support` seam, not the full `commands` tree.
 use cargo_pmcp::test_support::cache::{
     default_multi_cache_path, is_near_expiry, normalize_cache_key, TokenCacheEntry, TokenCacheV1,
     REFRESH_WINDOW_SECS,
@@ -15,7 +14,7 @@ use cargo_pmcp::test_support::cache::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
-fn normalize_covers_t74d_edge_cases() {
+fn normalize_covers_url_edge_cases() {
     // IDN / mixed case / trailing slash / default port / custom port
     assert_eq!(
         normalize_cache_key("HTTPS://API.Example.Com/").unwrap(),
@@ -97,7 +96,6 @@ async fn default_multi_cache_path_ends_in_oauth_cache_json() {
 #[cfg(unix)]
 #[tokio::test]
 async fn logout_no_args_errors_via_cli() {
-    // Warning #9 fix — use CARGO_BIN_EXE_cargo-pmcp (pre-built binary).
     use std::process::Command;
     let temp = tempfile::tempdir().unwrap();
     let bin = env!("CARGO_BIN_EXE_cargo-pmcp");
@@ -110,7 +108,7 @@ async fn logout_no_args_errors_via_cli() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("specify a server URL or --all"),
-        "expected D-09 copy in stderr, got: {stderr}"
+        "unexpected stderr: {stderr}"
     );
 }
 
@@ -157,17 +155,12 @@ async fn auth_token_prints_only_token_to_stdout() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(
-        stdout.trim_end(),
-        "SECRET-TOKEN-VALUE-42",
-        "D-11: raw token only"
-    );
+    assert_eq!(stdout.trim_end(), "SECRET-TOKEN-VALUE-42");
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn api_key_flag_overrides_cached_oauth_token() {
-    // Review LOW-10 — explicit precedence test for D-13 (flag > env > cache).
     // Seeds a fake OAuth entry in a temp cache, then invokes a server-connecting
     // command with `--api-key <FORCED>` against a mockito server that only
     // accepts the forced key. Succeeds when the outgoing Authorization header

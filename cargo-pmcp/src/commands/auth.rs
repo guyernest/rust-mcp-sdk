@@ -20,7 +20,7 @@ use super::flags::AuthMethod;
 
 /// Look up an access_token in the multi-server cache for `mcp_server_url`.
 ///
-/// Transparently refreshes when within [`REFRESH_WINDOW_SECS`] of expiry (D-15).
+/// Transparently refreshes when within [`REFRESH_WINDOW_SECS`] of expiry.
 ///
 /// Returns `Ok(None)` when:
 /// - the cache file does not exist, OR
@@ -101,9 +101,8 @@ pub async fn resolve_auth_middleware(
     auth_method: &AuthMethod,
 ) -> Result<Option<Arc<HttpMiddlewareChain>>> {
     match auth_method {
-        // D-13: cache is the lowest-precedence fallback, consulted only when
-        // no explicit flag or env var was provided. Explicit flags (ApiKey /
-        // OAuth) short-circuit below without touching the cache.
+        // Cache is the lowest-precedence fallback, consulted only when no
+        // explicit flag or env var was provided.
         AuthMethod::None => match try_cache_token(mcp_server_url).await? {
             Some(token) => Ok(Some(bearer_chain(token))),
             None => Ok(None),

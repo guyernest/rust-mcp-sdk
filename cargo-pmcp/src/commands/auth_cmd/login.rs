@@ -21,11 +21,11 @@ pub struct LoginArgs {
     pub url: String,
 
     /// Client name for Dynamic Client Registration (RFC 7591).
-    /// Mutually exclusive with --oauth-client-id (D-19).
+    /// Mutually exclusive with `--oauth-client-id`.
     #[arg(long, conflicts_with = "oauth_client_id")]
     pub client: Option<String>,
 
-    /// Pre-registered OAuth client ID (skips DCR entirely — D-20 escape hatch).
+    /// Pre-registered OAuth client ID. Skips DCR entirely.
     #[arg(long, env = "MCP_OAUTH_CLIENT_ID")]
     pub oauth_client_id: Option<String>,
 
@@ -47,8 +47,6 @@ pub async fn execute(args: LoginArgs, global_flags: &GlobalFlags) -> Result<()> 
     let key = normalize_cache_key(&args.url)
         .with_context(|| format!("normalizing login URL {}", args.url))?;
 
-    // D-04: if neither --client nor --oauth-client-id is passed, cargo-pmcp
-    // sets client_name = "cargo-pmcp" so DCR identifies the caller sensibly.
     let client_name = args.client.clone().or_else(|| {
         if args.oauth_client_id.is_none() {
             Some("cargo-pmcp".to_string())
@@ -67,9 +65,9 @@ pub async fn execute(args: LoginArgs, global_flags: &GlobalFlags) -> Result<()> 
         mcp_server_url: Some(args.url.clone()),
         client_id: args.oauth_client_id.clone(),
         client_name,
-        dcr_enabled: args.oauth_client_id.is_none(), // DCR only when no preset id
+        dcr_enabled: args.oauth_client_id.is_none(),
         scopes: scopes.clone(),
-        cache_file: None, // multi-server cache is CLI-managed, not SDK-managed
+        cache_file: None,
         redirect_port: args.oauth_redirect_port,
     };
 
@@ -87,10 +85,6 @@ pub async fn execute(args: LoginArgs, global_flags: &GlobalFlags) -> Result<()> 
     }
 
     let helper = OAuthHelper::new(config.clone()).context("OAuth setup failed")?;
-    // Blocker #6 fix — use authorize_with_details (Plan 01 Task 1.2b) so we
-    // capture refresh_token / expires_at / effective issuer / effective client_id.
-    // This makes the cached entry usable for D-15 near-expiry refresh and D-16
-    // force-refresh.
     let result = helper
         .authorize_with_details()
         .await
@@ -100,7 +94,6 @@ pub async fn execute(args: LoginArgs, global_flags: &GlobalFlags) -> Result<()> 
     cache.entries.insert(
         key.clone(),
         TokenCacheEntry {
-            // D-12: token is cached, but NEVER printed from this command.
             access_token: result.access_token,
             refresh_token: result.refresh_token,
             expires_at: result.expires_at,
@@ -143,9 +136,7 @@ pub async fn execute(args: LoginArgs, global_flags: &GlobalFlags) -> Result<()> 
             },
             None => "n/a (IdP did not advertise expires_in)".to_string(),
         };
-        // D-12 + review LOW-8: NEVER print the token via ANY output path —
-        // not println!/eprintln! and not tracing::{info,debug,warn,error,trace}!
-        // Only issuer/scopes/expires are safe to surface.
+        // Token is never printed — shell history and shared-terminal hygiene.
         println!(
             "Logged in to {} (issuer: {}, scopes: {}, expires in: {})",
             key.bright_green().bold(),
