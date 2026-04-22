@@ -234,7 +234,9 @@ impl OAuthHelper {
             .client_name
             .clone()
             .unwrap_or_else(|| "pmcp-sdk".to_string());
-        let redirect_uri = format!("http://localhost:{}/callback", self.config.redirect_port);
+        // Literal `127.0.0.1` rather than `localhost` — per RFC 8252 §7.3, avoids
+        // browsers resolving `localhost` to `::1` when the listener binds IPv4-only.
+        let redirect_uri = format!("http://127.0.0.1:{}/callback", self.config.redirect_port);
 
         let request = crate::server::auth::provider::DcrRequest {
             redirect_uris: vec![redirect_uri],
@@ -628,15 +630,18 @@ impl OAuthHelper {
         let code_verifier = Self::generate_code_verifier();
         let code_challenge = Self::generate_code_challenge(&code_verifier);
 
-        // Start local callback server on configured port
+        // Start local callback server on configured port.
+        // The advertised URL and the bind address MUST be literal `127.0.0.1`
+        // (not `localhost`), otherwise browsers can resolve `localhost` to `::1`
+        // (IPv6) and hit ERR_CONNECTION_REFUSED on our IPv4-only listener.
         let redirect_port = self.config.redirect_port;
-        let redirect_uri = format!("http://localhost:{}/callback", redirect_port);
+        let redirect_uri = format!("http://127.0.0.1:{}/callback", redirect_port);
 
         let listener = TcpListener::bind(format!("127.0.0.1:{}", redirect_port))
             .await
             .map_err(|e| {
                 Error::internal(format!(
-                    "Failed to bind to localhost:{}.\n\
+                    "Failed to bind to 127.0.0.1:{}.\n\
                      \n\
                      This port may already be in use. Try a different port with:\n\
                      --oauth-redirect-port PORT\n\
@@ -1282,6 +1287,38 @@ mod dcr_tests {
             s.contains(r#""response_types":["code"]"#),
             "RFC 7591 §3.1 response_types missing from wire body: {s}"
         );
+    }
+
+    #[tokio::test]
+    async fn dcr_advertises_127_0_0_1_redirect_not_localhost() {
+        // Regression guard: advertising `http://localhost:<port>` causes browsers
+        // to resolve to `::1` (IPv6) and miss the IPv4-only callback listener.
+        // The mock only matches when the wire body pins `127.0.0.1`; a regression
+        // back to `localhost` makes this mock return 501 and the DCR call errors.
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/register")
+            .match_body(mockito::Matcher::PartialJsonString(
+                serde_json::json!({
+                    "redirect_uris": ["http://127.0.0.1:8080/callback"]
+                })
+                .to_string(),
+            ))
+            .with_status(201)
+            .with_body(r#"{"client_id":"ok"}"#)
+            .create_async()
+            .await;
+        let helper = OAuthHelper::new(OAuthConfig {
+            dcr_enabled: true,
+            redirect_port: 8080,
+            ..OAuthConfig::default()
+        })
+        .unwrap();
+        let result = helper
+            .do_dynamic_client_registration(&format!("{}/register", server.url()))
+            .await;
+        assert!(result.is_ok(), "DCR body did not pin 127.0.0.1 redirect_uri");
+        mock.assert_async().await;
     }
 
     #[tokio::test]
