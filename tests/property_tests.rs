@@ -441,11 +441,7 @@ mod phase73_typed_helpers {
             // 1. { "method": "tools/call", "params": { "arguments": ... } }
             // 2. { "tools/call": { "arguments": ... } }
             // 3. { "params": { "arguments": ... } }
-            if let Some(args) = v
-                .get("params")
-                .and_then(|p| p.get("arguments"))
-                .cloned()
-            {
+            if let Some(args) = v.get("params").and_then(|p| p.get("arguments")).cloned() {
                 return Some(args);
             }
             if let Some(args) = v
