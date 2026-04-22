@@ -1,5 +1,4 @@
-//! Integration tests for `Client::list_all_*` auto-pagination
-//! (Phase 73, PARITY-CLIENT-01).
+//! Integration tests for `Client::list_all_*` auto-pagination.
 //!
 //! Drives the shared `mock_paginated::MockTransport` with scripted multi-page
 //! response sequences and asserts:

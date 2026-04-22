@@ -1,18 +1,17 @@
-//! Example: Typed call helpers and auto-paginating list helpers (Phase 73).
+//! Example: typed call helpers and auto-paginating list helpers.
 //!
-//! Demonstrates the Phase 73 PARITY-CLIENT-01 additions:
+//! Demonstrates:
 //!   - `Client::with_client_options` (custom `ClientOptions` + `max_iterations` knob)
 //!   - `Client::call_tool_typed` (struct → JSON args)
 //!   - `Client::get_prompt_typed` (struct → `HashMap<String, String>`)
-//!   - `Client::list_all_tools`, `list_all_prompts`, `list_all_resources`,
-//!     AND `list_all_resource_templates` (the last uses the distinct
+//!   - `Client::list_all_tools`, `list_all_prompts`, `list_all_resources`, and
+//!     `list_all_resource_templates` (the last uses the distinct
 //!     `resources/templates/list` capability).
 //!
 //! # How to run
 //!
 //! This example drives an MCP server over **stdio**. It is NOT self-contained —
-//! you must pair it with a compatible stdio MCP server. The simplest option is
-//! one of the repo's own example servers, for example `examples/01_server_basic.rs`:
+//! pair it with a compatible stdio MCP server, e.g. `examples/01_server_basic.rs`:
 //!
 //! ```bash
 //! # Terminal A — build a compatible stdio server:
@@ -22,11 +21,9 @@
 //! cargo run --example c09_client_list_all --features full
 //! ```
 //!
-//! Running `cargo run --example c09_client_list_all --features full` **without**
-//! a paired server will block reading from stdio — this is expected. The binary
-//! nonetheless compiles and demonstrates the PARITY-CLIENT-01 API surface for
-//! readers; pair it with any stdio MCP server (including one that advertises
-//! `resources/templates/list`) to see real output from every helper.
+//! Running without a paired server will block reading from stdio. Pair it with
+//! any stdio MCP server that advertises `resources/templates/list` to see real
+//! output from every helper.
 
 use pmcp::{Client, ClientCapabilities, ClientOptions, StdioTransport};
 use serde::Serialize;
@@ -83,8 +80,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("fetched prompt: summarize");
 
-    // Auto-pagination across ALL FOUR families (MEDIUM finding #4 — templates
-    // is the one with a distinct capability path `resources/templates/list`).
+    // Auto-pagination across all four families. `list_all_resource_templates`
+    // uses the distinct `resources/templates/list` capability path.
     let tools = client.list_all_tools().await?;
     println!("discovered {} tools across all pages", tools.len());
 

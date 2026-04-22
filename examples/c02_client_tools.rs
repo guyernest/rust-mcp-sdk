@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!(
         "   Arguments: {}",
-        serde_json::to_string_pretty(&serde_json::to_value(&calc_args)?)?
+        serde_json::to_string_pretty(&calc_args)?
     );
 
     match client.call_tool_typed("calculator", &calc_args).await {

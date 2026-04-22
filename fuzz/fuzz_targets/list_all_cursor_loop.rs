@@ -1,8 +1,8 @@
-//! Fuzz target: `Client::list_all_tools` cursor loop (Phase 73, T-73-01).
+//! Fuzz target: `Client::list_all_tools` cursor loop.
 //!
-//! CLAUDE.md ALWAYS / FUZZ Testing: `cargo fuzz run list_all_cursor_loop`.
+//! Run with: `cargo fuzz run list_all_cursor_loop`.
 //!
-//! Invariants (tightened per 73-REVIEWS.md MEDIUM finding #5):
+//! Invariants:
 //!
 //! 1. The loop terminates within `ClientOptions::max_iterations` for any
 //!    adversarial cursor sequence (empty strings, very long strings,
@@ -11,14 +11,12 @@
 //! 3. None-cursor terminates cleanly with `Ok(accumulator)`.
 //! 4. Accepted result set is EXACTLY one of:
 //!    - `Ok(_)`
-//!    - `Err(Error::Validation(_))` (cap-exceeded).
-//!    - `Err(Error::Protocol { .. })` (transport-exhaustion: the
-//!      MockTransport returns Error::protocol_msg when the scripted
-//!      response pool is empty; `Error::parse` also produces
-//!      Error::Protocol with ErrorCode::PARSE_ERROR).
-//!    - `Err(Error::Serialization(_))` (serde_json::Error during response
-//!      deserialization — this is the Parse-like variant on the pmcp
-//!      Error enum; it MAY fire on fuzzer-crafted payloads).
+//!    - `Err(Error::Validation(_))` — cap-exceeded.
+//!    - `Err(Error::Protocol { .. })` — transport-exhaustion when the
+//!      `MockTransport` response pool is empty; `Error::parse` also surfaces
+//!      here with `ErrorCode::PARSE_ERROR`.
+//!    - `Err(Error::Serialization(_))` — `serde_json` deserialization failure
+//!      on fuzzer-crafted payloads.
 //!
 //! Any other error variant is a bug and panics the fuzzer.
 

@@ -357,7 +357,7 @@ mod json_properties {
     }
 }
 
-// === Phase 73: PARITY-CLIENT-01 — delegation equivalence ===
+// === Typed-helper delegation equivalence ===
 //
 // Property: `call_tool_typed(name, &args)` sends the same wire bytes as
 // `call_tool(name, serde_json::to_value(&args).unwrap())`. Validated by
@@ -365,7 +365,7 @@ mod json_properties {
 // transports and asserting the recovered `params.arguments` field equals
 // `serde_json::to_value(&args)`.
 #[cfg(test)]
-mod phase73_typed_helpers {
+mod typed_helper_properties {
     use async_trait::async_trait;
     use pmcp::{
         shared::Transport,
@@ -480,7 +480,10 @@ mod phase73_typed_helpers {
                 sent: Arc::clone(&sent),
             };
 
-            let rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
             rt.block_on(async move {
                 let mut client = Client::new(transport);
                 client.initialize(ClientCapabilities::minimal()).await.unwrap();
@@ -502,7 +505,10 @@ mod phase73_typed_helpers {
                     responses: Arc::new(Mutex::new(vec![call_response(2), init_response()])),
                     sent: Arc::clone(&sent_b),
                 };
-                let rt = tokio::runtime::Runtime::new().unwrap();
+                let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
                 rt.block_on(async move {
                     let mut client = Client::new(transport_b);
                     client.initialize(ClientCapabilities::minimal()).await.unwrap();
@@ -529,12 +535,12 @@ mod phase73_typed_helpers {
     }
 }
 
-// === Phase 73: list_all_* properties (PARITY-CLIENT-01) ===
+// === list_all_* pagination properties ===
 //
 // The `#[path = "common/mock_paginated.rs"] mod mock_paginated;` declaration
 // lives ONCE at the top of this file — do NOT redeclare it here.
 #[cfg(test)]
-mod phase73_list_all_properties {
+mod list_all_pagination_properties {
     use super::mock_paginated::{
         build_paginated_responses, init_response, MockTransport, PaginationCapability,
     };
@@ -545,7 +551,7 @@ mod phase73_list_all_properties {
     proptest! {
         #![proptest_config(ProptestConfig { cases: 64, .. ProptestConfig::default() })]
 
-        /// D-12 flat-concatenation: for any N-page sequence (N in 1..=7),
+        /// Flat-concatenation invariant: for any N-page sequence (N in 1..=7),
         /// `list_all_tools` returns the in-order concatenation of tool names
         /// across all pages.
         #[test]
@@ -571,7 +577,10 @@ mod phase73_list_all_properties {
             );
             let expected: Vec<String> = pages.into_iter().flatten().collect();
 
-            let rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
             let observed = rt.block_on(async move {
                 let mut client = Client::new(MockTransport::with_responses(responses));
                 client
@@ -584,25 +593,18 @@ mod phase73_list_all_properties {
             prop_assert_eq!(observed_names, expected);
         }
 
-        /// D-10 cap enforcement: `max_iterations = cap` + `cap + 2` scripted
-        /// pages forces the cap-exceeded branch to fire with
-        /// `Error::Validation`.
+        /// Cap-enforcement invariant: `max_iterations = cap` + `cap + 2` scripted
+        /// pages forces the cap-exceeded branch to fire with `Error::Validation`.
         ///
-        /// Rationale for `cap + 2` (MUST, not "try cap + 1 first"):
-        ///   `build_paginated_responses` ALWAYS assigns `next_cursor: None`
-        ///   to the FINAL scripted page. If we scripted `cap + 1` pages, the
-        ///   `cap`-th iteration of the loop would happen to see that terminal
-        ///   `None` and the helper would exit with `Ok(_)` — the cap-exceeded
-        ///   branch would be UNREACHABLE and the property would pass
-        ///   vacuously. Scripting `cap + 2` pages guarantees every page that
-        ///   sits inside the budget (`0..cap`) carries `Some(_)`, so the
-        ///   `cap`-th iteration observes a non-terminal cursor and the
-        ///   for-loop's cap branch fires with `Error::Validation`. A
-        ///   returned `Ok(_)` is NOT acceptable under this property and is
-        ///   treated as a counter-example.
+        /// `build_paginated_responses` assigns `next_cursor: None` to the final
+        /// scripted page. With `cap + 1` pages, the `cap`-th iteration would see
+        /// that terminal `None` and exit with `Ok(_)`, so the cap branch would be
+        /// unreachable and the property would pass vacuously. `cap + 2` pages
+        /// guarantees every page inside the budget carries `Some(_)`, so the
+        /// `cap`-th iteration observes a non-terminal cursor and the for-loop's
+        /// cap branch fires. `Ok(_)` is a counter-example under this property.
         #[test]
         fn prop_list_all_tools_cap_enforced(cap in 1usize..20) {
-            // Primary prescription: script cap + 2 pages (see rationale).
             let page_count = cap + 2;
             let page_payloads: Vec<Vec<Value>> = (0..page_count)
                 .map(|i| {
@@ -620,7 +622,10 @@ mod phase73_list_all_properties {
             );
 
             let opts = ClientOptions::default().with_max_iterations(cap);
-            let rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
             let result = rt.block_on(async move {
                 let mut client = Client::with_client_options(
                     MockTransport::with_responses(responses),
@@ -633,7 +638,6 @@ mod phase73_list_all_properties {
                 client.list_all_tools().await
             });
 
-            // Counter-example annotation: Ok(_) is a property violation.
             prop_assert!(
                 result.is_err(),
                 "cap-enforced property violated: helper returned Ok(_) when it should have errored with Error::Validation after {cap} iterations"

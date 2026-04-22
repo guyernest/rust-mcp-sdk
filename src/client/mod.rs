@@ -188,12 +188,11 @@ impl<T: Transport> Client<T> {
     /// [`Self::list_all_tools`] / [`Self::list_all_prompts`] / etc. honour a
     /// custom `max_iterations` cap.
     ///
-    /// ## `ClientBuilder` parity (D-09)
+    /// ## `ClientBuilder` parity
     ///
-    /// [`ClientBuilder`] intentionally does **not** expose a `.client_options()`
-    /// setter in this release. If you need a custom [`ClientOptions`], construct
-    /// your client via [`Self::with_client_options`] directly — builder-level
-    /// parity is tracked for a future phase.
+    /// [`ClientBuilder`] does not currently expose a `.client_options()` setter.
+    /// If you need a custom [`ClientOptions`], construct the client via
+    /// [`Self::with_client_options`] directly.
     ///
     /// # Examples
     ///
@@ -894,7 +893,7 @@ impl<T: Transport> Client<T> {
         }
     }
 
-    // === Phase 73: Typed helpers (PARITY-CLIENT-01) ===
+    // === Typed call helpers ===
 
     /// Call a tool with typed, serializable arguments.
     ///
@@ -1167,7 +1166,7 @@ impl<T: Transport> Client<T> {
         }
     }
 
-    // === Phase 73: list_all_* helpers (PARITY-CLIENT-01) ===
+    // === Auto-paginating list helpers ===
 
     /// List all tools across all pages, auto-paginating on `next_cursor`.
     ///
@@ -2284,7 +2283,7 @@ mod tests {
         assert_eq!(client.info.version, "1.0.0");
     }
 
-    // === Phase 73: PARITY-CLIENT-01 — ClientOptions wiring tests ===
+    // === ClientOptions wiring tests ===
 
     #[test]
     fn test_client_new_uses_default_options() {
@@ -2315,7 +2314,7 @@ mod tests {
         assert_eq!(client.options.max_iterations, 100);
     }
 
-    // === Phase 73: Typed-helper unit tests (PARITY-CLIENT-01) ===
+    // === Typed-helper unit tests ===
 
     #[tokio::test]
     async fn test_call_tool_typed_serialize_error_maps_to_validation() {
@@ -2367,8 +2366,8 @@ mod tests {
             ignored: Option<String>,
         }
         // Unit-test the coercion directly by building the intermediate HashMap
-        // in-situ. Full wire round-trip is covered by Plan 02 integration tests;
-        // here we only care that the coercion rules (D-06) are honoured.
+        // in-situ. Wire round-trip is covered in tests/list_all_pagination.rs;
+        // here we only care that the leaf-coercion rules are honoured.
         let args = Args {
             topic: "rust".into(),
             length: 200,
@@ -2711,7 +2710,7 @@ mod tests {
         assert_eq!(contents.contents.len(), 1);
     }
 
-    // === Phase 73: list_all_* in-module tests (PARITY-CLIENT-01) ===
+    // === list_all_* in-module tests ===
 
     fn list_all_init_response() -> TransportMessage {
         TransportMessage::Response(JSONRPCResponse {
