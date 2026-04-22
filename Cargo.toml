@@ -515,6 +515,11 @@ path = "examples/s42_handler_extensions.rs"
 name = "s43_handler_peer_sample"
 path = "examples/s43_handler_peer_sample.rs"
 
+[[example]]
+name = "c09_client_list_all"
+path = "examples/c09_client_list_all.rs"
+required-features = ["full"]
+
 [[bench]]
 name = "comprehensive_benchmarks"
 harness = false

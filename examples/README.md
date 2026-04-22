@@ -9,7 +9,7 @@ Examples follow a **role-prefix** naming scheme:
 | Prefix | Role | Count |
 |--------|------|-------|
 | `s` | Server | 40 |
-| `c` | Client | 7 |
+| `c` | Client | 8 |
 | `t` | Transport | 8 |
 | `m` | Middleware | 8 |
 
@@ -292,6 +292,18 @@ cargo run --example c06_multiple_clients_parallel
 **c07_oidc_discovery** — OIDC discovery, token exchange, and refresh against an OAuth 2.0 provider (with CORS/retry handling).
 ```bash
 cargo run --example c07_oidc_discovery --features http-client
+```
+
+### Typed Helpers and Pagination (Phase 73)
+
+**c09_client_list_all** — Phase 73 PARITY-CLIENT-01 demo. Shows `Client::with_client_options`,
+`call_tool_typed`, `get_prompt_typed`, and all four `list_all_*` helpers (including
+`list_all_resource_templates`, which uses the distinct `resources/templates/list`
+capability). This example drives an MCP server over **stdio** and is not
+self-contained — see the source-file header for pairing instructions.
+
+```bash
+cargo run --example c09_client_list_all --features full
 ```
 
 ---
