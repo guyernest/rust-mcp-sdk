@@ -83,8 +83,7 @@ fn build_responses(seq: &FuzzCursorSeq, cap: usize) -> Vec<TransportMessage> {
     // prematurely exhausted under normal fuzz conditions — this narrows the
     // Protocol-error escape hatch so the oracle's Validation-or-Ok branches
     // dominate.
-    let mut page_cursors: Vec<Option<String>> =
-        seq.cursors.iter().take(cap + 1).cloned().collect();
+    let mut page_cursors: Vec<Option<String>> = seq.cursors.iter().take(cap + 1).cloned().collect();
     while page_cursors.len() < cap + 1 {
         // Pad with Some("pad") so the helper sees Some(_) for every
         // in-budget iteration; deterministically forces cap-exceeded.
@@ -134,10 +133,10 @@ fuzz_target!(|data: &[u8]| {
         // unexpected error variant (Internal, Transport, Io, etc.) panics
         // the fuzzer.
         match outcome {
-            Ok(_) => {}
-            Err(Error::Validation(_)) => {}
-            Err(Error::Protocol { .. }) => {}
-            Err(Error::Serialization(_)) => {}
+            Ok(_) => {},
+            Err(Error::Validation(_)) => {},
+            Err(Error::Protocol { .. }) => {},
+            Err(Error::Serialization(_)) => {},
             Err(other) => panic!("unexpected error variant: {other:?}"),
         }
     });
