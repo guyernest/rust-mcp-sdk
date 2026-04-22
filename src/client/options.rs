@@ -31,12 +31,25 @@
 ///
 /// # Examples
 ///
+/// From downstream crates (external — `#[non_exhaustive]` forbids the struct
+/// literal, so use [`ClientOptions::default`] + a setter or direct assignment):
+///
 /// ```rust,no_run
 /// use pmcp::ClientOptions;
 ///
-/// let opts = ClientOptions { max_iterations: 50, ..Default::default() };
+/// let opts = ClientOptions::default().with_max_iterations(50);
+/// assert_eq!(opts.max_iterations, 50);
+///
+/// // Equivalent mutable form:
+/// let mut opts = ClientOptions::default();
+/// opts.max_iterations = 50;
 /// assert_eq!(opts.max_iterations, 50);
 /// ```
+///
+/// From inside the `pmcp` crate (or any crate-internal consumer) the
+/// field-update idiom also compiles — `ClientOptions { max_iterations: 50,
+/// ..Default::default() }` — but external crates must use the two forms
+/// above.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct ClientOptions {
@@ -46,6 +59,27 @@ pub struct ClientOptions {
     /// `0` is legal but produces an immediate cap-exceeded error — see the
     /// struct-level docs.
     pub max_iterations: usize,
+}
+
+impl ClientOptions {
+    /// Builder-style setter for [`Self::max_iterations`].
+    ///
+    /// Provided so downstream crates can configure a non-default
+    /// `max_iterations` without running into the `#[non_exhaustive]`
+    /// struct-literal restriction.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use pmcp::ClientOptions;
+    /// let opts = ClientOptions::default().with_max_iterations(25);
+    /// assert_eq!(opts.max_iterations, 25);
+    /// ```
+    #[must_use]
+    pub fn with_max_iterations(mut self, max_iterations: usize) -> Self {
+        self.max_iterations = max_iterations;
+        self
+    }
 }
 
 impl Default for ClientOptions {

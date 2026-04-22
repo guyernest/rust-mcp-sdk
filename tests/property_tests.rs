@@ -350,3 +350,179 @@ mod json_properties {
         }
     }
 }
+
+// === Phase 73: PARITY-CLIENT-01 — delegation equivalence ===
+//
+// Property: `call_tool_typed(name, &args)` sends the same wire bytes as
+// `call_tool(name, serde_json::to_value(&args).unwrap())`. Validated by
+// capturing the outgoing JSON-RPC `tools/call` request on a pair of mock
+// transports and asserting the recovered `params.arguments` field equals
+// `serde_json::to_value(&args)`.
+#[cfg(test)]
+mod phase73_typed_helpers {
+    use async_trait::async_trait;
+    use pmcp::{
+        shared::Transport,
+        types::{ClientCapabilities, RequestId, TransportMessage},
+        Client, Error as PmcpError, Result as PmcpResult,
+    };
+    use proptest::prelude::*;
+    use serde::Serialize;
+    use serde_json::json;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Debug, Serialize)]
+    struct ProptestArgs {
+        a: i64,
+        b: String,
+        c: Vec<u32>,
+    }
+
+    /// `MockTransport` variant that exposes captured outgoing messages.
+    #[derive(Debug)]
+    struct CaptureTransport {
+        responses: Arc<Mutex<Vec<TransportMessage>>>,
+        sent: Arc<Mutex<Vec<TransportMessage>>>,
+    }
+
+    #[async_trait]
+    impl Transport for CaptureTransport {
+        async fn send(&mut self, m: TransportMessage) -> PmcpResult<()> {
+            self.sent.lock().unwrap().push(m);
+            Ok(())
+        }
+
+        async fn receive(&mut self) -> PmcpResult<TransportMessage> {
+            self.responses
+                .lock()
+                .unwrap()
+                .pop()
+                .ok_or_else(|| PmcpError::protocol_msg("no more responses"))
+        }
+
+        async fn close(&mut self) -> PmcpResult<()> {
+            Ok(())
+        }
+    }
+
+    fn init_response() -> TransportMessage {
+        use pmcp::types::{jsonrpc::ResponsePayload, JSONRPCResponse};
+        TransportMessage::Response(JSONRPCResponse {
+            jsonrpc: "2.0".to_string(),
+            id: RequestId::from(1i64),
+            payload: ResponsePayload::Result(json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "t", "version": "0" }
+            })),
+        })
+    }
+
+    fn call_response(id: i64) -> TransportMessage {
+        use pmcp::types::{jsonrpc::ResponsePayload, JSONRPCResponse};
+        TransportMessage::Response(JSONRPCResponse {
+            jsonrpc: "2.0".to_string(),
+            id: RequestId::from(id),
+            payload: ResponsePayload::Result(json!({ "content": [] })),
+        })
+    }
+
+    /// Extract the `params.arguments` JSON field from the captured outgoing
+    /// `tools/call` request, if any.
+    fn captured_arguments(sent: &[TransportMessage]) -> Option<serde_json::Value> {
+        sent.iter().find_map(|m| {
+            let TransportMessage::Request { request, .. } = m else {
+                return None;
+            };
+            let v = serde_json::to_value(request).ok()?;
+            // The wire format nests under method-name key "tools/call" which
+            // maps to params via serde's internally-tagged enum. Try a few
+            // traversal shapes to stay robust:
+            // 1. { "method": "tools/call", "params": { "arguments": ... } }
+            // 2. { "tools/call": { "arguments": ... } }
+            // 3. { "params": { "arguments": ... } }
+            if let Some(args) = v
+                .get("params")
+                .and_then(|p| p.get("arguments"))
+                .cloned()
+            {
+                return Some(args);
+            }
+            if let Some(args) = v
+                .get("tools/call")
+                .and_then(|p| p.get("arguments"))
+                .cloned()
+            {
+                return Some(args);
+            }
+            None
+        })
+    }
+
+    proptest! {
+        /// Delegation equivalence for `call_tool_typed` serialize path:
+        /// for any ProptestArgs, the `arguments` field on the captured
+        /// tools/call JSONRPC request equals `serde_json::to_value(&args)`.
+        #[test]
+        fn prop_call_tool_typed_sends_expected_value(
+            a in any::<i64>(),
+            b in "[a-z]{0,16}",
+            c in prop::collection::vec(any::<u32>(), 0..8),
+        ) {
+            let args = ProptestArgs { a, b: b.clone(), c: c.clone() };
+            let expected = serde_json::to_value(&args).unwrap();
+
+            let sent = Arc::new(Mutex::new(Vec::<TransportMessage>::new()));
+            let transport = CaptureTransport {
+                responses: Arc::new(Mutex::new(vec![call_response(2), init_response()])),
+                sent: Arc::clone(&sent),
+            };
+
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move {
+                let mut client = Client::new(transport);
+                client.initialize(ClientCapabilities::minimal()).await.unwrap();
+                let _ = client.call_tool_typed("prop", &args).await;
+            });
+
+            let sent_snapshot = sent.lock().unwrap().clone();
+            let recovered = captured_arguments(&sent_snapshot);
+
+            // If the wire-format traversal could not locate arguments, fall
+            // back to the delegation-equivalence check: driving `call_tool`
+            // with the same serialized value must produce the identical
+            // `sent` vec. This establishes the same invariant (typed helper
+            // serializes-and-delegates) without relying on internal wire
+            // accessors.
+            if recovered.is_none() {
+                let sent_b = Arc::new(Mutex::new(Vec::<TransportMessage>::new()));
+                let transport_b = CaptureTransport {
+                    responses: Arc::new(Mutex::new(vec![call_response(2), init_response()])),
+                    sent: Arc::clone(&sent_b),
+                };
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async move {
+                    let mut client = Client::new(transport_b);
+                    client.initialize(ClientCapabilities::minimal()).await.unwrap();
+                    let _ = client.call_tool("prop".to_string(), expected.clone()).await;
+                });
+                let snap_a = sent_snapshot;
+                let snap_b = sent_b.lock().unwrap().clone();
+                // The two sent vecs must be byte-identical at the serde_json
+                // level (RequestId strings will differ — strip them before
+                // comparison).
+                let strip = |msgs: &[TransportMessage]| -> Vec<serde_json::Value> {
+                    msgs.iter()
+                        .filter_map(|m| {
+                            let TransportMessage::Request { request, .. } = m else { return None };
+                            serde_json::to_value(request).ok()
+                        })
+                        .collect()
+                };
+                prop_assert_eq!(strip(&snap_a), strip(&snap_b));
+            } else {
+                prop_assert_eq!(recovered, Some(expected));
+            }
+        }
+    }
+}
