@@ -598,7 +598,9 @@ async fn create_oauth_middleware(
     let config = OAuthConfig {
         issuer: oauth_issuer,
         mcp_server_url: Some(mcp_server_url.to_string()),
-        client_id,
+        client_id: Some(client_id),
+        client_name: None,
+        dcr_enabled: false,
         scopes,
         cache_file,
         redirect_port,

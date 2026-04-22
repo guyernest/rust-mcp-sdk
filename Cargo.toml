@@ -1,6 +1,6 @@
 [package]
 name = "pmcp"
-version = "2.4.0"
+version = "2.6.0"
 edition = "2021"
 authors = ["PAIML Team"]
 description = "High-quality Rust SDK for Model Context Protocol (MCP) with full TypeScript SDK compatibility"
@@ -317,6 +317,11 @@ path = "examples/c07_oidc_discovery.rs"
 required-features = ["http-client"]
 
 [[example]]
+name = "c08_oauth_dcr"
+path = "examples/c08_oauth_dcr.rs"
+required-features = ["oauth"]
+
+[[example]]
 name = "t04_streamable_http_stateful"
 path = "examples/t04_streamable_http_stateful.rs"
 required-features = ["streamable-http"]
@@ -509,6 +514,11 @@ path = "examples/s42_handler_extensions.rs"
 [[example]]
 name = "s43_handler_peer_sample"
 path = "examples/s43_handler_peer_sample.rs"
+
+[[example]]
+name = "c09_client_list_all"
+path = "examples/c09_client_list_all.rs"
+required-features = ["full"]
 
 [[bench]]
 name = "comprehensive_benchmarks"

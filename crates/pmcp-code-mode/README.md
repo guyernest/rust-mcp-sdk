@@ -314,7 +314,19 @@ When deploying with `cargo pmcp deploy`, the server's `config.toml` is automatic
 
 ### config.toml Schema
 
-The `[[code_mode.operations]]` section declares available operations. When present, it takes priority over `[[tools]]` for policy categorization.
+The `[[code_mode.operations]]` section declares available operations with canonical IDs and categories. When present, these feed into the `OperationRegistry` which:
+
+1. **Maps raw API paths to plain-name IDs** in Cedar entity `calledOperations` (e.g., `getCostAnomalies` instead of `POST:/getCostAnomalies`)
+2. **Overrides HTTP method-based action routing** with the declared `category` (e.g., a POST endpoint declared as `category = "read"` routes to the `Read` Cedar action, not `Write`)
+
+Each entry has four fields:
+
+| Field | Required | Purpose |
+|-------|----------|---------|
+| `id` | yes | Canonical operation name — appears in Cedar `calledOperations` and admin UI |
+| `category` | yes | Action routing: `"read"`, `"write"`, `"delete"`, `"admin"` |
+| `description` | no | Human-readable label for admin UI and LLM context |
+| `path` | no | Raw API path to match against `api.post('/...')` calls (exact match) |
 
 **OpenAPI server:**
 
@@ -324,28 +336,39 @@ name = "cost-coach"
 type = "openapi-api"
 
 [code_mode]
-allow_writes = false
-allow_deletes = false
+enabled = true
+server_id = "cost-coach"
+openapi_allow_writes = true    # Required when operations use POST for reads
 
 [[code_mode.operations]]
-name = "getCostAndUsage"
-description = "Retrieve AWS cost and usage data"
-path = "/ce/GetCostAndUsage"
-method = "POST"
+id = "getCostAndUsage"
+category = "read"
+description = "Historical cost and usage data"
+path = "/getCostAndUsage"
 
 [[code_mode.operations]]
-name = "getRecommendations"
-description = "Get cost optimization recommendations"
-path = "/ce/GetRightsizingRecommendation"
-method = "POST"
+id = "getCostAnomalies"
+category = "read"
+description = "Cost anomalies detected by AWS"
+path = "/getCostAnomalies"
 
 [[code_mode.operations]]
-name = "deleteBudget"
+id = "deleteBudget"
+category = "delete"
 description = "Delete a budget"
-path = "/budgets/DeleteBudget"
-method = "POST"
-destructive_hint = true
+path = "/deleteBudget"
 ```
+
+**Loading config from TOML** (recommended for external servers):
+
+```rust
+const CONFIG_TOML: &str = include_str!("../../config.toml");
+
+let config = CodeModeConfig::from_toml(CONFIG_TOML)
+    .expect("Invalid code_mode section in config.toml");
+```
+
+`from_toml` parses the `[code_mode]` section including all `[[code_mode.operations]]` entries. Other sections (`[server]`, `[[tools]]`, etc.) are ignored. This is preferable to manual `CodeModeConfig` construction because operations are automatically populated.
 
 **GraphQL server:**
 
@@ -355,23 +378,22 @@ name = "open-images"
 type = "graphql-api"
 
 [code_mode]
-allow_writes = false
+allow_mutations = false
 
 [[code_mode.operations]]
-name = "searchImages"
-operation_type = "query"
+id = "searchImages"
+category = "read"
 description = "Search the image catalog"
 
 [[code_mode.operations]]
-name = "createCollection"
-operation_type = "mutation"
+id = "createCollection"
+category = "write"
 description = "Create a new image collection"
 
 [[code_mode.operations]]
-name = "deleteImage"
-operation_type = "mutation"
+id = "deleteImage"
+category = "delete"
 description = "Permanently delete an image"
-destructive_hint = true
 ```
 
 **SQL server:**
@@ -404,28 +426,52 @@ name = "orchestrator"
 type = "mcp-api"
 
 [[code_mode.operations]]
-name = "analyze_costs"
+id = "analyze_costs"
+category = "read"
 description = "Multi-step cost analysis workflow"
-operation_category = "read"
 
 [[code_mode.operations]]
-name = "provision_resources"
+id = "provision_resources"
+category = "admin"
 description = "Provision cloud resources"
-operation_category = "admin"
 ```
 
-### Categorization Rules
+### Action Routing and Categorization
 
-Operations are automatically categorized based on server type:
+The Cedar action (`Read`/`Write`/`Delete`/`Admin`) sent to AVP determines which policies apply. The SDK resolves the action through a two-tier system:
 
-| Server Type | Read | Write | Delete | Admin |
-|-------------|------|-------|--------|-------|
-| **OpenAPI** | GET, HEAD, OPTIONS | POST, PUT, PATCH | DELETE | `operation_category = "admin"` |
-| **GraphQL** | query | mutation | mutation with `destructive_hint` or delete/remove/destroy prefix | `operation_category = "admin"` |
-| **SQL** | SELECT on non-blocked tables | INSERT, UPDATE (if `allow_writes`) | DELETE (if `allow_deletes`) | — |
-| **MCP-API** | `read_only_hint` / default | create/add/update/set name patterns | delete/remove/destroy patterns | `operation_category = "admin"` |
+**Tier 1: Operation category (from `[[code_mode.operations]]`)**
 
-The `operation_category` field overrides automatic categorization when set explicitly.
+When the `OperationRegistry` has an entry for the API path with a declared `category`, that category determines the action — regardless of the HTTP method:
+
+| `category` | Cedar Action | Example |
+|-----------|-------------|---------|
+| `"read"` | `CodeMode::Action::"Read"` | `api.post('/getCostAnomalies')` with `category = "read"` → Read |
+| `"write"` | `CodeMode::Action::"Write"` | `api.post('/createBudget')` with `category = "write"` → Write |
+| `"delete"` | `CodeMode::Action::"Delete"` | `api.post('/deleteBudget')` with `category = "delete"` → Delete |
+| `"admin"` | `CodeMode::Action::"Write"` | Admin operations route to Write action |
+
+This is critical for APIs that use POST for read operations (AWS SDK, GraphQL, Cost Coach). Without the category override, all POST calls would route to the Write action and miss Read Blocklist policies.
+
+**Tier 2: HTTP method fallback (when no registry entry matches)**
+
+When a path has no `[[code_mode.operations]]` entry, the SDK falls back to HTTP method classification:
+
+| HTTP Method | Cedar Action |
+|-------------|-------------|
+| GET, HEAD, OPTIONS | `Read` |
+| POST, PUT, PATCH | `Write` |
+| DELETE | `Delete` |
+
+**Script-level action** is determined by aggregating all API calls in the script:
+
+| Script Classification | Condition | `action()` |
+|-----------------------|-----------|-----------|
+| `read_only` | Only read calls | `Read` |
+| `write_only` | Only write/delete calls, no deletes | `Write` |
+| `write_only` + deletes | Has delete calls | `Delete` |
+| `mixed` | Both read and write/delete calls | `Write` |
+| `empty` | No API calls | `Read` |
 
 ### Config File Resolution
 

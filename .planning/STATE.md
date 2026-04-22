@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
-status: "Phase 70+71 shipped — PR #239"
-stopped_at: Phase 69 complete — follow-on proposals ready for ROADMAP slotting
-last_updated: "2026-04-19T01:17:26.483Z"
+status: Executing Phase 73
+stopped_at: Phase 74 context gathered
+last_updated: "2026-04-22T13:13:27.509Z"
 progress:
   total_phases: 40
   completed_phases: 35
@@ -20,12 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Close credibility and DX gaps where rmcp outshines PMCP -- documentation accuracy, feature gate presentation, macro documentation, example index, repo hygiene.
-**Current focus:** Phase 71 — rustdoc-fallback-for-mcp-tool-tool-descriptions-parity-macro
+**Current focus:** Phase 73 — typed-client-helpers-list-all-pagination-parity-client-01
 
 ## Current Position
 
-Phase: 71 (rustdoc-fallback-for-mcp-tool-tool-descriptions-parity-macro) — EXECUTING
-Plan: 4 of 4
+Phase: 73 (typed-client-helpers-list-all-pagination-parity-client-01) — EXECUTING
+Plan: 1 of 3
+Next: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
+After: Phase 73 (Typed client helpers + list_all pagination, PARITY-CLIENT-01)
 
 ## Shipped Milestones
 
@@ -63,6 +65,10 @@ v2.1 decisions:
 - [Phase 69.1]: 4 High-severity ergonomics gaps identified — MACRO-02 (rustdoc fallback for tool description), HANDLER-02 (Extensions typemap on RequestHandlerExtra), HANDLER-05 (peer handle in RequestHandlerExtra), CLIENT-02 (typed call_tool + list_all_* pagination helpers). Plan 02 will derive one follow-on phase proposal per High row.
 - [Phase 69.2]: 3 follow-on phase proposals drafted in 69-PROPOSALS.md — PARITY-HANDLER-01 (bundling HANDLER-02 + HANDLER-05 on shared RequestHandlerExtra edit site, target v2.2, 4 plans), PARITY-CLIENT-01 (CLIENT-02, target late v2.1, 3 plans), PARITY-MACRO-01 (MACRO-02, target late v2.1, 3 plans). Row-ID bijection verified: all 4 High Row IDs cited in Derived-from + Rationale subsections. Flagged regex bug in Task 2 verify block for Plan 03 correction (pipe-table trailing `|` not matched).
 - [Phase 69]: rmcp parity research complete — 69-RESEARCH.md (gap matrix, 32 rows total, 4 High-severity) + 69-PROPOSALS.md (3 proposals). 3 PARITY-* requirement IDs landed in REQUIREMENTS.md (one per proposal); follow-on phases not yet scheduled.
+- [Phase 72]: [Phase 72 Plan 02]: PoC Slice 1 spike EXECUTED on throwaway branch — T4_compile_errors=0, T4_loc_delta=537, ~15 min wall-clock under 4-hour hard time-box; serde-shape divergence found (rmcp requires params: {}; rejects null/missing) downgrades INVENTORY row 1 EXACT→compatible-via-adapter
+- [Phase 72]: [Phase 72 Plan 02]: Rubric shipped 9 thresholds T1..T9; T8 historical churn + T9 enterprise-feature-preservation added; T2 expanded with PR merge latency; gh fallback URL codified verbatim; default-to-B logic removed per HIGH-1
+- [Phase 72.1]: CR-03 rev-2 shipped — cargo-pmcp 0.8.0 -> 0.8.1 (patch, additive). Landing Next.js template now uses runtime `fetch('/landing-config')` via shared `useLandingConfig` hook; 4 consumers (signup, callback, connect [server->client flip], Header [conditional button]) routed through the hook; 4 NEXT_PUBLIC_* reads deleted; 3 stale rustdoc refs in `src/landing/config.rs` rewritten. MCP_SERVER_NAME branding preserved (CR-03 §0). 12/12 CR-03 ACs PASS; G1..G8 guardrails green (G7 scaffold smoke added per Codex M3; G8 77-line LOC delta ≤100 budget). AC-11 manual offline gate approved by operator guy 2026-04-20. Unblocks pmcp.run Phase 71 UAT Test 7 + Cost Coach prod launch. crates.io release is a separate follow-up (git tag v0.8.1 triggers .github/workflows/release.yml).
+- [Phase ?]: Phase 74 release state landed — pmcp 2.5.0 + cargo-pmcp 0.9.0 + mcp-tester 0.5.2; 8 pins bumped; CHANGELOG dated 2026-04-21; quality-gate green. Tagging is operator-driven.
 
 ### Roadmap Evolution
 
@@ -73,6 +79,14 @@ v2.1 decisions:
 - Phase 70 added: Add Extensions typemap and peer back-channel to RequestHandlerExtra (PARITY-HANDLER-01) — bundles HANDLER-02 (Extensions typemap) + HANDLER-05 (peer handle) on the shared RequestHandlerExtra edit site per 69-PROPOSALS.md.
 - Phase 71 added: Rustdoc fallback for #[mcp_tool] tool descriptions (PARITY-MACRO-01) — rustdoc-harvest fallback in pmcp-macros when `description = "..."` attribute is omitted, per 69-PROPOSALS.md Proposal 3 (MACRO-02).
 - Phase 71 planned + replanned (2026-04-17): initial 3 plans → replanned to **4 plans / 12 tasks / 4 waves** after Codex cross-AI review surfaced 2 HIGH findings. HIGH-1 resolved via new `crates/pmcp-macros-support/` sibling crate (proc-macro crates cannot export public items; Option A adopted). HIGH-2 resolved via explicit `^pmcp = ` ripple audit + concurrent `cargo-pmcp 0.6.0→0.6.1` + `mcp-tester 0.5.0→0.5.1` patch bumps per CLAUDE.md §"Version Bump Rules". Semver posture revised: **pmcp 2.3.0→2.4.0 (minor, not patch)** — rustdoc-only macro source form is additive feature. Final VERIFICATION PASSED after 2 revision iterations.
+- Phase 72 added (2026-04-19): Investigate rmcp as foundations for pmcp — evaluate using rmcp for the protocol layer while repositioning pmcp + tooling as the pragmatic, batteries-included SDK for enterprise use cases. Goal is a research/decision phase to reduce protocol-spec maintenance burden and focus pmcp on higher-level DX.
+- Phase 72 planned + replanned (2026-04-19): initial 3 plans → replanned to **3 plans / 12 tasks / 3 waves** after Gemini + Codex cross-AI review (72-REVIEWS.md) surfaced 3 HIGH findings. HIGH-1 (consensus, default-to-B bias) resolved by removing the default-to-B rule and replacing it with an explicit decision tree (N<3→DEFER, N=3..4→D, N≥5→highest-scoring); valid recommendation set tightened to {A, B, C1, C2, D, DEFER} — E is prohibited as an outcome (contingency-only footnote). HIGH-2 (consensus, PoC/threshold resolution gap) resolved by adding Plan 02 Task 1b which EXECUTES PoC Slice 1 on a throwaway branch `spike/72-poc-slice-1` with a 4-hour hard time-box, producing 72-POC-RESULTS.md with real T4_compile_errors + T4_loc_delta, then deletes the branch + scratch dir. HIGH-3 (Codex-only, weak inventory evidence) resolved by upgrading 72-01 Task 2 row schema from 5 to 9 columns (adding exact symbols, public API surface, owned impls/macros, serde compat risk, feature flags, downstream crates). Also: strategy matrix rows changed {A,B,C,D,E}→{A,B,C1,C2,D} + E as footnote; rubric expanded T1..T9 including T8 (historical churn, 180d git log on src/types/+src/shared/) and T9 (enterprise-feature-preservation checklist for TypedTool/workflow/mcp_apps/auth/middleware/mcp-preview/cargo-pmcp); T2 expanded to include PR merge latency + codified gh fallback URL; Plan 01 Task 0 creates 72-CONTEXT.md locking T6/T7; Plan 03 Task 1b runs an awk semantic audit that auto-downgrades to DEFER if any `### Criterion` subsection fails to cite a T-ID + inventory/matrix row. 7 deliverables total (was 5). Final VERIFICATION PASSED on first revision iteration.
+- Phase 72 executed + verified (2026-04-20): 3 waves shipped; final **Recommendation: D** (Maintain pmcp as authoritative Rust MCP SDK). N=7/9 resolved thresholds (T6/T7 remain UNKNOWN). Slice 1 spike executed on throwaway branch — T4_compile_errors=0, T4_loc_delta=537, serde `params: null` round-trip FAILS against rmcp 1.5.0, downgrading inventory row 1 from EXACT to compatible-via-adapter (strongest counterargument to A/B). 72-REVIEWS.md HIGH findings all resolved in final artifacts. Verification PASSED 15/15 after 1 gap-closure iteration (C3/C5 matrix-citation regex fixes + REQUIREMENTS.md -01/-02 ledger sync). Phase 69's parity phases remain the forward path.
+- Phase 73 added (2026-04-20): Typed client helpers + list_all pagination (PARITY-CLIENT-01) — implements 69-PROPOSALS.md Proposal 2 (CLIENT-02). Adds `call_tool_typed<T>` / `call_prompt_typed<T>` (typed-arg serialization) and `list_all_tools` / `list_all_prompts` / `list_all_resources` (auto-paginating on next_cursor with max-iteration safety cap) to `Client`. Additive, non-breaking; 3 plans expected; minor semver bump.
+- Phase 72.1 inserted after Phase 72 (2026-04-20): **Finalize landing support (URGENT)** — implements pmcp-run team CR-03 rev-2 (runtime `/landing-config` fetch replacing the four `NEXT_PUBLIC_*` build-time env vars in `cargo-pmcp/templates/landing/nextjs/`). HIGH priority; blocks pmcp.run Phase 71 UAT Test 7 and Cost Coach prod launch. Scope: template-only + required `useLandingConfig` shared hook + 3-line rustdoc fix in `src/landing/config.rs`. `MCP_SERVER_NAME` branding stays. Target: `cargo-pmcp 0.8.1` patch. CR source copied to `72.1-CR-03-SOURCE.md`.
+- ROADMAP.md headings `## Phase Details (v2.1)` / `## Progress (v2.1)` renamed to `## Phase Details — Current Milestone` / `## Progress — Current Milestone` (2026-04-20) to prevent `extractCurrentMilestone` regex from clipping the v2.1 section at the Phase Details sub-heading; STATE.md frontmatter `milestone` also corrected from `v2.0` → `v2.1` (v2.0 shipped phases 54-59 per ROADMAP line 13; Phase 72+ is v2.1 territory).
+- Phase 74 added (2026-04-21): Add cargo pmcp auth subcommand with multi-server OAuth token management — consolidate the existing OAuth PKCE flow (currently nested inside every server-connecting command via `AuthFlags`) into a dedicated `cargo pmcp auth` command group: `login <url>`, `logout [<url> | --all]`, `status [<url>]`, `token <url>`, `refresh <url>`. Evolve `~/.pmcp/oauth-tokens.json` into a per-server-keyed cache so multiple OAuth-protected servers can be logged in concurrently (e.g. dev + staging + prod). Additive; `cargo-pmcp` patch/minor bump. Motivation: remove the per-command browser prompt friction for developers running `test conformance`, `test run`, `loadtest`, `preview` against OAuth-protected servers.
+- Phase 73 ↔ 74 order swapped (2026-04-21): Phase 74 (cargo pmcp auth) promoted ahead of Phase 73 (typed client helpers) per operator direction. Phase numbers preserved (no directory/reference churn); only ROADMAP.md ordering + "Depends on" chain flipped: Phase 74 now depends on Phase 72.1, Phase 73 now depends on Phase 74. Rationale: developer-facing DX unblocker (OAuth friction while testing OAuth-protected servers) takes priority over additive client ergonomics.
 
 ### Pending Todos
 
@@ -84,6 +98,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-04-17T04:48:35Z
-Stopped at: Phase 69 complete — follow-on proposals ready for ROADMAP slotting
-Resume: Run /gsd:add-phase to slot a 69-PROPOSALS.md entry into the roadmap, or /gsd-plan-phase for a scheduled v2.1 phase.
+Last session: 2026-04-21T22:53:20.664Z
+Stopped at: Phase 74 context gathered
+Resume: Run /gsd-plan-phase 74 (cargo pmcp auth subcommand with multi-server OAuth token management) — reordered ahead of Phase 73 on 2026-04-21; or ship cargo-pmcp 0.8.1 via `git tag -a v0.8.1 && git push upstream v0.8.1`.

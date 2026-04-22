@@ -13,13 +13,14 @@ serde_json = "1.0"
 bytes = "1.0"
 arbitrary = { version = "1.3", features = ["derive"] }
 tokio = { version = "1.0", features = ["full"] }
+async-trait = "0.1"
 pmcp-macros-support = { path = "../crates/pmcp-macros-support" }
 syn = { version = "2", features = ["full", "parsing", "extra-traits"] }
 
 [dependencies.pmcp]
 path = ".."
 default-features = false
-features = []
+features = ["oauth"]
 
 [dependencies.pmcp-code-mode]
 path = "../crates/pmcp-code-mode"
@@ -85,6 +86,20 @@ bench = false
 [[bin]]
 name = "rustdoc_normalize"
 path = "fuzz_targets/rustdoc_normalize.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dcr_response_parser"
+path = "fuzz_targets/dcr_response_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "list_all_cursor_loop"
+path = "fuzz_targets/list_all_cursor_loop.rs"
 test = false
 doc = false
 bench = false

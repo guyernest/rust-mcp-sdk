@@ -106,6 +106,22 @@ enum Commands {
         command: commands::test::TestCommand,
     },
 
+    /// Manage OAuth credentials for MCP servers
+    ///
+    /// Log in once per OAuth-protected MCP server; subsequent `cargo pmcp test/*`,
+    /// `connect`, `preview`, `schema`, `dev`, `loadtest/run`, `pentest` calls pick
+    /// up the cached token automatically.
+    #[command(after_long_help = "Examples:
+  cargo pmcp auth login https://mcp.pmcp.run
+  cargo pmcp auth login https://mcp.pmcp.run --client claude-desktop
+  cargo pmcp auth status
+  cargo pmcp auth token https://mcp.pmcp.run
+  cargo pmcp auth logout --all")]
+    Auth {
+        #[command(subcommand)]
+        command: commands::auth_cmd::AuthCommand,
+    },
+
     /// Start development server
     ///
     /// Builds and runs the server with live logs
@@ -410,6 +426,9 @@ fn execute_command(command: Commands, global_flags: &GlobalFlags) -> Result<()> 
             },
         },
         Commands::Test { command } => {
+            command.execute(global_flags)?;
+        },
+        Commands::Auth { command } => {
             command.execute(global_flags)?;
         },
         Commands::Dev {

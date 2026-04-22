@@ -5,9 +5,23 @@
 //! - Calling tools with arguments
 //! - Handling tool responses
 //! - Error handling for tool calls
+//!
+//! Phase 73 update: now demonstrates `Client::call_tool_typed` with a
+//! `#[derive(Serialize)]` struct, replacing the earlier hand-rolled
+//! `json!({...})` pattern for the calculator invocation.
 
 use pmcp::{Client, ClientCapabilities, StdioTransport};
+use serde::Serialize;
 use serde_json::json;
+
+/// Typed arguments for the calculator tool — replaces the old `json!({...})` pattern
+/// with a compile-checked struct that is serialized by `call_tool_typed`.
+#[derive(Serialize)]
+struct CalculatorArgs {
+    operation: &'static str,
+    a: f64,
+    b: f64,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -49,20 +63,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Example: Call a calculator tool
-    println!("\n\n📐 Calling calculator tool:");
-    let calc_args = json!({
-        "operation": "multiply",
-        "a": 42,
-        "b": std::f64::consts::PI
-    });
+    // Example: Call a calculator tool using the Phase 73 typed helper.
+    println!("\n\n📐 Calling calculator tool (typed):");
+    let calc_args = CalculatorArgs {
+        operation: "multiply",
+        a: 42.0,
+        b: std::f64::consts::PI,
+    };
 
     println!(
         "   Arguments: {}",
         serde_json::to_string_pretty(&calc_args)?
     );
 
-    match client.call_tool("calculator".to_string(), calc_args).await {
+    match client.call_tool_typed("calculator", &calc_args).await {
         Ok(result) => {
             println!(
                 "   ✅ Result: {}",

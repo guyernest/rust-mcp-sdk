@@ -5,6 +5,99 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-04-21
+
+### Added
+
+- **pmcp 2.6.0 — Typed client helpers** (Phase 73, PARITY-CLIENT-01):
+  `Client::call_tool_typed<A: Serialize>`, `Client::call_tool_typed_with_task<A: Serialize>`,
+  `Client::call_tool_typed_and_poll<A: Serialize>`, and `Client::get_prompt_typed<A: Serialize>`.
+  Each serializes caller-provided `&A` via `serde_json::to_value` and delegates to the existing
+  untyped sibling method. Serialization failures return `Error::validation` naming the argument
+  source. Signatures match the live siblings exactly — `call_tool_typed_with_task` is two-arg;
+  `call_tool_typed_and_poll` is three-arg with `max_polls: usize`.
+- **pmcp 2.6.0 — Auto-paginating list helpers** (Phase 73, PARITY-CLIENT-01): `Client::list_all_tools`,
+  `Client::list_all_prompts`, `Client::list_all_resources`, and
+  **`Client::list_all_resource_templates`** (the last uses the distinct `resources/templates/list`
+  capability). Each loops on `next_cursor` and returns the full concatenated item list. A bounded
+  `max_iterations` safety cap (configured via `ClientOptions::max_iterations`, default 100) returns
+  `Error::validation` rather than looping indefinitely on a buggy server. Empty-string cursors
+  (`Some("")`) continue the loop; only `None` terminates. Each helper's rustdoc documents the
+  memory-amplification caveat.
+- **`pmcp::ClientOptions`** — new `#[non_exhaustive]` configuration struct. Constructed via
+  `ClientOptions::default()` + the builder-style `with_max_iterations` setter (external crates)
+  or via field-update syntax (`..Default::default()`) from inside the `pmcp` crate. Future
+  client-level knobs can land non-breakingly. `max_iterations = 0` is a legal but degenerate
+  value (documented in rustdoc; produces immediate `Error::Validation` from every `list_all_*`
+  helper).
+- **`Client::with_client_options(transport, options)`** — new constructor for wiring a custom
+  `ClientOptions`. Does not collide with the pre-existing
+  `Client::with_options(transport, info, ProtocolOptions)`. `ClientBuilder` intentionally does not
+  expose a `.client_options()` setter in this release — builder-level parity is tracked for a future
+  phase.
+- **`examples/c09_client_list_all.rs`** — end-to-end demo exercising `Client::with_client_options`,
+  `call_tool_typed`, `get_prompt_typed`, and all four `list_all_*` helpers (including
+  `list_all_resource_templates`). Drives an MCP server over stdio — see the file header for pairing
+  instructions; the binary is not self-contained.
+- **`examples/c02_client_tools.rs`** updated to showcase `call_tool_typed` with a
+  `#[derive(Serialize)]` struct instead of the prior hand-rolled `json!({...})` pattern.
+
+### Fixed
+
+- **REQUIREMENTS.md §55** — renamed `call_prompt_typed` to `get_prompt_typed` to match the
+  MCP method name (`prompts/get`) and the shipped helper name (Phase 73 D-15).
+
+## [2.5.0] - 2026-04-21
+
+### Added
+
+- **pmcp 2.5.0 — Dynamic Client Registration (RFC 7591) support in `OAuthHelper`** (Phase 74).
+  `OAuthConfig` gains `client_name: Option<String>` and `dcr_enabled: bool` (default: `true`).
+  When `dcr_enabled && client_id.is_none() && discovery.registration_endpoint.is_some()`,
+  `OAuthHelper` auto-registers with the server's DCR endpoint before PKCE, eliminating
+  the need to pre-provision a client_id against OAuth servers that support RFC 7591.
+  Public `DcrRequest` / `DcrResponse` types are re-exported from `pmcp::client::oauth`
+  so library consumers can build custom flows on top. New example
+  `examples/c08_oauth_dcr.rs` demonstrates the library-user path.
+- **`OAuthHelper::authorize_with_details()` + `AuthorizationResult` struct** (Phase 74,
+  Blocker #6): returns the full set of OAuth artifacts (access_token, refresh_token,
+  expires_at, scopes, effective issuer, effective client_id) so cache consumers can
+  persist refresh state across runs. The existing `get_access_token()` API is
+  preserved unchanged for simple bearer-header callers.
+- **cargo-pmcp 0.9.0 — `cargo pmcp auth` command group** (Phase 74, Plan 02).
+  Five subcommands (`login`, `logout`, `status`, `token`, `refresh`) manage per-server
+  OAuth tokens in a new `~/.pmcp/oauth-cache.json` (schema_version: 1). `--client <name>`
+  flag on `auth login` drives the SDK's new DCR path. `auth token <url>` prints the raw
+  access token to stdout (`gh auth token` ergonomics). All server-connecting commands
+  (`test/*`, `connect`, `preview`, `schema`, `dev`, `loadtest/run`, `pentest`) now
+  consult the cache as the lowest-precedence auth source after explicit flags and
+  env vars.
+
+### Changed
+
+- **BREAKING (minor-within-v2.x window):** `OAuthConfig::client_id` type changed `String` -> `Option<String>` to enable DCR auto-trigger when `client_id.is_none()`.
+  Existing callers must wrap pre-registered ids in `Some(...)`:
+
+  ```rust
+  // Before (pmcp 2.4.x):
+  OAuthConfig { client_id: "my-client".to_string(), /* ... */ }
+
+  // After (pmcp 2.5.0+):
+  OAuthConfig {
+      client_id: Some("my-client".to_string()),
+      client_name: None,
+      dcr_enabled: false,  // opt out of DCR; use the provided id as-is
+      /* ... */
+  }
+  ```
+
+  Per the v2.x breaking-change window policy in MEMORY.md (v2.0 cleanup philosophy),
+  this ships as a minor bump rather than a major.
+
+- **cargo-pmcp `pentest`**: migrated from local `--api-key` flag to shared `AuthFlags`.
+  `--api-key` continues to work identically; `--oauth-client-id` / `--oauth-issuer`
+  / `--oauth-scopes` are now also accepted for OAuth-protected targets.
+
 ## [2.4.0] - 2026-04-17
 
 ### Added

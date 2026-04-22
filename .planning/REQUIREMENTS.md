@@ -52,8 +52,31 @@ Inserted into v2.1 via Phase 67.1 (INSERTED, 2026-04-11) — blocker for an immi
 Seeded by Phase 69 research (`.planning/phases/69-rmcp-parity-research-gap-analysis-across-ergonomics-transpor/69-PROPOSALS.md`). One REQ-ID per proposal, mapping to the proposal as a whole; the proposal's 3–5 success criteria are its internal acceptance tests. Status remains pending until the follow-on phase ships.
 
 - [ ] **PARITY-HANDLER-01**: Enrich `RequestHandlerExtra` with a typed-key extensions map and an optional peer back-channel, so middleware state transfer and in-handler server-to-client RPCs work without out-of-band plumbing.
-- [ ] **PARITY-CLIENT-01**: Ship typed-input `call_tool_typed` / `call_prompt_typed` helpers and auto-paginating `list_all_tools` / `list_all_prompts` / `list_all_resources` convenience methods on `Client`, reducing client boilerplate to one call per operation.
+- [ ] **PARITY-CLIENT-01**: Ship typed-input `call_tool_typed` / `get_prompt_typed` helpers and auto-paginating `list_all_tools` / `list_all_prompts` / `list_all_resources` convenience methods on `Client`, reducing client boilerplate to one call per operation.
 - [x] **PARITY-MACRO-01**: Support rustdoc as a fallback source for `#[mcp_tool]` descriptions, so well-documented tool functions do not have to repeat themselves in the macro attribute.
+
+### rmcp Foundation Evaluation (Phase 72 research)
+
+Seeded by Phase 72 rmcp-foundations research (`.planning/phases/72-investigate-rmcp-as-foundations-for-pmcp-evaluate-using-rmcp/72-RESEARCH.md` + `72-REVIEWS.md`). These REQ-IDs cover the artifacts that the phase itself produces (inventory, strategy matrix, PoC proposal, decision rubric, final recommendation). Status remains pending until Plan 03 ships the recommendation.
+
+- [x] **RMCP-EVAL-01**: Produce a source-citation-backed inversion inventory covering every module family in `src/types/` and `src/shared/` (and `src/server/cancellation.rs`), identifying the nearest rmcp 1.5.0 equivalent and an overlap rating (EXACT / Partial / pmcp-superset / pmcp-exclusive / UNVERIFIED). Each row MUST carry a 9-column evidence schema: (1) pmcp module family, (2) pmcp defining `file:line`, (3) rmcp docs.rs anchor or GitHub blob URL, (4) exact symbols touched, (5) public API surface impacted, (6) owned impls/macros affected, (7) serde compatibility risk, (8) feature flag(s), (9) downstream crates touched.
+- [x] **RMCP-EVAL-02**: Score the five architectural options (A. Full adopt / B. Hybrid wrapper / C1. Selective borrow — types only / C2. Selective borrow — transports only / D. Status quo + upstream PRs) against five criteria (maintenance reduction, migration cost, breaking-change surface, enterprise feature preservation, upgrade agility). All 25 cells scored with rationale; no `TBD`. E (Fork) documented as a contingency footnote only, not a scored row.
+- [x] **RMCP-EVAL-03**: Propose 2-3 candidate PoC slices, each `≤500` LOC touched, each with explicit files list, hypothesis tested, pass criterion, and disqualifying outcome. One slice must be executable in `≤3` days. Plan 02 additionally EXECUTES Slice 1 as a throwaway time-boxed spike to resolve T3/T4 with real data.
+- [x] **RMCP-EVAL-04**: Publish a decision rubric with `≥5` falsifiable thresholds (numeric or boolean), each citing a named data source (git log query, gh CLI query, mcp-tester run, PoC branch output, or CONTEXT.md entry). Post-reviews rubric adds T8 (historical churn on `src/types/` + `src/shared/`) and T9 (enterprise-feature preservation checklist) and updates T2 (PR merge latency) and T4 (broken-APIs + broken-examples + broken-downstream-crates subcounts).
+- [x] **RMCP-EVAL-05**: Publish a final recommendation picking exactly one of {A, B, C1, C2, D, DEFER}, with a per-criterion subsection that engages every rubric criterion from RMCP-EVAL-04 and cites the inventory row(s) and matrix cell(s) supporting its conclusion. DEFER is an explicit, valid outcome when net-resolved thresholds < 3; E (Fork) is NOT a valid recommendation.
+
+### Landing template runtime config (Phase 72.1)
+
+Urgent INSERTED phase driven by CR-03 rev-2 from the pmcp.run platform team. The platform's Phase 71.1 actively strips `NEXT_PUBLIC_*` env vars on every landing deploy, leaving the current `cargo-pmcp` landing template non-functional for signup. See `.planning/phases/72.1-finalize-landing-support/72.1-CR-03-SOURCE.md` for the authoritative spec.
+
+- [x] **LAND-CR03-01**: `cargo-pmcp 0.8.1` — landing template uses a runtime fetch of `/landing-config` via a new required shared `useLandingConfig` hook. All four template consumers (`app/signup/page.tsx`, `app/signup/callback/page.tsx`, `app/connect/page.tsx`, `app/components/Header.tsx`) route through the hook; all `NEXT_PUBLIC_COGNITO_*` / `NEXT_PUBLIC_LANDING_CLIENT_ID` / `NEXT_PUBLIC_SIGNUP_REDIRECT_AFTER` reads are deleted; `MCP_SERVER_NAME` branding reads stay; three stale rustdoc references in `cargo-pmcp/src/landing/config.rs` are rewritten to describe the runtime mechanism; patch version bump `0.8.0 → 0.8.1`. Verified by the 12 grep/build acceptance criteria in CR-03 §Acceptance criteria.
+
+### CLI auth subcommand + SDK DCR (Phase 74)
+
+Consolidates OAuth handling for all server-connecting `cargo pmcp` commands into a dedicated `cargo pmcp auth` command group with a per-server-keyed token cache. Adds Dynamic Client Registration (DCR, RFC 7591) to the SDK so any PMCP-built client — not just the CLI — can auto-register with OAuth servers that advertise a `registration_endpoint`. Exposes DCR via a `--client <name>` flag on `auth login` for testing pmcp.run's client-branded login pages. Full decision log: `.planning/phases/74-add-cargo-pmcp-auth-subcommand-with-multi-server-oauth-token/74-CONTEXT.md`.
+
+- [x] **SDK-DCR-01** (SDK, `pmcp` minor bump): Add public RFC 7591 Dynamic Client Registration support in `src/client/oauth.rs`. `OAuthConfig` gains `client_name: Option<String>` and `dcr_enabled: bool` fields (additive, no breaking change). `OAuthHelper` auto-performs DCR when `dcr_enabled && client_id.is_none() && discovery.registration_endpoint.is_some()`. Request body matches RFC 7591 public-PKCE-client shape. Response parsed for `client_id` (required) and optional `client_secret`. Error surface: actionable message when server does not advertise a registration_endpoint. Ships with fuzz + property + unit tests + working example per CLAUDE.md ALWAYS requirements.
+- [x] **CLI-AUTH-01** (CLI, `cargo-pmcp 0.8.1 → 0.9.0` minor bump): New `cargo pmcp auth` command group with `login`, `logout`, `status`, `token`, `refresh` subcommands. Per-server-keyed token cache at `~/.pmcp/oauth-cache.json` with `schema_version: 1` (legacy `~/.pmcp/oauth-tokens.json` left untouched — users re-login once). `login` accepts `--client <name>` (mutually exclusive with `--oauth-client-id`) which sets `OAuthConfig::client_name` for SDK DCR. `logout` with no args errors (`--all` or `<url>` required). `token <url>` prints raw access token to stdout. `login` prints success message only (never the token). Precedence for all server-connecting commands: explicit flag > env var > cache. Transparent on-demand refresh when cached token is expired or within 60s of expiry. `cargo-pmcp/src/commands/pentest.rs` migrated from its duplicate `--api-key` flag to shared `AuthFlags`.
 
 ## Previous Requirements
 
@@ -143,13 +166,25 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PARITY-HANDLER-01 | Phase 70 | Pending |
 | PARITY-CLIENT-01 | TBD | Pending |
 | PARITY-MACRO-01 | Phase 71 | Complete |
+| RMCP-EVAL-01 | Phase 72 | Complete |
+| RMCP-EVAL-02 | Phase 72 | Complete |
+| RMCP-EVAL-03 | Phase 72 | Complete |
+| RMCP-EVAL-04 | Phase 72 | Complete |
+| RMCP-EVAL-05 | Phase 72 | Complete |
+| LAND-CR03-01 | Phase 72.1 | Complete |
+| SDK-DCR-01 | Phase 74 | Complete |
+| CLI-AUTH-01 | Phase 74 | Complete |
 
 **Coverage:**
-- v2.1 requirements: 23 total (20 pre-seed + 3 seeded by Phase 69)
-- Mapped to phases: 23
+- v2.1 requirements: 31 total (20 pre-seed + 3 seeded by Phase 69 + 5 seeded by Phase 72 + 1 seeded by Phase 72.1 CR-03 + 2 seeded by Phase 74)
+- Mapped to phases: 31
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-10*
 *Last updated: 2026-04-16 — added 3 PARITY-* IDs seeded by Phase 69 rmcp parity research*
 *Last updated: 2026-04-17 — PARITY-MACRO-01 closed by Phase 71 (pmcp 2.4.0 / pmcp-macros 0.6.0 / pmcp-macros-support 0.1.0 — rustdoc fallback)*
+*Last updated: 2026-04-19 — added 5 RMCP-EVAL-* IDs seeded by Phase 72 rmcp foundation evaluation research (reviews-mode revised)*
+*Last updated: 2026-04-20 — Phase 72 Plan 03 closed RMCP-EVAL-05 (recommendation = D). Traceability updated.*
+*Last updated: 2026-04-20 — added LAND-CR03-01 seeded by Phase 72.1 CR-03 rev-2 (cargo-pmcp 0.8.1 landing runtime fetch).*
+*Last updated: 2026-04-20 — Phase 72.1 complete: cargo-pmcp 0.8.1 landing template runtime /landing-config fetch (AC-11 manual offline gate approved by operator guy).*

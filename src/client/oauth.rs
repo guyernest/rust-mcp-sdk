@@ -35,7 +35,30 @@ use crate::client::oauth_middleware::{BearerToken, OAuthClientMiddleware};
 use crate::error::{Error, Result};
 use crate::server::auth::oauth2::OidcDiscoveryMetadata;
 
+// Re-export RFC 7591 DCR types from the authoritative server-side definitions
+// so library users can construct DCR requests via `pmcp::client::oauth::DcrRequest`.
+// Source of truth: src/server/auth/provider.rs:302-382.
+pub use crate::server::auth::provider::{DcrRequest, DcrResponse};
+
 /// OAuth configuration for CLI authentication flows.
+///
+/// # Migration note (pmcp 2.5.0)
+///
+/// `client_id` changed from `String` to `Option<String>` to support RFC 7591
+/// Dynamic Client Registration. Existing callers that passed a pre-registered
+/// id must now wrap it in `Some(...)`:
+///
+/// ```rust,ignore
+/// // Before (pmcp < 2.5.0):
+/// OAuthConfig { client_id: "my-client".to_string(), /* ... */ }
+/// // After (pmcp 2.5.0+):
+/// OAuthConfig {
+///     client_id: Some("my-client".to_string()),
+///     client_name: None,
+///     dcr_enabled: false,
+///     /* ... */
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct OAuthConfig {
     /// OAuth issuer URL (e.g., `https://auth.example.com`).
@@ -43,14 +66,84 @@ pub struct OAuthConfig {
     pub issuer: Option<String>,
     /// MCP server URL for auto-discovery (required if issuer is `None`).
     pub mcp_server_url: Option<String>,
-    /// OAuth client ID.
-    pub client_id: String,
+    /// OAuth client ID. When `None` and `dcr_enabled` is `true` and the
+    /// discovery metadata advertises a `registration_endpoint`, the SDK
+    /// auto-performs RFC 7591 Dynamic Client Registration to obtain one.
+    pub client_id: Option<String>,
+    /// Client name advertised to the authorization server during DCR
+    /// (RFC 7591 §2). Only consulted when DCR fires. Falls back to the
+    /// literal `"pmcp-sdk"` if `None` at DCR time.
+    pub client_name: Option<String>,
+    /// Enable RFC 7591 Dynamic Client Registration when `client_id` is
+    /// `None` and the server advertises a `registration_endpoint`.
+    /// Defaults to `true` via `Default::default()`; set to `false` to
+    /// opt out and require an explicit `client_id`.
+    pub dcr_enabled: bool,
     /// OAuth scopes to request.
     pub scopes: Vec<String>,
     /// Cache file path for storing tokens.
     pub cache_file: Option<PathBuf>,
     /// Redirect port for localhost callback (default: 8080).
     pub redirect_port: u16,
+}
+
+impl Default for OAuthConfig {
+    fn default() -> Self {
+        Self {
+            issuer: None,
+            mcp_server_url: None,
+            client_id: None,
+            client_name: None,
+            dcr_enabled: true,
+            scopes: Vec::new(),
+            cache_file: None,
+            redirect_port: 8080,
+        }
+    }
+}
+
+/// Result of a successful OAuth authorization flow, carrying the full set of
+/// artifacts a cache consumer needs to persist and later refresh.
+///
+/// # Field semantics
+///
+/// - `access_token`: The bearer token. Put in `Authorization: Bearer <...>` headers.
+/// - `refresh_token`: Present when the IdP returned one (Okta, Auth0, Keycloak
+///   with offline_access). `None` when the IdP does not issue refresh tokens.
+///
+///   **Device-code flow (RFC 8628):** When `OAuthHelper` falls back from
+///   authorization-code to device-code (e.g., the IdP does not support
+///   localhost callbacks), `refresh_token` may be `None` because RFC 8628 §3.5
+///   does NOT require the token response to include a `refresh_token`. Users
+///   will need to re-run `cargo pmcp auth login` when the access_token
+///   expires on such IdPs. `issuer` is still populated from discovery;
+///   `client_id` is whatever was passed in `OAuthConfig` (or DCR-issued if
+///   DCR fired); `expires_at` captures whatever `expires_in` the token
+///   response provided (or `None` if absent).
+/// - `expires_at`: Absolute unix seconds (not `expires_in` relative). `None`
+///   when the IdP omitted `expires_in` from the token response.
+/// - `scopes`: The scopes the IdP actually granted. May differ from
+///   `config.scopes` (the requested scopes) when the server downgrades or
+///   expands them.
+/// - `issuer`: The effective issuer — caller-provided if present, else the
+///   value discovered from `.well-known/openid-configuration`. Always `Some`
+///   for a successful flow.
+/// - `client_id`: The effective client_id — the DCR-issued id when DCR fired,
+///   or the caller-provided value otherwise. Always populated.
+#[derive(Debug, Clone)]
+pub struct AuthorizationResult {
+    /// Bearer access token.
+    pub access_token: String,
+    /// Refresh token, if the IdP issued one.
+    pub refresh_token: Option<String>,
+    /// Absolute expiration time (unix seconds).
+    pub expires_at: Option<u64>,
+    /// Granted scopes.
+    pub scopes: Vec<String>,
+    /// Effective issuer (caller-provided or discovered).
+    pub issuer: Option<String>,
+    /// Effective client_id (DCR-issued or caller-provided).
+    pub client_id: String,
 }
 
 /// Token cache stored on disk.
@@ -105,6 +198,147 @@ impl OAuthHelper {
             .map_err(|e| Error::internal(format!("Failed to create HTTP client: {e}")))?;
 
         Ok(Self { config, client })
+    }
+
+    /// Perform RFC 7591 Dynamic Client Registration against `registration_endpoint`.
+    ///
+    /// Body is a public PKCE shape (`token_endpoint_auth_method: "none"`, no secret
+    /// requested). `client_name` falls back to `"pmcp-sdk"` when the config value is
+    /// `None`. Non-`https://` endpoints are rejected except for localhost loopback
+    /// variants, guarding against discovery-spoofing. Response body size is capped
+    /// at 1 MiB.
+    async fn do_dynamic_client_registration(
+        &self,
+        registration_endpoint: &str,
+    ) -> Result<crate::server::auth::provider::DcrResponse> {
+        let parsed = Url::parse(registration_endpoint)
+            .map_err(|e| Error::internal(format!("Invalid registration_endpoint URL: {e}")))?;
+        // `url::Url::host_str()` returns IPv6 literals WITH brackets (e.g.
+        // `http://[::1]/register` -> `Some("[::1]")`); match both forms.
+        let scheme_ok = parsed.scheme() == "https"
+            || (parsed.scheme() == "http"
+                && matches!(
+                    parsed.host_str(),
+                    Some("localhost") | Some("127.0.0.1") | Some("::1") | Some("[::1]")
+                ));
+        if !scheme_ok {
+            return Err(Error::internal(format!(
+                "registration_endpoint must be https:// (or http://localhost, \
+                 http://127.0.0.1, http://[::1]) — got {}",
+                registration_endpoint
+            )));
+        }
+
+        let client_name = self
+            .config
+            .client_name
+            .clone()
+            .unwrap_or_else(|| "pmcp-sdk".to_string());
+        // Literal `127.0.0.1` rather than `localhost` — per RFC 8252 §7.3, avoids
+        // browsers resolving `localhost` to `::1` when the listener binds IPv4-only.
+        let redirect_uri = format!("http://127.0.0.1:{}/callback", self.config.redirect_port);
+
+        let request = crate::server::auth::provider::DcrRequest {
+            redirect_uris: vec![redirect_uri],
+            client_name: Some(client_name),
+            client_uri: None,
+            logo_uri: None,
+            contacts: vec![],
+            token_endpoint_auth_method: Some("none".to_string()),
+            grant_types: vec!["authorization_code".to_string()],
+            // `DcrRequest` has `#[serde(skip_serializing_if = "Vec::is_empty")]`;
+            // RFC 7591 §3.1 requires `response_types` in the body, so it must be
+            // non-empty. `"code"` is the authorization-code public-PKCE flow.
+            response_types: vec!["code".to_string()],
+            scope: None,
+            software_id: None,
+            software_version: None,
+            extra: Default::default(),
+        };
+
+        let response = self
+            .client
+            .post(registration_endpoint)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| Error::internal(format!("DCR request failed: {e}")))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::internal(format!(
+                "DCR failed ({}): {}\n\n\
+                 The server rejected dynamic client registration. Pass a \
+                 pre-registered client_id to skip DCR.",
+                status, body
+            )));
+        }
+
+        // reqwest has no direct bytes-limit API — read the body as bytes, enforce
+        // the cap, then parse from slice.
+        const MAX_DCR_RESPONSE_BYTES: usize = 1_048_576; // 1 MiB
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::internal(format!("Failed to read DCR response body: {e}")))?;
+        if bytes.len() > MAX_DCR_RESPONSE_BYTES {
+            return Err(Error::internal(format!(
+                "DCR response exceeds {} byte cap (got {} bytes) — refusing to parse",
+                MAX_DCR_RESPONSE_BYTES,
+                bytes.len()
+            )));
+        }
+        serde_json::from_slice::<crate::server::auth::provider::DcrResponse>(&bytes)
+            .map_err(|e| Error::internal(format!("Failed to parse DCR response: {e}")))
+    }
+
+    /// Resolve the `client_id` for the current OAuth flow, performing DCR
+    /// lazily when all three conditions hold:
+    ///   1. `self.config.dcr_enabled == true`
+    ///   2. `self.config.client_id.is_none()`
+    ///   3. `metadata.registration_endpoint.is_some()`
+    ///
+    /// Returns `Err` with an actionable message when DCR is needed but the
+    /// server does not advertise a `registration_endpoint`.
+    async fn resolve_client_id_for_flow(&self, metadata: &OidcDiscoveryMetadata) -> Result<String> {
+        // Caller-provided client_id skips DCR entirely.
+        if let Some(ref id) = self.config.client_id {
+            return Ok(id.clone());
+        }
+
+        if !self.config.dcr_enabled {
+            return Err(Error::internal(
+                "no client_id configured and dcr_enabled is false — \
+                 provide OAuthConfig::client_id or enable dcr_enabled"
+                    .to_string(),
+            ));
+        }
+
+        match metadata.registration_endpoint.as_ref() {
+            Some(endpoint) => {
+                tracing::info!("Performing Dynamic Client Registration at {}", endpoint);
+                let response = self.do_dynamic_client_registration(endpoint).await?;
+                tracing::info!("DCR succeeded — issued client_id");
+                Ok(response.client_id)
+            },
+            None => Err(Error::internal(
+                "server does not support DCR — pass a pre-registered client_id".to_string(),
+            )),
+        }
+    }
+
+    /// Test-only hook: drive the discovery + DCR resolver path without invoking
+    /// the browser PKCE flow. Used by `tests/oauth_dcr_integration.rs`.
+    ///
+    /// Integration tests under `tests/` compile as a separate crate, so the
+    /// library's `#[cfg(test)]` does not apply. The `oauth` feature gate plus
+    /// `#[doc(hidden)]` and the `test_` prefix discourage external use.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "oauth"))]
+    pub async fn test_resolve_client_id_from_discovery(&self) -> Result<String> {
+        let metadata = self.get_metadata().await?;
+        self.resolve_client_id_for_flow(&metadata).await
     }
 
     /// Extract base URL from MCP server URL.
@@ -187,6 +421,10 @@ impl OAuthHelper {
     }
 
     /// Get or refresh access token, performing OAuth flow if needed.
+    ///
+    /// For callers that only need a bearer-header value. Cache consumers that
+    /// need to persist `refresh_token` / `expires_at` / `issuer` across runs
+    /// should use [`authorize_with_details`](Self::authorize_with_details) instead.
     pub async fn get_access_token(&self) -> Result<String> {
         // Try to load cached token first
         if let Some(ref cache_file) = self.config.cache_file {
@@ -243,6 +481,114 @@ impl OAuthHelper {
         }
     }
 
+    /// Like `get_access_token` but returns the full authorization result for
+    /// cache persistence.
+    ///
+    /// Cache callers (e.g., `cargo pmcp auth login`) should prefer this method;
+    /// simple callers that just need a bearer header can keep using
+    /// `get_access_token`.
+    ///
+    /// Drives DCR lazily when eligible; runs PKCE via the authorization_code
+    /// flow; captures `refresh_token`, `expires_at`, `scopes`, and the
+    /// effective issuer + client_id.
+    ///
+    /// # Device-code fallback
+    ///
+    /// If the authorization-code flow fails and the server advertises a
+    /// `device_authorization_endpoint`, this method falls back to device code
+    /// flow (RFC 8628). In that case, `refresh_token` may be `None` since
+    /// RFC 8628 §3.5 does not require it, and `scopes` falls back to the
+    /// requested scopes when the token response does not echo them.
+    pub async fn authorize_with_details(&self) -> Result<AuthorizationResult> {
+        let metadata = self.get_metadata().await?;
+
+        // Effective issuer: prefer the caller-provided config.issuer; fall back
+        // to discovery metadata.issuer. metadata.issuer is always populated by
+        // OIDC-compliant servers.
+        let effective_issuer = self
+            .config
+            .issuer
+            .clone()
+            .or_else(|| Some(metadata.issuer.clone()));
+
+        // Try authorization code flow first (returns the full TokenResponse).
+        match self.authorization_code_flow_inner(&metadata).await {
+            Ok((token_response, resolved_client_id)) => Ok(Self::build_auth_result(
+                token_response,
+                resolved_client_id,
+                effective_issuer,
+                &self.config.scopes,
+            )),
+            Err(e) => {
+                tracing::warn!("Authorization code flow failed: {}", e);
+
+                // Device flow only returns an access_token string via the legacy
+                // path — `refresh_token` / full `TokenResponse` are unavailable.
+                // See the rustdoc on this function for the device-code caveat.
+                if metadata.device_authorization_endpoint.is_some() {
+                    tracing::info!(
+                        "Trying device code flow (refresh_token may be None per RFC 8628)..."
+                    );
+                    // Resolve client_id the same way authorization_code would.
+                    let resolved_client_id = self.resolve_client_id_for_flow(&metadata).await?;
+                    let access_token = self.device_code_flow_with_metadata(&metadata).await?;
+                    // Device flow returns only the access_token — populate what
+                    // we know, leave refresh_token/expires_at/scopes at defaults.
+                    return Ok(AuthorizationResult {
+                        access_token,
+                        refresh_token: None,
+                        expires_at: None,
+                        scopes: self.config.scopes.clone(),
+                        issuer: effective_issuer,
+                        client_id: resolved_client_id,
+                    });
+                }
+                Err(Error::internal(
+                    "No supported OAuth flow available.\n\
+                     \n\
+                     The server must support either:\n\
+                     - Authorization code flow (authorization_endpoint), or\n\
+                     - Device code flow (device_authorization_endpoint)"
+                        .to_string(),
+                ))
+            },
+        }
+    }
+
+    /// Helper to construct an `AuthorizationResult` from a TokenResponse.
+    fn build_auth_result(
+        token_response: crate::client::auth::TokenResponse,
+        client_id: String,
+        effective_issuer: Option<String>,
+        requested_scopes: &[String],
+    ) -> AuthorizationResult {
+        // Convert `expires_in` (relative seconds) to `expires_at` (absolute unix seconds).
+        let expires_at = token_response.expires_in.map(|ttl| {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            now + ttl
+        });
+
+        // If the server returned a `scope` string, split it; else fall back to
+        // the requested scopes.
+        let granted_scopes = token_response
+            .scope
+            .as_deref()
+            .map(|s| s.split_whitespace().map(String::from).collect::<Vec<_>>())
+            .unwrap_or_else(|| requested_scopes.to_vec());
+
+        AuthorizationResult {
+            access_token: token_response.access_token,
+            refresh_token: token_response.refresh_token,
+            expires_at,
+            scopes: granted_scopes,
+            issuer: effective_issuer,
+            client_id,
+        }
+    }
+
     /// Generate PKCE code verifier (RFC 7636).
     fn generate_code_verifier() -> String {
         let random_bytes: [u8; 32] = rand::rng().random();
@@ -257,23 +603,45 @@ impl OAuthHelper {
         URL_SAFE_NO_PAD.encode(hash)
     }
 
-    /// Perform OAuth authorization code flow with PKCE.
+    /// Perform OAuth authorization code flow with PKCE (public wrapper).
+    ///
+    /// Returns just the access token for the simple `get_access_token` caller.
+    /// Full artifacts (refresh_token, expires_at, scopes, issuer, client_id) are
+    /// available through `authorize_with_details()` via `authorization_code_flow_inner`.
     async fn authorization_code_flow(&self, metadata: &OidcDiscoveryMetadata) -> Result<String> {
+        let (token_response, _client_id) = self.authorization_code_flow_inner(metadata).await?;
+        Ok(token_response.access_token)
+    }
+
+    /// Inner PKCE authorization code flow returning the full token response.
+    ///
+    /// Returns (TokenResponse, resolved_client_id) so `authorize_with_details`
+    /// can populate `AuthorizationResult` fields including refresh_token,
+    /// expires_at, scopes, and the effective client_id.
+    async fn authorization_code_flow_inner(
+        &self,
+        metadata: &OidcDiscoveryMetadata,
+    ) -> Result<(crate::client::auth::TokenResponse, String)> {
         tracing::info!("Starting OAuth authorization code flow...");
+
+        let resolved_client_id = self.resolve_client_id_for_flow(metadata).await?;
 
         // Generate PKCE challenge
         let code_verifier = Self::generate_code_verifier();
         let code_challenge = Self::generate_code_challenge(&code_verifier);
 
-        // Start local callback server on configured port
+        // Start local callback server on configured port.
+        // The advertised URL and the bind address MUST be literal `127.0.0.1`
+        // (not `localhost`), otherwise browsers can resolve `localhost` to `::1`
+        // (IPv6) and hit ERR_CONNECTION_REFUSED on our IPv4-only listener.
         let redirect_port = self.config.redirect_port;
-        let redirect_uri = format!("http://localhost:{}/callback", redirect_port);
+        let redirect_uri = format!("http://127.0.0.1:{}/callback", redirect_port);
 
         let listener = TcpListener::bind(format!("127.0.0.1:{}", redirect_port))
             .await
             .map_err(|e| {
                 Error::internal(format!(
-                    "Failed to bind to localhost:{}.\n\
+                    "Failed to bind to 127.0.0.1:{}.\n\
                      \n\
                      This port may already be in use. Try a different port with:\n\
                      --oauth-redirect-port PORT\n\
@@ -295,7 +663,7 @@ impl OAuthHelper {
 
         auth_url
             .query_pairs_mut()
-            .append_pair("client_id", &self.config.client_id)
+            .append_pair("client_id", &resolved_client_id)
             .append_pair("response_type", "code")
             .append_pair("redirect_uri", &redirect_uri)
             .append_pair("scope", &self.config.scopes.join(" "))
@@ -380,7 +748,7 @@ impl OAuthHelper {
             .exchange_code(
                 &metadata.token_endpoint,
                 &authorization_code,
-                &self.config.client_id,
+                &resolved_client_id,
                 None, // No client secret for public clients
                 &redirect_uri,
                 Some(&code_verifier), // PKCE verifier
@@ -400,7 +768,7 @@ impl OAuthHelper {
                 .await?;
         }
 
-        Ok(token_response.access_token)
+        Ok((token_response, resolved_client_id))
     }
 
     /// Perform OAuth device code flow (with pre-fetched metadata).
@@ -435,6 +803,8 @@ impl OAuthHelper {
         metadata: &OidcDiscoveryMetadata,
         device_auth_endpoint: &str,
     ) -> Result<String> {
+        let resolved_client_id = self.resolve_client_id_for_flow(metadata).await?;
+
         // Step 1: Request device code
         let scope = self.config.scopes.join(" ");
 
@@ -442,7 +812,7 @@ impl OAuthHelper {
             .client
             .post(device_auth_endpoint)
             .form(&[
-                ("client_id", self.config.client_id.as_str()),
+                ("client_id", resolved_client_id.as_str()),
                 ("scope", &scope),
             ])
             .send()
@@ -490,7 +860,7 @@ impl OAuthHelper {
                 .client
                 .post(token_endpoint)
                 .form(&[
-                    ("client_id", self.config.client_id.as_str()),
+                    ("client_id", resolved_client_id.as_str()),
                     ("device_code", &device_auth.device_code),
                     ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
                 ])
@@ -547,11 +917,17 @@ impl OAuthHelper {
         let metadata = self.get_metadata().await?;
         let token_endpoint = &metadata.token_endpoint;
 
+        // Refresh requires a previously-established client_id — DCR is not
+        // re-run on refresh (cached entry implies we already have one).
+        let client_id = self.config.client_id.as_deref().ok_or_else(|| {
+            Error::internal("cannot refresh token without a cached client_id".to_string())
+        })?;
+
         let response = self
             .client
             .post(token_endpoint)
             .form(&[
-                ("client_id", self.config.client_id.as_str()),
+                ("client_id", client_id),
                 ("refresh_token", refresh_token),
                 ("grant_type", "refresh_token"),
             ])
@@ -676,7 +1052,9 @@ pub fn default_cache_path() -> PathBuf {
 /// let config = OAuthConfig {
 ///     issuer: Some("https://auth.example.com".to_string()),
 ///     mcp_server_url: None,
-///     client_id: "my-client".to_string(),
+///     client_id: Some("my-client".to_string()),
+///     client_name: None,
+///     dcr_enabled: false,
 ///     scopes: vec!["openid".to_string()],
 ///     cache_file: None,
 ///     redirect_port: 8080,
@@ -689,4 +1067,498 @@ pub fn default_cache_path() -> PathBuf {
 pub async fn create_oauth_middleware(config: OAuthConfig) -> Result<Arc<HttpMiddlewareChain>> {
     let helper = OAuthHelper::new(config)?;
     helper.create_middleware_chain().await
+}
+
+#[cfg(test)]
+mod oauth_config_tests {
+    use super::*;
+
+    #[test]
+    fn oauth_config_default_has_dcr_enabled_and_none_client_id() {
+        let c = OAuthConfig::default();
+        assert!(
+            c.client_id.is_none(),
+            "default client_id must be None for DCR auto-fire"
+        );
+        assert!(c.dcr_enabled, "default dcr_enabled must be true");
+        assert!(c.client_name.is_none(), "default client_name is None");
+    }
+
+    #[test]
+    fn oauth_config_struct_literal_with_some_client_id_compiles() {
+        let _c = OAuthConfig {
+            issuer: None,
+            mcp_server_url: Some("https://x.example".into()),
+            client_id: Some("my-client".into()),
+            client_name: None,
+            dcr_enabled: false,
+            scopes: vec![],
+            cache_file: None,
+            redirect_port: 8080,
+        };
+    }
+
+    #[test]
+    fn dcr_types_are_reexported() {
+        // Compile-only: verifies pub use lands `DcrRequest` / `DcrResponse`
+        // at `pmcp::client::oauth::*`.
+        let _r: super::DcrRequest = super::DcrRequest {
+            redirect_uris: vec!["http://localhost:8080/callback".into()],
+            client_name: Some("test".into()),
+            client_uri: None,
+            logo_uri: None,
+            contacts: vec![],
+            token_endpoint_auth_method: Some("none".into()),
+            grant_types: vec!["authorization_code".into()],
+            response_types: vec![],
+            scope: None,
+            software_id: None,
+            software_version: None,
+            extra: Default::default(),
+        };
+        let _rsp = super::DcrResponse {
+            client_id: "x".into(),
+            client_secret: None,
+            client_secret_expires_at: None,
+            registration_access_token: None,
+            registration_client_uri: None,
+            token_endpoint_auth_method: None,
+            extra: Default::default(),
+        };
+    }
+}
+
+#[cfg(test)]
+mod dcr_tests {
+    use super::*;
+    use crate::server::auth::oauth2::OidcDiscoveryMetadata;
+
+    /// Construct an OidcDiscoveryMetadata with only the fields we care about
+    /// for DCR tests. OidcDiscoveryMetadata does NOT implement Default, so we
+    /// provide all required fields explicitly.
+    fn metadata(reg: Option<&str>) -> OidcDiscoveryMetadata {
+        OidcDiscoveryMetadata {
+            issuer: "https://issuer.example".into(),
+            authorization_endpoint: "https://issuer.example/auth".into(),
+            token_endpoint: "https://issuer.example/token".into(),
+            jwks_uri: None,
+            userinfo_endpoint: None,
+            registration_endpoint: reg.map(String::from),
+            revocation_endpoint: None,
+            introspection_endpoint: None,
+            device_authorization_endpoint: None,
+            response_types_supported: vec![],
+            grant_types_supported: vec![],
+            scopes_supported: vec![],
+            token_endpoint_auth_methods_supported: vec![],
+            code_challenge_methods_supported: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn dcr_skipped_when_client_id_provided() {
+        let cfg = OAuthConfig {
+            client_id: Some("preset".into()),
+            dcr_enabled: true,
+            ..OAuthConfig::default()
+        };
+        let helper = OAuthHelper::new(cfg).unwrap();
+        let resolved = helper
+            .resolve_client_id_for_flow(&metadata(Some("https://x/register")))
+            .await
+            .unwrap();
+        assert_eq!(resolved, "preset");
+    }
+
+    #[tokio::test]
+    async fn dcr_skipped_when_dcr_disabled_with_client_id() {
+        let cfg = OAuthConfig {
+            client_id: Some("preset".into()),
+            dcr_enabled: false,
+            ..OAuthConfig::default()
+        };
+        let helper = OAuthHelper::new(cfg).unwrap();
+        let resolved = helper
+            .resolve_client_id_for_flow(&metadata(None))
+            .await
+            .unwrap();
+        assert_eq!(resolved, "preset");
+    }
+
+    #[tokio::test]
+    async fn dcr_needed_but_unsupported_errors_with_actionable_message() {
+        let cfg = OAuthConfig {
+            dcr_enabled: true,
+            ..OAuthConfig::default()
+        };
+        let helper = OAuthHelper::new(cfg).unwrap();
+        let err = helper
+            .resolve_client_id_for_flow(&metadata(None))
+            .await
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("server does not support DCR"),
+            "expected actionable DCR-missing message, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dcr_needed_but_disabled_errors_when_client_id_none() {
+        let cfg = OAuthConfig {
+            client_id: None,
+            dcr_enabled: false,
+            ..OAuthConfig::default()
+        };
+        let helper = OAuthHelper::new(cfg).unwrap();
+        let err = helper
+            .resolve_client_id_for_flow(&metadata(Some("https://x/register")))
+            .await
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("dcr_enabled is false"),
+            "expected dcr_enabled=false error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dcr_rejects_http_non_localhost_endpoint() {
+        let cfg = OAuthConfig {
+            dcr_enabled: true,
+            ..OAuthConfig::default()
+        };
+        let helper = OAuthHelper::new(cfg).unwrap();
+        let err = helper
+            .do_dynamic_client_registration("http://attacker.example/register")
+            .await
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("must be https"), "got: {msg}");
+    }
+
+    #[test]
+    fn dcr_request_body_matches_rfc7591_public_pkce_shape() {
+        let req = crate::server::auth::provider::DcrRequest {
+            redirect_uris: vec!["http://localhost:8080/callback".into()],
+            client_name: Some("pmcp-sdk".into()),
+            client_uri: None,
+            logo_uri: None,
+            contacts: vec![],
+            token_endpoint_auth_method: Some("none".into()),
+            grant_types: vec!["authorization_code".into()],
+            response_types: vec![],
+            scope: None,
+            software_id: None,
+            software_version: None,
+            extra: Default::default(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["client_name"], "pmcp-sdk");
+        assert_eq!(
+            v["redirect_uris"],
+            serde_json::json!(["http://localhost:8080/callback"])
+        );
+        assert_eq!(v["grant_types"], serde_json::json!(["authorization_code"]));
+        assert_eq!(v["token_endpoint_auth_method"], "none");
+    }
+
+    #[test]
+    fn dcr_request_body_contains_response_types_code() {
+        // Serde-level guard: `DcrRequest` has
+        // `#[serde(skip_serializing_if = "Vec::is_empty")]` on `response_types`,
+        // so an accidental empty-Vec default would silently drop the field.
+        let req = crate::server::auth::provider::DcrRequest {
+            redirect_uris: vec!["http://localhost:8080/callback".into()],
+            client_name: Some("pmcp-sdk".into()),
+            client_uri: None,
+            logo_uri: None,
+            contacts: vec![],
+            token_endpoint_auth_method: Some("none".into()),
+            grant_types: vec!["authorization_code".into()],
+            response_types: vec!["code".into()],
+            scope: None,
+            software_id: None,
+            software_version: None,
+            extra: Default::default(),
+        };
+        let s = serde_json::to_string(&req).unwrap();
+        assert!(
+            s.contains(r#""response_types":["code"]"#),
+            "RFC 7591 §3.1 response_types missing from wire body: {s}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dcr_advertises_127_0_0_1_redirect_not_localhost() {
+        // Regression guard: advertising `http://localhost:<port>` causes browsers
+        // to resolve to `::1` (IPv6) and miss the IPv4-only callback listener.
+        // The mock only matches when the wire body pins `127.0.0.1`; a regression
+        // back to `localhost` makes this mock return 501 and the DCR call errors.
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/register")
+            .match_body(mockito::Matcher::PartialJsonString(
+                serde_json::json!({
+                    "redirect_uris": ["http://127.0.0.1:8080/callback"]
+                })
+                .to_string(),
+            ))
+            .with_status(201)
+            .with_body(r#"{"client_id":"ok"}"#)
+            .create_async()
+            .await;
+        let helper = OAuthHelper::new(OAuthConfig {
+            dcr_enabled: true,
+            redirect_port: 8080,
+            ..OAuthConfig::default()
+        })
+        .unwrap();
+        let result = helper
+            .do_dynamic_client_registration(&format!("{}/register", server.url()))
+            .await;
+        assert!(
+            result.is_ok(),
+            "DCR body did not pin 127.0.0.1 redirect_uri"
+        );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn dcr_accepts_ipv6_loopback_registration_endpoint() {
+        // The guard must accept `[::1]` alongside `localhost` and `127.0.0.1`.
+        // It rejects BEFORE the HTTP call, so a connection failure on port 9
+        // is the expected non-scheme-guard error here.
+        let cfg = OAuthConfig {
+            dcr_enabled: true,
+            ..OAuthConfig::default()
+        };
+        let helper = OAuthHelper::new(cfg).unwrap();
+        let err = helper
+            .do_dynamic_client_registration("http://[::1]:9/register")
+            .await
+            .unwrap_err();
+        let msg = format!("{err}");
+        // Must NOT be the scheme-guard error — the guard passed, we only
+        // failed on the downstream HTTP call (port 9 is unreachable).
+        assert!(
+            !msg.contains("must be https"),
+            "scheme guard should accept http://[::1] but rejected: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dcr_accepts_http_localhost_registration_endpoint() {
+        let cfg = OAuthConfig {
+            dcr_enabled: true,
+            ..OAuthConfig::default()
+        };
+        let helper = OAuthHelper::new(cfg).unwrap();
+        let err = helper
+            .do_dynamic_client_registration("http://localhost:9/register")
+            .await
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            !msg.contains("must be https"),
+            "scheme guard should accept http://localhost but rejected: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dcr_accepts_http_ipv4_loopback_registration_endpoint() {
+        let cfg = OAuthConfig {
+            dcr_enabled: true,
+            ..OAuthConfig::default()
+        };
+        let helper = OAuthHelper::new(cfg).unwrap();
+        let err = helper
+            .do_dynamic_client_registration("http://127.0.0.1:9/register")
+            .await
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            !msg.contains("must be https"),
+            "scheme guard should accept http://127.0.0.1 but rejected: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn authorize_with_details_fails_cleanly_without_server() {
+        // Unit-test scope: verify the method signature compiles and returns
+        // an error when no real server is reachable (not a behavior test —
+        // full behavior is in the mockito integration test, Task 1.3).
+        let cfg = OAuthConfig {
+            mcp_server_url: Some("http://localhost:1/nonexistent".into()),
+            client_id: Some("x".into()),
+            dcr_enabled: false,
+            ..OAuthConfig::default()
+        };
+        let helper = OAuthHelper::new(cfg).unwrap();
+        let err = helper.authorize_with_details().await.unwrap_err();
+        // Any error path is acceptable here — the test ensures no panic.
+        let _ = format!("{err}");
+    }
+
+    #[test]
+    fn authorization_result_struct_has_expected_fields() {
+        // Compile-time check: every required field is present and public.
+        let _r = AuthorizationResult {
+            access_token: "a".into(),
+            refresh_token: Some("r".into()),
+            expires_at: Some(1),
+            scopes: vec!["openid".into()],
+            issuer: Some("https://i.example".into()),
+            client_id: "c".into(),
+        };
+    }
+
+    #[test]
+    fn build_auth_result_converts_expires_in_to_expires_at() {
+        let token = crate::client::auth::TokenResponse {
+            access_token: "a".into(),
+            token_type: "Bearer".into(),
+            expires_in: Some(3600),
+            refresh_token: Some("r".into()),
+            scope: Some("openid profile".into()),
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let r = OAuthHelper::build_auth_result(
+            token,
+            "c1".into(),
+            Some("https://i.example".into()),
+            &["openid".into()],
+        );
+        assert_eq!(r.client_id, "c1");
+        assert_eq!(r.refresh_token.as_deref(), Some("r"));
+        assert_eq!(r.issuer.as_deref(), Some("https://i.example"));
+        assert_eq!(r.scopes, vec!["openid".to_string(), "profile".into()]);
+        let expires_at = r.expires_at.expect("expires_at populated");
+        assert!(
+            expires_at >= now + 3599 && expires_at <= now + 3601,
+            "expires_at ({}) should be approximately now+3600 ({})",
+            expires_at,
+            now + 3600
+        );
+    }
+
+    #[test]
+    fn build_auth_result_falls_back_to_requested_scopes_when_no_grant() {
+        let token = crate::client::auth::TokenResponse {
+            access_token: "a".into(),
+            token_type: "Bearer".into(),
+            expires_in: None,
+            refresh_token: None,
+            scope: None,
+        };
+        let requested = vec!["openid".to_string(), "email".to_string()];
+        let r = OAuthHelper::build_auth_result(token, "c".into(), None, &requested);
+        assert_eq!(r.scopes, requested);
+        assert!(r.expires_at.is_none());
+        assert!(r.refresh_token.is_none());
+    }
+}
+
+#[cfg(test)]
+mod dcr_proptest {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn arb_dcr_request() -> impl Strategy<Value = crate::server::auth::provider::DcrRequest> {
+        (
+            prop::collection::vec("[a-z][a-z0-9-]{2,30}", 1..3),
+            prop::option::of("[a-zA-Z][a-zA-Z0-9 _-]{1,40}"),
+            prop::option::of(
+                prop::string::string_regex("(none|client_secret_basic|client_secret_post)")
+                    .unwrap(),
+            ),
+        )
+            .prop_map(|(uris, name, auth_method)| {
+                let redirect_uris = uris
+                    .into_iter()
+                    .map(|u| format!("http://localhost:8080/{u}"))
+                    .collect();
+                crate::server::auth::provider::DcrRequest {
+                    redirect_uris,
+                    client_name: name,
+                    client_uri: None,
+                    logo_uri: None,
+                    contacts: vec![],
+                    token_endpoint_auth_method: auth_method,
+                    grant_types: vec!["authorization_code".into()],
+                    response_types: vec!["code".into()],
+                    scope: None,
+                    software_id: None,
+                    software_version: None,
+                    extra: Default::default(),
+                }
+            })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+        #[test]
+        fn dcr_request_serde_roundtrip(req in arb_dcr_request()) {
+            let v = serde_json::to_value(&req).unwrap();
+            let back: crate::server::auth::provider::DcrRequest =
+                serde_json::from_value(v).unwrap();
+            prop_assert_eq!(req.redirect_uris, back.redirect_uris);
+            prop_assert_eq!(req.client_name, back.client_name);
+            prop_assert_eq!(req.token_endpoint_auth_method, back.token_endpoint_auth_method);
+        }
+
+        #[test]
+        fn oauth_config_builder_allows_all_combinations(
+            has_id in any::<bool>(),
+            has_name in any::<bool>(),
+            dcr in any::<bool>(),
+        ) {
+            let cfg = OAuthConfig {
+                client_id: has_id.then(|| "id".into()),
+                client_name: has_name.then(|| "name".into()),
+                dcr_enabled: dcr,
+                mcp_server_url: Some("https://x.example".into()),
+                ..OAuthConfig::default()
+            };
+            OAuthHelper::new(cfg).unwrap();
+        }
+    }
+}
+
+// In-tree proptest smoke check for DCR response parsing. The authoritative
+// robustness gate is the cargo-fuzz target at `fuzz/fuzz_targets/dcr_response_parser.rs`
+// (CLAUDE.md ALWAYS / FUZZ Testing). This module exists for fast per-PR
+// regression coverage that runs as part of `cargo test`.
+#[cfg(test)]
+mod dcr_parser_fuzz {
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+        #[test]
+        fn parser_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..4096)) {
+            // Must return Result, never panic. Error paths are acceptable.
+            let _ = serde_json::from_slice::<
+                crate::server::auth::provider::DcrResponse
+            >(&bytes);
+        }
+
+        #[test]
+        fn parser_accepts_minimal_valid_response(
+            id in "[a-zA-Z0-9-]{8,40}",
+            has_secret in any::<bool>(),
+        ) {
+            let mut v = serde_json::json!({"client_id": id});
+            if has_secret {
+                v["client_secret"] = serde_json::json!("s3cret");
+            }
+            let parsed: crate::server::auth::provider::DcrResponse =
+                serde_json::from_value(v).unwrap();
+            prop_assert_eq!(parsed.client_id, id);
+            prop_assert_eq!(parsed.client_secret.is_some(), has_secret);
+        }
+    }
 }

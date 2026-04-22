@@ -25,8 +25,9 @@ pub struct LandingConfig {
 
     /// Sign-up flow configuration. The landing template's `/signup` route
     /// redirects to the server's Cognito hosted UI; this controls where the
-    /// user lands afterwards. Consumed by the platform at deploy time and
-    /// injected into the Next.js build as `NEXT_PUBLIC_SIGNUP_REDIRECT_AFTER`.
+    /// user lands afterwards. Consumed by the platform at deploy time, then
+    /// served by the platform at runtime via `GET /landing-config` and consumed
+    /// by the template's `useLandingConfig` hook.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signup: Option<SignupConfig>,
 }
@@ -177,7 +178,9 @@ fn validate_hex_color(color: &str, field: &str) -> Result<()> {
 /// Rejects absolute URLs (`http://...`, `https://...`), protocol-relative URLs
 /// (`//evil.com/...`), and anything that doesn't start with a single `/`.
 /// This prevents the value from being used as an open-redirect vector when
-/// the landing template consumes `NEXT_PUBLIC_SIGNUP_REDIRECT_AFTER`.
+/// the landing template reads the resolved redirect target from `/landing-config` at
+/// runtime; this TOML value is what `deploy-landing` writes into
+/// `ServerOAuthConfig::signup_redirect_after`, which `/landing-config` returns.
 fn validate_relative_path(path: &str, field: &str) -> Result<()> {
     if !path.starts_with('/') {
         anyhow::bail!(
@@ -440,9 +443,10 @@ server_name = "example"
         assert!(config.validate().is_ok());
     }
 
-    /// Regression test for CR-02: `[signup]` section must round-trip through
-    /// TOML so the platform deploy-landing Lambda can read `redirect_after`
-    /// and inject `NEXT_PUBLIC_SIGNUP_REDIRECT_AFTER` into the build env.
+    /// Regression test for CR-02/CR-03: `[signup]` section must round-trip through
+    /// TOML so the platform `deploy-landing` Lambda can read `redirect_after` and
+    /// write it into `ServerOAuthConfig::signup_redirect_after`; the runtime
+    /// `/landing-config` endpoint returns that value to the browser.
     #[test]
     fn test_signup_section_round_trips_through_toml() {
         let toml = r#"

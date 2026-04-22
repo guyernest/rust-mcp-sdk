@@ -14,9 +14,9 @@ use crate::types::{
     GetPromptRequest, GetPromptResult, Implementation, InitializeRequest, InitializeResult,
     ListPromptsRequest, ListPromptsResult, ListResourceTemplatesRequest,
     ListResourceTemplatesResult, ListResourcesRequest, ListResourcesResult, ListToolsRequest,
-    ListToolsResult, LoggingLevel, Notification, ProgressNotification, ReadResourceRequest,
-    ReadResourceResult, Request, RequestId, ServerCapabilities, SubscribeRequest,
-    UnsubscribeRequest,
+    ListToolsResult, LoggingLevel, Notification, ProgressNotification, PromptInfo,
+    ReadResourceRequest, ReadResourceResult, Request, RequestId, ResourceInfo, ResourceTemplate,
+    ServerCapabilities, SubscribeRequest, ToolInfo, UnsubscribeRequest,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -39,7 +39,10 @@ pub mod http_middleware;
 #[cfg(all(not(target_arch = "wasm32"), feature = "oauth"))]
 pub mod oauth;
 pub mod oauth_middleware;
+mod options;
 pub mod transport;
+
+pub use options::ClientOptions;
 
 /// Response from a task-augmented `tools/call`.
 ///
@@ -68,6 +71,7 @@ pub struct Client<T: Transport> {
     info: Implementation,
     notification_tx: Option<mpsc::Sender<Notification>>,
     active_requests: Arc<RwLock<HashMap<RequestId, oneshot::Sender<()>>>>,
+    options: ClientOptions,
 }
 
 impl<T: Transport> std::fmt::Debug for Client<T> {
@@ -131,6 +135,7 @@ impl<T: Transport> Client<T> {
             info: client_info,
             notification_tx: None,
             active_requests: Arc::new(RwLock::new(HashMap::new())),
+            options: ClientOptions::default(),
         }
     }
 
@@ -173,6 +178,46 @@ impl<T: Transport> Client<T> {
             info: client_info,
             notification_tx: None,
             active_requests: Arc::new(RwLock::new(HashMap::new())),
+            options: ClientOptions::default(),
+        }
+    }
+
+    /// Construct a client with caller-supplied [`ClientOptions`].
+    ///
+    /// Mirrors [`Self::new`] but wires in a [`ClientOptions`] value so that
+    /// [`Self::list_all_tools`] / [`Self::list_all_prompts`] / etc. honour a
+    /// custom `max_iterations` cap.
+    ///
+    /// ## `ClientBuilder` parity
+    ///
+    /// [`ClientBuilder`] does not currently expose a `.client_options()` setter.
+    /// If you need a custom [`ClientOptions`], construct the client via
+    /// [`Self::with_client_options`] directly.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # async fn ex<T: pmcp::shared::Transport + Send + Sync + 'static>(transport: T) -> pmcp::Result<()> {
+    /// use pmcp::{Client, ClientOptions};
+    ///
+    /// let opts = ClientOptions::default().with_max_iterations(50);
+    /// let _client = Client::with_client_options(transport, opts);
+    /// # Ok(()) }
+    /// ```
+    pub fn with_client_options(transport: T, options: ClientOptions) -> Self {
+        Self {
+            transport: Arc::new(RwLock::new(transport)),
+            protocol: Arc::new(RwLock::new(Protocol::new(ProtocolOptions::default()))),
+            middleware_chain: Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
+            capabilities: None,
+            server_capabilities: None,
+            server_version: None,
+            instructions: None,
+            initialized: false,
+            info: Implementation::default(),
+            notification_tx: None,
+            active_requests: Arc::new(RwLock::new(HashMap::new())),
+            options,
         }
     }
 
@@ -848,6 +893,159 @@ impl<T: Transport> Client<T> {
         }
     }
 
+    // === Typed call helpers ===
+
+    /// Call a tool with typed, serializable arguments.
+    ///
+    /// Serializes `args` via `serde_json::to_value` and delegates to
+    /// [`Self::call_tool`]. Serialization failures are mapped to
+    /// [`Error::validation`] with the underlying serde error message.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # async fn ex<T: pmcp::shared::Transport + Send + Sync + 'static>(mut client: pmcp::Client<T>) -> pmcp::Result<()> {
+    /// use serde::Serialize;
+    ///
+    /// #[derive(Serialize)]
+    /// struct Search { query: String, limit: u32 }
+    ///
+    /// let _ = client.call_tool_typed(
+    ///     "search",
+    ///     &Search { query: "rust mcp".into(), limit: 10 },
+    /// ).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn call_tool_typed<A: serde::Serialize + ?Sized + Sync>(
+        &self,
+        name: impl Into<String> + Send,
+        args: &A,
+    ) -> Result<CallToolResult> {
+        let value = serde_json::to_value(args)
+            .map_err(|e| Error::validation(format!("call_tool_typed arguments: {e}")))?;
+        self.call_tool(name.into(), value).await
+    }
+
+    /// Typed sibling of [`Self::call_tool_with_task`].
+    ///
+    /// Delegates to the two-argument [`Self::call_tool_with_task`]; there is no
+    /// `TaskMetadata` parameter on the live client API, so none is exposed here.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # async fn ex<T: pmcp::shared::Transport + Send + Sync + 'static>(mut client: pmcp::Client<T>) -> pmcp::Result<()> {
+    /// use serde::Serialize;
+    /// #[derive(Serialize)]
+    /// struct Args { file: String }
+    /// let _ = client.call_tool_typed_with_task("scan", &Args { file: "a.rs".into() }).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn call_tool_typed_with_task<A: serde::Serialize + ?Sized + Sync>(
+        &self,
+        name: impl Into<String> + Send,
+        args: &A,
+    ) -> Result<ToolCallResponse> {
+        let value = serde_json::to_value(args)
+            .map_err(|e| Error::validation(format!("call_tool_typed_with_task arguments: {e}")))?;
+        self.call_tool_with_task(name.into(), value).await
+    }
+
+    /// Typed sibling of [`Self::call_tool_and_poll`].
+    ///
+    /// Delegates to the three-argument [`Self::call_tool_and_poll`]
+    /// (`name, arguments, max_polls: usize`). There is no `poll_interval` or
+    /// `TaskMetadata` parameter on the live client API — the server-supplied
+    /// `poll_interval` is honoured internally by `call_tool_and_poll`.
+    ///
+    /// `max_polls = 0` means unlimited polls, matching the sibling's semantics.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # async fn ex<T: pmcp::shared::Transport + Send + Sync + 'static>(mut client: pmcp::Client<T>) -> pmcp::Result<()> {
+    /// use serde::Serialize;
+    /// #[derive(Serialize)]
+    /// struct Args { job: String }
+    /// let _ = client.call_tool_typed_and_poll(
+    ///     "build",
+    ///     &Args { job: "nightly".into() },
+    ///     30, // max_polls
+    /// ).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn call_tool_typed_and_poll<A: serde::Serialize + ?Sized + Sync>(
+        &self,
+        name: impl Into<String> + Send,
+        args: &A,
+        max_polls: usize,
+    ) -> Result<CallToolResult> {
+        let value = serde_json::to_value(args)
+            .map_err(|e| Error::validation(format!("call_tool_typed_and_poll arguments: {e}")))?;
+        self.call_tool_and_poll(name.into(), value, max_polls).await
+    }
+
+    /// Get a prompt with typed, serializable arguments.
+    ///
+    /// Serializes `args` to a JSON object, then coerces each leaf to a `String`
+    /// for the wire-level `HashMap<String, String>` arguments:
+    /// - `null` entries are omitted
+    /// - `string` entries pass through unchanged (no JSON-quoting)
+    /// - `number` and `bool` entries use `Display` (e.g. `42`, `true`)
+    /// - `array` and `object` entries are re-serialized via
+    ///   [`serde_json::to_string`]
+    ///
+    /// Non-object top-level serializations are rejected with
+    /// [`Error::validation`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # async fn ex<T: pmcp::shared::Transport + Send + Sync + 'static>(mut client: pmcp::Client<T>) -> pmcp::Result<()> {
+    /// use serde::Serialize;
+    ///
+    /// #[derive(Serialize)]
+    /// struct SummaryArgs { topic: String, length: u32 }
+    ///
+    /// let _ = client.get_prompt_typed(
+    ///     "summarize",
+    ///     &SummaryArgs { topic: "rust async".into(), length: 200 },
+    /// ).await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn get_prompt_typed<A: serde::Serialize + ?Sized + Sync>(
+        &self,
+        name: impl Into<String> + Send,
+        args: &A,
+    ) -> Result<GetPromptResult> {
+        let value = serde_json::to_value(args)
+            .map_err(|e| Error::validation(format!("get_prompt_typed arguments: {e}")))?;
+        let serde_json::Value::Object(obj) = value else {
+            return Err(Error::validation(
+                "prompts/get arguments must serialize to a JSON object",
+            ));
+        };
+        let mut out: HashMap<String, String> = HashMap::with_capacity(obj.len());
+        for (k, v) in obj {
+            match v {
+                serde_json::Value::Null => {},
+                serde_json::Value::String(s) => {
+                    out.insert(k, s);
+                },
+                serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+                    out.insert(k, v.to_string());
+                },
+                serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+                    let nested = serde_json::to_string(&v).map_err(|e| {
+                        Error::validation(format!("get_prompt_typed nested arg {k}: {e}"))
+                    })?;
+                    out.insert(k, nested);
+                },
+            }
+        }
+        self.get_prompt(name.into(), out).await
+    }
+
     /// List available resources.
     ///
     /// Retrieves information about all resources available on the server, including
@@ -966,6 +1164,183 @@ impl<T: Transport> Client<T> {
                 Err(Error::from_jsonrpc_error(error))
             },
         }
+    }
+
+    // === Auto-paginating list helpers ===
+
+    /// List all tools across all pages, auto-paginating on `next_cursor`.
+    ///
+    /// Loops calling [`Self::list_tools`], terminating when the server returns
+    /// `next_cursor: None`. Safety cap: if the loop runs more than
+    /// `self.options.max_iterations` iterations (default `100`), returns
+    /// [`Error::Validation`] instead of continuing or silently truncating.
+    ///
+    /// Empty-string cursors (`Some("")`) do NOT terminate the loop — only
+    /// `None` does. This matches the MCP spec, which treats the cursor as an
+    /// opaque server token and does not ascribe meaning to the empty string.
+    ///
+    /// # Memory
+    ///
+    /// This helper accumulates **all pages** in memory before returning. For
+    /// very large servers, prefer the paginated single-page
+    /// [`Self::list_tools`] and stream the output yourself — this helper is a
+    /// convenience API and will amplify memory usage proportional to the
+    /// total tool count.
+    ///
+    /// # Errors
+    ///
+    /// - Any error surfaced by [`Self::list_tools`] propagates unchanged.
+    /// - Cap exceeded → `Error::Validation("list_all_tools exceeded max_iterations cap of N pages")`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # async fn ex<T: pmcp::shared::Transport + Send + Sync + 'static>(mut client: pmcp::Client<T>) -> pmcp::Result<()> {
+    /// let tools = client.list_all_tools().await?;
+    /// println!("discovered {} tools", tools.len());
+    /// # Ok(()) }
+    /// ```
+    pub async fn list_all_tools(&self) -> Result<Vec<ToolInfo>> {
+        let cap = self.options.max_iterations;
+        let mut out: Vec<ToolInfo> = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..cap {
+            let page = self.list_tools(cursor).await?;
+            out.extend(page.tools);
+            match page.next_cursor {
+                None => return Ok(out),
+                Some(next) => cursor = Some(next),
+            }
+        }
+        Err(Error::validation(format!(
+            "list_all_tools exceeded max_iterations cap of {cap} pages"
+        )))
+    }
+
+    /// List all prompts across all pages, auto-paginating on `next_cursor`.
+    ///
+    /// Semantics identical to [`Self::list_all_tools`]: bounded by
+    /// `self.options.max_iterations`, terminates only on `next_cursor: None`,
+    /// returns [`Error::Validation`] on cap exceeded.
+    ///
+    /// # Memory
+    ///
+    /// Accumulates all pages in memory; prefer [`Self::list_prompts`] for
+    /// very large servers.
+    ///
+    /// # Errors
+    ///
+    /// - Any error surfaced by [`Self::list_prompts`] propagates unchanged.
+    /// - Cap exceeded → `Error::Validation("list_all_prompts exceeded max_iterations cap of N pages")`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # async fn ex<T: pmcp::shared::Transport + Send + Sync + 'static>(mut client: pmcp::Client<T>) -> pmcp::Result<()> {
+    /// let prompts = client.list_all_prompts().await?;
+    /// println!("discovered {} prompts", prompts.len());
+    /// # Ok(()) }
+    /// ```
+    pub async fn list_all_prompts(&self) -> Result<Vec<PromptInfo>> {
+        let cap = self.options.max_iterations;
+        let mut out: Vec<PromptInfo> = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..cap {
+            let page = self.list_prompts(cursor).await?;
+            out.extend(page.prompts);
+            match page.next_cursor {
+                None => return Ok(out),
+                Some(next) => cursor = Some(next),
+            }
+        }
+        Err(Error::validation(format!(
+            "list_all_prompts exceeded max_iterations cap of {cap} pages"
+        )))
+    }
+
+    /// List all resources across all pages, auto-paginating on `next_cursor`.
+    ///
+    /// Semantics identical to [`Self::list_all_tools`]: bounded by
+    /// `self.options.max_iterations`, terminates only on `next_cursor: None`,
+    /// returns [`Error::Validation`] on cap exceeded.
+    ///
+    /// # Memory
+    ///
+    /// Accumulates all pages in memory; prefer [`Self::list_resources`] for
+    /// very large servers.
+    ///
+    /// # Errors
+    ///
+    /// - Any error surfaced by [`Self::list_resources`] propagates unchanged.
+    /// - Cap exceeded → `Error::Validation("list_all_resources exceeded max_iterations cap of N pages")`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # async fn ex<T: pmcp::shared::Transport + Send + Sync + 'static>(mut client: pmcp::Client<T>) -> pmcp::Result<()> {
+    /// let resources = client.list_all_resources().await?;
+    /// println!("discovered {} resources", resources.len());
+    /// # Ok(()) }
+    /// ```
+    pub async fn list_all_resources(&self) -> Result<Vec<ResourceInfo>> {
+        let cap = self.options.max_iterations;
+        let mut out: Vec<ResourceInfo> = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..cap {
+            let page = self.list_resources(cursor).await?;
+            out.extend(page.resources);
+            match page.next_cursor {
+                None => return Ok(out),
+                Some(next) => cursor = Some(next),
+            }
+        }
+        Err(Error::validation(format!(
+            "list_all_resources exceeded max_iterations cap of {cap} pages"
+        )))
+    }
+
+    /// List all resource templates across all pages, auto-paginating on
+    /// `next_cursor`.
+    ///
+    /// Uses the distinct `resources/templates/list` capability path (all
+    /// other `list_all_*` helpers hit their own methods). Semantics otherwise
+    /// identical to [`Self::list_all_tools`]: bounded by
+    /// `self.options.max_iterations`, terminates only on `next_cursor: None`,
+    /// returns [`Error::Validation`] on cap exceeded.
+    ///
+    /// # Memory
+    ///
+    /// Accumulates all pages in memory; prefer
+    /// [`Self::list_resource_templates`] for very large servers.
+    ///
+    /// # Errors
+    ///
+    /// - Any error surfaced by [`Self::list_resource_templates`] propagates unchanged.
+    /// - Cap exceeded → `Error::Validation("list_all_resource_templates exceeded max_iterations cap of N pages")`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # async fn ex<T: pmcp::shared::Transport + Send + Sync + 'static>(mut client: pmcp::Client<T>) -> pmcp::Result<()> {
+    /// let templates = client.list_all_resource_templates().await?;
+    /// println!("discovered {} templates", templates.len());
+    /// # Ok(()) }
+    /// ```
+    pub async fn list_all_resource_templates(&self) -> Result<Vec<ResourceTemplate>> {
+        let cap = self.options.max_iterations;
+        let mut out: Vec<ResourceTemplate> = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..cap {
+            let page = self.list_resource_templates(cursor).await?;
+            out.extend(page.resource_templates);
+            match page.next_cursor {
+                None => return Ok(out),
+                Some(next) => cursor = Some(next),
+            }
+        }
+        Err(Error::validation(format!(
+            "list_all_resource_templates exceeded max_iterations cap of {cap} pages"
+        )))
     }
 
     /// Read a resource.
@@ -1826,6 +2201,7 @@ impl<T: Transport> Clone for Client<T> {
             info: self.info.clone(),
             notification_tx: self.notification_tx.clone(),
             active_requests: self.active_requests.clone(),
+            options: self.options.clone(),
         }
     }
 }
@@ -1905,6 +2281,111 @@ mod tests {
         let client = Client::with_info(transport, info);
         assert_eq!(client.info.name, "test-client");
         assert_eq!(client.info.version, "1.0.0");
+    }
+
+    // === ClientOptions wiring tests ===
+
+    #[test]
+    fn test_client_new_uses_default_options() {
+        let transport = MockTransport::new();
+        let client = Client::new(transport);
+        assert_eq!(client.options.max_iterations, 100);
+    }
+
+    #[test]
+    fn test_client_with_client_options_threads_value() {
+        let transport = MockTransport::new();
+        let opts = ClientOptions {
+            max_iterations: 7,
+            ..Default::default()
+        };
+        let client = Client::with_client_options(transport, opts);
+        assert_eq!(client.options.max_iterations, 7);
+    }
+
+    #[test]
+    fn test_client_with_options_preserves_default_client_options() {
+        let transport = MockTransport::new();
+        let client = Client::with_options(
+            transport,
+            Implementation::default(),
+            ProtocolOptions::default(),
+        );
+        assert_eq!(client.options.max_iterations, 100);
+    }
+
+    // === Typed-helper unit tests ===
+
+    #[tokio::test]
+    async fn test_call_tool_typed_serialize_error_maps_to_validation() {
+        use serde::Serialize;
+        // A type whose Serialize impl always errors.
+        struct Bad;
+        impl Serialize for Bad {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                _: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("nope"))
+            }
+        }
+        let transport = MockTransport::new();
+        let client = Client::new(transport);
+        let err = client.call_tool_typed("any", &Bad).await.unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("call_tool_typed arguments"), "got: {msg}");
+        assert!(msg.contains("nope"), "serde error must surface: {msg}");
+        assert!(matches!(err, Error::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn test_get_prompt_typed_non_object_rejected() {
+        let transport = MockTransport::new();
+        let client = Client::new(transport);
+        // Vec<i32> serializes to Value::Array, which is non-object.
+        let err = client
+            .get_prompt_typed("p", &vec![1, 2, 3])
+            .await
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("must serialize to a JSON object"),
+            "got: {msg}"
+        );
+        assert!(matches!(err, Error::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn test_get_prompt_typed_string_values_not_quoted() {
+        use serde::Serialize;
+        #[derive(Serialize)]
+        struct Args {
+            topic: String,
+            length: u32,
+            verbose: bool,
+            ignored: Option<String>,
+        }
+        // Unit-test the coercion directly by building the intermediate HashMap
+        // in-situ. Wire round-trip is covered in tests/list_all_pagination.rs;
+        // here we only care that the leaf-coercion rules are honoured.
+        let args = Args {
+            topic: "rust".into(),
+            length: 200,
+            verbose: true,
+            ignored: None,
+        };
+        let value = serde_json::to_value(&args).unwrap();
+        let obj = value.as_object().unwrap().clone();
+        assert_eq!(
+            obj.get("topic").unwrap(),
+            &serde_json::Value::String("rust".into())
+        );
+        assert_eq!(obj.get("length").unwrap().to_string(), "200");
+        assert_eq!(obj.get("verbose").unwrap().to_string(), "true");
+        assert!(matches!(
+            obj.get("ignored").unwrap(),
+            serde_json::Value::Null
+        ));
     }
 
     #[test]
@@ -2227,5 +2708,252 @@ mod tests {
         assert!(result.is_ok());
         let contents = result.unwrap();
         assert_eq!(contents.contents.len(), 1);
+    }
+
+    // === list_all_* in-module tests ===
+
+    fn list_all_init_response() -> TransportMessage {
+        TransportMessage::Response(JSONRPCResponse {
+            jsonrpc: "2.0".to_string(),
+            id: RequestId::from(1i64),
+            payload: ResponsePayload::Result(json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {
+                    "tools": {},
+                    "prompts": {},
+                    "resources": {},
+                },
+                "serverInfo": { "name": "test-server", "version": "1.0.0" }
+            })),
+        })
+    }
+
+    fn page_response<V: Into<serde_json::Value>>(
+        id: i64,
+        items_field: &str,
+        items: V,
+        next_cursor: Option<&str>,
+    ) -> TransportMessage {
+        let mut payload = serde_json::Map::new();
+        payload.insert(items_field.to_string(), items.into());
+        if let Some(c) = next_cursor {
+            payload.insert("nextCursor".to_string(), json!(c));
+        }
+        TransportMessage::Response(JSONRPCResponse {
+            jsonrpc: "2.0".to_string(),
+            id: RequestId::from(id),
+            payload: ResponsePayload::Result(serde_json::Value::Object(payload)),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_list_all_tools_single_page() {
+        let page = page_response(
+            2,
+            "tools",
+            json!([{"name": "only", "description": "t", "inputSchema": {}}]),
+            None,
+        );
+        // MockTransport pops from tail; push reversed + init last.
+        let transport = MockTransport::with_responses(vec![page, list_all_init_response()]);
+        let mut client = Client::new(transport);
+        let _ = client.initialize(ClientCapabilities::minimal()).await;
+        let all = client.list_all_tools().await.expect("ok");
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].name, "only");
+    }
+
+    #[tokio::test]
+    async fn test_list_all_tools_three_pages_in_order() {
+        let p1 = page_response(
+            2,
+            "tools",
+            json!([{"name": "a", "description": "t", "inputSchema": {}}]),
+            Some("p2"),
+        );
+        let p2 = page_response(
+            3,
+            "tools",
+            json!([{"name": "b", "description": "t", "inputSchema": {}}]),
+            Some("p3"),
+        );
+        let p3 = page_response(
+            4,
+            "tools",
+            json!([{"name": "c", "description": "t", "inputSchema": {}}]),
+            None,
+        );
+        // Reverse-push: pages last-to-first, init last.
+        let transport = MockTransport::with_responses(vec![p3, p2, p1, list_all_init_response()]);
+        let mut client = Client::new(transport);
+        let _ = client.initialize(ClientCapabilities::minimal()).await;
+        let all = client.list_all_tools().await.expect("ok");
+        let names: Vec<_> = all.into_iter().map(|t| t.name).collect();
+        assert_eq!(names, vec!["a", "b", "c"]);
+    }
+
+    #[tokio::test]
+    async fn test_list_all_tools_cap_enforced() {
+        // max_iterations=3, server emits 4 pages all with Some(_).
+        let p1 = page_response(
+            2,
+            "tools",
+            json!([{"name": "a", "description": "t", "inputSchema": {}}]),
+            Some("p2"),
+        );
+        let p2 = page_response(
+            3,
+            "tools",
+            json!([{"name": "b", "description": "t", "inputSchema": {}}]),
+            Some("p3"),
+        );
+        let p3 = page_response(
+            4,
+            "tools",
+            json!([{"name": "c", "description": "t", "inputSchema": {}}]),
+            Some("p4"),
+        );
+        let p4 = page_response(
+            5,
+            "tools",
+            json!([{"name": "d", "description": "t", "inputSchema": {}}]),
+            Some("p5"),
+        );
+        let transport =
+            MockTransport::with_responses(vec![p4, p3, p2, p1, list_all_init_response()]);
+        let opts = ClientOptions {
+            max_iterations: 3,
+            ..Default::default()
+        };
+        let mut client = Client::with_client_options(transport, opts);
+        let _ = client.initialize(ClientCapabilities::minimal()).await;
+        let err = client.list_all_tools().await.unwrap_err();
+        let msg = format!("{err}");
+        assert!(matches!(err, Error::Validation(_)), "got: {msg}");
+        assert!(msg.contains("list_all_tools"), "method name missing: {msg}");
+        assert!(msg.contains('3'), "cap value missing: {msg}");
+    }
+
+    #[tokio::test]
+    async fn test_list_all_tools_empty_string_cursor_continues() {
+        // First page has next_cursor: Some("") — MUST continue the loop.
+        let p1 = page_response(
+            2,
+            "tools",
+            json!([{"name": "a", "description": "t", "inputSchema": {}}]),
+            Some(""),
+        );
+        let p2 = page_response(
+            3,
+            "tools",
+            json!([{"name": "b", "description": "t", "inputSchema": {}}]),
+            None,
+        );
+        let transport = MockTransport::with_responses(vec![p2, p1, list_all_init_response()]);
+        let mut client = Client::new(transport);
+        let _ = client.initialize(ClientCapabilities::minimal()).await;
+        let all = client.list_all_tools().await.expect("ok");
+        let names: Vec<_> = all.into_iter().map(|t| t.name).collect();
+        assert_eq!(
+            names,
+            vec!["a", "b"],
+            "Some(\"\") must continue the loop (Pitfall 2)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_all_tools_max_iterations_zero_errors_immediately() {
+        // max_iterations=0: loop body must not execute; no tools/list sent.
+        // Only the init response is pre-loaded — if the loop ever called
+        // list_tools, receive() would then fail with "No more responses"
+        // (a Protocol error), not a Validation error.
+        let transport = MockTransport::with_responses(vec![list_all_init_response()]);
+        let sent_ref = Arc::clone(&transport.sent_messages);
+        let opts = ClientOptions {
+            max_iterations: 0,
+            ..Default::default()
+        };
+        let mut client = Client::with_client_options(transport, opts);
+        let _ = client.initialize(ClientCapabilities::minimal()).await;
+
+        // Snapshot sent count BEFORE the call — initialize() sent its init
+        // request. We assert no ADDITIONAL tools/list request is sent.
+        let sent_before = sent_ref.lock().unwrap().len();
+
+        let err = client.list_all_tools().await.unwrap_err();
+        let msg = format!("{err}");
+        assert!(matches!(err, Error::Validation(_)), "got: {msg}");
+        assert!(msg.contains('0'), "cap value missing: {msg}");
+        assert!(msg.contains("list_all_tools"), "method name missing: {msg}");
+
+        let sent_after = sent_ref.lock().unwrap().clone();
+        assert_eq!(
+            sent_after.len(),
+            sent_before,
+            "transport must not receive any tools/list request when max_iterations=0; sent: {sent_after:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_all_prompts_three_pages_in_order() {
+        let p1 = page_response(2, "prompts", json!([{"name": "p1"}]), Some("p2"));
+        let p2 = page_response(3, "prompts", json!([{"name": "p2"}]), Some("p3"));
+        let p3 = page_response(3, "prompts", json!([{"name": "p3"}]), None);
+        let transport = MockTransport::with_responses(vec![p3, p2, p1, list_all_init_response()]);
+        let mut client = Client::new(transport);
+        let _ = client.initialize(ClientCapabilities::minimal()).await;
+        let all = client.list_all_prompts().await.expect("ok");
+        let names: Vec<_> = all.into_iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["p1", "p2", "p3"]);
+    }
+
+    #[tokio::test]
+    async fn test_list_all_resources_three_pages_in_order() {
+        let p1 = page_response(
+            2,
+            "resources",
+            json!([{"uri": "file://a", "name": "a"}]),
+            Some("p2"),
+        );
+        let p2 = page_response(
+            3,
+            "resources",
+            json!([{"uri": "file://b", "name": "b"}]),
+            Some("p3"),
+        );
+        let p3 = page_response(
+            4,
+            "resources",
+            json!([{"uri": "file://c", "name": "c"}]),
+            None,
+        );
+        let transport = MockTransport::with_responses(vec![p3, p2, p1, list_all_init_response()]);
+        let mut client = Client::new(transport);
+        let _ = client.initialize(ClientCapabilities::minimal()).await;
+        let all = client.list_all_resources().await.expect("ok");
+        let names: Vec<_> = all.into_iter().map(|r| r.name).collect();
+        assert_eq!(names, vec!["a", "b", "c"]);
+    }
+
+    #[tokio::test]
+    async fn test_list_all_resource_templates_two_pages_in_order() {
+        let p1 = page_response(
+            2,
+            "resourceTemplates",
+            json!([{"uriTemplate": "file://{a}", "name": "ta"}]),
+            Some("p2"),
+        );
+        let p2 = page_response(
+            3,
+            "resourceTemplates",
+            json!([{"uriTemplate": "file://{b}", "name": "tb"}]),
+            None,
+        );
+        let transport = MockTransport::with_responses(vec![p2, p1, list_all_init_response()]);
+        let mut client = Client::new(transport);
+        let _ = client.initialize(ClientCapabilities::minimal()).await;
+        let all = client.list_all_resource_templates().await.expect("ok");
+        let names: Vec<_> = all.into_iter().map(|t| t.name).collect();
+        assert_eq!(names, vec!["ta", "tb"]);
     }
 }
