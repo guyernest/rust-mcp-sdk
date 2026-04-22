@@ -39,7 +39,10 @@ pub mod http_middleware;
 #[cfg(all(not(target_arch = "wasm32"), feature = "oauth"))]
 pub mod oauth;
 pub mod oauth_middleware;
+mod options;
 pub mod transport;
+
+pub use options::ClientOptions;
 
 /// Response from a task-augmented `tools/call`.
 ///
