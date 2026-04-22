@@ -71,6 +71,7 @@ pub struct Client<T: Transport> {
     info: Implementation,
     notification_tx: Option<mpsc::Sender<Notification>>,
     active_requests: Arc<RwLock<HashMap<RequestId, oneshot::Sender<()>>>>,
+    options: ClientOptions,
 }
 
 impl<T: Transport> std::fmt::Debug for Client<T> {
@@ -134,6 +135,7 @@ impl<T: Transport> Client<T> {
             info: client_info,
             notification_tx: None,
             active_requests: Arc::new(RwLock::new(HashMap::new())),
+            options: ClientOptions::default(),
         }
     }
 
@@ -176,6 +178,47 @@ impl<T: Transport> Client<T> {
             info: client_info,
             notification_tx: None,
             active_requests: Arc::new(RwLock::new(HashMap::new())),
+            options: ClientOptions::default(),
+        }
+    }
+
+    /// Construct a client with caller-supplied [`ClientOptions`].
+    ///
+    /// Mirrors [`Self::new`] but wires in a [`ClientOptions`] value so that
+    /// [`Self::list_all_tools`] / [`Self::list_all_prompts`] / etc. honour a
+    /// custom `max_iterations` cap.
+    ///
+    /// ## `ClientBuilder` parity (D-09)
+    ///
+    /// [`ClientBuilder`] intentionally does **not** expose a `.client_options()`
+    /// setter in this release. If you need a custom [`ClientOptions`], construct
+    /// your client via [`Self::with_client_options`] directly — builder-level
+    /// parity is tracked for a future phase.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # async fn ex<T: pmcp::shared::Transport + Send + Sync + 'static>(transport: T) -> pmcp::Result<()> {
+    /// use pmcp::{Client, ClientOptions};
+    ///
+    /// let opts = ClientOptions { max_iterations: 50, ..Default::default() };
+    /// let _client = Client::with_client_options(transport, opts);
+    /// # Ok(()) }
+    /// ```
+    pub fn with_client_options(transport: T, options: ClientOptions) -> Self {
+        Self {
+            transport: Arc::new(RwLock::new(transport)),
+            protocol: Arc::new(RwLock::new(Protocol::new(ProtocolOptions::default()))),
+            middleware_chain: Arc::new(RwLock::new(EnhancedMiddlewareChain::new())),
+            capabilities: None,
+            server_capabilities: None,
+            server_version: None,
+            instructions: None,
+            initialized: false,
+            info: Implementation::default(),
+            notification_tx: None,
+            active_requests: Arc::new(RwLock::new(HashMap::new())),
+            options,
         }
     }
 
@@ -1829,6 +1872,7 @@ impl<T: Transport> Clone for Client<T> {
             info: self.info.clone(),
             notification_tx: self.notification_tx.clone(),
             active_requests: self.active_requests.clone(),
+            options: self.options.clone(),
         }
     }
 }
@@ -1908,6 +1952,37 @@ mod tests {
         let client = Client::with_info(transport, info);
         assert_eq!(client.info.name, "test-client");
         assert_eq!(client.info.version, "1.0.0");
+    }
+
+    // === Phase 73: PARITY-CLIENT-01 — ClientOptions wiring tests ===
+
+    #[test]
+    fn test_client_new_uses_default_options() {
+        let transport = MockTransport::new();
+        let client = Client::new(transport);
+        assert_eq!(client.options.max_iterations, 100);
+    }
+
+    #[test]
+    fn test_client_with_client_options_threads_value() {
+        let transport = MockTransport::new();
+        let opts = ClientOptions {
+            max_iterations: 7,
+            ..Default::default()
+        };
+        let client = Client::with_client_options(transport, opts);
+        assert_eq!(client.options.max_iterations, 7);
+    }
+
+    #[test]
+    fn test_client_with_options_preserves_default_client_options() {
+        let transport = MockTransport::new();
+        let client = Client::with_options(
+            transport,
+            Implementation::default(),
+            ProtocolOptions::default(),
+        );
+        assert_eq!(client.options.max_iterations, 100);
     }
 
     #[test]
