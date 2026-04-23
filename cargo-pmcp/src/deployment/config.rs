@@ -806,3 +806,227 @@ mod iam_wave1_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod iam_wave2_tests {
+    //! Wave 2 (phase 76 Plan 02) — full `IamConfig` schema coverage.
+    //!
+    //! These tests drive the replacement of the Wave 1 zero-sized stub with the
+    //! three-vector schema described in CONTEXT.md (§Scope) and
+    //! `CLI_IAM_CHANGE_REQUEST.md`. They co-exist with `iam_wave1_tests` — the
+    //! Wave 1 invariants (default-empty, skip-serialize-empty, round-trip) are
+    //! still enforced there.
+    //!
+    //! Integration-level coverage (serde roundtrip through
+    //! `cargo_pmcp::deployment::config::*`) lives in
+    //! `cargo-pmcp/tests/iam_config.rs`. Because `cargo_pmcp`'s library surface
+    //! does not re-export `deployment::config` (same lib-boundary constraint
+    //! documented in Wave 1's summary, Rule 3 deviation #1), the struct-level
+    //! assertions live in-crate here where `super::*` makes the private types
+    //! directly accessible.
+
+    use super::*;
+
+    const COST_COACH_DEPLOY_TOML: &str = r#"
+[target]
+type = "pmcp-run"
+
+[aws]
+region = "us-west-2"
+
+[server]
+name = "cost-coach"
+
+[[iam.tables]]
+name = "cost-coach-tenants"
+actions = ["readwrite"]
+include_indexes = true
+
+[[iam.buckets]]
+name = "cost-coach-snapshots"
+actions = ["readwrite"]
+
+[[iam.statements]]
+effect = "Allow"
+actions = ["secretsmanager:GetSecretValue"]
+resources = ["arn:aws:secretsmanager:us-west-2:*:secret:cost-coach/*"]
+"#;
+
+    #[test]
+    fn iam_config_default_has_three_empty_vectors() {
+        let iam = IamConfig::default();
+        assert!(iam.tables.is_empty());
+        assert!(iam.buckets.is_empty());
+        assert!(iam.statements.is_empty());
+        assert!(iam.is_empty());
+    }
+
+    #[test]
+    fn iam_config_is_empty_flips_when_any_vector_is_populated() {
+        // Populating any one vector MUST flip is_empty to false — this is the
+        // exact condition that toggles the D-05 `skip_serializing_if` guard.
+        let mut iam = IamConfig::default();
+        iam.tables.push(TablePermission {
+            name: "t1".into(),
+            actions: vec!["read".into()],
+            include_indexes: false,
+        });
+        assert!(!iam.is_empty(), "populated tables vector must flip is_empty");
+
+        let mut iam = IamConfig::default();
+        iam.buckets.push(BucketPermission {
+            name: "b1".into(),
+            actions: vec!["read".into()],
+        });
+        assert!(
+            !iam.is_empty(),
+            "populated buckets vector must flip is_empty"
+        );
+
+        let mut iam = IamConfig::default();
+        iam.statements.push(IamStatement {
+            effect: "Allow".into(),
+            actions: vec!["s3:GetObject".into()],
+            resources: vec!["arn:aws:s3:::b/*".into()],
+        });
+        assert!(
+            !iam.is_empty(),
+            "populated statements vector must flip is_empty"
+        );
+    }
+
+    #[test]
+    fn cost_coach_shaped_toml_parses_into_populated_iam_config() {
+        let cfg: DeployConfig =
+            toml::from_str(COST_COACH_DEPLOY_TOML).expect("cost-coach TOML parses");
+
+        assert_eq!(cfg.iam.tables.len(), 1);
+        assert_eq!(cfg.iam.tables[0].name, "cost-coach-tenants");
+        assert_eq!(cfg.iam.tables[0].actions, vec!["readwrite".to_string()]);
+        assert!(cfg.iam.tables[0].include_indexes);
+
+        assert_eq!(cfg.iam.buckets.len(), 1);
+        assert_eq!(cfg.iam.buckets[0].name, "cost-coach-snapshots");
+        assert_eq!(cfg.iam.buckets[0].actions, vec!["readwrite".to_string()]);
+
+        assert_eq!(cfg.iam.statements.len(), 1);
+        assert_eq!(cfg.iam.statements[0].effect, "Allow");
+        assert_eq!(
+            cfg.iam.statements[0].actions,
+            vec!["secretsmanager:GetSecretValue".to_string()]
+        );
+        assert_eq!(
+            cfg.iam.statements[0].resources,
+            vec!["arn:aws:secretsmanager:us-west-2:*:secret:cost-coach/*".to_string()]
+        );
+
+        assert!(!cfg.iam.is_empty());
+    }
+
+    #[test]
+    fn include_indexes_defaults_false_when_omitted() {
+        let toml_str = r#"
+[target]
+type = "pmcp-run"
+
+[aws]
+region = "us-west-2"
+
+[server]
+name = "demo"
+
+[[iam.tables]]
+name = "t1"
+actions = ["read"]
+"#;
+        let cfg: DeployConfig = toml::from_str(toml_str).expect("parses");
+        assert_eq!(cfg.iam.tables.len(), 1);
+        assert!(
+            !cfg.iam.tables[0].include_indexes,
+            "include_indexes must default to false when TOML omits it"
+        );
+    }
+
+    #[test]
+    fn populated_iam_roundtrips_losslessly_through_toml() {
+        // Round-trip: parse → serialise → re-parse → structural equality
+        // (IamConfig intentionally derives no PartialEq per PATTERNS.md §S1, so
+        // compare each field individually).
+        let orig: DeployConfig =
+            toml::from_str(COST_COACH_DEPLOY_TOML).expect("cost-coach TOML parses");
+        let serialised = toml::to_string(&orig).expect("DeployConfig serialises");
+        let reparsed: DeployConfig = toml::from_str(&serialised).unwrap_or_else(|e| {
+            panic!("reparse failed — serialised:\n{serialised}\nerror: {e}")
+        });
+
+        assert_eq!(orig.iam.tables.len(), reparsed.iam.tables.len());
+        assert_eq!(orig.iam.tables[0].name, reparsed.iam.tables[0].name);
+        assert_eq!(orig.iam.tables[0].actions, reparsed.iam.tables[0].actions);
+        assert_eq!(
+            orig.iam.tables[0].include_indexes,
+            reparsed.iam.tables[0].include_indexes
+        );
+
+        assert_eq!(orig.iam.buckets.len(), reparsed.iam.buckets.len());
+        assert_eq!(orig.iam.buckets[0].name, reparsed.iam.buckets[0].name);
+        assert_eq!(
+            orig.iam.buckets[0].actions,
+            reparsed.iam.buckets[0].actions
+        );
+
+        assert_eq!(orig.iam.statements.len(), reparsed.iam.statements.len());
+        assert_eq!(
+            orig.iam.statements[0].effect,
+            reparsed.iam.statements[0].effect
+        );
+        assert_eq!(
+            orig.iam.statements[0].actions,
+            reparsed.iam.statements[0].actions
+        );
+        assert_eq!(
+            orig.iam.statements[0].resources,
+            reparsed.iam.statements[0].resources
+        );
+    }
+
+    #[test]
+    fn d05_empty_iam_still_elides_every_iam_header() {
+        // D-05 backward-compat guard, refined: ensure that the post-Wave-2
+        // struct still elides ALL iam-related table headers when every vector
+        // is empty (not just the bare `[iam]` header that Wave 1 tested).
+        let cfg = DeployConfig::default_for_server(
+            "demo-server".to_string(),
+            "us-west-2".to_string(),
+            std::path::PathBuf::from("/tmp/phase76-iam-wave2"),
+        );
+        let out = toml::to_string(&cfg).expect("DeployConfig serialises");
+        for header in ["[iam]", "[[iam.tables]]", "[[iam.buckets]]", "[[iam.statements]]"] {
+            assert!(
+                !out.contains(header),
+                "empty IamConfig must not emit {header} header (D-05) — got:\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn sub_struct_types_are_constructable() {
+        // Sanity: the sub-structs are `pub` and their fields are `pub` — Wave 3
+        // (render_iam_block) and Wave 4 (validator) will need to build these by
+        // hand for test fixtures.
+        let _tp = TablePermission {
+            name: "t".into(),
+            actions: vec!["read".into()],
+            include_indexes: false,
+        };
+        let _bp = BucketPermission {
+            name: "b".into(),
+            actions: vec!["write".into()],
+        };
+        let _st = IamStatement {
+            effect: "Allow".into(),
+            actions: vec!["s3:GetObject".into()],
+            resources: vec!["arn:aws:s3:::bucket/*".into()],
+        };
+        let _iam = IamConfig::default();
+    }
+}
