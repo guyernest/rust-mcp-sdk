@@ -642,11 +642,7 @@ actions = ["read"]
         );
         let (_dir, project_root) = write_fixture(&toml_str);
         let result = validate_deploy(Some(project_root.to_string_lossy().into_owned()), false);
-        assert!(
-            result.is_ok(),
-            "valid config rejected: {:?}",
-            result.err()
-        );
+        assert!(result.is_ok(), "valid config rejected: {:?}", result.err());
     }
 
     #[test]

@@ -37,6 +37,17 @@ impl DeployExecutor {
         println!();
 
         let config = crate::deployment::config::DeployConfig::load(&self.project_root)?;
+
+        // Phase 76 Wave 4: IAM validation gate. Hard errors block deploy
+        // BEFORE any AWS API call (fail-closed per 76-CONTEXT.md D-04);
+        // warnings print to stderr but never block. T-76-02 wildcard
+        // escalation lands here as a hard error.
+        let warnings = crate::deployment::iam::validate(&config.iam)
+            .context("IAM validation failed — fix .pmcp/deploy.toml before deploying")?;
+        for w in &warnings {
+            eprintln!("  {} {}", console::style("warning:").yellow(), w.message);
+        }
+
         println!("📋 Server: {}", config.server.name);
         println!("🌍 Region: {}", config.aws.region);
         println!();
