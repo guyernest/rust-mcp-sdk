@@ -1,3 +1,6 @@
+# Phase 76 reference fixture: cost-coach-shaped IAM declarations.
+# Mirrors the CR's cost-coach example (2026-04-23 prod incident scope).
+
 [target]
 type = "pmcp-run"
 version = "1.0"
@@ -22,15 +25,18 @@ log_retention_days = 30
 enable_xray = true
 create_dashboard = true
 
+# DynamoDB: read + write on the tenants table AND its GSIs.
 [[iam.tables]]
 name = "cost-coach-tenants"
 actions = ["readwrite"]
 include_indexes = true
 
+# S3: object-level RW on the snapshots bucket.
 [[iam.buckets]]
 name = "cost-coach-snapshots"
 actions = ["readwrite"]
 
+# Raw IAM: secretsmanager read under a narrow ARN prefix.
 [[iam.statements]]
 effect = "Allow"
 actions = ["secretsmanager:GetSecretValue"]

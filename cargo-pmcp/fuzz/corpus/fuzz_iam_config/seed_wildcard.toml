@@ -1,11 +1,26 @@
 [target]
 type = "pmcp-run"
+version = "1.0"
 
 [aws]
 region = "us-west-2"
 
 [server]
 name = "demo"
+memory_mb = 512
+timeout_seconds = 30
+
+[environment]
+RUST_LOG = "info"
+
+[auth]
+enabled = false
+provider = "none"
+
+[observability]
+log_retention_days = 30
+enable_xray = true
+create_dashboard = true
 
 [[iam.statements]]
 effect = "Allow"
