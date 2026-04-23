@@ -501,18 +501,29 @@ app.synth();
     ///   well-defined seam — the `_iam` parameter — without touching this
     ///   function's callers.
     ///
-    /// The `_iam` parameter is unused in Wave 1 (the stub `IamConfig` has no
-    /// fields). Wave 3 drops the leading underscore and threads
-    /// `render_iam_block(iam)` into each `format!` literal. This signature is
-    /// marked `#[doc(hidden)]` because it exists solely to serve in-crate tests
-    /// and future-wave executors — callers outside this crate must not depend
-    /// on it across semver.
+    /// Wave 3 drops the leading underscore on `iam` (previously `_iam` in
+    /// Wave 1 while `IamConfig` was a zero-sized stub) and threads
+    /// `render_iam_block(iam)` into a single `{iam_block}` named placeholder
+    /// spliced directly after the last platform-composition `addToRolePolicy`
+    /// closer in each branch — the empty-config path collapses to
+    /// byte-identical output, preserving the D-05 backward-compat invariant.
+    /// This signature is marked `#[doc(hidden)]` because it exists solely to
+    /// serve in-crate tests and future-wave executors — callers outside this
+    /// crate must not depend on it across semver.
     #[doc(hidden)]
     pub fn render_stack_ts(
         &self,
         server_name: &str,
-        _iam: &crate::deployment::config::IamConfig,
+        iam: &crate::deployment::config::IamConfig,
     ) -> String {
+        // Wave 3: render operator-declared IAM once up front so both template
+        // branches splice the same string in via a named `{iam_block}`
+        // placeholder. Returns `""` for the default (empty) config so the
+        // D-05 byte-identity invariant is preserved on the no-`[iam]` path.
+        // Imports through the `deployment` facade re-export so clippy sees
+        // `pub use deployment::render_iam_block` as reachable.
+        let iam_block = crate::deployment::render_iam_block(iam);
+
         // For pmcp-run target: Lambda-only stack (no API Gateway)
         // The shared pmcp.run API Gateway handles all routing
         if self.target_type == "pmcp-run" {
@@ -577,7 +588,7 @@ export class McpServerStack extends cdk.Stack {{
 
     // Get configuration from context or environment
     // These can be overridden via CDK context: -c serverId=myserver
-    const serverId = this.node.tryGetContext('serverId') || '{}';
+    const serverId = this.node.tryGetContext('serverId') || '{server_name}';
     const organizationId = this.node.tryGetContext('organizationId') || process.env.PMCP_ORGANIZATION_ID || 'default-org';
     const mcpServersTable = this.node.tryGetContext('mcpServersTable') || process.env.MCP_SERVERS_TABLE || 'McpServer';
 
@@ -637,7 +648,7 @@ export class McpServerStack extends cdk.Stack {{
       resources: [
         `arn:aws:lambda:${{this.region}}:${{this.account}}:function:*`,
       ],
-    }}));
+    }}));{iam_block}
 
     // Outputs
     new cdk.CfnOutput(this, 'LambdaArn', {{
@@ -670,8 +681,7 @@ export class McpServerStack extends cdk.Stack {{
     }});
   }}
 }}
-"#,
-                server_name
+"#
             );
         }
 
@@ -688,7 +698,7 @@ export class McpServerStack extends cdk.Stack {{
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {{
     super(scope, id, props);
 
-    const serverName = '{}';
+    const serverName = '{server_name}';
 
     // Cost allocation tags — propagate to all resources in this stack
     cdk.Tags.of(this).add('project', serverName);
@@ -722,7 +732,7 @@ export class McpServerStack extends cdk.Stack {{
 
     // HTTP API
     const httpApi = new apigatewayv2.HttpApi(this, 'HttpApi', {{
-      apiName: '{}',
+      apiName: '{server_name}',
       description: 'MCP Server HTTP API',
       corsPreflight: {{
         allowOrigins: ['*'],
@@ -754,7 +764,7 @@ export class McpServerStack extends cdk.Stack {{
     mcpFunction.addPermission('ApiGatewayInvoke', {{
       principal: new cdk.aws_iam.ServicePrincipal('apigateway.amazonaws.com'),
       sourceArn: `arn:aws:execute-api:${{this.region}}:${{this.account}}:${{httpApi.apiId}}/*/*`,
-    }});
+    }});{iam_block}
 
     // Outputs
     new cdk.CfnOutput(this, 'ApiUrl', {{
@@ -779,8 +789,7 @@ export class McpServerStack extends cdk.Stack {{
     }});
   }}
 }}
-"#,
-            server_name, server_name
+"#
         )
     }
 
@@ -1951,9 +1960,7 @@ mod wave1_stack_ts_tests {
             statements: vec![IamStatement {
                 effect: "Allow".into(),
                 actions: vec!["secretsmanager:GetSecretValue".into()],
-                resources: vec![
-                    "arn:aws:secretsmanager:us-west-2:*:secret:cost-coach/*".into(),
-                ],
+                resources: vec!["arn:aws:secretsmanager:us-west-2:*:secret:cost-coach/*".into()],
             }],
         }
     }
@@ -2038,10 +2045,7 @@ mod wave1_stack_ts_tests {
             "arn:aws:s3:::cost-coach-snapshots/*",
             "secretsmanager:GetSecretValue",
         ] {
-            assert!(
-                ts.contains(needle),
-                "wave3 aws-lambda: missing {needle}"
-            );
+            assert!(ts.contains(needle), "wave3 aws-lambda: missing {needle}");
         }
     }
 
