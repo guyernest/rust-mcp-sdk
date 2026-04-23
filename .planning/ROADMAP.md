@@ -1003,10 +1003,15 @@ Plans:
 
 ### Phase 75: Fix PMAT issues
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Restore the auto-generated `Quality Gate: passing` README badge by remediating PMAT findings (cognitive complexity is the gating dimension; SATD, duplicate, entropy, sections are best-effort within waves). After this phase, `pmat quality-gate --fail-on-violation --checks complexity` exits 0 and a CI gate prevents regression.
+**Requirements**: None (quality-debt remediation; must_haves derived from CONTEXT.md decisions D-01..D-09)
 **Depends on:** Phase 74
-**Plans:** 0 plans
+**Plans:** 6 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 75 to break down)
+- [ ] 75-00-PLAN.md — Wave 0: Baseline + spike (PMAT path-filter empirical test, insta snapshot baseline for pmcp-macros, semantic regression baseline for pmcp-code-mode, PMAT version pin in CI)
+- [ ] 75-01-PLAN.md — Wave 1: src/ + pmcp-macros/ refactors (streamable_http_server.rs + sibling src/ + pmcp-macros expand/collect; 13 retro-justifications of pre-existing bare allows)
+- [ ] 75-02-PLAN.md — Wave 2: cargo-pmcp/ refactors (pentest + deployment + commands + main.rs; ~41 violations including 2 monsters at cog 105 and 91)
+- [ ] 75-03-PLAN.md — Wave 3: pmcp-code-mode/ refactors (P6 dispatch decomposition for evaluate_with_scope cog 123 and evaluate_array_method_with_scope cog 117)
+- [ ] 75-04-PLAN.md — Wave 4: scattered crate hotspots + examples/fuzz handling per Wave 0 spike + SATD triage per D-04 + final pre-Wave-5 gate verification
+- [ ] 75-05-PLAN.md — Wave 5: D-07 enforcement (CI gate in ci.yml, regression-PR fail-closed test, badge-flip confirmation, CLAUDE.md docs update)

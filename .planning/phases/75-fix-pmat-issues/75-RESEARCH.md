@@ -520,27 +520,31 @@ Then the existing `gate` job (lines ~210-225) already aggregates `quality-gate` 
 
 **A2-A6 should be confirmed in the discuss-phase or by the planner before locking refactor strategy.**
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Does `cargo install pmat --version =X.Y.Z --locked` produce the same gate result as floating-latest?**
    - What we know: CI today uses `cargo install pmat --locked` with no version pin.
    - What's unclear: Whether pinning is desired given Pitfall 1 risk.
    - Recommendation: Plan should include a one-line decision and CI step accordingly.
+   - RESOLVED: Plan 75-00 Task 3 pins to `=3.15.0 --locked` in both ci.yml and quality-badges.yml.
 
 2. **Can `pmat quality-gate --checks complexity` be made to skip examples/?**
    - What we know: `[analysis] exclude_patterns` in `.pmat/project.toml` and `.pmatignore` were tested for duplicates and did NOT work; they were not tested for the complexity check specifically.
    - What's unclear: Whether complexity-check exclusion behaves differently from duplicate-check exclusion in 3.15.0.
    - Recommendation: Wave 0 / Wave 1 first task should empirically test by writing a `.pmatignore` with `examples/` and re-running `--checks complexity`. If it works, scope shrinks dramatically.
+   - RESOLVED: Empirical answer deferred to Plan 75-00 Task 0 (D-09 spike); Plan 75-04 Task 4-B and Plan 75-05 Task 5-01 branch on the spike result.
 
 3. **Can `pmat hooks install` from `pmat.toml` provide the gate step automatically?**
    - What we know: `pmat hooks` subcommand exists; supports `init`, `install`, `verify`, `run`. CONTEXT.md D-07 explicitly chose CI-only.
    - What's unclear: Whether `pmat hooks` could be co-opted for CI (it's labelled "pre-commit hook management" but `pmat hooks run` is described as "for CI/CD integration").
    - Recommendation: Stick with the explicit `pmat quality-gate` step; don't expand scope.
+   - RESOLVED: CONTEXT.md D-07 chose CI-only via explicit ci.yml step; pmat hooks not used.
 
 4. **Are there 94 distinct functions, or do some functions have BOTH cyclomatic-complexity and cognitive-complexity violations counted as 2?**
    - What we know: The full violations array has 187 entries when both rules are counted. Filtering to `cognitive-complexity` only gives 94.
    - What's unclear: Whether the gate counts distinct functions or distinct (function, rule) pairs toward the 94 figure.
    - Recommendation: Treat the 94 as the authoritative count; the badge is gated by the gate's own counter, not ours.
+   - RESOLVED: Treat 94 as authoritative — gate counter is the source of truth; not subdividing into per-rule splits.
 
 ## Environment Availability
 
