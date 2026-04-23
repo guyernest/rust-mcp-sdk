@@ -5,6 +5,7 @@ status: draft
 nyquist_compliant: false
 wave_0_complete: false
 created: 2026-04-22
+revised: 2026-04-22 (B-01 reconciliation — task IDs now match final PLAN.md structure)
 ---
 
 # Phase 76 — Validation Strategy
@@ -37,24 +38,26 @@ created: 2026-04-22
 
 ## Per-Task Verification Map
 
-> Filled by planner. Each plan task MUST map to one row.
-> Column semantics: `File Exists` = ✅ if the test file/infrastructure already exists in-repo; ❌ W0 if Wave 0 must create it.
+> **Revised 2026-04-22 (B-01):** IDs below map 1:1 to actual PLAN.md task anchors.
+> Format: `{phase}-{plan}-T{task_index}` — e.g., `76-01-T2` = Phase 76, Plan 01, Task 2.
+> All 9 original signals preserved; rows rekeyed against final task structure.
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 76-01-01 | 01 (role ARN export) | 1 | PART-1 | — | Stable CFN export unblocks bolt-on stacks without name guessing | integration (CDK synth → JSON grep) | `cargo test -p cargo-pmcp test_stack_ts_emits_mcp_role_arn_export` | ❌ W0 | ⬜ pending |
-| 76-02-01 | 02 (IamConfig schema) | 2 | PART-2 schema | — | TOML parses cleanly, default = empty (backward compat) | unit (serde round-trip) | `cargo test -p cargo-pmcp iam_config` | ✅ | ⬜ pending |
-| 76-03-01 | 03 (translation rules) | 3 | PART-2 tables | T-76-01 (no silent privilege expansion) | read/write/readwrite emit exactly the CR-specified action lists | property (proptest) | `cargo test -p cargo-pmcp iam_translation_props` | ❌ W0 (new prop harness) | ⬜ pending |
-| 76-03-02 | 03 (translation rules) | 3 | PART-2 buckets | T-76-01 | S3 object-level ARN only; bucket-level requires `[[iam.statements]]` | unit | `cargo test -p cargo-pmcp iam_bucket_translation` | ✅ | ⬜ pending |
-| 76-04-01 | 04 (validator + footgun) | 4 | PART-2 validation | T-76-02 (wildcard escalation) | Allow/`*:*`/`*` hard-rejected; other rules per CR | unit | `cargo test -p cargo-pmcp iam_validate` | ✅ | ⬜ pending |
-| 76-04-02 | 04 (validator) | 4 | PART-2 validation | T-76-02 | `cargo pmcp deploy` exits non-zero on invalid config before touching AWS | integration | `cargo test -p cargo-pmcp deploy_validate_gate` | ❌ W0 | ⬜ pending |
-| 76-05-01 | 05 (fuzz + example + docs) | 5 | PART-2 robustness | T-76-03 (parser DoS / crash) | IamConfig parser does not panic on adversarial TOML | fuzz | `cargo +nightly fuzz run fuzz_iam_config -- -max_total_time=60` | ❌ W0 (new target) | ⬜ pending |
-| 76-05-02 | 05 (example) | 5 | PART-2 DX | — | cost-coach-shaped example compiles and `cargo pmcp deploy init --dry-run` emits expected stack.ts | integration / example | `cargo run --example deploy_with_iam --manifest-path cargo-pmcp/Cargo.toml` | ❌ W0 | ⬜ pending |
-| 76-05-03 | 05 (backward compat) | 5 | D-05 | — | stack.ts emitted from a no-`[iam]` config is byte-identical to pre-phase output (minus the new CfnOutput) | integration (golden file) | `cargo test -p cargo-pmcp test_backward_compat_no_iam_block` | ❌ W0 | ⬜ pending |
+| 76-01-T2 | 01 (role ARN export) | 1 | PART-1 | — | Stable CFN export unblocks bolt-on stacks without name guessing | integration (in-crate — InitCommand private fields) | `cargo test -p cargo-pmcp wave1_stack_ts_tests` | ❌ W0 (Task 1 creates the render_stack_ts seam; Task 2 adds the tests) | ⬜ pending |
+| 76-01-T3 | 01 (backward compat) | 1 | D-05 | — | stack.ts emitted from no-`[iam]` config is byte-identical to pre-phase output (modulo the additive McpRoleArn CfnOutput) | integration (golden file) | `cargo test -p cargo-pmcp --test backward_compat_stack_ts` | ❌ W0 (Task 3 creates goldens + harness) | ⬜ pending |
+| 76-02-T1 | 02 (IamConfig schema) | 2 | PART-2 schema | — | Full IamConfig/TablePermission/BucketPermission/IamStatement struct hierarchy; Wave-1 tests still pass against refined is_empty | unit (in-crate — iam_wave1_tests) | `cargo test -p cargo-pmcp iam_wave1_tests` | ✅ (Wave 1 Task 1 creates; Wave 2 Task 1 refines) | ⬜ pending |
+| 76-02-T2 | 02 (IamConfig schema) | 2 | PART-2 schema | — | TOML parses cleanly; cost-coach-shaped fixture roundtrips; empty config omits `[iam]` table (D-05) | integration (serde round-trip) | `cargo test -p cargo-pmcp --test iam_config` | ❌ W0 (Wave 2 Task 2 creates) | ⬜ pending |
+| 76-03-T1 | 03 (translation rules — unit) | 3 | PART-2 tables + buckets | T-76-01 (no silent privilege expansion) | read/write/readwrite emit exactly the CR-specified action lists (D-02 lock); S3 object-level ARN only | unit (in-crate in deployment::iam) | `cargo test -p cargo-pmcp deployment::iam` | ❌ W0 (Wave 3 Task 1 creates iam.rs + 13 unit tests) | ⬜ pending |
+| 76-03-T3 | 03 (translation rules — property) | 3 | PART-2 tables | T-76-01 | Property: any valid IamConfig → one addToRolePolicy per declaration; read/write flags emit full action sets; toml roundtrip | property (proptest) | `cargo test -p cargo-pmcp --test iam_translation_props` | ❌ W0 (Wave 3 Task 3 creates prop harness) | ⬜ pending |
+| 76-04-T1 | 04 (validator) | 4 | PART-2 validation | T-76-02 (wildcard escalation) | Allow/`*:*`/`*` hard-rejected; 6 hard-error rules + 2 warning classes per CR | unit + integration | `cargo test -p cargo-pmcp validate_tests && cargo test -p cargo-pmcp --test iam_validate` | ❌ W0 (Wave 4 Task 1 creates validator + iam_validate integration file) | ⬜ pending |
+| 76-04-T2 | 04 (validator CLI gate) | 4 | PART-2 validation | T-76-02 | `cargo pmcp validate deploy` and `cargo pmcp deploy` exit non-zero on invalid config before touching AWS | integration | `cargo test -p cargo-pmcp --test deploy_validate_gate` | ❌ W0 (Wave 4 Task 2 creates gate test) | ⬜ pending |
+| 76-05-T1 | 05 (fuzz) | 5 | PART-2 robustness | T-76-03 (parser DoS / crash) | IamConfig parser does not panic on adversarial TOML | fuzz | `(a) test -f cargo-pmcp/fuzz/fuzz_targets/fuzz_iam_config.rs && test -d cargo-pmcp/fuzz/corpus/fuzz_iam_config` (acceptance gate); `(b) cargo +nightly fuzz build fuzz_iam_config` (best-effort) | ❌ W0 (Wave 5 Task 1 creates target + corpus) | ⬜ pending |
+| 76-05-T2 | 05 (example) | 5 | PART-2 DX | — | cost-coach-shaped example parses, validates, renders; wildcard-Allow rejection demonstrated | integration / example | `cargo run -p cargo-pmcp --example deploy_with_iam` | ❌ W0 (Wave 5 Task 2 creates example + fixture) | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
-> **Planner note:** the table above is a reference — if the final PLAN.md structure differs (e.g., plans split differently), re-derive rows 1:1 against the actual task IDs. Do NOT lose any of the 9 signals.
+> **Signal coverage:** 10 rows cover the original 9 signals from the first draft (signal 1 "role ARN export" split across 76-01-T2 emission tests and 76-01-T3 golden; signal 9 "backward compat" lands in 76-01-T3 — same row). No signal dropped.
 
 ---
 
@@ -62,13 +65,15 @@ created: 2026-04-22
 
 Tests and harnesses that do not exist today and MUST be created before/during the first wave that needs them:
 
-- [ ] `cargo-pmcp/tests/iam_stack_ts_integration.rs` — renders `create_stack_ts` for synthetic `DeployConfig` inputs, greps the emitted TypeScript string for expected PolicyStatement shapes and the McpRoleArn CfnOutput
-- [ ] `cargo-pmcp/tests/iam_translation_props.rs` — proptest strategies for valid `IamConfig` (tables / buckets / statements) + property assertions on the action-set translation and resource-ARN construction
-- [ ] `cargo-pmcp/tests/iam_validate.rs` — one test per validation rule in the CR (hard error + each warning class)
-- [ ] `cargo-pmcp/tests/deploy_validate_gate.rs` — integration test that invokes `ValidateCommand::Deploy` on golden `.pmcp/deploy.toml` fixtures (one pass, one fail) and asserts exit behavior
-- [ ] `cargo-pmcp/tests/backward_compat_stack_ts.rs` — golden-file test pinning the no-`[iam]` stack.ts output so regressions are loud (planner decides: snapshot via `insta` crate, or hand-rolled string compare)
-- [ ] `cargo-pmcp/fuzz/fuzz_targets/fuzz_iam_config.rs` — new libfuzzer target for `IamConfig::from_str`/`toml::from_str` (template: existing `fuzz_config_parse.rs`)
-- [ ] `cargo-pmcp/examples/deploy_with_iam.rs` — cost-coach-shaped example demonstrating `[iam.tables]` + `[iam.buckets]` + `[iam.statements]`; compiles and runs via `cargo run --example`
+- [ ] `cargo-pmcp/src/commands/deploy/init.rs` `mod wave1_stack_ts_tests` — in-crate tests renaming InitCommand via `for_golden_test` or direct struct literal; asserts McpRoleArn CfnOutput + aws-iam import (Wave 1 Task 2)
+- [ ] `cargo-pmcp/tests/backward_compat_stack_ts.rs` — golden-file test pinning no-`[iam]` stack.ts output; UPDATE_GOLDEN=1 regeneration flow (Wave 1 Task 3)
+- [ ] `cargo-pmcp/tests/iam_config.rs` — integration serde roundtrip + cost-coach fixture + D-05 empty-serialize invariant (Wave 2 Task 2)
+- [ ] `cargo-pmcp/src/deployment/iam.rs` `#[cfg(test)] mod tests` — 13 unit tests pinning translation rules (Wave 3 Task 1)
+- [ ] `cargo-pmcp/tests/iam_translation_props.rs` — proptest strategies + 9 property tests on translation invariants (Wave 3 Task 3)
+- [ ] `cargo-pmcp/src/deployment/iam.rs` `#[cfg(test)] mod validate_tests` + `cargo-pmcp/tests/iam_validate.rs` — validator unit + integration tests (Wave 4 Task 1)
+- [ ] `cargo-pmcp/tests/deploy_validate_gate.rs` — integration test that invokes `validate_deploy()` on synthetic `.pmcp/deploy.toml` fixtures, asserts Ok/Err behavior (Wave 4 Task 2)
+- [ ] `cargo-pmcp/fuzz/fuzz_targets/fuzz_iam_config.rs` + corpus seeds — libfuzzer target for `toml::from_str::<DeployConfig>` + `iam::validate` (Wave 5 Task 1)
+- [ ] `cargo-pmcp/examples/deploy_with_iam.rs` + `examples/fixtures/cost-coach.deploy.toml` — runnable cost-coach-shaped walkthrough (Wave 5 Task 2)
 
 *Infrastructure already present (no setup needed):* `proptest` in dev-deps, `libfuzzer-sys` + existing fuzz targets in `cargo-pmcp/fuzz/`, `regex` in main deps (no new ARN parser dependency required).
 
@@ -80,6 +85,7 @@ Tests and harnesses that do not exist today and MUST be created before/during th
 |----------|-------------|------------|-------------------|
 | Round-trip: emitted CFN template imports into a real CDK bolt-on stack via `Fn::ImportValue` and `grantReadWriteData` succeeds against a real DynamoDB table | PART-1 end-to-end | Requires a live AWS account; not suitable for CI | Deploy a test server with `cargo pmcp deploy --target pmcp-run`, then deploy a trivial bolt-on CDK stack that imports `pmcp-${serverName}-McpRoleArn` and grants RW on a table; observe the bolt-on `grantReadWriteData` call succeeds and the Lambda can write to the table |
 | Cost-coach migration: replace the env-var-based `MCP_FUNCTION_ROLE_NAME` lookup with `Fn.importValue` in cost-coach's bolt-on stack and confirm IAM grants persist across a platform-stack redeploy | PART-1 real-world unblock | Live integration with cost-coach prod; cannot CI-run | (Post-merge task for cost-coach team, tracked separately — not blocking this phase's verification) |
+| 60-second fuzz smoke (`cargo +nightly fuzz run fuzz_iam_config -- -max_total_time=60`) | PART-2 robustness | Requires nightly toolchain; non-blocking supplement to the acceptance gate in 76-05-T1 | Documented in Wave 5 Task 1; executor runs if nightly is installed locally; CI can extend to longer runs |
 
 ---
 
@@ -97,9 +103,9 @@ Tests and harnesses that do not exist today and MUST be created before/during th
 
 - [ ] All tasks have `<automated>` verify or Wave 0 dependencies
 - [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references (7 items above)
+- [ ] Wave 0 covers all MISSING references (9 items above)
 - [ ] No watch-mode flags in any test command
 - [ ] Feedback latency < 30s for per-task quick command
 - [ ] `nyquist_compliant: true` set in frontmatter after planner fills the per-task map
 
-**Approval:** pending (planner to populate per-task map, then executor-time; operator signs after full gate green)
+**Approval:** pending (planner has reconciled per-task map 2026-04-22 per B-01; executor-time verification next; operator signs after full gate green)
