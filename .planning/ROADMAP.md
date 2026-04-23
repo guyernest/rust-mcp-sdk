@@ -1015,3 +1015,13 @@ Plans:
 - [ ] 75-03-PLAN.md — Wave 3: pmcp-code-mode/ refactors (P6 dispatch decomposition for evaluate_with_scope cog 123 and evaluate_array_method_with_scope cog 117)
 - [ ] 75-04-PLAN.md — Wave 4: scattered crate hotspots + examples/fuzz handling per Wave 0 spike + SATD triage per D-04 + final pre-Wave-5 gate verification
 - [ ] 75-05-PLAN.md — Wave 5: D-07 enforcement (CI gate in ci.yml, regression-PR fail-closed test, badge-flip confirmation, CLAUDE.md docs update)
+
+### Phase 76: cargo-pmcp IAM declarations — servers declare IAM needs in deploy.toml
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 75
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 76 to break down)
