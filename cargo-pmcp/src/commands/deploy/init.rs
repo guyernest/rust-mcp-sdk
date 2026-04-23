@@ -1881,10 +1881,7 @@ mod wave1_stack_ts_tests {
         if std::env::var("UPDATE_GOLDEN").is_ok() {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).unwrap_or_else(|e| {
-                    panic!(
-                        "UPDATE_GOLDEN=1 could not create {}: {e}",
-                        parent.display()
-                    )
+                    panic!("UPDATE_GOLDEN=1 could not create {}: {e}", parent.display())
                 });
             }
             std::fs::write(&path, rendered).unwrap_or_else(|e| {
