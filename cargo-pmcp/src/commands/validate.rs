@@ -25,6 +25,22 @@ pub enum ValidateCommand {
         #[arg(long)]
         server: Option<String>,
     },
+
+    /// Validate `.pmcp/deploy.toml` — focuses on IAM footgun detection.
+    ///
+    /// Hard-errors on wildcard-`Allow`, malformed actions, empty resource
+    /// lists, bad effects, and sugar-keyword typos. Warnings (unknown
+    /// service prefix, cross-account ARN) print but do not fail.
+    ///
+    /// This is the pre-flight equivalent of the same validation that runs
+    /// inside `cargo pmcp deploy` — the deploy flow itself also invokes
+    /// this validator before any AWS call, so a failing `validate deploy`
+    /// guarantees a failing `deploy` for the same config.
+    Deploy {
+        /// Server directory to validate (defaults to current directory).
+        #[arg(long)]
+        server: Option<String>,
+    },
 }
 
 impl ValidateCommand {
@@ -33,6 +49,7 @@ impl ValidateCommand {
             ValidateCommand::Workflows { generate, server } => {
                 validate_workflows(generate, global_flags.verbose, server)
             },
+            ValidateCommand::Deploy { server } => validate_deploy(server, global_flags.verbose),
         }
     }
 }
@@ -494,6 +511,197 @@ fn print_test_guidance(not_quiet: bool) {
         println!(
             "        but tests let you catch errors at {} time.",
             style("cargo test").cyan()
+        );
+    }
+}
+
+/// Validate the deployment configuration (`.pmcp/deploy.toml`) — IAM focus.
+///
+/// This is the pre-flight equivalent of the same validation that runs inside
+/// `cargo pmcp deploy`. Returns `Ok(())` on success (even when warnings are
+/// emitted); returns `Err` on any CR-locked hard-error rule.
+///
+/// Warnings are printed to stderr with a yellow `warning:` prefix; they do
+/// not fail the command.
+///
+/// # Errors
+/// Returns `Err` when:
+/// - `.pmcp/deploy.toml` is missing or malformed
+/// - Any hard-error rule in [`crate::deployment::iam::validate`] is violated
+pub fn validate_deploy(server: Option<String>, verbose: bool) -> Result<()> {
+    let not_quiet = std::env::var("PMCP_QUIET").is_err();
+
+    let project_root = match server {
+        Some(path) => std::path::PathBuf::from(path),
+        None => std::env::current_dir().context("failed to read current directory")?,
+    };
+
+    if not_quiet {
+        println!("\n{}", style("PMCP Deploy Config Validation").cyan().bold());
+        println!("{}", style("━".repeat(50)).dim());
+        if verbose {
+            println!("  Project: {}", project_root.display());
+        }
+    }
+
+    let config = crate::deployment::config::DeployConfig::load(&project_root)
+        .context("failed to load .pmcp/deploy.toml")?;
+
+    let warnings = crate::deployment::iam::validate(&config.iam)
+        .context("IAM validation failed — fix .pmcp/deploy.toml before deploying")?;
+
+    if not_quiet {
+        for w in &warnings {
+            eprintln!("  {} {}", style("warning:").yellow(), w.message);
+        }
+        if warnings.is_empty() {
+            println!(
+                "  {} IAM configuration valid (no warnings)",
+                style("✓").green()
+            );
+        } else {
+            println!(
+                "  {} IAM configuration valid ({} warning{})",
+                style("✓").green(),
+                warnings.len(),
+                if warnings.len() == 1 { "" } else { "s" }
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod deploy_validate_gate_tests {
+    //! Phase 76 Wave 4 — integration tests for `cargo pmcp validate deploy`.
+    //!
+    //! **Rule-3 deviation note (consistent with Waves 1/2/3):** the plan
+    //! called for this file at `cargo-pmcp/tests/deploy_validate_gate.rs`,
+    //! but `cargo_pmcp::commands` is NOT re-exported from
+    //! `cargo-pmcp/src/lib.rs` (lib surface intentionally minimal at
+    //! `loadtest`/`pentest`/`test_support_cache`). Expanding lib visibility
+    //! would drag in the entire CLI subsystem for very little over the
+    //! in-crate coverage that works against `validate_deploy` via
+    //! `super::*`. Tests are otherwise identical in intent — they write a
+    //! synthetic `.pmcp/deploy.toml` into a tempdir and invoke the public
+    //! `validate_deploy` handler, asserting the CR gate behaviour.
+
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Deploy-TOML stanzas common to every fixture. Inserted verbatim at the
+    /// top of each fixture constant so individual tests only have to vary
+    /// the `[iam.*]` section they care about.
+    const COMMON_FIXTURE_HEADER: &str = r#"
+[target]
+type = "aws-lambda"
+version = "1.0.0"
+
+[aws]
+region = "us-west-2"
+
+[server]
+name = "demo-server"
+memory_mb = 512
+timeout_seconds = 30
+
+[environment]
+
+[auth]
+enabled = false
+
+[observability]
+log_retention_days = 30
+enable_xray = false
+create_dashboard = false
+"#;
+
+    fn fixture_with_iam(iam_section: &str) -> String {
+        format!("{COMMON_FIXTURE_HEADER}{iam_section}")
+    }
+
+    fn write_fixture(toml_str: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pmcp_dir = dir.path().join(".pmcp");
+        std::fs::create_dir_all(&pmcp_dir).expect("mkdir .pmcp");
+        std::fs::write(pmcp_dir.join("deploy.toml"), toml_str).expect("write deploy.toml");
+        let project_root = dir.path().to_path_buf();
+        (dir, project_root)
+    }
+
+    #[test]
+    fn validate_deploy_accepts_valid_config() {
+        std::env::set_var("PMCP_QUIET", "1");
+        let toml_str = fixture_with_iam(
+            r#"
+[[iam.tables]]
+name = "demo-table"
+actions = ["read"]
+"#,
+        );
+        let (_dir, project_root) = write_fixture(&toml_str);
+        let result = validate_deploy(Some(project_root.to_string_lossy().into_owned()), false);
+        assert!(
+            result.is_ok(),
+            "valid config rejected: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn validate_deploy_rejects_wildcard_allow() {
+        std::env::set_var("PMCP_QUIET", "1");
+        let toml_str = fixture_with_iam(
+            r#"
+[[iam.statements]]
+effect = "Allow"
+actions = ["*"]
+resources = ["*"]
+"#,
+        );
+        let (_dir, project_root) = write_fixture(&toml_str);
+        let result = validate_deploy(Some(project_root.to_string_lossy().into_owned()), false);
+        let err = result.expect_err("wildcard Allow must be rejected");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.to_lowercase().contains("wildcard"),
+            "expected 'wildcard' in error chain, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_deploy_rejects_bad_bucket_sugar() {
+        std::env::set_var("PMCP_QUIET", "1");
+        let toml_str = fixture_with_iam(
+            r#"
+[[iam.buckets]]
+name = "my-bucket"
+actions = ["devour"]
+"#,
+        );
+        let (_dir, project_root) = write_fixture(&toml_str);
+        let result = validate_deploy(Some(project_root.to_string_lossy().into_owned()), false);
+        assert!(result.is_err(), "bad bucket sugar must be rejected");
+    }
+
+    #[test]
+    fn validate_deploy_reports_unknown_service_prefix_but_returns_ok() {
+        std::env::set_var("PMCP_QUIET", "1");
+        let toml_str = fixture_with_iam(
+            r#"
+[[iam.statements]]
+effect = "Allow"
+actions = ["totallyfake:DoThing"]
+resources = ["*"]
+"#,
+        );
+        let (_dir, project_root) = write_fixture(&toml_str);
+        let result = validate_deploy(Some(project_root.to_string_lossy().into_owned()), false);
+        assert!(
+            result.is_ok(),
+            "unknown prefix must be a warning, not Err: {:?}",
+            result.err()
         );
     }
 }
