@@ -35,7 +35,291 @@
 
 use std::fmt::Write as _;
 
+use anyhow::{anyhow, Result};
+use regex::Regex;
+
 use crate::deployment::config::{BucketPermission, IamConfig, IamStatement, TablePermission};
+
+// ============================================================================
+// Validation (Phase 76 Wave 4)
+// ============================================================================
+
+/// A non-blocking validation finding produced by [`validate`].
+///
+/// Hard errors short-circuit via `Result::Err`; soft findings land here so the
+/// CLI can surface them to the operator without blocking deploy.
+#[derive(Debug, Clone)]
+pub struct Warning {
+    /// Human-readable warning text. Printed verbatim by the CLI, prefixed
+    /// with a yellow `warning:` label.
+    pub message: String,
+}
+
+impl Warning {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+/// Regex used to validate `service:Action` strings in `[[iam.statements]]`.
+///
+/// `^[a-z0-9-]+:[A-Za-z0-9*]+$` — lowercase kebab prefix, then action body
+/// that is either pure wildcard (`*`) or mixed-case alphanumeric. Matches
+/// the CR-locked rule catalogue in `76-RESEARCH.md §Validation`.
+const ACTION_REGEX: &str = r"^[a-z0-9-]+:[A-Za-z0-9*]+$";
+
+/// Allowed sugar keywords in `[[iam.tables]]` / `[[iam.buckets]]`.
+const VALID_SUGAR: &[&str] = &["read", "write", "readwrite"];
+
+/// Curated list of well-known AWS service prefixes.
+///
+/// Unknown prefixes in `[[iam.statements]]` action strings trigger a non-
+/// blocking warning (not an error) per `76-CONTEXT.md §Validation`. The list
+/// is curated and unit-tested — callers needing a new prefix should add it
+/// here. Length is asserted by acceptance tests.
+const KNOWN_SERVICE_PREFIXES: &[&str] = &[
+    "acm",
+    "apigateway",
+    "appconfig",
+    "athena",
+    "autoscaling",
+    "batch",
+    "cloudformation",
+    "cloudfront",
+    "cloudwatch",
+    "codebuild",
+    "codepipeline",
+    "cognito-idp",
+    "cognito-identity",
+    "dynamodb",
+    "ec2",
+    "ecr",
+    "ecs",
+    "elasticloadbalancing",
+    "events",
+    "eventbridge",
+    "execute-api",
+    "firehose",
+    "glue",
+    "iam",
+    "kinesis",
+    "kms",
+    "lambda",
+    "logs",
+    "rds",
+    "route53",
+    "s3",
+    "secretsmanager",
+    "sns",
+    "sqs",
+    "ssm",
+    "states",
+    "sts",
+    "waf",
+    "wafv2",
+    "xray",
+];
+
+/// Validate IAM declarations per the CR-locked rule catalogue.
+///
+/// Hard errors (6 classes) short-circuit via `Err`; soft findings are
+/// returned as a `Vec<Warning>` for the CLI to surface without blocking
+/// deploy.
+///
+/// Hard-error rules:
+///   1. `Allow` + `actions=["*"]` + `resources=["*"]` in any statement
+///      (wildcard escalation footgun — T-76-02)
+///   2. `effect` not in `{"Allow", "Deny"}`
+///   3. empty `actions` or empty `resources` in any statement
+///   4. action not matching `^[a-z0-9-]+:[A-Za-z0-9*]+$`
+///   5. sugar keyword in `[[iam.tables]]` / `[[iam.buckets]]` not in
+///      `{read, write, readwrite}`
+///   6. empty table or bucket name
+///
+/// Warning rules:
+///   7. unknown service prefix (not in [`KNOWN_SERVICE_PREFIXES`])
+///   8. pinned 12-digit AWS account in an ARN (cross-account advisory)
+///
+/// # Errors
+/// Returns `Err` on the first hard-error rule violation. Warnings never
+/// produce an `Err`.
+pub fn validate(iam: &IamConfig) -> Result<Vec<Warning>> {
+    let action_re = Regex::new(ACTION_REGEX).expect("ACTION_REGEX is a static, known-good pattern");
+    let mut warnings = Vec::new();
+
+    validate_tables(&iam.tables)?;
+    validate_buckets(&iam.buckets)?;
+    validate_statements(&iam.statements, &action_re, &mut warnings)?;
+
+    Ok(warnings)
+}
+
+/// Validate `[[iam.tables]]` entries. Rules 5 + 6 for tables.
+fn validate_tables(tables: &[TablePermission]) -> Result<()> {
+    for (idx, t) in tables.iter().enumerate() {
+        if t.name.trim().is_empty() {
+            return Err(anyhow!("[iam.tables][{idx}]: name must not be empty"));
+        }
+        if t.actions.is_empty() {
+            return Err(anyhow!(
+                "[iam.tables][{idx}] '{}': actions must not be empty",
+                t.name
+            ));
+        }
+        for a in &t.actions {
+            if !VALID_SUGAR.contains(&a.as_str()) {
+                return Err(anyhow!(
+                    "[iam.tables][{idx}] '{}': unknown sugar keyword '{}' — allowed: {{read, write, readwrite}}",
+                    t.name,
+                    a
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validate `[[iam.buckets]]` entries. Rules 5 + 6 for buckets.
+fn validate_buckets(buckets: &[BucketPermission]) -> Result<()> {
+    for (idx, b) in buckets.iter().enumerate() {
+        if b.name.trim().is_empty() {
+            return Err(anyhow!("[iam.buckets][{idx}]: name must not be empty"));
+        }
+        if b.actions.is_empty() {
+            return Err(anyhow!(
+                "[iam.buckets][{idx}] '{}': actions must not be empty",
+                b.name
+            ));
+        }
+        for a in &b.actions {
+            if !VALID_SUGAR.contains(&a.as_str()) {
+                return Err(anyhow!(
+                    "[iam.buckets][{idx}] '{}': unknown sugar keyword '{}' — allowed: {{read, write, readwrite}}",
+                    b.name,
+                    a
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validate `[[iam.statements]]` entries. Rules 1-4 + warnings 7-8.
+fn validate_statements(
+    stmts: &[IamStatement],
+    action_re: &Regex,
+    warnings: &mut Vec<Warning>,
+) -> Result<()> {
+    for (idx, stmt) in stmts.iter().enumerate() {
+        check_statement_effect_and_shape(idx, stmt)?;
+        check_statement_wildcard_escalation(idx, stmt)?;
+        check_statement_actions(idx, stmt, action_re, warnings)?;
+        collect_cross_account_warnings(idx, stmt, warnings);
+    }
+    Ok(())
+}
+
+/// Rules 2 + 3: effect must be canonical; actions/resources must be non-empty.
+fn check_statement_effect_and_shape(idx: usize, stmt: &IamStatement) -> Result<()> {
+    if stmt.effect != "Allow" && stmt.effect != "Deny" {
+        return Err(anyhow!(
+            "[iam.statements][{idx}]: effect must be 'Allow' or 'Deny', got '{}'",
+            stmt.effect
+        ));
+    }
+    if stmt.actions.is_empty() {
+        return Err(anyhow!(
+            "[iam.statements][{idx}]: actions must not be empty"
+        ));
+    }
+    if stmt.resources.is_empty() {
+        return Err(anyhow!(
+            "[iam.statements][{idx}]: resources must not be empty"
+        ));
+    }
+    Ok(())
+}
+
+/// Rule 1 (T-76-02): reject `Allow` with `actions=["*"]` and `resources=["*"]`.
+fn check_statement_wildcard_escalation(idx: usize, stmt: &IamStatement) -> Result<()> {
+    let is_wildcard_allow = stmt.effect == "Allow"
+        && stmt.actions.len() == 1
+        && stmt.actions[0] == "*"
+        && stmt.resources.len() == 1
+        && stmt.resources[0] == "*";
+    if is_wildcard_allow {
+        return Err(anyhow!(
+            "[iam.statements][{idx}]: Allow + actions=[\"*\"] + resources=[\"*\"] is a wildcard escalation footgun — refuse to deploy. Tighten actions and resources, or use [[iam.tables]] / [[iam.buckets]] sugar blocks."
+        ));
+    }
+    Ok(())
+}
+
+/// Rule 4: every action matches the regex. Warning 7: unknown prefix.
+fn check_statement_actions(
+    idx: usize,
+    stmt: &IamStatement,
+    action_re: &Regex,
+    warnings: &mut Vec<Warning>,
+) -> Result<()> {
+    for a in &stmt.actions {
+        // `*` is treated as a special pass-through action by itself so that
+        // `actions = ["*"]` with a tightened `resources` list remains
+        // declarable (Rule 1 already rejects the `*` + `*` combo). The regex
+        // also accepts `*` via `[A-Za-z0-9*]+` when combined with a prefix.
+        if a == "*" {
+            continue;
+        }
+        if !action_re.is_match(a) {
+            return Err(anyhow!(
+                "[iam.statements][{idx}]: action '{a}' does not match {ACTION_REGEX}"
+            ));
+        }
+        if let Some((prefix, _)) = a.split_once(':') {
+            if !KNOWN_SERVICE_PREFIXES.contains(&prefix) {
+                warnings.push(Warning::new(format!(
+                    "[iam.statements][{idx}]: unknown service prefix '{prefix}' in action '{a}' — verify this is a valid AWS service"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Warning 8 (best-effort): flag resources that pin a specific 12-digit AWS
+/// account. This is advisory only — a full cross-account check requires
+/// passing the deploy-target account through to `validate`, which is
+/// deferred. Never produces an `Err`.
+fn collect_cross_account_warnings(idx: usize, stmt: &IamStatement, warnings: &mut Vec<Warning>) {
+    for r in &stmt.resources {
+        if let Some(acct) = extract_account_from_arn(r) {
+            if acct.len() == 12 && acct.chars().all(|c| c.is_ascii_digit()) {
+                warnings.push(Warning::new(format!(
+                    "[iam.statements][{idx}]: resource '{r}' pins a specific AWS account '{acct}' — verify this matches your deploy target (use '*' or omit the account segment for account-agnostic ARNs)"
+                )));
+            }
+        }
+    }
+}
+
+/// Extract the `account` segment (index 4) of an ARN
+/// `arn:partition:service:region:account:resource`. Returns `None` if the
+/// input is not shaped like an ARN.
+fn extract_account_from_arn(arn: &str) -> Option<&str> {
+    let mut parts = arn.splitn(6, ':');
+    let head = parts.next()?;
+    if head != "arn" {
+        return None;
+    }
+    let _partition = parts.next()?;
+    let _service = parts.next()?;
+    let _region = parts.next()?;
+    let account = parts.next()?;
+    let _resource = parts.next()?;
+    Some(account)
+}
 
 /// Render the full IAM block for an [`IamConfig`].
 ///
