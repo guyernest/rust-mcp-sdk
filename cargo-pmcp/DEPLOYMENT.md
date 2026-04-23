@@ -1193,6 +1193,8 @@ export class CalculatorServerStack extends cdk.Stack {
 
 ## IAM Declarations (`[iam]` section)
 
+> **Looking for a task-oriented guide?** See [docs/IAM.md](./docs/IAM.md) for workflow, recipes (DynamoDB + GSI, S3, SecretsManager, KMS, cross-Lambda invoke), troubleshooting, and migration from hand-written bolt-on stacks. This section is the schema reference.
+
 `cargo pmcp deploy` supports declarative IAM in `.pmcp/deploy.toml`. The `[iam]`
 block gets translated to `mcpFunction.addToRolePolicy(...)` calls in the
 generated CDK stack, giving your Lambda the AWS permissions it needs — no more
