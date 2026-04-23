@@ -23,6 +23,16 @@ pub struct DeployConfig {
     #[serde(default)]
     pub composition: CompositionConfig,
 
+    /// IAM declarations for the Lambda execution role (tables, buckets, raw statements).
+    ///
+    /// Wave 1 (phase 76 Plan 01) introduces this as a zero-sized placeholder that is
+    /// elided from emitted TOML whenever empty (the default). Wave 2 will add real
+    /// fields without changing this wiring. The `skip_serializing_if` guard preserves
+    /// the D-05 backward-compat invariant: `.pmcp/deploy.toml` files with no `[iam]`
+    /// section round-trip unchanged.
+    #[serde(default, skip_serializing_if = "IamConfig::is_empty")]
+    pub iam: IamConfig,
+
     /// Project root directory (not serialized)
     #[serde(skip)]
     pub project_root: PathBuf,
@@ -545,6 +555,7 @@ impl DeployConfig {
             api_gateway: None,
             assets: AssetsConfig::default(),
             composition: CompositionConfig::default(),
+            iam: IamConfig::default(),
             project_root,
         }
     }
@@ -712,5 +723,86 @@ impl Default for CompositionConfig {
             internal_only: false,
             description: None,
         }
+    }
+}
+
+/// IAM declarations for the deployed Lambda's execution role.
+///
+/// Wave 2 (phase 76 Plan 02) will populate this struct with `tables`, `buckets`,
+/// and `statements` vectors, driven by a new `[iam]` section in
+/// `.pmcp/deploy.toml`. Wave 1 ships a zero-sized placeholder so:
+///
+/// 1. The `render_stack_ts` signature in `commands/deploy/init.rs` already has
+///    an `IamConfig` seam; Wave 2 replaces the struct body without touching
+///    init.rs plumbing.
+/// 2. `DeployConfig`'s `#[serde(default, skip_serializing_if =
+///    "IamConfig::is_empty")]` wiring is forward-compatible — empty in Wave 1,
+///    conditionally empty in Wave 2+.
+///
+/// Backward-compat invariant (D-05 from 76-CONTEXT.md): a `.pmcp/deploy.toml`
+/// with no `[iam]` section parses unchanged and re-serialises with no `[iam]`
+/// table. Covered by [`iam_wave1_tests`] below.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IamConfig {
+    // Fields intentionally omitted in Wave 1 — added in Wave 2.
+}
+
+impl IamConfig {
+    /// Returns `true` when the IAM config contains no declarations.
+    ///
+    /// In Wave 1 this is always `true` (the struct has no fields). Wave 2
+    /// replaces this with a check over the `tables`, `buckets`, and `statements`
+    /// vectors. Keeping the method in Wave 1 lets the `DeployConfig` field's
+    /// `#[serde(skip_serializing_if = "IamConfig::is_empty")]` attribute
+    /// compile against the stub.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        true
+    }
+}
+
+#[cfg(test)]
+mod iam_wave1_tests {
+    use super::*;
+
+    #[test]
+    fn iam_config_default_is_empty() {
+        assert!(
+            IamConfig::default().is_empty(),
+            "IamConfig::default() must report empty in Wave 1"
+        );
+    }
+
+    #[test]
+    fn deploy_config_without_iam_block_parses() {
+        // Round-trip: serialise a default DeployConfig (no [iam]) and re-parse it.
+        // The `skip_serializing_if` guard must elide the [iam] table from the
+        // emitted TOML so that subsequent parses do not require the section.
+        let cfg = DeployConfig::default_for_server(
+            "demo-server".to_string(),
+            "us-west-2".to_string(),
+            std::path::PathBuf::from("/tmp/phase76-iam-wave1"),
+        );
+        let serialised = toml::to_string(&cfg).expect("DeployConfig serialises");
+        let parsed: DeployConfig =
+            toml::from_str(&serialised).expect("round-trip DeployConfig parses");
+        assert!(
+            parsed.iam.is_empty(),
+            "round-tripped DeployConfig must have empty IamConfig"
+        );
+    }
+
+    #[test]
+    fn deploy_config_serializes_without_iam_when_empty() {
+        let cfg = DeployConfig::default_for_server(
+            "demo-server".to_string(),
+            "us-west-2".to_string(),
+            std::path::PathBuf::from("/tmp/phase76-iam-wave1"),
+        );
+        let out = toml::to_string(&cfg).expect("DeployConfig serialises");
+        assert!(
+            !out.contains("[iam]"),
+            "empty IamConfig must not emit [iam] table (D-05 backward-compat) — got:\n{out}"
+        );
     }
 }

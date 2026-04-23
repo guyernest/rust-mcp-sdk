@@ -485,11 +485,38 @@ app.synth();
     fn create_stack_ts(&self, deploy_dir: &PathBuf, server_name: &str) -> Result<()> {
         let lib_dir = deploy_dir.join("lib");
         std::fs::create_dir_all(&lib_dir)?;
+        let iam = crate::deployment::config::IamConfig::default();
+        let stack_ts = self.render_stack_ts(server_name, &iam);
+        std::fs::write(lib_dir.join("stack.ts"), stack_ts)?;
+        Ok(())
+    }
 
+    /// Render the CDK `stack.ts` as a string, without touching the filesystem.
+    ///
+    /// Extracted from [`Self::create_stack_ts`] in phase 76 Plan 01 so:
+    ///
+    /// - Tests (in-crate `wave1_stack_ts_tests` + integration golden files) can
+    ///   assert on the exact emitted TypeScript without going through a tempdir.
+    /// - Waves 3/5 of phase 76 can inject a rendered `[iam]` block at a single
+    ///   well-defined seam — the `_iam` parameter — without touching this
+    ///   function's callers.
+    ///
+    /// The `_iam` parameter is unused in Wave 1 (the stub `IamConfig` has no
+    /// fields). Wave 3 drops the leading underscore and threads
+    /// `render_iam_block(iam)` into each `format!` literal. This signature is
+    /// marked `#[doc(hidden)]` because it exists solely to serve in-crate tests
+    /// and future-wave executors — callers outside this crate must not depend
+    /// on it across semver.
+    #[doc(hidden)]
+    pub fn render_stack_ts(
+        &self,
+        server_name: &str,
+        _iam: &crate::deployment::config::IamConfig,
+    ) -> String {
         // For pmcp-run target: Lambda-only stack (no API Gateway)
         // The shared pmcp.run API Gateway handles all routing
         if self.target_type == "pmcp-run" {
-            let stack_ts = format!(
+            return format!(
                 r#"import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
@@ -635,22 +662,26 @@ export class McpServerStack extends cdk.Stack {{
       value: `https://console.aws.amazon.com/cloudwatch/home?region=${{this.region}}`,
       description: 'CloudWatch Console',
     }});
+
+    new cdk.CfnOutput(this, 'McpRoleArn', {{
+      value: mcpFunction.role!.roleArn,
+      description: 'MCP Server Lambda execution role ARN (stable export for downstream stacks)',
+      exportName: `pmcp-${{serverId}}-McpRoleArn`,
+    }});
   }}
 }}
 "#,
                 server_name
             );
-
-            std::fs::write(lib_dir.join("stack.ts"), stack_ts)?;
-            return Ok(());
         }
 
         // For aws-lambda target: Full stack with API Gateway
-        let stack_ts = format!(
+        format!(
             r#"import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import {{ Construct }} from 'constructs';
 
 export class McpServerStack extends cdk.Stack {{
@@ -740,15 +771,17 @@ export class McpServerStack extends cdk.Stack {{
       value: `https://console.aws.amazon.com/cloudwatch/home?region=${{this.region}}`,
       description: 'CloudWatch Console',
     }});
+
+    new cdk.CfnOutput(this, 'McpRoleArn', {{
+      value: mcpFunction.role!.roleArn,
+      description: 'MCP Server Lambda execution role ARN (stable export for downstream stacks)',
+      exportName: `pmcp-${{serverName}}-McpRoleArn`,
+    }});
   }}
 }}
 "#,
             server_name, server_name
-        );
-
-        std::fs::write(lib_dir.join("stack.ts"), stack_ts)?;
-
-        Ok(())
+        )
     }
 
     fn create_constructs(&self, deploy_dir: &PathBuf) -> Result<()> {
