@@ -1921,4 +1921,140 @@ mod wave1_stack_ts_tests {
         let ts = init.render_stack_ts("demo-server", &IamConfig::default());
         check_or_update_golden("aws-lambda-empty.ts", &ts);
     }
+
+    // ==========================================================================
+    // Phase 76 Wave 3 Task 2: render_stack_ts injects render_iam_block output
+    // into both template branches via a single `{iam_block}` named placeholder.
+    // ==========================================================================
+    //
+    // These in-crate tests complement the byte-identical golden guards above by
+    // checking that a *populated* IamConfig materialises as `addToRolePolicy`
+    // calls in the rendered TS on both pmcp-run and aws-lambda targets. They
+    // additionally lock the insertion point (between the platform-composition
+    // IAM calls and the first `// Outputs` / `new cdk.CfnOutput` block — per
+    // RESEARCH.md Q4 ordering) so that future waves don't silently reposition
+    // operator-declared IAM.
+
+    use crate::deployment::config::{BucketPermission, IamStatement, TablePermission};
+
+    fn cost_coach_iam() -> IamConfig {
+        IamConfig {
+            tables: vec![TablePermission {
+                name: "cost-coach-tenants".into(),
+                actions: vec!["readwrite".into()],
+                include_indexes: true,
+            }],
+            buckets: vec![BucketPermission {
+                name: "cost-coach-snapshots".into(),
+                actions: vec!["readwrite".into()],
+            }],
+            statements: vec![IamStatement {
+                effect: "Allow".into(),
+                actions: vec!["secretsmanager:GetSecretValue".into()],
+                resources: vec![
+                    "arn:aws:secretsmanager:us-west-2:*:secret:cost-coach/*".into(),
+                ],
+            }],
+        }
+    }
+
+    #[test]
+    fn wave3_pmcp_run_stack_ts_emits_iam_block_before_outputs() {
+        let init = make_init("pmcp-run");
+        let ts = init.render_stack_ts("demo-server", &cost_coach_iam());
+
+        // Locate the operator-declared IAM banner.
+        let banner_idx = ts
+            .find("// Operator-declared IAM")
+            .expect("wave3: operator IAM banner missing");
+        let outputs_idx = ts
+            .find("// Outputs")
+            .expect("wave3: // Outputs comment missing");
+        assert!(
+            banner_idx < outputs_idx,
+            "wave3: operator IAM block must appear BEFORE // Outputs — banner={banner_idx}, outputs={outputs_idx}"
+        );
+
+        // Locate the second platform-composition `addToRolePolicy` (the
+        // lambda:InvokeFunction one) — operator IAM must come AFTER it.
+        let platform_invoke_idx = ts
+            .find("'lambda:InvokeFunction'")
+            .expect("wave3: platform InvokeFunction addToRolePolicy missing");
+        assert!(
+            platform_invoke_idx < banner_idx,
+            "wave3: operator IAM must follow platform-composition IAM calls"
+        );
+
+        // Locate the D-02 DynamoDB action set (readwrite → 8 actions).
+        for needle in &[
+            "dynamodb:GetItem",
+            "dynamodb:BatchGetItem",
+            "dynamodb:PutItem",
+            "dynamodb:BatchWriteItem",
+            "table/cost-coach-tenants/index/*",
+            "s3:GetObject",
+            "s3:PutObject",
+            "s3:DeleteObject",
+            "arn:aws:s3:::cost-coach-snapshots/*",
+            "secretsmanager:GetSecretValue",
+            "arn:aws:secretsmanager:us-west-2:*:secret:cost-coach/*",
+        ] {
+            assert!(
+                ts.contains(needle),
+                "wave3 pmcp-run: missing {needle} in rendered stack.ts"
+            );
+        }
+    }
+
+    #[test]
+    fn wave3_aws_lambda_stack_ts_emits_iam_block_before_outputs() {
+        let init = make_init("aws-lambda");
+        let ts = init.render_stack_ts("demo-server", &cost_coach_iam());
+
+        let banner_idx = ts
+            .find("// Operator-declared IAM")
+            .expect("wave3 aws-lambda: banner missing");
+        let outputs_idx = ts
+            .find("// Outputs")
+            .expect("wave3 aws-lambda: // Outputs missing");
+        assert!(
+            banner_idx < outputs_idx,
+            "wave3 aws-lambda: banner={banner_idx}, outputs={outputs_idx}"
+        );
+
+        // The aws-lambda branch's preceding block is the API Gateway addPermission
+        // call ('ApiGatewayInvoke'). Operator IAM must come after it.
+        let api_gw_idx = ts
+            .find("'ApiGatewayInvoke'")
+            .expect("wave3 aws-lambda: ApiGatewayInvoke anchor missing");
+        assert!(
+            api_gw_idx < banner_idx,
+            "wave3 aws-lambda: operator IAM must follow API Gateway permission"
+        );
+
+        for needle in &[
+            "dynamodb:BatchGetItem",
+            "dynamodb:BatchWriteItem",
+            "arn:aws:s3:::cost-coach-snapshots/*",
+            "secretsmanager:GetSecretValue",
+        ] {
+            assert!(
+                ts.contains(needle),
+                "wave3 aws-lambda: missing {needle}"
+            );
+        }
+    }
+
+    #[test]
+    fn wave3_empty_iam_still_byte_identical_to_golden() {
+        // Redundant with `golden_pmcp_run_stack_ts_empty_iam` but localised
+        // here as a Wave 3 guard: the iam_block placeholder must collapse to
+        // the empty string without leaving residual whitespace.
+        let init = make_init("pmcp-run");
+        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        assert!(
+            !ts.contains("// Operator-declared IAM"),
+            "wave3: empty IamConfig must not emit the operator banner"
+        );
+    }
 }
