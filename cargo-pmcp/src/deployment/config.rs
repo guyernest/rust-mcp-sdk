@@ -964,7 +964,10 @@ resources = ["arn:aws:secretsmanager:us-west-2:*:secret:cost-coach/*"]
             actions: vec!["read".into()],
             include_indexes: false,
         });
-        assert!(!iam.is_empty(), "populated tables vector must flip is_empty");
+        assert!(
+            !iam.is_empty(),
+            "populated tables vector must flip is_empty"
+        );
 
         let mut iam = IamConfig::default();
         iam.buckets.push(BucketPermission {
@@ -991,8 +994,7 @@ resources = ["arn:aws:secretsmanager:us-west-2:*:secret:cost-coach/*"]
     #[test]
     fn cost_coach_shaped_toml_parses_into_populated_iam_config() {
         let fixture = cost_coach_deploy_toml();
-        let cfg: DeployConfig =
-            toml::from_str(&fixture).expect("cost-coach TOML parses");
+        let cfg: DeployConfig = toml::from_str(&fixture).expect("cost-coach TOML parses");
 
         assert_eq!(cfg.iam.tables.len(), 1);
         assert_eq!(cfg.iam.tables[0].name, "cost-coach-tenants");
@@ -1047,12 +1049,10 @@ actions = ["read"]
         // (IamConfig intentionally derives no PartialEq per PATTERNS.md §S1, so
         // compare each field individually).
         let fixture = cost_coach_deploy_toml();
-        let orig: DeployConfig =
-            toml::from_str(&fixture).expect("cost-coach TOML parses");
+        let orig: DeployConfig = toml::from_str(&fixture).expect("cost-coach TOML parses");
         let serialised = toml::to_string(&orig).expect("DeployConfig serialises");
-        let reparsed: DeployConfig = toml::from_str(&serialised).unwrap_or_else(|e| {
-            panic!("reparse failed — serialised:\n{serialised}\nerror: {e}")
-        });
+        let reparsed: DeployConfig = toml::from_str(&serialised)
+            .unwrap_or_else(|e| panic!("reparse failed — serialised:\n{serialised}\nerror: {e}"));
 
         assert_eq!(orig.iam.tables.len(), reparsed.iam.tables.len());
         assert_eq!(orig.iam.tables[0].name, reparsed.iam.tables[0].name);
@@ -1064,10 +1064,7 @@ actions = ["read"]
 
         assert_eq!(orig.iam.buckets.len(), reparsed.iam.buckets.len());
         assert_eq!(orig.iam.buckets[0].name, reparsed.iam.buckets[0].name);
-        assert_eq!(
-            orig.iam.buckets[0].actions,
-            reparsed.iam.buckets[0].actions
-        );
+        assert_eq!(orig.iam.buckets[0].actions, reparsed.iam.buckets[0].actions);
 
         assert_eq!(orig.iam.statements.len(), reparsed.iam.statements.len());
         assert_eq!(
@@ -1095,7 +1092,12 @@ actions = ["read"]
             std::path::PathBuf::from("/tmp/phase76-iam-wave2"),
         );
         let out = toml::to_string(&cfg).expect("DeployConfig serialises");
-        for header in ["[iam]", "[[iam.tables]]", "[[iam.buckets]]", "[[iam.statements]]"] {
+        for header in [
+            "[iam]",
+            "[[iam.tables]]",
+            "[[iam.buckets]]",
+            "[[iam.statements]]",
+        ] {
             assert!(
                 !out.contains(header),
                 "empty IamConfig must not emit {header} header (D-05) — got:\n{out}"
