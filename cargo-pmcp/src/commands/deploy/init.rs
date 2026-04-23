@@ -1765,3 +1765,87 @@ export class McpServerStack extends cdk.Stack {{
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod wave1_stack_ts_tests {
+    //! Phase 76 Wave 1: in-crate tests for `render_stack_ts`.
+    //!
+    //! `InitCommand`'s fields are private, so these assertions live in the same
+    //! module as the struct rather than in `tests/` where only public APIs are
+    //! reachable. The byte-identical golden-file coverage (Task 3) lives in
+    //! `tests/backward_compat_stack_ts.rs` and reads committed golden files.
+
+    use super::*;
+    use crate::deployment::config::IamConfig;
+
+    fn make_init(target_type: &str) -> InitCommand {
+        InitCommand {
+            project_root: PathBuf::from("/tmp/phase76-test"),
+            region: "us-west-2".to_string(),
+            check_credentials: false,
+            oauth_options: OAuthOptions::default(),
+            target_type: target_type.to_string(),
+        }
+    }
+
+    #[test]
+    fn pmcp_run_stack_ts_emits_mcp_role_arn_output() {
+        let init = make_init("pmcp-run");
+        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        assert!(
+            ts.contains("new cdk.CfnOutput(this, 'McpRoleArn', {"),
+            "pmcp-run stack.ts missing McpRoleArn CfnOutput.\nGot:\n{ts}"
+        );
+        assert!(
+            ts.contains("mcpFunction.role!.roleArn"),
+            "pmcp-run stack.ts missing mcpFunction.role!.roleArn value"
+        );
+        assert!(
+            ts.contains("pmcp-${serverId}-McpRoleArn"),
+            "pmcp-run stack.ts missing exportName pmcp-${{serverId}}-McpRoleArn"
+        );
+    }
+
+    #[test]
+    fn aws_lambda_stack_ts_emits_mcp_role_arn_output() {
+        let init = make_init("aws-lambda");
+        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        assert!(
+            ts.contains("new cdk.CfnOutput(this, 'McpRoleArn', {"),
+            "aws-lambda stack.ts missing McpRoleArn CfnOutput"
+        );
+        assert!(
+            ts.contains("mcpFunction.role!.roleArn"),
+            "aws-lambda stack.ts missing mcpFunction.role!.roleArn value"
+        );
+        assert!(
+            ts.contains("pmcp-${serverName}-McpRoleArn"),
+            "aws-lambda stack.ts missing exportName pmcp-${{serverName}}-McpRoleArn"
+        );
+    }
+
+    #[test]
+    fn aws_lambda_stack_ts_imports_iam_module() {
+        let init = make_init("aws-lambda");
+        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        assert!(
+            ts.contains("import * as iam from 'aws-cdk-lib/aws-iam';"),
+            "aws-lambda stack.ts missing 'import * as iam from aws-cdk-lib/aws-iam' (D-03)"
+        );
+    }
+
+    #[test]
+    fn pmcp_run_role_output_placed_after_existing_outputs() {
+        // Regression guard: McpRoleArn must appear AFTER DashboardUrl so the
+        // backward-compat golden (Task 3) diff is minimal when future waves
+        // regenerate the file.
+        let init = make_init("pmcp-run");
+        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        let dashboard_idx = ts.find("'DashboardUrl'").expect("DashboardUrl present");
+        let role_idx = ts.find("'McpRoleArn'").expect("McpRoleArn present");
+        assert!(
+            role_idx > dashboard_idx,
+            "McpRoleArn must be emitted after DashboardUrl (ordering matters for golden diff)"
+        );
+    }
+}
