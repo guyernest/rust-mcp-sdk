@@ -120,6 +120,35 @@ analysis instead of falling back to sentinel values.
   risks slowing the dev loop too much. CI block alone is enough to prevent
   regression.
 
+### Post-Research Refinements (added 2026-04-22 after research surfaced gaps)
+
+- **D-08:** Wave map expands beyond the 5 originally-named hotspots.
+  Researcher confirmed only 16 of 73 in-scope src/ violations live in the
+  named directories; 57 more are scattered across `cargo-pmcp/src/commands/`,
+  `cargo-pmcp/src/loadtest/`, `crates/mcp-tester/`, `crates/mcp-preview/`,
+  `src/server/path_validation.rs`, `src/server/schema_utils.rs`,
+  `src/utils/json_simd.rs`, `src/server/workflow/task_prompt_handler.rs`.
+  D-06's wave structure stays (by hotspot directory) but the planner adds
+  the additional directories to existing waves where they cluster
+  thematically, or creates a "Wave 4: remaining hotspots sweep" that batches
+  the rest. Definition of done from D-01 is binding — phase doesn't close
+  until the badge can flip green.
+
+- **D-09:** D-05 mechanism revised — `.pmatignore` and `[analysis]
+  exclude_patterns` were verified non-functional in PMAT 3.15.0 (two live
+  experiments). The CI gate from D-07 will use
+  `pmat quality-gate --fail-on-violation --checks complexity` to scope the
+  gate to the gating dimension only (consistent with D-01). For the 21
+  examples/ violations: planner picks the cheapest path that lets the
+  badge flip — preferred order: (a) verify whether `pmat quality-gate
+  --include 'src/**'` or equivalent path filter actually works on PMAT
+  3.15.0, (b) if yes, scope the gate to non-example code, (c) if no, bulk
+  `#[allow(clippy::cognitive_complexity)]` on examples/ functions with a
+  single per-file `// Why: illustrative demo code, not production` comment,
+  (d) only refactor examples/ functions if neither (a) nor (c) is workable.
+  D-05's path-exclusion goal for duplicates is downgraded to "best effort"
+  — duplicates are not gating (D-01) so this is no longer a blocker.
+
 ### Claude's Discretion
 - Which specific functions to refactor first within each wave (planner +
   executor pick based on dependency order and file co-location).
