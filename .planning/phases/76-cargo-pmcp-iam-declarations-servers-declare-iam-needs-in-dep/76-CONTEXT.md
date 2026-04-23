@@ -8,6 +8,20 @@ request. Every requirement in the source CR is a locked decision for this phase.
 Source CR: `/Users/guy/Development/mcp/sdk/pmcp-run/docs/CLI_IAM_CHANGE_REQUEST.md`
 (filed 2026-04 by pmcp.run platform team after cost-coach prod incident 2026-04-23).
 
+## CR ambiguities — resolved 2026-04-22 (locked decisions)
+
+Research (`76-RESEARCH.md`) surfaced two CR ambiguities. Operator locked both on 2026-04-22:
+
+- **D-01 — Role handle:** use the Lambda's auto-created role via `mcpFunction.role!`. Emit `mcpFunction.addToRolePolicy(...)` calls (matches existing pattern at `init.rs:594, 607`). Export `mcpFunction.role!.roleArn` as the `McpRoleArn` CfnOutput. Do NOT extract a named `const mcpRole = new iam.Role(...)` — the CR's reference to "McpRole" is informal. The two existing inline policies stay as-is; new iam-declared policies append to the same list.
+
+- **D-02 — DynamoDB action set:** follow the CR literally — 4 actions per bucket, not the 3-action TypeScript construct. `read` emits `{GetItem, Query, Scan, BatchGetItem}`, `write` emits `{PutItem, UpdateItem, DeleteItem, BatchWriteItem}`. The platform's TS `TablePermission` construct can be updated later to match; CR is authoritative for this phase.
+
+- **D-03 — aws-lambda branch import:** the aws-lambda template branch (`init.rs:648-747`) currently lacks `import * as iam from 'aws-cdk-lib/aws-iam'`. Part 2 MUST add it. The pmcp-run branch (`init.rs:492-646`) already imports `iam`.
+
+- **D-04 — Validator surface:** new `ValidateCommand::Deploy` variant (extend existing `commands/validate.rs`). Also invoke from `DeployExecutor::execute` after `DeployConfig::load` so `cargo pmcp deploy` rejects invalid IAM before doing any work.
+
+- **D-05 — Backward compatibility invariant:** given a `.pmcp/deploy.toml` with no `[iam]` section, the emitted `stack.ts` must be byte-identical to the pre-phase output (modulo the additive `McpRoleArn` CfnOutput from Part 1). This is an acceptance criterion for the wave that adds Part 2.
+
 ## Why this phase exists
 
 Servers deployed via `cargo pmcp deploy` cannot write to their own DynamoDB tables,
