@@ -1848,4 +1848,80 @@ mod wave1_stack_ts_tests {
             "McpRoleArn must be emitted after DashboardUrl (ordering matters for golden diff)"
         );
     }
+
+    // ==========================================================================
+    // Golden-file backward-compat tests (Task 3, D-05)
+    // ==========================================================================
+    //
+    // These pin the byte-for-byte output of `render_stack_ts` when IamConfig is
+    // empty. Any change to the renderer that affects the no-`[iam]` code path
+    // must explicitly regenerate the goldens via
+    //   `UPDATE_GOLDEN=1 cargo test -p cargo-pmcp golden`
+    // — otherwise CI fails loud on Waves 2-5.
+    //
+    // Why live here (in-crate) rather than in `tests/backward_compat_stack_ts.rs`:
+    // `InitCommand`'s fields are private, and `cargo-pmcp/src/lib.rs` exposes
+    // only the `loadtest`/`pentest`/`test_support` surface. Integration tests
+    // therefore cannot reach `render_stack_ts` directly. The companion file
+    // `tests/backward_compat_stack_ts.rs` reads these committed goldens from
+    // disk and runs grep-level invariant checks — that file is where the
+    // `files_modified` frontmatter declaration lands.
+
+    fn golden_path(filename: &str) -> std::path::PathBuf {
+        // CARGO_MANIFEST_DIR points at `cargo-pmcp/`, so goldens live at
+        // `cargo-pmcp/tests/golden/<filename>`.
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("golden")
+            .join(filename)
+    }
+
+    fn check_or_update_golden(filename: &str, rendered: &str) {
+        let path = golden_path(filename);
+        if std::env::var("UPDATE_GOLDEN").is_ok() {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap_or_else(|e| {
+                    panic!(
+                        "UPDATE_GOLDEN=1 could not create {}: {e}",
+                        parent.display()
+                    )
+                });
+            }
+            std::fs::write(&path, rendered).unwrap_or_else(|e| {
+                panic!("UPDATE_GOLDEN=1 could not write {}: {e}", path.display())
+            });
+            eprintln!("UPDATE_GOLDEN: regenerated {}", path.display());
+            return;
+        }
+        let golden = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "cannot read golden {}: {e}\n\
+                 First run? Generate it with:\n\
+                 \tUPDATE_GOLDEN=1 cargo test -p cargo-pmcp golden\n\
+                 Then inspect the diff and commit if intentional.",
+                path.display()
+            )
+        });
+        assert_eq!(
+            rendered,
+            golden,
+            "{} drift — D-05 backward-compat invariant violated.\n\
+             Run with UPDATE_GOLDEN=1 to regenerate if the change is intentional.",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn golden_pmcp_run_stack_ts_empty_iam() {
+        let init = make_init("pmcp-run");
+        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        check_or_update_golden("pmcp-run-empty.ts", &ts);
+    }
+
+    #[test]
+    fn golden_aws_lambda_stack_ts_empty_iam() {
+        let init = make_init("aws-lambda");
+        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        check_or_update_golden("aws-lambda-empty.ts", &ts);
+    }
 }
