@@ -38,15 +38,11 @@ impl DeployExecutor {
 
         let config = crate::deployment::config::DeployConfig::load(&self.project_root)?;
 
-        // Phase 76 Wave 4: IAM validation gate. Hard errors block deploy
-        // BEFORE any AWS API call (fail-closed per 76-CONTEXT.md D-04);
-        // warnings print to stderr but never block. T-76-02 wildcard
-        // escalation lands here as a hard error.
+        // Fail-closed IAM gate: hard errors block deploy before any AWS call;
+        // warnings print to stderr and never block.
         let warnings = crate::deployment::iam::validate(&config.iam)
             .context("IAM validation failed — fix .pmcp/deploy.toml before deploying")?;
-        for w in &warnings {
-            eprintln!("  {} {}", console::style("warning:").yellow(), w.message);
-        }
+        crate::deployment::iam::emit_warnings(&warnings);
 
         println!("📋 Server: {}", config.server.name);
         println!("🌍 Region: {}", config.aws.region);
@@ -55,6 +51,11 @@ impl DeployExecutor {
         let builder = crate::deployment::builder::BinaryBuilder::new(self.project_root.clone());
         builder.build()?;
         println!();
+
+        // Regenerate stack.ts from the loaded config so user-declared [iam]
+        // permissions land in the CDK template. `init` scaffolds with an empty
+        // IamConfig; the source of truth at deploy time is .pmcp/deploy.toml.
+        self.regenerate_stack_ts(&config)?;
 
         self.run_cdk_deploy(&config)?;
         println!();
@@ -72,6 +73,19 @@ impl DeployExecutor {
 
         outputs.display();
 
+        Ok(())
+    }
+
+    fn regenerate_stack_ts(&self, config: &crate::deployment::config::DeployConfig) -> Result<()> {
+        let lib_dir = self.project_root.join("deploy").join("lib");
+        std::fs::create_dir_all(&lib_dir).context("Failed to create deploy/lib directory")?;
+        let stack_ts = crate::commands::deploy::init::render_stack_ts_for_deploy(
+            &config.target.target_type,
+            &config.server.name,
+            &config.iam,
+        );
+        std::fs::write(lib_dir.join("stack.ts"), stack_ts)
+            .context("Failed to write deploy/lib/stack.ts")?;
         Ok(())
     }
 

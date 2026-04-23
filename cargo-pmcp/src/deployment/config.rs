@@ -25,11 +25,8 @@ pub struct DeployConfig {
 
     /// IAM declarations for the Lambda execution role (tables, buckets, raw statements).
     ///
-    /// Wave 1 (phase 76 Plan 01) introduces this as a zero-sized placeholder that is
-    /// elided from emitted TOML whenever empty (the default). Wave 2 will add real
-    /// fields without changing this wiring. The `skip_serializing_if` guard preserves
-    /// the D-05 backward-compat invariant: `.pmcp/deploy.toml` files with no `[iam]`
-    /// section round-trip unchanged.
+    /// The `skip_serializing_if` guard preserves byte-identity on the no-`[iam]`
+    /// path so pre-existing `.pmcp/deploy.toml` files round-trip unchanged.
     #[serde(default, skip_serializing_if = "IamConfig::is_empty")]
     pub iam: IamConfig,
 
@@ -728,17 +725,14 @@ impl Default for CompositionConfig {
 
 /// IAM declarations for the deployed Lambda's execution role.
 ///
-/// Translated in Wave 3 into `mcpFunction.addToRolePolicy(...)` calls in the
-/// generated CDK `stack.ts`. An empty `IamConfig` (all three vectors empty) is
-/// elided entirely from serialised TOML via
-/// `#[serde(skip_serializing_if = "IamConfig::is_empty")]` on `DeployConfig`,
-/// preserving the D-05 backward-compat invariant from `76-CONTEXT.md`:
-/// `.pmcp/deploy.toml` files without an `[iam]` section round-trip byte-identically.
+/// Translated by [`crate::deployment::iam::render_iam_block`] into
+/// `mcpFunction.addToRolePolicy(...)` calls in the generated CDK `stack.ts`.
+/// An empty `IamConfig` is elided from serialised TOML via the
+/// `skip_serializing_if = "IamConfig::is_empty"` guard on `DeployConfig::iam`,
+/// so files without an `[iam]` section round-trip byte-identically.
 ///
-/// The schema matches
-/// `/Users/guy/Development/mcp/sdk/pmcp-run/docs/CLI_IAM_CHANGE_REQUEST.md` —
-/// see [`TablePermission`], [`BucketPermission`], and [`IamStatement`] for the
-/// per-kind details.
+/// See [`TablePermission`], [`BucketPermission`], and [`IamStatement`] for
+/// the per-kind details.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IamConfig {
     /// DynamoDB table permissions (sugar form — see [`TablePermission`]).
@@ -750,17 +744,10 @@ pub struct IamConfig {
     #[serde(default)]
     pub buckets: Vec<BucketPermission>,
 
-    /// Raw IAM policy statements (passthrough after Wave 4 validation).
+    /// Raw IAM policy statements (passthrough after the validator).
     #[serde(default)]
     pub statements: Vec<IamStatement>,
 }
-// Default is derived — all three fields are `Vec<T>` whose `Default::default()`
-// produces an empty vector, which matches the required semantics (`is_empty`
-// returns true). The plan's must_have ("never derive(Default) when fields have
-// non-trivial defaults") is satisfied because every field here IS a trivial
-// default. The AssetsConfig analog writes `Default` by hand only because its
-// `exclude` field seeds several tmp/DS_Store patterns; no such seeding applies
-// to IamConfig. `clippy::derivable_impls` enforces this.
 
 impl IamConfig {
     /// Returns `true` when the IAM config contains no declarations

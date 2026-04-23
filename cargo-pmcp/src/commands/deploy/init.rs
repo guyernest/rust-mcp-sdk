@@ -493,35 +493,14 @@ app.synth();
 
     /// Render the CDK `stack.ts` as a string, without touching the filesystem.
     ///
-    /// Extracted from [`Self::create_stack_ts`] in phase 76 Plan 01 so:
-    ///
-    /// - Tests (in-crate `wave1_stack_ts_tests` + integration golden files) can
-    ///   assert on the exact emitted TypeScript without going through a tempdir.
-    /// - Waves 3/5 of phase 76 can inject a rendered `[iam]` block at a single
-    ///   well-defined seam — the `_iam` parameter — without touching this
-    ///   function's callers.
-    ///
-    /// Wave 3 drops the leading underscore on `iam` (previously `_iam` in
-    /// Wave 1 while `IamConfig` was a zero-sized stub) and threads
-    /// `render_iam_block(iam)` into a single `{iam_block}` named placeholder
-    /// spliced directly after the last platform-composition `addToRolePolicy`
-    /// closer in each branch — the empty-config path collapses to
-    /// byte-identical output, preserving the D-05 backward-compat invariant.
-    /// This signature is marked `#[doc(hidden)]` because it exists solely to
-    /// serve in-crate tests and future-wave executors — callers outside this
-    /// crate must not depend on it across semver.
-    #[doc(hidden)]
-    pub fn render_stack_ts(
+    /// Operator-declared `[iam]` is spliced in at a single `{iam_block}` seam
+    /// in each template branch; empty config renders as `""` so files with no
+    /// `[iam]` section produce byte-identical output.
+    pub(crate) fn render_stack_ts(
         &self,
         server_name: &str,
         iam: &crate::deployment::config::IamConfig,
     ) -> String {
-        // Wave 3: render operator-declared IAM once up front so both template
-        // branches splice the same string in via a named `{iam_block}`
-        // placeholder. Returns `""` for the default (empty) config so the
-        // D-05 byte-identity invariant is preserved on the no-`[iam]` path.
-        // Imports through the `deployment` facade re-export so clippy sees
-        // `pub use deployment::render_iam_block` as reachable.
         let iam_block = crate::deployment::render_iam_block(iam);
 
         // For pmcp-run target: Lambda-only stack (no API Gateway)
@@ -1773,6 +1752,26 @@ export class McpServerStack extends cdk.Stack {{
 
         Ok(())
     }
+}
+
+/// Render `deploy/lib/stack.ts` for an already-loaded `DeployConfig`.
+///
+/// Used by `cargo pmcp deploy` to regenerate the stack file from the user's
+/// current `.pmcp/deploy.toml` before handing off to `cdk deploy`, so declared
+/// `[iam]` permissions land in the synthesised template.
+pub(crate) fn render_stack_ts_for_deploy(
+    target_type: &str,
+    server_name: &str,
+    iam: &crate::deployment::config::IamConfig,
+) -> String {
+    let init = InitCommand {
+        project_root: PathBuf::new(),
+        region: String::new(),
+        check_credentials: false,
+        oauth_options: OAuthOptions::default(),
+        target_type: target_type.to_string(),
+    };
+    init.render_stack_ts(server_name, iam)
 }
 
 #[cfg(test)]

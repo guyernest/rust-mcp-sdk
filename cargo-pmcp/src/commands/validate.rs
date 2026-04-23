@@ -551,9 +551,7 @@ pub fn validate_deploy(server: Option<String>, verbose: bool) -> Result<()> {
         .context("IAM validation failed — fix .pmcp/deploy.toml before deploying")?;
 
     if not_quiet {
-        for w in &warnings {
-            eprintln!("  {} {}", style("warning:").yellow(), w.message);
-        }
+        crate::deployment::iam::emit_warnings(&warnings);
         if warnings.is_empty() {
             println!(
                 "  {} IAM configuration valid (no warnings)",

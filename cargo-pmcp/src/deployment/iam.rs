@@ -34,11 +34,16 @@
 //! keeping render and validate cleanly separable.
 
 use std::fmt::Write as _;
+use std::sync::LazyLock;
 
 use anyhow::{anyhow, Result};
 use regex::Regex;
 
 use crate::deployment::config::{BucketPermission, IamConfig, IamStatement, TablePermission};
+
+static ACTION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(ACTION_REGEX).expect("ACTION_REGEX is a static, known-good pattern")
+});
 
 // ============================================================================
 // Validation (Phase 76 Wave 4)
@@ -60,6 +65,15 @@ impl Warning {
         Self {
             message: message.into(),
         }
+    }
+}
+
+/// Print validator warnings to stderr with a consistent yellow `warning:` label.
+/// Shared by `cargo pmcp deploy` and `cargo pmcp validate deploy` so both entry
+/// points emit the same format.
+pub fn emit_warnings(warnings: &[Warning]) {
+    for w in warnings {
+        eprintln!("  {} {}", console::style("warning:").yellow(), w.message);
     }
 }
 
@@ -146,59 +160,57 @@ const KNOWN_SERVICE_PREFIXES: &[&str] = &[
 /// Returns `Err` on the first hard-error rule violation. Warnings never
 /// produce an `Err`.
 pub fn validate(iam: &IamConfig) -> Result<Vec<Warning>> {
-    let action_re = Regex::new(ACTION_REGEX).expect("ACTION_REGEX is a static, known-good pattern");
     let mut warnings = Vec::new();
 
-    validate_tables(&iam.tables)?;
-    validate_buckets(&iam.buckets)?;
-    validate_statements(&iam.statements, &action_re, &mut warnings)?;
+    validate_sugar_decls("tables", &iam.tables)?;
+    validate_sugar_decls("buckets", &iam.buckets)?;
+    validate_statements(&iam.statements, &mut warnings)?;
 
     Ok(warnings)
 }
 
-/// Validate `[[iam.tables]]` entries. Rules 5 + 6 for tables.
-fn validate_tables(tables: &[TablePermission]) -> Result<()> {
-    for (idx, t) in tables.iter().enumerate() {
-        if t.name.trim().is_empty() {
-            return Err(anyhow!("[iam.tables][{idx}]: name must not be empty"));
-        }
-        if t.actions.is_empty() {
-            return Err(anyhow!(
-                "[iam.tables][{idx}] '{}': actions must not be empty",
-                t.name
-            ));
-        }
-        for a in &t.actions {
-            if !VALID_SUGAR.contains(&a.as_str()) {
-                return Err(anyhow!(
-                    "[iam.tables][{idx}] '{}': unknown sugar keyword '{}' — allowed: {{read, write, readwrite}}",
-                    t.name,
-                    a
-                ));
-            }
-        }
-    }
-    Ok(())
+/// Entry in an `[[iam.tables]]` or `[[iam.buckets]]` section. Both kinds share
+/// the same validation shape (non-empty name, sugar-keyword actions).
+trait SugarDecl {
+    fn name(&self) -> &str;
+    fn actions(&self) -> &[String];
 }
 
-/// Validate `[[iam.buckets]]` entries. Rules 5 + 6 for buckets.
-fn validate_buckets(buckets: &[BucketPermission]) -> Result<()> {
-    for (idx, b) in buckets.iter().enumerate() {
-        if b.name.trim().is_empty() {
-            return Err(anyhow!("[iam.buckets][{idx}]: name must not be empty"));
+impl SugarDecl for TablePermission {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn actions(&self) -> &[String] {
+        &self.actions
+    }
+}
+
+impl SugarDecl for BucketPermission {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn actions(&self) -> &[String] {
+        &self.actions
+    }
+}
+
+/// Validate `[[iam.tables]]` / `[[iam.buckets]]` entries (Rules 5 + 6).
+fn validate_sugar_decls<T: SugarDecl>(kind: &str, entries: &[T]) -> Result<()> {
+    for (idx, e) in entries.iter().enumerate() {
+        if e.name().trim().is_empty() {
+            return Err(anyhow!("[iam.{kind}][{idx}]: name must not be empty"));
         }
-        if b.actions.is_empty() {
+        if e.actions().is_empty() {
             return Err(anyhow!(
-                "[iam.buckets][{idx}] '{}': actions must not be empty",
-                b.name
+                "[iam.{kind}][{idx}] '{}': actions must not be empty",
+                e.name()
             ));
         }
-        for a in &b.actions {
+        for a in e.actions() {
             if !VALID_SUGAR.contains(&a.as_str()) {
                 return Err(anyhow!(
-                    "[iam.buckets][{idx}] '{}': unknown sugar keyword '{}' — allowed: {{read, write, readwrite}}",
-                    b.name,
-                    a
+                    "[iam.{kind}][{idx}] '{}': unknown sugar keyword '{a}' — allowed: {{read, write, readwrite}}",
+                    e.name()
                 ));
             }
         }
@@ -207,15 +219,11 @@ fn validate_buckets(buckets: &[BucketPermission]) -> Result<()> {
 }
 
 /// Validate `[[iam.statements]]` entries. Rules 1-4 + warnings 7-8.
-fn validate_statements(
-    stmts: &[IamStatement],
-    action_re: &Regex,
-    warnings: &mut Vec<Warning>,
-) -> Result<()> {
+fn validate_statements(stmts: &[IamStatement], warnings: &mut Vec<Warning>) -> Result<()> {
     for (idx, stmt) in stmts.iter().enumerate() {
         check_statement_effect_and_shape(idx, stmt)?;
         check_statement_wildcard_escalation(idx, stmt)?;
-        check_statement_actions(idx, stmt, action_re, warnings)?;
+        check_statement_actions(idx, stmt, warnings)?;
         collect_cross_account_warnings(idx, stmt, warnings);
     }
     Ok(())
@@ -261,18 +269,15 @@ fn check_statement_wildcard_escalation(idx: usize, stmt: &IamStatement) -> Resul
 fn check_statement_actions(
     idx: usize,
     stmt: &IamStatement,
-    action_re: &Regex,
     warnings: &mut Vec<Warning>,
 ) -> Result<()> {
     for a in &stmt.actions {
-        // `*` is treated as a special pass-through action by itself so that
-        // `actions = ["*"]` with a tightened `resources` list remains
-        // declarable (Rule 1 already rejects the `*` + `*` combo). The regex
-        // also accepts `*` via `[A-Za-z0-9*]+` when combined with a prefix.
+        // `*` alone is allowed so `actions = ["*"]` with a tightened
+        // `resources` list remains declarable (Rule 1 already rejects `*`+`*`).
         if a == "*" {
             continue;
         }
-        if !action_re.is_match(a) {
+        if !ACTION_RE.is_match(a) {
             return Err(anyhow!(
                 "[iam.statements][{idx}]: action '{a}' does not match {ACTION_REGEX}"
             ));
@@ -363,63 +368,64 @@ pub fn render_iam_block(iam: &IamConfig) -> String {
     out
 }
 
+/// Emit the shared `addToRolePolicy(new iam.PolicyStatement({ ... }))`
+/// skeleton, delegating to `body` for the per-kind effect/actions/resources
+/// lines. Keeps the skeleton change-in-one-place across the three renderers.
+fn render_policy_statement(body: impl FnOnce(&mut String)) -> String {
+    let mut out = String::new();
+    out.push_str("    mcpFunction.addToRolePolicy(new iam.PolicyStatement({\n");
+    body(&mut out);
+    out.push_str("    }));\n");
+    out
+}
+
 /// Render a single [`TablePermission`] as a 4-space-indented
 /// `addToRolePolicy` statement.
 fn render_table(t: &TablePermission) -> String {
-    let actions = table_actions(&t.actions);
-    let actions_ts = format_single_quoted_array(&actions);
+    let actions_ts = format_single_quoted_array(&table_actions(&t.actions));
     let resources_ts = render_table_resources(&t.name, t.include_indexes);
 
-    let mut out = String::new();
-    out.push_str("    mcpFunction.addToRolePolicy(new iam.PolicyStatement({\n");
-    out.push_str("      effect: iam.Effect.ALLOW,\n");
-    let _ = writeln!(out, "      actions: {actions_ts},");
-    out.push_str("      resources: [\n");
-    out.push_str(&resources_ts);
-    out.push_str("      ],\n");
-    out.push_str("    }));\n");
-    out
+    render_policy_statement(|out| {
+        out.push_str("      effect: iam.Effect.ALLOW,\n");
+        let _ = writeln!(out, "      actions: {actions_ts},");
+        out.push_str("      resources: [\n");
+        out.push_str(&resources_ts);
+        out.push_str("      ],\n");
+    })
 }
 
 /// Render a single [`BucketPermission`] as a 4-space-indented
 /// `addToRolePolicy` statement.
 fn render_bucket(b: &BucketPermission) -> String {
-    let actions = bucket_actions(&b.actions);
-    let actions_ts = format_single_quoted_array(&actions);
+    let actions_ts = format_single_quoted_array(&bucket_actions(&b.actions));
     let resource = format!("`arn:aws:s3:::{name}/*`", name = b.name);
 
-    let mut out = String::new();
-    out.push_str("    mcpFunction.addToRolePolicy(new iam.PolicyStatement({\n");
-    out.push_str("      effect: iam.Effect.ALLOW,\n");
-    let _ = writeln!(out, "      actions: {actions_ts},");
-    out.push_str("      resources: [\n");
-    let _ = writeln!(out, "        {resource},");
-    out.push_str("      ],\n");
-    out.push_str("    }));\n");
-    out
+    render_policy_statement(|out| {
+        out.push_str("      effect: iam.Effect.ALLOW,\n");
+        let _ = writeln!(out, "      actions: {actions_ts},");
+        out.push_str("      resources: [\n");
+        let _ = writeln!(out, "        {resource},");
+        out.push_str("      ],\n");
+    })
 }
 
 /// Render a raw [`IamStatement`] (passthrough after Wave 4 validation).
 fn render_statement(s: &IamStatement) -> String {
+    // Wave 4's validator rejects effect strings outside {"Allow", "Deny"}
+    // before we get here, so anything not case-insensitive "Deny" is an Allow.
     let effect_ts = if s.effect.eq_ignore_ascii_case("Deny") {
         "iam.Effect.DENY"
     } else {
-        // Default to ALLOW for anything that isn't a case-insensitive "Deny".
-        // Wave 4's validator rejects effect strings outside {"Allow", "Deny"}
-        // before calling into this renderer, so in the supported path this
-        // branch always corresponds to a canonical "Allow".
         "iam.Effect.ALLOW"
     };
     let actions_ts = format_single_quoted_array(&s.actions);
     let resources_ts = format_single_quoted_array(&s.resources);
 
-    let mut out = String::new();
-    out.push_str("    mcpFunction.addToRolePolicy(new iam.PolicyStatement({\n");
-    let _ = writeln!(out, "      effect: {effect_ts},");
-    let _ = writeln!(out, "      actions: {actions_ts},");
-    let _ = writeln!(out, "      resources: {resources_ts},");
-    out.push_str("    }));\n");
-    out
+    render_policy_statement(|out| {
+        let _ = writeln!(out, "      effect: {effect_ts},");
+        let _ = writeln!(out, "      actions: {actions_ts},");
+        let _ = writeln!(out, "      resources: {resources_ts},");
+    })
 }
 
 /// Expand sugar keywords in `actions` to the D-02 DynamoDB action list.
