@@ -479,6 +479,333 @@ mod tests {
 }
 
 #[cfg(test)]
+mod validate_tests {
+    //! Phase 76 Wave 4 — unit tests for `validate` + `Warning`.
+    //!
+    //! RED-phase tests: authored before the implementation. Each test locks a
+    //! CR-mandated hard-error or warning rule per `76-CONTEXT.md §Validation`.
+
+    use super::*;
+    use crate::deployment::config::{BucketPermission, IamStatement, TablePermission};
+
+    fn mk_iam_stmt(stmts: Vec<IamStatement>) -> IamConfig {
+        IamConfig {
+            statements: stmts,
+            ..IamConfig::default()
+        }
+    }
+
+    #[test]
+    fn empty_config_is_valid() {
+        let w = validate(&IamConfig::default()).expect("valid");
+        assert!(w.is_empty());
+    }
+
+    #[test]
+    fn allow_star_star_is_hard_error() {
+        let iam = mk_iam_stmt(vec![IamStatement {
+            effect: "Allow".into(),
+            actions: vec!["*".into()],
+            resources: vec!["*".into()],
+        }]);
+        let err = validate(&iam).expect_err("wildcard escalation must fail");
+        assert!(
+            err.to_string().contains("wildcard escalation"),
+            "expected wildcard escalation message, got: {err}"
+        );
+    }
+
+    #[test]
+    fn unknown_effect_is_error() {
+        let iam = mk_iam_stmt(vec![IamStatement {
+            effect: "Permit".into(),
+            actions: vec!["s3:GetObject".into()],
+            resources: vec!["*".into()],
+        }]);
+        let err = validate(&iam).expect_err("bad effect must fail");
+        assert!(err.to_string().contains("effect"));
+    }
+
+    #[test]
+    fn empty_actions_is_error() {
+        let iam = mk_iam_stmt(vec![IamStatement {
+            effect: "Allow".into(),
+            actions: vec![],
+            resources: vec!["*".into()],
+        }]);
+        validate(&iam).expect_err("empty actions must fail");
+    }
+
+    #[test]
+    fn empty_resources_is_error() {
+        let iam = mk_iam_stmt(vec![IamStatement {
+            effect: "Allow".into(),
+            actions: vec!["s3:GetObject".into()],
+            resources: vec![],
+        }]);
+        validate(&iam).expect_err("empty resources must fail");
+    }
+
+    #[test]
+    fn malformed_action_uppercase_prefix_is_error() {
+        let iam = mk_iam_stmt(vec![IamStatement {
+            effect: "Allow".into(),
+            actions: vec!["DynamoDB:getitem".into()],
+            resources: vec!["*".into()],
+        }]);
+        validate(&iam).expect_err("bad action casing must fail");
+    }
+
+    #[test]
+    fn underscore_in_action_prefix_is_error() {
+        let iam = mk_iam_stmt(vec![IamStatement {
+            effect: "Allow".into(),
+            actions: vec!["foo_bar:GetThing".into()],
+            resources: vec!["*".into()],
+        }]);
+        validate(&iam).expect_err("underscore in service prefix must fail");
+    }
+
+    #[test]
+    fn table_empty_name_is_error() {
+        let iam = IamConfig {
+            tables: vec![TablePermission {
+                name: String::new(),
+                actions: vec!["read".into()],
+                include_indexes: false,
+            }],
+            ..IamConfig::default()
+        };
+        validate(&iam).expect_err("empty table name must fail");
+    }
+
+    #[test]
+    fn table_invalid_sugar_keyword_is_error() {
+        let iam = IamConfig {
+            tables: vec![TablePermission {
+                name: "t".into(),
+                actions: vec!["readfoo".into()],
+                include_indexes: false,
+            }],
+            ..IamConfig::default()
+        };
+        let err = validate(&iam).expect_err("bad sugar keyword must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("sugar") || msg.contains("read, write, readwrite"),
+            "expected sugar-keyword message, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn bucket_empty_name_is_error() {
+        let iam = IamConfig {
+            buckets: vec![BucketPermission {
+                name: String::new(),
+                actions: vec!["read".into()],
+            }],
+            ..IamConfig::default()
+        };
+        validate(&iam).expect_err("empty bucket name must fail");
+    }
+
+    #[test]
+    fn bucket_invalid_sugar_is_error() {
+        let iam = IamConfig {
+            buckets: vec![BucketPermission {
+                name: "b".into(),
+                actions: vec!["cook".into()],
+            }],
+            ..IamConfig::default()
+        };
+        validate(&iam).expect_err("bad bucket sugar must fail");
+    }
+
+    #[test]
+    fn unknown_service_prefix_is_warning_not_error() {
+        let iam = mk_iam_stmt(vec![IamStatement {
+            effect: "Allow".into(),
+            actions: vec!["totallyfake:DoThing".into()],
+            resources: vec!["*".into()],
+        }]);
+        let warnings = validate(&iam).expect("warnings only, no hard error");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.message.contains("unknown service prefix")
+                    && w.message.contains("totallyfake")),
+            "expected warning about 'totallyfake' prefix, got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn cross_account_arn_does_not_hard_error() {
+        // Cross-account detection is advisory, not a gate. Best-effort parser
+        // may or may not emit a warning for a given shape — test documents
+        // behaviour without over-specifying the warning class.
+        let iam = mk_iam_stmt(vec![IamStatement {
+            effect: "Allow".into(),
+            actions: vec!["s3:GetObject".into()],
+            resources: vec!["arn:aws:s3:::bucket/object:999999999999:foo".into()],
+        }]);
+        let warnings = validate(&iam).expect("not a hard error");
+        assert!(
+            warnings.iter().all(|w| !w.message.contains("wildcard")),
+            "no wildcard spam expected"
+        );
+    }
+
+    #[test]
+    fn typical_cost_coach_config_is_valid_without_warnings() {
+        let iam = IamConfig {
+            tables: vec![TablePermission {
+                name: "cost-coach-tenants".into(),
+                actions: vec!["readwrite".into()],
+                include_indexes: true,
+            }],
+            buckets: vec![BucketPermission {
+                name: "cost-coach-snapshots".into(),
+                actions: vec!["readwrite".into()],
+            }],
+            statements: vec![IamStatement {
+                effect: "Allow".into(),
+                actions: vec!["secretsmanager:GetSecretValue".into()],
+                resources: vec!["arn:aws:secretsmanager:us-west-2:*:secret:cost-coach/*".into()],
+            }],
+        };
+        let warnings = validate(&iam).expect("cost-coach config must validate");
+        assert!(
+            warnings.is_empty(),
+            "cost-coach config emitted unexpected warnings: {warnings:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod validate_integration_tests {
+    //! Phase 76 Wave 4 — in-crate integration-style tests for the validator.
+    //!
+    //! **Rule-3 deviation note (consistent with Wave 1/2/3):** the plan called
+    //! for this file at `cargo-pmcp/tests/iam_validate.rs`, but
+    //! `cargo_pmcp::deployment` is NOT re-exported from `cargo-pmcp/src/lib.rs`
+    //! (lib surface intentionally minimal at `loadtest`/`pentest`/
+    //! `test_support_cache`). Expanding lib visibility would drag in the
+    //! CognitoConfig + templates tree for very little over the in-crate
+    //! coverage. Tests are identical in intent — they exercise the public
+    //! `validate` + `Warning` API through `super::*` rather than through a
+    //! crate-root re-export.
+
+    use super::*;
+    use crate::deployment::config::{BucketPermission, IamStatement, TablePermission};
+
+    fn one_stmt(effect: &str, actions: Vec<&str>, resources: Vec<&str>) -> IamConfig {
+        IamConfig {
+            statements: vec![IamStatement {
+                effect: effect.into(),
+                actions: actions.into_iter().map(String::from).collect(),
+                resources: resources.into_iter().map(String::from).collect(),
+            }],
+            ..IamConfig::default()
+        }
+    }
+
+    #[test]
+    fn public_api_validate_accepts_empty() {
+        let warnings: Vec<Warning> = validate(&IamConfig::default()).expect("ok");
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn public_api_validate_rejects_wildcard_allow() {
+        let iam = one_stmt("Allow", vec!["*"], vec!["*"]);
+        let err = validate(&iam).expect_err("must fail");
+        assert!(err.to_string().to_lowercase().contains("wildcard"));
+    }
+
+    #[test]
+    fn public_api_validate_rejects_empty_statement_actions() {
+        let iam = one_stmt("Allow", vec![], vec!["*"]);
+        validate(&iam).expect_err("empty actions");
+    }
+
+    #[test]
+    fn public_api_validate_rejects_empty_statement_resources() {
+        let iam = one_stmt("Allow", vec!["s3:GetObject"], vec![]);
+        validate(&iam).expect_err("empty resources");
+    }
+
+    #[test]
+    fn public_api_validate_rejects_bad_effect() {
+        let iam = one_stmt("Maybe", vec!["s3:GetObject"], vec!["*"]);
+        validate(&iam).expect_err("bad effect");
+    }
+
+    #[test]
+    fn public_api_validate_rejects_bad_action_format() {
+        let iam = one_stmt("Allow", vec!["S3:get_object"], vec!["*"]);
+        validate(&iam).expect_err("bad action format");
+    }
+
+    #[test]
+    fn public_api_validate_rejects_bad_table_sugar() {
+        let iam = IamConfig {
+            tables: vec![TablePermission {
+                name: "t".into(),
+                actions: vec!["rwx".into()],
+                include_indexes: false,
+            }],
+            ..IamConfig::default()
+        };
+        validate(&iam).expect_err("bad table sugar");
+    }
+
+    #[test]
+    fn public_api_validate_rejects_bad_bucket_sugar() {
+        let iam = IamConfig {
+            buckets: vec![BucketPermission {
+                name: "b".into(),
+                actions: vec!["flood".into()],
+            }],
+            ..IamConfig::default()
+        };
+        validate(&iam).expect_err("bad bucket sugar");
+    }
+
+    #[test]
+    fn public_api_validate_rejects_empty_table_name() {
+        let iam = IamConfig {
+            tables: vec![TablePermission {
+                name: String::new(),
+                actions: vec!["read".into()],
+                include_indexes: false,
+            }],
+            ..IamConfig::default()
+        };
+        validate(&iam).expect_err("empty table name");
+    }
+
+    #[test]
+    fn public_api_validate_warns_on_unknown_service_prefix() {
+        let iam = one_stmt("Allow", vec!["mythicalaws:DoThing"], vec!["*"]);
+        let warnings = validate(&iam).expect("warning only, not hard error");
+        assert!(
+            warnings.iter().any(|w| w.message.contains("mythicalaws")),
+            "expected warning referencing 'mythicalaws', got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn public_api_warning_is_constructable_and_clonable() {
+        // Compile-time + runtime sanity: Warning is Clone + Debug.
+        let iam = one_stmt("Allow", vec!["notaservice:Foo"], vec!["*"]);
+        let warnings = validate(&iam).expect("ok");
+        let first = warnings.first().cloned();
+        let _debug_repr = format!("{first:?}");
+        assert!(first.is_some());
+    }
+}
+
+#[cfg(test)]
 mod proptests {
     //! Phase 76 Wave 3 Task 3 — property tests for the IAM translation rules.
     //!
