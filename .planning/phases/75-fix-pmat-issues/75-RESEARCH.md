@@ -450,6 +450,82 @@ For the badge to flip, **all 94 must be addressed** (refactor or `#[allow]`). Th
 
 `[VERIFIED: jq aggregation of /tmp/pmat-complexity.json this session]`
 
+### Inventory Reconciliation (added 2026-04-23 post-cross-AI-review)
+
+**The math in Pitfall 6 doesn't add up cleanly.** The cited breakdown is:
+- 21 examples/ + 3 fuzz/ + 73 in-scope = **97**, not 94.
+- The 4-item fuzz/ list (`test_auth_flow` cog 122, `test_pkce_flow` cog 45,
+  `simulate_transport_operations` cog 46, `test_websocket_framing` cog 30) is
+  4 functions but Pitfall 6's prose counts them as "3" — the prose is wrong
+  by one. So the derived total is actually 21 + 4 + 73 = **98**.
+
+**Codex reviewer flagged this** as "every wave delta and exit criterion is
+suspect" until reconciled. The 94 figure came from
+`pmat quality-gate --fail-on-violation --format json | jq '.violations | length'`
+on the baseline date; the per-bucket 21/3-or-4/73 came from a separate
+`pmat analyze complexity --format json` query filtered by path. The
+discrepancy is likely one or more of:
+
+- One fuzz function (e.g. `test_websocket_framing` cog 30) sitting just at
+  the 25-cog threshold and being included in `analyze complexity --max-cognitive 25`
+  but excluded from `quality-gate`'s default threshold.
+- A function exported from a path that PMAT classifies differently between
+  the two subcommands (e.g. a `crates/foo/examples/` path counted as `examples/`
+  in one query and as `crates/foo/` in the other).
+- Stale snapshot — counts taken on slightly different commits.
+
+**Resolution policy (binding for all later waves):**
+
+The authoritative violation count for Wave-N success criteria is the live
+output of `pmat quality-gate --fail-on-violation --checks complexity --format json`
+on the wave-merge commit. **Wave 0 Task 6 (added in the post-review revision
+pass) generates a machine-readable inventory snapshot** at
+`.planning/phases/75-fix-pmat-issues/pmat-inventory-2026-04-22.json`
+(committed to the repo) — every later wave's "expected count drop" is
+derived from that single JSON file via `jq` rather than from the prose
+counts in this document.
+
+**Practical implication for plan numbers:**
+- Treat all "94" / "73" / "21" / "3" figures in this RESEARCH.md as
+  *approximate* — they're the right order of magnitude and the right
+  per-directory clustering, but ±5 from the live truth.
+- Treat the live `pmat-inventory-2026-04-22.json` (Wave 0 Task 6 output)
+  as the authoritative numerator.
+- Wave-merge commit messages record `pmat-complexity: NN (was MM)` from
+  live measurement, not from this doc's projections.
+
+### Badge/Gate Command Verification (added 2026-04-23 post-cross-AI-review)
+
+**Codex reviewer flagged a stated-goal failure mode:** the badge in
+`quality-badges.yml` line ~70-82 is set by
+`pmat quality-gate --fail-on-violation` (no `--checks` filter), but Wave 5
+adds enforcement only for `pmat quality-gate --fail-on-violation --checks
+complexity` to `ci.yml`. CI can flip green while the badge stays red.
+
+**The phase goal is "restore the badge", not "make CI green"** — D-01 is
+binding. So Wave 0 (post-review revision) adds Task 5 to verify which
+specific dimensions currently fail the bare gate:
+
+```bash
+pmat quality-gate --fail-on-violation --format json > /tmp/bare-gate.json; echo "bare exit=$?"
+pmat quality-gate --fail-on-violation --checks complexity --format json > /tmp/cx-gate.json; echo "cx exit=$?"
+# Compare per-check counts to identify which dimensions cause non-zero exit on bare.
+```
+
+**Two outcomes drive Wave 5:**
+- **Case A — only complexity fails today:** the existing Wave 5 plan
+  works; flipping complexity to 0 also flips the bare gate to 0; badge
+  flips green. Wave 5 only edits `ci.yml`.
+- **Case B — other dimensions also fail today** (e.g. SATD count is
+  factored into bare-gate exit code): Wave 5 MUST also edit
+  `quality-badges.yml` so the badge command matches the CI gate command
+  (both use `--checks complexity`, OR both use the same path-filter).
+
+**See CONTEXT.md D-11 for the binding decision tree.** Wave 5 plan is
+written to handle BOTH branches; Wave 0 Task 5 narrows to one before
+Wave 5 runs.
+
+
 ## Code Examples
 
 ### Verified pattern: Existing bare `#[allow(clippy::cognitive_complexity)]` (anti-pattern per D-02)

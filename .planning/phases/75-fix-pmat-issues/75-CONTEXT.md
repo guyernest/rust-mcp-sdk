@@ -2,6 +2,8 @@
 
 **Gathered:** 2026-04-22
 **Status:** Ready for planning
+**Patched:** 2026-04-23 (post-cross-AI-review — added D-10/D-11 conditional decisions
+on PMAT-allow suppression behavior + badge/gate semantic alignment)
 
 <domain>
 ## Phase Boundary
@@ -149,18 +151,66 @@ analysis instead of falling back to sentinel values.
   D-05's path-exclusion goal for duplicates is downgraded to "best effort"
   — duplicates are not gating (D-01) so this is no longer a blocker.
 
-### Claude's Discretion
-- Which specific functions to refactor first within each wave (planner +
-  executor pick based on dependency order and file co-location).
-- Whether to introduce shared types/traits to reduce complexity vs duplicate
-  helpers per call site — judgment call per case.
-- How to structure GitHub issues filed for SATDs (one issue per SATD vs grouped
-  by area) — planner can decide based on triage outcome.
-- Exact PMAT config file location and syntax for path exclusion (verify
-  against `pmat --help` output and the actual `.pmat/project.toml` format used
-  by 3.11.1).
-- Whether the CI gate workflow should run on PRs only or also nightly — pick
-  whichever is least disruptive while preventing regression.
+### Post-Review Refinements (added 2026-04-23 after cross-AI review of plan set)
+
+- **D-10:** PMAT-allow-suppression behavior is the load-bearing assumption
+  for D-02/D-03; it MUST be empirically verified in Wave 0 before any
+  refactor wave begins. A new Wave 0 task (75-00 Task 4) writes a tiny
+  fixture function with cog ≥30, runs `pmat analyze complexity`, adds
+  `#[allow(clippy::cognitive_complexity)]` per the D-02 `// Why:` template,
+  re-runs PMAT, and records the result in
+  `.planning/phases/75-fix-pmat-issues/pmat-allow-behavior.md`.
+
+  **Branch on result:**
+  - **(D-10-A) PMAT honors the allow** (function disappears from violations
+    after annotation): proceed as planned. P5 (`#[allow]` with `// Why:`)
+    remains a valid technique throughout Waves 1-4. D-03 still applies
+    (cap 50 even with allow).
+  - **(D-10-B) PMAT IGNORES the allow** (function still flagged after
+    annotation): P5 is REMOVED from the refactor toolkit. All hotspot
+    functions must REDUCE to ≤25 by extraction. D-02's `// Why:` template
+    is retained for documentation hygiene only (it provides a paper trail
+    even if it doesn't reduce the gate count). D-03's "cap 50" becomes
+    irrelevant — every function must hit ≤25. The planner must re-budget
+    every later wave's projected count drops (currently inflated under the
+    P5-works assumption); the executor surfaces this as a SCOPE EXPANSION
+    in 75-00-SUMMARY.md so the user can decide whether to split the phase
+    or accept the additional refactor work.
+
+  Plans 75-01 through 75-05 remain authored under the (D-10-A) "allow works"
+  optimistic assumption; if Wave 0 returns (D-10-B), the executor pauses
+  Wave 1 and surfaces a re-plan request via `/gsd-plan-phase 75 --gaps`.
+
+- **D-11:** Badge/gate command alignment is mandatory for the phase to
+  satisfy its stated goal. The README badge is set by
+  `.github/workflows/quality-badges.yml` line ~70-82 running
+  `pmat quality-gate --fail-on-violation` (no `--checks` filter). The
+  Wave 5 CI gate runs `pmat quality-gate --fail-on-violation --checks
+  complexity`. If `--checks complexity` exits 0 but bare
+  `--fail-on-violation` exits non-zero (because duplicates/SATD/sections/
+  entropy still fail), CI passes but the BADGE STAYS RED — phase goal
+  unmet.
+
+  A new Wave 0 verification task (75-00 Task 5) MUST run BOTH commands and
+  determine which dimensions currently fail the bare gate. Branch on
+  result:
+  - **(D-11-A) only complexity currently fails** (other dimensions pass or
+    are not failure-counted): the existing plan works. After complexity
+    hits 0, `--fail-on-violation` will exit 0 and the badge flips. No
+    `quality-badges.yml` edit is needed; Wave 5 only edits `ci.yml`.
+  - **(D-11-B) other dimensions also fail today** (e.g. SATD count
+    contributes to non-zero exit): Wave 5 Task 5-01 MUST ALSO update
+    `quality-badges.yml` so the badge command matches the CI gate command.
+    Two equivalent fix shapes:
+    - Both badge and CI gate use `--checks complexity` (the simplest fix;
+      the badge then reflects only complexity, which matches D-01's
+      "complexity is the gating dimension")
+    - OR both use a path filter (e.g. `--include 'src/**,...'`) consistent
+      with the Wave 0 D-09 spike result
+
+  Plan 75-05 is authored to handle BOTH branches; Wave 0 Task 5 narrows
+  to one. The phase goal is satisfied only when the README displays
+  `Quality Gate: passing` — not just when CI is green.
 
 </decisions>
 
@@ -292,3 +342,4 @@ analysis instead of falling back to sentinel values.
 
 *Phase: 75-fix-pmat-issues*
 *Context gathered: 2026-04-22 via /gsd-discuss-phase*
+*Patched 2026-04-23 with D-10 + D-11 from cross-AI review pass*
