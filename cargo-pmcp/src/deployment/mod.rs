@@ -1,5 +1,6 @@
 pub mod builder;
 pub mod config;
+pub mod iam;
 pub mod metadata;
 pub mod naming;
 pub mod operations;
@@ -10,6 +11,7 @@ pub mod r#trait;
 
 pub use builder::BinaryBuilder;
 pub use config::DeployConfig;
+pub use iam::render_iam_block;
 pub use naming::would_conflict;
 pub use operations::OperationStatus;
 pub use outputs::load_cdk_outputs;
