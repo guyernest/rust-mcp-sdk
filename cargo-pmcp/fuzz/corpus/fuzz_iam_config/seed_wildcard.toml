@@ -1,0 +1,13 @@
+[target]
+type = "pmcp-run"
+
+[aws]
+region = "us-west-2"
+
+[server]
+name = "demo"
+
+[[iam.statements]]
+effect = "Allow"
+actions = ["*"]
+resources = ["*"]

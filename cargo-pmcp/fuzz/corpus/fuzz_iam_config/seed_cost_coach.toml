@@ -1,0 +1,22 @@
+[target]
+type = "pmcp-run"
+
+[aws]
+region = "us-west-2"
+
+[server]
+name = "cost-coach"
+
+[[iam.tables]]
+name = "cost-coach-tenants"
+actions = ["readwrite"]
+include_indexes = true
+
+[[iam.buckets]]
+name = "cost-coach-snapshots"
+actions = ["readwrite"]
+
+[[iam.statements]]
+effect = "Allow"
+actions = ["secretsmanager:GetSecretValue"]
+resources = ["arn:aws:secretsmanager:us-west-2:*:secret:cost-coach/*"]
