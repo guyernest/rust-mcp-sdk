@@ -88,18 +88,18 @@ fn main() {
     match validate(&cfg.iam) {
         Ok(warnings) if warnings.is_empty() => {
             println!("  Valid (no warnings).\n");
-        }
+        },
         Ok(warnings) => {
             println!("  Valid with {} warning(s):", warnings.len());
             for w in &warnings {
                 println!("    warning: {}", w.message);
             }
             println!();
-        }
+        },
         Err(e) => {
             eprintln!("  Validation failed: {e}");
             std::process::exit(1);
-        }
+        },
     }
 
     println!("--- 4. Rendered TypeScript addToRolePolicy block ---");
@@ -115,11 +115,11 @@ fn main() {
         Ok(_) => {
             eprintln!("\nBUG: wildcard Allow accepted by validator — this should never happen");
             std::process::exit(2);
-        }
+        },
         Err(e) => {
             println!("\n  Validator correctly rejected the invalid config:");
             println!("  {e}");
-        }
+        },
     }
 
     println!("\n=== Example complete ===");

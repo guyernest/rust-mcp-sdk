@@ -19,6 +19,7 @@ Production-grade MCP server development toolkit.
 - **MCP Apps** - Scaffold widget projects, generate ChatGPT manifests, and build landing pages
 - **Widget Preview** - Browser-based preview with dual proxy/WASM bridge modes and hot-reload
 - **Multi-Target Deployment** - Deploy to AWS Lambda, Google Cloud Run, Cloudflare Workers, or pmcp.run
+- **Declarative IAM** - Declare AWS permissions in `.pmcp/deploy.toml` via the `[iam]` section (see [DEPLOYMENT.md#iam-declarations-iam-section](./DEPLOYMENT.md#iam-declarations-iam-section))
 - **Secrets Management** - Multi-provider secret storage (local, pmcp.run, AWS Secrets Manager)
 - **OAuth Authentication** - Production-ready OAuth 2.0 with AWS Cognito, Dynamic Client Registration, and SSO
 - **Landing Pages** - Create, develop, and deploy landing pages for server discovery
