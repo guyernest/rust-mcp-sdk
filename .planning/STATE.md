@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
-status: Ready to execute
+status: Milestone complete
 stopped_at: Phase 75 context gathered
-last_updated: "2026-04-23T04:07:25.532Z"
+last_updated: "2026-04-23T20:58:22.837Z"
 progress:
   total_phases: 40
   completed_phases: 35
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Close credibility and DX gaps where rmcp outshines PMCP -- documentation accuracy, feature gate presentation, macro documentation, example index, repo hygiene.
-**Current focus:** Phase 73 — typed-client-helpers-list-all-pagination-parity-client-01
+**Current focus:** Phase 76 — cargo-pmcp-iam-declarations-servers-declare-iam-needs-in-dep
 
 ## Current Position
 
-Phase: 73 (typed-client-helpers-list-all-pagination-parity-client-01) — EXECUTING
-Plan: 1 of 3
+Phase: 76
+Plan: Not started
 Next: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
 After: Phase 73 (Typed client helpers + list_all pagination, PARITY-CLIENT-01)
 
@@ -44,7 +44,7 @@ After: Phase 73 (Typed client helpers + list_all pagination, PARITY-CLIENT-01)
 
 **Velocity:**
 
-- Total plans completed: 93 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 11)
+- Total plans completed: 98 (v1.0: 9, v1.1: 10, v1.2: 9, v1.3: 12, v1.4: 10, v1.5: 6, v1.6: 5, v1.7: 4, v2.0: 11)
 - Total phases completed: 29
 
 ## Accumulated Context
