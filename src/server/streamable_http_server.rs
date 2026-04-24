@@ -1073,6 +1073,99 @@ async fn store_response_event(state: &ServerState, response_session_id: Option<&
 }
 
 /// Fast path handler without HTTP middleware
+/// Read the axum request body with enforced byte limit.
+///
+/// Returns the body bytes as a `String` on success, or a 413 error response
+/// when the body exceeds `max_bytes`.
+async fn read_body_with_limit(
+    body: Body,
+    max_bytes: usize,
+) -> std::result::Result<String, Response> {
+    let body_bytes = axum::body::to_bytes(body, max_bytes).await.map_err(|e| {
+        create_error_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            -32600,
+            &format!("Request body exceeds limit: {}", e),
+        )
+    })?;
+    Ok(String::from_utf8_lossy(&body_bytes).to_string())
+}
+
+/// Parse a JSON-RPC message on the fast path, returning a 400 error response
+/// on failure.
+fn parse_transport_message_fast(body: &[u8]) -> std::result::Result<TransportMessage, Response> {
+    crate::shared::StdioTransport::parse_message(body).map_err(|e| {
+        create_error_response(
+            StatusCode::BAD_REQUEST,
+            -32700,
+            &format!("Invalid JSON: {}", e),
+        )
+    })
+}
+
+/// Handle the successful-request arm on the fast path: dispatch to the
+/// server, persist event, and attach session/version headers to the response.
+async fn handle_fast_path_request(
+    state: &ServerState,
+    id: crate::types::RequestId,
+    request: Request,
+    auth_context: Option<crate::server::auth::AuthContext>,
+    is_init_request: bool,
+    response_session_id: Option<String>,
+    session_id: Option<&String>,
+) -> Response {
+    let json_response = {
+        let server = state.server.lock().await;
+        server.handle_request(id, request, auth_context).await
+    };
+
+    tracing::debug!(
+        target: "mcp.http",
+        response = %serde_json::to_string(&json_response).unwrap_or_default(),
+        "StreamableHttpServer response"
+    );
+
+    let response_msg = TransportMessage::Response(json_response);
+
+    let negotiated_version = if is_init_request {
+        let version = extract_negotiated_version(&response_msg);
+        update_session_after_init(state, response_session_id.as_ref(), version.clone());
+        version
+    } else {
+        None
+    };
+
+    store_response_event(state, response_session_id.as_ref(), &response_msg).await;
+
+    let mut response = build_response(state, response_msg, session_id);
+
+    if let Some(sid) = &response_session_id {
+        response
+            .headers_mut()
+            .insert(MCP_SESSION_ID, sid.parse().unwrap());
+    }
+
+    let version_to_send = compute_outbound_protocol_version(
+        state,
+        response_session_id.as_ref(),
+        is_init_request,
+        negotiated_version.as_deref(),
+    );
+    response
+        .headers_mut()
+        .insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
+
+    response
+}
+
+/// Fast path handler without HTTP middleware.
+///
+/// Refactored in 75-01 Task 1a-A: extracted [`read_body_with_limit`],
+/// [`parse_transport_message_fast`], and [`handle_fast_path_request`] so
+/// this orchestrator is a thin early-return pipeline, sharing
+/// [`extract_session_and_protocol_headers`], [`is_initialize_request`],
+/// [`resolve_session_for_request`], and [`compute_outbound_protocol_version`]
+/// with the middleware path.
 async fn handle_post_fast_path(
     state: ServerState,
     request: axum::extract::Request<Body>,
@@ -1080,70 +1173,33 @@ async fn handle_post_fast_path(
     let (parts, body) = request.into_parts();
     let headers = parts.headers;
 
-    // Read body to string
-    let body_bytes = match axum::body::to_bytes(body, state.config.max_request_bytes).await {
+    let body = match read_body_with_limit(body, state.config.max_request_bytes).await {
         Ok(b) => b,
-        Err(e) => {
-            return create_error_response(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                -32600,
-                &format!("Request body exceeds limit: {}", e),
-            );
-        },
+        Err(response) => return response,
     };
-    let body = String::from_utf8_lossy(&body_bytes).to_string();
 
-    // Validate headers
     if let Err(error_response) = validate_headers(&headers, "POST") {
         return error_response;
     }
 
-    // Parse the JSON body using JSON-RPC compatibility layer
-    let message: TransportMessage =
-        match crate::shared::StdioTransport::parse_message(body.as_bytes()) {
-            Ok(msg) => msg,
-            Err(e) => {
-                return create_error_response(
-                    StatusCode::BAD_REQUEST,
-                    -32700,
-                    &format!("Invalid JSON: {}", e),
-                );
-            },
-        };
-
-    // Extract session ID from headers
-    let session_id = headers
-        .get(MCP_SESSION_ID)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
-    // Extract protocol version from headers
-    let protocol_version = headers
-        .get(MCP_PROTOCOL_VERSION)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
-    // Check if this is an initialization request
-    let is_init_request = matches!(
-        &message,
-        TransportMessage::Request { request: Request::Client(boxed), .. }
-            if matches!(**boxed, ClientRequest::Initialize(_))
-    );
-
-    // Handle session ID logic based on request type
-    let (response_session_id, _is_new_session) = if is_init_request {
-        match process_init_session(&state, session_id.clone(), protocol_version.clone()) {
-            Ok(result) => result,
-            Err(error_response) => return error_response,
-        }
-    } else {
-        match validate_non_init_session(&state, session_id.clone()) {
-            Ok(sid) => (sid, false),
-            Err(error_response) => return error_response,
-        }
+    let message = match parse_transport_message_fast(body.as_bytes()) {
+        Ok(msg) => msg,
+        Err(response) => return response,
     };
 
-    // Validate protocol version for non-init requests
+    let (session_id, protocol_version) = extract_session_and_protocol_headers(&headers);
+    let is_init_request = is_initialize_request(&message);
+
+    let response_session_id = match resolve_session_for_request(
+        &state,
+        is_init_request,
+        session_id.clone(),
+        protocol_version.clone(),
+    ) {
+        Ok(sid) => sid,
+        Err(error_response) => return error_response,
+    };
+
     if !is_init_request {
         if let Err(error_response) =
             validate_protocol_version(&state, session_id.as_ref(), protocol_version.as_ref())
@@ -1152,86 +1208,27 @@ async fn handle_post_fast_path(
         }
     }
 
-    // Extract and validate authentication if auth_provider is configured
     let auth_context = match extract_and_validate_auth(&state, &headers).await {
         Ok(ctx) => ctx,
         Err(response) => return response,
     };
 
-    // Process the message
     match message {
         TransportMessage::Request { id, request } => {
-            let server = state.server.lock().await;
-            let json_response = server.handle_request(id, request, auth_context).await;
-
-            // Trace response payload (compact for CloudWatch compatibility)
-            tracing::debug!(
-                target: "mcp.http",
-                response = %serde_json::to_string(&json_response).unwrap_or_default(),
-                "StreamableHttpServer response"
-            );
-
-            let response = TransportMessage::Response(json_response.clone());
-
-            // Handle initialization response
-            let negotiated_version = if is_init_request {
-                let version = extract_negotiated_version(&response);
-                update_session_after_init(&state, response_session_id.as_ref(), version.clone());
-                version
-            } else {
-                None
-            };
-
-            // Store event if we have an event store
-            if let Some(event_store) = &state.config.event_store {
-                if let Some(sid) = &response_session_id {
-                    let event_id = Uuid::new_v4().to_string();
-                    let _ = event_store.store_event(sid, &event_id, &response).await;
-                }
-            }
-
-            // Build response with headers
-            let mut response = build_response(&state, response, session_id.as_ref());
-
-            // Always add session header in stateful mode
-            if let Some(sid) = &response_session_id {
-                response
-                    .headers_mut()
-                    .insert(MCP_SESSION_ID, sid.parse().unwrap());
-            }
-
-            // Add protocol version header
-            let version_to_send = if is_init_request {
-                // For init responses, use the negotiated version
-                negotiated_version.unwrap_or_else(|| crate::DEFAULT_PROTOCOL_VERSION.to_string())
-            } else {
-                // For subsequent responses, echo the session's negotiated version
-                if let Some(ref sid) = response_session_id {
-                    if let Some(session_info) = state.sessions.read().get(sid) {
-                        session_info
-                            .protocol_version
-                            .clone()
-                            .unwrap_or_else(|| crate::DEFAULT_PROTOCOL_VERSION.to_string())
-                    } else {
-                        crate::DEFAULT_PROTOCOL_VERSION.to_string()
-                    }
-                } else {
-                    // Stateless mode or no session - use default
-                    crate::DEFAULT_PROTOCOL_VERSION.to_string()
-                }
-            };
-
-            response
-                .headers_mut()
-                .insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
-
-            response
+            handle_fast_path_request(
+                &state,
+                id,
+                request,
+                auth_context,
+                is_init_request,
+                response_session_id,
+                session_id.as_ref(),
+            )
+            .await
         },
-        TransportMessage::Notification { .. } => {
-            // Notifications get 202 Accepted
+        TransportMessage::Notification { .. } | TransportMessage::Response(_) => {
             StatusCode::ACCEPTED.into_response()
         },
-        TransportMessage::Response(_) => StatusCode::ACCEPTED.into_response(),
     }
 }
 
