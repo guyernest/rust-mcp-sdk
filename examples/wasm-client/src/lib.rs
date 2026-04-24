@@ -1,3 +1,5 @@
+mod pentest;
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use pmcp::client::Client;
@@ -88,7 +90,12 @@ impl WasmClient {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         console_error_panic_hook::set_once();
-        tracing_wasm::set_as_global_default();
+        
+        static INIT_TRACING: std::sync::Once = std::sync::Once::new();
+        INIT_TRACING.call_once(|| {
+            tracing_wasm::set_as_global_default();
+        });
+
         Self {
             connection_type: None,
             ws_client: None,
@@ -137,14 +144,10 @@ impl WasmClient {
             let json_request = to_jsonrpc(
                 self.next_id(),
                 &pmcp::types::Request::Client(Box::new(
-                    pmcp::types::ClientRequest::Initialize(pmcp::types::InitializeParams {
-                        protocol_version: pmcp::LATEST_PROTOCOL_VERSION.to_string(),
-                        capabilities: ClientCapabilities::default(),
-                        client_info: pmcp::types::Implementation {
-                            name: "wasm-mcp-client".to_string(),
-                            version: "1.0.0".to_string(),
-                        },
-                    }),
+                        pmcp::types::ClientRequest::Initialize(pmcp::types::InitializeRequest::new(
+                            pmcp::types::Implementation::new("wasm-mcp-client", "1.0.0"),
+                            ClientCapabilities::default(),
+                        )),
                 )),
             );
 
@@ -254,12 +257,10 @@ impl WasmClient {
                 let json_request = to_jsonrpc(
                     req_id,
                     &pmcp::types::Request::Client(Box::new(
-                        pmcp::types::ClientRequest::CallTool(pmcp::types::CallToolRequest {
+                        pmcp::types::ClientRequest::CallTool(pmcp::types::CallToolRequest::new(
                             name,
                             arguments,
-                            _meta: None,
-                            task: None,
-                        }),
+                        )),
                     )),
                 );
 
@@ -282,6 +283,238 @@ impl WasmClient {
             },
             None => Err(new_js_error("Not connected".to_string(), None, JsValue::NULL).into()),
         }
+    }
+
+    /// List all available resources using pmcp
+    #[wasm_bindgen]
+    pub async fn list_resources(&mut self) -> Result<JsValue, JsValue> {
+        match &self.connection_type {
+            None => Err(new_js_error("Not connected".to_string(), None, JsValue::NULL).into()),
+            Some(ConnectionType::WebSocket) => {
+                Err(new_js_error("WebSocket not fully implemented for list_resources".to_string(), None, JsValue::NULL).into())
+            },
+            Some(ConnectionType::Http) => {
+                let req_id = self.next_id();
+                let client = self.http_client.as_mut().ok_or_else(|| {
+                    new_js_error("Not connected".to_string(), None, JsValue::NULL)
+                })?;
+
+                let json_request = to_jsonrpc(
+                    req_id,
+                    &pmcp::types::Request::Client(Box::new(
+                        pmcp::types::ClientRequest::ListResources(pmcp::types::ListResourcesRequest {
+                            cursor: None,
+                        }),
+                    )),
+                );
+
+                let response: Value = client.request(json_request).await.map_err(to_js_error)?;
+
+                if let Some(result) = response.get("result") {
+                    if let Ok(list_result) =
+                        serde_json::from_value::<pmcp::types::ListResourcesResult>(result.clone())
+                    {
+                        return serde_wasm_bindgen::to_value(&list_result.resources)
+                            .map_err(|e| e.into());
+                    }
+                }
+
+                Err(new_js_error(
+                    "Invalid response format".to_string(),
+                    None,
+                    JsValue::NULL,
+                )
+                .into())
+            }
+        }
+    }
+
+    /// Read a specific resource using pmcp
+    #[wasm_bindgen]
+    pub async fn read_resource(&mut self, uri: String) -> Result<JsValue, JsValue> {
+        match &self.connection_type {
+            None => Err(new_js_error("Not connected".to_string(), None, JsValue::NULL).into()),
+            Some(ConnectionType::WebSocket) => {
+                Err(new_js_error("WebSocket not fully implemented for read_resource".to_string(), None, JsValue::NULL).into())
+            },
+            Some(ConnectionType::Http) => {
+                let req_id = self.next_id();
+                let client = self.http_client.as_mut().ok_or_else(|| {
+                    new_js_error("Not connected".to_string(), None, JsValue::NULL)
+                })?;
+
+                let json_request = to_jsonrpc(
+                    req_id,
+                    &pmcp::types::Request::Client(Box::new(
+                        pmcp::types::ClientRequest::ReadResource(pmcp::types::ReadResourceRequest {
+                            uri,
+                            _meta: None,
+                        }),
+                    )),
+                );
+
+                let response: Value = client.request(json_request).await.map_err(to_js_error)?;
+
+                if let Some(result) = response.get("result") {
+                    if let Ok(read_result) =
+                        serde_json::from_value::<pmcp::types::ReadResourceResult>(result.clone())
+                    {
+                        return serde_wasm_bindgen::to_value(&read_result).map_err(|e| e.into());
+                    }
+                }
+
+                Err(new_js_error(
+                    "Invalid response format".to_string(),
+                    None,
+                    JsValue::NULL,
+                )
+                .into())
+            }
+        }
+    }
+
+    /// List all available prompts using pmcp
+    #[wasm_bindgen]
+    pub async fn list_prompts(&mut self) -> Result<JsValue, JsValue> {
+        match &self.connection_type {
+            None => Err(new_js_error("Not connected".to_string(), None, JsValue::NULL).into()),
+            Some(ConnectionType::WebSocket) => {
+                Err(new_js_error("WebSocket not fully implemented for list_prompts".to_string(), None, JsValue::NULL).into())
+            },
+            Some(ConnectionType::Http) => {
+                let req_id = self.next_id();
+                let client = self.http_client.as_mut().ok_or_else(|| {
+                    new_js_error("Not connected".to_string(), None, JsValue::NULL)
+                })?;
+
+                let json_request = to_jsonrpc(
+                    req_id,
+                    &pmcp::types::Request::Client(Box::new(
+                        pmcp::types::ClientRequest::ListPrompts(pmcp::types::ListPromptsRequest {
+                            cursor: None,
+                        }),
+                    )),
+                );
+
+                let response: Value = client.request(json_request).await.map_err(to_js_error)?;
+
+                if let Some(result) = response.get("result") {
+                    if let Ok(list_result) =
+                        serde_json::from_value::<pmcp::types::ListPromptsResult>(result.clone())
+                    {
+                        return serde_wasm_bindgen::to_value(&list_result.prompts)
+                            .map_err(|e| e.into());
+                    }
+                }
+
+                Err(new_js_error(
+                    "Invalid response format".to_string(),
+                    None,
+                    JsValue::NULL,
+                )
+                .into())
+            }
+        }
+    }
+
+    /// Get a prompt with arguments using pmcp
+    #[wasm_bindgen]
+    pub async fn get_prompt(&mut self, name: String, args: JsValue) -> Result<JsValue, JsValue> {
+        let arguments: Option<std::collections::HashMap<String, String>> = if args.is_null() || args.is_undefined() {
+            None
+        } else {
+            serde_wasm_bindgen::from_value(args).map_err(|e| {
+                new_js_error(format!("Invalid arguments: {}", e), None, JsValue::NULL)
+            })?
+        };
+
+        match &self.connection_type {
+            None => Err(new_js_error("Not connected".to_string(), None, JsValue::NULL).into()),
+            Some(ConnectionType::WebSocket) => {
+                Err(new_js_error("WebSocket not fully implemented for get_prompt".to_string(), None, JsValue::NULL).into())
+            },
+            Some(ConnectionType::Http) => {
+                let req_id = self.next_id();
+                let client = self.http_client.as_mut().ok_or_else(|| {
+                    new_js_error("Not connected".to_string(), None, JsValue::NULL)
+                })?;
+
+                let json_request = to_jsonrpc(
+                    req_id,
+                    &pmcp::types::Request::Client(Box::new(
+                        pmcp::types::ClientRequest::GetPrompt(pmcp::types::GetPromptRequest {
+                            name,
+                            arguments: arguments.unwrap_or_default(),
+                            _meta: None,
+                        }),
+                    )),
+                );
+
+                let response: Value = client.request(json_request).await.map_err(to_js_error)?;
+
+                if let Some(result) = response.get("result") {
+                    if let Ok(prompt_result) =
+                        serde_json::from_value::<pmcp::types::GetPromptResult>(result.clone())
+                    {
+                        return serde_wasm_bindgen::to_value(&prompt_result).map_err(|e| e.into());
+                    }
+                }
+
+                Err(new_js_error(
+                    "Invalid response format".to_string(),
+                    None,
+                    JsValue::NULL,
+                )
+                .into())
+            }
+        }
+    }
+
+    /// Run security static analysis on available tools
+    #[wasm_bindgen]
+    pub async fn pentest_tools(&mut self) -> Result<JsValue, JsValue> {
+        let tools = match self.connection_type {
+            Some(ConnectionType::WebSocket) => {
+                let client = self.ws_client.as_mut().ok_or_else(|| {
+                    new_js_error("Not connected".to_string(), None, JsValue::NULL)
+                })?;
+                let result = client.list_tools(None).await.map_err(to_js_error)?;
+                result.tools
+            },
+            Some(ConnectionType::Http) => {
+                let req_id = self.next_id();
+                let client = self.http_client.as_mut().ok_or_else(|| {
+                    new_js_error("Not connected".to_string(), None, JsValue::NULL)
+                })?;
+
+                let json_request = to_jsonrpc(
+                    req_id,
+                    &pmcp::types::Request::Client(Box::new(
+                        pmcp::types::ClientRequest::ListTools(pmcp::types::ListToolsRequest {
+                            cursor: None,
+                        }),
+                    )),
+                );
+
+                let response: Value = client.request(json_request).await.map_err(to_js_error)?;
+
+                if let Some(result) = response.get("result") {
+                    if let Ok(list_result) =
+                        serde_json::from_value::<pmcp::types::ListToolsResult>(result.clone())
+                    {
+                        list_result.tools
+                    } else {
+                        return Err(new_js_error("Invalid response from server".to_string(), None, JsValue::NULL).into());
+                    }
+                } else {
+                    return Err(new_js_error("Invalid response from server".to_string(), None, JsValue::NULL).into());
+                }
+            },
+            None => return Err(new_js_error("Not connected".to_string(), None, JsValue::NULL).into()),
+        };
+
+        let findings = pentest::run_static_analysis(&tools);
+        serde_wasm_bindgen::to_value(&findings).map_err(|e| e.into())
     }
 
     /// Get the connection type

@@ -974,6 +974,7 @@ impl<T: Transport> Client<T> {
     /// ).await?;
     /// # Ok(()) }
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn call_tool_typed_and_poll<A: serde::Serialize + ?Sized + Sync>(
         &self,
         name: impl Into<String> + Send,
