@@ -1017,9 +1017,7 @@ fn print_configure_result_endpoints(
 }
 
 /// Print status block when OAuth is currently enabled on the server.
-fn print_enabled_status(
-    endpoints: &crate::deployment::targets::pmcp_run::graphql::OAuthEndpoints,
-) {
+fn print_enabled_status(endpoints: &crate::deployment::targets::pmcp_run::graphql::OAuthEndpoints) {
     println!("   Status: Enabled");
     if let Some(ref provider) = endpoints.provider {
         println!("   Provider: {}", provider);

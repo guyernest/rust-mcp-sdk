@@ -85,11 +85,7 @@ fn target_is_bin(target: &serde_json::Value) -> bool {
 
 /// Build the helpful "no binary found" error message, distinguishing
 /// Lambda-only setups from genuinely-missing binaries.
-fn build_no_binary_error(
-    server: &str,
-    candidates: &[String],
-    available_bins: &[String],
-) -> String {
+fn build_no_binary_error(server: &str, candidates: &[String], available_bins: &[String]) -> String {
     let local_bins: Vec<&String> = available_bins
         .iter()
         .filter(|b| !LAMBDA_BINARIES.contains(&b.as_str()))
@@ -175,7 +171,11 @@ pub fn execute(
 
 /// Apply the configured-port override from WorkspaceConfig when CLI port is
 /// the default (3000).
-fn resolve_dev_port(server: &str, port: u16, global_flags: &crate::commands::GlobalFlags) -> Result<u16> {
+fn resolve_dev_port(
+    server: &str,
+    port: u16,
+    global_flags: &crate::commands::GlobalFlags,
+) -> Result<u16> {
     let config = WorkspaceConfig::load()?;
     let Some(server_config) = config.get_server(server) else {
         return Ok(port);
@@ -195,7 +195,10 @@ fn resolve_dev_port(server: &str, port: u16, global_flags: &crate::commands::Glo
 }
 
 /// Run `cargo build --bin <server_binary>` and bail on failure.
-fn build_dev_server(server_binary: &str, global_flags: &crate::commands::GlobalFlags) -> Result<()> {
+fn build_dev_server(
+    server_binary: &str,
+    global_flags: &crate::commands::GlobalFlags,
+) -> Result<()> {
     let build_status = Command::new("cargo")
         .args(["build", "--bin", server_binary])
         .status()

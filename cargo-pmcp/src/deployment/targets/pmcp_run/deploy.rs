@@ -43,10 +43,7 @@ fn run_cargo_metadata(project_root: &Path) -> Option<serde_json::Value> {
 
 /// From a list of cargo-metadata package entries, prefer the workspace-root
 /// package's version; fallback to the first package with a version field.
-fn select_best_version(
-    packages: &[serde_json::Value],
-    workspace_root: &str,
-) -> Option<String> {
+fn select_best_version(packages: &[serde_json::Value], workspace_root: &str) -> Option<String> {
     let mut root_package_version: Option<String> = None;
     let mut any_version: Option<String> = None;
 
@@ -144,12 +141,8 @@ pub async fn deploy_to_pmcp_run(
 
     // Step 7: Create deployment via GraphQL with composition settings and version
     println!("🚀 Creating deployment...");
-    let deployment = create_deployment_with_composition(
-        &credentials.access_token,
-        &urls,
-        config,
-    )
-    .await?;
+    let deployment =
+        create_deployment_with_composition(&credentials.access_token, &urls, config).await?;
     println!("   Deployment ID: {}", deployment.deployment_id);
     println!();
 
@@ -214,8 +207,16 @@ fn extract_metadata_with_log(project_root: &Path) -> Option<McpMetadata> {
 
 /// Run `npx cdk synth --quiet` with optional metadata context args.
 fn run_cdk_synth(deploy_dir: &Path, metadata: Option<&McpMetadata>) -> Result<()> {
-    let shell_cmd = if cfg!(target_os = "windows") { "cmd" } else { "sh" };
-    let shell_arg = if cfg!(target_os = "windows") { "/C" } else { "-c" };
+    let shell_cmd = if cfg!(target_os = "windows") {
+        "cmd"
+    } else {
+        "sh"
+    };
+    let shell_arg = if cfg!(target_os = "windows") {
+        "/C"
+    } else {
+        "-c"
+    };
 
     let cdk_context_args = metadata
         .map(|m| m.to_cdk_context().join(" "))
@@ -253,17 +254,28 @@ struct BootstrapUpload {
 /// deployment package zip if present, otherwise fall back to the raw binary.
 fn read_bootstrap_upload(artifact: BuildArtifact) -> Result<BootstrapUpload> {
     let (bootstrap_path, deployment_package) = match artifact {
-        BuildArtifact::Binary { path, deployment_package, .. }
-        | BuildArtifact::Wasm { path, deployment_package, .. }
-        | BuildArtifact::Custom { path, deployment_package, .. } => (path, deployment_package),
+        BuildArtifact::Binary {
+            path,
+            deployment_package,
+            ..
+        }
+        | BuildArtifact::Wasm {
+            path,
+            deployment_package,
+            ..
+        }
+        | BuildArtifact::Custom {
+            path,
+            deployment_package,
+            ..
+        } => (path, deployment_package),
     };
 
     if let Some(ref package_path) = deployment_package {
         if package_path.exists() {
             println!("   📦 Using deployment package with assets");
             println!("   Package: {}", package_path.display());
-            let data =
-                std::fs::read(package_path).context("Failed to read deployment package")?;
+            let data = std::fs::read(package_path).context("Failed to read deployment package")?;
             return Ok(BootstrapUpload {
                 data,
                 content_type: "application/zip",
@@ -302,7 +314,11 @@ async fn upload_template_and_bootstrap(
 ) -> Result<()> {
     println!("⬆️  Uploading files to S3...");
 
-    let bootstrap_label = if upload.has_assets { "Package" } else { "Bootstrap" };
+    let bootstrap_label = if upload.has_assets {
+        "Package"
+    } else {
+        "Bootstrap"
+    };
     let (template_result, bootstrap_result) = tokio::join!(
         graphql::upload_to_s3(
             &urls.template_upload_url,
@@ -417,7 +433,10 @@ async fn configure_new_oauth(
 }
 
 /// Backend OAuth state check for a server not enabling OAuth in local config.
-async fn fetch_existing_oauth(access_token: &str, server_name: &str) -> Option<graphql::OAuthConfig> {
+async fn fetch_existing_oauth(
+    access_token: &str,
+    server_name: &str,
+) -> Option<graphql::OAuthConfig> {
     match graphql::fetch_server_oauth_endpoints(access_token, server_name).await {
         Ok(oauth) => {
             if oauth.oauth_enabled {

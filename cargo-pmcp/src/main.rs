@@ -423,12 +423,17 @@ fn dispatch_trait_based(command: Commands, global_flags: &GlobalFlags) -> Option
         Commands::Add { component } => execute_add(component, global_flags),
         Commands::Test { command } => command.execute(global_flags),
         Commands::Auth { command } => command.execute(global_flags),
-        Commands::Dev { server, port, connect } => {
-            commands::dev::execute(server, port, connect, global_flags)
-        },
-        Commands::Connect { server, client, url, auth_flags } => {
-            commands::connect::execute(server, client, url, &auth_flags, global_flags)
-        },
+        Commands::Dev {
+            server,
+            port,
+            connect,
+        } => commands::dev::execute(server, port, connect, global_flags),
+        Commands::Connect {
+            server,
+            client,
+            url,
+            auth_flags,
+        } => commands::connect::execute(server, client, url, &auth_flags, global_flags),
         Commands::Deploy(deploy_cmd) => deploy_cmd.execute(global_flags),
         Commands::Landing { command } => execute_landing(command, global_flags),
         Commands::Schema { command } => command.execute(global_flags),
@@ -453,7 +458,16 @@ fn dispatch_trait_based(command: Commands, global_flags: &GlobalFlags) -> Option
             mode,
             auth_flags,
         } => execute_preview(
-            url, port, open, tool, theme, locale, widgets_dir, mode, auth_flags, global_flags,
+            url,
+            port,
+            open,
+            tool,
+            theme,
+            locale,
+            widgets_dir,
+            mode,
+            auth_flags,
+            global_flags,
         ),
     };
     Some(result)
@@ -483,7 +497,10 @@ fn execute_add(component: AddCommands, global_flags: &GlobalFlags) -> Result<()>
 
 /// Dispatcher for the Landing subcommand group (async; spins up its own
 /// tokio runtime because main.rs stays sync).
-fn execute_landing(command: commands::landing::LandingCommand, global_flags: &GlobalFlags) -> Result<()> {
+fn execute_landing(
+    command: commands::landing::LandingCommand,
+    global_flags: &GlobalFlags,
+) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let project_root = std::env::current_dir()?;
     runtime.block_on(command.execute(project_root, global_flags))

@@ -373,9 +373,7 @@ fn parse_test_output(stdout: &str, stderr: &str) -> (usize, usize, usize) {
 
 /// Parse the `test result: ...` line if present.
 fn parse_test_result_line(combined: &str) -> Option<(usize, usize, usize)> {
-    let line = combined
-        .lines()
-        .find(|l| l.starts_with("test result:"))?;
+    let line = combined.lines().find(|l| l.starts_with("test result:"))?;
 
     let passed = count_for_keyword(line, "passed");
     let failed = count_for_keyword(line, "failed");
@@ -388,7 +386,10 @@ fn parse_test_result_line(combined: &str) -> Option<(usize, usize, usize)> {
 fn count_for_keyword(line: &str, keyword: &str) -> usize {
     let with_space = format!(" {keyword}");
     line.split_whitespace()
-        .find_map(|word| word.strip_suffix(with_space.as_str()).and_then(|n| n.parse().ok()))
+        .find_map(|word| {
+            word.strip_suffix(with_space.as_str())
+                .and_then(|n| n.parse().ok())
+        })
         .or_else(|| {
             line.split(';')
                 .find(|part| part.contains(keyword))

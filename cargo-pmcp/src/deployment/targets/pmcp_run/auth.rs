@@ -654,9 +654,7 @@ fn respond_callback_success(request: tiny_http::Request) {
         <p>You can close this window and return to your terminal.</p>\
         </body></html>",
     )
-    .with_header(
-        tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..]).unwrap(),
-    );
+    .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..]).unwrap());
     let _ = request.respond(response);
 }
 

@@ -39,7 +39,13 @@ pub async fn execute(
     let has_failures = print_test_results(&report.tests, verbose);
 
     if has_failures {
-        print_failure_diagnostics(&report.tests, &url, transport.is_none(), verbose, global_flags);
+        print_failure_diagnostics(
+            &report.tests,
+            &url,
+            transport.is_none(),
+            verbose,
+            global_flags,
+        );
         anyhow::bail!("Server check failed - see errors above");
     }
 

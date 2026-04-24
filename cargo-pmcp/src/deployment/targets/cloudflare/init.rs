@@ -165,7 +165,9 @@ fn detect_workspace_package(
             "   ⚠️  Using package: {} (may have WASM compatibility issues)",
             name
         );
-        println!("   ℹ️  Consider splitting into core/transport packages for multi-target deployment");
+        println!(
+            "   ℹ️  Consider splitting into core/transport packages for multi-target deployment"
+        );
         return Ok(Some((name, path)));
     }
 
@@ -430,8 +432,7 @@ fn try_find_pmcp_in_cargo_toml(
     }
 
     // Look for direct pmcp dependency with a path
-    let pmcp_path = find_direct_pmcp_path(&content)
-        .context("pmcp not found in Cargo.toml")?;
+    let pmcp_path = find_direct_pmcp_path(&content).context("pmcp not found in Cargo.toml")?;
 
     let cargo_dir = cargo_toml.parent().unwrap();
     let pmcp_absolute = cargo_dir.join(pmcp_path).canonicalize()?;
@@ -440,8 +441,7 @@ fn try_find_pmcp_in_cargo_toml(
 
 /// Returns true if the Cargo.toml references pmcp via `pmcp = { workspace = true }`.
 fn uses_workspace_pmcp(content: &str) -> bool {
-    content.contains("pmcp = { workspace = true }")
-        || content.contains("pmcp = {workspace = true}")
+    content.contains("pmcp = { workspace = true }") || content.contains("pmcp = {workspace = true}")
 }
 
 /// Extract a literal path from a `pmcp = { path = "..." }` line. Returns None

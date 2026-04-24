@@ -30,7 +30,13 @@ pub async fn execute(
         .parse()
         .map_err(|e: String| anyhow::anyhow!(e))?;
 
-    print_apps_header(&url, &validation_mode, strict, tool.as_deref(), global_flags);
+    print_apps_header(
+        &url,
+        &validation_mode,
+        strict,
+        tool.as_deref(),
+        global_flags,
+    );
 
     let auth_method = auth_flags.resolve();
     let middleware = auth::resolve_auth_middleware(&url, &auth_method).await?;

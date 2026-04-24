@@ -123,7 +123,10 @@ fn find_template_by_walking_up(template_path: &str) -> Option<std::path::PathBuf
 }
 
 /// Check a single directory for `cargo-pmcp/<template>/` or `<template>/`.
-fn check_dir_for_template(dir: &std::path::Path, template_path: &str) -> Option<std::path::PathBuf> {
+fn check_dir_for_template(
+    dir: &std::path::Path,
+    template_path: &str,
+) -> Option<std::path::PathBuf> {
     let template_dir = dir.join("cargo-pmcp").join(template_path);
     if template_dir.exists() && template_dir.is_dir() {
         return Some(template_dir);

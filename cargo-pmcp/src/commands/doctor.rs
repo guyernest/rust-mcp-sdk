@@ -147,9 +147,7 @@ fn check_server_connectivity(server_url: &str, quiet: bool) -> Result<u32> {
     }
 
     let rt = tokio::runtime::Runtime::new()?;
-    let issue_count = rt.block_on(async {
-        probe_server_initialize(server_url, quiet).await
-    })?;
+    let issue_count = rt.block_on(async { probe_server_initialize(server_url, quiet).await })?;
     Ok(issue_count)
 }
 
