@@ -1,0 +1,6225 @@
+{
+  "pmat_version": "3.15.0",
+  "generated_at": "2026-04-23",
+  "source_command": "pmat analyze complexity --format json --max-cognitive 25 --top-files 0",
+  "summary": {
+    "total_files": 602,
+    "total_functions": 317,
+    "median_cyclomatic": 5.0,
+    "median_cognitive": 8.0,
+    "max_cyclomatic": 44,
+    "max_cognitive": 123,
+    "p90_cyclomatic": 20,
+    "p90_cognitive": 44,
+    "technical_debt_hours": 1154.0
+  },
+  "violations": [
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 32 exceeds maximum allowed complexity of 20",
+      "value": 32,
+      "threshold": 20,
+      "file": "./cargo-pmcp/src/commands/add.rs",
+      "line": 12,
+      "function": "server"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 56 exceeds maximum allowed complexity of 25",
+      "value": 56,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/commands/add.rs",
+      "line": 12,
+      "function": "server"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 12 exceeds recommended complexity of 10",
+      "value": 12,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/commands/deploy/mod.rs",
+      "line": 8,
+      "function": "detect_server_name"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 64 exceeds maximum allowed complexity of 25",
+      "value": 64,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/commands/deploy/mod.rs",
+      "line": 8,
+      "function": "detect_server_name"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 36 exceeds maximum allowed complexity of 20",
+      "value": 36,
+      "threshold": 20,
+      "file": "./cargo-pmcp/src/commands/deploy/mod.rs",
+      "line": 796,
+      "function": "handle_oauth_action"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 91 exceeds maximum allowed complexity of 25",
+      "value": 91,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/commands/deploy/mod.rs",
+      "line": 796,
+      "function": "handle_oauth_action"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 14 exceeds recommended complexity of 10",
+      "value": 14,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/commands/deploy/mod.rs",
+      "line": 988,
+      "function": "resolve_oauth_config"
+    },
+    {
+      "severity": "warning",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 24 exceeds recommended complexity of 23",
+      "value": 24,
+      "threshold": 23,
+      "file": "./cargo-pmcp/src/commands/deploy/mod.rs",
+      "line": 988,
+      "function": "resolve_oauth_config"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 14 exceeds recommended complexity of 10",
+      "value": 14,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/commands/dev.rs",
+      "line": 22,
+      "function": "resolve_server_binary"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 34 exceeds maximum allowed complexity of 25",
+      "value": 34,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/commands/dev.rs",
+      "line": 22,
+      "function": "resolve_server_binary"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 25 exceeds maximum allowed complexity of 20",
+      "value": 25,
+      "threshold": 20,
+      "file": "./cargo-pmcp/src/commands/dev.rs",
+      "line": 113,
+      "function": "execute"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 33 exceeds maximum allowed complexity of 25",
+      "value": 33,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/commands/dev.rs",
+      "line": 113,
+      "function": "execute"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 32 exceeds maximum allowed complexity of 20",
+      "value": 32,
+      "threshold": 20,
+      "file": "./cargo-pmcp/src/commands/doctor.rs",
+      "line": 15,
+      "function": "execute"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 60 exceeds maximum allowed complexity of 25",
+      "value": 60,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/commands/doctor.rs",
+      "line": 15,
+      "function": "execute"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 28 exceeds maximum allowed complexity of 20",
+      "value": 28,
+      "threshold": 20,
+      "file": "./cargo-pmcp/src/commands/landing/deploy.rs",
+      "line": 11,
+      "function": "deploy_landing_page"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 27 exceeds maximum allowed complexity of 25",
+      "value": 27,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/commands/landing/deploy.rs",
+      "line": 11,
+      "function": "deploy_landing_page"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 11 exceeds recommended complexity of 10",
+      "value": 11,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/commands/landing/deploy.rs",
+      "line": 243,
+      "function": "upload_landing_via_graphql"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 18 exceeds recommended complexity of 10",
+      "value": 18,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/commands/landing/init.rs",
+      "line": 10,
+      "function": "init_landing_page"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 30 exceeds maximum allowed complexity of 25",
+      "value": 30,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/commands/landing/init.rs",
+      "line": 144,
+      "function": "detect_server_name"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 17 exceeds recommended complexity of 10",
+      "value": 17,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/commands/loadtest/run.rs",
+      "line": 19,
+      "function": "execute_run"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 26 exceeds maximum allowed complexity of 25",
+      "value": 26,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/commands/loadtest/run.rs",
+      "line": 19,
+      "function": "execute_run"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 24 exceeds maximum allowed complexity of 20",
+      "value": 24,
+      "threshold": 20,
+      "file": "./cargo-pmcp/src/commands/pentest.rs",
+      "line": 80,
+      "function": "execute_pentest"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 38 exceeds maximum allowed complexity of 25",
+      "value": 38,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/commands/pentest.rs",
+      "line": 80,
+      "function": "execute_pentest"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 14 exceeds recommended complexity of 10",
+      "value": 14,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/commands/preview.rs",
+      "line": 9,
+      "function": "execute"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 27 exceeds maximum allowed complexity of 25",
+      "value": 27,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/commands/preview.rs",
+      "line": 9,
+      "function": "execute"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 29 exceeds maximum allowed complexity of 20",
+      "value": 29,
+      "threshold": 20,
+      "file": "./cargo-pmcp/src/commands/test/apps.rs",
+      "line": 16,
+      "function": "execute"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 43 exceeds maximum allowed complexity of 25",
+      "value": 43,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/commands/test/apps.rs",
+      "line": 16,
+      "function": "execute"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 44 exceeds maximum allowed complexity of 20",
+      "value": 44,
+      "threshold": 20,
+      "file": "./cargo-pmcp/src/commands/test/check.rs",
+      "line": 20,
+      "function": "execute"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 105 exceeds maximum allowed complexity of 25",
+      "value": 105,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/commands/test/check.rs",
+      "line": 20,
+      "function": "execute"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 19 exceeds recommended complexity of 10",
+      "value": 19,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/commands/test/list.rs",
+      "line": 10,
+      "function": "execute"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 36 exceeds maximum allowed complexity of 25",
+      "value": 36,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/commands/test/list.rs",
+      "line": 10,
+      "function": "execute"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 25 exceeds maximum allowed complexity of 20",
+      "value": 25,
+      "threshold": 20,
+      "file": "./cargo-pmcp/src/commands/test/run.rs",
+      "line": 12,
+      "function": "execute"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 46 exceeds maximum allowed complexity of 25",
+      "value": 46,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/commands/test/run.rs",
+      "line": 12,
+      "function": "execute"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 23 exceeds maximum allowed complexity of 20",
+      "value": 23,
+      "threshold": 20,
+      "file": "./cargo-pmcp/src/commands/test/upload.rs",
+      "line": 11,
+      "function": "execute"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 44 exceeds maximum allowed complexity of 25",
+      "value": 44,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/commands/test/upload.rs",
+      "line": 11,
+      "function": "execute"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 33 exceeds maximum allowed complexity of 20",
+      "value": 33,
+      "threshold": 20,
+      "file": "./cargo-pmcp/src/commands/validate.rs",
+      "line": 88,
+      "function": "run_validation"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 66 exceeds maximum allowed complexity of 25",
+      "value": 66,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/commands/validate.rs",
+      "line": 88,
+      "function": "run_validation"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 30 exceeds maximum allowed complexity of 25",
+      "value": 30,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/commands/validate.rs",
+      "line": 303,
+      "function": "parse_test_output"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 11 exceeds recommended complexity of 10",
+      "value": 11,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/deployment/targets/cloudflare/init.rs",
+      "line": 98,
+      "function": "auto_detect_server_package"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 35 exceeds maximum allowed complexity of 25",
+      "value": 35,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/deployment/targets/cloudflare/init.rs",
+      "line": 98,
+      "function": "auto_detect_server_package"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 35 exceeds maximum allowed complexity of 25",
+      "value": 35,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/deployment/targets/cloudflare/init.rs",
+      "line": 159,
+      "function": "find_core_package"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 14 exceeds recommended complexity of 10",
+      "value": 14,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/deployment/targets/cloudflare/init.rs",
+      "line": 193,
+      "function": "find_any_package"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 65 exceeds maximum allowed complexity of 25",
+      "value": 65,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/deployment/targets/cloudflare/init.rs",
+      "line": 193,
+      "function": "find_any_package"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 33 exceeds maximum allowed complexity of 25",
+      "value": 33,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/deployment/targets/cloudflare/init.rs",
+      "line": 342,
+      "function": "detect_pmcp_dependency"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 14 exceeds recommended complexity of 10",
+      "value": 14,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/deployment/targets/cloudflare/init.rs",
+      "line": 381,
+      "function": "try_find_pmcp_in_cargo_toml"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 41 exceeds maximum allowed complexity of 25",
+      "value": 41,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/deployment/targets/cloudflare/init.rs",
+      "line": 381,
+      "function": "try_find_pmcp_in_cargo_toml"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 15 exceeds recommended complexity of 10",
+      "value": 15,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/deployment/targets/cloudflare/init.rs",
+      "line": 436,
+      "function": "try_find_workspace_pmcp"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 41 exceeds maximum allowed complexity of 25",
+      "value": 41,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/deployment/targets/cloudflare/init.rs",
+      "line": 436,
+      "function": "try_find_workspace_pmcp"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 35 exceeds maximum allowed complexity of 25",
+      "value": 35,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/deployment/targets/pmcp_run/auth.rs",
+      "line": 142,
+      "function": "fetch_pmcp_config"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 12 exceeds recommended complexity of 10",
+      "value": 12,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/deployment/targets/pmcp_run/auth.rs",
+      "line": 351,
+      "function": "get_credentials"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 26 exceeds maximum allowed complexity of 25",
+      "value": 26,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/deployment/targets/pmcp_run/auth.rs",
+      "line": 582,
+      "function": "start_callback_server"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 15 exceeds recommended complexity of 10",
+      "value": 15,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/deployment/targets/pmcp_run/deploy.rs",
+      "line": 21,
+      "function": "extract_version_from_cargo"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 27 exceeds maximum allowed complexity of 25",
+      "value": 27,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/deployment/targets/pmcp_run/deploy.rs",
+      "line": 21,
+      "function": "extract_version_from_cargo"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 44 exceeds maximum allowed complexity of 20",
+      "value": 44,
+      "threshold": 20,
+      "file": "./cargo-pmcp/src/deployment/targets/pmcp_run/deploy.rs",
+      "line": 77,
+      "function": "deploy_to_pmcp_run"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 66 exceeds maximum allowed complexity of 25",
+      "value": 66,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/deployment/targets/pmcp_run/deploy.rs",
+      "line": 77,
+      "function": "deploy_to_pmcp_run"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 11 exceeds recommended complexity of 10",
+      "value": 11,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/landing/template.rs",
+      "line": 90,
+      "function": "find_local_template"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 26 exceeds maximum allowed complexity of 25",
+      "value": 26,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/landing/template.rs",
+      "line": 90,
+      "function": "find_local_template"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 15 exceeds recommended complexity of 10",
+      "value": 15,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/loadtest/summary.rs",
+      "line": 56,
+      "function": "render_summary"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 26 exceeds maximum allowed complexity of 25",
+      "value": 26,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/loadtest/summary.rs",
+      "line": 56,
+      "function": "render_summary"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 14 exceeds recommended complexity of 10",
+      "value": 14,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/loadtest/vu.rs",
+      "line": 243,
+      "function": "vu_loop_inner"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 37 exceeds maximum allowed complexity of 25",
+      "value": 37,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/loadtest/vu.rs",
+      "line": 243,
+      "function": "vu_loop_inner"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 11 exceeds recommended complexity of 10",
+      "value": 11,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/main.rs",
+      "line": 351,
+      "function": "main"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 24 exceeds maximum allowed complexity of 20",
+      "value": 24,
+      "threshold": 20,
+      "file": "./cargo-pmcp/src/main.rs",
+      "line": 407,
+      "function": "execute_command"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 48 exceeds maximum allowed complexity of 25",
+      "value": 48,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/main.rs",
+      "line": 407,
+      "function": "execute_command"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 30 exceeds maximum allowed complexity of 25",
+      "value": 30,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/pentest/attacks/auth_flow.rs",
+      "line": 322,
+      "function": "run_af03_jwt_algorithm_confusion"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 11 exceeds recommended complexity of 10",
+      "value": 11,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/pentest/attacks/data_exfiltration.rs",
+      "line": 121,
+      "function": "run_de01_ssrf"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 45 exceeds maximum allowed complexity of 25",
+      "value": 45,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/pentest/attacks/data_exfiltration.rs",
+      "line": 121,
+      "function": "run_de01_ssrf"
+    },
+    {
+      "severity": "warning",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 25 exceeds recommended complexity of 23",
+      "value": 25,
+      "threshold": 23,
+      "file": "./cargo-pmcp/src/pentest/attacks/data_exfiltration.rs",
+      "line": 230,
+      "function": "run_de02_path_traversal"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 27 exceeds maximum allowed complexity of 25",
+      "value": 27,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/pentest/attacks/data_exfiltration.rs",
+      "line": 306,
+      "function": "run_de03_content_injection"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 44 exceeds maximum allowed complexity of 25",
+      "value": 44,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/pentest/attacks/prompt_injection.rs",
+      "line": 98,
+      "function": "check_value_for_markers"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 40 exceeds maximum allowed complexity of 25",
+      "value": 40,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/pentest/attacks/prompt_injection.rs",
+      "line": 576,
+      "function": "run_deep_fuzz"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 12 exceeds recommended complexity of 10",
+      "value": 12,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/pentest/attacks/protocol_abuse.rs",
+      "line": 101,
+      "function": "run_pa01_malformed_jsonrpc"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 34 exceeds maximum allowed complexity of 25",
+      "value": 34,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/pentest/attacks/protocol_abuse.rs",
+      "line": 101,
+      "function": "run_pa01_malformed_jsonrpc"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 12 exceeds recommended complexity of 10",
+      "value": 12,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/pentest/attacks/protocol_abuse.rs",
+      "line": 214,
+      "function": "run_pa02_oversized_request"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 36 exceeds maximum allowed complexity of 25",
+      "value": 36,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/pentest/attacks/protocol_abuse.rs",
+      "line": 214,
+      "function": "run_pa02_oversized_request"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 11 exceeds recommended complexity of 10",
+      "value": 11,
+      "threshold": 10,
+      "file": "./cargo-pmcp/src/pentest/attacks/protocol_abuse.rs",
+      "line": 457,
+      "function": "run_pa04_notification_flooding"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 28 exceeds maximum allowed complexity of 25",
+      "value": 28,
+      "threshold": 25,
+      "file": "./cargo-pmcp/src/pentest/attacks/protocol_abuse.rs",
+      "line": 457,
+      "function": "run_pa04_notification_flooding"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 13 exceeds recommended complexity of 10",
+      "value": 13,
+      "threshold": 10,
+      "file": "./crates/mcp-preview/src/handlers/api.rs",
+      "line": 179,
+      "function": "list_resources"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 31 exceeds maximum allowed complexity of 25",
+      "value": 31,
+      "threshold": 25,
+      "file": "./crates/mcp-preview/src/handlers/api.rs",
+      "line": 179,
+      "function": "list_resources"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 37 exceeds maximum allowed complexity of 25",
+      "value": 37,
+      "threshold": 25,
+      "file": "./crates/mcp-preview/src/handlers/websocket.rs",
+      "line": 50,
+      "function": "handle_socket"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 28 exceeds maximum allowed complexity of 20",
+      "value": 28,
+      "threshold": 20,
+      "file": "./crates/mcp-tester/src/diagnostics.rs",
+      "line": 28,
+      "function": "run_diagnostics_internal"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 55 exceeds maximum allowed complexity of 25",
+      "value": 55,
+      "threshold": 25,
+      "file": "./crates/mcp-tester/src/diagnostics.rs",
+      "line": 28,
+      "function": "run_diagnostics_internal"
+    },
+    {
+      "severity": "warning",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 24 exceeds recommended complexity of 23",
+      "value": 24,
+      "threshold": 23,
+      "file": "./crates/mcp-tester/src/diagnostics.rs",
+      "line": 362,
+      "function": "diagnose_http"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 22 exceeds maximum allowed complexity of 20",
+      "value": 22,
+      "threshold": 20,
+      "file": "./crates/mcp-tester/src/main.rs",
+      "line": 244,
+      "function": "main"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 40 exceeds maximum allowed complexity of 25",
+      "value": 40,
+      "threshold": 25,
+      "file": "./crates/mcp-tester/src/main.rs",
+      "line": 244,
+      "function": "main"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 11 exceeds recommended complexity of 10",
+      "value": 11,
+      "threshold": 10,
+      "file": "./crates/mcp-tester/src/main.rs",
+      "line": 910,
+      "function": "run_apps_validation"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 32 exceeds maximum allowed complexity of 20",
+      "value": 32,
+      "threshold": 20,
+      "file": "./crates/pmcp-code-mode/src/eval.rs",
+      "line": 59,
+      "function": "evaluate_with_scope"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 123 exceeds maximum allowed complexity of 25",
+      "value": 123,
+      "threshold": 25,
+      "file": "./crates/pmcp-code-mode/src/eval.rs",
+      "line": 59,
+      "function": "evaluate_with_scope"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 37 exceeds maximum allowed complexity of 20",
+      "value": 37,
+      "threshold": 20,
+      "file": "./crates/pmcp-code-mode/src/eval.rs",
+      "line": 506,
+      "function": "evaluate_array_method_with_scope"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 117 exceeds maximum allowed complexity of 25",
+      "value": 117,
+      "threshold": 25,
+      "file": "./crates/pmcp-code-mode/src/eval.rs",
+      "line": 506,
+      "function": "evaluate_array_method_with_scope"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 25 exceeds maximum allowed complexity of 20",
+      "value": 25,
+      "threshold": 20,
+      "file": "./crates/pmcp-code-mode/src/eval.rs",
+      "line": 771,
+      "function": "evaluate_string_method"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 50 exceeds maximum allowed complexity of 25",
+      "value": 50,
+      "threshold": 25,
+      "file": "./crates/pmcp-code-mode/src/eval.rs",
+      "line": 771,
+      "function": "evaluate_string_method"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 17 exceeds recommended complexity of 10",
+      "value": 17,
+      "threshold": 10,
+      "file": "./crates/pmcp-code-mode/src/policy_annotations.rs",
+      "line": 189,
+      "function": "infer_category_and_risk_from_cedar"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 15 exceeds recommended complexity of 10",
+      "value": 15,
+      "threshold": 10,
+      "file": "./crates/pmcp-code-mode/src/policy_annotations.rs",
+      "line": 367,
+      "function": "parse_policy_annotations"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 35 exceeds maximum allowed complexity of 25",
+      "value": 35,
+      "threshold": 25,
+      "file": "./crates/pmcp-code-mode/src/policy_annotations.rs",
+      "line": 367,
+      "function": "parse_policy_annotations"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 34 exceeds maximum allowed complexity of 25",
+      "value": 34,
+      "threshold": 25,
+      "file": "./crates/pmcp-code-mode/src/schema_exposure.rs",
+      "line": 770,
+      "function": "pattern_matches"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 15 exceeds recommended complexity of 10",
+      "value": 15,
+      "threshold": 10,
+      "file": "./crates/pmcp-server/pmcp-server-lambda/src/main.rs",
+      "line": 89,
+      "function": "handler"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 26 exceeds maximum allowed complexity of 25",
+      "value": 26,
+      "threshold": 25,
+      "file": "./crates/pmcp-server/pmcp-server-lambda/src/main.rs",
+      "line": 89,
+      "function": "handler"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 28 exceeds maximum allowed complexity of 20",
+      "value": 28,
+      "threshold": 20,
+      "file": "./examples/26-server-tester/src/diagnostics.rs",
+      "line": 28,
+      "function": "run_diagnostics_internal"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 57 exceeds maximum allowed complexity of 25",
+      "value": 57,
+      "threshold": 25,
+      "file": "./examples/26-server-tester/src/diagnostics.rs",
+      "line": 28,
+      "function": "run_diagnostics_internal"
+    },
+    {
+      "severity": "warning",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 24 exceeds recommended complexity of 23",
+      "value": 24,
+      "threshold": 23,
+      "file": "./examples/26-server-tester/src/diagnostics.rs",
+      "line": 366,
+      "function": "diagnose_http"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 21 exceeds maximum allowed complexity of 20",
+      "value": 21,
+      "threshold": 20,
+      "file": "./examples/26-server-tester/src/main.rs",
+      "line": 214,
+      "function": "main"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 38 exceeds maximum allowed complexity of 25",
+      "value": 38,
+      "threshold": 25,
+      "file": "./examples/26-server-tester/src/main.rs",
+      "line": 214,
+      "function": "main"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 14 exceeds recommended complexity of 10",
+      "value": 14,
+      "threshold": 10,
+      "file": "./examples/27-course-server-minimal/src/main.rs",
+      "line": 116,
+      "function": "load_course_content"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 66 exceeds maximum allowed complexity of 25",
+      "value": 66,
+      "threshold": 25,
+      "file": "./examples/27-course-server-minimal/src/main.rs",
+      "line": 116,
+      "function": "load_course_content"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 26 exceeds maximum allowed complexity of 20",
+      "value": 26,
+      "threshold": 20,
+      "file": "./examples/c03_client_resources.rs",
+      "line": 12,
+      "function": "main"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 66 exceeds maximum allowed complexity of 25",
+      "value": 66,
+      "threshold": 25,
+      "file": "./examples/c03_client_resources.rs",
+      "line": 12,
+      "function": "main"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 29 exceeds maximum allowed complexity of 25",
+      "value": 29,
+      "threshold": 25,
+      "file": "./examples/c06_multiple_clients_parallel.rs",
+      "line": 30,
+      "function": "simulate_client_operation"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 31 exceeds maximum allowed complexity of 25",
+      "value": 31,
+      "threshold": 25,
+      "file": "./examples/s11_error_handling.rs",
+      "line": 139,
+      "function": "retry_with_backoff"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 20 exceeds recommended complexity of 10",
+      "value": 20,
+      "threshold": 10,
+      "file": "./examples/s11_error_handling.rs",
+      "line": 190,
+      "function": "main"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 34 exceeds maximum allowed complexity of 25",
+      "value": 34,
+      "threshold": 25,
+      "file": "./examples/s11_error_handling.rs",
+      "line": 190,
+      "function": "main"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 44 exceeds maximum allowed complexity of 20",
+      "value": 44,
+      "threshold": 20,
+      "file": "./examples/s17_advanced_typed_tools.rs",
+      "line": 230,
+      "function": "main"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 123 exceeds maximum allowed complexity of 25",
+      "value": 123,
+      "threshold": 25,
+      "file": "./examples/s17_advanced_typed_tools.rs",
+      "line": 230,
+      "function": "main"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 13 exceeds recommended complexity of 10",
+      "value": 13,
+      "threshold": 10,
+      "file": "./examples/t02_websocket_server_enhanced.rs",
+      "line": 12,
+      "function": "main"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 27 exceeds maximum allowed complexity of 25",
+      "value": 27,
+      "threshold": 25,
+      "file": "./examples/t02_websocket_server_enhanced.rs",
+      "line": 12,
+      "function": "main"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 21 exceeds maximum allowed complexity of 20",
+      "value": 21,
+      "threshold": 20,
+      "file": "./examples/t06_streamable_http_client.rs",
+      "line": 27,
+      "function": "main"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 28 exceeds maximum allowed complexity of 25",
+      "value": 28,
+      "threshold": 25,
+      "file": "./examples/t06_streamable_http_client.rs",
+      "line": 27,
+      "function": "main"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 20 exceeds recommended complexity of 10",
+      "value": 20,
+      "threshold": 10,
+      "file": "./examples/t08_simd_parsing_performance.rs",
+      "line": 21,
+      "function": "main"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 30 exceeds maximum allowed complexity of 25",
+      "value": 30,
+      "threshold": 25,
+      "file": "./examples/t08_simd_parsing_performance.rs",
+      "line": 21,
+      "function": "main"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 17 exceeds recommended complexity of 10",
+      "value": 17,
+      "threshold": 10,
+      "file": "./examples/wasm-mcp-server/deployments/fermyon-spin/src/lib.rs",
+      "line": 12,
+      "function": "handle_request"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 42 exceeds maximum allowed complexity of 25",
+      "value": 42,
+      "threshold": 25,
+      "file": "./examples/wasm-mcp-server/deployments/fermyon-spin/src/lib.rs",
+      "line": 12,
+      "function": "handle_request"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 32 exceeds maximum allowed complexity of 20",
+      "value": 32,
+      "threshold": 20,
+      "file": "./examples/wasm-mcp-server/src/lib.rs",
+      "line": 7,
+      "function": "main"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 83 exceeds maximum allowed complexity of 25",
+      "value": 83,
+      "threshold": 25,
+      "file": "./examples/wasm-mcp-server/src/lib.rs",
+      "line": 7,
+      "function": "main"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 32 exceeds maximum allowed complexity of 20",
+      "value": 32,
+      "threshold": 20,
+      "file": "./fuzz/fuzz_targets/auth_flows.rs",
+      "line": 49,
+      "function": "test_auth_flow"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 122 exceeds maximum allowed complexity of 25",
+      "value": 122,
+      "threshold": 25,
+      "file": "./fuzz/fuzz_targets/auth_flows.rs",
+      "line": 49,
+      "function": "test_auth_flow"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 20 exceeds recommended complexity of 10",
+      "value": 20,
+      "threshold": 10,
+      "file": "./fuzz/fuzz_targets/auth_flows.rs",
+      "line": 146,
+      "function": "test_pkce_flow"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 45 exceeds maximum allowed complexity of 25",
+      "value": 45,
+      "threshold": 25,
+      "file": "./fuzz/fuzz_targets/auth_flows.rs",
+      "line": 146,
+      "function": "test_pkce_flow"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 17 exceeds recommended complexity of 10",
+      "value": 17,
+      "threshold": 10,
+      "file": "./fuzz/fuzz_targets/transport_layer.rs",
+      "line": 35,
+      "function": "simulate_transport_operations"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 46 exceeds maximum allowed complexity of 25",
+      "value": 46,
+      "threshold": 25,
+      "file": "./fuzz/fuzz_targets/transport_layer.rs",
+      "line": 35,
+      "function": "simulate_transport_operations"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 13 exceeds recommended complexity of 10",
+      "value": 13,
+      "threshold": 10,
+      "file": "./fuzz/fuzz_targets/transport_layer.rs",
+      "line": 107,
+      "function": "test_websocket_framing"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 30 exceeds maximum allowed complexity of 25",
+      "value": 30,
+      "threshold": 25,
+      "file": "./fuzz/fuzz_targets/transport_layer.rs",
+      "line": 107,
+      "function": "test_websocket_framing"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 18 exceeds recommended complexity of 10",
+      "value": 18,
+      "threshold": 10,
+      "file": "./pmcp-macros/src/mcp_prompt.rs",
+      "line": 47,
+      "function": "expand_mcp_prompt"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 42 exceeds maximum allowed complexity of 25",
+      "value": 42,
+      "threshold": 25,
+      "file": "./pmcp-macros/src/mcp_prompt.rs",
+      "line": 47,
+      "function": "expand_mcp_prompt"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 21 exceeds maximum allowed complexity of 20",
+      "value": 21,
+      "threshold": 20,
+      "file": "./pmcp-macros/src/mcp_resource.rs",
+      "line": 78,
+      "function": "expand_mcp_resource"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 71 exceeds maximum allowed complexity of 25",
+      "value": 71,
+      "threshold": 25,
+      "file": "./pmcp-macros/src/mcp_resource.rs",
+      "line": 78,
+      "function": "expand_mcp_resource"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 23 exceeds maximum allowed complexity of 20",
+      "value": 23,
+      "threshold": 20,
+      "file": "./pmcp-macros/src/mcp_server.rs",
+      "line": 111,
+      "function": "expand_mcp_server"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 36 exceeds maximum allowed complexity of 25",
+      "value": 36,
+      "threshold": 25,
+      "file": "./pmcp-macros/src/mcp_server.rs",
+      "line": 111,
+      "function": "expand_mcp_server"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 44 exceeds maximum allowed complexity of 25",
+      "value": 44,
+      "threshold": 25,
+      "file": "./pmcp-macros/src/mcp_server.rs",
+      "line": 480,
+      "function": "collect_tool_methods"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 42 exceeds maximum allowed complexity of 25",
+      "value": 42,
+      "threshold": 25,
+      "file": "./pmcp-macros/src/mcp_server.rs",
+      "line": 625,
+      "function": "collect_prompt_methods"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 14 exceeds recommended complexity of 10",
+      "value": 14,
+      "threshold": 10,
+      "file": "./pmcp-macros/src/mcp_server.rs",
+      "line": 743,
+      "function": "collect_resource_methods"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 80 exceeds maximum allowed complexity of 25",
+      "value": 80,
+      "threshold": 25,
+      "file": "./pmcp-macros/src/mcp_server.rs",
+      "line": 743,
+      "function": "collect_resource_methods"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 18 exceeds recommended complexity of 10",
+      "value": 18,
+      "threshold": 10,
+      "file": "./pmcp-macros/src/mcp_tool.rs",
+      "line": 66,
+      "function": "expand_mcp_tool"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 40 exceeds maximum allowed complexity of 25",
+      "value": 40,
+      "threshold": 25,
+      "file": "./pmcp-macros/src/mcp_tool.rs",
+      "line": 66,
+      "function": "expand_mcp_tool"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 27 exceeds maximum allowed complexity of 20",
+      "value": 27,
+      "threshold": 20,
+      "file": "./src/server/path_validation.rs",
+      "line": 65,
+      "function": "validate_path"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 103 exceeds maximum allowed complexity of 25",
+      "value": 103,
+      "threshold": 25,
+      "file": "./src/server/path_validation.rs",
+      "line": 65,
+      "function": "validate_path"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 16 exceeds recommended complexity of 10",
+      "value": 16,
+      "threshold": 10,
+      "file": "./src/server/schema_utils.rs",
+      "line": 61,
+      "function": "normalize_schema_with_config"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 56 exceeds maximum allowed complexity of 25",
+      "value": 56,
+      "threshold": 25,
+      "file": "./src/server/schema_utils.rs",
+      "line": 61,
+      "function": "normalize_schema_with_config"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 14 exceeds recommended complexity of 10",
+      "value": 14,
+      "threshold": 10,
+      "file": "./src/server/schema_utils.rs",
+      "line": 149,
+      "function": "inline_refs_with_context"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 55 exceeds maximum allowed complexity of 25",
+      "value": 55,
+      "threshold": 25,
+      "file": "./src/server/schema_utils.rs",
+      "line": 149,
+      "function": "inline_refs_with_context"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 11 exceeds recommended complexity of 10",
+      "value": 11,
+      "threshold": 10,
+      "file": "./src/server/schema_utils.rs",
+      "line": 210,
+      "function": "inline_refs"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 41 exceeds maximum allowed complexity of 25",
+      "value": 41,
+      "threshold": 25,
+      "file": "./src/server/schema_utils.rs",
+      "line": 210,
+      "function": "inline_refs"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 13 exceeds recommended complexity of 10",
+      "value": 13,
+      "threshold": 10,
+      "file": "./src/server/schema_utils.rs",
+      "line": 276,
+      "function": "add_constraints"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 40 exceeds maximum allowed complexity of 25",
+      "value": 40,
+      "threshold": 25,
+      "file": "./src/server/streamable_http_server.rs",
+      "line": 391,
+      "function": "validate_headers"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 30 exceeds maximum allowed complexity of 25",
+      "value": 30,
+      "threshold": 25,
+      "file": "./src/server/streamable_http_server.rs",
+      "line": 566,
+      "function": "build_response"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 34 exceeds maximum allowed complexity of 25",
+      "value": 34,
+      "threshold": 25,
+      "file": "./src/server/streamable_http_server.rs",
+      "line": 674,
+      "function": "validate_protocol_version"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 18 exceeds recommended complexity of 10",
+      "value": 18,
+      "threshold": 10,
+      "file": "./src/server/streamable_http_server.rs",
+      "line": 841,
+      "function": "handle_post_fast_path"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 48 exceeds maximum allowed complexity of 25",
+      "value": 48,
+      "threshold": 25,
+      "file": "./src/server/streamable_http_server.rs",
+      "line": 841,
+      "function": "handle_post_fast_path"
+    },
+    {
+      "severity": "error",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 22 exceeds maximum allowed complexity of 20",
+      "value": 22,
+      "threshold": 20,
+      "file": "./src/server/streamable_http_server.rs",
+      "line": 1005,
+      "function": "handle_post_with_middleware"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 59 exceeds maximum allowed complexity of 25",
+      "value": 59,
+      "threshold": 25,
+      "file": "./src/server/streamable_http_server.rs",
+      "line": 1005,
+      "function": "handle_post_with_middleware"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 14 exceeds recommended complexity of 10",
+      "value": 14,
+      "threshold": 10,
+      "file": "./src/server/streamable_http_server.rs",
+      "line": 1262,
+      "function": "handle_get_sse"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 35 exceeds maximum allowed complexity of 25",
+      "value": 35,
+      "threshold": 25,
+      "file": "./src/server/streamable_http_server.rs",
+      "line": 1262,
+      "function": "handle_get_sse"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 43 exceeds maximum allowed complexity of 25",
+      "value": 43,
+      "threshold": 25,
+      "file": "./src/server/workflow/task_prompt_handler.rs",
+      "line": 523,
+      "function": "classify_resolution_failure"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 12 exceeds recommended complexity of 10",
+      "value": 12,
+      "threshold": 10,
+      "file": "./src/utils/json_simd.rs",
+      "line": 11,
+      "function": "parse_json_fast"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 59 exceeds maximum allowed complexity of 25",
+      "value": 59,
+      "threshold": 25,
+      "file": "./src/utils/json_simd.rs",
+      "line": 11,
+      "function": "parse_json_fast"
+    },
+    {
+      "severity": "warning",
+      "rule": "cyclomatic-complexity",
+      "message": "Cyclomatic complexity of 11 exceeds recommended complexity of 10",
+      "value": 11,
+      "threshold": 10,
+      "file": "./src/utils/json_simd.rs",
+      "line": 113,
+      "function": "pretty_print_fast"
+    },
+    {
+      "severity": "error",
+      "rule": "cognitive-complexity",
+      "message": "Cognitive complexity of 36 exceeds maximum allowed complexity of 25",
+      "value": 36,
+      "threshold": 25,
+      "file": "./src/utils/json_simd.rs",
+      "line": 113,
+      "function": "pretty_print_fast"
+    }
+  ],
+  "files": [
+    {
+      "path": "./cargo-pmcp/src/commands/add.rs",
+      "total_complexity": {
+        "cyclomatic": 12,
+        "cognitive": 19,
+        "nesting_max": 18,
+        "lines": 343,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "server",
+          "line_start": 12,
+          "line_end": 270,
+          "metrics": {
+            "cyclomatic": 32,
+            "cognitive": 56,
+            "nesting_max": 18,
+            "lines": 258,
+            "halstead": null
+          }
+        },
+        {
+          "name": "tool",
+          "line_start": 271,
+          "line_end": 292,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 21,
+            "halstead": null
+          }
+        },
+        {
+          "name": "workflow",
+          "line_start": 293,
+          "line_end": 343,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/commands/deploy/mod.rs",
+      "total_complexity": {
+        "cyclomatic": 20,
+        "cognitive": 59,
+        "nesting_max": 30,
+        "lines": 1038,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "detect_server_name",
+          "line_start": 8,
+          "line_end": 795,
+          "metrics": {
+            "cyclomatic": 12,
+            "cognitive": 64,
+            "nesting_max": 21,
+            "lines": 787,
+            "halstead": null
+          }
+        },
+        {
+          "name": "handle_oauth_action",
+          "line_start": 796,
+          "line_end": 987,
+          "metrics": {
+            "cyclomatic": 36,
+            "cognitive": 91,
+            "nesting_max": 30,
+            "lines": 191,
+            "halstead": null
+          }
+        },
+        {
+          "name": "resolve_oauth_config",
+          "line_start": 988,
+          "line_end": 1038,
+          "metrics": {
+            "cyclomatic": 14,
+            "cognitive": 24,
+            "nesting_max": 8,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/commands/dev.rs",
+      "total_complexity": {
+        "cyclomatic": 19,
+        "cognitive": 33,
+        "nesting_max": 11,
+        "lines": 163,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "resolve_server_binary",
+          "line_start": 22,
+          "line_end": 112,
+          "metrics": {
+            "cyclomatic": 14,
+            "cognitive": 34,
+            "nesting_max": 11,
+            "lines": 90,
+            "halstead": null
+          }
+        },
+        {
+          "name": "execute",
+          "line_start": 113,
+          "line_end": 163,
+          "metrics": {
+            "cyclomatic": 25,
+            "cognitive": 33,
+            "nesting_max": 11,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/commands/doctor.rs",
+      "total_complexity": {
+        "cyclomatic": 32,
+        "cognitive": 60,
+        "nesting_max": 20,
+        "lines": 65,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "execute",
+          "line_start": 15,
+          "line_end": 65,
+          "metrics": {
+            "cyclomatic": 32,
+            "cognitive": 60,
+            "nesting_max": 20,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/commands/landing/deploy.rs",
+      "total_complexity": {
+        "cyclomatic": 10,
+        "cognitive": 12,
+        "nesting_max": 9,
+        "lines": 454,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "deploy_landing_page",
+          "line_start": 11,
+          "line_end": 190,
+          "metrics": {
+            "cyclomatic": 28,
+            "cognitive": 27,
+            "nesting_max": 9,
+            "lines": 179,
+            "halstead": null
+          }
+        },
+        {
+          "name": "create_deployment_zip",
+          "line_start": 191,
+          "line_end": 242,
+          "metrics": {
+            "cyclomatic": 10,
+            "cognitive": 9,
+            "nesting_max": 3,
+            "lines": 51,
+            "halstead": null
+          }
+        },
+        {
+          "name": "upload_landing_via_graphql",
+          "line_start": 243,
+          "line_end": 304,
+          "metrics": {
+            "cyclomatic": 11,
+            "cognitive": 10,
+            "nesting_max": 3,
+            "lines": 61,
+            "halstead": null
+          }
+        },
+        {
+          "name": "poll_landing_status",
+          "line_start": 305,
+          "line_end": 353,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 23,
+            "nesting_max": 7,
+            "lines": 48,
+            "halstead": null
+          }
+        },
+        {
+          "name": "check_node_installed",
+          "line_start": 354,
+          "line_end": 377,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 4,
+            "nesting_max": 1,
+            "lines": 23,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_npm_install",
+          "line_start": 378,
+          "line_end": 403,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 6,
+            "nesting_max": 2,
+            "lines": 25,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_npm_build",
+          "line_start": 404,
+          "line_end": 454,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 6,
+            "nesting_max": 2,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/commands/landing/init.rs",
+      "total_complexity": {
+        "cyclomatic": 13,
+        "cognitive": 25,
+        "nesting_max": 10,
+        "lines": 194,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "init_landing_page",
+          "line_start": 10,
+          "line_end": 143,
+          "metrics": {
+            "cyclomatic": 18,
+            "cognitive": 20,
+            "nesting_max": 6,
+            "lines": 133,
+            "halstead": null
+          }
+        },
+        {
+          "name": "detect_server_name",
+          "line_start": 144,
+          "line_end": 194,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 30,
+            "nesting_max": 10,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/commands/loadtest/run.rs",
+      "total_complexity": {
+        "cyclomatic": 9,
+        "cognitive": 15,
+        "nesting_max": 8,
+        "lines": 200,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "execute_run",
+          "line_start": 19,
+          "line_end": 122,
+          "metrics": {
+            "cyclomatic": 17,
+            "cognitive": 26,
+            "nesting_max": 8,
+            "lines": 103,
+            "halstead": null
+          }
+        },
+        {
+          "name": "apply_overrides",
+          "line_start": 123,
+          "line_end": 149,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 7,
+            "nesting_max": 2,
+            "lines": 26,
+            "halstead": null
+          }
+        },
+        {
+          "name": "discover_config",
+          "line_start": 150,
+          "line_end": 200,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 12,
+            "nesting_max": 4,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/commands/pentest.rs",
+      "total_complexity": {
+        "cyclomatic": 24,
+        "cognitive": 38,
+        "nesting_max": 12,
+        "lines": 130,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "execute_pentest",
+          "line_start": 80,
+          "line_end": 130,
+          "metrics": {
+            "cyclomatic": 24,
+            "cognitive": 38,
+            "nesting_max": 12,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/commands/preview.rs",
+      "total_complexity": {
+        "cyclomatic": 10,
+        "cognitive": 19,
+        "nesting_max": 9,
+        "lines": 202,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "execute",
+          "line_start": 9,
+          "line_end": 151,
+          "metrics": {
+            "cyclomatic": 14,
+            "cognitive": 27,
+            "nesting_max": 9,
+            "lines": 142,
+            "halstead": null
+          }
+        },
+        {
+          "name": "discover_oauth_endpoints",
+          "line_start": 152,
+          "line_end": 202,
+          "metrics": {
+            "cyclomatic": 7,
+            "cognitive": 11,
+            "nesting_max": 3,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/commands/test/apps.rs",
+      "total_complexity": {
+        "cyclomatic": 29,
+        "cognitive": 43,
+        "nesting_max": 14,
+        "lines": 66,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "execute",
+          "line_start": 16,
+          "line_end": 66,
+          "metrics": {
+            "cyclomatic": 29,
+            "cognitive": 43,
+            "nesting_max": 14,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/commands/test/check.rs",
+      "total_complexity": {
+        "cyclomatic": 44,
+        "cognitive": 105,
+        "nesting_max": 35,
+        "lines": 70,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "execute",
+          "line_start": 20,
+          "line_end": 70,
+          "metrics": {
+            "cyclomatic": 44,
+            "cognitive": 105,
+            "nesting_max": 35,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/commands/test/list.rs",
+      "total_complexity": {
+        "cyclomatic": 10,
+        "cognitive": 18,
+        "nesting_max": 12,
+        "lines": 204,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "execute",
+          "line_start": 10,
+          "line_end": 153,
+          "metrics": {
+            "cyclomatic": 19,
+            "cognitive": 36,
+            "nesting_max": 12,
+            "lines": 143,
+            "halstead": null
+          }
+        },
+        {
+          "name": "truncate_string",
+          "line_start": 154,
+          "line_end": 204,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/commands/test/run.rs",
+      "total_complexity": {
+        "cyclomatic": 25,
+        "cognitive": 46,
+        "nesting_max": 15,
+        "lines": 62,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "execute",
+          "line_start": 12,
+          "line_end": 62,
+          "metrics": {
+            "cyclomatic": 25,
+            "cognitive": 46,
+            "nesting_max": 15,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/commands/test/upload.rs",
+      "total_complexity": {
+        "cyclomatic": 23,
+        "cognitive": 44,
+        "nesting_max": 14,
+        "lines": 61,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "execute",
+          "line_start": 11,
+          "line_end": 61,
+          "metrics": {
+            "cyclomatic": 23,
+            "cognitive": 44,
+            "nesting_max": 14,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/commands/validate.rs",
+      "total_complexity": {
+        "cyclomatic": 9,
+        "cognitive": 18,
+        "nesting_max": 22,
+        "lines": 581,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "validate_workflows",
+          "line_start": 58,
+          "line_end": 87,
+          "metrics": {
+            "cyclomatic": 7,
+            "cognitive": 8,
+            "nesting_max": 2,
+            "lines": 29,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_validation",
+          "line_start": 88,
+          "line_end": 272,
+          "metrics": {
+            "cyclomatic": 33,
+            "cognitive": 66,
+            "nesting_max": 22,
+            "lines": 184,
+            "halstead": null
+          }
+        },
+        {
+          "name": "find_workflow_tests",
+          "line_start": 273,
+          "line_end": 302,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 5,
+            "nesting_max": 1,
+            "lines": 29,
+            "halstead": null
+          }
+        },
+        {
+          "name": "parse_test_output",
+          "line_start": 303,
+          "line_end": 349,
+          "metrics": {
+            "cyclomatic": 7,
+            "cognitive": 30,
+            "nesting_max": 10,
+            "lines": 46,
+            "halstead": null
+          }
+        },
+        {
+          "name": "print_failure_summary",
+          "line_start": 350,
+          "line_end": 372,
+          "metrics": {
+            "cyclomatic": 8,
+            "cognitive": 17,
+            "nesting_max": 5,
+            "lines": 22,
+            "halstead": null
+          }
+        },
+        {
+          "name": "generate_validation_scaffolding",
+          "line_start": 373,
+          "line_end": 473,
+          "metrics": {
+            "cyclomatic": 7,
+            "cognitive": 10,
+            "nesting_max": 3,
+            "lines": 100,
+            "halstead": null
+          }
+        },
+        {
+          "name": "print_test_guidance",
+          "line_start": 474,
+          "line_end": 530,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 56,
+            "halstead": null
+          }
+        },
+        {
+          "name": "validate_deploy",
+          "line_start": 531,
+          "line_end": 581,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 11,
+            "nesting_max": 3,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/deployment/targets/cloudflare/init.rs",
+      "total_complexity": {
+        "cyclomatic": 7,
+        "cognitive": 20,
+        "nesting_max": 21,
+        "lines": 718,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "init_cloudflare",
+          "line_start": 7,
+          "line_end": 73,
+          "metrics": {
+            "cyclomatic": 10,
+            "cognitive": 9,
+            "nesting_max": 3,
+            "lines": 66,
+            "halstead": null
+          }
+        },
+        {
+          "name": "check_wrangler_auth",
+          "line_start": 74,
+          "line_end": 97,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 3,
+            "nesting_max": 1,
+            "lines": 23,
+            "halstead": null
+          }
+        },
+        {
+          "name": "auto_detect_server_package",
+          "line_start": 98,
+          "line_end": 158,
+          "metrics": {
+            "cyclomatic": 11,
+            "cognitive": 35,
+            "nesting_max": 11,
+            "lines": 60,
+            "halstead": null
+          }
+        },
+        {
+          "name": "find_core_package",
+          "line_start": 159,
+          "line_end": 192,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 35,
+            "nesting_max": 11,
+            "lines": 33,
+            "halstead": null
+          }
+        },
+        {
+          "name": "find_any_package",
+          "line_start": 193,
+          "line_end": 237,
+          "metrics": {
+            "cyclomatic": 14,
+            "cognitive": 65,
+            "nesting_max": 21,
+            "lines": 44,
+            "halstead": null
+          }
+        },
+        {
+          "name": "try_package_dir",
+          "line_start": 238,
+          "line_end": 258,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 5,
+            "nesting_max": 1,
+            "lines": 20,
+            "halstead": null
+          }
+        },
+        {
+          "name": "extract_package_name",
+          "line_start": 259,
+          "line_end": 271,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 10,
+            "nesting_max": 3,
+            "lines": 12,
+            "halstead": null
+          }
+        },
+        {
+          "name": "create_adapter_cargo_toml",
+          "line_start": 272,
+          "line_end": 341,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 5,
+            "nesting_max": 1,
+            "lines": 69,
+            "halstead": null
+          }
+        },
+        {
+          "name": "detect_pmcp_dependency",
+          "line_start": 342,
+          "line_end": 380,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 33,
+            "nesting_max": 11,
+            "lines": 38,
+            "halstead": null
+          }
+        },
+        {
+          "name": "try_find_pmcp_in_cargo_toml",
+          "line_start": 381,
+          "line_end": 435,
+          "metrics": {
+            "cyclomatic": 14,
+            "cognitive": 41,
+            "nesting_max": 13,
+            "lines": 54,
+            "halstead": null
+          }
+        },
+        {
+          "name": "try_find_workspace_pmcp",
+          "line_start": 436,
+          "line_end": 501,
+          "metrics": {
+            "cyclomatic": 15,
+            "cognitive": 41,
+            "nesting_max": 13,
+            "lines": 65,
+            "halstead": null
+          }
+        },
+        {
+          "name": "create_wrangler_toml",
+          "line_start": 502,
+          "line_end": 527,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 25,
+            "halstead": null
+          }
+        },
+        {
+          "name": "create_adapter_code",
+          "line_start": 528,
+          "line_end": 667,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 139,
+            "halstead": null
+          }
+        },
+        {
+          "name": "create_gitignore",
+          "line_start": 668,
+          "line_end": 718,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/deployment/targets/pmcp_run/auth.rs",
+      "total_complexity": {
+        "cyclomatic": 5,
+        "cognitive": 9,
+        "nesting_max": 11,
+        "lines": 792,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "get_api_base_url",
+          "line_start": 88,
+          "line_end": 94,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 6,
+            "halstead": null
+          }
+        },
+        {
+          "name": "config_cache_path",
+          "line_start": 95,
+          "line_end": 106,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 4,
+            "nesting_max": 1,
+            "lines": 11,
+            "halstead": null
+          }
+        },
+        {
+          "name": "load_cached_config",
+          "line_start": 107,
+          "line_end": 129,
+          "metrics": {
+            "cyclomatic": 7,
+            "cognitive": 8,
+            "nesting_max": 2,
+            "lines": 22,
+            "halstead": null
+          }
+        },
+        {
+          "name": "save_config_cache",
+          "line_start": 130,
+          "line_end": 141,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 3,
+            "nesting_max": 1,
+            "lines": 11,
+            "halstead": null
+          }
+        },
+        {
+          "name": "fetch_pmcp_config",
+          "line_start": 142,
+          "line_end": 217,
+          "metrics": {
+            "cyclomatic": 10,
+            "cognitive": 35,
+            "nesting_max": 11,
+            "lines": 75,
+            "halstead": null
+          }
+        },
+        {
+          "name": "get_pmcp_config",
+          "line_start": 218,
+          "line_end": 300,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 11,
+            "nesting_max": 3,
+            "lines": 82,
+            "halstead": null
+          }
+        },
+        {
+          "name": "get_cognito_domain_from_config",
+          "line_start": 301,
+          "line_end": 311,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 10,
+            "halstead": null
+          }
+        },
+        {
+          "name": "get_cognito_client_id_from_config",
+          "line_start": 312,
+          "line_end": 324,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 12,
+            "halstead": null
+          }
+        },
+        {
+          "name": "credentials_path",
+          "line_start": 325,
+          "line_end": 350,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 4,
+            "nesting_max": 1,
+            "lines": 25,
+            "halstead": null
+          }
+        },
+        {
+          "name": "get_credentials",
+          "line_start": 351,
+          "line_end": 428,
+          "metrics": {
+            "cyclomatic": 12,
+            "cognitive": 17,
+            "nesting_max": 5,
+            "lines": 77,
+            "halstead": null
+          }
+        },
+        {
+          "name": "get_credentials_via_client_credentials",
+          "line_start": 429,
+          "line_end": 483,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 4,
+            "nesting_max": 1,
+            "lines": 54,
+            "halstead": null
+          }
+        },
+        {
+          "name": "refresh_credentials",
+          "line_start": 484,
+          "line_end": 532,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 4,
+            "nesting_max": 1,
+            "lines": 48,
+            "halstead": null
+          }
+        },
+        {
+          "name": "save_credentials",
+          "line_start": 533,
+          "line_end": 556,
+          "metrics": {
+            "cyclomatic": 10,
+            "cognitive": 11,
+            "nesting_max": 3,
+            "lines": 23,
+            "halstead": null
+          }
+        },
+        {
+          "name": "create_oauth_client_from_config",
+          "line_start": 557,
+          "line_end": 581,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 24,
+            "halstead": null
+          }
+        },
+        {
+          "name": "start_callback_server",
+          "line_start": 582,
+          "line_end": 639,
+          "metrics": {
+            "cyclomatic": 7,
+            "cognitive": 26,
+            "nesting_max": 8,
+            "lines": 57,
+            "halstead": null
+          }
+        },
+        {
+          "name": "login",
+          "line_start": 640,
+          "line_end": 741,
+          "metrics": {
+            "cyclomatic": 10,
+            "cognitive": 9,
+            "nesting_max": 3,
+            "lines": 101,
+            "halstead": null
+          }
+        },
+        {
+          "name": "logout",
+          "line_start": 742,
+          "line_end": 792,
+          "metrics": {
+            "cyclomatic": 10,
+            "cognitive": 18,
+            "nesting_max": 6,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/deployment/targets/pmcp_run/deploy.rs",
+      "total_complexity": {
+        "cyclomatic": 16,
+        "cognitive": 27,
+        "nesting_max": 22,
+        "lines": 661,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "extract_version_from_cargo",
+          "line_start": 21,
+          "line_end": 76,
+          "metrics": {
+            "cyclomatic": 15,
+            "cognitive": 27,
+            "nesting_max": 9,
+            "lines": 55,
+            "halstead": null
+          }
+        },
+        {
+          "name": "deploy_to_pmcp_run",
+          "line_start": 77,
+          "line_end": 510,
+          "metrics": {
+            "cyclomatic": 44,
+            "cognitive": 66,
+            "nesting_max": 22,
+            "lines": 433,
+            "halstead": null
+          }
+        },
+        {
+          "name": "poll_deployment_status",
+          "line_start": 511,
+          "line_end": 581,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 23,
+            "nesting_max": 7,
+            "lines": 70,
+            "halstead": null
+          }
+        },
+        {
+          "name": "find_template_file",
+          "line_start": 582,
+          "line_end": 610,
+          "metrics": {
+            "cyclomatic": 8,
+            "cognitive": 19,
+            "nesting_max": 6,
+            "lines": 28,
+            "halstead": null
+          }
+        },
+        {
+          "name": "validate_and_regenerate_stack_ts",
+          "line_start": 611,
+          "line_end": 661,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 3,
+            "nesting_max": 1,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/landing/template.rs",
+      "total_complexity": {
+        "cyclomatic": 6,
+        "cognitive": 11,
+        "nesting_max": 8,
+        "lines": 321,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "clone_template",
+          "line_start": 38,
+          "line_end": 89,
+          "metrics": {
+            "cyclomatic": 7,
+            "cognitive": 9,
+            "nesting_max": 3,
+            "lines": 51,
+            "halstead": null
+          }
+        },
+        {
+          "name": "find_local_template",
+          "line_start": 90,
+          "line_end": 125,
+          "metrics": {
+            "cyclomatic": 11,
+            "cognitive": 26,
+            "nesting_max": 8,
+            "lines": 35,
+            "halstead": null
+          }
+        },
+        {
+          "name": "sparse_clone_template",
+          "line_start": 126,
+          "line_end": 194,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 11,
+            "nesting_max": 3,
+            "lines": 68,
+            "halstead": null
+          }
+        },
+        {
+          "name": "copy_dir_recursive",
+          "line_start": 195,
+          "line_end": 216,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 18,
+            "nesting_max": 6,
+            "lines": 21,
+            "halstead": null
+          }
+        },
+        {
+          "name": "check_git_installed",
+          "line_start": 217,
+          "line_end": 231,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 14,
+            "halstead": null
+          }
+        },
+        {
+          "name": "replace_variables_in_files",
+          "line_start": 232,
+          "line_end": 270,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 12,
+            "nesting_max": 4,
+            "lines": 38,
+            "halstead": null
+          }
+        },
+        {
+          "name": "list_templates",
+          "line_start": 271,
+          "line_end": 321,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/loadtest/summary.rs",
+      "total_complexity": {
+        "cyclomatic": 5,
+        "cognitive": 8,
+        "nesting_max": 8,
+        "lines": 296,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "render_summary",
+          "line_start": 56,
+          "line_end": 221,
+          "metrics": {
+            "cyclomatic": 15,
+            "cognitive": 26,
+            "nesting_max": 8,
+            "lines": 165,
+            "halstead": null
+          }
+        },
+        {
+          "name": "render_header",
+          "line_start": 222,
+          "line_end": 245,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 23,
+            "halstead": null
+          }
+        },
+        {
+          "name": "format_metric_row",
+          "line_start": 246,
+          "line_end": 296,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/loadtest/vu.rs",
+      "total_complexity": {
+        "cyclomatic": 4,
+        "cognitive": 8,
+        "nesting_max": 12,
+        "lines": 293,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "step_to_operation_type",
+          "line_start": 67,
+          "line_end": 78,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 11,
+            "halstead": null
+          }
+        },
+        {
+          "name": "execute_step",
+          "line_start": 79,
+          "line_end": 113,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 34,
+            "halstead": null
+          }
+        },
+        {
+          "name": "respawn_with_backoff",
+          "line_start": 114,
+          "line_end": 132,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 4,
+            "nesting_max": 1,
+            "lines": 18,
+            "halstead": null
+          }
+        },
+        {
+          "name": "is_session_fatal",
+          "line_start": 133,
+          "line_end": 141,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 8,
+            "halstead": null
+          }
+        },
+        {
+          "name": "try_initialize",
+          "line_start": 142,
+          "line_end": 203,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 18,
+            "nesting_max": 6,
+            "lines": 61,
+            "halstead": null
+          }
+        },
+        {
+          "name": "vu_loop",
+          "line_start": 204,
+          "line_end": 242,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 38,
+            "halstead": null
+          }
+        },
+        {
+          "name": "vu_loop_inner",
+          "line_start": 243,
+          "line_end": 293,
+          "metrics": {
+            "cyclomatic": 14,
+            "cognitive": 37,
+            "nesting_max": 12,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/main.rs",
+      "total_complexity": {
+        "cyclomatic": 17,
+        "cognitive": 29,
+        "nesting_max": 16,
+        "lines": 457,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "main",
+          "line_start": 351,
+          "line_end": 406,
+          "metrics": {
+            "cyclomatic": 11,
+            "cognitive": 11,
+            "nesting_max": 3,
+            "lines": 55,
+            "halstead": null
+          }
+        },
+        {
+          "name": "execute_command",
+          "line_start": 407,
+          "line_end": 457,
+          "metrics": {
+            "cyclomatic": 24,
+            "cognitive": 48,
+            "nesting_max": 16,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/pentest/attacks/auth_flow.rs",
+      "total_complexity": {
+        "cyclomatic": 4,
+        "cognitive": 10,
+        "nesting_max": 10,
+        "lines": 526,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "run",
+          "line_start": 24,
+          "line_end": 73,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 5,
+            "nesting_max": 1,
+            "lines": 49,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_af01_token_replay",
+          "line_start": 74,
+          "line_end": 175,
+          "metrics": {
+            "cyclomatic": 8,
+            "cognitive": 20,
+            "nesting_max": 6,
+            "lines": 101,
+            "halstead": null
+          }
+        },
+        {
+          "name": "extract_session_id",
+          "line_start": 176,
+          "line_end": 211,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 35,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_af02_pkce_downgrade",
+          "line_start": 212,
+          "line_end": 321,
+          "metrics": {
+            "cyclomatic": 10,
+            "cognitive": 18,
+            "nesting_max": 6,
+            "lines": 109,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_af03_jwt_algorithm_confusion",
+          "line_start": 322,
+          "line_end": 456,
+          "metrics": {
+            "cyclomatic": 10,
+            "cognitive": 30,
+            "nesting_max": 10,
+            "lines": 134,
+            "halstead": null
+          }
+        },
+        {
+          "name": "craft_jwt",
+          "line_start": 457,
+          "line_end": 467,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 10,
+            "halstead": null
+          }
+        },
+        {
+          "name": "base64url_encode",
+          "line_start": 468,
+          "line_end": 475,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 7,
+            "halstead": null
+          }
+        },
+        {
+          "name": "extract_base_url",
+          "line_start": 476,
+          "line_end": 526,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 6,
+            "nesting_max": 2,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/pentest/attacks/data_exfiltration.rs",
+      "total_complexity": {
+        "cyclomatic": 5,
+        "cognitive": 18,
+        "nesting_max": 15,
+        "lines": 421,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "run",
+          "line_start": 21,
+          "line_end": 69,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 48,
+            "halstead": null
+          }
+        },
+        {
+          "name": "traversal_variants",
+          "line_start": 70,
+          "line_end": 120,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 50,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_de01_ssrf",
+          "line_start": 121,
+          "line_end": 229,
+          "metrics": {
+            "cyclomatic": 11,
+            "cognitive": 45,
+            "nesting_max": 15,
+            "lines": 108,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_de02_path_traversal",
+          "line_start": 230,
+          "line_end": 305,
+          "metrics": {
+            "cyclomatic": 7,
+            "cognitive": 25,
+            "nesting_max": 8,
+            "lines": 75,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_de03_content_injection",
+          "line_start": 306,
+          "line_end": 370,
+          "metrics": {
+            "cyclomatic": 7,
+            "cognitive": 27,
+            "nesting_max": 9,
+            "lines": 64,
+            "halstead": null
+          }
+        },
+        {
+          "name": "extract_uri_args",
+          "line_start": 371,
+          "line_end": 421,
+          "metrics": {
+            "cyclomatic": 7,
+            "cognitive": 15,
+            "nesting_max": 5,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/pentest/attacks/prompt_injection.rs",
+      "total_complexity": {
+        "cyclomatic": 4,
+        "cognitive": 10,
+        "nesting_max": 14,
+        "lines": 792,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "run",
+          "line_start": 26,
+          "line_end": 89,
+          "metrics": {
+            "cyclomatic": 8,
+            "cognitive": 15,
+            "nesting_max": 5,
+            "lines": 63,
+            "halstead": null
+          }
+        },
+        {
+          "name": "check_response_for_markers",
+          "line_start": 90,
+          "line_end": 97,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 7,
+            "halstead": null
+          }
+        },
+        {
+          "name": "check_value_for_markers",
+          "line_start": 98,
+          "line_end": 132,
+          "metrics": {
+            "cyclomatic": 10,
+            "cognitive": 44,
+            "nesting_max": 14,
+            "lines": 34,
+            "halstead": null
+          }
+        },
+        {
+          "name": "send_tool_call",
+          "line_start": 133,
+          "line_end": 159,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 26,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_pi01_delimiter_confusion",
+          "line_start": 160,
+          "line_end": 208,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 10,
+            "nesting_max": 3,
+            "lines": 48,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_pi02_instruction_override",
+          "line_start": 209,
+          "line_end": 275,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 15,
+            "nesting_max": 5,
+            "lines": 66,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_pi03_system_prompt_extraction",
+          "line_start": 276,
+          "line_end": 339,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 15,
+            "nesting_max": 5,
+            "lines": 63,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_pi04_tool_redirection",
+          "line_start": 340,
+          "line_end": 402,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 15,
+            "nesting_max": 5,
+            "lines": 62,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_pi05_marker_echo",
+          "line_start": 403,
+          "line_end": 447,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 6,
+            "nesting_max": 2,
+            "lines": 44,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_pi06_unicode_bypass",
+          "line_start": 448,
+          "line_end": 514,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 15,
+            "nesting_max": 5,
+            "lines": 66,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_pi07_oversized_input",
+          "line_start": 515,
+          "line_end": 575,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 7,
+            "nesting_max": 2,
+            "lines": 60,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_deep_fuzz",
+          "line_start": 576,
+          "line_end": 705,
+          "metrics": {
+            "cyclomatic": 10,
+            "cognitive": 40,
+            "nesting_max": 13,
+            "lines": 129,
+            "halstead": null
+          }
+        },
+        {
+          "name": "mutate_url_encode",
+          "line_start": 706,
+          "line_end": 710,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 4,
+            "halstead": null
+          }
+        },
+        {
+          "name": "mutate_double_encode",
+          "line_start": 711,
+          "line_end": 716,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 5,
+            "halstead": null
+          }
+        },
+        {
+          "name": "mutate_base64",
+          "line_start": 717,
+          "line_end": 723,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 6,
+            "halstead": null
+          }
+        },
+        {
+          "name": "mutate_unicode_nfkc",
+          "line_start": 724,
+          "line_end": 741,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 17,
+            "halstead": null
+          }
+        },
+        {
+          "name": "mutate_case_swap",
+          "line_start": 742,
+          "line_end": 792,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./cargo-pmcp/src/pentest/attacks/protocol_abuse.rs",
+      "total_complexity": {
+        "cyclomatic": 7,
+        "cognitive": 17,
+        "nesting_max": 12,
+        "lines": 612,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "run",
+          "line_start": 21,
+          "line_end": 57,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 4,
+            "nesting_max": 1,
+            "lines": 36,
+            "halstead": null
+          }
+        },
+        {
+          "name": "malformed_jsonrpc_messages",
+          "line_start": 58,
+          "line_end": 100,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 42,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_pa01_malformed_jsonrpc",
+          "line_start": 101,
+          "line_end": 213,
+          "metrics": {
+            "cyclomatic": 12,
+            "cognitive": 34,
+            "nesting_max": 11,
+            "lines": 112,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_pa02_oversized_request",
+          "line_start": 214,
+          "line_end": 345,
+          "metrics": {
+            "cyclomatic": 12,
+            "cognitive": 36,
+            "nesting_max": 12,
+            "lines": 131,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_pa03_batch_abuse",
+          "line_start": 346,
+          "line_end": 456,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 21,
+            "nesting_max": 7,
+            "lines": 110,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_pa04_notification_flooding",
+          "line_start": 457,
+          "line_end": 561,
+          "metrics": {
+            "cyclomatic": 11,
+            "cognitive": 28,
+            "nesting_max": 9,
+            "lines": 104,
+            "halstead": null
+          }
+        },
+        {
+          "name": "truncate_evidence",
+          "line_start": 562,
+          "line_end": 612,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./crates/mcp-preview/src/handlers/api.rs",
+      "total_complexity": {
+        "cyclomatic": 3,
+        "cognitive": 5,
+        "nesting_max": 10,
+        "lines": 550,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "get_config",
+          "line_start": 43,
+          "line_end": 107,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 64,
+            "halstead": null
+          }
+        },
+        {
+          "name": "list_tools",
+          "line_start": 108,
+          "line_end": 144,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 6,
+            "nesting_max": 2,
+            "lines": 36,
+            "halstead": null
+          }
+        },
+        {
+          "name": "call_tool",
+          "line_start": 145,
+          "line_end": 178,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "nesting_max": 1,
+            "lines": 33,
+            "halstead": null
+          }
+        },
+        {
+          "name": "list_resources",
+          "line_start": 179,
+          "line_end": 282,
+          "metrics": {
+            "cyclomatic": 13,
+            "cognitive": 31,
+            "nesting_max": 10,
+            "lines": 103,
+            "halstead": null
+          }
+        },
+        {
+          "name": "read_resource",
+          "line_start": 283,
+          "line_end": 329,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 10,
+            "nesting_max": 3,
+            "lines": 46,
+            "halstead": null
+          }
+        },
+        {
+          "name": "inject_bridge_script",
+          "line_start": 330,
+          "line_end": 334,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 4,
+            "halstead": null
+          }
+        },
+        {
+          "name": "widget_error_html",
+          "line_start": 335,
+          "line_end": 393,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 58,
+            "halstead": null
+          }
+        },
+        {
+          "name": "reconnect",
+          "line_start": 394,
+          "line_end": 408,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 14,
+            "halstead": null
+          }
+        },
+        {
+          "name": "status",
+          "line_start": 409,
+          "line_end": 419,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 10,
+            "halstead": null
+          }
+        },
+        {
+          "name": "forward_mcp",
+          "line_start": 420,
+          "line_end": 471,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 11,
+            "nesting_max": 3,
+            "lines": 51,
+            "halstead": null
+          }
+        },
+        {
+          "name": "enrich_chatgpt_meta_map",
+          "line_start": 472,
+          "line_end": 492,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 20,
+            "halstead": null
+          }
+        },
+        {
+          "name": "enrich_meta_for_chatgpt",
+          "line_start": 493,
+          "line_end": 499,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 6,
+            "halstead": null
+          }
+        },
+        {
+          "name": "enrich_value_meta_for_chatgpt",
+          "line_start": 500,
+          "line_end": 550,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./crates/mcp-preview/src/handlers/websocket.rs",
+      "total_complexity": {
+        "cyclomatic": 4,
+        "cognitive": 18,
+        "nesting_max": 12,
+        "lines": 100,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "handler",
+          "line_start": 42,
+          "line_end": 49,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 7,
+            "halstead": null
+          }
+        },
+        {
+          "name": "handle_socket",
+          "line_start": 50,
+          "line_end": 100,
+          "metrics": {
+            "cyclomatic": 8,
+            "cognitive": 37,
+            "nesting_max": 12,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./crates/mcp-tester/src/diagnostics.rs",
+      "total_complexity": {
+        "cyclomatic": 5,
+        "cognitive": 8,
+        "nesting_max": 18,
+        "lines": 634,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "run_diagnostics",
+          "line_start": 8,
+          "line_end": 17,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 9,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_diagnostics_quiet",
+          "line_start": 18,
+          "line_end": 27,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 9,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_diagnostics_internal",
+          "line_start": 28,
+          "line_end": 195,
+          "metrics": {
+            "cyclomatic": 28,
+            "cognitive": 55,
+            "nesting_max": 18,
+            "lines": 167,
+            "halstead": null
+          }
+        },
+        {
+          "name": "diagnose_url",
+          "line_start": 196,
+          "line_end": 253,
+          "metrics": {
+            "cyclomatic": 8,
+            "cognitive": 16,
+            "nesting_max": 5,
+            "lines": 57,
+            "halstead": null
+          }
+        },
+        {
+          "name": "diagnose_dns",
+          "line_start": 254,
+          "line_end": 304,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 9,
+            "nesting_max": 3,
+            "lines": 50,
+            "halstead": null
+          }
+        },
+        {
+          "name": "diagnose_tcp",
+          "line_start": 305,
+          "line_end": 344,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 39,
+            "halstead": null
+          }
+        },
+        {
+          "name": "diagnose_tls",
+          "line_start": 345,
+          "line_end": 361,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 16,
+            "halstead": null
+          }
+        },
+        {
+          "name": "diagnose_http",
+          "line_start": 362,
+          "line_end": 420,
+          "metrics": {
+            "cyclomatic": 10,
+            "cognitive": 24,
+            "nesting_max": 8,
+            "lines": 58,
+            "halstead": null
+          }
+        },
+        {
+          "name": "diagnose_mcp_protocol",
+          "line_start": 421,
+          "line_end": 473,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "nesting_max": 1,
+            "lines": 52,
+            "halstead": null
+          }
+        },
+        {
+          "name": "print_diagnostic_result",
+          "line_start": 474,
+          "line_end": 499,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 4,
+            "nesting_max": 1,
+            "lines": 25,
+            "halstead": null
+          }
+        },
+        {
+          "name": "print_suggestions_for_dns",
+          "line_start": 500,
+          "line_end": 508,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 8,
+            "halstead": null
+          }
+        },
+        {
+          "name": "print_suggestions_for_tcp",
+          "line_start": 509,
+          "line_end": 531,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 22,
+            "halstead": null
+          }
+        },
+        {
+          "name": "print_suggestions_for_tls",
+          "line_start": 532,
+          "line_end": 540,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 8,
+            "halstead": null
+          }
+        },
+        {
+          "name": "print_suggestions_for_http",
+          "line_start": 541,
+          "line_end": 557,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 16,
+            "halstead": null
+          }
+        },
+        {
+          "name": "print_suggestions_for_mcp",
+          "line_start": 558,
+          "line_end": 583,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 9,
+            "nesting_max": 3,
+            "lines": 25,
+            "halstead": null
+          }
+        },
+        {
+          "name": "print_overall_recommendations",
+          "line_start": 584,
+          "line_end": 634,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "nesting_max": 1,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./crates/mcp-tester/src/main.rs",
+      "total_complexity": {
+        "cyclomatic": 5,
+        "cognitive": 6,
+        "nesting_max": 13,
+        "lines": 1035,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "main",
+          "line_start": 244,
+          "line_end": 521,
+          "metrics": {
+            "cyclomatic": 22,
+            "cognitive": 40,
+            "nesting_max": 13,
+            "lines": 277,
+            "halstead": null
+          }
+        },
+        {
+          "name": "print_header",
+          "line_start": 522,
+          "line_end": 549,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 27,
+            "halstead": null
+          }
+        },
+        {
+          "name": "create_oauth_from_config",
+          "line_start": 550,
+          "line_end": 565,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 15,
+            "halstead": null
+          }
+        },
+        {
+          "name": "create_oauth_middleware",
+          "line_start": 566,
+          "line_end": 615,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 8,
+            "nesting_max": 2,
+            "lines": 49,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_full_test",
+          "line_start": 616,
+          "line_end": 656,
+          "metrics": {
+            "cyclomatic": 7,
+            "cognitive": 10,
+            "nesting_max": 3,
+            "lines": 40,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_quick_test",
+          "line_start": 657,
+          "line_end": 679,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 22,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_conformance_test",
+          "line_start": 680,
+          "line_end": 702,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 22,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_tools_test",
+          "line_start": 703,
+          "line_end": 731,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 28,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_resources_test",
+          "line_start": 732,
+          "line_end": 759,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 27,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_prompts_test",
+          "line_start": 760,
+          "line_end": 787,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 27,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_diagnostics",
+          "line_start": 788,
+          "line_end": 809,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 21,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_comparison",
+          "line_start": 810,
+          "line_end": 843,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 3,
+            "nesting_max": 1,
+            "lines": 33,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_health_check",
+          "line_start": 844,
+          "line_end": 866,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 22,
+            "halstead": null
+          }
+        },
+        {
+          "name": "generate_scenario",
+          "line_start": 867,
+          "line_end": 909,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 42,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_apps_validation",
+          "line_start": 910,
+          "line_end": 984,
+          "metrics": {
+            "cyclomatic": 11,
+            "cognitive": 14,
+            "nesting_max": 4,
+            "lines": 74,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_scenario",
+          "line_start": 985,
+          "line_end": 1035,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 11,
+            "nesting_max": 3,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./crates/pmcp-code-mode/src/eval.rs",
+      "total_complexity": {
+        "cyclomatic": 6,
+        "cognitive": 16,
+        "nesting_max": 41,
+        "lines": 1169,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "evaluate_with_scope",
+          "line_start": 59,
+          "line_end": 257,
+          "metrics": {
+            "cyclomatic": 32,
+            "cognitive": 123,
+            "nesting_max": 41,
+            "lines": 198,
+            "halstead": null
+          }
+        },
+        {
+          "name": "evaluate_binary_op",
+          "line_start": 258,
+          "line_end": 302,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 9,
+            "nesting_max": 3,
+            "lines": 44,
+            "halstead": null
+          }
+        },
+        {
+          "name": "evaluate_unary_op",
+          "line_start": 303,
+          "line_end": 335,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "nesting_max": 1,
+            "lines": 32,
+            "halstead": null
+          }
+        },
+        {
+          "name": "is_truthy",
+          "line_start": 336,
+          "line_end": 347,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "nesting_max": 1,
+            "lines": 11,
+            "halstead": null
+          }
+        },
+        {
+          "name": "is_nullish",
+          "line_start": 348,
+          "line_end": 352,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 4,
+            "halstead": null
+          }
+        },
+        {
+          "name": "to_number",
+          "line_start": 353,
+          "line_end": 369,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "nesting_max": 1,
+            "lines": 16,
+            "halstead": null
+          }
+        },
+        {
+          "name": "add_values",
+          "line_start": 370,
+          "line_end": 386,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 4,
+            "nesting_max": 1,
+            "lines": 16,
+            "halstead": null
+          }
+        },
+        {
+          "name": "numeric_op",
+          "line_start": 387,
+          "line_end": 399,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 12,
+            "halstead": null
+          }
+        },
+        {
+          "name": "compare_values",
+          "line_start": 400,
+          "line_end": 413,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 13,
+            "halstead": null
+          }
+        },
+        {
+          "name": "json_equals",
+          "line_start": 414,
+          "line_end": 435,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "nesting_max": 1,
+            "lines": 21,
+            "halstead": null
+          }
+        },
+        {
+          "name": "json_strict_equals",
+          "line_start": 436,
+          "line_end": 459,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 23,
+            "halstead": null
+          }
+        },
+        {
+          "name": "json_to_string_with_mode",
+          "line_start": 460,
+          "line_end": 479,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 5,
+            "nesting_max": 1,
+            "lines": 19,
+            "halstead": null
+          }
+        },
+        {
+          "name": "json_to_string",
+          "line_start": 480,
+          "line_end": 485,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 5,
+            "halstead": null
+          }
+        },
+        {
+          "name": "restore_scope_var",
+          "line_start": 486,
+          "line_end": 505,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 19,
+            "halstead": null
+          }
+        },
+        {
+          "name": "evaluate_array_method_with_scope",
+          "line_start": 506,
+          "line_end": 770,
+          "metrics": {
+            "cyclomatic": 37,
+            "cognitive": 117,
+            "nesting_max": 39,
+            "lines": 264,
+            "halstead": null
+          }
+        },
+        {
+          "name": "evaluate_string_method",
+          "line_start": 771,
+          "line_end": 953,
+          "metrics": {
+            "cyclomatic": 25,
+            "cognitive": 50,
+            "nesting_max": 16,
+            "lines": 182,
+            "halstead": null
+          }
+        },
+        {
+          "name": "evaluate_builtin",
+          "line_start": 954,
+          "line_end": 1054,
+          "metrics": {
+            "cyclomatic": 10,
+            "cognitive": 23,
+            "nesting_max": 7,
+            "lines": 100,
+            "halstead": null
+          }
+        },
+        {
+          "name": "flatten_array",
+          "line_start": 1055,
+          "line_end": 1071,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 9,
+            "nesting_max": 3,
+            "lines": 16,
+            "halstead": null
+          }
+        },
+        {
+          "name": "evaluate_number_method",
+          "line_start": 1072,
+          "line_end": 1096,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 4,
+            "nesting_max": 1,
+            "lines": 24,
+            "halstead": null
+          }
+        },
+        {
+          "name": "evaluate",
+          "line_start": 1097,
+          "line_end": 1105,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 8,
+            "halstead": null
+          }
+        },
+        {
+          "name": "evaluate_with_binding",
+          "line_start": 1106,
+          "line_end": 1118,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 12,
+            "halstead": null
+          }
+        },
+        {
+          "name": "evaluate_with_two_bindings",
+          "line_start": 1119,
+          "line_end": 1169,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./crates/pmcp-code-mode/src/policy_annotations.rs",
+      "total_complexity": {
+        "cyclomatic": 13,
+        "cognitive": 22,
+        "nesting_max": 11,
+        "lines": 514,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "infer_category_and_risk_from_cedar",
+          "line_start": 189,
+          "line_end": 366,
+          "metrics": {
+            "cyclomatic": 17,
+            "cognitive": 22,
+            "nesting_max": 7,
+            "lines": 177,
+            "halstead": null
+          }
+        },
+        {
+          "name": "parse_policy_annotations",
+          "line_start": 367,
+          "line_end": 463,
+          "metrics": {
+            "cyclomatic": 15,
+            "cognitive": 35,
+            "nesting_max": 11,
+            "lines": 96,
+            "halstead": null
+          }
+        },
+        {
+          "name": "generate_policy_cedar",
+          "line_start": 464,
+          "line_end": 514,
+          "metrics": {
+            "cyclomatic": 8,
+            "cognitive": 9,
+            "nesting_max": 3,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./crates/pmcp-code-mode/src/schema_exposure.rs",
+      "total_complexity": {
+        "cyclomatic": 9,
+        "cognitive": 34,
+        "nesting_max": 11,
+        "lines": 820,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "pattern_matches",
+          "line_start": 770,
+          "line_end": 820,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 34,
+            "nesting_max": 11,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./crates/pmcp-server/pmcp-server-lambda/src/main.rs",
+      "total_complexity": {
+        "cyclomatic": 7,
+        "cognitive": 11,
+        "nesting_max": 8,
+        "lines": 139,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "main",
+          "line_start": 16,
+          "line_end": 54,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 6,
+            "nesting_max": 2,
+            "lines": 38,
+            "halstead": null
+          }
+        },
+        {
+          "name": "start_http_in_background",
+          "line_start": 55,
+          "line_end": 88,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 33,
+            "halstead": null
+          }
+        },
+        {
+          "name": "handler",
+          "line_start": 89,
+          "line_end": 139,
+          "metrics": {
+            "cyclomatic": 15,
+            "cognitive": 26,
+            "nesting_max": 8,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./examples/26-server-tester/src/diagnostics.rs",
+      "total_complexity": {
+        "cyclomatic": 5,
+        "cognitive": 8,
+        "nesting_max": 19,
+        "lines": 638,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "run_diagnostics",
+          "line_start": 8,
+          "line_end": 17,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 9,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_diagnostics_quiet",
+          "line_start": 18,
+          "line_end": 27,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 9,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_diagnostics_internal",
+          "line_start": 28,
+          "line_end": 199,
+          "metrics": {
+            "cyclomatic": 28,
+            "cognitive": 57,
+            "nesting_max": 19,
+            "lines": 171,
+            "halstead": null
+          }
+        },
+        {
+          "name": "diagnose_url",
+          "line_start": 200,
+          "line_end": 257,
+          "metrics": {
+            "cyclomatic": 8,
+            "cognitive": 16,
+            "nesting_max": 5,
+            "lines": 57,
+            "halstead": null
+          }
+        },
+        {
+          "name": "diagnose_dns",
+          "line_start": 258,
+          "line_end": 308,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 9,
+            "nesting_max": 3,
+            "lines": 50,
+            "halstead": null
+          }
+        },
+        {
+          "name": "diagnose_tcp",
+          "line_start": 309,
+          "line_end": 348,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 39,
+            "halstead": null
+          }
+        },
+        {
+          "name": "diagnose_tls",
+          "line_start": 349,
+          "line_end": 365,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 16,
+            "halstead": null
+          }
+        },
+        {
+          "name": "diagnose_http",
+          "line_start": 366,
+          "line_end": 424,
+          "metrics": {
+            "cyclomatic": 10,
+            "cognitive": 24,
+            "nesting_max": 8,
+            "lines": 58,
+            "halstead": null
+          }
+        },
+        {
+          "name": "diagnose_mcp_protocol",
+          "line_start": 425,
+          "line_end": 477,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "nesting_max": 1,
+            "lines": 52,
+            "halstead": null
+          }
+        },
+        {
+          "name": "print_diagnostic_result",
+          "line_start": 478,
+          "line_end": 503,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 4,
+            "nesting_max": 1,
+            "lines": 25,
+            "halstead": null
+          }
+        },
+        {
+          "name": "print_suggestions_for_dns",
+          "line_start": 504,
+          "line_end": 512,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 8,
+            "halstead": null
+          }
+        },
+        {
+          "name": "print_suggestions_for_tcp",
+          "line_start": 513,
+          "line_end": 535,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 22,
+            "halstead": null
+          }
+        },
+        {
+          "name": "print_suggestions_for_tls",
+          "line_start": 536,
+          "line_end": 544,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 8,
+            "halstead": null
+          }
+        },
+        {
+          "name": "print_suggestions_for_http",
+          "line_start": 545,
+          "line_end": 561,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 16,
+            "halstead": null
+          }
+        },
+        {
+          "name": "print_suggestions_for_mcp",
+          "line_start": 562,
+          "line_end": 587,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 9,
+            "nesting_max": 3,
+            "lines": 25,
+            "halstead": null
+          }
+        },
+        {
+          "name": "print_overall_recommendations",
+          "line_start": 588,
+          "line_end": 638,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "nesting_max": 1,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./examples/26-server-tester/src/main.rs",
+      "total_complexity": {
+        "cyclomatic": 4,
+        "cognitive": 5,
+        "nesting_max": 12,
+        "lines": 901,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "main",
+          "line_start": 214,
+          "line_end": 465,
+          "metrics": {
+            "cyclomatic": 21,
+            "cognitive": 38,
+            "nesting_max": 12,
+            "lines": 251,
+            "halstead": null
+          }
+        },
+        {
+          "name": "print_header",
+          "line_start": 466,
+          "line_end": 493,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 27,
+            "halstead": null
+          }
+        },
+        {
+          "name": "create_oauth_from_config",
+          "line_start": 494,
+          "line_end": 509,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 15,
+            "halstead": null
+          }
+        },
+        {
+          "name": "create_oauth_middleware",
+          "line_start": 510,
+          "line_end": 557,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 8,
+            "nesting_max": 2,
+            "lines": 47,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_full_test",
+          "line_start": 558,
+          "line_end": 598,
+          "metrics": {
+            "cyclomatic": 7,
+            "cognitive": 10,
+            "nesting_max": 3,
+            "lines": 40,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_quick_test",
+          "line_start": 599,
+          "line_end": 620,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 21,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_compliance_test",
+          "line_start": 621,
+          "line_end": 644,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 23,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_tools_test",
+          "line_start": 645,
+          "line_end": 673,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 28,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_resources_test",
+          "line_start": 674,
+          "line_end": 701,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 27,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_prompts_test",
+          "line_start": 702,
+          "line_end": 728,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 26,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_diagnostics",
+          "line_start": 729,
+          "line_end": 750,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 21,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_comparison",
+          "line_start": 751,
+          "line_end": 784,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 3,
+            "nesting_max": 1,
+            "lines": 33,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_health_check",
+          "line_start": 785,
+          "line_end": 807,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 22,
+            "halstead": null
+          }
+        },
+        {
+          "name": "generate_scenario",
+          "line_start": 808,
+          "line_end": 850,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "nesting_max": 0,
+            "lines": 42,
+            "halstead": null
+          }
+        },
+        {
+          "name": "run_scenario",
+          "line_start": 851,
+          "line_end": 901,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 11,
+            "nesting_max": 3,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./examples/27-course-server-minimal/src/main.rs",
+      "total_complexity": {
+        "cyclomatic": 6,
+        "cognitive": 19,
+        "nesting_max": 22,
+        "lines": 418,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "load_course_content",
+          "line_start": 116,
+          "line_end": 166,
+          "metrics": {
+            "cyclomatic": 14,
+            "cognitive": 66,
+            "nesting_max": 22,
+            "lines": 50,
+            "halstead": null
+          }
+        },
+        {
+          "name": "load_chapter",
+          "line_start": 167,
+          "line_end": 184,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 17,
+            "halstead": null
+          }
+        },
+        {
+          "name": "load_quiz",
+          "line_start": 185,
+          "line_end": 367,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 4,
+            "nesting_max": 1,
+            "lines": 182,
+            "halstead": null
+          }
+        },
+        {
+          "name": "main",
+          "line_start": 368,
+          "line_end": 418,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 5,
+            "nesting_max": 1,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./examples/c03_client_resources.rs",
+      "total_complexity": {
+        "cyclomatic": 26,
+        "cognitive": 66,
+        "nesting_max": 22,
+        "lines": 62,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "main",
+          "line_start": 12,
+          "line_end": 62,
+          "metrics": {
+            "cyclomatic": 26,
+            "cognitive": 66,
+            "nesting_max": 22,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./examples/c06_multiple_clients_parallel.rs",
+      "total_complexity": {
+        "cyclomatic": 8,
+        "cognitive": 20,
+        "nesting_max": 9,
+        "lines": 202,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "simulate_client_operation",
+          "line_start": 30,
+          "line_end": 151,
+          "metrics": {
+            "cyclomatic": 8,
+            "cognitive": 29,
+            "nesting_max": 9,
+            "lines": 121,
+            "halstead": null
+          }
+        },
+        {
+          "name": "main",
+          "line_start": 152,
+          "line_end": 202,
+          "metrics": {
+            "cyclomatic": 8,
+            "cognitive": 11,
+            "nesting_max": 3,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./examples/s11_error_handling.rs",
+      "total_complexity": {
+        "cyclomatic": 14,
+        "cognitive": 32,
+        "nesting_max": 11,
+        "lines": 240,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "retry_with_backoff",
+          "line_start": 139,
+          "line_end": 189,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 31,
+            "nesting_max": 10,
+            "lines": 50,
+            "halstead": null
+          }
+        },
+        {
+          "name": "main",
+          "line_start": 190,
+          "line_end": 240,
+          "metrics": {
+            "cyclomatic": 20,
+            "cognitive": 34,
+            "nesting_max": 11,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./examples/s17_advanced_typed_tools.rs",
+      "total_complexity": {
+        "cyclomatic": 7,
+        "cognitive": 17,
+        "nesting_max": 41,
+        "lines": 280,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "default_country",
+          "line_start": 54,
+          "line_end": 57,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 3,
+            "halstead": null
+          }
+        },
+        {
+          "name": "default_account_type",
+          "line_start": 58,
+          "line_end": 99,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 41,
+            "halstead": null
+          }
+        },
+        {
+          "name": "default_limit",
+          "line_start": 100,
+          "line_end": 103,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 3,
+            "halstead": null
+          }
+        },
+        {
+          "name": "default_timeout",
+          "line_start": 104,
+          "line_end": 126,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 22,
+            "halstead": null
+          }
+        },
+        {
+          "name": "default_permissions",
+          "line_start": 127,
+          "line_end": 168,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 41,
+            "halstead": null
+          }
+        },
+        {
+          "name": "default_encoding",
+          "line_start": 169,
+          "line_end": 229,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 60,
+            "halstead": null
+          }
+        },
+        {
+          "name": "main",
+          "line_start": 230,
+          "line_end": 280,
+          "metrics": {
+            "cyclomatic": 44,
+            "cognitive": 123,
+            "nesting_max": 41,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./examples/t02_websocket_server_enhanced.rs",
+      "total_complexity": {
+        "cyclomatic": 13,
+        "cognitive": 27,
+        "nesting_max": 9,
+        "lines": 62,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "main",
+          "line_start": 12,
+          "line_end": 62,
+          "metrics": {
+            "cyclomatic": 13,
+            "cognitive": 27,
+            "nesting_max": 9,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./examples/t06_streamable_http_client.rs",
+      "total_complexity": {
+        "cyclomatic": 21,
+        "cognitive": 28,
+        "nesting_max": 9,
+        "lines": 77,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "main",
+          "line_start": 27,
+          "line_end": 77,
+          "metrics": {
+            "cyclomatic": 21,
+            "cognitive": 28,
+            "nesting_max": 9,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./examples/t08_simd_parsing_performance.rs",
+      "total_complexity": {
+        "cyclomatic": 12,
+        "cognitive": 22,
+        "nesting_max": 10,
+        "lines": 449,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "main",
+          "line_start": 21,
+          "line_end": 398,
+          "metrics": {
+            "cyclomatic": 20,
+            "cognitive": 30,
+            "nesting_max": 10,
+            "lines": 377,
+            "halstead": null
+          }
+        },
+        {
+          "name": "get_memory_usage",
+          "line_start": 399,
+          "line_end": 449,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 15,
+            "nesting_max": 5,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./examples/wasm-mcp-server/deployments/fermyon-spin/src/lib.rs",
+      "total_complexity": {
+        "cyclomatic": 11,
+        "cognitive": 26,
+        "nesting_max": 14,
+        "lines": 197,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "handle_request",
+          "line_start": 12,
+          "line_end": 146,
+          "metrics": {
+            "cyclomatic": 17,
+            "cognitive": 42,
+            "nesting_max": 14,
+            "lines": 134,
+            "halstead": null
+          }
+        },
+        {
+          "name": "create_mcp_server",
+          "line_start": 147,
+          "line_end": 197,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 11,
+            "nesting_max": 3,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./examples/wasm-mcp-server/src/lib.rs",
+      "total_complexity": {
+        "cyclomatic": 32,
+        "cognitive": 83,
+        "nesting_max": 27,
+        "lines": 57,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "main",
+          "line_start": 7,
+          "line_end": 57,
+          "metrics": {
+            "cyclomatic": 32,
+            "cognitive": 83,
+            "nesting_max": 27,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./fuzz/fuzz_targets/auth_flows.rs",
+      "total_complexity": {
+        "cyclomatic": 26,
+        "cognitive": 83,
+        "nesting_max": 40,
+        "lines": 196,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "test_auth_flow",
+          "line_start": 49,
+          "line_end": 145,
+          "metrics": {
+            "cyclomatic": 32,
+            "cognitive": 122,
+            "nesting_max": 40,
+            "lines": 96,
+            "halstead": null
+          }
+        },
+        {
+          "name": "test_pkce_flow",
+          "line_start": 146,
+          "line_end": 196,
+          "metrics": {
+            "cyclomatic": 20,
+            "cognitive": 45,
+            "nesting_max": 15,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./fuzz/fuzz_targets/transport_layer.rs",
+      "total_complexity": {
+        "cyclomatic": 15,
+        "cognitive": 38,
+        "nesting_max": 15,
+        "lines": 157,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "simulate_transport_operations",
+          "line_start": 35,
+          "line_end": 106,
+          "metrics": {
+            "cyclomatic": 17,
+            "cognitive": 46,
+            "nesting_max": 15,
+            "lines": 71,
+            "halstead": null
+          }
+        },
+        {
+          "name": "test_websocket_framing",
+          "line_start": 107,
+          "line_end": 157,
+          "metrics": {
+            "cyclomatic": 13,
+            "cognitive": 30,
+            "nesting_max": 10,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./pmcp-macros/src/mcp_prompt.rs",
+      "total_complexity": {
+        "cyclomatic": 18,
+        "cognitive": 42,
+        "nesting_max": 14,
+        "lines": 97,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "expand_mcp_prompt",
+          "line_start": 47,
+          "line_end": 97,
+          "metrics": {
+            "cyclomatic": 18,
+            "cognitive": 42,
+            "nesting_max": 14,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./pmcp-macros/src/mcp_resource.rs",
+      "total_complexity": {
+        "cyclomatic": 12,
+        "cognitive": 40,
+        "nesting_max": 23,
+        "lines": 128,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "extract_template_vars",
+          "line_start": 60,
+          "line_end": 77,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 9,
+            "nesting_max": 3,
+            "lines": 17,
+            "halstead": null
+          }
+        },
+        {
+          "name": "expand_mcp_resource",
+          "line_start": 78,
+          "line_end": 128,
+          "metrics": {
+            "cyclomatic": 21,
+            "cognitive": 71,
+            "nesting_max": 23,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./pmcp-macros/src/mcp_server.rs",
+      "total_complexity": {
+        "cyclomatic": 7,
+        "cognitive": 25,
+        "nesting_max": 26,
+        "lines": 949,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "expand_mcp_server",
+          "line_start": 111,
+          "line_end": 479,
+          "metrics": {
+            "cyclomatic": 23,
+            "cognitive": 36,
+            "nesting_max": 12,
+            "lines": 368,
+            "halstead": null
+          }
+        },
+        {
+          "name": "collect_tool_methods",
+          "line_start": 480,
+          "line_end": 580,
+          "metrics": {
+            "cyclomatic": 10,
+            "cognitive": 44,
+            "nesting_max": 14,
+            "lines": 100,
+            "halstead": null
+          }
+        },
+        {
+          "name": "parse_mcp_tool_attr",
+          "line_start": 581,
+          "line_end": 607,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 4,
+            "nesting_max": 1,
+            "lines": 26,
+            "halstead": null
+          }
+        },
+        {
+          "name": "generate_method_output_schema",
+          "line_start": 608,
+          "line_end": 624,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "nesting_max": 1,
+            "lines": 16,
+            "halstead": null
+          }
+        },
+        {
+          "name": "collect_prompt_methods",
+          "line_start": 625,
+          "line_end": 713,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 42,
+            "nesting_max": 14,
+            "lines": 88,
+            "halstead": null
+          }
+        },
+        {
+          "name": "parse_mcp_prompt_attr",
+          "line_start": 714,
+          "line_end": 742,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 5,
+            "nesting_max": 1,
+            "lines": 28,
+            "halstead": null
+          }
+        },
+        {
+          "name": "collect_resource_methods",
+          "line_start": 743,
+          "line_end": 866,
+          "metrics": {
+            "cyclomatic": 14,
+            "cognitive": 80,
+            "nesting_max": 26,
+            "lines": 123,
+            "halstead": null
+          }
+        },
+        {
+          "name": "parse_mcp_resource_attr",
+          "line_start": 867,
+          "line_end": 898,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 5,
+            "nesting_max": 1,
+            "lines": 31,
+            "halstead": null
+          }
+        },
+        {
+          "name": "strip_mcp_attrs",
+          "line_start": 899,
+          "line_end": 949,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 9,
+            "nesting_max": 3,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./pmcp-macros/src/mcp_tool.rs",
+      "total_complexity": {
+        "cyclomatic": 9,
+        "cognitive": 17,
+        "nesting_max": 13,
+        "lines": 384,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "expand_mcp_tool",
+          "line_start": 66,
+          "line_end": 320,
+          "metrics": {
+            "cyclomatic": 18,
+            "cognitive": 40,
+            "nesting_max": 13,
+            "lines": 254,
+            "halstead": null
+          }
+        },
+        {
+          "name": "extract_output_schema_code",
+          "line_start": 321,
+          "line_end": 333,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 12,
+            "halstead": null
+          }
+        },
+        {
+          "name": "generate_tool_info_code",
+          "line_start": 334,
+          "line_end": 384,
+          "metrics": {
+            "cyclomatic": 7,
+            "cognitive": 10,
+            "nesting_max": 3,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./src/server/path_validation.rs",
+      "total_complexity": {
+        "cyclomatic": 6,
+        "cognitive": 22,
+        "nesting_max": 34,
+        "lines": 346,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "validate_path",
+          "line_start": 65,
+          "line_end": 231,
+          "metrics": {
+            "cyclomatic": 27,
+            "cognitive": 103,
+            "nesting_max": 34,
+            "lines": 166,
+            "halstead": null
+          }
+        },
+        {
+          "name": "normalize_path_separators",
+          "line_start": 232,
+          "line_end": 245,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 13,
+            "halstead": null
+          }
+        },
+        {
+          "name": "normalize_path",
+          "line_start": 246,
+          "line_end": 283,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 10,
+            "nesting_max": 3,
+            "lines": 37,
+            "halstead": null
+          }
+        },
+        {
+          "name": "glob_match",
+          "line_start": 284,
+          "line_end": 295,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 11,
+            "halstead": null
+          }
+        },
+        {
+          "name": "secure_path_validator",
+          "line_start": 296,
+          "line_end": 346,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./src/server/schema_utils.rs",
+      "total_complexity": {
+        "cyclomatic": 9,
+        "cognitive": 29,
+        "nesting_max": 18,
+        "lines": 326,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "normalize_schema",
+          "line_start": 55,
+          "line_end": 60,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 5,
+            "halstead": null
+          }
+        },
+        {
+          "name": "normalize_schema_with_config",
+          "line_start": 61,
+          "line_end": 148,
+          "metrics": {
+            "cyclomatic": 16,
+            "cognitive": 56,
+            "nesting_max": 18,
+            "lines": 87,
+            "halstead": null
+          }
+        },
+        {
+          "name": "inline_refs_with_context",
+          "line_start": 149,
+          "line_end": 209,
+          "metrics": {
+            "cyclomatic": 14,
+            "cognitive": 55,
+            "nesting_max": 18,
+            "lines": 60,
+            "halstead": null
+          }
+        },
+        {
+          "name": "inline_refs",
+          "line_start": 210,
+          "line_end": 251,
+          "metrics": {
+            "cyclomatic": 11,
+            "cognitive": 41,
+            "nesting_max": 13,
+            "lines": 41,
+            "halstead": null
+          }
+        },
+        {
+          "name": "simple_schema",
+          "line_start": 252,
+          "line_end": 275,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "nesting_max": 0,
+            "lines": 23,
+            "halstead": null
+          }
+        },
+        {
+          "name": "add_constraints",
+          "line_start": 276,
+          "line_end": 326,
+          "metrics": {
+            "cyclomatic": 13,
+            "cognitive": 23,
+            "nesting_max": 7,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./src/server/streamable_http_server.rs",
+      "total_complexity": {
+        "cyclomatic": 6,
+        "cognitive": 17,
+        "nesting_max": 19,
+        "lines": 1431,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "build_mcp_router",
+          "line_start": 286,
+          "line_end": 297,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 11,
+            "halstead": null
+          }
+        },
+        {
+          "name": "make_server_state",
+          "line_start": 298,
+          "line_end": 333,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 35,
+            "halstead": null
+          }
+        },
+        {
+          "name": "create_error_response",
+          "line_start": 334,
+          "line_end": 390,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 56,
+            "halstead": null
+          }
+        },
+        {
+          "name": "validate_headers",
+          "line_start": 391,
+          "line_end": 456,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 40,
+            "nesting_max": 13,
+            "lines": 65,
+            "halstead": null
+          }
+        },
+        {
+          "name": "process_init_session",
+          "line_start": 457,
+          "line_end": 500,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 18,
+            "nesting_max": 6,
+            "lines": 43,
+            "halstead": null
+          }
+        },
+        {
+          "name": "validate_non_init_session",
+          "line_start": 501,
+          "line_end": 536,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 6,
+            "nesting_max": 2,
+            "lines": 35,
+            "halstead": null
+          }
+        },
+        {
+          "name": "extract_negotiated_version",
+          "line_start": 537,
+          "line_end": 550,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 10,
+            "nesting_max": 3,
+            "lines": 13,
+            "halstead": null
+          }
+        },
+        {
+          "name": "update_session_after_init",
+          "line_start": 551,
+          "line_end": 565,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "nesting_max": 1,
+            "lines": 14,
+            "halstead": null
+          }
+        },
+        {
+          "name": "build_response",
+          "line_start": 566,
+          "line_end": 673,
+          "metrics": {
+            "cyclomatic": 8,
+            "cognitive": 30,
+            "nesting_max": 10,
+            "lines": 107,
+            "halstead": null
+          }
+        },
+        {
+          "name": "validate_protocol_version",
+          "line_start": 674,
+          "line_end": 715,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 34,
+            "nesting_max": 11,
+            "lines": 41,
+            "halstead": null
+          }
+        },
+        {
+          "name": "handle_post_request",
+          "line_start": 716,
+          "line_end": 729,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 3,
+            "nesting_max": 1,
+            "lines": 13,
+            "halstead": null
+          }
+        },
+        {
+          "name": "extract_and_validate_auth",
+          "line_start": 730,
+          "line_end": 764,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "nesting_max": 1,
+            "lines": 34,
+            "halstead": null
+          }
+        },
+        {
+          "name": "extract_auth_from_proxy_headers",
+          "line_start": 765,
+          "line_end": 840,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 5,
+            "nesting_max": 1,
+            "lines": 75,
+            "halstead": null
+          }
+        },
+        {
+          "name": "handle_post_fast_path",
+          "line_start": 841,
+          "line_end": 1004,
+          "metrics": {
+            "cyclomatic": 18,
+            "cognitive": 48,
+            "nesting_max": 16,
+            "lines": 163,
+            "halstead": null
+          }
+        },
+        {
+          "name": "handle_post_with_middleware",
+          "line_start": 1005,
+          "line_end": 1261,
+          "metrics": {
+            "cyclomatic": 22,
+            "cognitive": 59,
+            "nesting_max": 19,
+            "lines": 256,
+            "halstead": null
+          }
+        },
+        {
+          "name": "handle_get_sse",
+          "line_start": 1262,
+          "line_end": 1380,
+          "metrics": {
+            "cyclomatic": 14,
+            "cognitive": 35,
+            "nesting_max": 11,
+            "lines": 118,
+            "halstead": null
+          }
+        },
+        {
+          "name": "handle_delete_session",
+          "line_start": 1381,
+          "line_end": 1431,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 10,
+            "nesting_max": 3,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./src/server/workflow/task_prompt_handler.rs",
+      "total_complexity": {
+        "cyclomatic": 5,
+        "cognitive": 17,
+        "nesting_max": 14,
+        "lines": 633,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "workflow_result_key",
+          "line_start": 59,
+          "line_end": 522,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 463,
+            "halstead": null
+          }
+        },
+        {
+          "name": "classify_resolution_failure",
+          "line_start": 523,
+          "line_end": 582,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 43,
+            "nesting_max": 14,
+            "lines": 59,
+            "halstead": null
+          }
+        },
+        {
+          "name": "build_updated_progress",
+          "line_start": 583,
+          "line_end": 633,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 10,
+            "nesting_max": 3,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "./src/utils/json_simd.rs",
+      "total_complexity": {
+        "cyclomatic": 5,
+        "cognitive": 17,
+        "nesting_max": 19,
+        "lines": 163,
+        "halstead": null
+      },
+      "functions": [
+        {
+          "name": "parse_json_fast",
+          "line_start": 11,
+          "line_end": 10,
+          "metrics": {
+            "cyclomatic": 12,
+            "cognitive": 59,
+            "nesting_max": 19,
+            "lines": 1,
+            "halstead": null
+          }
+        },
+        {
+          "name": "parse_json_fast",
+          "line_start": 11,
+          "line_end": 78,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 67,
+            "halstead": null
+          }
+        },
+        {
+          "name": "serialize_json_fast",
+          "line_start": 79,
+          "line_end": 78,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 7,
+            "nesting_max": 2,
+            "lines": 1,
+            "halstead": null
+          }
+        },
+        {
+          "name": "serialize_json_fast",
+          "line_start": 79,
+          "line_end": 105,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 26,
+            "halstead": null
+          }
+        },
+        {
+          "name": "parse_json_batch",
+          "line_start": 106,
+          "line_end": 112,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "nesting_max": 0,
+            "lines": 6,
+            "halstead": null
+          }
+        },
+        {
+          "name": "pretty_print_fast",
+          "line_start": 113,
+          "line_end": 163,
+          "metrics": {
+            "cyclomatic": 11,
+            "cognitive": 36,
+            "nesting_max": 12,
+            "lines": 50,
+            "halstead": null
+          }
+        }
+      ],
+      "classes": []
+    }
+  ]
+}
