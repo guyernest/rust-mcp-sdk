@@ -6,66 +6,73 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Error as JsonError, Value};
 
-/// Parse JSON with SIMD acceleration when available
+/// Validate UTF-8 via the SIMD helper, returning a `JsonError` on failure.
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+fn validate_utf8_or_err(input: &[u8]) -> Result<(), JsonError> {
+    let ok = unsafe { crate::simd::json::validate_utf8_simd(input) };
+    if ok {
+        return Ok(());
+    }
+    Err(serde_json::Error::io(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "Invalid UTF-8",
+    )))
+}
+
+/// Strip whitespace bytes (outside of JSON strings) identified by SIMD
+/// position scanning. Returns a new `Vec<u8>` with only significant bytes.
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+fn strip_whitespace_simd_aware(input: &[u8], ws_positions: &[usize]) -> Vec<u8> {
+    let mut cleaned = Vec::with_capacity(input.len().saturating_sub(ws_positions.len()));
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    for (i, &byte) in input.iter().enumerate() {
+        if escape_next {
+            escape_next = false;
+            cleaned.push(byte);
+            continue;
+        }
+        if byte == b'\\' && in_string {
+            escape_next = true;
+            cleaned.push(byte);
+            continue;
+        }
+        if byte == b'"' {
+            in_string = !in_string;
+            cleaned.push(byte);
+            continue;
+        }
+        if !in_string && ws_positions.binary_search(&i).is_ok() {
+            continue;
+        }
+        cleaned.push(byte);
+    }
+    cleaned
+}
+
+/// Parse JSON with SIMD acceleration when available.
+///
+/// Refactored in 75-01 Task 1a-B (P1): extracted
+/// [`validate_utf8_or_err`] and [`strip_whitespace_simd_aware`] so this
+/// function becomes a short control-flow dispatch around the SIMD hot path.
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 pub fn parse_json_fast<T: for<'de> Deserialize<'de>>(input: &[u8]) -> Result<T, JsonError> {
-    // Runtime feature detection for AVX2
-    if is_x86_feature_detected!("avx2") {
-        // First validate UTF-8 using SIMD
-        unsafe {
-            if !crate::simd::json::validate_utf8_simd(input) {
-                return Err(serde_json::Error::io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Invalid UTF-8",
-                )));
-            }
-        }
-
-        // Use optimized whitespace skipping
-        let ws_positions = unsafe { crate::simd::json::find_whitespace_simd(input) };
-
-        // If there's minimal whitespace, parse directly
-        if ws_positions.len() < input.len() / 10 {
-            serde_json::from_slice(input)
-        } else {
-            // Strip unnecessary whitespace first
-            let mut cleaned = Vec::with_capacity(input.len() - ws_positions.len());
-            let mut in_string = false;
-            let mut escape_next = false;
-
-            for (i, &byte) in input.iter().enumerate() {
-                if escape_next {
-                    escape_next = false;
-                    cleaned.push(byte);
-                    continue;
-                }
-
-                if byte == b'\\' && in_string {
-                    escape_next = true;
-                    cleaned.push(byte);
-                    continue;
-                }
-
-                if byte == b'"' && !escape_next {
-                    in_string = !in_string;
-                    cleaned.push(byte);
-                    continue;
-                }
-
-                if !in_string && ws_positions.binary_search(&i).is_ok() {
-                    // Skip whitespace outside strings
-                    continue;
-                }
-
-                cleaned.push(byte);
-            }
-
-            serde_json::from_slice(&cleaned)
-        }
-    } else {
-        // Fallback to standard parsing
-        serde_json::from_slice(input)
+    if !is_x86_feature_detected!("avx2") {
+        return serde_json::from_slice(input);
     }
+    validate_utf8_or_err(input)?;
+
+    let ws_positions = unsafe { crate::simd::json::find_whitespace_simd(input) };
+
+    // Minimal whitespace: parse directly.
+    if ws_positions.len() < input.len() / 10 {
+        return serde_json::from_slice(input);
+    }
+
+    // Strip unnecessary whitespace first.
+    let cleaned = strip_whitespace_simd_aware(input, &ws_positions);
+    serde_json::from_slice(&cleaned)
 }
 
 /// Parse JSON - fallback for non-SIMD platforms
@@ -109,75 +116,109 @@ pub fn parse_json_batch<T: for<'de> Deserialize<'de>>(
     inputs.iter().map(|input| parse_json_fast(input)).collect()
 }
 
-/// Fast JSON pretty printing
+/// Mutable indent/in-string state used while pretty-printing the SIMD path.
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+struct PrettyPrintCtx {
+    indent: usize,
+    in_string: bool,
+    escape_next: bool,
+}
+
+/// Append an open-brace/bracket byte with line break + indent increase.
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+fn push_open_bracket(result: &mut String, byte: u8, ctx: &mut PrettyPrintCtx) {
+    result.push(byte as char);
+    ctx.indent += 2;
+    result.push('\n');
+    result.push_str(&" ".repeat(ctx.indent));
+}
+
+/// Append a close-brace/bracket byte with indent decrease + preceding line break.
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+fn push_close_bracket(result: &mut String, byte: u8, ctx: &mut PrettyPrintCtx) {
+    ctx.indent = ctx.indent.saturating_sub(2);
+    result.push('\n');
+    result.push_str(&" ".repeat(ctx.indent));
+    result.push(byte as char);
+}
+
+/// Handle a single byte in the out-of-string pretty-printer path.
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+fn append_non_string_byte(result: &mut String, byte: u8, ctx: &mut PrettyPrintCtx) {
+    match byte {
+        b'{' | b'[' => push_open_bracket(result, byte, ctx),
+        b'}' | b']' => push_close_bracket(result, byte, ctx),
+        b',' => {
+            result.push(',');
+            result.push('\n');
+            result.push_str(&" ".repeat(ctx.indent));
+        },
+        b':' => result.push_str(": "),
+        b' ' | b'\t' | b'\n' | b'\r' => { /* skip whitespace */ },
+        _ => result.push(byte as char),
+    }
+}
+
+/// Process a single byte of the compact JSON buffer, mutating the result
+/// string and context state. Collapsed from a 3-level nested match+match
+/// into a flat early-return chain.
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+fn process_pretty_byte(
+    result: &mut String,
+    byte: u8,
+    i: usize,
+    escapes: &[usize],
+    ctx: &mut PrettyPrintCtx,
+) {
+    if ctx.escape_next {
+        ctx.escape_next = false;
+        result.push(byte as char);
+        return;
+    }
+    if escapes.binary_search(&i).is_ok() {
+        if byte == b'\\' && ctx.in_string {
+            ctx.escape_next = true;
+        } else if byte == b'"' {
+            ctx.in_string = !ctx.in_string;
+        }
+    }
+    if ctx.in_string {
+        result.push(byte as char);
+    } else {
+        append_non_string_byte(result, byte, ctx);
+    }
+}
+
+/// SIMD-accelerated pretty printer body (wraps the byte loop).
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+fn pretty_print_simd(value: &Value) -> Result<String, JsonError> {
+    let compact = serde_json::to_vec(value)?;
+    let escapes = unsafe { crate::simd::json::find_escapes_simd(&compact) };
+    let mut result = String::with_capacity(compact.len() * 2);
+    let mut ctx = PrettyPrintCtx {
+        indent: 0,
+        in_string: false,
+        escape_next: false,
+    };
+    for (i, &byte) in compact.iter().enumerate() {
+        process_pretty_byte(&mut result, byte, i, &escapes, &mut ctx);
+    }
+    Ok(result)
+}
+
+/// Fast JSON pretty printing.
+///
+/// Refactored in 75-01 Task 1a-B (P1): extracted `PrettyPrintCtx` state
+/// struct, [`process_pretty_byte`], [`append_non_string_byte`],
+/// [`push_open_bracket`], [`push_close_bracket`], and
+/// [`pretty_print_simd`] so this orchestrator is a short cfg+feature-gate.
 pub fn pretty_print_fast(value: &Value) -> Result<String, JsonError> {
     #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     {
         if is_x86_feature_detected!("avx2") {
-            let compact = serde_json::to_vec(value)?;
-
-            // Find all structure points using SIMD
-            let escapes = unsafe { crate::simd::json::find_escapes_simd(&compact) };
-
-            // Allocate with estimated size
-            let mut result = String::with_capacity(compact.len() * 2);
-            let mut indent = 0;
-            let mut in_string = false;
-            let mut escape_next = false;
-
-            for (i, &byte) in compact.iter().enumerate() {
-                if escape_next {
-                    escape_next = false;
-                    result.push(byte as char);
-                    continue;
-                }
-
-                if escapes.binary_search(&i).is_ok() {
-                    if byte == b'\\' && in_string {
-                        escape_next = true;
-                    } else if byte == b'"' {
-                        in_string = !in_string;
-                    }
-                }
-
-                if !in_string {
-                    match byte {
-                        b'{' | b'[' => {
-                            result.push(byte as char);
-                            indent += 2;
-                            result.push('\n');
-                            result.push_str(&" ".repeat(indent));
-                        },
-                        b'}' | b']' => {
-                            indent = indent.saturating_sub(2);
-                            result.push('\n');
-                            result.push_str(&" ".repeat(indent));
-                            result.push(byte as char);
-                        },
-                        b',' => {
-                            result.push(',');
-                            result.push('\n');
-                            result.push_str(&" ".repeat(indent));
-                        },
-                        b':' => {
-                            result.push_str(": ");
-                        },
-                        b' ' | b'\t' | b'\n' | b'\r' => {
-                            // Skip whitespace
-                        },
-                        _ => {
-                            result.push(byte as char);
-                        },
-                    }
-                } else {
-                    result.push(byte as char);
-                }
-            }
-
-            return Ok(result);
+            return pretty_print_simd(value);
         }
     }
-
     // Fallback to standard pretty printing
     serde_json::to_string_pretty(value)
 }
