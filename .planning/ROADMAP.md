@@ -1010,11 +1010,21 @@ Plans:
 
 Plans:
 - [x] 75-00-PLAN.md — Wave 0: Baseline + spike (PMAT path-filter empirical test, insta snapshot baseline for pmcp-macros, semantic regression baseline for pmcp-code-mode, PMAT version pin in CI) — completed 2026-04-23 — D-09 resolved (include_works=false, .pmatignore is the only honored filter), D-10 resolved D-10-B (PMAT ignores #[allow] — SCOPE EXPANSION DETECTED), D-11 resolved D-11-B (bare gate fails on 5 dimensions — Wave 5 must patch quality-badges.yml)
-- [ ] 75-01-PLAN.md — Wave 1: src/ + pmcp-macros/ refactors (streamable_http_server.rs + sibling src/ + pmcp-macros expand/collect; 13 retro-justifications of pre-existing bare allows)
+- [ ] 75-01-PLAN.md — Wave 1: src/ + pmcp-macros/ refactors (streamable_http_server.rs + sibling src/ + pmcp-macros expand/collect). NOTE (D-10-B): Task 1a-C "13 retro-justifications" deferred to Phase 75.5; P5 fallbacks replaced by escapee deferral per 75-ADDENDUM-D10B.md.
 - [ ] 75-02-PLAN.md — Wave 2: cargo-pmcp/ refactors (pentest + deployment + commands + main.rs; ~41 violations including 2 monsters at cog 105 and 91)
 - [ ] 75-03-PLAN.md — Wave 3: pmcp-code-mode/ refactors (P6 dispatch decomposition for evaluate_with_scope cog 123 and evaluate_array_method_with_scope cog 117)
 - [ ] 75-04-PLAN.md — Wave 4: scattered crate hotspots + examples/fuzz handling per Wave 0 spike + SATD triage per D-04 + final pre-Wave-5 gate verification
-- [ ] 75-05-PLAN.md — Wave 5: D-07 enforcement (CI gate in ci.yml, regression-PR fail-closed test, badge-flip confirmation, CLAUDE.md docs update)
+- [ ] 75-05-PLAN.md — Wave 5: D-07 enforcement (CI gate in ci.yml, regression-PR fail-closed test, badge-flip confirmation, CLAUDE.md docs update). NOTE (D-11-B): must also patch `.github/workflows/quality-badges.yml:~72` bare gate → `--checks complexity` per 75-ADDENDUM-D10B.md Rule 5.
+
+### Phase 75.5: PMAT ex-P5 refactor backlog
+
+**Goal:** Absorb the refactor work that Phase 75 could not land under P5 (`#[allow(clippy::cognitive_complexity)]` + `// Why:`) because Wave 0 D-10 spike proved PMAT 3.15.0 ignores the allow attribute. Category A: the 13 pre-existing bare-allow sites in `src/` migrated wholesale from 75-01 Task 1a-C. Category B: escapees logged to `75.5-ESCAPEES.md` during Plans 75-01..75-04 — functions that could not reach cog ≤25 after P1-P4 extraction. Each site either refactors to ≤25 or has the ineffective `#[allow]` removed because the underlying function already simplified.
+**Requirements**: None (quality-debt remediation, sibling of Phase 75)
+**Depends on:** Phase 75 Waves 1-4 complete (so Category B is known). MAY land in parallel with Phase 75 Wave 5 or before it.
+**Plans:** TBD — scope after Category B is concrete
+
+Plans:
+- [ ] TBD — plans drafted once Plans 75-01 through 75-04 complete and `75.5-ESCAPEES.md` is populated
 
 ### Phase 76: cargo-pmcp IAM declarations — servers declare IAM needs in deploy.toml
 
