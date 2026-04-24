@@ -34,6 +34,34 @@ pub async fn deploy_landing_page(
 
     print_landing_config_summary(&config, &server_id, &endpoint, &target, not_quiet);
 
+    let credentials = authenticate_for_landing(not_quiet).await?;
+    run_npm_build_pipeline(&dir, &endpoint, &config, not_quiet)?;
+
+    let out_dir = dir.join("out");
+    verify_build_outputs(&out_dir)?;
+
+    let (landing_id, landing_url) = package_and_upload_landing(
+        &out_dir,
+        &server_id,
+        &config,
+        &credentials.access_token,
+        not_quiet,
+    )
+    .await?;
+
+    if not_quiet {
+        println!("Building landing page...");
+    }
+    poll_landing_status(&landing_id, &credentials.access_token).await?;
+    print_landing_success(&landing_url, not_quiet);
+
+    Ok(())
+}
+
+/// Authenticate with pmcp.run and log the result.
+async fn authenticate_for_landing(
+    not_quiet: bool,
+) -> Result<crate::deployment::targets::pmcp_run::auth::Credentials> {
     if not_quiet {
         println!("Authenticating with pmcp.run...");
     }
@@ -43,23 +71,37 @@ pub async fn deploy_landing_page(
     if not_quiet {
         println!("   Authenticated");
         println!();
+    }
+    Ok(credentials)
+}
+
+/// Run the npm install + npm build pipeline with output framing.
+fn run_npm_build_pipeline(
+    dir: &PathBuf,
+    endpoint: &str,
+    config: &LandingConfig,
+    not_quiet: bool,
+) -> Result<()> {
+    if not_quiet {
         println!("Installing dependencies...");
     }
-    check_node_installed(&dir)?;
-    run_npm_install(&dir)?;
+    check_node_installed(dir)?;
+    run_npm_install(dir)?;
     if not_quiet {
         println!("   Dependencies installed");
         println!();
         println!("Building landing page...");
     }
-    run_npm_build(&dir, &endpoint, &config)?;
+    run_npm_build(dir, endpoint, config)?;
     if not_quiet {
         println!("   Build completed");
         println!();
     }
+    Ok(())
+}
 
-    // Verify out/ directory exists
-    let out_dir = dir.join("out");
+/// Verify that the Next.js static export produced `out/` with `index.html`.
+fn verify_build_outputs(out_dir: &std::path::Path) -> Result<()> {
     if !out_dir.exists() {
         anyhow::bail!(
             "Build failed: out/ directory not created.\n\
@@ -69,47 +111,53 @@ pub async fn deploy_landing_page(
     if !out_dir.join("index.html").exists() {
         anyhow::bail!("Build failed: out/index.html not found");
     }
+    Ok(())
+}
 
-    // Create zip file from out/ directory CONTENTS (not the directory itself)
+/// Package the out/ directory into a zip, upload via GraphQL, and clean up.
+async fn package_and_upload_landing(
+    out_dir: &std::path::Path,
+    server_id: &str,
+    config: &LandingConfig,
+    access_token: &str,
+    not_quiet: bool,
+) -> Result<(String, String)> {
     if not_quiet {
         println!("Creating deployment package...");
     }
-    let zip_path = create_deployment_zip(&out_dir)?;
+    let zip_path = create_deployment_zip(&out_dir.to_path_buf())?;
     let zip_size = std::fs::metadata(&zip_path)?.len();
     if not_quiet {
         println!("   Created {} ({} KB)", zip_path.display(), zip_size / 1024);
         println!();
-
-        // Upload to pmcp.run via GraphQL (same as server deployment)
         println!("Uploading to pmcp.run...");
     }
+
     let (landing_id, landing_url) =
-        upload_landing_via_graphql(&zip_path, &server_id, &config, &credentials.access_token)
-            .await?;
+        upload_landing_via_graphql(&zip_path, server_id, config, access_token).await?;
+
     if not_quiet {
         println!("   Uploaded (ID: {})", landing_id);
         println!();
     }
 
-    // Clean up zip file
-    std::fs::remove_file(&zip_path)?;
+    // Clean up zip file (best-effort)
+    let _ = std::fs::remove_file(&zip_path);
 
-    // Poll for deployment status
-    if not_quiet {
-        println!("Building landing page...");
+    Ok((landing_id, landing_url))
+}
+
+/// Print the final success banner.
+fn print_landing_success(landing_url: &str, not_quiet: bool) {
+    if !not_quiet {
+        return;
     }
-    poll_landing_status(&landing_id, &credentials.access_token).await?;
-
-    if not_quiet {
-        println!();
-        println!("Landing page deployed successfully!");
-        println!();
-        println!("URL: {}", landing_url);
-        println!();
-        println!("Tip: You can update your landing page by running this command again");
-    }
-
-    Ok(())
+    println!();
+    println!("Landing page deployed successfully!");
+    println!();
+    println!("URL: {}", landing_url);
+    println!();
+    println!("Tip: You can update your landing page by running this command again");
 }
 
 /// Ensure the deployment target is supported by this command.

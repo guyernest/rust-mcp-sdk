@@ -13,7 +13,6 @@ pub async fn execute(server_id: String, show_all: bool, global_flags: &GlobalFla
         println!("{}", "─────────────────────────────────────".bright_cyan());
     }
 
-    // Get credentials
     let credentials = auth::get_credentials().await?;
 
     if global_flags.should_output() {
@@ -27,27 +26,13 @@ pub async fn execute(server_id: String, show_all: bool, global_flags: &GlobalFla
     println!();
 
     if result.scenarios.is_empty() {
-        println!("{}", "No test scenarios found".yellow());
-        if global_flags.should_output() {
-            println!();
-            println!("{}", "To add scenarios:".bright_white().bold());
-            println!("  1. Generate scenarios locally:");
-            println!("     cargo pmcp test generate --url <server-url>");
-            println!();
-            println!("  2. Upload to pmcp.run:");
-            println!(
-                "     cargo pmcp test upload --server {} scenarios/",
-                server_id
-            );
-        }
+        print_empty_scenarios_hint(&server_id, global_flags);
         return Ok(());
     }
 
-    // Count by status
     let enabled_count = result.scenarios.iter().filter(|s| s.enabled).count();
     let disabled_count = result.scenarios.len() - enabled_count;
 
-    // Requested output: scenario listing
     println!(
         "{} {} scenario(s) ({} enabled, {} disabled)",
         "📋".to_string(),
@@ -57,7 +42,38 @@ pub async fn execute(server_id: String, show_all: bool, global_flags: &GlobalFla
     );
     println!();
 
-    // Print header
+    print_scenarios_table_header();
+    for scenario in &result.scenarios {
+        if !show_all && !scenario.enabled {
+            continue;
+        }
+        print_scenario_row(scenario);
+    }
+
+    print_list_footer(&server_id, disabled_count, show_all, global_flags);
+
+    Ok(())
+}
+
+/// Print the "no scenarios found" hint with links to test generate + upload.
+fn print_empty_scenarios_hint(server_id: &str, global_flags: &GlobalFlags) {
+    println!("{}", "No test scenarios found".yellow());
+    if global_flags.should_output() {
+        println!();
+        println!("{}", "To add scenarios:".bright_white().bold());
+        println!("  1. Generate scenarios locally:");
+        println!("     cargo pmcp test generate --url <server-url>");
+        println!();
+        println!("  2. Upload to pmcp.run:");
+        println!(
+            "     cargo pmcp test upload --server {} scenarios/",
+            server_id
+        );
+    }
+}
+
+/// Print the column headers for the scenarios table.
+fn print_scenarios_table_header() {
     println!(
         "  {:<40} {:<12} {:<10} {:<8} {}",
         "NAME".bright_white().bold(),
@@ -67,87 +83,98 @@ pub async fn execute(server_id: String, show_all: bool, global_flags: &GlobalFla
         "LAST RUN".bright_white().bold()
     );
     println!("  {}", "─".repeat(90));
+}
 
-    for scenario in &result.scenarios {
-        // Skip disabled if not showing all
-        if !show_all && !scenario.enabled {
-            continue;
-        }
+/// Print one scenario row plus optional description.
+fn print_scenario_row(scenario: &crate::deployment::targets::pmcp_run::graphql::ScenarioInfo) {
+    let status = if scenario.enabled {
+        "enabled".green().to_string()
+    } else {
+        "disabled".yellow().to_string()
+    };
 
-        let status = if scenario.enabled {
-            "enabled".green().to_string()
-        } else {
-            "disabled".yellow().to_string()
-        };
+    let last_run = format_last_run(
+        scenario.last_execution_status.as_deref(),
+        scenario.last_executed_at.as_deref(),
+    );
+    let source_display = format_source(scenario.source.as_str());
 
-        let last_run = match &scenario.last_execution_status {
-            Some(status) => {
-                let status_colored = match status.as_str() {
-                    "passed" => "passed".green().to_string(),
-                    "failed" => "failed".red().to_string(),
-                    "error" => "error".red().to_string(),
-                    "running" => "running".blue().to_string(),
-                    _ => status.clone(),
-                };
-                format!(
-                    "{} ({})",
-                    scenario.last_executed_at.as_deref().unwrap_or("-"),
-                    status_colored
-                )
-            },
-            None => "-".to_string(),
-        };
+    println!(
+        "  {:<40} {:<12} {:<10} v{:<7} {}",
+        truncate_string(&scenario.name, 38),
+        source_display,
+        status,
+        scenario.version,
+        last_run
+    );
 
-        let source_display = match scenario.source.as_str() {
-            "auto_generated" => "auto".cyan().to_string(),
-            "user_created" => "user".to_string(),
-            "user_modified" => "modified".to_string(),
-            "imported" => "imported".to_string(),
-            _ => scenario.source.clone(),
-        };
-
-        println!(
-            "  {:<40} {:<12} {:<10} v{:<7} {}",
-            truncate_string(&scenario.name, 38),
-            source_display,
-            status,
-            scenario.version,
-            last_run
-        );
-
-        // Show description if available
-        if let Some(ref desc) = scenario.description {
-            if !desc.is_empty() {
-                println!("    {}", desc.bright_black());
-            }
+    if let Some(ref desc) = scenario.description {
+        if !desc.is_empty() {
+            println!("    {}", desc.bright_black());
         }
     }
+}
 
-    if global_flags.should_output() {
-        println!();
-        println!(
-            "{}",
-            "═════════════════════════════════════════════════════════════════".bright_cyan()
-        );
-        println!();
-        println!("{}", "Commands:".bright_white().bold());
-        println!("  Download a scenario:  cargo pmcp test download --scenario-id <id>");
-        println!(
-            "  Upload scenarios:     cargo pmcp test upload --server {} <path>",
-            server_id
-        );
+/// Format the "last run" cell: "<timestamp> (<status-colored>)" or "-".
+fn format_last_run(status: Option<&str>, timestamp: Option<&str>) -> String {
+    match status {
+        Some(s) => {
+            let status_colored = match s {
+                "passed" => "passed".green().to_string(),
+                "failed" => "failed".red().to_string(),
+                "error" => "error".red().to_string(),
+                "running" => "running".blue().to_string(),
+                other => other.to_string(),
+            };
+            format!("{} ({})", timestamp.unwrap_or("-"), status_colored)
+        },
+        None => "-".to_string(),
+    }
+}
 
-        if disabled_count > 0 && !show_all {
-            println!();
-            println!(
-                "  {} {} disabled scenario(s) hidden. Use --all to show all.",
-                "ℹ".blue(),
-                disabled_count
-            );
-        }
+/// Format the "source" cell with color overrides for known kinds.
+fn format_source(source: &str) -> String {
+    match source {
+        "auto_generated" => "auto".cyan().to_string(),
+        "user_created" => "user".to_string(),
+        "user_modified" => "modified".to_string(),
+        "imported" => "imported".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Print the trailing command hints + disabled-count message.
+fn print_list_footer(
+    server_id: &str,
+    disabled_count: usize,
+    show_all: bool,
+    global_flags: &GlobalFlags,
+) {
+    if !global_flags.should_output() {
+        return;
     }
 
-    Ok(())
+    println!();
+    println!(
+        "{}",
+        "═════════════════════════════════════════════════════════════════".bright_cyan()
+    );
+    println!();
+    println!("{}", "Commands:".bright_white().bold());
+    println!("  Download a scenario:  cargo pmcp test download --scenario-id <id>");
+    println!(
+        "  Upload scenarios:     cargo pmcp test upload --server {} <path>",
+        server_id
+    );
+
+    if disabled_count > 0 && !show_all {
+        println!();
+        println!(
+            "  {} {} disabled scenario(s) hidden. Use --all to show all.",
+            "ℹ".blue(),
+            disabled_count
+        );
+    }
 }
 
 /// Truncate string to max length, adding ellipsis if needed
