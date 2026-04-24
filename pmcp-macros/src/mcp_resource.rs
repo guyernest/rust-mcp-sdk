@@ -74,28 +74,262 @@ pub fn extract_template_vars(uri: &str) -> Result<Vec<String>, String> {
     Ok(vars)
 }
 
-/// Expand `#[mcp_resource]` attribute macro on a standalone function.
-pub fn expand_mcp_resource(args: TokenStream, input: &ItemFn) -> syn::Result<TokenStream> {
-    // Parse macro attributes via darling.
-    let nested_metas = if args.is_empty() {
+/// Parse `#[mcp_resource(...)]` attribute tokens into a `Vec<NestedMeta>`,
+/// rejecting empty argument lists with a descriptive error.
+fn parse_resource_attr_args(
+    args: TokenStream,
+    fn_ident: &syn::Ident,
+) -> syn::Result<Vec<darling::ast::NestedMeta>> {
+    if args.is_empty() {
         return Err(syn::Error::new_spanned(
-            &input.sig.ident,
+            fn_ident,
             "mcp_resource requires at least `uri = \"...\"` and `description = \"...\"` attributes",
         ));
-    } else {
-        let parser = syn::punctuated::Punctuated::<darling::ast::NestedMeta, syn::Token![,]>::parse_terminated;
-        parser
-            .parse2(args)
-            .map_err(|e| {
-                syn::Error::new_spanned(
-                    &input.sig.ident,
-                    format!("invalid mcp_resource attributes: {e}"),
-                )
-            })?
-            .into_iter()
-            .collect::<Vec<_>>()
-    };
+    }
+    let parser =
+        syn::punctuated::Punctuated::<darling::ast::NestedMeta, syn::Token![,]>::parse_terminated;
+    Ok(parser
+        .parse2(args)
+        .map_err(|e| {
+            syn::Error::new_spanned(
+                fn_ident,
+                format!("invalid mcp_resource attributes: {e}"),
+            )
+        })?
+        .into_iter()
+        .collect())
+}
 
+/// Match a `String` arg parameter against URI-template vars; push slot or
+/// return a typed error.
+fn classify_resource_template_arg(
+    param: &FnArg,
+    template_vars: &[String],
+    uri_param_names: &mut Vec<String>,
+    param_order: &mut Vec<ParamSlot>,
+) -> syn::Result<()> {
+    if let FnArg::Typed(pat_type) = param {
+        if let Pat::Ident(pat_ident) = &*pat_type.pat {
+            let name = pat_ident.ident.to_string();
+            if template_vars.contains(&name) {
+                uri_param_names.push(name);
+                param_order.push(ParamSlot::Args);
+                return Ok(());
+            }
+        }
+    }
+    Err(syn::Error::new_spanned(
+        param,
+        format!(
+            "Parameter name must match a URI template variable. Available: {:?}",
+            template_vars
+        ),
+    ))
+}
+
+/// Process a single `#[mcp_resource]` function parameter, dispatching by role.
+#[allow(clippy::too_many_arguments)]
+fn process_resource_fn_param(
+    param: &FnArg,
+    template_vars: &[String],
+    state_inner_ty: &mut Option<Type>,
+    has_extra: &mut bool,
+    uri_param_names: &mut Vec<String>,
+    param_order: &mut Vec<ParamSlot>,
+) -> syn::Result<()> {
+    let role = mcp_common::classify_param(param)?;
+    match role {
+        mcp_common::ParamRole::Args(ty) => {
+            if !mcp_common::type_name_matches(&ty, "String") {
+                return Err(syn::Error::new_spanned(
+                    param,
+                    "Resource function parameters (URI template variables) must be String type",
+                ));
+            }
+            classify_resource_template_arg(param, template_vars, uri_param_names, param_order)
+        },
+        mcp_common::ParamRole::State { inner_ty, .. } => {
+            if state_inner_ty.is_some() {
+                return Err(syn::Error::new_spanned(
+                    param,
+                    "mcp_resource functions can have at most one State<T> parameter",
+                ));
+            }
+            *state_inner_ty = Some(inner_ty);
+            param_order.push(ParamSlot::State);
+            Ok(())
+        },
+        mcp_common::ParamRole::Extra => {
+            if *has_extra {
+                return Err(syn::Error::new_spanned(
+                    param,
+                    "mcp_resource functions can have at most one RequestHandlerExtra parameter",
+                ));
+            }
+            *has_extra = true;
+            param_order.push(ParamSlot::Extra);
+            Ok(())
+        },
+        mcp_common::ParamRole::SelfRef => Err(syn::Error::new_spanned(
+            param,
+            "standalone #[mcp_resource] functions cannot have &self — use #[mcp_server] for impl block resources",
+        )),
+    }
+}
+
+/// Bundled parameter classification for a `#[mcp_resource]` function.
+struct ResourceFnParams {
+    state_inner_ty: Option<Type>,
+    uri_param_names: Vec<String>,
+    param_order: Vec<ParamSlot>,
+}
+
+/// Classify every parameter of an `#[mcp_resource]` function.
+fn classify_resource_fn_params(
+    input: &ItemFn,
+    template_vars: &[String],
+) -> syn::Result<ResourceFnParams> {
+    let mut state_inner_ty: Option<Type> = None;
+    let mut has_extra = false;
+    let mut uri_param_names: Vec<String> = Vec::new();
+    let mut param_order: Vec<ParamSlot> = Vec::new();
+    for param in &input.sig.inputs {
+        process_resource_fn_param(
+            param,
+            template_vars,
+            &mut state_inner_ty,
+            &mut has_extra,
+            &mut uri_param_names,
+            &mut param_order,
+        )?;
+    }
+    Ok(ResourceFnParams {
+        state_inner_ty,
+        uri_param_names,
+        param_order,
+    })
+}
+
+/// Verify all URI template variables are covered by the function parameters.
+fn require_resource_template_var_coverage(
+    fn_ident: &syn::Ident,
+    template_vars: &[String],
+    uri_param_names: &[String],
+) -> syn::Result<()> {
+    let uncovered: Vec<&str> = template_vars
+        .iter()
+        .filter(|v| !uri_param_names.contains(v))
+        .map(String::as_str)
+        .collect();
+    if uncovered.is_empty() {
+        return Ok(());
+    }
+    Err(syn::Error::new_spanned(
+        fn_ident,
+        format!(
+            "URI template variables not covered by function parameters: {:?}",
+            uncovered
+        ),
+    ))
+}
+
+/// Generate the optional `state` struct field, `with_state()` method,
+/// constructor body, and runtime state-resolution snippet for a resource
+/// that may take `State<T>`.
+struct StateCodegen {
+    struct_fields: TokenStream,
+    with_state_method: TokenStream,
+    constructor_default: TokenStream,
+    state_resolution: TokenStream,
+}
+
+fn generate_resource_state_codegen(
+    state_inner_ty: Option<&Type>,
+    struct_name: &syn::Ident,
+    resource_name: &str,
+) -> StateCodegen {
+    let Some(inner) = state_inner_ty else {
+        return StateCodegen {
+            struct_fields: quote! {},
+            with_state_method: quote! {},
+            constructor_default: quote! { #struct_name {} },
+            state_resolution: quote! {},
+        };
+    };
+    let inner_name = quote!(#inner).to_string();
+    StateCodegen {
+        struct_fields: quote! { state: Option<std::sync::Arc<#inner>>, },
+        with_state_method: quote! {
+            /// Provide shared state for this resource.
+            pub fn with_state(mut self, state: impl Into<std::sync::Arc<#inner>>) -> Self {
+                self.state = Some(state.into());
+                self
+            }
+        },
+        constructor_default: quote! { #struct_name { state: None } },
+        state_resolution: quote! {
+            let state_val = pmcp::State(
+                self.state.as_ref()
+                    .ok_or_else(|| pmcp::Error::internal(format!(
+                        "State<{}> not provided for resource '{}' -- call .with_state() during registration",
+                        #inner_name, #resource_name
+                    )))?
+                    .clone()
+            );
+        },
+    }
+}
+
+/// Generate URI-parameter extraction code for the `fetch()` body.
+fn generate_resource_uri_param_extractions(
+    uri_param_names: &[String],
+    uri: &str,
+) -> Vec<TokenStream> {
+    uri_param_names
+        .iter()
+        .map(|name| {
+            let ident = format_ident!("{}", name);
+            quote! {
+                let #ident = params.get(#name)
+                    .ok_or_else(|| pmcp::Error::validation(format!(
+                        "Missing URI parameter '{}' for resource '{}'", #name, #uri
+                    )))?
+                    .clone();
+            }
+        })
+        .collect()
+}
+
+/// Generate the call-site arg tokens for the standalone-function fetch impl.
+fn generate_resource_call_args(
+    param_order: &[ParamSlot],
+    uri_param_names: &[String],
+) -> Vec<TokenStream> {
+    let mut uri_var_idx = 0;
+    param_order
+        .iter()
+        .map(|slot| match slot {
+            ParamSlot::Args => {
+                let ident = format_ident!("{}", uri_param_names[uri_var_idx]);
+                uri_var_idx += 1;
+                quote! { #ident }
+            },
+            ParamSlot::State => quote! { state_val },
+            ParamSlot::Extra => quote! { _context.extra.clone() },
+        })
+        .collect()
+}
+
+/// Expand `#[mcp_resource]` attribute macro on a standalone function.
+///
+/// Refactored in 75-01 Task 1b-B (P1): per-section codegen extracted into
+/// [`parse_resource_attr_args`], [`classify_resource_fn_params`],
+/// [`require_resource_template_var_coverage`],
+/// [`generate_resource_state_codegen`],
+/// [`generate_resource_uri_param_extractions`],
+/// [`generate_resource_call_args`].
+pub fn expand_mcp_resource(args: TokenStream, input: &ItemFn) -> syn::Result<TokenStream> {
+    let nested_metas = parse_resource_attr_args(args, &input.sig.ident)?;
     let macro_args = McpResourceArgs::from_list(&nested_metas)
         .map_err(|e| syn::Error::new_spanned(&input.sig.ident, e.to_string()))?;
 
@@ -118,176 +352,34 @@ pub fn expand_mcp_resource(args: TokenStream, input: &ItemFn) -> syn::Result<Tok
     let mut impl_fn = input.clone();
     impl_fn.sig.ident = impl_fn_name.clone();
 
-    // Classify parameters: URI template vars (String), State<T>, RequestHandlerExtra.
-    // For resources, plain String params are matched by name against URI template variables.
-    let mut state_inner_ty: Option<Type> = None;
-    let mut has_extra = false;
-    let mut uri_param_names: Vec<String> = Vec::new();
-    let mut param_order: Vec<ParamSlot> = Vec::new();
+    let params = classify_resource_fn_params(input, &template_vars)?;
+    require_resource_template_var_coverage(
+        &input.sig.ident,
+        &template_vars,
+        &params.uri_param_names,
+    )?;
 
-    for param in &input.sig.inputs {
-        let role = mcp_common::classify_param(param)?;
-        match role {
-            mcp_common::ParamRole::Args(ty) => {
-                // For resources, check if this is a simple String parameter
-                // that maps to a URI template variable.
-                if mcp_common::type_name_matches(&ty, "String") {
-                    // Get the parameter name from the pattern.
-                    if let FnArg::Typed(pat_type) = param {
-                        if let Pat::Ident(pat_ident) = &*pat_type.pat {
-                            let name = pat_ident.ident.to_string();
-                            if template_vars.contains(&name) {
-                                uri_param_names.push(name);
-                                param_order.push(ParamSlot::Args);
-                                continue;
-                            }
-                        }
-                    }
-                    return Err(syn::Error::new_spanned(
-                        param,
-                        format!(
-                            "Parameter name must match a URI template variable. Available: {:?}",
-                            template_vars
-                        ),
-                    ));
-                } else {
-                    return Err(syn::Error::new_spanned(
-                        param,
-                        "Resource function parameters (URI template variables) must be String type",
-                    ));
-                }
-            },
-            mcp_common::ParamRole::State { inner_ty, .. } => {
-                if state_inner_ty.is_some() {
-                    return Err(syn::Error::new_spanned(
-                        param,
-                        "mcp_resource functions can have at most one State<T> parameter",
-                    ));
-                }
-                state_inner_ty = Some(inner_ty);
-                param_order.push(ParamSlot::State);
-            },
-            mcp_common::ParamRole::Extra => {
-                if has_extra {
-                    return Err(syn::Error::new_spanned(
-                        param,
-                        "mcp_resource functions can have at most one RequestHandlerExtra parameter",
-                    ));
-                }
-                has_extra = true;
-                param_order.push(ParamSlot::Extra);
-            },
-            mcp_common::ParamRole::SelfRef => {
-                return Err(syn::Error::new_spanned(
-                    param,
-                    "standalone #[mcp_resource] functions cannot have &self — use #[mcp_server] for impl block resources",
-                ));
-            },
-        }
-    }
+    let state_codegen = generate_resource_state_codegen(
+        params.state_inner_ty.as_ref(),
+        &struct_name,
+        &resource_name,
+    );
 
-    // Validate all URI template variables have matching parameters.
-    let uncovered: Vec<&str> = template_vars
-        .iter()
-        .filter(|v| !uri_param_names.contains(v))
-        .map(String::as_str)
-        .collect();
-    if !uncovered.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &input.sig.ident,
-            format!(
-                "URI template variables not covered by function parameters: {:?}",
-                uncovered
-            ),
-        ));
-    }
+    let uri_param_extraction_code =
+        generate_resource_uri_param_extractions(&params.uri_param_names, uri);
+    let call_args = generate_resource_call_args(&params.param_order, &params.uri_param_names);
 
-    // Generate struct fields.
-    let struct_fields = if let Some(ref inner) = state_inner_ty {
-        quote! { state: Option<std::sync::Arc<#inner>>, }
-    } else {
-        quote! {}
-    };
-
-    // Generate with_state method.
-    let with_state_method = if let Some(ref inner) = state_inner_ty {
-        quote! {
-            /// Provide shared state for this resource.
-            pub fn with_state(mut self, state: impl Into<std::sync::Arc<#inner>>) -> Self {
-                self.state = Some(state.into());
-                self
-            }
-        }
-    } else {
-        quote! {}
-    };
-
-    // Generate constructor default.
-    let constructor_default = if state_inner_ty.is_some() {
-        quote! { #struct_name { state: None } }
-    } else {
-        quote! { #struct_name {} }
-    };
-
-    // Generate state resolution in fetch().
-    let state_resolution = if let Some(ref inner) = state_inner_ty {
-        let inner_name = quote!(#inner).to_string();
-        quote! {
-            let state_val = pmcp::State(
-                self.state.as_ref()
-                    .ok_or_else(|| pmcp::Error::internal(format!(
-                        "State<{}> not provided for resource '{}' -- call .with_state() during registration",
-                        #inner_name, #resource_name
-                    )))?
-                    .clone()
-            );
-        }
-    } else {
-        quote! {}
-    };
-
-    // Generate URI parameter extraction code.
-    let uri_param_extraction_code: Vec<TokenStream> = uri_param_names
-        .iter()
-        .map(|name| {
-            let ident = format_ident!("{}", name);
-            quote! {
-                let #ident = params.get(#name)
-                    .ok_or_else(|| pmcp::Error::validation(format!(
-                        "Missing URI parameter '{}' for resource '{}'", #name, #uri
-                    )))?
-                    .clone();
-            }
-        })
-        .collect();
-
-    // Generate function call arguments in correct parameter order.
-    let mut uri_var_idx = 0;
-    let call_args: Vec<TokenStream> = param_order
-        .iter()
-        .map(|slot| match slot {
-            ParamSlot::Args => {
-                let ident = format_ident!("{}", uri_param_names[uri_var_idx]);
-                uri_var_idx += 1;
-                quote! { #ident }
-            },
-            ParamSlot::State => quote! { state_val },
-            ParamSlot::Extra => quote! { _context.extra.clone() },
-        })
-        .collect();
-
-    // Generate the function call (async vs sync).
-    // Explicit String annotation produces clear errors if user returns wrong type.
     let fn_call = if is_async {
         quote! { let content_str: String = #impl_fn_name(#(#call_args),*).await?; }
     } else {
         quote! { let content_str: String = #impl_fn_name(#(#call_args),*)?; }
     };
 
-    // Extra parameter: for resources, the extra comes from RequestContext
-    // which provides .extra field. We pass _context if needed.
+    let struct_fields = state_codegen.struct_fields;
+    let with_state_method = state_codegen.with_state_method;
+    let constructor_default = state_codegen.constructor_default;
+    let state_resolution = state_codegen.state_resolution;
 
-    // Assemble everything.
     let struct_doc =
         format!("Auto-generated resource provider for the `{fn_name_str}` MCP resource.");
     let ctor_doc = format!(
