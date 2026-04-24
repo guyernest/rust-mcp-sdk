@@ -972,178 +972,255 @@ fn evaluate_string_method<V: VariableProvider>(
 ) -> Result<JsonValue, ExecutionError> {
     match method {
         ArrayMethodCall::Length => Ok(JsonValue::Number((s.chars().count() as i64).into())),
-
         ArrayMethodCall::Includes { item } => {
-            let search_val = evaluate_with_scope(item, global_vars, local_vars)?;
-            match search_val {
-                JsonValue::String(sub) => Ok(JsonValue::Bool(s.contains(sub.as_str()))),
-                _ => Ok(JsonValue::Bool(false)),
-            }
+            eval_string_includes(s, item, global_vars, local_vars)
         },
-
         ArrayMethodCall::IndexOf { item } => {
-            let search_val = evaluate_with_scope(item, global_vars, local_vars)?;
-            match search_val {
-                JsonValue::String(sub) => {
-                    // Use char-based index for safety with multi-byte characters
-                    let idx = s
-                        .char_indices()
-                        .zip(0i64..)
-                        .find_map(|((byte_pos, _), char_idx)| {
-                            if s[byte_pos..].starts_with(sub.as_str()) {
-                                Some(char_idx)
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or(-1);
-                    Ok(JsonValue::Number(idx.into()))
-                },
-                _ => Ok(JsonValue::Number((-1_i64).into())),
-            }
+            eval_string_index_of(s, item, global_vars, local_vars)
         },
-
-        ArrayMethodCall::Slice { start, end } => {
-            let char_count = s.chars().count();
-            let end_idx = end.unwrap_or(char_count).min(char_count);
-            let start_idx = (*start).min(char_count);
-            let sliced: String = s
-                .chars()
-                .skip(start_idx)
-                .take(end_idx.saturating_sub(start_idx))
-                .collect();
-            Ok(JsonValue::String(sliced))
-        },
-
+        ArrayMethodCall::Slice { start, end } => Ok(eval_string_slice(s, *start, *end)),
         ArrayMethodCall::Concat { other } => {
-            let other_val = evaluate_with_scope(other, global_vars, local_vars)?;
-            Ok(JsonValue::String(format!(
-                "{}{}",
-                s,
-                json_to_string(&other_val)
-            )))
+            eval_string_concat(s, other, global_vars, local_vars)
         },
-
         ArrayMethodCall::ToLowerCase => Ok(JsonValue::String(s.to_lowercase())),
-
         ArrayMethodCall::ToUpperCase => Ok(JsonValue::String(s.to_uppercase())),
-
         ArrayMethodCall::StartsWith { search } => {
-            let search_val = evaluate_with_scope(search, global_vars, local_vars)?;
-            match search_val {
-                JsonValue::String(sub) => Ok(JsonValue::Bool(s.starts_with(sub.as_str()))),
-                _ => Ok(JsonValue::Bool(false)),
-            }
+            eval_string_starts_with(s, search, global_vars, local_vars)
         },
-
         ArrayMethodCall::EndsWith { search } => {
-            let search_val = evaluate_with_scope(search, global_vars, local_vars)?;
-            match search_val {
-                JsonValue::String(sub) => Ok(JsonValue::Bool(s.ends_with(sub.as_str()))),
-                _ => Ok(JsonValue::Bool(false)),
-            }
+            eval_string_ends_with(s, search, global_vars, local_vars)
         },
-
         ArrayMethodCall::Trim => Ok(JsonValue::String(s.trim().to_string())),
-
         ArrayMethodCall::Replace {
             search,
             replacement,
-        } => {
-            let search_val = evaluate_with_scope(search, global_vars, local_vars)?;
-            let repl_val = evaluate_with_scope(replacement, global_vars, local_vars)?;
-            match (search_val, repl_val) {
-                (JsonValue::String(needle), JsonValue::String(repl)) => {
-                    // JS .replace() only replaces the first occurrence
-                    Ok(JsonValue::String(s.replacen(
-                        needle.as_str(),
-                        repl.as_str(),
-                        1,
-                    )))
-                },
-                _ => Ok(JsonValue::String(s.to_string())),
-            }
-        },
-
+        } => eval_string_replace(s, search, replacement, global_vars, local_vars),
         ArrayMethodCall::Split { separator } => {
-            let sep_val = evaluate_with_scope(separator, global_vars, local_vars)?;
-            match sep_val {
-                JsonValue::String(sep) if sep.is_empty() => {
-                    // JS "ab".split("") => ["a", "b"] (split into chars)
-                    // Safety cap to prevent unbounded memory from large strings
-                    let parts: Vec<JsonValue> = s
-                        .chars()
-                        .take(10_000)
-                        .map(|c| JsonValue::String(c.to_string()))
-                        .collect();
-                    Ok(JsonValue::Array(parts))
-                },
-                JsonValue::String(sep) => {
-                    let parts: Vec<JsonValue> = s
-                        .split(sep.as_str())
-                        .map(|p| JsonValue::String(p.to_string()))
-                        .collect();
-                    Ok(JsonValue::Array(parts))
-                },
-                _ => Ok(JsonValue::Array(vec![JsonValue::String(s.to_string())])),
-            }
+            eval_string_split(s, separator, global_vars, local_vars)
         },
-
         ArrayMethodCall::Substring { start, end } => {
-            let start_val = evaluate_with_scope(start, global_vars, local_vars)?;
-            let start_idx = match start_val {
-                JsonValue::Number(n) => n.as_u64().unwrap_or(0) as usize,
-                _ => 0,
-            };
-            let end_idx = if let Some(end_expr) = end {
-                let end_val = evaluate_with_scope(end_expr, global_vars, local_vars)?;
-                match end_val {
-                    JsonValue::Number(n) => n.as_u64().unwrap_or(0) as usize,
-                    _ => usize::MAX,
-                }
-            } else {
-                usize::MAX
-            };
-            // JS substring() swaps if start > end
-            let (lo, hi) = if start_idx > end_idx {
-                (end_idx, start_idx)
-            } else {
-                (start_idx, end_idx)
-            };
-            // Single-pass: skip to lo, take (hi - lo) chars
-            let result: String = s.chars().skip(lo).take(hi.saturating_sub(lo)).collect();
-            Ok(JsonValue::String(result))
+            eval_string_substring(s, start, end.as_deref(), global_vars, local_vars)
         },
-
         ArrayMethodCall::ToString => Ok(JsonValue::String(s.to_string())),
 
-        // Array-only methods — produce a helpful error
-        _ => {
-            let method_name = match method {
-                ArrayMethodCall::Map { .. } => ".map()",
-                ArrayMethodCall::Filter { .. } => ".filter()",
-                ArrayMethodCall::Find { .. } => ".find()",
-                ArrayMethodCall::Some { .. } => ".some()",
-                ArrayMethodCall::Every { .. } => ".every()",
-                ArrayMethodCall::Reduce { .. } => ".reduce()",
-                ArrayMethodCall::FlatMap { .. } => ".flatMap()",
-                ArrayMethodCall::Push { .. } => ".push()",
-                ArrayMethodCall::Join { .. } => ".join()",
-                ArrayMethodCall::Reverse => ".reverse()",
-                ArrayMethodCall::Sort { .. } => ".sort()",
-                ArrayMethodCall::Flat => ".flat()",
-                ArrayMethodCall::First => ".first()",
-                ArrayMethodCall::Last => ".last()",
-                _ => "this method",
-            };
-            Err(ExecutionError::RuntimeError {
-                message: format!(
-                    "String does not support {} — use it only on arrays",
-                    method_name
-                ),
-            })
-        },
+        // Array-only methods — produce a helpful error.
+        _ => Err(ExecutionError::RuntimeError {
+            message: format!(
+                "String does not support {} — use it only on arrays",
+                array_only_method_label(method)
+            ),
+        }),
     }
+}
+
+/// Pretty-name array-only methods for use in the "string does not support …" error.
+fn array_only_method_label(method: &ArrayMethodCall) -> &'static str {
+    match method {
+        ArrayMethodCall::Map { .. } => ".map()",
+        ArrayMethodCall::Filter { .. } => ".filter()",
+        ArrayMethodCall::Find { .. } => ".find()",
+        ArrayMethodCall::Some { .. } => ".some()",
+        ArrayMethodCall::Every { .. } => ".every()",
+        ArrayMethodCall::Reduce { .. } => ".reduce()",
+        ArrayMethodCall::FlatMap { .. } => ".flatMap()",
+        ArrayMethodCall::Push { .. } => ".push()",
+        ArrayMethodCall::Join { .. } => ".join()",
+        ArrayMethodCall::Reverse => ".reverse()",
+        ArrayMethodCall::Sort { .. } => ".sort()",
+        ArrayMethodCall::Flat => ".flat()",
+        ArrayMethodCall::First => ".first()",
+        ArrayMethodCall::Last => ".last()",
+        _ => "this method",
+    }
+}
+
+/// `s.includes(sub)` — case-sensitive substring search; non-string args yield `false`.
+fn eval_string_includes<V: VariableProvider>(
+    s: &str,
+    item: &ValueExpr,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let search_val = evaluate_with_scope(item, global_vars, local_vars)?;
+    match search_val {
+        JsonValue::String(sub) => Ok(JsonValue::Bool(s.contains(sub.as_str()))),
+        _ => Ok(JsonValue::Bool(false)),
+    }
+}
+
+/// `s.indexOf(sub)` — char-based index for multi-byte safety; -1 on miss / non-string arg.
+fn eval_string_index_of<V: VariableProvider>(
+    s: &str,
+    item: &ValueExpr,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let search_val = evaluate_with_scope(item, global_vars, local_vars)?;
+    match search_val {
+        JsonValue::String(sub) => {
+            let idx = char_index_of(s, sub.as_str()).unwrap_or(-1);
+            Ok(JsonValue::Number(idx.into()))
+        },
+        _ => Ok(JsonValue::Number((-1_i64).into())),
+    }
+}
+
+/// Char-based starts-at index of `needle` within `haystack` (None if missing).
+fn char_index_of(haystack: &str, needle: &str) -> Option<i64> {
+    haystack
+        .char_indices()
+        .zip(0i64..)
+        .find_map(|((byte_pos, _), char_idx)| {
+            if haystack[byte_pos..].starts_with(needle) {
+                Some(char_idx)
+            } else {
+                None
+            }
+        })
+}
+
+/// `s.slice(start, end)` — char-based half-open interval, clamped to length.
+fn eval_string_slice(s: &str, start: usize, end: Option<usize>) -> JsonValue {
+    let char_count = s.chars().count();
+    let end_idx = end.unwrap_or(char_count).min(char_count);
+    let start_idx = start.min(char_count);
+    let sliced: String = s
+        .chars()
+        .skip(start_idx)
+        .take(end_idx.saturating_sub(start_idx))
+        .collect();
+    JsonValue::String(sliced)
+}
+
+/// `s.concat(other)` — JS-style coercion via json_to_string for the right-hand side.
+fn eval_string_concat<V: VariableProvider>(
+    s: &str,
+    other: &ValueExpr,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let other_val = evaluate_with_scope(other, global_vars, local_vars)?;
+    Ok(JsonValue::String(format!(
+        "{}{}",
+        s,
+        json_to_string(&other_val)
+    )))
+}
+
+/// `s.startsWith(sub)` / `s.endsWith(sub)` differ only by which `&str` predicate is used.
+fn eval_string_starts_with<V: VariableProvider>(
+    s: &str,
+    search: &ValueExpr,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let search_val = evaluate_with_scope(search, global_vars, local_vars)?;
+    match search_val {
+        JsonValue::String(sub) => Ok(JsonValue::Bool(s.starts_with(sub.as_str()))),
+        _ => Ok(JsonValue::Bool(false)),
+    }
+}
+
+/// See `eval_string_starts_with`.
+fn eval_string_ends_with<V: VariableProvider>(
+    s: &str,
+    search: &ValueExpr,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let search_val = evaluate_with_scope(search, global_vars, local_vars)?;
+    match search_val {
+        JsonValue::String(sub) => Ok(JsonValue::Bool(s.ends_with(sub.as_str()))),
+        _ => Ok(JsonValue::Bool(false)),
+    }
+}
+
+/// `s.replace(needle, repl)` — JS replaces only the first occurrence; non-string args
+/// pass-through the original string unchanged.
+fn eval_string_replace<V: VariableProvider>(
+    s: &str,
+    search: &ValueExpr,
+    replacement: &ValueExpr,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let search_val = evaluate_with_scope(search, global_vars, local_vars)?;
+    let repl_val = evaluate_with_scope(replacement, global_vars, local_vars)?;
+    match (search_val, repl_val) {
+        (JsonValue::String(needle), JsonValue::String(repl)) => Ok(JsonValue::String(
+            s.replacen(needle.as_str(), repl.as_str(), 1),
+        )),
+        _ => Ok(JsonValue::String(s.to_string())),
+    }
+}
+
+/// `s.split(sep)` — empty separator yields per-char split (capped at 10_000), non-string
+/// separator returns the original string wrapped in a single-element array.
+fn eval_string_split<V: VariableProvider>(
+    s: &str,
+    separator: &ValueExpr,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let sep_val = evaluate_with_scope(separator, global_vars, local_vars)?;
+    match sep_val {
+        JsonValue::String(sep) if sep.is_empty() => Ok(JsonValue::Array(split_chars_capped(s))),
+        JsonValue::String(sep) => Ok(JsonValue::Array(split_by(s, sep.as_str()))),
+        _ => Ok(JsonValue::Array(vec![JsonValue::String(s.to_string())])),
+    }
+}
+
+/// Cap-protected char split: `"ab".split("") -> ["a", "b"]` (max 10_000 chars).
+fn split_chars_capped(s: &str) -> Vec<JsonValue> {
+    s.chars()
+        .take(10_000)
+        .map(|c| JsonValue::String(c.to_string()))
+        .collect()
+}
+
+/// `s.split(sep)` for a non-empty separator.
+fn split_by(s: &str, sep: &str) -> Vec<JsonValue> {
+    s.split(sep)
+        .map(|p| JsonValue::String(p.to_string()))
+        .collect()
+}
+
+/// `s.substring(start [, end])` — JS swaps start/end if start > end; missing end means
+/// "to end of string". Both indices are usize via lossy conversion (matches existing
+/// pre-refactor semantics, preserved by the Wave 0 baseline).
+fn eval_string_substring<V: VariableProvider>(
+    s: &str,
+    start: &ValueExpr,
+    end: Option<&ValueExpr>,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let start_idx = eval_substring_index(start, global_vars, local_vars, 0)?;
+    let end_idx = match end {
+        Some(end_expr) => eval_substring_index(end_expr, global_vars, local_vars, usize::MAX)?,
+        None => usize::MAX,
+    };
+    let (lo, hi) = if start_idx > end_idx {
+        (end_idx, start_idx)
+    } else {
+        (start_idx, end_idx)
+    };
+    let result: String = s.chars().skip(lo).take(hi.saturating_sub(lo)).collect();
+    Ok(JsonValue::String(result))
+}
+
+/// Evaluate a substring index expression; non-numeric values fall back to `default`.
+fn eval_substring_index<V: VariableProvider>(
+    expr: &ValueExpr,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+    default: usize,
+) -> Result<usize, ExecutionError> {
+    let val = evaluate_with_scope(expr, global_vars, local_vars)?;
+    Ok(match val {
+        JsonValue::Number(n) => n.as_u64().unwrap_or(0) as usize,
+        _ => default,
+    })
 }
 
 /// Evaluate a built-in function call (parseFloat, Math.abs, Object.keys, etc.).

@@ -377,85 +377,133 @@ pub fn parse_policy_annotations(cedar: &str, policy_id: &str) -> PolicyMetadata 
 
     for line in cedar.lines() {
         let line = line.trim();
-
-        if let Some(content) = line.strip_prefix("/// @") {
-            in_description = false;
-
-            // Split on first space to get key and value
-            if let Some((key, value)) = content.split_once(' ') {
-                let value = value.trim();
-                match key.to_lowercase().as_str() {
-                    "title" => {
-                        metadata.title = value.to_string();
-                        // Check if it's a baseline policy
-                        if value.starts_with("Baseline:") {
-                            metadata.is_baseline = true;
-                            metadata.editable = false;
-                        }
-                    },
-                    "description" => {
-                        metadata.description = value.to_string();
-                        in_description = true;
-                    },
-                    "category" => {
-                        metadata.category = value.parse().unwrap_or_default();
-                        found_category = true;
-                    },
-                    "risk" => {
-                        metadata.risk = value.parse().unwrap_or_default();
-                        found_risk = true;
-                    },
-                    "editable" => {
-                        metadata.editable = value.eq_ignore_ascii_case("true");
-                    },
-                    "reason" => {
-                        metadata.reason = Some(value.to_string());
-                    },
-                    "author" => {
-                        metadata.author = Some(value.to_string());
-                    },
-                    "modified" => {
-                        metadata.modified = Some(value.to_string());
-                    },
-                    _ => {
-                        // Unknown annotation, ignore
-                    },
-                }
-            }
-        } else if let Some(content) = line.strip_prefix("/// ") {
-            // Continuation of description (line starting with /// but no @)
-            if in_description {
-                if !metadata.description.is_empty() {
-                    metadata.description.push('\n');
-                }
-                metadata.description.push_str(content);
-            }
-        } else if line == "///" {
-            // Empty doc comment line (paragraph break in description)
-            if in_description {
-                metadata.description.push_str("\n\n");
-            }
-        } else {
-            // Non-comment line, stop parsing description
-            in_description = false;
-        }
+        in_description = process_annotation_line(
+            line,
+            &mut metadata,
+            in_description,
+            &mut found_category,
+            &mut found_risk,
+        );
     }
 
-    // Trim trailing whitespace from description
     metadata.description = metadata.description.trim().to_string();
-
-    // If category or risk annotations are missing, infer from Cedar content
-    if !found_category || !found_risk {
-        let (inferred_category, inferred_risk) = infer_category_and_risk_from_cedar(cedar);
-        if !found_category {
-            metadata.category = inferred_category;
-        }
-        if !found_risk {
-            metadata.risk = inferred_risk;
-        }
-    }
-
+    apply_inferred_category_and_risk(&mut metadata, cedar, found_category, found_risk);
     metadata
+}
+
+/// Process a single trimmed source line for `parse_policy_annotations`. Returns the
+/// updated `in_description` flag (true iff we are still inside an `@description` block).
+fn process_annotation_line(
+    line: &str,
+    metadata: &mut PolicyMetadata,
+    in_description: bool,
+    found_category: &mut bool,
+    found_risk: &mut bool,
+) -> bool {
+    if let Some(content) = line.strip_prefix("/// @") {
+        return apply_at_annotation(content, metadata, found_category, found_risk);
+    }
+    if let Some(content) = line.strip_prefix("/// ") {
+        if in_description {
+            append_description_line(metadata, content);
+        }
+        return in_description;
+    }
+    if line == "///" {
+        if in_description {
+            metadata.description.push_str("\n\n");
+        }
+        return in_description;
+    }
+    // Non-comment line — stop parsing description.
+    false
+}
+
+/// Apply a single `/// @key value` annotation. Returns the new `in_description` state
+/// (true only when the annotation is `@description`).
+fn apply_at_annotation(
+    content: &str,
+    metadata: &mut PolicyMetadata,
+    found_category: &mut bool,
+    found_risk: &mut bool,
+) -> bool {
+    let Some((key, value)) = content.split_once(' ') else {
+        return false;
+    };
+    let value = value.trim();
+    match key.to_lowercase().as_str() {
+        "title" => {
+            apply_title(metadata, value);
+            false
+        },
+        "description" => {
+            metadata.description = value.to_string();
+            true
+        },
+        "category" => {
+            metadata.category = value.parse().unwrap_or_default();
+            *found_category = true;
+            false
+        },
+        "risk" => {
+            metadata.risk = value.parse().unwrap_or_default();
+            *found_risk = true;
+            false
+        },
+        "editable" => {
+            metadata.editable = value.eq_ignore_ascii_case("true");
+            false
+        },
+        "reason" => {
+            metadata.reason = Some(value.to_string());
+            false
+        },
+        "author" => {
+            metadata.author = Some(value.to_string());
+            false
+        },
+        "modified" => {
+            metadata.modified = Some(value.to_string());
+            false
+        },
+        _ => false, // Unknown annotation, ignore
+    }
+}
+
+/// Apply the `@title` annotation. `Baseline:` titles flag the policy as immutable.
+fn apply_title(metadata: &mut PolicyMetadata, value: &str) {
+    metadata.title = value.to_string();
+    if value.starts_with("Baseline:") {
+        metadata.is_baseline = true;
+        metadata.editable = false;
+    }
+}
+
+/// Append a continuation line to the in-progress `@description`.
+fn append_description_line(metadata: &mut PolicyMetadata, content: &str) {
+    if !metadata.description.is_empty() {
+        metadata.description.push('\n');
+    }
+    metadata.description.push_str(content);
+}
+
+/// If `@category` and/or `@risk` annotations were absent, infer them from the policy body.
+fn apply_inferred_category_and_risk(
+    metadata: &mut PolicyMetadata,
+    cedar: &str,
+    found_category: bool,
+    found_risk: bool,
+) {
+    if found_category && found_risk {
+        return;
+    }
+    let (inferred_category, inferred_risk) = infer_category_and_risk_from_cedar(cedar);
+    if !found_category {
+        metadata.category = inferred_category;
+    }
+    if !found_risk {
+        metadata.risk = inferred_risk;
+    }
 }
 
 /// Generate Cedar policy text with annotations from metadata.
