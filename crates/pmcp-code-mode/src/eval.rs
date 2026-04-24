@@ -585,7 +585,7 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
     global_vars: &V,
     local_vars: &mut HashMap<String, JsonValue>,
 ) -> Result<JsonValue, ExecutionError> {
-    // String-compatible methods — dispatch before array handling
+    // String-compatible methods — dispatch before array handling.
     if let JsonValue::String(s) = arr_value {
         return evaluate_string_method(s, method, global_vars, local_vars);
     }
@@ -601,232 +601,70 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
 
     match method {
         ArrayMethodCall::Length => Ok(JsonValue::Number((arr.len() as i64).into())),
-
         ArrayMethodCall::Map { item_var, body } => {
-            let mut results = Vec::with_capacity(arr.len());
-            for item in arr {
-                let old = local_vars.insert(item_var.clone(), item);
-                let value = evaluate_with_scope(body, global_vars, local_vars);
-                restore_scope_var(local_vars, item_var, old);
-                results.push(value?);
-            }
-            Ok(JsonValue::Array(results))
+            eval_array_map(arr, item_var, body, global_vars, local_vars)
         },
-
         ArrayMethodCall::Filter {
             item_var,
             predicate,
-        } => {
-            let mut results = Vec::new();
-            for item in arr {
-                let old = local_vars.insert(item_var.clone(), item.clone());
-                let keep = evaluate_with_scope(predicate, global_vars, local_vars);
-                restore_scope_var(local_vars, item_var, old);
-                if is_truthy(&keep?) {
-                    results.push(item);
-                }
-            }
-            Ok(JsonValue::Array(results))
-        },
-
+        } => eval_array_filter(arr, item_var, predicate, global_vars, local_vars),
         ArrayMethodCall::Find {
             item_var,
             predicate,
-        } => {
-            for item in arr {
-                let old = local_vars.insert(item_var.clone(), item.clone());
-                let found = evaluate_with_scope(predicate, global_vars, local_vars);
-                restore_scope_var(local_vars, item_var, old);
-                if is_truthy(&found?) {
-                    return Ok(item);
-                }
-            }
-            Ok(JsonValue::Null)
-        },
-
+        } => eval_array_find(arr, item_var, predicate, global_vars, local_vars),
         ArrayMethodCall::Some {
             item_var,
             predicate,
-        } => {
-            for item in arr {
-                let old = local_vars.insert(item_var.clone(), item);
-                let found = evaluate_with_scope(predicate, global_vars, local_vars);
-                restore_scope_var(local_vars, item_var, old);
-                if is_truthy(&found?) {
-                    return Ok(JsonValue::Bool(true));
-                }
-            }
-            Ok(JsonValue::Bool(false))
-        },
-
+        } => eval_array_some(arr, item_var, predicate, global_vars, local_vars),
         ArrayMethodCall::Every {
             item_var,
             predicate,
-        } => {
-            for item in arr {
-                let old = local_vars.insert(item_var.clone(), item);
-                let found = evaluate_with_scope(predicate, global_vars, local_vars);
-                restore_scope_var(local_vars, item_var, old);
-                if !is_truthy(&found?) {
-                    return Ok(JsonValue::Bool(false));
-                }
-            }
-            Ok(JsonValue::Bool(true))
-        },
-
+        } => eval_array_every(arr, item_var, predicate, global_vars, local_vars),
         ArrayMethodCall::FlatMap { item_var, body } => {
-            let mut results = Vec::new();
-            for item in arr {
-                let old = local_vars.insert(item_var.clone(), item);
-                let value = evaluate_with_scope(body, global_vars, local_vars);
-                restore_scope_var(local_vars, item_var, old);
-                let value = value?;
-                if let JsonValue::Array(items) = value {
-                    results.extend(items);
-                } else {
-                    results.push(value);
-                }
-            }
-            Ok(JsonValue::Array(results))
+            eval_array_flat_map(arr, item_var, body, global_vars, local_vars)
         },
-
         ArrayMethodCall::Reduce {
             acc_var,
             item_var,
             body,
             initial,
-        } => {
-            let mut acc = evaluate_with_scope(initial, global_vars, local_vars)?;
-            for item in arr {
-                let old_acc = local_vars.insert(acc_var.clone(), acc.clone());
-                let old_item = local_vars.insert(item_var.clone(), item);
-                let result = evaluate_with_scope(body, global_vars, local_vars);
-                restore_scope_var(local_vars, acc_var, old_acc);
-                restore_scope_var(local_vars, item_var, old_item);
-                acc = result?;
-            }
-            Ok(acc)
-        },
-
-        ArrayMethodCall::Slice { start, end } => {
-            let len = arr.len();
-            let end_idx = end.unwrap_or(len).min(len);
-            let sliced: Vec<JsonValue> = arr
-                .into_iter()
-                .skip(*start)
-                .take(end_idx.saturating_sub(*start))
-                .collect();
-            Ok(JsonValue::Array(sliced))
-        },
-
+        } => eval_array_reduce(
+            arr,
+            acc_var,
+            item_var,
+            body,
+            initial,
+            global_vars,
+            local_vars,
+        ),
+        ArrayMethodCall::Slice { start, end } => Ok(eval_array_slice(arr, *start, *end)),
         ArrayMethodCall::Concat { other } => {
-            let mut result = arr;
-            let other_val = evaluate_with_scope(other, global_vars, local_vars)?;
-            if let JsonValue::Array(other_arr) = other_val {
-                result.extend(other_arr);
-            } else {
-                result.push(other_val);
-            }
-            Ok(JsonValue::Array(result))
+            eval_array_concat(arr, other, global_vars, local_vars)
         },
-
-        ArrayMethodCall::Push { item } => {
-            let mut result = arr;
-            let item_val = evaluate_with_scope(item, global_vars, local_vars)?;
-            result.push(item_val);
-            Ok(JsonValue::Array(result))
-        },
-
-        ArrayMethodCall::Join { separator } => {
-            let sep = separator.as_deref().unwrap_or(",");
-            let joined: String = arr
-                .iter()
-                .map(json_to_string)
-                .collect::<Vec<_>>()
-                .join(sep);
-            Ok(JsonValue::String(joined))
-        },
-
+        ArrayMethodCall::Push { item } => eval_array_push(arr, item, global_vars, local_vars),
+        ArrayMethodCall::Join { separator } => Ok(eval_array_join(&arr, separator.as_deref())),
         ArrayMethodCall::Reverse => {
             let mut reversed = arr;
             reversed.reverse();
             Ok(JsonValue::Array(reversed))
         },
-
         ArrayMethodCall::Sort { comparator } => {
-            let mut sorted = arr;
-            match comparator {
-                None => {
-                    // Default string sort (JavaScript behavior)
-                    sorted.sort_by_key(json_to_string);
-                },
-                Some((a_var, b_var, body)) => {
-                    // Sort with comparator: .sort((a, b) => expr)
-                    // Capture first error encountered during sorting
-                    let mut sort_error: Option<ExecutionError> = None;
-                    sorted.sort_by(|a, b| {
-                        if sort_error.is_some() {
-                            return std::cmp::Ordering::Equal;
-                        }
-                        let mut merged = local_vars.clone();
-                        merged.insert(a_var.clone(), a.clone());
-                        merged.insert(b_var.clone(), b.clone());
-                        match evaluate_with_scope(body, global_vars, &merged) {
-                            Ok(result) => {
-                                let n = to_number(&result);
-                                if n < 0.0 {
-                                    std::cmp::Ordering::Less
-                                } else if n > 0.0 {
-                                    std::cmp::Ordering::Greater
-                                } else {
-                                    std::cmp::Ordering::Equal
-                                }
-                            },
-                            Err(e) => {
-                                sort_error = Some(e);
-                                std::cmp::Ordering::Equal
-                            },
-                        }
-                    });
-                    if let Some(e) = sort_error {
-                        return Err(e);
-                    }
-                },
-            }
-            Ok(JsonValue::Array(sorted))
+            eval_array_sort(arr, comparator.as_ref(), global_vars, local_vars)
         },
-
-        ArrayMethodCall::Flat => {
-            let result = flatten_array(arr, 1);
-            Ok(JsonValue::Array(result))
-        },
-
+        ArrayMethodCall::Flat => Ok(JsonValue::Array(flatten_array(arr, 1))),
         ArrayMethodCall::Includes { item } => {
-            let search_val = evaluate_with_scope(item, global_vars, local_vars)?;
-            let found = arr.iter().any(|item| json_equals(item, &search_val));
-            Ok(JsonValue::Bool(found))
+            eval_array_includes(&arr, item, global_vars, local_vars)
         },
-
         ArrayMethodCall::IndexOf { item } => {
-            let search_val = evaluate_with_scope(item, global_vars, local_vars)?;
-            for (i, arr_item) in arr.iter().enumerate() {
-                if json_equals(arr_item, &search_val) {
-                    return Ok(JsonValue::Number((i as i64).into()));
-                }
-            }
-            Ok(JsonValue::Number((-1_i64).into()))
+            eval_array_index_of(&arr, item, global_vars, local_vars)
         },
-
         ArrayMethodCall::First => Ok(arr.into_iter().next().unwrap_or(JsonValue::Null)),
-
         ArrayMethodCall::Last => Ok(arr.into_iter().last().unwrap_or(JsonValue::Null)),
+        ArrayMethodCall::ToString => Ok(JsonValue::String(
+            serde_json::to_string(&JsonValue::Array(arr)).unwrap_or_default(),
+        )),
 
-        ArrayMethodCall::ToString => {
-            let json = serde_json::to_string(&JsonValue::Array(arr)).unwrap_or_default();
-            Ok(JsonValue::String(json))
-        },
-
-        // String-only methods — error when called on arrays
+        // String-only methods — error when called on arrays.
         ArrayMethodCall::ToLowerCase
         | ArrayMethodCall::ToUpperCase
         | ArrayMethodCall::StartsWith { .. }
@@ -838,6 +676,288 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
             message: "This method is only available on strings, not arrays".into(),
         }),
     }
+}
+
+/// `arr.map(item => body)` — collect each evaluated body into a result vec.
+fn eval_array_map<V: VariableProvider>(
+    arr: Vec<JsonValue>,
+    item_var: &str,
+    body: &ValueExpr,
+    global_vars: &V,
+    local_vars: &mut HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let mut results = Vec::with_capacity(arr.len());
+    for item in arr {
+        let old = local_vars.insert(item_var.to_string(), item);
+        let value = evaluate_with_scope(body, global_vars, local_vars);
+        restore_scope_var(local_vars, item_var, old);
+        results.push(value?);
+    }
+    Ok(JsonValue::Array(results))
+}
+
+/// `arr.filter(item => predicate)` — keep items whose predicate is truthy.
+fn eval_array_filter<V: VariableProvider>(
+    arr: Vec<JsonValue>,
+    item_var: &str,
+    predicate: &ValueExpr,
+    global_vars: &V,
+    local_vars: &mut HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let mut results = Vec::new();
+    for item in arr {
+        let old = local_vars.insert(item_var.to_string(), item.clone());
+        let keep = evaluate_with_scope(predicate, global_vars, local_vars);
+        restore_scope_var(local_vars, item_var, old);
+        if is_truthy(&keep?) {
+            results.push(item);
+        }
+    }
+    Ok(JsonValue::Array(results))
+}
+
+/// `arr.find(item => predicate)` — first item whose predicate is truthy, or null.
+fn eval_array_find<V: VariableProvider>(
+    arr: Vec<JsonValue>,
+    item_var: &str,
+    predicate: &ValueExpr,
+    global_vars: &V,
+    local_vars: &mut HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    for item in arr {
+        let old = local_vars.insert(item_var.to_string(), item.clone());
+        let found = evaluate_with_scope(predicate, global_vars, local_vars);
+        restore_scope_var(local_vars, item_var, old);
+        if is_truthy(&found?) {
+            return Ok(item);
+        }
+    }
+    Ok(JsonValue::Null)
+}
+
+/// `arr.some(item => predicate)` — true iff any item's predicate is truthy.
+fn eval_array_some<V: VariableProvider>(
+    arr: Vec<JsonValue>,
+    item_var: &str,
+    predicate: &ValueExpr,
+    global_vars: &V,
+    local_vars: &mut HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    for item in arr {
+        let old = local_vars.insert(item_var.to_string(), item);
+        let found = evaluate_with_scope(predicate, global_vars, local_vars);
+        restore_scope_var(local_vars, item_var, old);
+        if is_truthy(&found?) {
+            return Ok(JsonValue::Bool(true));
+        }
+    }
+    Ok(JsonValue::Bool(false))
+}
+
+/// `arr.every(item => predicate)` — true iff every item's predicate is truthy.
+fn eval_array_every<V: VariableProvider>(
+    arr: Vec<JsonValue>,
+    item_var: &str,
+    predicate: &ValueExpr,
+    global_vars: &V,
+    local_vars: &mut HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    for item in arr {
+        let old = local_vars.insert(item_var.to_string(), item);
+        let found = evaluate_with_scope(predicate, global_vars, local_vars);
+        restore_scope_var(local_vars, item_var, old);
+        if !is_truthy(&found?) {
+            return Ok(JsonValue::Bool(false));
+        }
+    }
+    Ok(JsonValue::Bool(true))
+}
+
+/// `arr.flatMap(item => body)` — map then flatten one level (non-array bodies kept as-is).
+fn eval_array_flat_map<V: VariableProvider>(
+    arr: Vec<JsonValue>,
+    item_var: &str,
+    body: &ValueExpr,
+    global_vars: &V,
+    local_vars: &mut HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let mut results = Vec::new();
+    for item in arr {
+        let old = local_vars.insert(item_var.to_string(), item);
+        let value = evaluate_with_scope(body, global_vars, local_vars);
+        restore_scope_var(local_vars, item_var, old);
+        match value? {
+            JsonValue::Array(items) => results.extend(items),
+            other => results.push(other),
+        }
+    }
+    Ok(JsonValue::Array(results))
+}
+
+/// `arr.reduce((acc, item) => body, initial)` — left-fold with both vars in scope.
+fn eval_array_reduce<V: VariableProvider>(
+    arr: Vec<JsonValue>,
+    acc_var: &str,
+    item_var: &str,
+    body: &ValueExpr,
+    initial: &ValueExpr,
+    global_vars: &V,
+    local_vars: &mut HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let mut acc = evaluate_with_scope(initial, global_vars, local_vars)?;
+    for item in arr {
+        let old_acc = local_vars.insert(acc_var.to_string(), acc.clone());
+        let old_item = local_vars.insert(item_var.to_string(), item);
+        let result = evaluate_with_scope(body, global_vars, local_vars);
+        restore_scope_var(local_vars, acc_var, old_acc);
+        restore_scope_var(local_vars, item_var, old_item);
+        acc = result?;
+    }
+    Ok(acc)
+}
+
+/// `arr.slice(start, end)` — half-open interval, `end` defaults to `len`.
+fn eval_array_slice(arr: Vec<JsonValue>, start: usize, end: Option<usize>) -> JsonValue {
+    let len = arr.len();
+    let end_idx = end.unwrap_or(len).min(len);
+    let sliced: Vec<JsonValue> = arr
+        .into_iter()
+        .skip(start)
+        .take(end_idx.saturating_sub(start))
+        .collect();
+    JsonValue::Array(sliced)
+}
+
+/// `arr.concat(other)` — array → extend in place; non-array → push as single element.
+fn eval_array_concat<V: VariableProvider>(
+    arr: Vec<JsonValue>,
+    other: &ValueExpr,
+    global_vars: &V,
+    local_vars: &mut HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let mut result = arr;
+    let other_val = evaluate_with_scope(other, global_vars, local_vars)?;
+    if let JsonValue::Array(other_arr) = other_val {
+        result.extend(other_arr);
+    } else {
+        result.push(other_val);
+    }
+    Ok(JsonValue::Array(result))
+}
+
+/// `arr.push(item)` — append, returning a new array (no in-place mutation of source).
+fn eval_array_push<V: VariableProvider>(
+    arr: Vec<JsonValue>,
+    item: &ValueExpr,
+    global_vars: &V,
+    local_vars: &mut HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let mut result = arr;
+    let item_val = evaluate_with_scope(item, global_vars, local_vars)?;
+    result.push(item_val);
+    Ok(JsonValue::Array(result))
+}
+
+/// `arr.join(separator)` — JS-compatible string join, `","` if separator is `None`.
+fn eval_array_join(arr: &[JsonValue], separator: Option<&str>) -> JsonValue {
+    let sep = separator.unwrap_or(",");
+    let joined: String = arr
+        .iter()
+        .map(json_to_string)
+        .collect::<Vec<_>>()
+        .join(sep);
+    JsonValue::String(joined)
+}
+
+/// `arr.sort()` (default lexicographic) or `arr.sort((a, b) => expr)` (custom comparator).
+/// Custom-comparator errors are captured on the first failing pair and bubbled out.
+fn eval_array_sort<V: VariableProvider>(
+    arr: Vec<JsonValue>,
+    comparator: Option<&(String, String, Box<ValueExpr>)>,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let mut sorted = arr;
+    match comparator {
+        None => sorted.sort_by_key(json_to_string),
+        Some((a_var, b_var, body)) => {
+            sort_with_comparator(&mut sorted, a_var, b_var, body, global_vars, local_vars)?;
+        },
+    }
+    Ok(JsonValue::Array(sorted))
+}
+
+/// Apply a JavaScript-style comparator callback to a `Vec<JsonValue>` in place.
+/// Captures the first comparator error and propagates it after the sort completes.
+fn sort_with_comparator<V: VariableProvider>(
+    sorted: &mut [JsonValue],
+    a_var: &str,
+    b_var: &str,
+    body: &ValueExpr,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<(), ExecutionError> {
+    let mut sort_error: Option<ExecutionError> = None;
+    sorted.sort_by(|a, b| {
+        if sort_error.is_some() {
+            return std::cmp::Ordering::Equal;
+        }
+        let mut merged = local_vars.clone();
+        merged.insert(a_var.to_string(), a.clone());
+        merged.insert(b_var.to_string(), b.clone());
+        match evaluate_with_scope(body, global_vars, &merged) {
+            Ok(result) => comparator_result_to_ordering(&result),
+            Err(e) => {
+                sort_error = Some(e);
+                std::cmp::Ordering::Equal
+            },
+        }
+    });
+    match sort_error {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
+/// JS comparator convention: negative → Less, positive → Greater, zero/NaN → Equal.
+#[inline]
+fn comparator_result_to_ordering(result: &JsonValue) -> std::cmp::Ordering {
+    let n = to_number(result);
+    if n < 0.0 {
+        std::cmp::Ordering::Less
+    } else if n > 0.0 {
+        std::cmp::Ordering::Greater
+    } else {
+        std::cmp::Ordering::Equal
+    }
+}
+
+/// `arr.includes(item)` — true iff any element loose-equals the search value.
+fn eval_array_includes<V: VariableProvider>(
+    arr: &[JsonValue],
+    item: &ValueExpr,
+    global_vars: &V,
+    local_vars: &mut HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let search_val = evaluate_with_scope(item, global_vars, local_vars)?;
+    let found = arr.iter().any(|elem| json_equals(elem, &search_val));
+    Ok(JsonValue::Bool(found))
+}
+
+/// `arr.indexOf(item)` — first matching index, or -1.
+fn eval_array_index_of<V: VariableProvider>(
+    arr: &[JsonValue],
+    item: &ValueExpr,
+    global_vars: &V,
+    local_vars: &mut HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let search_val = evaluate_with_scope(item, global_vars, local_vars)?;
+    for (i, arr_item) in arr.iter().enumerate() {
+        if json_equals(arr_item, &search_val) {
+            return Ok(JsonValue::Number((i as i64).into()));
+        }
+    }
+    Ok(JsonValue::Number((-1_i64).into()))
 }
 
 /// Evaluate a method call on a string value.
