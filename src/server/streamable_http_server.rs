@@ -1486,50 +1486,127 @@ async fn handle_post_with_middleware(
 }
 
 /// Handle GET requests for SSE streams
+/// Resolve the SSE session ID: validate an incoming one or mint a new one.
+///
+/// Returns `Ok(session_id)` on success, or an error response (404 unknown
+/// session, 405 stateless-mode).
+fn resolve_sse_session(
+    state: &ServerState,
+    incoming_session_id: Option<String>,
+) -> std::result::Result<String, Response> {
+    if let Some(sid) = incoming_session_id {
+        if state.config.session_id_generator.is_some() && !state.sessions.read().contains_key(&sid)
+        {
+            return Err(create_error_response(
+                StatusCode::NOT_FOUND,
+                -32600,
+                "Unknown session ID",
+            ));
+        }
+        return Ok(sid);
+    }
+    let Some(generator) = &state.config.session_id_generator else {
+        return Err(create_error_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            -32601,
+            "SSE not supported in stateless mode",
+        ));
+    };
+    let new_id = generator();
+    state.sessions.write().insert(
+        new_id.clone(),
+        SessionInfo {
+            initialized: true, // GET SSE implicitly initializes
+            protocol_version: None,
+        },
+    );
+    if let Some(callback) = &state.config.on_session_initialized {
+        callback(&new_id);
+    }
+    Ok(new_id)
+}
+
+/// Replay events from the event store after a `Last-Event-ID` header value
+/// into an SSE sender channel. Fire-and-forget on any intermediate failure.
+async fn replay_sse_events_from_header(
+    headers: &HeaderMap,
+    tx: &mpsc::UnboundedSender<TransportMessage>,
+    event_store: Option<&Arc<InMemoryEventStore>>,
+) {
+    let Some(last_event_id) = headers.get(LAST_EVENT_ID) else {
+        return;
+    };
+    let Ok(last_id) = last_event_id.to_str() else {
+        return;
+    };
+    let Some(store) = event_store else {
+        return;
+    };
+    if let Ok(events) = store.replay_events_after(last_id).await {
+        for (_event_id, msg) in events {
+            let _ = tx.send(msg);
+        }
+    }
+}
+
+/// Map a `TransportMessage` to an SSE `Event`, spawning a best-effort event
+/// store write in parallel.
+fn sse_event_for_message(
+    msg: TransportMessage,
+    session_id: &str,
+    event_store: Option<&Arc<InMemoryEventStore>>,
+) -> std::result::Result<Event, Infallible> {
+    let event_id = Uuid::new_v4().to_string();
+    if let Some(store) = event_store {
+        let sid = session_id.to_string();
+        let msg_clone = msg.clone();
+        let store = store.clone();
+        let event_id_clone = event_id.clone();
+        tokio::spawn(async move {
+            let _ = store.store_event(&sid, &event_id_clone, &msg_clone).await;
+        });
+    }
+    Ok(Event::default()
+        .id(event_id)
+        .event("message")
+        .data(serde_json::to_string(&msg).unwrap()))
+}
+
+/// Attach SSE-specific hardening headers (session, cache-control, connection)
+/// to the given axum response.
+fn attach_sse_response_headers(response: &mut Response, session_id: &str) {
+    response
+        .headers_mut()
+        .insert(MCP_SESSION_ID, session_id.parse().unwrap());
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-cache, no-transform"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
+}
+
+/// Handle GET requests for SSE streams.
+///
+/// Refactored in 75-01 Task 1a-A: extracted [`resolve_sse_session`],
+/// [`replay_sse_events_from_header`], [`sse_event_for_message`], and
+/// [`attach_sse_response_headers`] so this orchestrator is a short pipeline.
 async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) -> impl IntoResponse {
-    // Validate headers
     if let Err(error_response) = validate_headers(&headers, "GET") {
         return error_response;
     }
 
-    // Extract session ID
-    let session_id = headers
+    let incoming_session_id = headers
         .get(MCP_SESSION_ID)
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
+        .map(str::to_string);
 
-    // Validate or generate session ID
-    let session_id = if let Some(sid) = session_id {
-        // Validate session exists
-        if state.config.session_id_generator.is_some() && !state.sessions.read().contains_key(&sid)
-        {
-            return create_error_response(StatusCode::NOT_FOUND, -32600, "Unknown session ID");
-        }
-        sid
-    } else if let Some(generator) = &state.config.session_id_generator {
-        // Generate new session for GET SSE
-        let new_id = generator();
-        state.sessions.write().insert(
-            new_id.clone(),
-            SessionInfo {
-                initialized: true, // GET SSE implicitly initializes
-                protocol_version: None,
-            },
-        );
-        if let Some(callback) = &state.config.on_session_initialized {
-            callback(&new_id);
-        }
-        new_id
-    } else {
-        // Stateless mode, no SSE
-        return create_error_response(
-            StatusCode::METHOD_NOT_ALLOWED,
-            -32601,
-            "SSE not supported in stateless mode",
-        );
+    let session_id = match resolve_sse_session(&state, incoming_session_id) {
+        Ok(sid) => sid,
+        Err(response) => return response,
     };
 
-    // Check if stream already exists for this session
     if state.sse_streams.read().contains_key(&session_id) {
         return create_error_response(
             StatusCode::CONFLICT,
@@ -1538,69 +1615,25 @@ async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) ->
         );
     }
 
-    // Create SSE stream
     let (tx, rx) = mpsc::unbounded_channel();
     state
         .sse_streams
         .write()
         .insert(session_id.clone(), tx.clone());
 
-    // Check for Last-Event-ID for resumability
-    if let Some(last_event_id) = headers.get(LAST_EVENT_ID) {
-        if let Ok(last_id) = last_event_id.to_str() {
-            if let Some(event_store) = &state.config.event_store {
-                // Replay events after the last event ID
-                if let Ok(events) = event_store.replay_events_after(last_id).await {
-                    for (_event_id, msg) in events {
-                        let _ = tx.send(msg);
-                    }
-                }
-            }
-        }
-    }
+    replay_sse_events_from_header(&headers, &tx, state.config.event_store.as_ref()).await;
 
     let stream = UnboundedReceiverStream::new(rx);
-    let session_id_header = session_id.clone();
+    let session_id_for_header = session_id.clone();
+    let session_id_for_stream = session_id.clone();
+    let event_store = state.config.event_store.clone();
 
     let sse = Sse::new(stream.map(move |msg| {
-        let event_id = Uuid::new_v4().to_string();
-
-        // Store event if we have an event store
-        if let Some(event_store) = &state.config.event_store {
-            let sid = session_id.clone();
-            let msg_clone = msg.clone();
-            let store = event_store.clone();
-            let event_id_clone = event_id.clone();
-            tokio::spawn(async move {
-                let _ = store.store_event(&sid, &event_id_clone, &msg_clone).await;
-            });
-        }
-
-        Ok::<_, Infallible>(
-            Event::default()
-                .id(event_id)
-                .event("message")
-                .data(serde_json::to_string(&msg).unwrap()),
-        )
+        sse_event_for_message(msg, &session_id_for_stream, event_store.as_ref())
     }));
 
     let mut response = sse.into_response();
-
-    // Add session ID header
-    response
-        .headers_mut()
-        .insert(MCP_SESSION_ID, session_id_header.parse().unwrap());
-
-    // Add SSE-specific headers for hardening
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-cache, no-transform"),
-    );
-    response
-        .headers_mut()
-        .insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
-    // Content-Type is already set by Axum's Sse
-
+    attach_sse_response_headers(&mut response, &session_id_for_header);
     response
 }
 
