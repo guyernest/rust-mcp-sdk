@@ -275,66 +275,40 @@ async fn vu_loop_inner(
 
     // Load generation loop
     loop {
-        // Pre-flight cancellation check
         if cancel.is_cancelled() {
             return Ok(());
         }
 
-        // Iteration limit check (first-limit-wins with minor overshoot acceptable)
-        if let (Some(counter), Some(max)) = (iteration_counter, max_iterations) {
-            let prev = counter.fetch_add(1, Ordering::Relaxed);
-            if prev >= max {
-                cancel.cancel();
-                return Ok(());
-            }
-        }
-
-        // Select and execute a weighted-random step
-        let step_idx = dist.sample(&mut rng);
-        let step = &config.scenario[step_idx];
-
-        let start = Instant::now();
-        let (op_type, result) = execute_step(&mut client, step).await;
-        let duration = start.elapsed();
-
-        // Extract tool_name from the scenario step for per-tool metrics
-        let tool_name = match step {
-            ScenarioStep::ToolCall { tool, .. } => Some(tool.clone()),
-            ScenarioStep::ResourceRead { uri, .. } => Some(uri.clone()),
-            ScenarioStep::PromptGet { prompt, .. } => Some(prompt.clone()),
-            ScenarioStep::CodeMode { format, .. } => Some(format!("code_mode/{format}")),
-        };
-
-        // Build and send the metrics sample
-        let sample = match &result {
-            Ok(()) => RequestSample::success(op_type, duration, tool_name),
-            Err(err) => RequestSample::error(op_type, duration, err.clone(), tool_name),
-        };
-
-        if sample_tx.send(sample).await.is_err() {
-            // Receiver dropped -- metrics aggregator is gone
+        if iteration_limit_reached(iteration_counter, max_iterations, cancel) {
             return Ok(());
         }
 
-        // Handle session-fatal errors with respawn
-        if let Err(ref err) = result {
-            if is_session_fatal(err) {
-                client = try_initialize(
-                    vu_id,
-                    http_client,
-                    base_url,
-                    timeout,
-                    sample_tx,
-                    cancel,
-                    MAX_RESPAWN_ATTEMPTS,
-                    http_middleware_chain.clone(),
-                )
-                .await
-                .ok_or_else(|| "all respawn attempts failed".to_string())?;
-            }
+        // Execute one step and emit sample
+        let step_idx = dist.sample(&mut rng);
+        let step = &config.scenario[step_idx];
+        let (result, sample) = execute_step_and_sample(&mut client, step).await;
+
+        if sample_tx.send(sample).await.is_err() {
+            return Ok(());
         }
 
-        // Pace requests when request_interval_ms is configured
+        // Respawn on session-fatal errors
+        if should_respawn_session(&result) {
+            client = try_initialize(
+                vu_id,
+                http_client,
+                base_url,
+                timeout,
+                sample_tx,
+                cancel,
+                MAX_RESPAWN_ATTEMPTS,
+                http_middleware_chain.clone(),
+            )
+            .await
+            .ok_or_else(|| "all respawn attempts failed".to_string())?;
+        }
+
+        // Optional pacing
         if let Some(interval_ms) = config.settings.request_interval_ms {
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(interval_ms)) => {},
@@ -342,6 +316,59 @@ async fn vu_loop_inner(
             }
         }
     }
+}
+
+/// Atomically increment the iteration counter (if set) and check against the
+/// max. Cancels the token and returns true when the limit is hit.
+fn iteration_limit_reached(
+    iteration_counter: Option<&Arc<AtomicU64>>,
+    max_iterations: Option<u64>,
+    cancel: &CancellationToken,
+) -> bool {
+    let (Some(counter), Some(max)) = (iteration_counter, max_iterations) else {
+        return false;
+    };
+    let prev = counter.fetch_add(1, Ordering::Relaxed);
+    if prev >= max {
+        cancel.cancel();
+        true
+    } else {
+        false
+    }
+}
+
+/// Execute one scenario step, returning the operation result plus a ready-to-send
+/// `RequestSample` tagged with per-tool metadata.
+async fn execute_step_and_sample(
+    client: &mut McpClient,
+    step: &ScenarioStep,
+) -> (Result<(), McpError>, RequestSample) {
+    let start = Instant::now();
+    let (op_type, result) = execute_step(client, step).await;
+    let duration = start.elapsed();
+
+    let tool_name = extract_tool_name(step);
+
+    let sample = match &result {
+        Ok(()) => RequestSample::success(op_type, duration, tool_name),
+        Err(err) => RequestSample::error(op_type, duration, err.clone(), tool_name),
+    };
+    (result, sample)
+}
+
+/// Extract a per-tool metric label from a scenario step.
+fn extract_tool_name(step: &ScenarioStep) -> Option<String> {
+    match step {
+        ScenarioStep::ToolCall { tool, .. } => Some(tool.clone()),
+        ScenarioStep::ResourceRead { uri, .. } => Some(uri.clone()),
+        ScenarioStep::PromptGet { prompt, .. } => Some(prompt.clone()),
+        ScenarioStep::CodeMode { format, .. } => Some(format!("code_mode/{format}")),
+    }
+}
+
+/// Return true when the step result indicates a session-fatal error warranting respawn.
+fn should_respawn_session(result: &Result<(), McpError>) -> bool {
+    matches!(result, Err(err) if is_session_fatal(err))
 }
 
 #[cfg(test)]

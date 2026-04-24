@@ -86,7 +86,42 @@ fn validate_workflows(generate: bool, verbose: bool, server: Option<String>) -> 
 }
 
 fn run_validation(generate: bool, verbose: bool, not_quiet: bool) -> Result<()> {
-    // Step 1: Run cargo check
+    // Step 1: Compilation check
+    run_cargo_check(verbose, not_quiet)?;
+
+    // Step 2: Discover workflow tests
+    if not_quiet {
+        println!(
+            "\n{} Looking for workflow validation tests...",
+            style("Step 2:").bold()
+        );
+    }
+    let test_patterns = find_workflow_tests()?;
+
+    if test_patterns.is_empty() {
+        return handle_no_patterns(generate, not_quiet);
+    }
+
+    if not_quiet {
+        println!(
+            "  {} Found {} workflow test pattern(s)",
+            style("✓").green(),
+            test_patterns.len()
+        );
+        println!(
+            "\n{} Running workflow validation tests...",
+            style("Step 3:").bold()
+        );
+    }
+
+    let (all_passed, total_tests, passed_tests) =
+        run_all_test_patterns(&test_patterns, verbose, not_quiet)?;
+
+    print_validation_summary(all_passed, total_tests, passed_tests, not_quiet)
+}
+
+/// Run `cargo check --message-format=short` and bail on failure.
+fn run_cargo_check(verbose: bool, not_quiet: bool) -> Result<()> {
     if not_quiet {
         println!("\n{} Checking compilation...", style("Step 1:").bold());
     }
@@ -116,70 +151,54 @@ fn run_validation(generate: bool, verbose: bool, not_quiet: bool) -> Result<()> 
     if not_quiet {
         println!("  {} Compilation successful", style("✓").green());
     }
+    Ok(())
+}
 
-    // Step 2: Check for workflow tests
-    if not_quiet {
-        println!(
-            "\n{} Looking for workflow validation tests...",
-            style("Step 2:").bold()
-        );
-    }
-
-    let test_patterns = find_workflow_tests()?;
-
-    if test_patterns.is_empty() {
-        if generate {
-            if not_quiet {
-                println!(
-                    "  {} No workflow tests found. Generating scaffolding...",
-                    style("!").yellow()
-                );
-            }
-            generate_validation_scaffolding(not_quiet)?;
-            if not_quiet {
-                println!(
-                    "  {} Generated validation test scaffolding",
-                    style("✓").green()
-                );
-                println!(
-                    "\n  Run {} again to validate",
-                    style("cargo pmcp validate workflows").cyan()
-                );
-            }
-            return Ok(());
-        } else {
-            if not_quiet {
-                println!(
-                    "  {} No workflow validation tests found",
-                    style("!").yellow()
-                );
-                print_test_guidance(not_quiet);
-            }
-            return Ok(());
+/// When no workflow-test patterns match: emit `generate_validation_scaffolding`
+/// (if `generate`) or user-facing guidance.
+fn handle_no_patterns(generate: bool, not_quiet: bool) -> Result<()> {
+    if generate {
+        if not_quiet {
+            println!(
+                "  {} No workflow tests found. Generating scaffolding...",
+                style("!").yellow()
+            );
         }
+        generate_validation_scaffolding(not_quiet)?;
+        if not_quiet {
+            println!(
+                "  {} Generated validation test scaffolding",
+                style("✓").green()
+            );
+            println!(
+                "\n  Run {} again to validate",
+                style("cargo pmcp validate workflows").cyan()
+            );
+        }
+        return Ok(());
     }
 
     if not_quiet {
         println!(
-            "  {} Found {} workflow test pattern(s)",
-            style("✓").green(),
-            test_patterns.len()
+            "  {} No workflow validation tests found",
+            style("!").yellow()
         );
+        print_test_guidance(not_quiet);
     }
+    Ok(())
+}
 
-    // Step 3: Run workflow tests
-    if not_quiet {
-        println!(
-            "\n{} Running workflow validation tests...",
-            style("Step 3:").bold()
-        );
-    }
-
+/// Run each test pattern. Returns (all_passed, total_tests, passed_tests).
+fn run_all_test_patterns(
+    test_patterns: &[String],
+    verbose: bool,
+    not_quiet: bool,
+) -> Result<(bool, usize, usize)> {
     let mut all_passed = true;
     let mut total_tests = 0;
     let mut passed_tests = 0;
 
-    for pattern in &test_patterns {
+    for pattern in test_patterns {
         let test_output = Command::new("cargo")
             .args(["test", pattern, "--", "--nocapture"])
             .output()
@@ -188,7 +207,6 @@ fn run_validation(generate: bool, verbose: bool, not_quiet: bool) -> Result<()> 
         let stdout = String::from_utf8_lossy(&test_output.stdout);
         let stderr = String::from_utf8_lossy(&test_output.stderr);
 
-        // Parse test results
         let (tests_run, tests_passed, tests_failed) = parse_test_output(&stdout, &stderr);
         total_tests += tests_run;
         passed_tests += tests_passed;
@@ -200,41 +218,79 @@ fn run_validation(generate: bool, verbose: bool, not_quiet: bool) -> Result<()> 
             }
         }
 
-        if tests_failed > 0 {
+        let passed = print_pattern_result(
+            pattern,
+            tests_run,
+            tests_passed,
+            tests_failed,
+            &stdout,
+            &stderr,
+            verbose,
+            not_quiet,
+        );
+        if !passed {
             all_passed = false;
-            if not_quiet {
-                println!(
-                    "  {} Pattern '{}': {} passed, {} failed",
-                    style("✗").red(),
-                    pattern,
-                    tests_passed,
-                    style(tests_failed).red()
-                );
-            }
-
-            // Show failure details
-            if !verbose {
-                print_failure_summary(&stdout, &stderr);
-            }
-        } else if tests_run > 0 {
-            if not_quiet {
-                println!(
-                    "  {} Pattern '{}': {} passed",
-                    style("✓").green(),
-                    pattern,
-                    tests_passed
-                );
-            }
-        } else if not_quiet {
-            println!(
-                "  {} Pattern '{}': no tests matched",
-                style("-").dim(),
-                pattern
-            );
         }
     }
 
-    // Summary
+    Ok((all_passed, total_tests, passed_tests))
+}
+
+/// Print one test-pattern's result and return whether it passed.
+#[allow(clippy::too_many_arguments)]
+fn print_pattern_result(
+    pattern: &str,
+    tests_run: usize,
+    tests_passed: usize,
+    tests_failed: usize,
+    stdout: &str,
+    stderr: &str,
+    verbose: bool,
+    not_quiet: bool,
+) -> bool {
+    if tests_failed > 0 {
+        if not_quiet {
+            println!(
+                "  {} Pattern '{}': {} passed, {} failed",
+                style("✗").red(),
+                pattern,
+                tests_passed,
+                style(tests_failed).red()
+            );
+        }
+        if !verbose {
+            print_failure_summary(stdout, stderr);
+        }
+        return false;
+    }
+
+    if tests_run > 0 {
+        if not_quiet {
+            println!(
+                "  {} Pattern '{}': {} passed",
+                style("✓").green(),
+                pattern,
+                tests_passed
+            );
+        }
+    } else if not_quiet {
+        println!(
+            "  {} Pattern '{}': no tests matched",
+            style("-").dim(),
+            pattern
+        );
+    }
+    true
+}
+
+/// Print the final "all passed / X of Y / no tests" summary and return
+/// an Err when validation failed.
+fn print_validation_summary(
+    all_passed: bool,
+    total_tests: usize,
+    passed_tests: usize,
+    not_quiet: bool,
+) -> Result<()> {
     if not_quiet {
         println!("\n{}", style("━".repeat(50)).dim());
     }
@@ -248,7 +304,10 @@ fn run_validation(generate: bool, verbose: bool, not_quiet: bool) -> Result<()> 
             );
             println!("\n  Your workflows are structurally valid and ready for use.");
         }
-    } else if total_tests == 0 {
+        return Ok(());
+    }
+
+    if total_tests == 0 {
         if not_quiet {
             println!(
                 "{} No workflow tests were executed",
@@ -256,17 +315,16 @@ fn run_validation(generate: bool, verbose: bool, not_quiet: bool) -> Result<()> 
             );
             print_test_guidance(not_quiet);
         }
-    } else {
-        println!(
-            "{} Workflow validation failed: {} of {} tests passed",
-            style("✗").red().bold(),
-            passed_tests,
-            total_tests
-        );
-        return Err(anyhow::anyhow!("Workflow validation failed"));
+        return Ok(());
     }
 
-    Ok(())
+    println!(
+        "{} Workflow validation failed: {} of {} tests passed",
+        style("✗").red().bold(),
+        passed_tests,
+        total_tests
+    );
+    Err(anyhow::anyhow!("Workflow validation failed"))
 }
 
 /// Find test patterns that match workflow tests
@@ -301,49 +359,43 @@ fn find_workflow_tests() -> Result<Vec<String>> {
 
 /// Parse test output to extract pass/fail counts
 fn parse_test_output(stdout: &str, stderr: &str) -> (usize, usize, usize) {
-    // Look for "test result: ok. X passed; Y failed" pattern
     let combined = format!("{}\n{}", stdout, stderr);
 
-    for line in combined.lines() {
-        if line.starts_with("test result:") {
-            let passed = line
-                .split_whitespace()
-                .find_map(|word| word.strip_suffix(" passed").and_then(|n| n.parse().ok()))
-                .or_else(|| {
-                    // Try another pattern: "X passed"
-                    let parts: Vec<&str> = line.split(';').collect();
-                    for part in parts {
-                        if part.contains("passed") {
-                            return part.split_whitespace().next().and_then(|n| n.parse().ok());
-                        }
-                    }
-                    None
-                })
-                .unwrap_or(0);
-
-            let failed = line
-                .split_whitespace()
-                .find_map(|word| word.strip_suffix(" failed").and_then(|n| n.parse().ok()))
-                .or_else(|| {
-                    let parts: Vec<&str> = line.split(';').collect();
-                    for part in parts {
-                        if part.contains("failed") {
-                            return part.split_whitespace().next().and_then(|n| n.parse().ok());
-                        }
-                    }
-                    None
-                })
-                .unwrap_or(0);
-
-            return (passed + failed, passed, failed);
-        }
+    if let Some(counts) = parse_test_result_line(&combined) {
+        return counts;
     }
 
     // Alternative: count individual test lines
     let passed = combined.matches("... ok").count();
     let failed = combined.matches("... FAILED").count();
-
     (passed + failed, passed, failed)
+}
+
+/// Parse the `test result: ...` line if present.
+fn parse_test_result_line(combined: &str) -> Option<(usize, usize, usize)> {
+    let line = combined
+        .lines()
+        .find(|l| l.starts_with("test result:"))?;
+
+    let passed = count_for_keyword(line, "passed");
+    let failed = count_for_keyword(line, "failed");
+    Some((passed + failed, passed, failed))
+}
+
+/// Extract the integer count preceding `keyword` (e.g. "passed" or "failed")
+/// in a cargo-test result line. Tries the `"N <keyword>"` token form first,
+/// then falls back to semicolon-separated segments.
+fn count_for_keyword(line: &str, keyword: &str) -> usize {
+    let with_space = format!(" {keyword}");
+    line.split_whitespace()
+        .find_map(|word| word.strip_suffix(with_space.as_str()).and_then(|n| n.parse().ok()))
+        .or_else(|| {
+            line.split(';')
+                .find(|part| part.contains(keyword))
+                .and_then(|part| part.split_whitespace().next())
+                .and_then(|n| n.parse().ok())
+        })
+        .unwrap_or(0)
 }
 
 /// Print failure summary from test output
