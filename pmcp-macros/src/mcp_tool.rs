@@ -62,7 +62,169 @@ pub struct McpToolAnnotations {
     pub(crate) open_world: Option<bool>,
 }
 
+/// Bundled parameter classification for a `#[mcp_tool]` function.
+struct ToolFnParams {
+    args_type: Option<Type>,
+    state_inner_ty: Option<Type>,
+    param_order: Vec<mcp_common::ParamSlot>,
+    has_extra: bool,
+}
+
+/// Push an args-typed parameter slot, rejecting duplicates.
+fn push_tool_args_slot(
+    param: &syn::FnArg,
+    ty: Type,
+    args_type: &mut Option<Type>,
+    param_order: &mut Vec<mcp_common::ParamSlot>,
+) -> syn::Result<()> {
+    if args_type.is_some() {
+        return Err(syn::Error::new_spanned(
+            param,
+            "mcp_tool functions can have at most one args parameter",
+        ));
+    }
+    *args_type = Some(ty);
+    param_order.push(mcp_common::ParamSlot::Args);
+    Ok(())
+}
+
+/// Push a `State<T>` slot, rejecting duplicates.
+fn push_tool_state_slot(
+    param: &syn::FnArg,
+    inner_ty: Type,
+    state_inner_ty: &mut Option<Type>,
+    param_order: &mut Vec<mcp_common::ParamSlot>,
+) -> syn::Result<()> {
+    if state_inner_ty.is_some() {
+        return Err(syn::Error::new_spanned(
+            param,
+            "mcp_tool functions can have at most one State<T> parameter",
+        ));
+    }
+    *state_inner_ty = Some(inner_ty);
+    param_order.push(mcp_common::ParamSlot::State);
+    Ok(())
+}
+
+/// Push a `RequestHandlerExtra` slot, rejecting duplicates.
+fn push_tool_extra_slot(
+    param: &syn::FnArg,
+    has_extra: &mut bool,
+    param_order: &mut Vec<mcp_common::ParamSlot>,
+) -> syn::Result<()> {
+    if *has_extra {
+        return Err(syn::Error::new_spanned(
+            param,
+            "mcp_tool functions can have at most one RequestHandlerExtra parameter",
+        ));
+    }
+    *has_extra = true;
+    param_order.push(mcp_common::ParamSlot::Extra);
+    Ok(())
+}
+
+/// Classify every parameter of an `#[mcp_tool]` function.
+fn classify_tool_fn_params(input: &ItemFn) -> syn::Result<ToolFnParams> {
+    let mut args_type: Option<Type> = None;
+    let mut state_inner_ty: Option<Type> = None;
+    let mut has_extra = false;
+    let mut param_order: Vec<mcp_common::ParamSlot> = Vec::new();
+    for param in &input.sig.inputs {
+        let role = mcp_common::classify_param(param)?;
+        match role {
+            mcp_common::ParamRole::Args(ty) => {
+                push_tool_args_slot(param, ty, &mut args_type, &mut param_order)?;
+            },
+            mcp_common::ParamRole::State { inner_ty, .. } => {
+                push_tool_state_slot(param, inner_ty, &mut state_inner_ty, &mut param_order)?;
+            },
+            mcp_common::ParamRole::Extra => {
+                push_tool_extra_slot(param, &mut has_extra, &mut param_order)?;
+            },
+            mcp_common::ParamRole::SelfRef => {
+                return Err(syn::Error::new_spanned(
+                    param,
+                    "standalone #[mcp_tool] functions cannot have &self — use #[mcp_server] for impl block tools",
+                ));
+            },
+        }
+    }
+    Ok(ToolFnParams {
+        args_type,
+        state_inner_ty,
+        param_order,
+        has_extra,
+    })
+}
+
+/// Bundled state codegen for standalone mcp_tool.
+struct ToolStateCodegen {
+    struct_fields: TokenStream,
+    with_state_method: TokenStream,
+    constructor_default: TokenStream,
+    state_resolution: TokenStream,
+}
+
+fn generate_tool_state_codegen(
+    state_inner_ty: Option<&Type>,
+    struct_name: &syn::Ident,
+    tool_name: &str,
+) -> ToolStateCodegen {
+    let Some(inner) = state_inner_ty else {
+        return ToolStateCodegen {
+            struct_fields: quote! {},
+            with_state_method: quote! {},
+            constructor_default: quote! { #struct_name {} },
+            state_resolution: quote! {},
+        };
+    };
+    let inner_name = quote!(#inner).to_string();
+    ToolStateCodegen {
+        struct_fields: quote! { state: Option<std::sync::Arc<#inner>>, },
+        with_state_method: quote! {
+            /// Provide shared state for this tool.
+            ///
+            /// Call this at registration time to inject state:
+            /// ```rust,ignore
+            /// server_builder.tool("name", tool_fn().with_state(my_state))
+            /// ```
+            pub fn with_state(mut self, state: impl Into<std::sync::Arc<#inner>>) -> Self {
+                self.state = Some(state.into());
+                self
+            }
+        },
+        constructor_default: quote! { #struct_name { state: None } },
+        state_resolution: quote! {
+            let state_val = pmcp::State(
+                self.state.as_ref()
+                    .ok_or_else(|| pmcp::Error::internal(format!(
+                        "State<{}> not provided for tool '{}' -- call .with_state() during registration",
+                        #inner_name, #tool_name
+                    )))?
+                    .clone()
+            );
+        },
+    }
+}
+
+/// Generate the args deserialization snippet for a tool handler body.
+fn generate_tool_args_deser(args_type: Option<&Type>, tool_name: &str) -> TokenStream {
+    let Some(at) = args_type else {
+        return quote! {};
+    };
+    quote! {
+        let typed_args: #at = serde_json::from_value(args)
+            .map_err(|e| pmcp::Error::invalid_params(
+                format!("Invalid arguments for tool '{}': {}", #tool_name, e)
+            ))?;
+    }
+}
+
 /// Expand `#[mcp_tool]` attribute macro on a standalone function.
+///
+/// Refactored in 75-01 Task 1b-C (P1): parse/classify/codegen helpers
+/// extracted ([`classify_tool_fn_params`], [`generate_tool_state_codegen`],
+/// [`generate_tool_args_deser`]).
 pub fn expand_mcp_tool(args: TokenStream, input: &ItemFn) -> syn::Result<TokenStream> {
     use mcp_common::ParamSlot;
 
@@ -87,126 +249,27 @@ pub fn expand_mcp_tool(args: TokenStream, input: &ItemFn) -> syn::Result<TokenSt
     let mut impl_fn = input.clone();
     impl_fn.sig.ident = impl_fn_name.clone();
 
-    // Classify all parameters.
-    let mut args_type: Option<Type> = None;
-    let mut state_inner_ty: Option<Type> = None;
-    let mut has_extra = false;
-    let mut param_order: Vec<ParamSlot> = Vec::new();
+    let params = classify_tool_fn_params(input)?;
+    let state_codegen =
+        generate_tool_state_codegen(params.state_inner_ty.as_ref(), &struct_name, &tool_name);
 
-    for param in &input.sig.inputs {
-        let role = mcp_common::classify_param(param)?;
-        match role {
-            mcp_common::ParamRole::Args(ty) => {
-                if args_type.is_some() {
-                    return Err(syn::Error::new_spanned(
-                        param,
-                        "mcp_tool functions can have at most one args parameter",
-                    ));
-                }
-                args_type = Some(ty);
-                param_order.push(ParamSlot::Args);
-            },
-            mcp_common::ParamRole::State { inner_ty, .. } => {
-                if state_inner_ty.is_some() {
-                    return Err(syn::Error::new_spanned(
-                        param,
-                        "mcp_tool functions can have at most one State<T> parameter",
-                    ));
-                }
-                state_inner_ty = Some(inner_ty);
-                param_order.push(ParamSlot::State);
-            },
-            mcp_common::ParamRole::Extra => {
-                if has_extra {
-                    return Err(syn::Error::new_spanned(
-                        param,
-                        "mcp_tool functions can have at most one RequestHandlerExtra parameter",
-                    ));
-                }
-                has_extra = true;
-                param_order.push(ParamSlot::Extra);
-            },
-            mcp_common::ParamRole::SelfRef => {
-                return Err(syn::Error::new_spanned(
-                    param,
-                    "standalone #[mcp_tool] functions cannot have &self — use #[mcp_server] for impl block tools",
-                ));
-            },
-        }
-    }
+    let struct_fields = state_codegen.struct_fields;
+    let with_state_method = state_codegen.with_state_method;
+    let constructor_default = state_codegen.constructor_default;
+    let state_resolution = state_codegen.state_resolution;
 
-    // Generate struct fields.
-    let struct_fields = if let Some(ref inner) = state_inner_ty {
-        quote! { state: Option<std::sync::Arc<#inner>>, }
-    } else {
-        quote! {}
-    };
-
-    // Generate with_state method (only if state param present).
-    let with_state_method = if let Some(ref inner) = state_inner_ty {
-        quote! {
-            /// Provide shared state for this tool.
-            ///
-            /// Call this at registration time to inject state:
-            /// ```rust,ignore
-            /// server_builder.tool("name", tool_fn().with_state(my_state))
-            /// ```
-            pub fn with_state(mut self, state: impl Into<std::sync::Arc<#inner>>) -> Self {
-                self.state = Some(state.into());
-                self
-            }
-        }
-    } else {
-        quote! {}
-    };
-
-    // Generate constructor default.
-    let constructor_default = if state_inner_ty.is_some() {
-        quote! { #struct_name { state: None } }
-    } else {
-        quote! { #struct_name {} }
-    };
-
-    // Generate args deserialization in handle().
-    let args_deser = if let Some(ref at) = args_type {
-        let tool_name_for_err = &tool_name;
-        quote! {
-            let typed_args: #at = serde_json::from_value(args)
-                .map_err(|e| pmcp::Error::invalid_params(
-                    format!("Invalid arguments for tool '{}': {}", #tool_name_for_err, e)
-                ))?;
-        }
-    } else {
-        quote! {}
-    };
-
-    // Generate state resolution in handle().
-    let state_resolution = if let Some(ref inner) = state_inner_ty {
-        let inner_name = quote!(#inner).to_string();
-        let tool_name_for_err = &tool_name;
-        quote! {
-            let state_val = pmcp::State(
-                self.state.as_ref()
-                    .ok_or_else(|| pmcp::Error::internal(format!(
-                        "State<{}> not provided for tool '{}' -- call .with_state() during registration",
-                        #inner_name, #tool_name_for_err
-                    )))?
-                    .clone()
-            );
-        }
-    } else {
-        quote! {}
-    };
+    let args_deser = generate_tool_args_deser(params.args_type.as_ref(), &tool_name);
 
     // Generate extra parameter name in handle() signature.
-    let extra_param_name: Ident = if has_extra {
+    let extra_param_name: Ident = if params.has_extra {
         format_ident!("extra")
     } else {
         format_ident!("_extra")
     };
 
     // Generate function call arguments in correct parameter order.
-    let call_args: Vec<TokenStream> = param_order
+    let call_args: Vec<TokenStream> = params
+        .param_order
         .iter()
         .map(|slot| match slot {
             ParamSlot::Args => quote! { typed_args },
@@ -238,7 +301,7 @@ pub fn expand_mcp_tool(args: TokenStream, input: &ItemFn) -> syn::Result<TokenSt
     };
 
     // Generate input schema code for metadata().
-    let input_schema_code = if let Some(ref at) = args_type {
+    let input_schema_code = if let Some(ref at) = params.args_type {
         mcp_common::generate_input_schema_code(at)
     } else {
         mcp_common::generate_empty_schema_code()
