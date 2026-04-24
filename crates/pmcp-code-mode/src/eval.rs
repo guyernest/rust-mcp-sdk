@@ -638,9 +638,7 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
             local_vars,
         ),
         ArrayMethodCall::Slice { start, end } => Ok(eval_array_slice(arr, *start, *end)),
-        ArrayMethodCall::Concat { other } => {
-            eval_array_concat(arr, other, global_vars, local_vars)
-        },
+        ArrayMethodCall::Concat { other } => eval_array_concat(arr, other, global_vars, local_vars),
         ArrayMethodCall::Push { item } => eval_array_push(arr, item, global_vars, local_vars),
         ArrayMethodCall::Join { separator } => Ok(eval_array_join(&arr, separator.as_deref())),
         ArrayMethodCall::Reverse => {
@@ -861,11 +859,7 @@ fn eval_array_push<V: VariableProvider>(
 /// `arr.join(separator)` — JS-compatible string join, `","` if separator is `None`.
 fn eval_array_join(arr: &[JsonValue], separator: Option<&str>) -> JsonValue {
     let sep = separator.unwrap_or(",");
-    let joined: String = arr
-        .iter()
-        .map(json_to_string)
-        .collect::<Vec<_>>()
-        .join(sep);
+    let joined: String = arr.iter().map(json_to_string).collect::<Vec<_>>().join(sep);
     JsonValue::String(joined)
 }
 
@@ -975,13 +969,9 @@ fn evaluate_string_method<V: VariableProvider>(
         ArrayMethodCall::Includes { item } => {
             eval_string_includes(s, item, global_vars, local_vars)
         },
-        ArrayMethodCall::IndexOf { item } => {
-            eval_string_index_of(s, item, global_vars, local_vars)
-        },
+        ArrayMethodCall::IndexOf { item } => eval_string_index_of(s, item, global_vars, local_vars),
         ArrayMethodCall::Slice { start, end } => Ok(eval_string_slice(s, *start, *end)),
-        ArrayMethodCall::Concat { other } => {
-            eval_string_concat(s, other, global_vars, local_vars)
-        },
+        ArrayMethodCall::Concat { other } => eval_string_concat(s, other, global_vars, local_vars),
         ArrayMethodCall::ToLowerCase => Ok(JsonValue::String(s.to_lowercase())),
         ArrayMethodCall::ToUpperCase => Ok(JsonValue::String(s.to_uppercase())),
         ArrayMethodCall::StartsWith { search } => {
@@ -1147,9 +1137,11 @@ fn eval_string_replace<V: VariableProvider>(
     let search_val = evaluate_with_scope(search, global_vars, local_vars)?;
     let repl_val = evaluate_with_scope(replacement, global_vars, local_vars)?;
     match (search_val, repl_val) {
-        (JsonValue::String(needle), JsonValue::String(repl)) => Ok(JsonValue::String(
-            s.replacen(needle.as_str(), repl.as_str(), 1),
-        )),
+        (JsonValue::String(needle), JsonValue::String(repl)) => Ok(JsonValue::String(s.replacen(
+            needle.as_str(),
+            repl.as_str(),
+            1,
+        ))),
         _ => Ok(JsonValue::String(s.to_string())),
     }
 }

@@ -1621,8 +1621,7 @@ impl PlanCompiler {
                         },
                         // reduce((acc, item) => expr, initialValue)
                         "reduce" if call.args.len() >= 2 => {
-                            let (acc_var, item_var, body) =
-                                self.extract_reduce_callback(call)?;
+                            let (acc_var, item_var, body) = self.extract_reduce_callback(call)?;
                             let initial = Box::new(self.compile_expr(&call.args[1].expr)?);
                             return Ok(ValueExpr::ArrayMethod {
                                 array,

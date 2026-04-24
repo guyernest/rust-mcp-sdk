@@ -177,4 +177,3 @@ fn print_list_footer(
         );
     }
 }
-
