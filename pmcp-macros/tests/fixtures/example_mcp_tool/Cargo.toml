@@ -1,0 +1,19 @@
+# Standalone fixture for `cargo expand` snapshot of `#[mcp_tool]` (Phase 75 Wave 0 Task 1).
+# Declared as its own workspace via empty `[workspace]` so the parent
+# `rust-mcp-sdk` workspace doesn't try to absorb this fixture as a member.
+[package]
+name = "example_mcp_tool_fixture"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+pmcp = { path = "../../../..", features = ["macros", "schema-generation"] }
+pmcp-macros = { path = "../../.." }
+schemars = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+async-trait = "0.1"
+tokio = { version = "1.46", features = ["full"] }
