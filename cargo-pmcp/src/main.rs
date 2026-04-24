@@ -405,80 +405,43 @@ fn main() -> Result<()> {
 }
 
 fn execute_command(command: Commands, global_flags: &GlobalFlags) -> Result<()> {
-    match command {
-        Commands::New { name, path } => {
-            commands::new::execute(name, path, None, global_flags)?;
+    // Subcommand groups whose execute(&GlobalFlags) method is on the
+    // subcommand type itself — dispatch uniformly.
+    if let Some(result) = dispatch_trait_based(command, global_flags) {
+        return result;
+    }
+    Ok(())
+}
+
+/// Route through every `Commands` variant and dispatch either via the
+/// subcommand's `.execute(global_flags)` method or an explicit function-call
+/// wrapper. Always returns `Some(result)` — the outer `execute_command`
+/// unwraps for `Ok(())` compatibility.
+fn dispatch_trait_based(command: Commands, global_flags: &GlobalFlags) -> Option<Result<()>> {
+    let result: Result<()> = match command {
+        Commands::New { name, path } => commands::new::execute(name, path, None, global_flags),
+        Commands::Add { component } => execute_add(component, global_flags),
+        Commands::Test { command } => command.execute(global_flags),
+        Commands::Auth { command } => command.execute(global_flags),
+        Commands::Dev { server, port, connect } => {
+            commands::dev::execute(server, port, connect, global_flags)
         },
-        Commands::Add { component } => match component {
-            AddCommands::Server {
-                name,
-                template,
-                port,
-                replace,
-            } => {
-                commands::add::server(name, template, port, replace, global_flags)?;
-            },
-            AddCommands::Tool { name, server } => {
-                commands::add::tool(name, server, global_flags)?;
-            },
-            AddCommands::Workflow { name, server } => {
-                commands::add::workflow(name, server, global_flags)?;
-            },
+        Commands::Connect { server, client, url, auth_flags } => {
+            commands::connect::execute(server, client, url, &auth_flags, global_flags)
         },
-        Commands::Test { command } => {
-            command.execute(global_flags)?;
-        },
-        Commands::Auth { command } => {
-            command.execute(global_flags)?;
-        },
-        Commands::Dev {
-            server,
-            port,
-            connect,
-        } => {
-            commands::dev::execute(server, port, connect, global_flags)?;
-        },
-        Commands::Connect {
-            server,
-            client,
-            url,
-            auth_flags,
-        } => {
-            commands::connect::execute(server, client, url, &auth_flags, global_flags)?;
-        },
-        Commands::Deploy(deploy_cmd) => {
-            deploy_cmd.execute(global_flags)?;
-        },
-        Commands::Landing { command } => {
-            let runtime = tokio::runtime::Runtime::new()?;
-            let project_root = std::env::current_dir()?;
-            runtime.block_on(command.execute(project_root, global_flags))?;
-        },
-        Commands::Schema { command } => {
-            command.execute(global_flags)?;
-        },
-        Commands::Validate { command } => {
-            command.execute(global_flags)?;
-        },
-        Commands::Secret(secret_cmd) => {
-            secret_cmd.execute(global_flags)?;
-        },
-        Commands::Loadtest { command } => {
-            command.execute(global_flags)?;
-        },
-        Commands::App { command } => {
-            command.execute(global_flags)?;
-        },
-        Commands::Doctor { url } => {
-            commands::doctor::execute(url.as_deref(), global_flags)?;
-        },
+        Commands::Deploy(deploy_cmd) => deploy_cmd.execute(global_flags),
+        Commands::Landing { command } => execute_landing(command, global_flags),
+        Commands::Schema { command } => command.execute(global_flags),
+        Commands::Validate { command } => command.execute(global_flags),
+        Commands::Secret(secret_cmd) => secret_cmd.execute(global_flags),
+        Commands::Loadtest { command } => command.execute(global_flags),
+        Commands::App { command } => command.execute(global_flags),
+        Commands::Doctor { url } => commands::doctor::execute(url.as_deref(), global_flags),
         Commands::Completions { shell } => {
-            let mut cmd = Cli::command();
-            clap_complete::generate(shell, &mut cmd, "cargo pmcp", &mut std::io::stdout());
+            execute_completions(shell);
+            Ok(())
         },
-        Commands::Pentest(pentest_cmd) => {
-            pentest_cmd.execute(global_flags)?;
-        },
+        Commands::Pentest(pentest_cmd) => pentest_cmd.execute(global_flags),
         Commands::Preview {
             url,
             port,
@@ -489,21 +452,68 @@ fn execute_command(command: Commands, global_flags: &GlobalFlags) -> Result<()> 
             widgets_dir,
             mode,
             auth_flags,
-        } => {
-            let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(commands::preview::execute(
-                url,
-                port,
-                open,
-                tool,
-                theme,
-                locale,
-                widgets_dir,
-                mode,
-                &auth_flags,
-                global_flags,
-            ))?;
+        } => execute_preview(
+            url, port, open, tool, theme, locale, widgets_dir, mode, auth_flags, global_flags,
+        ),
+    };
+    Some(result)
+}
+
+/// Emit shell completions to stdout for the given shell.
+fn execute_completions(shell: clap_complete::Shell) {
+    let mut cmd = Cli::command();
+    clap_complete::generate(shell, &mut cmd, "cargo pmcp", &mut std::io::stdout());
+}
+
+/// Dispatcher for the Add subcommand tree (Server / Tool / Workflow).
+fn execute_add(component: AddCommands, global_flags: &GlobalFlags) -> Result<()> {
+    match component {
+        AddCommands::Server {
+            name,
+            template,
+            port,
+            replace,
+        } => commands::add::server(name, template, port, replace, global_flags),
+        AddCommands::Tool { name, server } => commands::add::tool(name, server, global_flags),
+        AddCommands::Workflow { name, server } => {
+            commands::add::workflow(name, server, global_flags)
         },
     }
-    Ok(())
+}
+
+/// Dispatcher for the Landing subcommand group (async; spins up its own
+/// tokio runtime because main.rs stays sync).
+fn execute_landing(command: commands::landing::LandingCommand, global_flags: &GlobalFlags) -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let project_root = std::env::current_dir()?;
+    runtime.block_on(command.execute(project_root, global_flags))
+}
+
+/// Dispatcher for the Preview command (async; spins up its own tokio runtime).
+#[allow(clippy::too_many_arguments)]
+fn execute_preview(
+    url: String,
+    port: u16,
+    open: bool,
+    tool: Option<String>,
+    theme: String,
+    locale: String,
+    widgets_dir: Option<String>,
+    mode: String,
+    auth_flags: commands::flags::AuthFlags,
+    global_flags: &GlobalFlags,
+) -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(commands::preview::execute(
+        url,
+        port,
+        open,
+        tool,
+        theme,
+        locale,
+        widgets_dir,
+        mode,
+        &auth_flags,
+        global_flags,
+    ))
 }

@@ -24,29 +24,13 @@ pub async fn execute(
         mcp_preview::PreviewMode::Standard
     };
 
-    if global_flags.should_output() {
-        println!("\n{}", "Starting MCP Apps Preview".bright_cyan().bold());
-        println!("{}", "─────────────────────────────────".bright_cyan());
-        println!("  {} MCP Server: {}", "→".blue(), url.bright_yellow());
-        println!(
-            "  {} Preview URL: {}",
-            "→".blue(),
-            format!("http://localhost:{}", port).bright_green()
-        );
-        if let Some(ref dir) = widgets_dir {
-            println!(
-                "  {} Widgets Dir: {} (hot-reload)",
-                "→".blue(),
-                dir.bright_magenta()
-            );
-        }
-        let mode_display = match preview_mode {
-            mcp_preview::PreviewMode::ChatGpt => "ChatGPT Strict".bright_red().bold(),
-            mcp_preview::PreviewMode::Standard => "Standard".bright_green().bold(),
-        };
-        println!("  {} Mode:        {}", "→".blue(), mode_display);
-        println!();
-    }
+    print_preview_header(
+        &url,
+        port,
+        widgets_dir.as_deref(),
+        &preview_mode,
+        global_flags,
+    );
 
     // Resolve authentication method from CLI flags
     let auth_method = auth_flags.resolve();
@@ -54,66 +38,13 @@ pub async fn execute(
     // Build OAuth config for browser-based re-authentication FIRST (if OAuth configured).
     // This happens before resolve_auth_header so that even if CLI OAuth fails,
     // the browser can still authenticate via the popup flow.
-    let oauth_config = match &auth_method {
-        AuthMethod::OAuth {
-            client_id,
-            issuer,
-            scopes,
-            ..
-        } => {
-            // Try OIDC discovery to find authorization and token endpoints
-            match discover_oauth_endpoints(&url, issuer.as_deref()).await {
-                Ok((authorization_endpoint, token_endpoint)) => {
-                    if global_flags.should_output() {
-                        println!(
-                            "  {} OAuth:       {}",
-                            "→".blue(),
-                            "Browser PKCE flow enabled".bright_green()
-                        );
-                    }
-                    Some(mcp_preview::OAuthPreviewConfig {
-                        client_id: client_id.clone(),
-                        authorization_endpoint,
-                        token_endpoint,
-                        scopes: scopes.clone(),
-                    })
-                },
-                Err(e) => {
-                    if global_flags.should_output() {
-                        eprintln!("  {} OAuth browser flow unavailable: {}", "!".yellow(), e);
-                        eprintln!(
-                            "  {} CLI-acquired token will be used (no browser re-login)",
-                            "!".yellow(),
-                        );
-                    }
-                    None
-                },
-            }
-        },
-        _ => None,
-    };
+    let oauth_config = resolve_browser_oauth_config(&url, &auth_method, global_flags).await;
 
     // Resolve CLI-level auth as best-effort (gets initial token for proxy).
     // If this fails but oauth_config is set, the browser handles auth via popup.
-    let auth_header = match super::auth::resolve_auth_header(&url, &auth_method).await {
-        Ok(header) => header,
-        Err(e) => {
-            if oauth_config.is_some() {
-                // Browser will handle OAuth -- CLI failure is non-fatal
-                if global_flags.should_output() {
-                    eprintln!(
-                        "  {} CLI token acquisition failed: {} (browser OAuth will handle auth)",
-                        "!".yellow(),
-                        e
-                    );
-                }
-                None
-            } else {
-                // No browser OAuth fallback -- propagate the error
-                return Err(e);
-            }
-        },
-    };
+    let auth_header =
+        resolve_preview_auth_header(&url, &auth_method, oauth_config.is_some(), global_flags)
+            .await?;
 
     let widgets_path = widgets_dir.map(std::path::PathBuf::from);
 
@@ -142,6 +73,113 @@ pub async fn execute(
     }
 
     mcp_preview::PreviewServer::start(config).await
+}
+
+/// Print the "Starting MCP Apps Preview" banner (URL + port + mode + widgets).
+fn print_preview_header(
+    url: &str,
+    port: u16,
+    widgets_dir: Option<&str>,
+    preview_mode: &mcp_preview::PreviewMode,
+    global_flags: &crate::commands::GlobalFlags,
+) {
+    if !global_flags.should_output() {
+        return;
+    }
+    println!("\n{}", "Starting MCP Apps Preview".bright_cyan().bold());
+    println!("{}", "─────────────────────────────────".bright_cyan());
+    println!("  {} MCP Server: {}", "→".blue(), url.bright_yellow());
+    println!(
+        "  {} Preview URL: {}",
+        "→".blue(),
+        format!("http://localhost:{}", port).bright_green()
+    );
+    if let Some(dir) = widgets_dir {
+        println!(
+            "  {} Widgets Dir: {} (hot-reload)",
+            "→".blue(),
+            dir.bright_magenta()
+        );
+    }
+    let mode_display = match preview_mode {
+        mcp_preview::PreviewMode::ChatGpt => "ChatGPT Strict".bright_red().bold(),
+        mcp_preview::PreviewMode::Standard => "Standard".bright_green().bold(),
+    };
+    println!("  {} Mode:        {}", "→".blue(), mode_display);
+    println!();
+}
+
+/// Attempt OIDC discovery for the browser OAuth PKCE flow. Returns None on
+/// any failure (logs a hint unless quiet).
+async fn resolve_browser_oauth_config(
+    url: &str,
+    auth_method: &AuthMethod,
+    global_flags: &crate::commands::GlobalFlags,
+) -> Option<mcp_preview::OAuthPreviewConfig> {
+    let AuthMethod::OAuth {
+        client_id,
+        issuer,
+        scopes,
+        ..
+    } = auth_method
+    else {
+        return None;
+    };
+
+    match discover_oauth_endpoints(url, issuer.as_deref()).await {
+        Ok((authorization_endpoint, token_endpoint)) => {
+            if global_flags.should_output() {
+                println!(
+                    "  {} OAuth:       {}",
+                    "→".blue(),
+                    "Browser PKCE flow enabled".bright_green()
+                );
+            }
+            Some(mcp_preview::OAuthPreviewConfig {
+                client_id: client_id.clone(),
+                authorization_endpoint,
+                token_endpoint,
+                scopes: scopes.clone(),
+            })
+        },
+        Err(e) => {
+            if global_flags.should_output() {
+                eprintln!("  {} OAuth browser flow unavailable: {}", "!".yellow(), e);
+                eprintln!(
+                    "  {} CLI-acquired token will be used (no browser re-login)",
+                    "!".yellow(),
+                );
+            }
+            None
+        },
+    }
+}
+
+/// Resolve the initial auth header for the proxy. When `has_browser_oauth` is
+/// true, CLI auth failures are non-fatal (the browser flow will cover auth).
+async fn resolve_preview_auth_header(
+    url: &str,
+    auth_method: &AuthMethod,
+    has_browser_oauth: bool,
+    global_flags: &crate::commands::GlobalFlags,
+) -> Result<Option<String>> {
+    match super::auth::resolve_auth_header(url, auth_method).await {
+        Ok(header) => Ok(header),
+        Err(e) => {
+            if has_browser_oauth {
+                if global_flags.should_output() {
+                    eprintln!(
+                        "  {} CLI token acquisition failed: {} (browser OAuth will handle auth)",
+                        "!".yellow(),
+                        e
+                    );
+                }
+                Ok(None)
+            } else {
+                Err(e)
+            }
+        },
+    }
 }
 
 /// Discover OAuth authorization and token endpoints via OIDC discovery.
