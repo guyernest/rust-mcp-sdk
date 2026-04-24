@@ -158,6 +158,10 @@ jobs:
   quality-gate:
     name: Quality Gate
     runs-on: ubuntu-latest
+    # Phase 75 Wave 5 / D-07: when adding PMAT here, pin via `cargo install pmat --version =3.15.0 --locked`
+    # The pin matches .github/workflows/quality-badges.yml so badge and gate
+    # semantics stay aligned. See .planning/phases/75-fix-pmat-issues/
+    # 75-W0-SPIKE-RESULTS.md for the empirical justification (D-09).
     steps:
     - uses: actions/checkout@v6
 
