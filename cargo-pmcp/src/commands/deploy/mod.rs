@@ -794,10 +794,11 @@ endpoint = "{}"
 
 /// Handle OAuth subcommands for pmcp.run
 async fn handle_oauth_action(action: &OAuthAction) -> Result<()> {
-    use crate::deployment::targets::pmcp_run::{auth, graphql};
+    use crate::deployment::targets::pmcp_run::auth;
 
-    // Get credentials
+    // Get credentials once; individual handlers consume access_token.
     let credentials = auth::get_credentials().await?;
+    let access_token = &credentials.access_token;
 
     match action {
         OAuthAction::Enable {
@@ -808,174 +809,244 @@ async fn handle_oauth_action(action: &OAuthAction) -> Result<()> {
             public_clients,
             shared_pool,
         } => {
-            if std::env::var("PMCP_QUIET").is_err() {
-                println!("Enabling OAuth for server: {}", server);
-                println!();
-            }
-
-            // Resolve final configuration values
-            // Priority: explicit params > copied values > defaults
-            let (final_scopes, final_dcr, final_public_clients, final_shared_pool) =
-                resolve_oauth_config(
-                    &credentials.access_token,
-                    copy_from.as_deref(),
-                    scopes.clone(),
-                    *dcr,
-                    public_clients.clone(),
-                    shared_pool.clone(),
-                )
-                .await?;
-
-            // Display what configuration will be applied
-            if (copy_from.is_some() || shared_pool.is_some())
-                && std::env::var("PMCP_QUIET").is_err()
-            {
-                println!("OAuth Configuration:");
-                println!("   Scopes:         {}", final_scopes.join(", "));
-                println!(
-                    "   DCR:            {}",
-                    if final_dcr { "enabled" } else { "disabled" }
-                );
-                println!(
-                    "   Public clients: {}",
-                    final_public_clients
-                        .as_ref()
-                        .map(|p| p.join(", "))
-                        .unwrap_or_else(|| "(default)".to_string())
-                );
-                if let Some(ref pool) = final_shared_pool {
-                    println!("   Shared pool:    {}", pool);
-                }
-                println!();
-            }
-
-            let oauth_config = graphql::configure_server_oauth(
-                &credentials.access_token,
+            handle_oauth_enable(
+                access_token,
                 server,
-                true,
-                Some(final_scopes),
-                Some(final_dcr),
-                final_public_clients,
-                final_shared_pool,
+                copy_from.as_deref(),
+                scopes.clone(),
+                *dcr,
+                public_clients.clone(),
+                shared_pool.clone(),
             )
             .await
-            .context("Failed to configure OAuth")?;
-
-            let not_quiet = std::env::var("PMCP_QUIET").is_err();
-            if not_quiet {
-                println!("OAuth enabled successfully!");
-            }
-            println!();
-            println!("OAuth Endpoints:");
-            if let Some(ref discovery) = oauth_config.discovery_url {
-                println!("   Discovery:     {}", discovery);
-            }
-            if let Some(ref register) = oauth_config.registration_endpoint {
-                println!("   Registration:  {}", register);
-            }
-            if let Some(ref authorize) = oauth_config.authorization_endpoint {
-                println!("   Authorization: {}", authorize);
-            }
-            if let Some(ref token) = oauth_config.token_endpoint {
-                println!("   Token:         {}", token);
-            }
-            if let Some(ref pool_id) = oauth_config.user_pool_id {
-                println!();
-                println!("   User Pool ID:  {}", pool_id);
-            }
-            if let Some(ref region) = oauth_config.user_pool_region {
-                println!("   Region:        {}", region);
-            }
-
-            // Show helpful next steps for SSO
-            if (copy_from.is_some() || shared_pool.is_some()) && not_quiet {
-                println!();
-                println!("SSO enabled: Users from the shared pool can access this server");
-            }
-
-            Ok(())
         },
-        OAuthAction::Disable { server } => {
-            let not_quiet = std::env::var("PMCP_QUIET").is_err();
-            if not_quiet {
-                println!("Disabling OAuth for server: {}", server);
-                println!();
-            }
+        OAuthAction::Disable { server } => handle_oauth_disable(access_token, server).await,
+        OAuthAction::Status { server } => handle_oauth_status(access_token, server).await,
+    }
+}
 
-            graphql::disable_server_oauth(&credentials.access_token, server)
-                .await
-                .context("Failed to disable OAuth")?;
+/// Return true if output is NOT suppressed (PMCP_QUIET unset).
+fn oauth_not_quiet() -> bool {
+    std::env::var("PMCP_QUIET").is_err()
+}
 
-            if not_quiet {
-                println!("OAuth disabled successfully!");
-                println!();
-                println!("Note: The Cognito User Pool was NOT deleted.");
-                println!("   You can re-enable OAuth at any time with:");
-                println!("   cargo pmcp deploy oauth enable --server {}", server);
-            }
+/// Implement `OAuthAction::Enable`. Resolves config (copy_from + defaults +
+/// explicit overrides), invokes graphql::configure_server_oauth, and prints
+/// endpoint + SSO details.
+#[allow(clippy::too_many_arguments)]
+async fn handle_oauth_enable(
+    access_token: &str,
+    server: &str,
+    copy_from: Option<&str>,
+    scopes: Option<Vec<String>>,
+    dcr: bool,
+    public_clients: Option<Vec<String>>,
+    shared_pool: Option<String>,
+) -> Result<()> {
+    use crate::deployment::targets::pmcp_run::graphql;
 
-            Ok(())
-        },
-        OAuthAction::Status { server } => {
-            println!("OAuth Status for server: {}", server);
-            println!();
+    if oauth_not_quiet() {
+        println!("Enabling OAuth for server: {}", server);
+        println!();
+    }
 
-            match graphql::fetch_server_oauth_endpoints(&credentials.access_token, server).await {
-                Ok(endpoints) => {
-                    if endpoints.oauth_enabled {
-                        println!("   Status: Enabled");
-                        if let Some(provider) = endpoints.provider {
-                            println!("   Provider: {}", provider);
-                        }
-                        if let Some(dcr) = endpoints.dcr_enabled {
-                            println!("   DCR: {}", if dcr { "enabled" } else { "disabled" });
-                        }
-                        if let Some(scopes) = endpoints.scopes {
-                            println!("   Scopes: {}", scopes.join(", "));
-                        }
-                        println!();
-                        println!("OAuth Endpoints:");
-                        if let Some(ref discovery) = endpoints.discovery_url {
-                            println!("   Discovery:     {}", discovery);
-                        }
-                        if let Some(ref register) = endpoints.registration_endpoint {
-                            println!("   Registration:  {}", register);
-                        }
-                        if let Some(ref authorize) = endpoints.authorization_endpoint {
-                            println!("   Authorization: {}", authorize);
-                        }
-                        if let Some(ref token) = endpoints.token_endpoint {
-                            println!("   Token:         {}", token);
-                        }
-                        println!();
-                        println!("Cognito Details:");
-                        if let Some(ref pool_id) = endpoints.user_pool_id {
-                            println!("   User Pool ID:  {}", pool_id);
-                        }
-                        if let Some(ref region) = endpoints.user_pool_region {
-                            println!("   Region:        {}", region);
-                        }
-                    } else {
-                        println!("   Status: Disabled");
-                        if std::env::var("PMCP_QUIET").is_err() {
-                            println!();
-                            println!("Enable OAuth with:");
-                            println!("   cargo pmcp deploy oauth enable --server {}", server);
-                        }
-                    }
-                },
-                Err(_) => {
-                    println!("   Status: Not configured");
-                    if std::env::var("PMCP_QUIET").is_err() {
-                        println!();
-                        println!("Enable OAuth with:");
-                        println!("   cargo pmcp deploy oauth enable --server {}", server);
-                    }
-                },
-            }
+    // Resolve final configuration values
+    // Priority: explicit params > copied values > defaults
+    let (final_scopes, final_dcr, final_public_clients, final_shared_pool) = resolve_oauth_config(
+        access_token,
+        copy_from,
+        scopes,
+        dcr,
+        public_clients,
+        shared_pool.clone(),
+    )
+    .await?;
 
-            Ok(())
-        },
+    // Display what configuration will be applied
+    if (copy_from.is_some() || shared_pool.is_some()) && oauth_not_quiet() {
+        print_oauth_config_summary(
+            &final_scopes,
+            final_dcr,
+            final_public_clients.as_ref(),
+            final_shared_pool.as_ref(),
+        );
+    }
+
+    let oauth_config = graphql::configure_server_oauth(
+        access_token,
+        server,
+        true,
+        Some(final_scopes),
+        Some(final_dcr),
+        final_public_clients,
+        final_shared_pool,
+    )
+    .await
+    .context("Failed to configure OAuth")?;
+
+    let not_quiet = oauth_not_quiet();
+    if not_quiet {
+        println!("OAuth enabled successfully!");
+    }
+    println!();
+    print_configure_result_endpoints(&oauth_config);
+
+    // Show helpful next steps for SSO
+    if (copy_from.is_some() || shared_pool.is_some()) && not_quiet {
+        println!();
+        println!("SSO enabled: Users from the shared pool can access this server");
+    }
+
+    Ok(())
+}
+
+/// Implement `OAuthAction::Disable`.
+async fn handle_oauth_disable(access_token: &str, server: &str) -> Result<()> {
+    use crate::deployment::targets::pmcp_run::graphql;
+
+    let not_quiet = oauth_not_quiet();
+    if not_quiet {
+        println!("Disabling OAuth for server: {}", server);
+        println!();
+    }
+
+    graphql::disable_server_oauth(access_token, server)
+        .await
+        .context("Failed to disable OAuth")?;
+
+    if not_quiet {
+        println!("OAuth disabled successfully!");
+        println!();
+        println!("Note: The Cognito User Pool was NOT deleted.");
+        println!("   You can re-enable OAuth at any time with:");
+        println!("   cargo pmcp deploy oauth enable --server {}", server);
+    }
+
+    Ok(())
+}
+
+/// Implement `OAuthAction::Status`.
+async fn handle_oauth_status(access_token: &str, server: &str) -> Result<()> {
+    use crate::deployment::targets::pmcp_run::graphql;
+
+    println!("OAuth Status for server: {}", server);
+    println!();
+
+    match graphql::fetch_server_oauth_endpoints(access_token, server).await {
+        Ok(endpoints) if endpoints.oauth_enabled => print_enabled_status(&endpoints),
+        Ok(_) => print_disabled_status(server),
+        Err(_) => print_not_configured_status(server),
+    }
+
+    Ok(())
+}
+
+/// Print the resolved OAuth configuration summary (pre-apply).
+fn print_oauth_config_summary(
+    scopes: &[String],
+    dcr: bool,
+    public_clients: Option<&Vec<String>>,
+    shared_pool: Option<&String>,
+) {
+    println!("OAuth Configuration:");
+    println!("   Scopes:         {}", scopes.join(", "));
+    println!(
+        "   DCR:            {}",
+        if dcr { "enabled" } else { "disabled" }
+    );
+    println!(
+        "   Public clients: {}",
+        public_clients
+            .map(|p| p.join(", "))
+            .unwrap_or_else(|| "(default)".to_string())
+    );
+    if let Some(pool) = shared_pool {
+        println!("   Shared pool:    {}", pool);
+    }
+    println!();
+}
+
+/// Print endpoint block for an `OAuthConfig` (result of configure_server_oauth).
+fn print_configure_result_endpoints(
+    oauth_config: &crate::deployment::targets::pmcp_run::graphql::OAuthConfig,
+) {
+    println!("OAuth Endpoints:");
+    if let Some(ref discovery) = oauth_config.discovery_url {
+        println!("   Discovery:     {}", discovery);
+    }
+    if let Some(ref register) = oauth_config.registration_endpoint {
+        println!("   Registration:  {}", register);
+    }
+    if let Some(ref authorize) = oauth_config.authorization_endpoint {
+        println!("   Authorization: {}", authorize);
+    }
+    if let Some(ref token) = oauth_config.token_endpoint {
+        println!("   Token:         {}", token);
+    }
+    if let Some(ref pool_id) = oauth_config.user_pool_id {
+        println!();
+        println!("   User Pool ID:  {}", pool_id);
+    }
+    if let Some(ref region) = oauth_config.user_pool_region {
+        println!("   Region:        {}", region);
+    }
+}
+
+/// Print status block when OAuth is currently enabled on the server.
+fn print_enabled_status(
+    endpoints: &crate::deployment::targets::pmcp_run::graphql::OAuthEndpoints,
+) {
+    println!("   Status: Enabled");
+    if let Some(ref provider) = endpoints.provider {
+        println!("   Provider: {}", provider);
+    }
+    if let Some(dcr) = endpoints.dcr_enabled {
+        println!("   DCR: {}", if dcr { "enabled" } else { "disabled" });
+    }
+    if let Some(ref scopes) = endpoints.scopes {
+        println!("   Scopes: {}", scopes.join(", "));
+    }
+    println!();
+    println!("OAuth Endpoints:");
+    if let Some(ref discovery) = endpoints.discovery_url {
+        println!("   Discovery:     {}", discovery);
+    }
+    if let Some(ref register) = endpoints.registration_endpoint {
+        println!("   Registration:  {}", register);
+    }
+    if let Some(ref authorize) = endpoints.authorization_endpoint {
+        println!("   Authorization: {}", authorize);
+    }
+    if let Some(ref token) = endpoints.token_endpoint {
+        println!("   Token:         {}", token);
+    }
+    println!();
+    println!("Cognito Details:");
+    if let Some(ref pool_id) = endpoints.user_pool_id {
+        println!("   User Pool ID:  {}", pool_id);
+    }
+    if let Some(ref region) = endpoints.user_pool_region {
+        println!("   Region:        {}", region);
+    }
+}
+
+/// Print status block when OAuth is disabled (server known, not configured).
+fn print_disabled_status(server: &str) {
+    println!("   Status: Disabled");
+    if oauth_not_quiet() {
+        println!();
+        println!("Enable OAuth with:");
+        println!("   cargo pmcp deploy oauth enable --server {}", server);
+    }
+}
+
+/// Print status block when the server has no OAuth record at all.
+fn print_not_configured_status(server: &str) {
+    println!("   Status: Not configured");
+    if oauth_not_quiet() {
+        println!();
+        println!("Enable OAuth with:");
+        println!("   cargo pmcp deploy oauth enable --server {}", server);
     }
 }
 
