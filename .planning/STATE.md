@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
-status: Milestone complete
-stopped_at: Phase 75 context gathered
-last_updated: "2026-04-23T20:58:22.837Z"
+status: Executing Phase 75
+stopped_at: Phase 75 Wave 0 (75-00-PLAN.md) complete — D-10-B + D-11-B scope-expansion alerts pending operator decision
+last_updated: "2026-04-23T21:30:00.000Z"
 progress:
   total_phases: 40
   completed_phases: 35
-  total_plans: 84
-  completed_plans: 84
-  percent: 100
+  total_plans: 90
+  completed_plans: 85
+  percent: 94
 ---
 
 # Project State
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Close credibility and DX gaps where rmcp outshines PMCP -- documentation accuracy, feature gate presentation, macro documentation, example index, repo hygiene.
-**Current focus:** Phase 76 — cargo-pmcp-iam-declarations-servers-declare-iam-needs-in-dep
+**Current focus:** Phase 75 — fix-pmat-issues
 
 ## Current Position
 
-Phase: 76
-Plan: Not started
-Next: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
-After: Phase 73 (Typed client helpers + list_all pagination, PARITY-CLIENT-01)
+Phase: 75 (fix-pmat-issues) — EXECUTING
+Plan: 2 of 6 (75-00 complete, awaiting operator decision before 75-01)
+Next: 75-01-PLAN.md (Wave 1: src/ + pmcp-macros/) — BLOCKED on D-10-B operator decision (split phase vs accept additional refactor effort vs raise threshold)
+After: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
 
 ## Shipped Milestones
 
@@ -89,17 +89,23 @@ v2.1 decisions:
 - Phase 73 ↔ 74 order swapped (2026-04-21): Phase 74 (cargo pmcp auth) promoted ahead of Phase 73 (typed client helpers) per operator direction. Phase numbers preserved (no directory/reference churn); only ROADMAP.md ordering + "Depends on" chain flipped: Phase 74 now depends on Phase 72.1, Phase 73 now depends on Phase 74. Rationale: developer-facing DX unblocker (OAuth friction while testing OAuth-protected servers) takes priority over additive client ergonomics.
 - Phase 75 added (2026-04-22): Fix PMAT issues — close accumulated quality-gate debt surfaced after the v2.6.0 release when `cargo install pmat-cli` was corrected to `cargo install pmat` (PR #246) and the workflow finally ran real analysis. Current baseline (local `pmat quality-gate`, worktrees excluded): **94 complexity** violations (cognitive complexity > 25), **439 duplicate** code blocks, **33 SATD** TODO/FIXME comments, **4 entropy** violations, **2 README sections** missing (Installation, Usage). Target: restore "Quality Gate: passing" on the auto-generated top-of-README badge. Hotspots in `crates/pmcp-code-mode/`, `cargo-pmcp/src/pentest/`, `cargo-pmcp/src/deployment/`, `src/server/streamable_http_server.rs`, `pmcp-macros/`. Expected as a multi-wave phase.
 - Phase 76 added (2026-04-22): cargo-pmcp IAM declarations — implement pmcp.run platform CR `/Users/guy/Development/mcp/sdk/pmcp-run/docs/CLI_IAM_CHANGE_REQUEST.md` (filed 2026-04 after cost-coach prod incident 2026-04-23). Two parts land together in one phase: **Part 1** adds stable `McpRoleArn` CfnOutput + `pmcp-${ServerName}-McpRoleArn` export to both template branches in `cargo-pmcp/src/commands/deploy/init.rs:485-747` (pmcp-run + aws-lambda), unblocking existing bolt-on stacks via `Fn::ImportValue`. **Part 2** adds a new optional `[iam]` section to `.pmcp/deploy.toml` (`[[iam.tables]]`, `[[iam.buckets]]`, `[[iam.statements]]`) that translates to `addToRolePolicy` calls on `McpRole`; CLI validates footguns (Allow `*:*` on `*` → hard error, unknown service prefix → warn, cross-account ARN → warn, action regex enforced). Mirrors platform's existing `TablePermission` construct one-to-one. Backward compatible (empty default). CR explicitly rejected env-var-name auto-inference and `${serverName}-*` prefix auto-grant — do not re-propose. Full brief at `.planning/phases/76-cargo-pmcp-iam-declarations-servers-declare-iam-needs-in-dep/76-BRIEF.md`.
+- [Phase 75 Wave 0]: D-09 resolved empirically — PMAT 3.15.0 `quality-gate` has NO `--include`/`--exclude` flag; `.pmatignore` (gitignore-style globs) is the only gate-honored path-filter mechanism. Wave 5 must use `.pmatignore` for fuzz/+packages/+examples/ (defensive) plus bare `--checks complexity`.
+- [Phase 75 Wave 0]: **D-10 resolved D-10-B (UNFAVORABLY)** — PMAT 3.15.0 IGNORES `#[allow(clippy::cognitive_complexity)]`. Empirical fixture (cog 41 function with project-template `// Why:` annotation) STILL flagged. P5 (allow-with-Why suppression) is REMOVED from Phase 75 toolkit. Every flagged complexity hotspot must reduce ≤25 by real refactor. **SCOPE EXPANSION ALERT** — Wave 1 is BLOCKED awaiting operator decision (split phase 75/75.5 vs accept additional refactor effort).
+- [Phase 75 Wave 0]: **D-11 resolved D-11-B (UNFAVORABLY)** — bare `pmat quality-gate --fail-on-violation` (the BADGE command) currently fails on 5 dimensions: complexity 94, duplicate 1545, satd 33, entropy 13, sections 2. Even after Waves 1-4 reduce complexity to 0, the bare gate will STILL exit 1 — meaning the README badge will stay RED. Wave 5 MUST patch `quality-badges.yml` line ~72 with `--checks complexity` (alongside the new `ci.yml` gate job).
+- [Phase 75 Wave 0]: Inventory snapshot committed at `.planning/phases/75-fix-pmat-issues/pmat-inventory-2026-04-22.json` (166 violations, 91 cog + 75 cyc). All later wave deltas derive from this file via `jq`; CONTEXT.md prose counts (94/73/21/3) are explicitly superseded.
+- [Phase 75 Wave 0]: Phase 76 dependency inversion — Phase 76 shipped to main BEFORE Phase 75 despite logically depending on it. Material divergences (vs CONTEXT.md baseline): complexity gate count UNCHANGED at 94 (Phase 76 added cargo-pmcp branchy code but gate-relevant count is identical); duplicates tripled (439 → 1545); entropy tripled (4 → 13); in-scope src/ count grew (73 → 86); examples/ count dropped 21 → 0 under the gate. Detailed reconciliation in `pmat-inventory-summary.md`.
 
 ### Pending Todos
 
-None.
+- **OPERATOR DECISION REQUIRED before Wave 1**: D-10-B scope-expansion. Pick one of (1) split Phase 75 into 75 + 75.5 — recommended; (2) accept additional refactor effort in single phase; (3) raise cog threshold (rejected per CONTEXT.md). See `.planning/phases/75-fix-pmat-issues/75-00-SUMMARY.md` "SCOPE EXPANSION DETECTED" section.
 
 ### Blockers/Concerns
 
-None.
+- Wave 1 BLOCKED on D-10-B operator decision (above).
+- Wave 5 must patch `quality-badges.yml` per D-11-B — without that, no amount of complexity reduction flips the badge.
 
 ## Session Continuity
 
-Last session: 2026-04-23T01:19:28.925Z
-Stopped at: Phase 75 context gathered
-Resume: Run /gsd-plan-phase 74 (cargo pmcp auth subcommand with multi-server OAuth token management) — reordered ahead of Phase 73 on 2026-04-21; or ship cargo-pmcp 0.8.1 via `git tag -a v0.8.1 && git push upstream v0.8.1`.
+Last session: 2026-04-23T21:30:00.000Z
+Stopped at: Phase 75 Wave 0 complete; awaiting operator decision on D-10-B scope expansion
+Resume: Operator picks 1/2/3 from "OPERATOR DECISION REQUIRED" above. Then `/gsd-execute-phase 75` continues with whichever Wave-1 plan structure is chosen.

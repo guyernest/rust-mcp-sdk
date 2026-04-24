@@ -1009,7 +1009,7 @@ Plans:
 **Plans:** 6 plans
 
 Plans:
-- [ ] 75-00-PLAN.md — Wave 0: Baseline + spike (PMAT path-filter empirical test, insta snapshot baseline for pmcp-macros, semantic regression baseline for pmcp-code-mode, PMAT version pin in CI)
+- [x] 75-00-PLAN.md — Wave 0: Baseline + spike (PMAT path-filter empirical test, insta snapshot baseline for pmcp-macros, semantic regression baseline for pmcp-code-mode, PMAT version pin in CI) — completed 2026-04-23 — D-09 resolved (include_works=false, .pmatignore is the only honored filter), D-10 resolved D-10-B (PMAT ignores #[allow] — SCOPE EXPANSION DETECTED), D-11 resolved D-11-B (bare gate fails on 5 dimensions — Wave 5 must patch quality-badges.yml)
 - [ ] 75-01-PLAN.md — Wave 1: src/ + pmcp-macros/ refactors (streamable_http_server.rs + sibling src/ + pmcp-macros expand/collect; 13 retro-justifications of pre-existing bare allows)
 - [ ] 75-02-PLAN.md — Wave 2: cargo-pmcp/ refactors (pentest + deployment + commands + main.rs; ~41 violations including 2 monsters at cog 105 and 91)
 - [ ] 75-03-PLAN.md — Wave 3: pmcp-code-mode/ refactors (P6 dispatch decomposition for evaluate_with_scope cog 123 and evaluate_array_method_with_scope cog 117)
