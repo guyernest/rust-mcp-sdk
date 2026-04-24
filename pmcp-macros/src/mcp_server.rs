@@ -104,355 +104,427 @@ struct ResourceMethodInfo {
     param_order: Vec<ParamSlot>,
 }
 
+/// Generic-parameter splits used by handler-struct codegen. Avoids
+/// re-deriving the same lifetime/type parameter triplets in each per-method
+/// helper.
+struct HandlerGenerics<'a> {
+    impl_gen_params: syn::ImplGenerics<'a>,
+    ty_gen_params: syn::TypeGenerics<'a>,
+    where_clause: Option<&'a syn::WhereClause>,
+    handler_impl_params: syn::ImplGenerics<'a>,
+    handler_where: Option<&'a syn::WhereClause>,
+}
+
+/// The `extra` / `_extra` parameter name used in generated `handle()`
+/// signatures, depending on whether the user method takes `RequestHandlerExtra`.
+fn extra_param_ident(has_extra: bool) -> syn::Ident {
+    if has_extra {
+        format_ident!("extra")
+    } else {
+        format_ident!("_extra")
+    }
+}
+
+/// Build call-site argument tokens (`typed_args`, `extra`) in user-declared
+/// parameter order for tool/prompt methods. Panics on State<T> (collected
+/// against #[mcp_server] at parse time).
+fn build_call_args_for_tool_or_prompt(param_order: &[ParamSlot]) -> Vec<TokenStream> {
+    param_order
+        .iter()
+        .map(|slot| match slot {
+            ParamSlot::Args => quote! { typed_args },
+            ParamSlot::Extra => quote! { extra },
+            ParamSlot::State => unreachable!("#[mcp_server] uses &self, not State<T>"),
+        })
+        .collect()
+}
+
+/// Generate the args-deserialization snippet for tool methods (or empty
+/// tokens when the method takes no typed-args parameter).
+fn generate_tool_args_deser(method_info: &ToolMethodInfo) -> TokenStream {
+    let Some(ref at) = method_info.args_type else {
+        return quote! {};
+    };
+    let tool_name_err = &method_info.tool_name;
+    quote! {
+        let typed_args: #at = serde_json::from_value(args)
+            .map_err(|e| pmcp::Error::invalid_params(
+                format!("Invalid arguments for tool '{}': {}", #tool_name_err, e)
+            ))?;
+    }
+}
+
+/// Generate the input-schema construction code for a tool method.
+fn generate_tool_input_schema_code(method_info: &ToolMethodInfo) -> TokenStream {
+    if let Some(ref at) = method_info.args_type {
+        mcp_common::generate_input_schema_code(at)
+    } else {
+        mcp_common::generate_empty_schema_code()
+    }
+}
+
+/// Generate one tool's handler struct + `ToolHandler` impl as a `TokenStream`.
+fn generate_tool_handler_struct(
+    method_info: &ToolMethodInfo,
+    server_type: &syn::Type,
+    generics: &HandlerGenerics<'_>,
+) -> (syn::Ident, TokenStream) {
+    let handler_name = format_ident!(
+        "{}ToolHandler",
+        method_info.method_name.to_string().to_upper_camel_case()
+    );
+    let method_ident = &method_info.method_name;
+    let tool_name = &method_info.tool_name;
+    let description = &method_info.description;
+
+    let args_deser = generate_tool_args_deser(method_info);
+    let call_args = build_call_args_for_tool_or_prompt(&method_info.param_order);
+    let fn_call = if method_info.is_async {
+        quote! { let result = self.server.#method_ident(#(#call_args),*).await?; }
+    } else {
+        quote! { let result = self.server.#method_ident(#(#call_args),*)?; }
+    };
+    let extra_param_name = extra_param_ident(method_info.has_extra);
+    let input_schema_code = generate_tool_input_schema_code(method_info);
+    let output_schema_code = generate_method_output_schema(method_info);
+    let tool_info_code = crate::mcp_tool::generate_tool_info_code(
+        tool_name,
+        description,
+        method_info.annotations.as_ref(),
+        method_info.ui.as_ref(),
+    );
+
+    let handler_impl_params = &generics.handler_impl_params;
+    let ty_gen_params = &generics.ty_gen_params;
+    let handler_where = &generics.handler_where;
+
+    let handler_struct = quote! {
+        struct #handler_name #handler_impl_params #handler_where {
+            server: std::sync::Arc<#server_type>,
+        }
+
+        #[pmcp::async_trait]
+        impl #handler_impl_params pmcp::ToolHandler for #handler_name #ty_gen_params #handler_where {
+            async fn handle(
+                &self,
+                args: serde_json::Value,
+                #extra_param_name: pmcp::RequestHandlerExtra,
+            ) -> pmcp::Result<serde_json::Value> {
+                #args_deser
+                #fn_call
+                serde_json::to_value(result)
+                    .map_err(|e| pmcp::Error::internal(
+                        format!("Failed to serialize result: {}", e)
+                    ))
+            }
+
+            fn metadata(&self) -> Option<pmcp::types::ToolInfo> {
+                let input_schema = #input_schema_code;
+                let output_schema: Option<serde_json::Value> = #output_schema_code;
+                let mut info = #tool_info_code;
+                if let Some(schema) = output_schema {
+                    info = info.with_output_schema(schema);
+                }
+                Some(info)
+            }
+        }
+    };
+    (handler_name, handler_struct)
+}
+
+/// Generate the args-deserialization snippet for prompt methods.
+fn generate_prompt_args_deser(prompt_info: &PromptMethodInfo) -> TokenStream {
+    let Some(ref at) = prompt_info.args_type else {
+        return quote! {};
+    };
+    let prompt_name_err = &prompt_info.prompt_name;
+    quote! {
+        let typed_args: #at = pmcp::server::typed_prompt::deserialize_prompt_args(args, #prompt_name_err)?;
+    }
+}
+
+/// Generate the `metadata()` body for a prompt handler, branching on
+/// whether the prompt has typed args.
+fn generate_prompt_metadata_body(prompt_info: &PromptMethodInfo) -> TokenStream {
+    let prompt_name = &prompt_info.prompt_name;
+    let description = &prompt_info.description;
+    let Some(ref at) = prompt_info.args_type else {
+        return quote! {
+            fn metadata(&self) -> Option<pmcp::types::PromptInfo> {
+                Some(pmcp::types::PromptInfo::new(#prompt_name)
+                    .with_description(#description))
+            }
+        };
+    };
+    quote! {
+        fn metadata(&self) -> Option<pmcp::types::PromptInfo> {
+            let mut info = pmcp::types::PromptInfo::new(#prompt_name)
+                .with_description(#description);
+
+            let schema = schemars::schema_for!(#at);
+            let json_schema = serde_json::to_value(&schema).unwrap_or_default();
+            let arguments = pmcp::server::typed_prompt::extract_prompt_arguments_from_schema(&json_schema);
+            if !arguments.is_empty() {
+                info = info.with_arguments(arguments);
+            }
+            Some(info)
+        }
+    }
+}
+
+/// Generate one prompt's handler struct + `PromptHandler` impl.
+fn generate_prompt_handler_struct(
+    prompt_info: &PromptMethodInfo,
+    server_type: &syn::Type,
+    generics: &HandlerGenerics<'_>,
+) -> (syn::Ident, TokenStream) {
+    let handler_name = format_ident!(
+        "{}PromptHandler",
+        prompt_info.method_name.to_string().to_upper_camel_case()
+    );
+    let method_ident = &prompt_info.method_name;
+
+    let args_deser = generate_prompt_args_deser(prompt_info);
+    let call_args = build_call_args_for_tool_or_prompt(&prompt_info.param_order);
+    let fn_call = if prompt_info.is_async {
+        quote! { self.server.#method_ident(#(#call_args),*).await }
+    } else {
+        quote! { self.server.#method_ident(#(#call_args),*) }
+    };
+    let extra_param_name = extra_param_ident(prompt_info.has_extra);
+    let metadata_body = generate_prompt_metadata_body(prompt_info);
+
+    let handler_impl_params = &generics.handler_impl_params;
+    let ty_gen_params = &generics.ty_gen_params;
+    let handler_where = &generics.handler_where;
+
+    let handler_struct = quote! {
+        struct #handler_name #handler_impl_params #handler_where {
+            server: std::sync::Arc<#server_type>,
+        }
+
+        #[pmcp::async_trait]
+        impl #handler_impl_params pmcp::PromptHandler for #handler_name #ty_gen_params #handler_where {
+            async fn handle(
+                &self,
+                args: std::collections::HashMap<String, String>,
+                #extra_param_name: pmcp::RequestHandlerExtra,
+            ) -> pmcp::Result<pmcp::types::GetPromptResult> {
+                #args_deser
+                #fn_call
+            }
+
+            #metadata_body
+        }
+    };
+    (handler_name, handler_struct)
+}
+
+/// Generate URI-parameter `let` bindings extracted from the URI template.
+fn generate_uri_param_extractions(res_info: &ResourceMethodInfo) -> Vec<TokenStream> {
+    let uri = &res_info.uri;
+    res_info
+        .uri_param_names
+        .iter()
+        .map(|name| {
+            let ident = format_ident!("{}", name);
+            quote! {
+                let #ident = params.get(#name)
+                    .ok_or_else(|| pmcp::Error::validation(format!(
+                        "Missing URI parameter '{}' for resource '{}'", #name, #uri
+                    )))?
+                    .clone();
+            }
+        })
+        .collect()
+}
+
+/// Build call-site argument tokens for resource methods (URI vars + extra).
+fn build_call_args_for_resource(res_info: &ResourceMethodInfo) -> Vec<TokenStream> {
+    let mut uri_var_idx = 0;
+    res_info
+        .param_order
+        .iter()
+        .map(|slot| match slot {
+            ParamSlot::Args => {
+                let ident = format_ident!("{}", res_info.uri_param_names[uri_var_idx]);
+                uri_var_idx += 1;
+                quote! { #ident }
+            },
+            ParamSlot::Extra => quote! { _context.extra.clone() },
+            ParamSlot::State => unreachable!("#[mcp_server] uses &self, not State<T>"),
+        })
+        .collect()
+}
+
+/// Generate one resource's handler struct + `DynamicResourceProvider` impl.
+fn generate_resource_handler_struct(
+    res_info: &ResourceMethodInfo,
+    server_type: &syn::Type,
+    generics: &HandlerGenerics<'_>,
+) -> (syn::Ident, TokenStream) {
+    let handler_name = format_ident!(
+        "{}ResourceHandler",
+        res_info.method_name.to_string().to_upper_camel_case()
+    );
+    let method_ident = &res_info.method_name;
+    let uri = &res_info.uri;
+    let resource_name = &res_info.resource_name;
+    let description = &res_info.description;
+    let mime_type = &res_info.mime_type;
+
+    let uri_param_extraction = generate_uri_param_extractions(res_info);
+    let call_args = build_call_args_for_resource(res_info);
+    let fn_call = if res_info.is_async {
+        quote! { let content_str: String = self.server.#method_ident(#(#call_args),*).await?; }
+    } else {
+        quote! { let content_str: String = self.server.#method_ident(#(#call_args),*)?; }
+    };
+
+    let handler_impl_params = &generics.handler_impl_params;
+    let ty_gen_params = &generics.ty_gen_params;
+    let handler_where = &generics.handler_where;
+
+    let handler_struct = quote! {
+        struct #handler_name #handler_impl_params #handler_where {
+            server: std::sync::Arc<#server_type>,
+        }
+
+        #[pmcp::async_trait]
+        impl #handler_impl_params pmcp::server::dynamic_resources::DynamicResourceProvider
+            for #handler_name #ty_gen_params #handler_where
+        {
+            fn templates(&self) -> Vec<pmcp::types::ResourceTemplate> {
+                let mut tmpl = pmcp::types::ResourceTemplate::new(#uri, #resource_name)
+                    .with_description(#description);
+                tmpl.mime_type = Some(#mime_type.to_string());
+                vec![tmpl]
+            }
+
+            async fn fetch(
+                &self,
+                _uri: &str,
+                params: pmcp::server::dynamic_resources::UriParams,
+                _context: pmcp::server::dynamic_resources::RequestContext,
+            ) -> pmcp::Result<pmcp::types::ReadResourceResult> {
+                #(#uri_param_extraction)*
+                #fn_call
+                Ok(pmcp::types::ReadResourceResult::new(
+                    vec![pmcp::types::Content::text(content_str)]
+                ))
+            }
+        }
+    };
+    (handler_name, handler_struct)
+}
+
+/// Build the `pmcp::ResourceCollection::new()...add_dynamic_provider...`
+/// chain emitted into the `register()` body when resources exist.
+fn build_resource_registration(resource_provider_names: &[syn::Ident]) -> TokenStream {
+    if resource_provider_names.is_empty() {
+        return quote! {};
+    }
+    let provider_adds: Vec<TokenStream> = resource_provider_names
+        .iter()
+        .map(|name| {
+            quote! {
+                .add_dynamic_provider(std::sync::Arc::new(#name { server: shared.clone() }))
+            }
+        })
+        .collect();
+    quote! {
+        let resource_collection = pmcp::ResourceCollection::new()
+            #(#provider_adds)*;
+        builder = builder.resources(resource_collection);
+    }
+}
+
+/// Validate that at least one mcp-annotated method exists.
+fn require_at_least_one_method(
+    input: &ItemImpl,
+    tools: &[ToolMethodInfo],
+    prompts: &[PromptMethodInfo],
+    resources: &[ResourceMethodInfo],
+) -> syn::Result<()> {
+    if !tools.is_empty() || !prompts.is_empty() || !resources.is_empty() {
+        return Ok(());
+    }
+    Err(syn::Error::new_spanned(
+        input,
+        "No methods marked with #[mcp_tool], #[mcp_prompt], or #[mcp_resource] found in impl block",
+    ))
+}
+
 /// Expand `#[mcp_server]` attribute macro on an impl block.
 ///
 /// The `args` token stream is currently unused (reserved for future options).
 /// The `input` is the parsed `ItemImpl` block containing `#[mcp_tool]` methods.
+///
+/// Refactored in 75-01 Task 1b-A (P1): per-section codegen extracted into
+/// [`generate_tool_handler_struct`], [`generate_prompt_handler_struct`],
+/// [`generate_resource_handler_struct`], [`build_resource_registration`],
+/// [`require_at_least_one_method`], and a `HandlerGenerics` carrier. The
+/// orchestrator now reads as a sequential pipeline of named codegen calls.
 pub fn expand_mcp_server(_args: TokenStream, mut input: ItemImpl) -> syn::Result<TokenStream> {
-    // Collect all annotated methods.
     let tool_methods = collect_tool_methods(&input)?;
     let prompt_methods = collect_prompt_methods(&input)?;
     let resource_methods = collect_resource_methods(&input)?;
+    require_at_least_one_method(&input, &tool_methods, &prompt_methods, &resource_methods)?;
 
-    if tool_methods.is_empty() && prompt_methods.is_empty() && resource_methods.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &input,
-            "No methods marked with #[mcp_tool], #[mcp_prompt], or #[mcp_resource] found in impl block",
-        ));
-    }
-
-    // Extract the server type from the impl block (clone to avoid borrow conflict
-    // with later mutable strip operation).
+    // Extract the server type (clone to avoid borrow conflict with later
+    // mutable strip operation).
     let server_type = input.self_ty.clone();
 
-    // Extract generics from the impl block for generic server support (D-25).
+    // Extract generics (D-25 generic-server support).
     let impl_generics = input.generics.clone();
-    // Add Send + Sync + 'static bounds for handler struct generics.
     let handler_generics = mcp_common::add_async_trait_bounds(impl_generics.clone());
     let (impl_gen_params, ty_gen_params, where_clause) = impl_generics.split_for_impl();
     let (handler_impl_params, _handler_ty_params, handler_where) =
         handler_generics.split_for_impl();
+    let generics = HandlerGenerics {
+        impl_gen_params: impl_gen_params.clone(),
+        ty_gen_params,
+        where_clause,
+        handler_impl_params,
+        handler_where,
+    };
 
-    // Generate per-tool handler structs and ToolHandler impls.
-    let mut handler_structs = Vec::new();
-    let mut register_lines = Vec::new();
+    let mut handler_structs: Vec<TokenStream> = Vec::new();
+    let mut register_lines: Vec<TokenStream> = Vec::new();
 
     for method_info in &tool_methods {
-        let handler_name = format_ident!(
-            "{}ToolHandler",
-            method_info.method_name.to_string().to_upper_camel_case()
-        );
-        let method_ident = &method_info.method_name;
+        let (handler_name, handler_struct) =
+            generate_tool_handler_struct(method_info, &server_type, &generics);
+        handler_structs.push(handler_struct);
         let tool_name = &method_info.tool_name;
-        let description = &method_info.description;
-
-        // Generate args deserialization.
-        let args_deser = if let Some(ref at) = method_info.args_type {
-            let tool_name_err = tool_name;
-            quote! {
-                let typed_args: #at = serde_json::from_value(args)
-                    .map_err(|e| pmcp::Error::invalid_params(
-                        format!("Invalid arguments for tool '{}': {}", #tool_name_err, e)
-                    ))?;
-            }
-        } else {
-            quote! {}
-        };
-
-        // Build call arguments in the user's declared parameter order.
-        // State variant is never pushed for #[mcp_server] (rejected at collection time).
-        let call_args: Vec<TokenStream> = method_info
-            .param_order
-            .iter()
-            .map(|slot| match slot {
-                ParamSlot::Args => quote! { typed_args },
-                ParamSlot::Extra => quote! { extra },
-                ParamSlot::State => unreachable!("#[mcp_server] uses &self, not State<T>"),
-            })
-            .collect();
-
-        // Generate function call (async vs sync).
-        let fn_call = if method_info.is_async {
-            quote! { let result = self.server.#method_ident(#(#call_args),*).await?; }
-        } else {
-            quote! { let result = self.server.#method_ident(#(#call_args),*)?; }
-        };
-
-        // Extra parameter name in handle() signature.
-        let extra_param_name = if method_info.has_extra {
-            format_ident!("extra")
-        } else {
-            format_ident!("_extra")
-        };
-
-        // Generate input schema code.
-        let input_schema_code = if let Some(ref at) = method_info.args_type {
-            mcp_common::generate_input_schema_code(at)
-        } else {
-            mcp_common::generate_empty_schema_code()
-        };
-
-        // Generate output schema code.
-        let output_schema_code = generate_method_output_schema(method_info);
-
-        // Generate ToolInfo construction (branching on annotations).
-        let tool_info_code = crate::mcp_tool::generate_tool_info_code(
-            tool_name,
-            description,
-            method_info.annotations.as_ref(),
-            method_info.ui.as_ref(),
-        );
-
-        // Generate the handler struct and ToolHandler impl.
-        let handler_struct = quote! {
-            struct #handler_name #handler_impl_params #handler_where {
-                server: std::sync::Arc<#server_type>,
-            }
-
-            #[pmcp::async_trait]
-            impl #handler_impl_params pmcp::ToolHandler for #handler_name #ty_gen_params #handler_where {
-                async fn handle(
-                    &self,
-                    args: serde_json::Value,
-                    #extra_param_name: pmcp::RequestHandlerExtra,
-                ) -> pmcp::Result<serde_json::Value> {
-                    #args_deser
-                    #fn_call
-                    serde_json::to_value(result)
-                        .map_err(|e| pmcp::Error::internal(
-                            format!("Failed to serialize result: {}", e)
-                        ))
-                }
-
-                fn metadata(&self) -> Option<pmcp::types::ToolInfo> {
-                    let input_schema = #input_schema_code;
-                    let output_schema: Option<serde_json::Value> = #output_schema_code;
-                    let mut info = #tool_info_code;
-                    if let Some(schema) = output_schema {
-                        info = info.with_output_schema(schema);
-                    }
-                    Some(info)
-                }
-            }
-        };
-        handler_structs.push(handler_struct);
-
-        // Generate registration line for register().
-        let register_line = quote! {
+        register_lines.push(quote! {
             builder = builder.tool(#tool_name, #handler_name { server: shared.clone() });
-        };
-        register_lines.push(register_line);
+        });
     }
 
-    // Generate per-prompt handler structs and PromptHandler impls.
     for prompt_info in &prompt_methods {
-        let handler_name = format_ident!(
-            "{}PromptHandler",
-            prompt_info.method_name.to_string().to_upper_camel_case()
-        );
-        let method_ident = &prompt_info.method_name;
-        let prompt_name = &prompt_info.prompt_name;
-        let description = &prompt_info.description;
-
-        // Generate args deserialization using shared runtime helper.
-        let args_deser = if let Some(ref at) = prompt_info.args_type {
-            let prompt_name_err = prompt_name;
-            quote! {
-                let typed_args: #at = pmcp::server::typed_prompt::deserialize_prompt_args(args, #prompt_name_err)?;
-            }
-        } else {
-            quote! {}
-        };
-
-        // Build call arguments in the user's declared parameter order.
-        let call_args: Vec<TokenStream> = prompt_info
-            .param_order
-            .iter()
-            .map(|slot| match slot {
-                ParamSlot::Args => quote! { typed_args },
-                ParamSlot::Extra => quote! { extra },
-                ParamSlot::State => unreachable!("#[mcp_server] uses &self, not State<T>"),
-            })
-            .collect();
-
-        // Generate function call (async vs sync).
-        // Prompts return GetPromptResult directly -- no serialization wrapper.
-        let fn_call = if prompt_info.is_async {
-            quote! { self.server.#method_ident(#(#call_args),*).await }
-        } else {
-            quote! { self.server.#method_ident(#(#call_args),*) }
-        };
-
-        // Extra parameter name in handle() signature.
-        let extra_param_name = if prompt_info.has_extra {
-            format_ident!("extra")
-        } else {
-            format_ident!("_extra")
-        };
-
-        // Generate metadata body based on whether prompt has args.
-        let metadata_body = if let Some(ref at) = prompt_info.args_type {
-            quote! {
-                fn metadata(&self) -> Option<pmcp::types::PromptInfo> {
-                    let mut info = pmcp::types::PromptInfo::new(#prompt_name)
-                        .with_description(#description);
-
-                    let schema = schemars::schema_for!(#at);
-                    let json_schema = serde_json::to_value(&schema).unwrap_or_default();
-                    let arguments = pmcp::server::typed_prompt::extract_prompt_arguments_from_schema(&json_schema);
-                    if !arguments.is_empty() {
-                        info = info.with_arguments(arguments);
-                    }
-                    Some(info)
-                }
-            }
-        } else {
-            quote! {
-                fn metadata(&self) -> Option<pmcp::types::PromptInfo> {
-                    Some(pmcp::types::PromptInfo::new(#prompt_name)
-                        .with_description(#description))
-                }
-            }
-        };
-
-        // Generate the handler struct and PromptHandler impl.
-        let handler_struct = quote! {
-            struct #handler_name #handler_impl_params #handler_where {
-                server: std::sync::Arc<#server_type>,
-            }
-
-            #[pmcp::async_trait]
-            impl #handler_impl_params pmcp::PromptHandler for #handler_name #ty_gen_params #handler_where {
-                async fn handle(
-                    &self,
-                    args: std::collections::HashMap<String, String>,
-                    #extra_param_name: pmcp::RequestHandlerExtra,
-                ) -> pmcp::Result<pmcp::types::GetPromptResult> {
-                    #args_deser
-                    #fn_call
-                }
-
-                #metadata_body
-            }
-        };
+        let (handler_name, handler_struct) =
+            generate_prompt_handler_struct(prompt_info, &server_type, &generics);
         handler_structs.push(handler_struct);
-
-        // Generate prompt registration line.
-        let register_line = quote! {
+        let prompt_name = &prompt_info.prompt_name;
+        register_lines.push(quote! {
             builder = builder.prompt(#prompt_name, #handler_name { server: shared.clone() });
-        };
-        register_lines.push(register_line);
+        });
     }
 
-    // Generate per-resource handler structs and DynamicResourceProvider impls.
     let mut resource_provider_names = Vec::new();
     for res_info in &resource_methods {
-        let handler_name = format_ident!(
-            "{}ResourceHandler",
-            res_info.method_name.to_string().to_upper_camel_case()
-        );
-        let method_ident = &res_info.method_name;
-        let uri = &res_info.uri;
-        let resource_name = &res_info.resource_name;
-        let description = &res_info.description;
-        let mime_type = &res_info.mime_type;
-
-        // Generate URI parameter extraction.
-        let uri_param_extraction: Vec<TokenStream> = res_info
-            .uri_param_names
-            .iter()
-            .map(|name| {
-                let ident = format_ident!("{}", name);
-                quote! {
-                    let #ident = params.get(#name)
-                        .ok_or_else(|| pmcp::Error::validation(format!(
-                            "Missing URI parameter '{}' for resource '{}'", #name, #uri
-                        )))?
-                        .clone();
-                }
-            })
-            .collect();
-
-        // Build call arguments in the user's declared parameter order.
-        let mut uri_var_idx = 0;
-        let call_args: Vec<TokenStream> = res_info
-            .param_order
-            .iter()
-            .map(|slot| match slot {
-                ParamSlot::Args => {
-                    let ident = format_ident!("{}", res_info.uri_param_names[uri_var_idx]);
-                    uri_var_idx += 1;
-                    quote! { #ident }
-                },
-                ParamSlot::Extra => quote! { _context.extra.clone() },
-                ParamSlot::State => unreachable!("#[mcp_server] uses &self, not State<T>"),
-            })
-            .collect();
-
-        // Generate function call (async vs sync).
-        let fn_call = if res_info.is_async {
-            quote! { let content_str: String = self.server.#method_ident(#(#call_args),*).await?; }
-        } else {
-            quote! { let content_str: String = self.server.#method_ident(#(#call_args),*)?; }
-        };
-
-        let handler_struct = quote! {
-            struct #handler_name #handler_impl_params #handler_where {
-                server: std::sync::Arc<#server_type>,
-            }
-
-            #[pmcp::async_trait]
-            impl #handler_impl_params pmcp::server::dynamic_resources::DynamicResourceProvider
-                for #handler_name #ty_gen_params #handler_where
-            {
-                fn templates(&self) -> Vec<pmcp::types::ResourceTemplate> {
-                    let mut tmpl = pmcp::types::ResourceTemplate::new(#uri, #resource_name)
-                        .with_description(#description);
-                    tmpl.mime_type = Some(#mime_type.to_string());
-                    vec![tmpl]
-                }
-
-                async fn fetch(
-                    &self,
-                    _uri: &str,
-                    params: pmcp::server::dynamic_resources::UriParams,
-                    _context: pmcp::server::dynamic_resources::RequestContext,
-                ) -> pmcp::Result<pmcp::types::ReadResourceResult> {
-                    #(#uri_param_extraction)*
-                    #fn_call
-                    Ok(pmcp::types::ReadResourceResult::new(
-                        vec![pmcp::types::Content::text(content_str)]
-                    ))
-                }
-            }
-        };
+        let (handler_name, handler_struct) =
+            generate_resource_handler_struct(res_info, &server_type, &generics);
         handler_structs.push(handler_struct);
         resource_provider_names.push(handler_name);
     }
 
-    // Strip macro attributes from methods in the original impl block.
     strip_mcp_attrs(&mut input);
 
-    // Generate the McpServer trait implementation.
-    // If resources are present, build a ResourceCollection with all providers.
-    let resource_registration = if !resource_provider_names.is_empty() {
-        let provider_adds: Vec<TokenStream> = resource_provider_names
-            .iter()
-            .map(|name| {
-                quote! {
-                    .add_dynamic_provider(std::sync::Arc::new(#name { server: shared.clone() }))
-                }
-            })
-            .collect();
-        quote! {
-            let resource_collection = pmcp::ResourceCollection::new()
-                #(#provider_adds)*;
-            builder = builder.resources(resource_collection);
-        }
-    } else {
-        quote! {}
-    };
-
+    let resource_registration = build_resource_registration(&resource_provider_names);
+    let impl_gen_params = &generics.impl_gen_params;
+    let where_clause = &generics.where_clause;
     let mcp_server_impl = quote! {
         impl #impl_gen_params pmcp::McpServer for #server_type #where_clause {
             fn register(self, mut builder: pmcp::ServerBuilder) -> pmcp::ServerBuilder {
@@ -464,7 +536,6 @@ pub fn expand_mcp_server(_args: TokenStream, mut input: ItemImpl) -> syn::Result
         }
     };
 
-    // Assemble output: original impl block + handler structs + McpServer impl.
     let expanded = quote! {
         #input
 
