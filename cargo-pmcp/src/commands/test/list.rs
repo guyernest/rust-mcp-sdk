@@ -5,6 +5,7 @@ use colored::Colorize;
 
 use crate::commands::GlobalFlags;
 use crate::deployment::targets::pmcp_run::{auth, graphql};
+use crate::pentest::schema_utils::truncate_for_evidence;
 
 /// List test scenarios for an MCP server on pmcp.run
 pub async fn execute(server_id: String, show_all: bool, global_flags: &GlobalFlags) -> Result<()> {
@@ -101,7 +102,7 @@ fn print_scenario_row(scenario: &crate::deployment::targets::pmcp_run::graphql::
 
     println!(
         "  {:<40} {:<12} {:<10} v{:<7} {}",
-        truncate_string(&scenario.name, 38),
+        truncate_for_evidence(&scenario.name, 38),
         source_display,
         status,
         scenario.version,
@@ -177,11 +178,3 @@ fn print_list_footer(
     }
 }
 
-/// Truncate string to max length, adding ellipsis if needed
-fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len - 3])
-    }
-}

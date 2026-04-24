@@ -284,11 +284,13 @@ fn read_bootstrap_upload(artifact: BuildArtifact) -> Result<BootstrapUpload> {
         }
     }
 
-    if !bootstrap_path.exists() {
-        bail!("Bootstrap binary not found: {}", bootstrap_path.display());
-    }
     println!("   Bootstrap: {}", bootstrap_path.display());
-    let data = std::fs::read(&bootstrap_path).context("Failed to read bootstrap binary")?;
+    let data = std::fs::read(&bootstrap_path).with_context(|| {
+        format!(
+            "Bootstrap binary not found or unreadable: {}",
+            bootstrap_path.display()
+        )
+    })?;
     Ok(BootstrapUpload {
         data,
         content_type: "application/octet-stream",
@@ -697,12 +699,12 @@ async fn poll_deployment_status(
 
 /// Find the CloudFormation template file in cdk.out directory
 fn find_template_file(cdk_out: &PathBuf) -> Result<PathBuf> {
-    if !cdk_out.exists() {
-        bail!("CDK output directory not found: {}", cdk_out.display());
-    }
-
-    // Look for *.template.json files
-    let entries = std::fs::read_dir(cdk_out).context("Failed to read cdk.out directory")?;
+    let entries = std::fs::read_dir(cdk_out).with_context(|| {
+        format!(
+            "CDK output directory not found or unreadable: {}",
+            cdk_out.display()
+        )
+    })?;
 
     for entry in entries {
         let entry = entry?;

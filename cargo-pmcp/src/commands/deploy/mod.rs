@@ -958,8 +958,8 @@ async fn handle_oauth_status(access_token: &str, server: &str) -> Result<()> {
 
     match graphql::fetch_server_oauth_endpoints(access_token, server).await {
         Ok(endpoints) if endpoints.oauth_enabled => print_enabled_status(&endpoints),
-        Ok(_) => print_disabled_status(server),
-        Err(_) => print_not_configured_status(server),
+        Ok(_) => print_inactive_status(server, "Disabled"),
+        Err(_) => print_inactive_status(server, "Not configured"),
     }
 
     Ok(())
@@ -1052,19 +1052,9 @@ fn print_enabled_status(endpoints: &crate::deployment::targets::pmcp_run::graphq
     }
 }
 
-/// Print status block when OAuth is disabled (server known, not configured).
-fn print_disabled_status(server: &str) {
-    println!("   Status: Disabled");
-    if oauth_not_quiet() {
-        println!();
-        println!("Enable OAuth with:");
-        println!("   cargo pmcp deploy oauth enable --server {}", server);
-    }
-}
-
-/// Print status block when the server has no OAuth record at all.
-fn print_not_configured_status(server: &str) {
-    println!("   Status: Not configured");
+/// Print status block when OAuth is inactive (disabled or not configured).
+fn print_inactive_status(server: &str, status_label: &str) {
+    println!("   Status: {}", status_label);
     if oauth_not_quiet() {
         println!();
         println!("Enable OAuth with:");
@@ -1098,7 +1088,7 @@ async fn resolve_oauth_config(
     // If copy_from is specified, fetch config from source server
     let (copied_scopes, copied_dcr, copied_public_clients, copied_pool) =
         if let Some(source_server) = copy_from {
-            if std::env::var("PMCP_QUIET").is_err() {
+            if oauth_not_quiet() {
                 println!("Copying OAuth configuration from: {}", source_server);
             }
 
@@ -1120,7 +1110,7 @@ async fn resolve_oauth_config(
                         )
                     })?;
 
-                    if std::env::var("PMCP_QUIET").is_err() {
+                    if oauth_not_quiet() {
                         println!("   Found User Pool: {}", pool_id);
                         if let Some(ref scopes) = endpoints.scopes {
                             println!("   Found scopes: {}", scopes.join(", "));
