@@ -719,7 +719,7 @@ impl<T: TokenGenerator, E: ExplanationGenerator> ValidationPipeline<T, E> {
             });
         }
 
-        Ok(self.javascript_validator.validate(code)?)
+        self.javascript_validator.validate(code)
     }
 
     /// Config-level authorization checks for JavaScript code.

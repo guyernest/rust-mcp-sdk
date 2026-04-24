@@ -665,7 +665,7 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
             let sep = separator.as_deref().unwrap_or(",");
             let joined: String = arr
                 .iter()
-                .map(|v| json_to_string(v))
+                .map(json_to_string)
                 .collect::<Vec<_>>()
                 .join(sep);
             Ok(JsonValue::String(joined))
@@ -682,7 +682,7 @@ pub fn evaluate_array_method_with_scope<V: VariableProvider>(
             match comparator {
                 None => {
                     // Default string sort (JavaScript behavior)
-                    sorted.sort_by(|a, b| json_to_string(a).cmp(&json_to_string(b)));
+                    sorted.sort_by_key(json_to_string);
                 },
                 Some((a_var, b_var, body)) => {
                     // Sort with comparator: .sort((a, b) => expr)
@@ -1427,7 +1427,11 @@ mod tests {
             args: vec![ValueExpr::Literal(JsonValue::String("3.14".into()))],
         };
         let result = evaluate(&expr, &vars).unwrap();
-        assert_eq!(result, serde_json::json!(3.14));
+        // Why: test fixture uses 3.14 as a representative non-integer parse target,
+        // not the mathematical PI constant — clippy::approx_constant is a false positive here.
+        #[allow(clippy::approx_constant)]
+        let expected = serde_json::json!(3.14);
+        assert_eq!(result, expected);
     }
 
     #[test]

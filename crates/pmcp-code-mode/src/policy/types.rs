@@ -1088,7 +1088,7 @@ mod tests {
         let entity = ScriptEntity::from_javascript_info(&info, &[], Some(&registry));
 
         assert_eq!(entity.delete_calls, 1);
-        assert_eq!(entity.has_deletes, true);
+        assert!(entity.has_deletes);
         assert_eq!(entity.action(), "Delete");
     }
 

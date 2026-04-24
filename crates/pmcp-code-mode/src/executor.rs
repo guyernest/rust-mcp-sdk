@@ -680,6 +680,8 @@ enum ExtractedCall {
 
 /// Compiler that converts SWC AST to ExecutionPlan.
 pub struct PlanCompiler {
+    /// Configured maximum API calls per plan (retained for future enforcement diagnostics)
+    #[allow(dead_code)]
     max_api_calls: usize,
     api_call_count: usize,
     endpoints: Vec<String>,
@@ -1220,13 +1222,11 @@ impl PlanCompiler {
             // Array literal: [1, 2, 3]
             Expr::Array(arr) => {
                 let mut items = Vec::new();
-                for elem in &arr.elems {
-                    if let Some(elem) = elem {
-                        if elem.spread.is_some() {
-                            return Err(CompileError::UnsupportedExpression("spread".into()));
-                        }
-                        items.push(self.compile_expr(&elem.expr)?);
+                for elem in arr.elems.iter().flatten() {
+                    if elem.spread.is_some() {
+                        return Err(CompileError::UnsupportedExpression("spread".into()));
                     }
+                    items.push(self.compile_expr(&elem.expr)?);
                 }
                 Ok(ValueExpr::ArrayLiteral { items })
             }
@@ -1439,10 +1439,8 @@ impl PlanCompiler {
                                 if let Some(arg) = call.args.first() {
                                     if let Expr::Array(arr) = arg.expr.as_ref() {
                                         let mut items = Vec::new();
-                                        for elem in &arr.elems {
-                                            if let Some(elem) = elem {
-                                                items.push(self.compile_expr(&elem.expr)?);
-                                            }
+                                        for elem in arr.elems.iter().flatten() {
+                                            items.push(self.compile_expr(&elem.expr)?);
                                         }
                                         return Ok(ValueExpr::PromiseAll { items });
                                     }
@@ -1621,22 +1619,20 @@ impl PlanCompiler {
                                 }
                             }
                         },
-                        "reduce" => {
-                            // reduce((acc, item) => expr, initialValue)
-                            if call.args.len() >= 2 {
-                                let (acc_var, item_var, body) =
-                                    self.extract_reduce_callback(call)?;
-                                let initial = Box::new(self.compile_expr(&call.args[1].expr)?);
-                                return Ok(ValueExpr::ArrayMethod {
-                                    array,
-                                    method: ArrayMethodCall::Reduce {
-                                        acc_var,
-                                        item_var,
-                                        body: Box::new(body),
-                                        initial,
-                                    },
-                                });
-                            }
+                        // reduce((acc, item) => expr, initialValue)
+                        "reduce" if call.args.len() >= 2 => {
+                            let (acc_var, item_var, body) =
+                                self.extract_reduce_callback(call)?;
+                            let initial = Box::new(self.compile_expr(&call.args[1].expr)?);
+                            return Ok(ValueExpr::ArrayMethod {
+                                array,
+                                method: ArrayMethodCall::Reduce {
+                                    acc_var,
+                                    item_var,
+                                    body: Box::new(body),
+                                    initial,
+                                },
+                            });
                         },
                         "toFixed" => {
                             // Number.toFixed(digits) - treat as a number method
@@ -2130,10 +2126,12 @@ impl PlanCompiler {
     }
 
     fn extract_bound(&self, expr: &ValueExpr) -> Option<usize> {
-        if let ValueExpr::ArrayMethod { method, .. } = expr {
-            if let ArrayMethodCall::Slice { end, .. } = method {
-                return *end;
-            }
+        if let ValueExpr::ArrayMethod {
+            method: ArrayMethodCall::Slice { end, .. },
+            ..
+        } = expr
+        {
+            return *end;
         }
         None
     }
@@ -2501,7 +2499,8 @@ pub enum MockExecutionMode {
 /// }
 /// ```
 pub struct MockHttpExecutor {
-    /// Execution mode
+    /// Execution mode (retained for future per-mode dispatch; currently informational only)
+    #[allow(dead_code)]
     mode: MockExecutionMode,
     /// Mock responses by path pattern (exact match or glob pattern with *)
     responses: std::sync::RwLock<HashMap<String, JsonValue>>,
@@ -2901,7 +2900,7 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                     };
 
                     let limit = (*max_iterations).min(self.config.max_loop_iterations);
-                    'outer: for (_i, item) in items.into_iter().take(limit).enumerate() {
+                    'outer: for item in items.into_iter().take(limit) {
                         self.variables.insert(item_var.clone(), item);
 
                         for step in body {
@@ -3172,6 +3171,7 @@ impl<H: HttpExecutor> PlanExecutor<H> {
 
     /// Evaluate an expression with a temporary variable binding.
     /// Used for array method callbacks like .map(), .filter(), etc.
+    #[allow(dead_code)]
     fn evaluate_with_binding(
         &self,
         expr: &ValueExpr,
@@ -3182,6 +3182,7 @@ impl<H: HttpExecutor> PlanExecutor<H> {
     }
 
     /// Evaluate with two bindings (for reduce).
+    #[allow(dead_code)]
     fn evaluate_with_two_bindings(
         &self,
         expr: &ValueExpr,
@@ -4611,7 +4612,11 @@ return { discriminant: discriminant.result, root_type: root_type, roots: [x1.res
         let mock_http = MockHttpExecutor::new();
         let mut executor = PlanExecutor::new(mock_http, ExecutionConfig::default());
         let result = executor.execute(&plan).await.unwrap();
-        assert_eq!(result.value, serde_json::json!(3.14));
+        // Why: test fixture uses 3.14 as a representative non-integer parse target,
+        // not the mathematical PI constant — clippy::approx_constant is a false positive here.
+        #[allow(clippy::approx_constant)]
+        let expected = serde_json::json!(3.14);
+        assert_eq!(result.value, expected);
     }
 
     #[tokio::test]

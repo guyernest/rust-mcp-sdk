@@ -557,15 +557,11 @@ forbid(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graphql::field_name_to_type;
-    use crate::policy::types::{get_baseline_policies, get_code_mode_schema_json};
+    use crate::policy::types::get_code_mode_schema_json;
     #[cfg(feature = "openapi-code-mode")]
-    use crate::policy::types::{get_openapi_baseline_policies, get_openapi_code_mode_schema_json};
+    use crate::policy::types::get_openapi_code_mode_schema_json;
     #[cfg(feature = "sql-code-mode")]
-    use crate::policy::types::{get_sql_baseline_policies, get_sql_code_mode_schema_json};
-    use crate::policy_annotations::{parse_policy_annotations, PolicyCategory, PolicyRiskLevel};
-    use crate::schema_exposure::pattern_matches;
-    use crate::templates::conditional;
+    use crate::policy::types::get_sql_code_mode_schema_json;
     use cedar_policy::{PolicySet, Schema};
 
     /// Parse a Cedar schema from JSON.
