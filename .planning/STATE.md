@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: Executing Phase 75
-stopped_at: Phase 75 Wave 0 (75-00-PLAN.md) complete — D-10-B + D-11-B scope-expansion alerts pending operator decision
-last_updated: "2026-04-23T21:30:00.000Z"
+stopped_at: Phase 75 Wave 1 (75-01-PLAN.md) complete — 20 hotspots refactored to cog ≤25 (−19 PMAT violations); ready for Wave 2 (75-02-PLAN.md)
+last_updated: "2026-04-24T06:30:00.000Z"
 progress:
   total_phases: 40
   completed_phases: 35
   total_plans: 90
-  completed_plans: 85
-  percent: 94
+  completed_plans: 86
+  percent: 95
 ---
 
 # Project State
@@ -25,8 +25,8 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 75 (fix-pmat-issues) — EXECUTING
-Plan: 2 of 6 (75-00 complete, awaiting operator decision before 75-01)
-Next: 75-01-PLAN.md (Wave 1: src/ + pmcp-macros/) — BLOCKED on D-10-B operator decision (split phase vs accept additional refactor effort vs raise threshold)
+Plan: 3 of 6 (75-00 complete, 75-01 complete 2026-04-24)
+Next: 75-02-PLAN.md (Wave 2: cargo-pmcp/ refactors — pentest + deployment + commands + main.rs; ~41 violations including cog 105 and 91 monsters). Phase 75.5 Category A (13 retro-justify sites migrated from 75-01 Task 1a-C) can land in parallel or after Phase 75 Wave 5.
 After: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
 
 ## Shipped Milestones

@@ -1010,7 +1010,7 @@ Plans:
 
 Plans:
 - [x] 75-00-PLAN.md — Wave 0: Baseline + spike (PMAT path-filter empirical test, insta snapshot baseline for pmcp-macros, semantic regression baseline for pmcp-code-mode, PMAT version pin in CI) — completed 2026-04-23 — D-09 resolved (include_works=false, .pmatignore is the only honored filter), D-10 resolved D-10-B (PMAT ignores #[allow] — SCOPE EXPANSION DETECTED), D-11 resolved D-11-B (bare gate fails on 5 dimensions — Wave 5 must patch quality-badges.yml)
-- [ ] 75-01-PLAN.md — Wave 1: src/ + pmcp-macros/ refactors (streamable_http_server.rs + sibling src/ + pmcp-macros expand/collect). NOTE (D-10-B): Task 1a-C "13 retro-justifications" deferred to Phase 75.5; P5 fallbacks replaced by escapee deferral per 75-ADDENDUM-D10B.md.
+- [x] 75-01-PLAN.md — Wave 1: src/ + pmcp-macros/ refactors — completed 2026-04-24. 20 hotspots cleared to ≤25 via P1-P3 (zero P5 usage, zero escapees). Delta: PMAT complexity 94→75 (−19). Task 1a-C explicitly skipped per addendum Rule 1 (migrated to Phase 75.5 Category A); pre-existing bare #[allow] at streamable_http_server.rs:1004 removed. Macro expansion snapshots byte-identical (Wave 0 contract preserved).
 - [ ] 75-02-PLAN.md — Wave 2: cargo-pmcp/ refactors (pentest + deployment + commands + main.rs; ~41 violations including 2 monsters at cog 105 and 91)
 - [ ] 75-03-PLAN.md — Wave 3: pmcp-code-mode/ refactors (P6 dispatch decomposition for evaluate_with_scope cog 123 and evaluate_array_method_with_scope cog 117)
 - [ ] 75-04-PLAN.md — Wave 4: scattered crate hotspots + examples/fuzz handling per Wave 0 spike + SATD triage per D-04 + final pre-Wave-5 gate verification

@@ -40,3 +40,51 @@ dead-code warnings:
   methods never called
 
 **Disposition:** Wave 3 — same justification as the clippy items above.
+
+## 2026-04-23 — Pre-existing clippy errors in `crates/pmcp-widget-utils/`
+
+`make quality-gate` (equivalent to `cargo clippy --features full --lib --tests
+-- -D warnings -W clippy::pedantic -W clippy::nursery ...`) fails with 2
+errors in `crates/pmcp-widget-utils/src/lib.rs`:
+
+- `lib.rs:27` — `clippy::option_if_let_else` on the `html.find("</head>")` branch
+- `lib.rs:37` — `clippy::option_if_let_else` on the nested `html[pos..].find('>')` branch
+
+Verified pre-existing (last commit to this file is `eb7e4bf1 style: apply
+cargo fmt --all across workspace` from before Phase 75). These lints are
+triggered only by the `-W clippy::nursery` flag that `make lint` applies.
+
+**Disposition:** Out of scope for Plan 75-01 (scope is complexity refactors
+in `src/` and `pmcp-macros/src/` only — widget-utils is a separate
+workspace crate outside this plan's `files_modified` list). Per the
+post-review revision of the plan (Codex Concern #8), per-task verification
+is now narrowed to the affected package. 75-01 will run `cargo build
+--workspace`, `cargo test -p pmcp --lib`, package-scoped `cargo clippy -p
+pmcp`, and `pmat analyze complexity` instead of full `make quality-gate`,
+isolating the verification from the unrelated pmcp-widget-utils nursery
+warnings. Wave-merge verification will need to address this widget-utils
+issue separately (likely a 2-line `#[allow(clippy::option_if_let_else)]` on
+the single function in wave 5 housekeeping).
+
+## 2026-04-23 — Pre-existing clippy errors in `crates/pmcp-widget-utils/`
+
+`make quality-gate` (equivalent to `cargo clippy --features full --lib --tests
+-- -D warnings -W clippy::pedantic -W clippy::nursery ...`) fails with 2
+errors in `crates/pmcp-widget-utils/src/lib.rs`:
+
+- `lib.rs:27` — `clippy::option_if_let_else` on the `html.find("</head>")` branch
+- `lib.rs:37` — `clippy::option_if_let_else` on the nested `html[pos..].find('>')` branch
+
+Verified pre-existing (last commit to this file is `eb7e4bf1 style: apply
+cargo fmt --all across workspace` from before Phase 75). These lints are
+triggered only by the `-W clippy::nursery` flag that `make lint` applies.
+
+**Disposition:** Out of scope for Plan 75-01 (scope is complexity refactors
+in `src/` and `pmcp-macros/src/` only — widget-utils is a separate
+workspace crate outside this plan's `files_modified` list). Since `make
+quality-gate` is blocked on this unrelated crate, per-task verification in
+75-01 is narrowed to `cargo build`, `cargo test` on the affected crate, and
+`pmat analyze complexity` for the refactored function. The plan-level
+wave-merge verification will need to address this widget-utils issue
+separately (either a trivial fix inside 75-01 scope if trivially adjacent,
+or log it for 75-05/75.5 follow-up).
