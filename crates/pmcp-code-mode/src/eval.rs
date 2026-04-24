@@ -62,196 +62,272 @@ pub fn evaluate_with_scope<V: VariableProvider>(
     local_vars: &HashMap<String, JsonValue>,
 ) -> Result<JsonValue, ExecutionError> {
     match expr {
-        // Variable lookup: check local scope first, then global, then built-in globals
-        ValueExpr::Variable(name) => {
-            if let Some(value) = local_vars.get(name) {
-                Ok(value.clone())
-            } else if let Some(value) = global_vars.get_variable(name) {
-                Ok(value.clone())
-            } else {
-                // Handle JavaScript built-in globals
-                match name.as_str() {
-                    // undefined maps to JSON null (no distinction in JSON)
-                    "undefined" => Ok(JsonValue::Null),
-                    _ => Err(ExecutionError::RuntimeError {
-                        message: format!("Undefined variable: {}", name),
-                    }),
-                }
-            }
-        },
-
-        // Literals evaluate to themselves
+        ValueExpr::Variable(name) => evaluate_variable_lookup(name, global_vars, local_vars),
         ValueExpr::Literal(value) => Ok(value.clone()),
-
-        // Property access: obj.property
         ValueExpr::PropertyAccess { object, property } => {
-            let obj = evaluate_with_scope(object, global_vars, local_vars)?;
-            match obj {
-                JsonValue::Object(map) => Ok(map.get(property).cloned().unwrap_or(JsonValue::Null)),
-                _ => Ok(JsonValue::Null),
-            }
+            evaluate_property_access(object, property, global_vars, local_vars)
         },
-
-        // Array index: arr[index]
         ValueExpr::ArrayIndex { array, index } => {
-            let arr = evaluate_with_scope(array, global_vars, local_vars)?;
-            let idx = evaluate_with_scope(index, global_vars, local_vars)?;
-            match (arr, idx) {
-                (JsonValue::Array(arr), JsonValue::Number(n)) => {
-                    let i = n.as_i64().unwrap_or(0) as usize;
-                    Ok(arr.get(i).cloned().unwrap_or(JsonValue::Null))
-                },
-                _ => Ok(JsonValue::Null),
-            }
+            evaluate_array_index(array, index, global_vars, local_vars)
         },
-
-        // Object literal: { key: value, ...spread }
         ValueExpr::ObjectLiteral { fields } => {
-            let mut map = serde_json::Map::new();
-            for field in fields {
-                match field {
-                    ObjectField::KeyValue {
-                        key,
-                        value: value_expr,
-                    } => {
-                        let value = evaluate_with_scope(value_expr, global_vars, local_vars)?;
-                        map.insert(key.clone(), value);
-                    },
-                    ObjectField::Spread { expr } => {
-                        let spread_val = evaluate_with_scope(expr, global_vars, local_vars)?;
-                        if let JsonValue::Object(spread_map) = spread_val {
-                            for (k, v) in spread_map {
-                                map.insert(k, v);
-                            }
-                        }
-                        // Non-objects spread as no-op (matches JS behavior)
-                    },
-                }
-            }
-            Ok(JsonValue::Object(map))
+            evaluate_object_literal(fields, global_vars, local_vars)
         },
-
-        // Array literal: [item1, item2, ...]
-        ValueExpr::ArrayLiteral { items } => {
-            let mut arr = Vec::with_capacity(items.len());
-            for item in items {
-                arr.push(evaluate_with_scope(item, global_vars, local_vars)?);
-            }
-            Ok(JsonValue::Array(arr))
-        },
-
-        // Binary operations: left op right
+        ValueExpr::ArrayLiteral { items } => evaluate_array_literal(items, global_vars, local_vars),
         ValueExpr::BinaryOp { left, op, right } => {
             let l = evaluate_with_scope(left, global_vars, local_vars)?;
             let r = evaluate_with_scope(right, global_vars, local_vars)?;
             evaluate_binary_op(&l, *op, &r)
         },
-
-        // Unary operations: !value, -value, typeof value
         ValueExpr::UnaryOp { op, operand } => {
             let v = evaluate_with_scope(operand, global_vars, local_vars)?;
             evaluate_unary_op(*op, &v)
         },
-
-        // Ternary: condition ? consequent : alternate
         ValueExpr::Ternary {
             condition,
             consequent,
             alternate,
-        } => {
-            let cond = evaluate_with_scope(condition, global_vars, local_vars)?;
-            if is_truthy(&cond) {
-                evaluate_with_scope(consequent, global_vars, local_vars)
-            } else {
-                evaluate_with_scope(alternate, global_vars, local_vars)
-            }
-        },
-
-        // Optional chaining: obj?.property
+        } => evaluate_ternary(condition, consequent, alternate, global_vars, local_vars),
         ValueExpr::OptionalChain { object, property } => {
-            let obj = evaluate_with_scope(object, global_vars, local_vars)?;
-            match obj {
-                JsonValue::Null => Ok(JsonValue::Null),
-                JsonValue::Object(map) => Ok(map.get(property).cloned().unwrap_or(JsonValue::Null)),
-                _ => Ok(JsonValue::Null),
-            }
+            evaluate_optional_chain(object, property, global_vars, local_vars)
         },
-
-        // Nullish coalescing: a ?? b
         ValueExpr::NullishCoalesce { left, right } => {
-            let l = evaluate_with_scope(left, global_vars, local_vars)?;
-            if is_nullish(&l) {
-                evaluate_with_scope(right, global_vars, local_vars)
-            } else {
-                Ok(l)
-            }
+            evaluate_nullish_coalesce(left, right, global_vars, local_vars)
         },
-
-        // Array methods: arr.map(), arr.filter(), etc.
         ValueExpr::ArrayMethod { array, method } => {
-            let arr_value = evaluate_with_scope(array, global_vars, local_vars)?;
-            // Clone scope once per array method call instead of N clones per element.
-            // The array method uses push/pop on this mutable scope.
-            let mut scope = local_vars.clone();
-            evaluate_array_method_with_scope(&arr_value, method, global_vars, &mut scope)
+            evaluate_array_method_dispatch(array, method, global_vars, local_vars)
         },
-
-        // Number methods: num.toFixed(), etc.
         ValueExpr::NumberMethod { number, method } => {
             let num_value = evaluate_with_scope(number, global_vars, local_vars)?;
             evaluate_number_method(&num_value, method)
         },
-
-        // Block expressions: { const x = ...; const y = ...; return result }
         ValueExpr::Block { bindings, result } => {
-            // Start with the outer scope
-            let mut merged_vars = local_vars.clone();
-
-            // Evaluate each binding in order, adding to scope
-            for (name, binding_expr) in bindings {
-                let value = evaluate_with_scope(binding_expr, global_vars, &merged_vars)?;
-                merged_vars.insert(name.clone(), value);
-            }
-
-            // Evaluate the result expression with the merged scope
-            evaluate_with_scope(result, global_vars, &merged_vars)
+            evaluate_block(bindings, result, global_vars, local_vars)
         },
-
-        // Built-in function calls: parseFloat(), Math.abs(), Object.keys(), etc.
         ValueExpr::BuiltinCall { func, args } => {
-            let evaluated_args: Vec<JsonValue> = args
-                .iter()
-                .map(|a| evaluate_with_scope(a, global_vars, local_vars))
-                .collect::<Result<Vec<_>, _>>()?;
-            evaluate_builtin(func, &evaluated_args)
+            evaluate_builtin_call(func, args, global_vars, local_vars)
         },
-
-        // API calls should not reach evaluation directly (handled by executor)
-        ValueExpr::ApiCall { .. } => Err(ExecutionError::RuntimeError {
-            message: "API calls should be handled by executor, not evaluator".into(),
-        }),
-
-        // Await expressions should not reach evaluation directly
-        ValueExpr::Await { .. } => Err(ExecutionError::RuntimeError {
-            message: "Await expressions should be handled by executor".into(),
-        }),
-
-        // Promise.all should not reach evaluation directly
-        ValueExpr::PromiseAll { .. } => Err(ExecutionError::RuntimeError {
-            message: "Promise.all should be handled by executor".into(),
-        }),
-
-        // MCP calls should not reach evaluation directly (handled by executor)
+        ValueExpr::ApiCall { .. } => Err(executor_only_error(
+            "API calls should be handled by executor, not evaluator",
+        )),
+        ValueExpr::Await { .. } => Err(executor_only_error(
+            "Await expressions should be handled by executor",
+        )),
+        ValueExpr::PromiseAll { .. } => Err(executor_only_error(
+            "Promise.all should be handled by executor",
+        )),
         #[cfg(feature = "mcp-code-mode")]
-        ValueExpr::McpCall { .. } => Err(ExecutionError::RuntimeError {
-            message: "MCP calls should be handled by executor, not evaluator".into(),
-        }),
-
-        // SDK calls should not reach evaluation directly (handled by executor)
-        ValueExpr::SdkCall { .. } => Err(ExecutionError::RuntimeError {
-            message: "SDK calls should be handled by executor, not evaluator".into(),
-        }),
+        ValueExpr::McpCall { .. } => Err(executor_only_error(
+            "MCP calls should be handled by executor, not evaluator",
+        )),
+        ValueExpr::SdkCall { .. } => Err(executor_only_error(
+            "SDK calls should be handled by executor, not evaluator",
+        )),
     }
+}
+
+/// Build a "should be handled by executor" runtime error.
+#[inline]
+fn executor_only_error(message: &str) -> ExecutionError {
+    ExecutionError::RuntimeError {
+        message: message.into(),
+    }
+}
+
+/// Evaluate a `Variable` reference: local scope, then global, then JS built-ins.
+fn evaluate_variable_lookup<V: VariableProvider>(
+    name: &str,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    if let Some(value) = local_vars.get(name) {
+        return Ok(value.clone());
+    }
+    if let Some(value) = global_vars.get_variable(name) {
+        return Ok(value.clone());
+    }
+    // JavaScript built-in globals — `undefined` maps to JSON null (no JSON distinction).
+    if name == "undefined" {
+        return Ok(JsonValue::Null);
+    }
+    Err(ExecutionError::RuntimeError {
+        message: format!("Undefined variable: {}", name),
+    })
+}
+
+/// Evaluate `obj.property`. Non-objects produce `null`.
+fn evaluate_property_access<V: VariableProvider>(
+    object: &ValueExpr,
+    property: &str,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let obj = evaluate_with_scope(object, global_vars, local_vars)?;
+    match obj {
+        JsonValue::Object(map) => Ok(map.get(property).cloned().unwrap_or(JsonValue::Null)),
+        _ => Ok(JsonValue::Null),
+    }
+}
+
+/// Evaluate `arr[index]`. Non-array/non-number combinations produce `null`.
+fn evaluate_array_index<V: VariableProvider>(
+    array: &ValueExpr,
+    index: &ValueExpr,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let arr = evaluate_with_scope(array, global_vars, local_vars)?;
+    let idx = evaluate_with_scope(index, global_vars, local_vars)?;
+    match (arr, idx) {
+        (JsonValue::Array(arr), JsonValue::Number(n)) => {
+            let i = n.as_i64().unwrap_or(0) as usize;
+            Ok(arr.get(i).cloned().unwrap_or(JsonValue::Null))
+        },
+        _ => Ok(JsonValue::Null),
+    }
+}
+
+/// Evaluate `{ key: value, ...spread }`. Non-object spreads are no-ops (JS semantics).
+fn evaluate_object_literal<V: VariableProvider>(
+    fields: &[ObjectField],
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let mut map = serde_json::Map::new();
+    for field in fields {
+        evaluate_object_field_into(field, &mut map, global_vars, local_vars)?;
+    }
+    Ok(JsonValue::Object(map))
+}
+
+/// Evaluate one `ObjectField` (key/value or spread) and merge into `map`.
+fn evaluate_object_field_into<V: VariableProvider>(
+    field: &ObjectField,
+    map: &mut serde_json::Map<String, JsonValue>,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<(), ExecutionError> {
+    match field {
+        ObjectField::KeyValue {
+            key,
+            value: value_expr,
+        } => {
+            let value = evaluate_with_scope(value_expr, global_vars, local_vars)?;
+            map.insert(key.clone(), value);
+        },
+        ObjectField::Spread { expr } => {
+            let spread_val = evaluate_with_scope(expr, global_vars, local_vars)?;
+            if let JsonValue::Object(spread_map) = spread_val {
+                for (k, v) in spread_map {
+                    map.insert(k, v);
+                }
+            }
+            // Non-objects spread as no-op (matches JS behavior)
+        },
+    }
+    Ok(())
+}
+
+/// Evaluate `[item1, item2, ...]` left-to-right.
+fn evaluate_array_literal<V: VariableProvider>(
+    items: &[ValueExpr],
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let mut arr = Vec::with_capacity(items.len());
+    for item in items {
+        arr.push(evaluate_with_scope(item, global_vars, local_vars)?);
+    }
+    Ok(JsonValue::Array(arr))
+}
+
+/// Evaluate `condition ? consequent : alternate` using JS truthiness on the condition.
+fn evaluate_ternary<V: VariableProvider>(
+    condition: &ValueExpr,
+    consequent: &ValueExpr,
+    alternate: &ValueExpr,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let cond = evaluate_with_scope(condition, global_vars, local_vars)?;
+    if is_truthy(&cond) {
+        evaluate_with_scope(consequent, global_vars, local_vars)
+    } else {
+        evaluate_with_scope(alternate, global_vars, local_vars)
+    }
+}
+
+/// Evaluate `obj?.property`. Null/undefined short-circuits to `null`.
+fn evaluate_optional_chain<V: VariableProvider>(
+    object: &ValueExpr,
+    property: &str,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let obj = evaluate_with_scope(object, global_vars, local_vars)?;
+    match obj {
+        JsonValue::Null => Ok(JsonValue::Null),
+        JsonValue::Object(map) => Ok(map.get(property).cloned().unwrap_or(JsonValue::Null)),
+        _ => Ok(JsonValue::Null),
+    }
+}
+
+/// Evaluate `a ?? b`: take `a` unless it is null/undefined, in which case evaluate `b`.
+fn evaluate_nullish_coalesce<V: VariableProvider>(
+    left: &ValueExpr,
+    right: &ValueExpr,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let l = evaluate_with_scope(left, global_vars, local_vars)?;
+    if is_nullish(&l) {
+        evaluate_with_scope(right, global_vars, local_vars)
+    } else {
+        Ok(l)
+    }
+}
+
+/// Dispatch to `evaluate_array_method_with_scope` after evaluating the receiver and
+/// cloning local scope once (vs N clones per element inside the method body).
+fn evaluate_array_method_dispatch<V: VariableProvider>(
+    array: &ValueExpr,
+    method: &ArrayMethodCall,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let arr_value = evaluate_with_scope(array, global_vars, local_vars)?;
+    let mut scope = local_vars.clone();
+    evaluate_array_method_with_scope(&arr_value, method, global_vars, &mut scope)
+}
+
+/// Evaluate a block expression `{ const x = ...; const y = ...; result }`.
+/// Bindings extend a freshly-merged scope in declaration order.
+fn evaluate_block<V: VariableProvider>(
+    bindings: &[(String, ValueExpr)],
+    result: &ValueExpr,
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let mut merged_vars = local_vars.clone();
+    for (name, binding_expr) in bindings {
+        let value = evaluate_with_scope(binding_expr, global_vars, &merged_vars)?;
+        merged_vars.insert(name.clone(), value);
+    }
+    evaluate_with_scope(result, global_vars, &merged_vars)
+}
+
+/// Evaluate a `BuiltinCall`: evaluate args left-to-right then dispatch to `evaluate_builtin`.
+fn evaluate_builtin_call<V: VariableProvider>(
+    func: &BuiltinFunction,
+    args: &[ValueExpr],
+    global_vars: &V,
+    local_vars: &HashMap<String, JsonValue>,
+) -> Result<JsonValue, ExecutionError> {
+    let evaluated_args: Vec<JsonValue> = args
+        .iter()
+        .map(|a| evaluate_with_scope(a, global_vars, local_vars))
+        .collect::<Result<Vec<_>, _>>()?;
+    evaluate_builtin(func, &evaluated_args)
 }
 
 /// Evaluate a binary operation.
