@@ -81,6 +81,11 @@ pub async fn deploy_to_pmcp_run(
     println!("🚀 Deploying to pmcp.run...");
     println!();
 
+    // Fail-closed IAM gate + stack.ts regeneration. Mirrors the aws-lambda
+    // path (commands/deploy/deploy.rs) so the operator-declared `[iam]`
+    // contract is identical across targets. Must run before any network call.
+    validate_and_regenerate_stack_ts(config)?;
+
     // Get credentials (OAuth tokens)
     let credentials = auth::get_credentials().await?;
 
@@ -597,4 +602,111 @@ fn find_template_file(cdk_out: &PathBuf) -> Result<PathBuf> {
     }
 
     bail!("No CloudFormation template found in {}", cdk_out.display());
+}
+
+/// Run the fail-closed IAM validator and rewrite `deploy/lib/stack.ts` from
+/// the loaded [`DeployConfig`], so `[iam]` declared in `.pmcp/deploy.toml`
+/// lands in the synthesized CloudFormation template. Mirrors
+/// `DeployExecutor::regenerate_stack_ts` from the aws-lambda path.
+fn validate_and_regenerate_stack_ts(config: &DeployConfig) -> Result<()> {
+    let warnings = crate::deployment::iam::validate(&config.iam)
+        .context("IAM validation failed — fix .pmcp/deploy.toml before deploying")?;
+    crate::deployment::iam::emit_warnings(&warnings);
+
+    let lib_dir = config.project_root.join("deploy").join("lib");
+    std::fs::create_dir_all(&lib_dir).context("Failed to create deploy/lib directory")?;
+    let stack_ts = crate::commands::deploy::init::render_stack_ts_for_deploy(
+        &config.target.target_type,
+        &config.server.name,
+        &config.iam,
+    );
+    std::fs::write(lib_dir.join("stack.ts"), stack_ts)
+        .context("Failed to write deploy/lib/stack.ts")?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::deployment::config::{IamConfig, IamStatement, TablePermission};
+
+    fn cfg_with_target_and_iam(
+        project_root: PathBuf,
+        target_type: &str,
+        iam: IamConfig,
+    ) -> DeployConfig {
+        let mut cfg = DeployConfig::default_for_server(
+            "demo-server".to_string(),
+            "us-east-1".to_string(),
+            project_root,
+        );
+        cfg.target.target_type = target_type.to_string();
+        cfg.iam = iam;
+        cfg
+    }
+
+    #[test]
+    fn pmcp_run_deploy_regenerates_stack_ts_with_iam_block() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let iam = IamConfig {
+            tables: vec![TablePermission {
+                name: "Users".to_string(),
+                actions: vec!["read".to_string()],
+                include_indexes: false,
+            }],
+            ..IamConfig::default()
+        };
+        let config = cfg_with_target_and_iam(tmp.path().to_path_buf(), "pmcp-run", iam);
+
+        validate_and_regenerate_stack_ts(&config).expect("should succeed with valid iam");
+
+        let stack_ts =
+            std::fs::read_to_string(tmp.path().join("deploy").join("lib").join("stack.ts"))
+                .expect("stack.ts written");
+
+        assert!(
+            stack_ts.contains("Operator-declared IAM"),
+            "pmcp-run stack.ts missing user-declared IAM banner — renderer was not invoked"
+        );
+        assert!(
+            stack_ts.contains("table/Users"),
+            "pmcp-run stack.ts missing the Users table resource ARN"
+        );
+        assert!(
+            stack_ts.contains("pmcp-${serverId}-McpRoleArn"),
+            "pmcp-run branch signature (McpRoleArn exportName) missing — wrong template branch was rendered"
+        );
+    }
+
+    #[test]
+    fn pmcp_run_deploy_rejects_iam_footgun_before_writing_stack_ts() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let iam = IamConfig {
+            statements: vec![IamStatement {
+                effect: "Allow".to_string(),
+                actions: vec!["*".to_string()],
+                resources: vec!["*".to_string()],
+            }],
+            ..IamConfig::default()
+        };
+        let config = cfg_with_target_and_iam(tmp.path().to_path_buf(), "pmcp-run", iam);
+
+        let err = validate_and_regenerate_stack_ts(&config)
+            .expect_err("Allow-*-* must be rejected by the validator gate");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("IAM validation failed"),
+            "expected validator gate message, got: {msg}"
+        );
+
+        assert!(
+            !tmp.path()
+                .join("deploy")
+                .join("lib")
+                .join("stack.ts")
+                .exists(),
+            "stack.ts must not be written when validator rejects config (fail-closed)"
+        );
+    }
 }
