@@ -837,6 +837,241 @@ fn extract_auth_from_proxy_headers(
     })
 }
 
+/// Extract session ID and protocol version headers from a raw axum `HeaderMap`.
+///
+/// Shared by both the fast path and middleware-path POST handlers so the two
+/// entry points read the same two headers in the same way.
+fn extract_session_and_protocol_headers(
+    headers: &HeaderMap,
+) -> (Option<String>, Option<String>) {
+    let session_id = headers
+        .get(MCP_SESSION_ID)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let protocol_version = headers
+        .get(MCP_PROTOCOL_VERSION)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    (session_id, protocol_version)
+}
+
+/// Classify a `TransportMessage` as an `initialize` request or not.
+///
+/// Extracted so both POST handlers can short-circuit protocol-version
+/// validation and session creation without re-implementing the `matches!`.
+fn is_initialize_request(message: &TransportMessage) -> bool {
+    matches!(
+        message,
+        TransportMessage::Request { request: Request::Client(boxed), .. }
+            if matches!(**boxed, ClientRequest::Initialize(_))
+    )
+}
+
+/// Resolve the response session ID given the request type and incoming headers.
+///
+/// For initialize requests this delegates to [`process_init_session`]; for
+/// subsequent requests to [`validate_non_init_session`]. Used by both POST
+/// handlers.
+fn resolve_session_for_request(
+    state: &ServerState,
+    is_init_request: bool,
+    session_id: Option<String>,
+    protocol_version: Option<String>,
+) -> std::result::Result<Option<String>, Response> {
+    if is_init_request {
+        let (sid, _is_new) = process_init_session(state, session_id, protocol_version)?;
+        Ok(sid)
+    } else {
+        validate_non_init_session(state, session_id)
+    }
+}
+
+/// Compute the outbound `MCP-Protocol-Version` header value.
+///
+/// Used by both POST handlers to echo either the negotiated version from an
+/// initialize response or the session's recorded version for subsequent
+/// requests, falling back to `DEFAULT_PROTOCOL_VERSION` when no session is
+/// associated with the response.
+fn compute_outbound_protocol_version(
+    state: &ServerState,
+    response_session_id: Option<&String>,
+    is_init_request: bool,
+    negotiated_version: Option<&str>,
+) -> String {
+    if is_init_request {
+        return negotiated_version
+            .map(std::string::ToString::to_string)
+            .unwrap_or_else(|| crate::DEFAULT_PROTOCOL_VERSION.to_string());
+    }
+    if let Some(sid) = response_session_id {
+        if let Some(session_info) = state.sessions.read().get(sid) {
+            return session_info
+                .protocol_version
+                .clone()
+                .unwrap_or_else(|| crate::DEFAULT_PROTOCOL_VERSION.to_string());
+        }
+    }
+    crate::DEFAULT_PROTOCOL_VERSION.to_string()
+}
+
+/// Best-effort error-hook dispatch for the middleware path.
+///
+/// Wraps the `http_middleware.handle_error` call so the caller can short-circuit
+/// to a `Response` without a second level of match nesting. The middleware's
+/// error hook is intentionally fire-and-forget (return value ignored) — we do
+/// not want a misbehaving hook to mask the original failure.
+async fn report_middleware_error(
+    http_middleware: &ServerHttpMiddlewareChain,
+    context: &ServerHttpContext,
+    error_kind: &str,
+) {
+    let err = crate::Error::protocol_msg(error_kind);
+    let _ = http_middleware.handle_error(&err, context).await;
+}
+
+/// Run request-side middleware and return an error response if rejected.
+///
+/// Consolidates the `process_request` + error-hook-then-return pattern used
+/// at the top of [`handle_post_with_middleware`].
+async fn run_request_middleware(
+    http_middleware: &ServerHttpMiddlewareChain,
+    server_request: &mut crate::server::http_middleware::ServerHttpRequest,
+    context: &ServerHttpContext,
+) -> std::result::Result<(), Response> {
+    if let Err(e) = http_middleware
+        .process_request(server_request, context)
+        .await
+    {
+        let _ = http_middleware.handle_error(&e, context).await;
+        return Err(create_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            -32603,
+            &format!("Middleware rejected request: {}", e),
+        ));
+    }
+    Ok(())
+}
+
+/// Parse a JSON-RPC message from raw bytes with middleware-aware error handling.
+///
+/// On parse failure, runs the request-side response middleware over a
+/// manufactured 400 response so downstream observers (logging, metrics) still
+/// see the failure.
+async fn parse_transport_message_with_middleware(
+    body: &[u8],
+    http_middleware: &ServerHttpMiddlewareChain,
+    context: &ServerHttpContext,
+) -> std::result::Result<TransportMessage, Response> {
+    match crate::shared::StdioTransport::parse_message(body) {
+        Ok(msg) => Ok(msg),
+        Err(e) => {
+            let mut error_response = ServerHttpResponse::new(
+                StatusCode::BAD_REQUEST,
+                HeaderMap::new(),
+                format!("{{\"error\":\"Invalid JSON: {}\"}}", e).into_bytes(),
+            );
+            let _ = http_middleware
+                .process_response(&mut error_response, context)
+                .await;
+            Err(into_axum(error_response))
+        },
+    }
+}
+
+/// Extract and validate authentication for the middleware POST path.
+///
+/// Mirrors [`extract_and_validate_auth`] but wires the middleware error hook
+/// into the 401 path. Returns `Ok(None)` when no auth provider is configured
+/// (matching the existing middleware-path behavior, which does NOT fall back
+/// to proxy-header extraction).
+async fn extract_auth_with_middleware(
+    state: &ServerState,
+    server_request: &crate::server::http_middleware::ServerHttpRequest,
+    http_middleware: &ServerHttpMiddlewareChain,
+    context: &ServerHttpContext,
+) -> std::result::Result<Option<crate::server::auth::AuthContext>, Response> {
+    let server = state.server.lock().await;
+    let Some(auth_provider) = server.get_auth_provider() else {
+        return Ok(None);
+    };
+    let auth_header = server_request.get_header("authorization");
+    match auth_provider.validate_request(auth_header).await {
+        Ok(ctx) => Ok(ctx),
+        Err(e) => {
+            let auth_error =
+                crate::Error::authentication(format!("Authentication failed: {}", e));
+            let _ = http_middleware.handle_error(&auth_error, context).await;
+            Err(create_error_response(
+                StatusCode::UNAUTHORIZED,
+                -32003,
+                &format!("Authentication failed: {}", e),
+            ))
+        },
+    }
+}
+
+/// Assemble the JSON-RPC success response + headers, run response middleware,
+/// and convert to an axum `Response`.
+///
+/// Returns either the built axum response or a 500 error response when
+/// serialization fails.
+async fn build_success_response_with_middleware(
+    response_msg: &TransportMessage,
+    response_session_id: Option<&String>,
+    version_to_send: &str,
+    http_middleware: &ServerHttpMiddlewareChain,
+    context: &ServerHttpContext,
+) -> Response {
+    let response_body = match serde_json::to_vec(response_msg) {
+        Ok(b) => b,
+        Err(e) => {
+            let serialization_error =
+                crate::Error::internal(format!("Failed to serialize response: {}", e));
+            let _ = http_middleware
+                .handle_error(&serialization_error, context)
+                .await;
+            return create_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                -32603,
+                &format!("Failed to serialize response: {}", e),
+            );
+        },
+    };
+
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(header::CONTENT_TYPE, APPLICATION_JSON.parse().unwrap());
+    if let Some(sid) = response_session_id {
+        response_headers.insert(MCP_SESSION_ID, sid.parse().unwrap());
+    }
+    response_headers.insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
+
+    let mut server_response =
+        ServerHttpResponse::new(StatusCode::OK, response_headers, response_body);
+
+    if let Err(e) = http_middleware
+        .process_response(&mut server_response, context)
+        .await
+    {
+        tracing::warn!("Response middleware processing failed: {}", e);
+    }
+
+    into_axum(server_response)
+}
+
+/// Persist the initialize response event if an event store is configured.
+///
+/// Shared by both POST handlers — same condition (init OR non-init request
+/// with a response session ID), same store-event call, same fire-and-forget
+/// error handling.
+async fn store_response_event(state: &ServerState, response_session_id: Option<&String>, response_msg: &TransportMessage) {
+    if let Some(event_store) = &state.config.event_store {
+        if let Some(sid) = response_session_id {
+            let event_id = Uuid::new_v4().to_string();
+            let _ = event_store.store_event(sid, &event_id, response_msg).await;
+        }
+    }
+}
+
 /// Fast path handler without HTTP middleware
 async fn handle_post_fast_path(
     state: ServerState,
@@ -1000,8 +1235,153 @@ async fn handle_post_fast_path(
     }
 }
 
-/// Handler with HTTP middleware integration
-#[allow(clippy::cognitive_complexity)]
+/// Build the HTTP middleware context from a middleware-adapted request.
+fn build_middleware_context(
+    server_request: &crate::server::http_middleware::ServerHttpRequest,
+) -> ServerHttpContext {
+    let session_id = server_request
+        .get_header(MCP_SESSION_ID)
+        .map(str::to_string);
+    let request_id = server_request
+        .get_header("x-request-id")
+        .map_or_else(|| Uuid::new_v4().to_string(), str::to_string);
+    ServerHttpContext {
+        request_id,
+        start_time: std::time::Instant::now(),
+        session_id,
+    }
+}
+
+/// Convert the axum request into a middleware `ServerHttpRequest`, handling
+/// the body-size-limit failure path.
+async fn convert_axum_to_middleware_request(
+    request: axum::extract::Request<Body>,
+    max_request_bytes: usize,
+) -> std::result::Result<crate::server::http_middleware::ServerHttpRequest, Response> {
+    let (parts, body) = request.into_parts();
+    from_axum_with_limit(parts, body, max_request_bytes)
+        .await
+        .map_err(|e| {
+            create_error_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                -32600,
+                &format!("Request body exceeds limit: {}", e),
+            )
+        })
+}
+
+/// Resolve the session ID and run the middleware error hook on failure.
+///
+/// Wraps [`resolve_session_for_request`] so the caller doesn't have to
+/// branch on `is_init_request` for the error-kind string.
+async fn resolve_session_with_error_hook(
+    state: &ServerState,
+    is_init_request: bool,
+    session_id: Option<String>,
+    protocol_version: Option<String>,
+    http_middleware: &ServerHttpMiddlewareChain,
+    http_context: &ServerHttpContext,
+) -> std::result::Result<Option<String>, Response> {
+    match resolve_session_for_request(state, is_init_request, session_id, protocol_version) {
+        Ok(sid) => Ok(sid),
+        Err(error_response) => {
+            let kind = if is_init_request {
+                "Session initialization failed"
+            } else {
+                "Session validation failed"
+            };
+            report_middleware_error(http_middleware, http_context, kind).await;
+            Err(error_response)
+        },
+    }
+}
+
+/// Run protocol-version validation for non-init requests, wiring the middleware
+/// error hook on failure. A no-op for init requests.
+async fn validate_protocol_version_with_error_hook(
+    state: &ServerState,
+    is_init_request: bool,
+    session_id: Option<&String>,
+    protocol_version: Option<&String>,
+    http_middleware: &ServerHttpMiddlewareChain,
+    http_context: &ServerHttpContext,
+) -> std::result::Result<(), Response> {
+    if is_init_request {
+        return Ok(());
+    }
+    if let Err(error_response) = validate_protocol_version(state, session_id, protocol_version) {
+        report_middleware_error(
+            http_middleware,
+            http_context,
+            "Protocol version validation failed",
+        )
+        .await;
+        return Err(error_response);
+    }
+    Ok(())
+}
+
+/// Dispatch the parsed `TransportMessage` on the middleware path.
+///
+/// Handles `Request` (server-handled + response assembly), `Notification`
+/// (202 Accepted), and `Response` (202 Accepted) in separate arms.
+async fn dispatch_message_with_middleware(
+    state: &ServerState,
+    message: TransportMessage,
+    is_init_request: bool,
+    response_session_id: Option<String>,
+    auth_context: Option<crate::server::auth::AuthContext>,
+    http_middleware: &ServerHttpMiddlewareChain,
+    http_context: &ServerHttpContext,
+) -> Response {
+    match message {
+        TransportMessage::Request { id, request } => {
+            let json_response = {
+                let server = state.server.lock().await;
+                server.handle_request(id, request, auth_context).await
+            };
+            let response_msg = TransportMessage::Response(json_response);
+
+            let negotiated_version = if is_init_request {
+                let version = extract_negotiated_version(&response_msg);
+                update_session_after_init(state, response_session_id.as_ref(), version.clone());
+                version
+            } else {
+                None
+            };
+
+            store_response_event(state, response_session_id.as_ref(), &response_msg).await;
+
+            let version_to_send = compute_outbound_protocol_version(
+                state,
+                response_session_id.as_ref(),
+                is_init_request,
+                negotiated_version.as_deref(),
+            );
+
+            build_success_response_with_middleware(
+                &response_msg,
+                response_session_id.as_ref(),
+                &version_to_send,
+                http_middleware,
+                http_context,
+            )
+            .await
+        },
+        TransportMessage::Notification { .. } | TransportMessage::Response(_) => {
+            StatusCode::ACCEPTED.into_response()
+        },
+    }
+}
+
+/// Handler with HTTP middleware integration.
+///
+/// Refactored in 75-01 Task 1a-A: extracted
+/// [`convert_axum_to_middleware_request`], [`build_middleware_context`],
+/// [`run_request_middleware`], [`parse_transport_message_with_middleware`],
+/// [`resolve_session_for_request`], [`extract_auth_with_middleware`], and
+/// [`dispatch_message_with_middleware`] so this orchestrator is a thin
+/// early-return pipeline.
 async fn handle_post_with_middleware(
     state: ServerState,
     request: axum::extract::Request<Body>,
@@ -1012,250 +1392,89 @@ async fn handle_post_with_middleware(
         .as_ref()
         .expect("Middleware chain must exist");
 
-    // Convert from axum request
-    let (parts, body) = request.into_parts();
-
     let mut server_request =
-        match from_axum_with_limit(parts, body, state.config.max_request_bytes).await {
+        match convert_axum_to_middleware_request(request, state.config.max_request_bytes).await {
             Ok(req) => req,
-            Err(e) => {
-                return create_error_response(
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    -32600,
-                    &format!("Request body exceeds limit: {}", e),
-                );
-            },
+            Err(response) => return response,
         };
 
-    // Extract session ID from headers
-    let session_id = server_request
-        .get_header(MCP_SESSION_ID)
-        .map(|s| s.to_string());
+    let http_context = build_middleware_context(&server_request);
 
-    // Generate or extract request ID
-    let request_id = server_request
-        .get_header("x-request-id")
-        .map_or_else(|| Uuid::new_v4().to_string(), |s| s.to_string());
-
-    // Create HTTP middleware context
-    let http_context = ServerHttpContext {
-        request_id: request_id.clone(),
-        start_time: std::time::Instant::now(),
-        session_id: session_id.clone(),
-    };
-
-    // Process request through HTTP middleware chain
-    if let Err(e) = http_middleware
-        .process_request(&mut server_request, &http_context)
-        .await
+    if let Err(response) =
+        run_request_middleware(http_middleware, &mut server_request, &http_context).await
     {
-        // Call error hooks before returning
-        let _ = http_middleware.handle_error(&e, &http_context).await;
-        return create_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            -32603,
-            &format!("Middleware rejected request: {}", e),
-        );
+        return response;
     }
 
-    // Validate headers (consistent with fast path)
     if let Err(error_response) = validate_headers(&server_request.headers, "POST") {
-        // Call error hooks for validation failures
-        let validation_error = crate::Error::protocol_msg("Header validation failed");
-        let _ = http_middleware
-            .handle_error(&validation_error, &http_context)
-            .await;
+        report_middleware_error(http_middleware, &http_context, "Header validation failed").await;
         return error_response;
     }
 
-    // Parse JSON-RPC from body
-    let body_str = String::from_utf8_lossy(&server_request.body);
-    let message: TransportMessage =
-        match crate::shared::StdioTransport::parse_message(body_str.as_bytes()) {
-            Ok(msg) => msg,
-            Err(e) => {
-                let mut error_response = ServerHttpResponse::new(
-                    StatusCode::BAD_REQUEST,
-                    HeaderMap::new(),
-                    format!("{{\"error\":\"Invalid JSON: {}\"}}", e).into_bytes(),
-                );
-                let _ = http_middleware
-                    .process_response(&mut error_response, &http_context)
-                    .await;
-                return into_axum(error_response);
-            },
-        };
-
-    // Extract protocol version
-    let protocol_version = server_request
-        .get_header(MCP_PROTOCOL_VERSION)
-        .map(|s| s.to_string());
-
-    // Check if this is an initialization request
-    let is_init_request = matches!(
-        &message,
-        TransportMessage::Request { request: Request::Client(boxed), .. }
-            if matches!(**boxed, ClientRequest::Initialize(_))
-    );
-
-    // Handle session logic
-    let (response_session_id, _) = if is_init_request {
-        match process_init_session(&state, session_id.clone(), protocol_version.clone()) {
-            Ok(result) => result,
-            Err(error_response) => {
-                // Call error hooks for session initialization failures
-                let session_error = crate::Error::protocol_msg("Session initialization failed");
-                let _ = http_middleware
-                    .handle_error(&session_error, &http_context)
-                    .await;
-                return error_response;
-            },
-        }
-    } else {
-        match validate_non_init_session(&state, session_id.clone()) {
-            Ok(sid) => (sid, false),
-            Err(error_response) => {
-                // Call error hooks for session validation failures
-                let session_error = crate::Error::protocol_msg("Session validation failed");
-                let _ = http_middleware
-                    .handle_error(&session_error, &http_context)
-                    .await;
-                return error_response;
-            },
-        }
+    let message = match parse_transport_message_with_middleware(
+        &server_request.body,
+        http_middleware,
+        &http_context,
+    )
+    .await
+    {
+        Ok(msg) => msg,
+        Err(response) => return response,
     };
 
-    // Validate protocol version for non-init requests
-    if !is_init_request {
-        if let Err(error_response) =
-            validate_protocol_version(&state, session_id.as_ref(), protocol_version.as_ref())
-        {
-            // Call error hooks for protocol version validation failures
-            let version_error = crate::Error::protocol_msg("Protocol version validation failed");
-            let _ = http_middleware
-                .handle_error(&version_error, &http_context)
-                .await;
-            return error_response;
-        }
-    }
+    let (session_id, protocol_version) =
+        extract_session_and_protocol_headers(&server_request.headers);
+    let is_init_request = is_initialize_request(&message);
 
-    // Extract and validate authentication if auth_provider is configured
-    let auth_context = {
-        let server = state.server.lock().await;
-        if let Some(auth_provider) = server.get_auth_provider() {
-            // Extract Authorization header from middleware-processed request
-            let auth_header = server_request.get_header("authorization");
-
-            // Validate the request and get auth context
-            match auth_provider.validate_request(auth_header).await {
-                Ok(ctx) => ctx,
-                Err(e) => {
-                    // Auth validation failed - return 401 Unauthorized
-                    let auth_error =
-                        crate::Error::authentication(format!("Authentication failed: {}", e));
-                    let _ = http_middleware
-                        .handle_error(&auth_error, &http_context)
-                        .await;
-
-                    return create_error_response(
-                        StatusCode::UNAUTHORIZED,
-                        -32003,
-                        &format!("Authentication failed: {}", e),
-                    );
-                },
-            }
-        } else {
-            None
-        }
+    let response_session_id = match resolve_session_with_error_hook(
+        &state,
+        is_init_request,
+        session_id.clone(),
+        protocol_version.clone(),
+        http_middleware,
+        &http_context,
+    )
+    .await
+    {
+        Ok(sid) => sid,
+        Err(response) => return response,
     };
 
-    // Process the request
-    match message {
-        TransportMessage::Request { id, request } => {
-            let server = state.server.lock().await;
-            let json_response = server.handle_request(id, request, auth_context).await;
-
-            let response_msg = TransportMessage::Response(json_response.clone());
-
-            // Handle initialization response
-            let negotiated_version = if is_init_request {
-                let version = extract_negotiated_version(&response_msg);
-                update_session_after_init(&state, response_session_id.as_ref(), version.clone());
-                version
-            } else {
-                None
-            };
-
-            // Store event if needed
-            if let Some(event_store) = &state.config.event_store {
-                if let Some(sid) = &response_session_id {
-                    let event_id = Uuid::new_v4().to_string();
-                    let _ = event_store.store_event(sid, &event_id, &response_msg).await;
-                }
-            }
-
-            // Build response with proper headers
-            let response_body = match serde_json::to_vec(&response_msg) {
-                Ok(b) => b,
-                Err(e) => {
-                    // Call error hooks for serialization failures
-                    let serialization_error =
-                        crate::Error::internal(format!("Failed to serialize response: {}", e));
-                    let _ = http_middleware
-                        .handle_error(&serialization_error, &http_context)
-                        .await;
-                    return create_error_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        -32603,
-                        &format!("Failed to serialize response: {}", e),
-                    );
-                },
-            };
-
-            let mut response_headers = HeaderMap::new();
-            response_headers.insert(header::CONTENT_TYPE, APPLICATION_JSON.parse().unwrap());
-
-            // Add session header if present
-            if let Some(sid) = &response_session_id {
-                response_headers.insert(MCP_SESSION_ID, sid.parse().unwrap());
-            }
-
-            // Add protocol version header
-            let version_to_send = if is_init_request {
-                negotiated_version.unwrap_or_else(|| crate::DEFAULT_PROTOCOL_VERSION.to_string())
-            } else if let Some(ref sid) = response_session_id {
-                if let Some(session_info) = state.sessions.read().get(sid) {
-                    session_info
-                        .protocol_version
-                        .clone()
-                        .unwrap_or_else(|| crate::DEFAULT_PROTOCOL_VERSION.to_string())
-                } else {
-                    crate::DEFAULT_PROTOCOL_VERSION.to_string()
-                }
-            } else {
-                crate::DEFAULT_PROTOCOL_VERSION.to_string()
-            };
-
-            response_headers.insert(MCP_PROTOCOL_VERSION, version_to_send.parse().unwrap());
-
-            // Create ServerHttpResponse
-            let mut server_response =
-                ServerHttpResponse::new(StatusCode::OK, response_headers, response_body);
-
-            // Process response through HTTP middleware chain
-            if let Err(e) = http_middleware
-                .process_response(&mut server_response, &http_context)
-                .await
-            {
-                tracing::warn!("Response middleware processing failed: {}", e);
-            }
-
-            // Convert back to axum response
-            into_axum(server_response)
-        },
-        TransportMessage::Notification { .. } => StatusCode::ACCEPTED.into_response(),
-        TransportMessage::Response(_) => StatusCode::ACCEPTED.into_response(),
+    if let Err(response) = validate_protocol_version_with_error_hook(
+        &state,
+        is_init_request,
+        session_id.as_ref(),
+        protocol_version.as_ref(),
+        http_middleware,
+        &http_context,
+    )
+    .await
+    {
+        return response;
     }
+
+    let auth_context = match extract_auth_with_middleware(
+        &state,
+        &server_request,
+        http_middleware,
+        &http_context,
+    )
+    .await
+    {
+        Ok(ctx) => ctx,
+        Err(response) => return response,
+    };
+
+    dispatch_message_with_middleware(
+        &state,
+        message,
+        is_init_request,
+        response_session_id,
+        auth_context,
+        http_middleware,
+        &http_context,
+    )
+    .await
 }
 
 /// Handle GET requests for SSE streams
