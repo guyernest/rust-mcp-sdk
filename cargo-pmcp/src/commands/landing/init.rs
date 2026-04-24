@@ -142,38 +142,11 @@ pub async fn init_landing_page(
 
 /// Detect server name from project files
 fn detect_server_name(project_root: &PathBuf) -> Result<String> {
-    // Try pmcp.toml first
-    let pmcp_toml = project_root.join("pmcp.toml");
-    if pmcp_toml.exists() {
-        if let Ok(content) = std::fs::read_to_string(&pmcp_toml) {
-            if let Ok(value) = toml::from_str::<toml::Value>(&content) {
-                if let Some(name) = value
-                    .get("server")
-                    .and_then(|s| s.get("name"))
-                    .and_then(|n| n.as_str())
-                {
-                    return Ok(name.to_string());
-                }
-            }
-        }
+    if let Some(name) = read_name_from_pmcp_toml(&project_root.join("pmcp.toml")) {
+        return Ok(name);
     }
-
-    // Try Cargo.toml
-    let cargo_toml = project_root.join("Cargo.toml");
-    if cargo_toml.exists() {
-        if let Ok(content) = std::fs::read_to_string(&cargo_toml) {
-            if let Ok(value) = toml::from_str::<toml::Value>(&content) {
-                if let Some(name) = value
-                    .get("package")
-                    .and_then(|p| p.get("name"))
-                    .and_then(|n| n.as_str())
-                {
-                    // Clean up name (remove -server suffix if present)
-                    let name = name.strip_suffix("-server").unwrap_or(name);
-                    return Ok(name.to_string());
-                }
-            }
-        }
+    if let Some(name) = read_name_from_cargo_toml(&project_root.join("Cargo.toml")) {
+        return Ok(name);
     }
 
     // Fallback to directory name
@@ -183,4 +156,33 @@ fn detect_server_name(project_root: &PathBuf) -> Result<String> {
         .unwrap_or("my-server");
 
     Ok(dir_name.to_string())
+}
+
+/// Read `server.name` from a pmcp.toml file. Returns None on any error or
+/// missing key.
+fn read_name_from_pmcp_toml(pmcp_toml: &std::path::Path) -> Option<String> {
+    if !pmcp_toml.exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(pmcp_toml).ok()?;
+    let value = toml::from_str::<toml::Value>(&content).ok()?;
+    value
+        .get("server")
+        .and_then(|s| s.get("name"))
+        .and_then(|n| n.as_str())
+        .map(String::from)
+}
+
+/// Read `package.name` from a Cargo.toml file (strip `-server` suffix).
+fn read_name_from_cargo_toml(cargo_toml: &std::path::Path) -> Option<String> {
+    if !cargo_toml.exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(cargo_toml).ok()?;
+    let value = toml::from_str::<toml::Value>(&content).ok()?;
+    let name = value
+        .get("package")
+        .and_then(|p| p.get("name"))
+        .and_then(|n| n.as_str())?;
+    Some(name.strip_suffix("-server").unwrap_or(name).to_string())
 }

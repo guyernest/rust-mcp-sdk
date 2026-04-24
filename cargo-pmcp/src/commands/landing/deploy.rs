@@ -20,91 +20,21 @@ pub async fn deploy_landing_page(
         println!();
     }
 
-    // Validate target
-    if target != "pmcp-run" && target != "pmcp.run" {
-        anyhow::bail!(
-            "Target '{}' not supported. Currently only 'pmcp-run' is available.",
-            target
-        );
-    }
+    validate_landing_target(&target)?;
+    validate_landing_dir(&dir)?;
 
-    // Check if landing directory exists
-    if !dir.exists() {
-        anyhow::bail!(
-            "Landing directory not found: {}\n\
-             Run 'cargo pmcp landing init' first",
-            dir.display()
-        );
-    }
-
-    // Load configuration
     let config_path = dir.join("pmcp-landing.toml");
-    if !config_path.exists() {
-        anyhow::bail!(
-            "Configuration file not found: {}\n\
-             Make sure you're in the correct directory",
-            config_path.display()
-        );
-    }
+    validate_config_path(&config_path)?;
 
     let config = LandingConfig::load(&config_path)?;
-
-    // Load deployment info from .pmcp/deployment.toml (created by `cargo pmcp deploy`)
-    // This has the CURRENT deployment info, which takes precedence over stale config
     let deployment_info = crate::landing::config::load_deployment_info(&project_root);
 
-    // Determine server ID with helpful fallback chain:
-    // 1. CLI flag (highest priority)
-    // 2. .pmcp/deployment.toml (current deployment)
-    // 3. pmcp-landing.toml config (may be stale)
-    let server_id = server_id
-        .or_else(|| {
-            // Try .pmcp/deployment.toml first (current deployment)
-            deployment_info.as_ref().map(|(id, _)| id.clone())
-        })
-        .or_else(|| {
-            // Fall back to pmcp-landing.toml
-            config.deployment.server_id.clone()
-        })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "❌ Server ID not found. The landing page needs to be linked to your deployed MCP server.\n\
-                 \n\
-                 💡 Solutions:\n\
-                 \n\
-                 1. Deploy your MCP server first (recommended):\n\
-                    cargo pmcp deploy --target pmcp-run\n\
-                 \n\
-                 2. Or manually specify server ID:\n\
-                    cargo pmcp landing deploy --target pmcp-run --server YOUR_SERVER_ID\n\
-                 \n\
-                 3. Or add to pmcp-landing.toml:\n\
-                    [deployment]\n\
-                    server_id = \"YOUR_SERVER_ID\"\n\
-                 \n\
-                 ℹ️  The server ID links your landing page to your MCP server deployment."
-            )
-        })?;
+    let server_id = resolve_landing_server_id(server_id, deployment_info.as_ref(), &config)?;
+    let endpoint = resolve_landing_endpoint(deployment_info.as_ref(), &config, &server_id);
 
-    // Determine endpoint with fallback chain:
-    // 1. .pmcp/deployment.toml (current deployment - highest priority)
-    // 2. pmcp-landing.toml config (may be stale)
-    // 3. Default constructed from server_id
-    let endpoint = deployment_info
-        .as_ref()
-        .map(|(_, ep)| ep.clone())
-        .or_else(|| config.deployment.endpoint.clone())
-        .unwrap_or_else(|| format!("https://pmcp.run/{}", server_id));
+    print_landing_config_summary(&config, &server_id, &endpoint, &target, not_quiet);
 
     if not_quiet {
-        println!("Configuration:");
-        println!("   Server: {}", config.display_title());
-        println!("   Server ID: {}", server_id);
-        println!("   Endpoint: {}", endpoint);
-        println!("   Target: {}", target);
-        println!();
-
-        // Authenticate with pmcp.run
         println!("Authenticating with pmcp.run...");
     }
     let credentials = auth::get_credentials().await.context(
@@ -113,8 +43,6 @@ pub async fn deploy_landing_page(
     if not_quiet {
         println!("   Authenticated");
         println!();
-
-        // Install dependencies
         println!("Installing dependencies...");
     }
     check_node_installed(&dir)?;
@@ -122,8 +50,6 @@ pub async fn deploy_landing_page(
     if not_quiet {
         println!("   Dependencies installed");
         println!();
-
-        // Build the landing page with environment variables
         println!("Building landing page...");
     }
     run_npm_build(&dir, &endpoint, &config)?;
@@ -184,6 +110,104 @@ pub async fn deploy_landing_page(
     }
 
     Ok(())
+}
+
+/// Ensure the deployment target is supported by this command.
+fn validate_landing_target(target: &str) -> Result<()> {
+    if target != "pmcp-run" && target != "pmcp.run" {
+        anyhow::bail!(
+            "Target '{}' not supported. Currently only 'pmcp-run' is available.",
+            target
+        );
+    }
+    Ok(())
+}
+
+/// Ensure the landing directory exists (points user at `landing init` if missing).
+fn validate_landing_dir(dir: &PathBuf) -> Result<()> {
+    if !dir.exists() {
+        anyhow::bail!(
+            "Landing directory not found: {}\n\
+             Run 'cargo pmcp landing init' first",
+            dir.display()
+        );
+    }
+    Ok(())
+}
+
+/// Ensure the pmcp-landing.toml config file exists.
+fn validate_config_path(config_path: &PathBuf) -> Result<()> {
+    if !config_path.exists() {
+        anyhow::bail!(
+            "Configuration file not found: {}\n\
+             Make sure you're in the correct directory",
+            config_path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Determine the server ID with the CLI→deployment.toml→landing.toml
+/// fallback chain. Emits the long user-facing error when none present.
+fn resolve_landing_server_id(
+    cli_server_id: Option<String>,
+    deployment_info: Option<&(String, String)>,
+    config: &LandingConfig,
+) -> Result<String> {
+    cli_server_id
+        .or_else(|| deployment_info.map(|(id, _)| id.clone()))
+        .or_else(|| config.deployment.server_id.clone())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "❌ Server ID not found. The landing page needs to be linked to your deployed MCP server.\n\
+                 \n\
+                 💡 Solutions:\n\
+                 \n\
+                 1. Deploy your MCP server first (recommended):\n\
+                    cargo pmcp deploy --target pmcp-run\n\
+                 \n\
+                 2. Or manually specify server ID:\n\
+                    cargo pmcp landing deploy --target pmcp-run --server YOUR_SERVER_ID\n\
+                 \n\
+                 3. Or add to pmcp-landing.toml:\n\
+                    [deployment]\n\
+                    server_id = \"YOUR_SERVER_ID\"\n\
+                 \n\
+                 ℹ️  The server ID links your landing page to your MCP server deployment."
+            )
+        })
+}
+
+/// Determine the MCP endpoint: prefer deployment.toml (current), then
+/// landing.toml config, then default-constructed from server_id.
+fn resolve_landing_endpoint(
+    deployment_info: Option<&(String, String)>,
+    config: &LandingConfig,
+    server_id: &str,
+) -> String {
+    deployment_info
+        .map(|(_, ep)| ep.clone())
+        .or_else(|| config.deployment.endpoint.clone())
+        .unwrap_or_else(|| format!("https://pmcp.run/{}", server_id))
+}
+
+/// Print the config summary block (Server / Server ID / Endpoint / Target).
+fn print_landing_config_summary(
+    config: &LandingConfig,
+    server_id: &str,
+    endpoint: &str,
+    target: &str,
+    not_quiet: bool,
+) {
+    if !not_quiet {
+        return;
+    }
+    println!("Configuration:");
+    println!("   Server: {}", config.display_title());
+    println!("   Server ID: {}", server_id);
+    println!("   Endpoint: {}", endpoint);
+    println!("   Target: {}", target);
+    println!();
 }
 
 /// Create a zip file from the out/ directory (built static files)
