@@ -146,17 +146,16 @@ fn resolve_canonical_path(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             canonicalize_nonexistent_path(path_buf, &e)
         },
-        Err(e) => Err(ValidationError::new(ValidationErrorCode::InvalidFormat, "path")
-            .message(format!("Cannot canonicalize path: {}", e))
-            .to_error()),
+        Err(e) => Err(
+            ValidationError::new(ValidationErrorCode::InvalidFormat, "path")
+                .message(format!("Cannot canonicalize path: {}", e))
+                .to_error(),
+        ),
     }
 }
 
 /// Enforce confinement of a canonical path under the canonical base directory.
-fn enforce_base_dir_confinement(
-    canonical_path: &Path,
-    canonical_base: &Path,
-) -> crate::Result<()> {
+fn enforce_base_dir_confinement(canonical_path: &Path, canonical_base: &Path) -> crate::Result<()> {
     if canonical_path.starts_with(canonical_base) {
         return Ok(());
     }

@@ -864,9 +864,7 @@ fn extract_auth_from_proxy_headers(
 ///
 /// Shared by both the fast path and middleware-path POST handlers so the two
 /// entry points read the same two headers in the same way.
-fn extract_session_and_protocol_headers(
-    headers: &HeaderMap,
-) -> (Option<String>, Option<String>) {
+fn extract_session_and_protocol_headers(headers: &HeaderMap) -> (Option<String>, Option<String>) {
     let session_id = headers
         .get(MCP_SESSION_ID)
         .and_then(|v| v.to_str().ok())
@@ -1022,8 +1020,7 @@ async fn extract_auth_with_middleware(
     match auth_provider.validate_request(auth_header).await {
         Ok(ctx) => Ok(ctx),
         Err(e) => {
-            let auth_error =
-                crate::Error::authentication(format!("Authentication failed: {}", e));
+            let auth_error = crate::Error::authentication(format!("Authentication failed: {}", e));
             let _ = http_middleware.handle_error(&auth_error, context).await;
             Err(create_error_response(
                 StatusCode::UNAUTHORIZED,
@@ -1087,7 +1084,11 @@ async fn build_success_response_with_middleware(
 /// Shared by both POST handlers — same condition (init OR non-init request
 /// with a response session ID), same store-event call, same fire-and-forget
 /// error handling.
-async fn store_response_event(state: &ServerState, response_session_id: Option<&String>, response_msg: &TransportMessage) {
+async fn store_response_event(
+    state: &ServerState,
+    response_session_id: Option<&String>,
+    response_msg: &TransportMessage,
+) {
     if let Some(event_store) = &state.config.event_store {
         if let Some(sid) = response_session_id {
             let event_id = Uuid::new_v4().to_string();
@@ -1474,17 +1475,13 @@ async fn handle_post_with_middleware(
         return response;
     }
 
-    let auth_context = match extract_auth_with_middleware(
-        &state,
-        &server_request,
-        http_middleware,
-        &http_context,
-    )
-    .await
-    {
-        Ok(ctx) => ctx,
-        Err(response) => return response,
-    };
+    let auth_context =
+        match extract_auth_with_middleware(&state, &server_request, http_middleware, &http_context)
+            .await
+        {
+            Ok(ctx) => ctx,
+            Err(response) => return response,
+        };
 
     dispatch_message_with_middleware(
         &state,

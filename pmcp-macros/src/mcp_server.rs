@@ -550,10 +550,7 @@ pub fn expand_mcp_server(_args: TokenStream, mut input: ItemImpl) -> syn::Result
 /// Locate a method-level attribute by ident name (`mcp_tool`, `mcp_prompt`,
 /// `mcp_resource`). Returns the attribute reference if present.
 fn find_mcp_attr<'a>(method: &'a ImplItemFn, name: &str) -> Option<&'a syn::Attribute> {
-    method
-        .attrs
-        .iter()
-        .find(|a| a.path().is_ident(name))
+    method.attrs.iter().find(|a| a.path().is_ident(name))
 }
 
 /// Validate that a method takes `&self` as its first parameter.

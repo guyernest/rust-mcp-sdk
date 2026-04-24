@@ -91,10 +91,7 @@ fn parse_resource_attr_args(
     Ok(parser
         .parse2(args)
         .map_err(|e| {
-            syn::Error::new_spanned(
-                fn_ident,
-                format!("invalid mcp_resource attributes: {e}"),
-            )
+            syn::Error::new_spanned(fn_ident, format!("invalid mcp_resource attributes: {e}"))
         })?
         .into_iter()
         .collect())
