@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: Executing Phase 75
-stopped_at: Phase 75 Wave 1 (75-01-PLAN.md) complete — 20 hotspots refactored to cog ≤25 (−19 PMAT violations); ready for Wave 2 (75-02-PLAN.md)
-last_updated: "2026-04-24T06:30:00.000Z"
+stopped_at: Phase 75 Wave 2 (75-02-PLAN.md) complete — 40 cargo-pmcp hotspots refactored to cog ≤25 (both monsters cog 105 + 91 killed); PMAT complexity-gate 75 → 29 (−46); ready for Wave 3 (75-03-PLAN.md, pmcp-code-mode)
+last_updated: "2026-04-24T18:40:29.000Z"
 progress:
   total_phases: 40
   completed_phases: 35
   total_plans: 90
-  completed_plans: 86
-  percent: 95
+  completed_plans: 87
+  percent: 96
 ---
 
 # Project State
@@ -25,8 +25,8 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 75 (fix-pmat-issues) — EXECUTING
-Plan: 3 of 6 (75-00 complete, 75-01 complete 2026-04-24)
-Next: 75-02-PLAN.md (Wave 2: cargo-pmcp/ refactors — pentest + deployment + commands + main.rs; ~41 violations including cog 105 and 91 monsters). Phase 75.5 Category A (13 retro-justify sites migrated from 75-01 Task 1a-C) can land in parallel or after Phase 75 Wave 5.
+Plan: 4 of 6 (75-00 complete, 75-01 complete 2026-04-24, 75-02 complete 2026-04-24)
+Next: 75-03-PLAN.md (Wave 3: pmcp-code-mode refactors — evaluate_with_scope cog 123 + related hotspots; architecturally deeper than Waves 1-2). Phase 75.5 Category A (13 retro-justify sites migrated from 75-01 Task 1a-C) can land in parallel or after Phase 75 Wave 5.
 After: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
 
 ## Shipped Milestones
@@ -101,11 +101,18 @@ v2.1 decisions:
 
 ### Blockers/Concerns
 
-- Wave 1 BLOCKED on D-10-B operator decision (above).
 - Wave 5 must patch `quality-badges.yml` per D-11-B — without that, no amount of complexity reduction flips the badge.
+
+### Phase 75 Wave 2 Decisions (2026-04-24)
+
+- [Phase 75 Wave 2]: All 40 cargo-pmcp/ hotspots refactored to cog ≤25 via P1-P4 extraction alone. No P5 invocations. No escapees logged to 75.5-ESCAPEES.md. Both monsters (check.rs::execute cog 105, handle_oauth_action cog 91) decomposed to ≤25 via P1 per-stage pipeline + P4 per-variant dispatch.
+- [Phase 75 Wave 2]: PMAT complexity-gate count dropped 75 → 29 (delta −46) after Wave 2. Aggregate Phase 75 delta so far: baseline 94 → 29 (−65). `make quality-gate` exits 0 end-to-end.
+- [Phase 75 Wave 2]: Shared scan_for_package helper established in cloudflare/init.rs — 3-bird kill (reduces find_core_package + find_any_package + removes duplicated scan loop). Pattern reusable in Wave 3.
+- [Phase 75 Wave 2]: 7 new in-file unit tests added to commands/test/check.rs for pure predicate helpers (detect_transport_error + print_test_results). Full E2E mock-HTTP tests deferred — out-of-scope for structural refactor.
+- [Phase 75 Wave 2]: Phase 76 dependency inversion reconciled — deploy_to_pmcp_run measured cog 66 at Wave 2 start (was 65 in plan's RESEARCH.md); other 5 named hotspots matched the plan exactly. No task rework.
 
 ## Session Continuity
 
-Last session: 2026-04-23T21:30:00.000Z
-Stopped at: Phase 75 Wave 0 complete; awaiting operator decision on D-10-B scope expansion
-Resume: Operator picks 1/2/3 from "OPERATOR DECISION REQUIRED" above. Then `/gsd-execute-phase 75` continues with whichever Wave-1 plan structure is chosen.
+Last session: 2026-04-24T18:40:29.000Z
+Stopped at: Phase 75 Wave 2 (75-02-PLAN.md) complete — 40 cargo-pmcp hotspots refactored; PMAT complexity 75 → 29; ready for Wave 3
+Resume: Run `/gsd-execute-phase 75` to continue with 75-03-PLAN.md (Wave 3: pmcp-code-mode refactors).
