@@ -574,153 +574,165 @@ fn update_session_after_init(
 }
 
 /// Build response with appropriate format (JSON or SSE).
+/// Serialize a `TransportMessage` and re-parse as a `serde_json::Value`, or
+/// return a 500 error response on failure.
+fn serialize_response_as_json_value(
+    response: &TransportMessage,
+) -> std::result::Result<serde_json::Value, Response> {
+    let json_bytes = crate::shared::StdioTransport::serialize_message(response).map_err(|e| {
+        create_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            -32603,
+            &format!("Failed to serialize response: {}", e),
+        )
+    })?;
+    tracing::debug!(
+        target: "mcp.http",
+        response = %String::from_utf8_lossy(&json_bytes),
+        "HTTP response serialized bytes"
+    );
+    let json_value: serde_json::Value = serde_json::from_slice(&json_bytes).map_err(|e| {
+        create_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            -32603,
+            &format!("Failed to parse JSON response: {}", e),
+        )
+    })?;
+    Ok(json_value)
+}
+
+/// Build an OK JSON response body from a `TransportMessage`.
+fn build_json_response(response: &TransportMessage, trace_source: &'static str) -> Response {
+    let json_value = match serialize_response_as_json_value(response) {
+        Ok(v) => v,
+        Err(error_response) => return error_response,
+    };
+    tracing::debug!(
+        target: "mcp.http",
+        source = trace_source,
+        response = %serde_json::to_string(&json_value).unwrap_or_default(),
+        "HTTP response (JSON mode)"
+    );
+    (StatusCode::OK, Json(json_value)).into_response()
+}
+
+/// Build an SSE streaming response from a single `TransportMessage`.
+///
+/// Each element of the stream is serialized via `StdioTransport` for
+/// JSON-RPC-compat framing.
+fn build_sse_response_from_single_message(response: TransportMessage) -> Response {
+    let (tx, rx) = mpsc::unbounded_channel();
+    tx.send(response).unwrap();
+    let stream = UnboundedReceiverStream::new(rx);
+    let sse = Sse::new(stream.map(|msg| {
+        let event_id = Uuid::new_v4().to_string();
+        let json_bytes =
+            crate::shared::StdioTransport::serialize_message(&msg).unwrap_or_else(|e| {
+                tracing::error!(target: "mcp.sse", error = %e, "Failed to serialize SSE message");
+                Vec::new()
+            });
+        let json_str = String::from_utf8(json_bytes).unwrap_or_else(|_| "{}".to_string());
+        Ok::<_, Infallible>(
+            Event::default()
+                .id(event_id)
+                .event("message")
+                .data(json_str),
+        )
+    }));
+    sse.into_response()
+}
+
+/// Build response with appropriate format (JSON or SSE).
+///
+/// Refactored in 75-01 Task 1a-A (P1): extracted
+/// [`serialize_response_as_json_value`], [`build_json_response`], and
+/// [`build_sse_response_from_single_message`] so this function is a thin
+/// per-mode dispatcher.
 fn build_response(
     state: &ServerState,
     response: TransportMessage,
     session_id: Option<&String>,
 ) -> Response {
     if state.config.enable_json_response {
-        // JSON response mode - use JSON-RPC compatibility layer
-        let json_bytes = match crate::shared::StdioTransport::serialize_message(&response) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                return create_error_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    -32603,
-                    &format!("Failed to serialize response: {}", e),
-                );
-            },
-        };
-
-        // Trace serialized bytes for debugging (single-line for CloudWatch compatibility)
-        tracing::debug!(
-            target: "mcp.http",
-            response = %String::from_utf8_lossy(&json_bytes),
-            "HTTP response serialized bytes"
-        );
-
-        // Parse JSON bytes to Value for Json response
-        let json_value: serde_json::Value = match serde_json::from_slice(&json_bytes) {
-            Ok(val) => val,
-            Err(e) => {
-                return create_error_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    -32603,
-                    &format!("Failed to parse JSON response: {}", e),
-                );
-            },
-        };
-
-        // Trace final JSON value (compact for CloudWatch compatibility)
-        tracing::debug!(
-            target: "mcp.http",
-            response = %serde_json::to_string(&json_value).unwrap_or_default(),
-            "HTTP response (JSON mode)"
-        );
-
-        (StatusCode::OK, Json(json_value)).into_response()
-    } else {
-        // SSE streaming mode
-        if let Some(sid) = session_id {
-            if let Some(sender) = state.sse_streams.read().get(sid) {
-                // Send to existing SSE stream
-                let _ = sender.send(response);
-                StatusCode::ACCEPTED.into_response()
-            } else {
-                // Return as SSE stream
-                let (tx, rx) = mpsc::unbounded_channel();
-                tx.send(response).unwrap();
-
-                let stream = UnboundedReceiverStream::new(rx);
-                let sse = Sse::new(stream.map(|msg| {
-                    let event_id = Uuid::new_v4().to_string();
-                    // Use JSON-RPC compatibility layer for SSE messages
-                    let json_bytes = crate::shared::StdioTransport::serialize_message(&msg)
-                        .unwrap_or_else(|e| {
-                            tracing::error!(target: "mcp.sse", error = %e, "Failed to serialize SSE message");
-                            Vec::new()
-                        });
-                    let json_str =
-                        String::from_utf8(json_bytes).unwrap_or_else(|_| "{}".to_string());
-                    Ok::<_, Infallible>(
-                        Event::default()
-                            .id(event_id)
-                            .event("message")
-                            .data(json_str),
-                    )
-                }));
-
-                sse.into_response()
-            }
-        } else {
-            // No session, return JSON using JSON-RPC compatibility layer
-            let json_bytes = match crate::shared::StdioTransport::serialize_message(&response) {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    return create_error_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        -32603,
-                        &format!("Failed to serialize response: {}", e),
-                    );
-                },
-            };
-
-            let json_value: serde_json::Value = match serde_json::from_slice(&json_bytes) {
-                Ok(val) => val,
-                Err(e) => {
-                    return create_error_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        -32603,
-                        &format!("Failed to parse JSON response: {}", e),
-                    );
-                },
-            };
-
-            (StatusCode::OK, Json(json_value)).into_response()
-        }
+        return build_json_response(&response, "JSON mode");
     }
+    // SSE streaming mode
+    let Some(sid) = session_id else {
+        return build_json_response(&response, "SSE no-session fallback");
+    };
+    if let Some(sender) = state.sse_streams.read().get(sid) {
+        let _ = sender.send(response);
+        return StatusCode::ACCEPTED.into_response();
+    }
+    build_sse_response_from_single_message(response)
 }
 
-/// Validate protocol version for non-init requests.
+/// Validate that a provided protocol version is in the supported set.
+fn validate_protocol_version_supported(
+    protocol_version: Option<&String>,
+) -> std::result::Result<(), Response> {
+    let Some(version) = protocol_version else {
+        return Ok(());
+    };
+    if crate::SUPPORTED_PROTOCOL_VERSIONS.contains(&version.as_str()) {
+        return Ok(());
+    }
+    Err(create_error_response(
+        StatusCode::BAD_REQUEST,
+        -32600,
+        &format!("Unsupported protocol version: {}", version),
+    ))
+}
+
+/// In stateful mode, verify that a provided protocol version matches the
+/// session's recorded negotiated version (if any). Pure early-return chain.
+fn validate_protocol_version_matches_session(
+    state: &ServerState,
+    session_id: Option<&String>,
+    protocol_version: Option<&String>,
+) -> std::result::Result<(), Response> {
+    if state.config.session_id_generator.is_none() {
+        return Ok(());
+    }
+    let Some(sid) = session_id else {
+        return Ok(());
+    };
+    let sessions = state.sessions.read();
+    let Some(session_info) = sessions.get(sid.as_str()) else {
+        return Ok(());
+    };
+    let Some(negotiated_version) = session_info.protocol_version.as_ref() else {
+        return Ok(());
+    };
+    let Some(provided_version) = protocol_version else {
+        return Ok(());
+    };
+    if provided_version == negotiated_version {
+        return Ok(());
+    }
+    Err(create_error_response(
+        StatusCode::BAD_REQUEST,
+        -32600,
+        &format!(
+            "Protocol version mismatch: expected {}, got {}",
+            negotiated_version, provided_version
+        ),
+    ))
+}
+
+/// Validate the `MCP-Protocol-Version` header (if any) against the supported
+/// set and any negotiated session version.
+///
+/// Refactored in 75-01 Task 1a-A (P2): extracted
+/// [`validate_protocol_version_supported`] and
+/// [`validate_protocol_version_matches_session`] as early-return chains.
 fn validate_protocol_version(
     state: &ServerState,
     session_id: Option<&String>,
     protocol_version: Option<&String>,
 ) -> std::result::Result<(), Response> {
-    if let Some(version) = protocol_version {
-        // Check if the provided version is supported
-        if !crate::SUPPORTED_PROTOCOL_VERSIONS.contains(&version.as_str()) {
-            return Err(create_error_response(
-                StatusCode::BAD_REQUEST,
-                -32600,
-                &format!("Unsupported protocol version: {}", version),
-            ));
-        }
-    }
-
-    // For stateful mode, also validate against session's negotiated version if exists
-    if state.config.session_id_generator.is_some() {
-        if let Some(sid) = session_id {
-            if let Some(session_info) = state.sessions.read().get(sid.as_str()) {
-                if let Some(ref negotiated_version) = session_info.protocol_version {
-                    // If header provided, it should match the negotiated version
-                    if let Some(provided_version) = protocol_version {
-                        if provided_version != negotiated_version {
-                            return Err(create_error_response(
-                                StatusCode::BAD_REQUEST,
-                                -32600,
-                                &format!(
-                                    "Protocol version mismatch: expected {}, got {}",
-                                    negotiated_version, provided_version
-                                ),
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
+    validate_protocol_version_supported(protocol_version)?;
+    validate_protocol_version_matches_session(state, session_id, protocol_version)
 }
 
 /// Handle POST requests
