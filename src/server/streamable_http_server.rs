@@ -387,69 +387,80 @@ impl StreamableHttpServer {
     }
 }
 
+/// Validate `Content-Type: application/json` for POST.
+fn validate_content_type_json(headers: &HeaderMap) -> std::result::Result<(), Response> {
+    let Some(content_type) = headers.get(header::CONTENT_TYPE) else {
+        return Err(create_error_response(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            -32700,
+            "Content-Type header is required",
+        ));
+    };
+    let ct = content_type.to_str().unwrap_or("");
+    if !ct.contains(APPLICATION_JSON) {
+        return Err(create_error_response(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            -32700,
+            "Content-Type must be application/json",
+        ));
+    }
+    Ok(())
+}
+
+/// Validate `Accept: application/json` or `text/event-stream` for POST.
+fn validate_accept_post(headers: &HeaderMap) -> std::result::Result<(), Response> {
+    let Some(accept) = headers.get(header::ACCEPT) else {
+        return Err(create_error_response(
+            StatusCode::NOT_ACCEPTABLE,
+            -32700,
+            "Accept header is required",
+        ));
+    };
+    let accept_str = accept.to_str().unwrap_or("");
+    if !accept_str.contains(APPLICATION_JSON) && !accept_str.contains(TEXT_EVENT_STREAM) {
+        return Err(create_error_response(
+            StatusCode::NOT_ACCEPTABLE,
+            -32700,
+            "Accept header must include application/json or text/event-stream",
+        ));
+    }
+    Ok(())
+}
+
+/// Validate `Accept: text/event-stream` for GET (SSE).
+fn validate_accept_sse(headers: &HeaderMap) -> std::result::Result<(), Response> {
+    let Some(accept) = headers.get(header::ACCEPT) else {
+        return Err(create_error_response(
+            StatusCode::NOT_ACCEPTABLE,
+            -32700,
+            "Accept header is required for SSE",
+        ));
+    };
+    let accept_str = accept.to_str().unwrap_or("");
+    if !accept_str.contains(TEXT_EVENT_STREAM) {
+        return Err(create_error_response(
+            StatusCode::NOT_ACCEPTABLE,
+            -32700,
+            "Accept header must be text/event-stream for SSE",
+        ));
+    }
+    Ok(())
+}
+
 /// Validate request headers and return appropriate error response.
+///
+/// Refactored in 75-01 Task 1a-A: per-header checks extracted to
+/// [`validate_content_type_json`], [`validate_accept_post`], and
+/// [`validate_accept_sse`] (P3).
 fn validate_headers(headers: &HeaderMap, method: &str) -> std::result::Result<(), Response> {
     match method {
         "POST" => {
-            // Validate Content-Type
-            if let Some(content_type) = headers.get(header::CONTENT_TYPE) {
-                let ct = content_type.to_str().unwrap_or("");
-                if !ct.contains(APPLICATION_JSON) {
-                    return Err(create_error_response(
-                        StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                        -32700,
-                        "Content-Type must be application/json",
-                    ));
-                }
-            } else {
-                return Err(create_error_response(
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    -32700,
-                    "Content-Type header is required",
-                ));
-            }
-
-            // Validate Accept
-            if let Some(accept) = headers.get(header::ACCEPT) {
-                let accept_str = accept.to_str().unwrap_or("");
-                if !accept_str.contains(APPLICATION_JSON) && !accept_str.contains(TEXT_EVENT_STREAM)
-                {
-                    return Err(create_error_response(
-                        StatusCode::NOT_ACCEPTABLE,
-                        -32700,
-                        "Accept header must include application/json or text/event-stream",
-                    ));
-                }
-            } else {
-                return Err(create_error_response(
-                    StatusCode::NOT_ACCEPTABLE,
-                    -32700,
-                    "Accept header is required",
-                ));
-            }
+            validate_content_type_json(headers)?;
+            validate_accept_post(headers)?;
         },
-        "GET" => {
-            // Validate Accept for SSE
-            if let Some(accept) = headers.get(header::ACCEPT) {
-                let accept_str = accept.to_str().unwrap_or("");
-                if !accept_str.contains(TEXT_EVENT_STREAM) {
-                    return Err(create_error_response(
-                        StatusCode::NOT_ACCEPTABLE,
-                        -32700,
-                        "Accept header must be text/event-stream for SSE",
-                    ));
-                }
-            } else {
-                return Err(create_error_response(
-                    StatusCode::NOT_ACCEPTABLE,
-                    -32700,
-                    "Accept header is required for SSE",
-                ));
-            }
-        },
+        "GET" => validate_accept_sse(headers)?,
         _ => {},
     }
-
     Ok(())
 }
 
