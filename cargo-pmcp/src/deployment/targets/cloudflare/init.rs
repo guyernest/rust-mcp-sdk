@@ -101,42 +101,8 @@ fn auto_detect_server_package(
     println!("🔍 Auto-detecting MCP server package...");
 
     // Check if project_root itself is a package (standalone project)
-    let root_cargo_toml = project_root.join("Cargo.toml");
-    if root_cargo_toml.exists() {
-        let content =
-            std::fs::read_to_string(&root_cargo_toml).context("Failed to read root Cargo.toml")?;
-
-        // If it has [package], it's a standalone package
-        if content.contains("[package]") && !content.contains("[workspace]") {
-            let name = extract_package_name(&content)?;
-            println!("   Found standalone package: {}", name);
-            return Ok((name, project_root.to_path_buf()));
-        }
-
-        // If it's a workspace, search for packages
-        if content.contains("[workspace]") {
-            println!("   Detected workspace, searching for MCP server package...");
-
-            // FIRST PASS: Look for -core packages (WASM-compatible)
-            let core_package = find_core_package(project_root)?;
-            if let Some((name, path)) = core_package {
-                println!("   ✅ Found core package (WASM-compatible): {}", name);
-                return Ok((name, path));
-            }
-
-            println!("   ⚠️  No -core package found, searching for any MCP server package...");
-
-            // SECOND PASS: Fall back to any package
-            let any_package = find_any_package(project_root)?;
-            if let Some((name, path)) = any_package {
-                println!(
-                    "   ⚠️  Using package: {} (may have WASM compatibility issues)",
-                    name
-                );
-                println!("   ℹ️  Consider splitting into core/transport packages for multi-target deployment");
-                return Ok((name, path));
-            }
-        }
+    if let Some(result) = try_standalone_or_workspace_detection(project_root)? {
+        return Ok(result);
     }
 
     bail!(
@@ -155,6 +121,101 @@ fn auto_detect_server_package(
     )
 }
 
+/// First-pass detection: standalone package at root, or workspace search.
+/// Returns `Ok(None)` when root Cargo.toml doesn't exist or doesn't match
+/// either shape (caller emits the bail! with troubleshooting).
+fn try_standalone_or_workspace_detection(
+    project_root: &std::path::Path,
+) -> Result<Option<(String, std::path::PathBuf)>> {
+    let root_cargo_toml = project_root.join("Cargo.toml");
+    if !root_cargo_toml.exists() {
+        return Ok(None);
+    }
+
+    let content =
+        std::fs::read_to_string(&root_cargo_toml).context("Failed to read root Cargo.toml")?;
+
+    if content.contains("[package]") && !content.contains("[workspace]") {
+        let name = extract_package_name(&content)?;
+        println!("   Found standalone package: {}", name);
+        return Ok(Some((name, project_root.to_path_buf())));
+    }
+
+    if content.contains("[workspace]") {
+        println!("   Detected workspace, searching for MCP server package...");
+        return detect_workspace_package(project_root);
+    }
+
+    Ok(None)
+}
+
+/// Search a workspace for a -core package first, any MCP package second.
+fn detect_workspace_package(
+    project_root: &std::path::Path,
+) -> Result<Option<(String, std::path::PathBuf)>> {
+    if let Some((name, path)) = find_core_package(project_root)? {
+        println!("   ✅ Found core package (WASM-compatible): {}", name);
+        return Ok(Some((name, path)));
+    }
+
+    println!("   ⚠️  No -core package found, searching for any MCP server package...");
+
+    if let Some((name, path)) = find_any_package(project_root)? {
+        println!(
+            "   ⚠️  Using package: {} (may have WASM compatibility issues)",
+            name
+        );
+        println!("   ℹ️  Consider splitting into core/transport packages for multi-target deployment");
+        return Ok(Some((name, path)));
+    }
+
+    Ok(None)
+}
+
+/// Scan a list of candidate directories for the first package whose name
+/// satisfies `accept`, using `try_package_dir` to load each subdirectory.
+///
+/// Shared helper replacing the duplicated `for search_dir in search_dirs { ... }`
+/// loop that previously lived in find_core_package and find_any_package.
+fn scan_for_package(
+    search_dirs: &[std::path::PathBuf],
+    accept: impl Fn(&str) -> bool,
+) -> Result<Option<(String, std::path::PathBuf)>> {
+    for search_dir in search_dirs {
+        if !search_dir.exists() || !search_dir.is_dir() {
+            continue;
+        }
+        if let Some(found) = first_matching_package(search_dir, &accept)? {
+            return Ok(Some(found));
+        }
+    }
+    Ok(None)
+}
+
+/// Scan a single directory (non-recursive) and return the first package whose
+/// name satisfies `accept`.
+fn first_matching_package(
+    search_dir: &std::path::Path,
+    accept: &impl Fn(&str) -> bool,
+) -> Result<Option<(String, std::path::PathBuf)>> {
+    let Ok(entries) = std::fs::read_dir(search_dir) else {
+        return Ok(None);
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if let Ok((name, pkg_path)) = try_package_dir(&path) {
+            if accept(&name) {
+                return Ok(Some((name, pkg_path)));
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// Find a -core package (preferred for WASM compatibility)
 fn find_core_package(
     project_root: &std::path::Path,
@@ -165,73 +226,25 @@ fn find_core_package(
         project_root.join("packages"),       // packages/ directory
         project_root.to_path_buf(),          // Root level packages
     ];
-
-    for search_dir in search_dirs {
-        if !search_dir.exists() || !search_dir.is_dir() {
-            continue;
-        }
-
-        if let Ok(entries) = std::fs::read_dir(&search_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    if let Ok((name, pkg_path)) = try_package_dir(&path) {
-                        // Prioritize packages ending with -core
-                        if name.ends_with("-core") {
-                            return Ok(Some((name, pkg_path)));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(None)
+    scan_for_package(&search_dirs, |name| name.ends_with("-core"))
 }
 
 /// Find any package that looks like an MCP server
 fn find_any_package(
     project_root: &std::path::Path,
 ) -> Result<Option<(String, std::path::PathBuf)>> {
-    let search_dirs = vec![
-        project_root.to_path_buf(),    // Root level packages
+    // Check root-level first (skip the project_root itself; try_package_dir
+    // already rejects workspace roots).
+    let root_dirs = vec![project_root.to_path_buf()];
+    if let Some(found) = scan_for_package(&root_dirs, |_| true)? {
+        return Ok(Some(found));
+    }
+
+    let sub_dirs = vec![
         project_root.join("crates"),   // crates/ directory
         project_root.join("packages"), // packages/ directory
     ];
-
-    for search_dir in search_dirs {
-        if !search_dir.exists() || !search_dir.is_dir() {
-            continue;
-        }
-
-        // If search_dir is project_root, only check immediate children
-        if search_dir == project_root {
-            if let Ok(entries) = std::fs::read_dir(&search_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() && path != project_root {
-                        if let Ok((name, pkg_path)) = try_package_dir(&path) {
-                            return Ok(Some((name, pkg_path)));
-                        }
-                    }
-                }
-            }
-        } else {
-            // For crates/ and packages/ directories, scan all subdirectories
-            if let Ok(entries) = std::fs::read_dir(&search_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        if let Ok((name, pkg_path)) = try_package_dir(&path) {
-                            return Ok(Some((name, pkg_path)));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(None)
+    scan_for_package(&sub_dirs, |_| true)
 }
 
 /// Try to load a package from a directory
@@ -350,23 +363,8 @@ fn detect_pmcp_dependency(project_root: &std::path::Path) -> Result<String> {
         return Ok(pmcp_dep);
     }
 
-    // Check workspace members
-    for dir in &["crates", "packages"] {
-        let search_dir = project_root.join(dir);
-        if search_dir.exists() && search_dir.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&search_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        let cargo_toml = path.join("Cargo.toml");
-                        if let Ok(pmcp_dep) = try_find_pmcp_in_cargo_toml(&cargo_toml, project_root)
-                        {
-                            return Ok(pmcp_dep);
-                        }
-                    }
-                }
-            }
-        }
+    if let Some(pmcp_dep) = search_workspace_members_for_pmcp(project_root) {
+        return Ok(pmcp_dep);
     }
 
     // Fallback: assume pmcp is in the SDK (common for examples)
@@ -375,6 +373,41 @@ fn detect_pmcp_dependency(project_root: &std::path::Path) -> Result<String> {
         "# Auto-detected: pmcp from SDK (adjust if needed)\n\
          pmcp = { path = \"../../../..\", default-features = false, features = [\"wasm\"] }",
     ))
+}
+
+/// Search workspace member directories (crates/, packages/) for a Cargo.toml
+/// that references pmcp. Returns the rendered dependency string on first hit.
+fn search_workspace_members_for_pmcp(project_root: &std::path::Path) -> Option<String> {
+    for dir in &["crates", "packages"] {
+        let search_dir = project_root.join(dir);
+        if !search_dir.exists() || !search_dir.is_dir() {
+            continue;
+        }
+        if let Some(pmcp_dep) = scan_dir_members_for_pmcp(&search_dir, project_root) {
+            return Some(pmcp_dep);
+        }
+    }
+    None
+}
+
+/// Scan immediate subdirectories of `search_dir` for a Cargo.toml that
+/// references pmcp.
+fn scan_dir_members_for_pmcp(
+    search_dir: &std::path::Path,
+    project_root: &std::path::Path,
+) -> Option<String> {
+    let entries = std::fs::read_dir(search_dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let cargo_toml = path.join("Cargo.toml");
+        if let Ok(pmcp_dep) = try_find_pmcp_in_cargo_toml(&cargo_toml, project_root) {
+            return Some(pmcp_dep);
+        }
+    }
+    None
 }
 
 /// Try to find pmcp dependency in a specific Cargo.toml
@@ -389,47 +422,56 @@ fn try_find_pmcp_in_cargo_toml(
     let content = std::fs::read_to_string(cargo_toml)?;
 
     // Check if this uses workspace dependencies
-    if content.contains("pmcp = { workspace = true }")
-        || content.contains("pmcp = {workspace = true}")
-    {
-        // Look for workspace.dependencies.pmcp in the root Cargo.toml
+    if uses_workspace_pmcp(&content) {
         let root_cargo = project_root.join("Cargo.toml");
         if root_cargo.exists() && root_cargo != cargo_toml {
             return try_find_workspace_pmcp(&root_cargo, project_root);
         }
     }
 
-    // Look for direct pmcp dependency
-    if let Some(line) = content.lines().find(|l| l.trim().starts_with("pmcp")) {
-        // If it has a path, extract it and adjust relative to adapter location
-        if line.contains("path =") {
-            // Parse the path from the line like: pmcp = { path = "../pmcp" }
-            if let Some(path_start) = line.find("path = \"") {
-                let path_content = &line[path_start + 8..];
-                if let Some(path_end) = path_content.find('"') {
-                    let pmcp_path = &path_content[..path_end];
+    // Look for direct pmcp dependency with a path
+    let pmcp_path = find_direct_pmcp_path(&content)
+        .context("pmcp not found in Cargo.toml")?;
 
-                    // Resolve the pmcp path relative to the Cargo.toml's directory
-                    let cargo_dir = cargo_toml.parent().unwrap();
-                    let pmcp_absolute = cargo_dir.join(pmcp_path).canonicalize()?;
+    let cargo_dir = cargo_toml.parent().unwrap();
+    let pmcp_absolute = cargo_dir.join(pmcp_path).canonicalize()?;
+    render_pmcp_dep_line(&pmcp_absolute, project_root)
+}
 
-                    // Calculate relative path from deploy/cloudflare/ to pmcp
-                    let deploy_dir = project_root.join("deploy/cloudflare");
-                    let relative = pathdiff::diff_paths(&pmcp_absolute, &deploy_dir)
-                        .context("Failed to calculate relative path to pmcp")?;
+/// Returns true if the Cargo.toml references pmcp via `pmcp = { workspace = true }`.
+fn uses_workspace_pmcp(content: &str) -> bool {
+    content.contains("pmcp = { workspace = true }")
+        || content.contains("pmcp = {workspace = true}")
+}
 
-                    let relative_str = relative.to_str().context("Invalid UTF-8 in path")?;
-
-                    return Ok(format!(
-                        "pmcp = {{ path = \"{}\", default-features = false, features = [\"wasm\"] }}",
-                        relative_str
-                    ));
-                }
-            }
-        }
+/// Extract a literal path from a `pmcp = { path = "..." }` line. Returns None
+/// if no pmcp line with an inline `path = "..."` is present.
+fn find_direct_pmcp_path(content: &str) -> Option<&str> {
+    let line = content.lines().find(|l| l.trim().starts_with("pmcp"))?;
+    if !line.contains("path =") {
+        return None;
     }
+    let path_start = line.find("path = \"")?;
+    let path_content = &line[path_start + 8..];
+    let path_end = path_content.find('"')?;
+    Some(&path_content[..path_end])
+}
 
-    bail!("pmcp not found in Cargo.toml")
+/// Render the final `pmcp = { path = "...", default-features = false, features = ["wasm"] }`
+/// dependency line, with the path made relative to the generated
+/// `deploy/cloudflare/` directory.
+fn render_pmcp_dep_line(
+    pmcp_absolute: &std::path::Path,
+    project_root: &std::path::Path,
+) -> Result<String> {
+    let deploy_dir = project_root.join("deploy/cloudflare");
+    let relative = pathdiff::diff_paths(pmcp_absolute, &deploy_dir)
+        .context("Failed to calculate relative path to pmcp")?;
+    let relative_str = relative.to_str().context("Invalid UTF-8 in path")?;
+    Ok(format!(
+        "pmcp = {{ path = \"{}\", default-features = false, features = [\"wasm\"] }}",
+        relative_str
+    ))
 }
 
 /// Try to find pmcp in workspace.dependencies
@@ -438,65 +480,55 @@ fn try_find_workspace_pmcp(
     project_root: &std::path::Path,
 ) -> Result<String> {
     let content = std::fs::read_to_string(root_cargo)?;
+    let pmcp_path_str = extract_workspace_pmcp_path(&content)
+        .context("pmcp path not found in [workspace.dependencies.pmcp]")?;
 
-    // Look for [workspace.dependencies.pmcp] section and then parse the path within it
+    let cargo_dir = root_cargo.parent().unwrap();
+    let pmcp_full_path = if std::path::Path::new(&pmcp_path_str).is_absolute() {
+        std::path::PathBuf::from(&pmcp_path_str)
+    } else {
+        cargo_dir.join(&pmcp_path_str)
+    };
+
+    let pmcp_absolute = pmcp_full_path
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve pmcp path: {}", pmcp_path_str))?;
+
+    render_pmcp_dep_line(&pmcp_absolute, project_root)
+}
+
+/// Parse `[workspace.dependencies.pmcp]` section of a workspace root Cargo.toml
+/// and return the `path = "..."` literal. Returns None if the section is
+/// missing or doesn't contain a path key.
+fn extract_workspace_pmcp_path(content: &str) -> Option<String> {
     let mut in_pmcp_section = false;
-    let mut pmcp_path: Option<String> = None;
-
     for line in content.lines() {
         let trimmed = line.trim();
 
-        // Check for [workspace.dependencies.pmcp] section
         if trimmed == "[workspace.dependencies.pmcp]" {
             in_pmcp_section = true;
             continue;
         }
 
-        // End of current section
         if trimmed.starts_with('[') && in_pmcp_section {
             break;
         }
 
-        // If we're in pmcp section, look for path
         if in_pmcp_section && trimmed.starts_with("path =") {
-            // Parse: path = "/some/path" or path = "/some/path"
-            if let Some(path_start) = trimmed.find("path = \"") {
-                let path_content = &trimmed[path_start + 8..];
-                if let Some(path_end) = path_content.find('"') {
-                    pmcp_path = Some(path_content[..path_end].to_string());
-                    break;
-                }
+            if let Some(path) = parse_path_literal(trimmed) {
+                return Some(path);
             }
         }
     }
+    None
+}
 
-    if let Some(pmcp_path_str) = pmcp_path {
-        // Resolve the path (could be absolute or relative)
-        let cargo_dir = root_cargo.parent().unwrap();
-        let pmcp_full_path = if std::path::Path::new(&pmcp_path_str).is_absolute() {
-            std::path::PathBuf::from(&pmcp_path_str)
-        } else {
-            cargo_dir.join(&pmcp_path_str)
-        };
-
-        let pmcp_absolute = pmcp_full_path
-            .canonicalize()
-            .with_context(|| format!("Failed to resolve pmcp path: {}", pmcp_path_str))?;
-
-        // Calculate relative path from deploy/cloudflare/ to pmcp
-        let deploy_dir = project_root.join("deploy/cloudflare");
-        let relative = pathdiff::diff_paths(&pmcp_absolute, &deploy_dir)
-            .context("Failed to calculate relative path to pmcp")?;
-
-        let relative_str = relative.to_str().context("Invalid UTF-8 in path")?;
-
-        return Ok(format!(
-            "pmcp = {{ path = \"{}\", default-features = false, features = [\"wasm\"] }}",
-            relative_str
-        ));
-    }
-
-    bail!("pmcp path not found in [workspace.dependencies.pmcp]")
+/// Parse `path = "..."` from a TOML line, returning the quoted literal.
+fn parse_path_literal(line: &str) -> Option<String> {
+    let path_start = line.find("path = \"")?;
+    let path_content = &line[path_start + 8..];
+    let path_end = path_content.find('"')?;
+    Some(path_content[..path_end].to_string())
 }
 
 fn create_wrangler_toml(deploy_dir: &std::path::Path, server_name: &str) -> Result<()> {
