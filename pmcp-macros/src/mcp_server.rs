@@ -127,7 +127,7 @@ fn extra_param_ident(has_extra: bool) -> syn::Ident {
 
 /// Build call-site argument tokens (`typed_args`, `extra`) in user-declared
 /// parameter order for tool/prompt methods. Panics on State<T> (collected
-/// against #[mcp_server] at parse time).
+/// against `#[mcp_server]` at parse time).
 fn build_call_args_for_tool_or_prompt(param_order: &[ParamSlot]) -> Vec<TokenStream> {
     param_order
         .iter()

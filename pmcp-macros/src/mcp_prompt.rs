@@ -157,7 +157,7 @@ fn classify_prompt_fn_params(input: &ItemFn) -> syn::Result<PromptFnParams> {
     })
 }
 
-/// Bundled state codegen for standalone mcp_prompt.
+/// Bundled state codegen for standalone `mcp_prompt`.
 struct PromptStateCodegen {
     struct_fields: TokenStream,
     with_state_method: TokenStream,

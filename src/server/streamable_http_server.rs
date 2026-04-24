@@ -922,9 +922,10 @@ fn compute_outbound_protocol_version(
     negotiated_version: Option<&str>,
 ) -> String {
     if is_init_request {
-        return negotiated_version
-            .map(std::string::ToString::to_string)
-            .unwrap_or_else(|| crate::DEFAULT_PROTOCOL_VERSION.to_string());
+        return negotiated_version.map_or_else(
+            || crate::DEFAULT_PROTOCOL_VERSION.to_string(),
+            std::string::ToString::to_string,
+        );
     }
     if let Some(sid) = response_session_id {
         if let Some(session_info) = state.sessions.read().get(sid) {
@@ -1564,10 +1565,10 @@ async fn replay_sse_events_from_header(
 /// Map a `TransportMessage` to an SSE `Event`, spawning a best-effort event
 /// store write in parallel.
 fn sse_event_for_message(
-    msg: TransportMessage,
+    msg: &TransportMessage,
     session_id: &str,
     event_store: Option<&Arc<InMemoryEventStore>>,
-) -> std::result::Result<Event, Infallible> {
+) -> Event {
     let event_id = Uuid::new_v4().to_string();
     if let Some(store) = event_store {
         let sid = session_id.to_string();
@@ -1578,10 +1579,10 @@ fn sse_event_for_message(
             let _ = store.store_event(&sid, &event_id_clone, &msg_clone).await;
         });
     }
-    Ok(Event::default()
+    Event::default()
         .id(event_id)
         .event("message")
-        .data(serde_json::to_string(&msg).unwrap()))
+        .data(serde_json::to_string(msg).unwrap())
 }
 
 /// Attach SSE-specific hardening headers (session, cache-control, connection)
@@ -1641,7 +1642,11 @@ async fn handle_get_sse(State(state): State<ServerState>, headers: HeaderMap) ->
     let event_store = state.config.event_store.clone();
 
     let sse = Sse::new(stream.map(move |msg| {
-        sse_event_for_message(msg, &session_id_for_stream, event_store.as_ref())
+        Ok::<_, Infallible>(sse_event_for_message(
+            &msg,
+            &session_id_for_stream,
+            event_store.as_ref(),
+        ))
     }));
 
     let mut response = sse.into_response();

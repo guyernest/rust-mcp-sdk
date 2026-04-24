@@ -184,7 +184,7 @@ fn parse_local_ref_name(ref_str: &str) -> Option<&str> {
 #[cfg(feature = "schema-generation")]
 fn try_inline_single_ref(
     map: &mut serde_json::Map<String, Value>,
-    context: &mut InlineContext<'_>,
+    context: &InlineContext<'_>,
 ) -> bool {
     let Some(Value::String(ref_str)) = map.get("$ref") else {
         return false;

@@ -533,7 +533,7 @@ fn find_producing_step<'a>(
     None
 }
 
-/// Inspect a single `(arg_name, data_source)` entry for a StepOutput
+/// Inspect a single `(arg_name, data_source)` entry for a `StepOutput`
 /// dependency whose producer failed or was skipped, returning a matching
 /// `UnresolvedDependency` reason if so.
 fn dependency_failure_for_arg(

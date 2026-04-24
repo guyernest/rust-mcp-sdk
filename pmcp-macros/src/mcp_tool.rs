@@ -157,7 +157,7 @@ fn classify_tool_fn_params(input: &ItemFn) -> syn::Result<ToolFnParams> {
     })
 }
 
-/// Bundled state codegen for standalone mcp_tool.
+/// Bundled state codegen for standalone `mcp_tool`.
 struct ToolStateCodegen {
     struct_fields: TokenStream,
     with_state_method: TokenStream,
