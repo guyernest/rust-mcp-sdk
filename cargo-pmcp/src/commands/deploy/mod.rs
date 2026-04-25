@@ -1062,6 +1062,14 @@ fn print_inactive_status(server: &str, status_label: &str) {
     }
 }
 
+/// Tuple of OAuth values copied from a source server (None if not copying).
+type CopiedOAuthConfig = (
+    Option<Vec<String>>, // copied_scopes
+    Option<bool>,        // copied_dcr
+    Option<Vec<String>>, // copied_public_clients (always None — not returned by status endpoint)
+    Option<String>,      // copied_pool
+);
+
 /// Resolve OAuth configuration with priority: explicit params > copied values > defaults
 ///
 /// This function implements the configuration resolution logic:
@@ -1076,97 +1084,25 @@ async fn resolve_oauth_config(
     explicit_public_clients: Option<Vec<String>>,
     explicit_shared_pool: Option<String>,
 ) -> Result<(Vec<String>, bool, Option<Vec<String>>, Option<String>)> {
-    use crate::deployment::targets::pmcp_run::graphql;
-
-    // Start with defaults
     let default_scopes: Vec<String> = DEFAULT_OAUTH_SCOPES.iter().map(|s| s.to_string()).collect();
     let default_public_clients: Vec<String> = DEFAULT_PUBLIC_CLIENT_PATTERNS
         .iter()
         .map(|s| s.to_string())
         .collect();
 
-    // If copy_from is specified, fetch config from source server
-    let (copied_scopes, copied_dcr, copied_public_clients, copied_pool) =
-        if let Some(source_server) = copy_from {
-            if oauth_not_quiet() {
-                println!("Copying OAuth configuration from: {}", source_server);
-            }
+    let (copied_scopes, copied_dcr, copied_public_clients, copied_pool) = match copy_from {
+        Some(source_server) => fetch_copied_oauth_config(access_token, source_server).await?,
+        None => (None, None, None, None),
+    };
 
-            match graphql::fetch_server_oauth_endpoints(access_token, source_server).await {
-                Ok(endpoints) => {
-                    if !endpoints.oauth_enabled {
-                        bail!(
-                            "Source server '{}' does not have OAuth enabled. \
-                         Cannot copy configuration from a server without OAuth.",
-                            source_server
-                        );
-                    }
-
-                    let pool_id = endpoints.user_pool_id.ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "Source server '{}' has OAuth enabled but no User Pool ID. \
-                         This is unexpected - please check the server configuration.",
-                            source_server
-                        )
-                    })?;
-
-                    if oauth_not_quiet() {
-                        println!("   Found User Pool: {}", pool_id);
-                        if let Some(ref scopes) = endpoints.scopes {
-                            println!("   Found scopes: {}", scopes.join(", "));
-                        }
-                        println!();
-                    }
-
-                    (
-                        endpoints.scopes,
-                        endpoints.dcr_enabled,
-                        None, // Public client patterns not returned by status endpoint
-                        Some(pool_id),
-                    )
-                },
-                Err(e) => {
-                    bail!(
-                        "Failed to fetch OAuth configuration from '{}': {}\n\
-                     Make sure the server exists and has OAuth enabled.\n\
-                     You can check with: cargo pmcp deploy oauth status --server {}",
-                        source_server,
-                        e,
-                        source_server
-                    );
-                },
-            }
-        } else {
-            (None, None, None, None)
-        };
-
-    // Resolve final values with priority: explicit > copied > default
-    // For scopes: explicit provided OR copied from source OR default
     let final_scopes = explicit_scopes.or(copied_scopes).unwrap_or(default_scopes);
-
-    // For DCR: explicit is always used (it has a default_value in clap)
-    // But if copying and explicit wasn't changed from default, prefer copied
-    let final_dcr = if copy_from.is_some() && explicit_dcr {
-        // User didn't override DCR (it's still the default true)
-        // Use copied value if available, otherwise use explicit (which is default true)
-        copied_dcr.unwrap_or(explicit_dcr)
-    } else {
-        explicit_dcr
-    };
-
-    // For public clients: explicit OR copied OR default (when using shared pool)
-    let final_public_clients = if explicit_public_clients.is_some() {
-        explicit_public_clients
-    } else if copied_public_clients.is_some() {
-        copied_public_clients
-    } else if copy_from.is_some() || explicit_shared_pool.is_some() {
-        // When using shared pool or copying, apply default public clients
-        Some(default_public_clients)
-    } else {
-        None // Let backend use its defaults
-    };
-
-    // For shared pool: explicit OR copied
+    let final_dcr = resolve_dcr(copy_from.is_some(), explicit_dcr, copied_dcr);
+    let final_public_clients = resolve_public_clients(
+        explicit_public_clients,
+        copied_public_clients,
+        copy_from.is_some() || explicit_shared_pool.is_some(),
+        default_public_clients,
+    );
     let final_shared_pool = explicit_shared_pool.or(copied_pool);
 
     Ok((
@@ -1175,4 +1111,93 @@ async fn resolve_oauth_config(
         final_public_clients,
         final_shared_pool,
     ))
+}
+
+/// Fetch OAuth endpoints from `source_server` and translate them to the
+/// copied-config tuple expected by `resolve_oauth_config`. Bails if the source
+/// server has no OAuth enabled or no User Pool ID.
+async fn fetch_copied_oauth_config(
+    access_token: &str,
+    source_server: &str,
+) -> Result<CopiedOAuthConfig> {
+    use crate::deployment::targets::pmcp_run::graphql;
+
+    if oauth_not_quiet() {
+        println!("Copying OAuth configuration from: {}", source_server);
+    }
+
+    let endpoints = graphql::fetch_server_oauth_endpoints(access_token, source_server)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to fetch OAuth configuration from '{}': {}\n\
+                 Make sure the server exists and has OAuth enabled.\n\
+                 You can check with: cargo pmcp deploy oauth status --server {}",
+                source_server,
+                e,
+                source_server
+            )
+        })?;
+
+    if !endpoints.oauth_enabled {
+        bail!(
+            "Source server '{}' does not have OAuth enabled. \
+             Cannot copy configuration from a server without OAuth.",
+            source_server
+        );
+    }
+
+    let pool_id = endpoints.user_pool_id.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Source server '{}' has OAuth enabled but no User Pool ID. \
+             This is unexpected - please check the server configuration.",
+            source_server
+        )
+    })?;
+
+    if oauth_not_quiet() {
+        println!("   Found User Pool: {}", pool_id);
+        if let Some(ref scopes) = endpoints.scopes {
+            println!("   Found scopes: {}", scopes.join(", "));
+        }
+        println!();
+    }
+
+    Ok((
+        endpoints.scopes,
+        endpoints.dcr_enabled,
+        None, // Public client patterns not returned by status endpoint
+        Some(pool_id),
+    ))
+}
+
+/// Resolve the final DCR-enabled value:
+/// - When copying from a source AND `explicit_dcr` is the default `true`, use the copied value.
+/// - Otherwise use the explicit value (which has a clap default).
+fn resolve_dcr(copying: bool, explicit_dcr: bool, copied_dcr: Option<bool>) -> bool {
+    if copying && explicit_dcr {
+        copied_dcr.unwrap_or(explicit_dcr)
+    } else {
+        explicit_dcr
+    }
+}
+
+/// Resolve the final public-clients value with priority: explicit > copied >
+/// default-when-pool-shared. Returns `None` if no signal is present (lets the
+/// backend apply its own defaults).
+fn resolve_public_clients(
+    explicit: Option<Vec<String>>,
+    copied: Option<Vec<String>>,
+    pool_shared_or_copying: bool,
+    default_public_clients: Vec<String>,
+) -> Option<Vec<String>> {
+    if explicit.is_some() {
+        explicit
+    } else if copied.is_some() {
+        copied
+    } else if pool_shared_or_copying {
+        Some(default_public_clients)
+    } else {
+        None
+    }
 }
