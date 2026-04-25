@@ -970,9 +970,7 @@ fn evaluate_string_method<V: VariableProvider>(
     match method {
         ArrayMethodCall::Length => Ok(JsonValue::Number((s.chars().count() as i64).into())),
         ArrayMethodCall::Includes { item } => {
-            eval_string_bool_predicate(s, item, global_vars, local_vars, |s, sub| {
-                s.contains(sub)
-            })
+            eval_string_bool_predicate(s, item, global_vars, local_vars, |s, sub| s.contains(sub))
         },
         ArrayMethodCall::IndexOf { item } => eval_string_index_of(s, item, global_vars, local_vars),
         ArrayMethodCall::Slice { start, end } => Ok(eval_string_slice(s, *start, *end)),

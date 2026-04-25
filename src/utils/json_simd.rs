@@ -48,12 +48,7 @@ impl StripState {
     ///
     /// Returns `Some(byte)` if the byte should be emitted, `None` if it is a
     /// whitespace byte (outside a string) at a SIMD-detected position.
-    fn next_output_byte(
-        &mut self,
-        byte: u8,
-        index: usize,
-        ws_positions: &[usize],
-    ) -> Option<u8> {
+    fn next_output_byte(&mut self, byte: u8, index: usize, ws_positions: &[usize]) -> Option<u8> {
         if self.escape_next {
             self.escape_next = false;
             return Some(byte);

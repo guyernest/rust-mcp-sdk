@@ -153,7 +153,11 @@ async fn proxy_to_backend(event: Request) -> Result<Response<Body>, Error> {
     let headers = resp.headers().clone();
     let bytes = resp.bytes().await.map_err(|e| Error::from(e.to_string()))?;
 
-    Ok(build_lambda_response(status.as_u16(), &headers, bytes.into()))
+    Ok(build_lambda_response(
+        status.as_u16(),
+        &headers,
+        bytes.into(),
+    ))
 }
 
 /// Construct the outbound reqwest request: forward inbound headers (skip Host)
@@ -259,6 +263,9 @@ mod tests {
         // path returns Err rather than panicking.
         let req = build_request(Method::POST, Body::Text("{}".into()));
         let result = handler(req).await;
-        assert!(result.is_err(), "POST without initialized BASE_URL must err");
+        assert!(
+            result.is_err(),
+            "POST without initialized BASE_URL must err"
+        );
     }
 }

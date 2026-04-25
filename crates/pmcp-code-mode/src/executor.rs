@@ -3177,7 +3177,6 @@ impl<H: HttpExecutor> PlanExecutor<H> {
     fn evaluate(&self, expr: &ValueExpr) -> Result<JsonValue, ExecutionError> {
         shared_evaluate(expr, &self.variables)
     }
-
 }
 
 // ============================================================================

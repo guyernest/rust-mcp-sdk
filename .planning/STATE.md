@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: Executing Phase 75
-stopped_at: Phase 75 Wave 3 (75-03-PLAN.md) complete — 5 pmcp-code-mode hotspots refactored to cog ≤25 (both eval-monsters cog 123 + 117 killed via P6); PMAT complexity-gate 29 → 22 (−7); ready for Wave 4 (75-04-PLAN.md, scattered hotspots)
-last_updated: "2026-04-24T22:00:00.000Z"
+stopped_at: Phase 75 Wave 4 (75-04-PLAN.md) complete — 5 plan-named scattered hotspots cleared to ≤25 + 8 Rule-3 warning-level cog reductions + .pmatignore for fuzz/+packages/+examples/ + SATD triage (3 umbrella issues #247/#248/#249); PMAT complexity-gate 22 → 0 (−22); aggregate Phase 75 delta 94 → 0; ready for Wave 5 (75-05-PLAN.md, CI gate + badge workflow patch)
+last_updated: "2026-04-25T03:30:00.000Z"
 progress:
   total_phases: 40
   completed_phases: 35
   total_plans: 90
-  completed_plans: 87
-  percent: 96
+  completed_plans: 88
+  percent: 97
 ---
 
 # Project State
@@ -25,8 +25,8 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 75 (fix-pmat-issues) — EXECUTING
-Plan: 5 of 6 (75-00 complete, 75-01 complete 2026-04-24, 75-02 complete 2026-04-24, 75-03 complete 2026-04-24)
-Next: 75-04-PLAN.md (Wave 4: scattered crate hotspots — diagnostics, mcp-tester::main, mcp-preview handlers, pmcp-server-lambda; SATD triage per D-04; final pre-Wave-5 gate verification). Phase 75.5 Category A (13 retro-justify sites migrated from 75-01 Task 1a-C) can land in parallel or after Phase 75 Wave 5.
+Plan: 6 of 6 (75-00 complete, 75-01 complete 2026-04-24, 75-02 complete 2026-04-24, 75-03 complete 2026-04-24, 75-04 complete 2026-04-25)
+Next: 75-05-PLAN.md (Wave 5: D-07 CI gate enforcement + D-11-B quality-badges.yml patch). Phase 75.5 Category A (13 retro-justify sites migrated from 75-01 Task 1a-C) can land in parallel or after Phase 75 Wave 5. Phase 75.5 Category B is empty (zero escapees logged across Waves 1+2+3+4).
 After: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
 
 ## Shipped Milestones
@@ -120,8 +120,19 @@ v2.1 decisions:
 - [Phase 75 Wave 3]: One out-of-scope pmcp-code-mode warning remains in the gate (find_blocked_fields_recursive cog 24 in executor.rs — warning-level severity, not in this plan's hotspot list). Deferred to Wave 4 or later per scope-boundary rule.
 - [Phase 75 Wave 3]: Wave 0 semantic-regression baseline (eval_semantic_regression.rs, 34 tests) byte-identical across all 5 commits — no JsonValue output drift; no `assert_eq!` payload changes.
 
+### Phase 75 Wave 4 Decisions (2026-04-25)
+
+- [Phase 75 Wave 4]: All 5 plan-named scattered hotspots refactored to cog ≤25 via P1 + P4 extraction (run_diagnostics_internal 55→16, mcp-tester::main 40→≤25, handle_socket 37→≤25, list_resources 31→≤25, lambda::handler 26→≤25). No P5 invocations. No escapees logged.
+- [Phase 75 Wave 4]: Plan body underspecified the residual gate count — 22 violations at start, 5 plan-named accounted for 6 (with one same-file warning), 8 fuzz/+packages/ handled by `.pmatignore` per Wave 0 chosen_path: (a), and 8 outstanding cog 24-25 warnings in cargo-pmcp/, src/, crates/pmcp-code-mode/ refactored under Rule 3 (auto-fix blocking issue) since gate-exit-0 was the acceptance criterion. All 8 cleared to ≤23.
+- [Phase 75 Wave 4]: PMAT complexity-gate count dropped 22 → 0 (delta −22). **Aggregate Phase 75 delta: baseline 94 → 0 (−94, ALL violations cleared).** `make quality-gate` exits 0 end-to-end. `pmat quality-gate --fail-on-violation --checks complexity` exits 0.
+- [Phase 75 Wave 4]: `.pmatignore` (gitignore-style globs) added at repo root excluding fuzz/, packages/, and examples/ (defensively — count is currently 0 but a future branchy example shouldn't silently regress the gate). Per Wave 0 spike Mechanism 6 — the only path-filter mechanism PMAT 3.15.0 honors on `quality-gate`.
+- [Phase 75 Wave 4]: fuzz/auth_flows::test_auth_flow cog 122 NOT refactored (plan body assumed mandatory refactor under D-03; Wave 0 chosen_path: (a) supersedes that — fuzz harnesses excluded via `.pmatignore` per D-09 framing).
+- [Phase 75 Wave 4]: SATD triage per D-04 — 25 inventoried, 11 in-scope (b) migrated to `// See #NNN` refs against 3 umbrella issues filed at paiml/rust-mcp-sdk (#247 aws-sdk-secretsmanager wiring, #248 cargo-pmcp commands roadmap, #249 pmcp-code-mode misc); 14 classified as out-of-D-04-scope scaffold/template content (json! literal values in scenario_generator.rs + r#"..."# template-literal contents in validate.rs and cloudflare/init.rs that are written to user-generated files).
+- [Phase 75 Wave 4]: Pre-existing build error in crates/pmcp-code-mode/src/cedar_validation.rs (missing get_sql_baseline_policies import in the --all-features test build) fixed under Rule 3 — required for the plan's `cargo test --workspace --all-features` verification step. Reproducible against pre-Wave-4 HEAD.
+- [Phase 75 Wave 4]: Wave 5 ready — needs (a) `--checks complexity` job in .github/workflows/ci.yml and (b) patch `quality-badges.yml:~72` per D-11-B.
+
 ## Session Continuity
 
-Last session: 2026-04-24T22:00:00.000Z
-Stopped at: Phase 75 Wave 3 (75-03-PLAN.md) complete — 5 pmcp-code-mode hotspots refactored; PMAT complexity 29 → 22; ready for Wave 4
-Resume: Run `/gsd-execute-phase 75` to continue with 75-04-PLAN.md (Wave 4: scattered crate hotspots).
+Last session: 2026-04-25T03:30:00.000Z
+Stopped at: Phase 75 Wave 4 (75-04-PLAN.md) complete — 5 plan-named hotspots + 8 Rule-3 cog reductions; .pmatignore configured; SATD triaged with 3 umbrella issues filed; PMAT complexity-gate at 0; ready for Wave 5
+Resume: Run `/gsd-execute-phase 75` to continue with 75-05-PLAN.md (Wave 5: CI gate enforcement + D-11-B badge workflow patch).

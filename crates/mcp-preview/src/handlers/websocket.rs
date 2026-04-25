@@ -82,9 +82,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 /// Returns `Some(text)` for `Message::Text`. Returns `None` for `Close` or
 /// stream errors (caller should break the loop). For other variants (Binary,
 /// Ping, Pong, etc.) returns `Some("")` which the caller treats as "skip".
-fn extract_text_frame(
-    msg: Result<Message, axum::Error>,
-) -> Option<axum::extract::ws::Utf8Bytes> {
+fn extract_text_frame(msg: Result<Message, axum::Error>) -> Option<axum::extract::ws::Utf8Bytes> {
     match msg {
         Ok(Message::Text(text)) => Some(text),
         Ok(Message::Close(_)) | Err(_) => None,

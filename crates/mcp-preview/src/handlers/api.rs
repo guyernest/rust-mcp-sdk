@@ -558,13 +558,11 @@ mod tests {
         enrich_chatgpt_meta_map(&mut map);
 
         assert_eq!(
-            map.get("openai/outputTemplate")
-                .and_then(Value::as_str),
+            map.get("openai/outputTemplate").and_then(Value::as_str),
             Some("ui://app/widget1")
         );
         assert_eq!(
-            map.get("openai/widgetAccessible")
-                .and_then(Value::as_bool),
+            map.get("openai/widgetAccessible").and_then(Value::as_bool),
             Some(true)
         );
         assert!(map.contains_key("openai/toolInvocation/invoking"));
@@ -582,8 +580,7 @@ mod tests {
         enrich_chatgpt_meta_map(&mut map);
 
         assert_eq!(
-            map.get("openai/outputTemplate")
-                .and_then(Value::as_str),
+            map.get("openai/outputTemplate").and_then(Value::as_str),
             Some("ui://app/legacy")
         );
     }
@@ -591,10 +588,7 @@ mod tests {
     #[test]
     fn enrich_chatgpt_meta_map_preserves_server_provided_keys() {
         let mut map = serde_json::Map::new();
-        map.insert(
-            "ui".to_string(),
-            json!({ "resourceUri": "ui://app/x" }),
-        );
+        map.insert("ui".to_string(), json!({ "resourceUri": "ui://app/x" }));
         map.insert(
             "openai/outputTemplate".to_string(),
             Value::String("ui://app/server-set".to_string()),
@@ -603,8 +597,7 @@ mod tests {
         enrich_chatgpt_meta_map(&mut map);
 
         assert_eq!(
-            map.get("openai/outputTemplate")
-                .and_then(Value::as_str),
+            map.get("openai/outputTemplate").and_then(Value::as_str),
             Some("ui://app/server-set"),
             "server value must not be overwritten"
         );
