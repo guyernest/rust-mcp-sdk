@@ -85,7 +85,11 @@ jobs:
     - name: Generate Quality Gate Badge
       run: |
         # Check quality gate status
-        if pmat quality-gate --fail-on-violation --format json > quality_gate.json 2>/dev/null; then
+        # Phase 75 Wave 5 / D-11-B: scope to complexity to match the CI gate command
+        # in .github/workflows/ci.yml `quality-gate` job. Without --checks complexity,
+        # this command stays red on duplicate/SATD/entropy/sections dimensions even
+        # after Phase 75 brings complexity to 0. See badge-vs-gate-verification.md.
+        if pmat quality-gate --fail-on-violation --checks complexity --format json > quality_gate.json 2>/dev/null; then
           GATE_STATUS="passing"
           GATE_COLOR="brightgreen"
         else
