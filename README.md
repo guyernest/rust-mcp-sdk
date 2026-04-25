@@ -1,6 +1,6 @@
 # PMCP - Pragmatic Model Context Protocol
 <!-- QUALITY BADGES START -->
-[![Quality Gate](https://img.shields.io/badge/Quality%20Gate-failing-red)](https://github.com/paiml/rust-mcp-sdk/actions/workflows/quality-badges.yml)
+[![Quality Gate](https://img.shields.io/badge/Quality%20Gate-passing-brightgreen)](https://github.com/paiml/rust-mcp-sdk/actions/workflows/quality-badges.yml)
 [![TDG Score](https://img.shields.io/badge/TDG%20Score-0.00-brightgreen)](https://github.com/paiml/rust-mcp-sdk/actions/workflows/quality-badges.yml)
 [![Complexity](https://img.shields.io/badge/Complexity-clean-brightgreen)](https://github.com/paiml/rust-mcp-sdk/actions/workflows/quality-badges.yml)
 [![Technical Debt](https://img.shields.io/badge/Tech%20Debt-0h-brightgreen)](https://github.com/paiml/rust-mcp-sdk/actions/workflows/quality-badges.yml)
