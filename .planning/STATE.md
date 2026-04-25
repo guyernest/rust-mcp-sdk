@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: Executing Phase 75
-stopped_at: Phase 75 Wave 2 (75-02-PLAN.md) complete — 40 cargo-pmcp hotspots refactored to cog ≤25 (both monsters cog 105 + 91 killed); PMAT complexity-gate 75 → 29 (−46); ready for Wave 3 (75-03-PLAN.md, pmcp-code-mode)
-last_updated: "2026-04-24T18:40:29.000Z"
+stopped_at: Phase 75 Wave 3 (75-03-PLAN.md) complete — 5 pmcp-code-mode hotspots refactored to cog ≤25 (both eval-monsters cog 123 + 117 killed via P6); PMAT complexity-gate 29 → 22 (−7); ready for Wave 4 (75-04-PLAN.md, scattered hotspots)
+last_updated: "2026-04-24T22:00:00.000Z"
 progress:
   total_phases: 40
   completed_phases: 35
@@ -25,8 +25,8 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 75 (fix-pmat-issues) — EXECUTING
-Plan: 4 of 6 (75-00 complete, 75-01 complete 2026-04-24, 75-02 complete 2026-04-24)
-Next: 75-03-PLAN.md (Wave 3: pmcp-code-mode refactors — evaluate_with_scope cog 123 + related hotspots; architecturally deeper than Waves 1-2). Phase 75.5 Category A (13 retro-justify sites migrated from 75-01 Task 1a-C) can land in parallel or after Phase 75 Wave 5.
+Plan: 5 of 6 (75-00 complete, 75-01 complete 2026-04-24, 75-02 complete 2026-04-24, 75-03 complete 2026-04-24)
+Next: 75-04-PLAN.md (Wave 4: scattered crate hotspots — diagnostics, mcp-tester::main, mcp-preview handlers, pmcp-server-lambda; SATD triage per D-04; final pre-Wave-5 gate verification). Phase 75.5 Category A (13 retro-justify sites migrated from 75-01 Task 1a-C) can land in parallel or after Phase 75 Wave 5.
 After: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
 
 ## Shipped Milestones
@@ -111,8 +111,17 @@ v2.1 decisions:
 - [Phase 75 Wave 2]: 7 new in-file unit tests added to commands/test/check.rs for pure predicate helpers (detect_transport_error + print_test_results). Full E2E mock-HTTP tests deferred — out-of-scope for structural refactor.
 - [Phase 75 Wave 2]: Phase 76 dependency inversion reconciled — deploy_to_pmcp_run measured cog 66 at Wave 2 start (was 65 in plan's RESEARCH.md); other 5 named hotspots matched the plan exactly. No task rework.
 
+### Phase 75 Wave 3 Decisions (2026-04-24)
+
+- [Phase 75 Wave 3]: All 5 named pmcp-code-mode hotspots refactored to cog ≤25 via P6 + P1 extraction alone. No P5 invocations. No escapees logged to 75.5-ESCAPEES.md. Both eval-monsters (evaluate_with_scope cog 123→17, evaluate_array_method_with_scope cog 117→≤25) decomposed via per-ValueExpr-variant / per-ArrayMethodCall-variant dispatch tables. evaluate_string_method (50→≤25), parse_policy_annotations (35→≤25), pattern_matches (34→≤25) cleared via P1.
+- [Phase 75 Wave 3]: PMAT complexity-gate count dropped 29 → 22 (delta −7) after Wave 3. Aggregate Phase 75 delta: baseline 94 → 22 (−72). `make quality-gate` exits 0 end-to-end.
+- [Phase 75 Wave 3]: Pre-existing pmcp-code-mode lint debt (18 lib + 28 test clippy errors + 3 dead-code warnings logged in deferred-items.md 2026-04-23) cleared in opening sweep before any cog refactor. Imports trimmed in cedar_validation.rs test mod, manual `if let Some` → `.flatten()`, `assert_eq!(_, true)` → `assert!(_)`, redundant `Ok(?)` removed, etc. No P5/dead-code annotations added beyond two `#[allow(dead_code)]` on retained-but-unused fields/methods (MockHttpExecutor.mode, PlanCompiler.max_api_calls, PlanExecutor::evaluate_with_binding/_with_two_bindings — all extension surfaces or future-diagnostics).
+- [Phase 75 Wave 3]: EvalContext struct allowance from plan body NOT triggered — the per-helper signature spam never materialised because each evaluate_*-variant helper takes only ≤4 args (`expr_subparts`, `&V`, `&HashMap`, sometimes `&mut HashMap`). Dispatcher remains a flat match on `&ValueExpr` / `&ArrayMethodCall`.
+- [Phase 75 Wave 3]: One out-of-scope pmcp-code-mode warning remains in the gate (find_blocked_fields_recursive cog 24 in executor.rs — warning-level severity, not in this plan's hotspot list). Deferred to Wave 4 or later per scope-boundary rule.
+- [Phase 75 Wave 3]: Wave 0 semantic-regression baseline (eval_semantic_regression.rs, 34 tests) byte-identical across all 5 commits — no JsonValue output drift; no `assert_eq!` payload changes.
+
 ## Session Continuity
 
-Last session: 2026-04-24T18:40:29.000Z
-Stopped at: Phase 75 Wave 2 (75-02-PLAN.md) complete — 40 cargo-pmcp hotspots refactored; PMAT complexity 75 → 29; ready for Wave 3
-Resume: Run `/gsd-execute-phase 75` to continue with 75-03-PLAN.md (Wave 3: pmcp-code-mode refactors).
+Last session: 2026-04-24T22:00:00.000Z
+Stopped at: Phase 75 Wave 3 (75-03-PLAN.md) complete — 5 pmcp-code-mode hotspots refactored; PMAT complexity 29 → 22; ready for Wave 4
+Resume: Run `/gsd-execute-phase 75` to continue with 75-04-PLAN.md (Wave 4: scattered crate hotspots).
