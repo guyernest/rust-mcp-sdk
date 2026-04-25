@@ -1,0 +1,70 @@
+name: Quality Gate
+
+# Dedicated workflow whose pass/fail honestly reflects the PMAT complexity gate.
+#
+# The README's "Quality Gate" badge points at this workflow's status badge
+# (`actions/workflows/quality-gate.yml/badge.svg?branch=main`). When this
+# workflow's latest run on `main` succeeds, the badge is green; when it fails,
+# the badge is red — no manual flipping, no swallowed push errors, no
+# protected-branch token escalation needed.
+#
+# The same gate command also runs in `ci.yml` (the merge-blocking gate). This
+# workflow exists separately so the badge is dynamically driven by a single,
+# uncontaminated job — independent of unrelated CI steps that might fail.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Daily check so the badge re-validates against any environmental drift
+    # (e.g., PMAT version changes, dependency updates). Aligned with
+    # quality-badges.yml's 06:00 UTC slot.
+    - cron: '5 6 * * *'
+
+env:
+  # Pin matches ci.yml + quality-badges.yml so badge, gate, and CI stay
+  # aligned (Phase 75 D-09). Bumping requires re-running the W0 spike.
+  PMAT_VERSION: "3.15.0"
+
+jobs:
+  gate:
+    name: PMAT complexity gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+          key: ${{ runner.os }}-pmat-${{ env.PMAT_VERSION }}
+          restore-keys: |
+            ${{ runner.os }}-pmat-
+
+      - name: Install PMAT (cache-aware; reused across runs via ~/.cargo/bin)
+        run: |
+          if ! command -v pmat &>/dev/null || ! pmat --version | grep -qE "^pmat ${PMAT_VERSION}$"; then
+            cargo install pmat --version "=${PMAT_VERSION}" --locked
+          fi
+
+      - name: Verify PMAT version
+        run: |
+          pmat --version
+          pmat --version | grep -qE "^pmat ${PMAT_VERSION}$" || {
+            echo "ERROR: PMAT version mismatch — expected pmat ${PMAT_VERSION}"
+            exit 1
+          }
+
+      - name: Run PMAT quality gate (complexity only — see Phase 75 D-01 / D-11-B)
+        run: pmat quality-gate --fail-on-violation --checks complexity
