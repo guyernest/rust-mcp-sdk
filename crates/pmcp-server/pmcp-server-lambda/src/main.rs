@@ -130,7 +130,6 @@ fn build_cors_preflight_response() -> Response<Body> {
 
 /// Proxy a non-GET/OPTIONS request through to the backend StreamableHttpServer.
 async fn proxy_to_backend(event: Request) -> Result<Response<Body>, Error> {
-    let method = event.method().clone();
     let path_q = event
         .uri()
         .path_and_query()
@@ -140,10 +139,12 @@ async fn proxy_to_backend(event: Request) -> Result<Response<Body>, Error> {
     let base = BASE_URL
         .get()
         .ok_or_else(|| Error::from("Server not started"))?;
-    let client = HTTP.get().expect("client initialized");
+    let client = HTTP
+        .get()
+        .ok_or_else(|| Error::from("HTTP client not started"))?;
 
     let url = format!("{}{}", base, path_q);
-    let reqwest_method = reqwest::Method::from_bytes(method.as_str().as_bytes())
+    let reqwest_method = reqwest::Method::from_bytes(event.method().as_str().as_bytes())
         .map_err(|e| Error::from(e.to_string()))?;
 
     let req = build_proxied_request(client, reqwest_method, &url, event);
