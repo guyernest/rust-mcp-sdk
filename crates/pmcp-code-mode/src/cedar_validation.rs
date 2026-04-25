@@ -561,7 +561,7 @@ mod tests {
     #[cfg(feature = "openapi-code-mode")]
     use crate::policy::types::get_openapi_code_mode_schema_json;
     #[cfg(feature = "sql-code-mode")]
-    use crate::policy::types::get_sql_code_mode_schema_json;
+    use crate::policy::types::{get_sql_baseline_policies, get_sql_code_mode_schema_json};
     use cedar_policy::{PolicySet, Schema};
 
     /// Parse a Cedar schema from JSON.
