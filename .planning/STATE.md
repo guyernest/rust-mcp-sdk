@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
-status: Executing Phase 75
-stopped_at: Phase 75 Wave 5 (75-05-PLAN.md) complete — D-07 CI gate (pmat quality-gate --fail-on-violation --checks complexity) landed in ci.yml; D-11-B badge alignment landed in quality-badges.yml; CLAUDE.md documents the gate; 75-05-GATE-VERIFICATION.md records local-pmat evidence (Task 5-02 replanned option A → option B per user); Task 5-03 badge-flip observation deferred until Wave 5 lands on paiml/main
-last_updated: "2026-04-25T04:15:00.000Z"
+status: Phase 75.5 complete — Phase 75 + 75.5 complexity-debt program closed
+stopped_at: Phase 75.5 (75.5-01-PLAN.md) complete — 12 Category-A bare clippy::cognitive_complexity allows removed from src/; make quality-gate + pmat complexity-only gate both exit 0; ESCAPEES.md (Category B) unchanged at 0 entries. Phase 75 Wave 5 closure follow-up (badge-flip observation post-merge to paiml/main) still pending operator action.
+last_updated: "2026-04-25T05:19:04Z"
 progress:
   total_phases: 40
   completed_phases: 35
@@ -20,14 +20,15 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Close credibility and DX gaps where rmcp outshines PMCP -- documentation accuracy, feature gate presentation, macro documentation, example index, repo hygiene.
-**Current focus:** Phase 75 — fix-pmat-issues
+**Current focus:** Phase 75.5 — pmat-ex-p5-refactor-backlog
 
 ## Current Position
 
-Phase: 75 (fix-pmat-issues) — EXECUTING
-Plan: 1 of 6
-Next: 75-05-PLAN.md (Wave 5: D-07 CI gate enforcement + D-11-B quality-badges.yml patch). Phase 75.5 Category A (13 retro-justify sites migrated from 75-01 Task 1a-C) can land in parallel or after Phase 75 Wave 5. Phase 75.5 Category B is empty (zero escapees logged across Waves 1+2+3+4).
-After: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
+Phase: 75.5 (pmat-ex-p5-refactor-backlog) — COMPLETE
+Plan: 1 of 1 — complete
+Next: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
+After: Phase 73 (Typed client helpers + list_all pagination, PARITY-CLIENT-01)
+Operator follow-ups (deferred from Phase 75 Wave 5, not blocking Phase 74): (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
 
 ## Shipped Milestones
 
@@ -131,6 +132,14 @@ v2.1 decisions:
 - [Phase 75 Wave 4]: Pre-existing build error in crates/pmcp-code-mode/src/cedar_validation.rs (missing get_sql_baseline_policies import in the --all-features test build) fixed under Rule 3 — required for the plan's `cargo test --workspace --all-features` verification step. Reproducible against pre-Wave-4 HEAD.
 - [Phase 75 Wave 4]: Wave 5 ready — needs (a) `--checks complexity` job in .github/workflows/ci.yml and (b) patch `quality-badges.yml:~72` per D-11-B.
 
+### Phase 75.5 Plan 01 Decisions (2026-04-25)
+
+- [Phase 75.5 Plan 01]: All 12 Category-A bare `#[allow(clippy::cognitive_complexity)]` attributes removed from `src/` via single-line attribute deletion (10 files: src/server/elicitation.rs, src/server/notification_debouncer.rs, src/server/resource_watcher.rs, src/server/mod.rs, src/server/transport/websocket_enhanced.rs ×2, src/shared/sse_optimized.rs, src/shared/connection_pool.rs, src/shared/logging.rs, src/client/mod.rs, src/client/http_logging_middleware.rs ×2). No refactor triggered — clippy pedantic+nursery on `--features full` raised zero `cognitive_complexity` warnings post-removal, empirically confirming that all 12 underlying functions sit at cog ≤25 (consistent with main-was-already-green pre-condition).
+- [Phase 75.5 Plan 01]: `make quality-gate` exit 0 + `pmat quality-gate --fail-on-violation --checks complexity` exit 0 (PMAT 3.15.0, matches CI command per Phase 75 Wave 5 D-07) end-to-end. `grep -rn '#[allow(clippy::cognitive_complexity)]' src/` returns 0 matches — Phase 75-ADDENDUM-D10B Rule 1 (no new bare allows) compliance confirmed.
+- [Phase 75.5 Plan 01]: ESCAPEES.md (Category B) unchanged at 0 entries — zero P5-residual handoffs across Phase 75 Waves 1-4 + zero new escapees from this plan (no refactor branch was triggered).
+- [Phase 75.5 Plan 01]: Plan-verify `cargo test --workspace --all-features` surfaced two pre-existing environmental failure clusters classified out-of-scope per deviation-rules SCOPE BOUNDARY: (a) `mcp-e2e-tests::chess` (10 failures) — chromiumoxide v0.9 fetcher cannot find a Chrome browser archive in the runner cache (`~/.cache/ms-playwright` missing); (b) `pmcp-tasks::store::redis` (24 failures) + `pmcp-tasks::store::dynamodb` (12 failures) — TCP "Connection refused (os error 61)" against required external services not running locally. Neither cluster touches src/server/, src/shared/, or src/client/; both fail identically on the parent commit (29dc0a8b) pre-changes. CI-matching gate `make quality-gate` (the authoritative pre-merge check) exits 0.
+- [Phase 75.5 Plan 01]: Phase 75 + 75.5 complexity-debt program **closed**. Aggregate state: 0 PMAT complexity violations gate-wide, 0 bare `#[allow(clippy::cognitive_complexity)]` attributes in src/, ESCAPEES.md empty, CI gate live (D-07), badge command aligned (D-11-B). Pending operator follow-up: merge Wave 5 + 75.5 to paiml/main and run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` to record badge-flip observation.
+
 ### Phase 75 Wave 5 Decisions (2026-04-25)
 
 - [Phase 75 Wave 5]: PMAT quality-gate complexity-only check landed in `.github/workflows/ci.yml` `quality-gate` job (3 new steps: install pinned PMAT 3.15.0, verify version, run `pmat quality-gate --fail-on-violation --checks complexity`). The `gate` aggregate job already lists `quality-gate` in `needs:`, so a PMAT failure now propagates to the org-required `gate` status check and PR-blocks merge.
@@ -142,6 +151,6 @@ v2.1 decisions:
 
 ## Session Continuity
 
-Last session: 2026-04-25T04:15:00.000Z
-Stopped at: Phase 75 Wave 5 (75-05-PLAN.md) complete — D-07 CI gate landed in ci.yml; D-11-B badge alignment landed in quality-badges.yml; CLAUDE.md documents the gate; gate-verification doc records local-pmat evidence (Task 5-02 replanned per user); Task 5-03 badge-flip deferred until Wave 5 lands on paiml/main
-Resume: Run `make quality-gate` and open the Wave 5 PR to upstream per CLAUDE.md "Release Steps". Post-merge, run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and record observation in 75-05-GATE-VERIFICATION.md "## Badge flip observation".
+Last session: 2026-04-25T05:19:04Z
+Stopped at: Phase 75.5 (75.5-01-PLAN.md) complete — 12 Category-A bare `#[allow(clippy::cognitive_complexity)]` attributes removed from src/ in 2 task commits (fae333fa server/+server/transport/, 7a0cc362 shared/+client/). `make quality-gate` exit 0; `pmat quality-gate --fail-on-violation --checks complexity` exit 0; SUMMARY.md written. Phase 75 + 75.5 complexity-debt program closed.
+Resume: Open the consolidated Phase 75 Wave 5 + Phase 75.5 PR to `paiml/rust-mcp-sdk:main` per CLAUDE.md "Release Steps". Post-merge, run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and record observation in `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation". Then proceed to Phase 74 (cargo pmcp auth subcommand).
