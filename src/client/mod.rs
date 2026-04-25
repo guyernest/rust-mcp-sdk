@@ -1910,7 +1910,6 @@ impl<T: Transport> Client<T> {
     }
 
     /// Send a request and wait for response.
-    #[allow(clippy::cognitive_complexity)]
     async fn send_request(
         &self,
         request_id: RequestId,

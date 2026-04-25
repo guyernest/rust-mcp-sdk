@@ -430,7 +430,6 @@ impl LogEntry {
     }
 
     /// Log the entry.
-    #[allow(clippy::cognitive_complexity)]
     pub fn log(self) {
         let json = serde_json::to_string(&self).unwrap_or_else(|_| self.message.clone());
 
