@@ -236,6 +236,16 @@ pub async fn vu_loop(
     active_vus.decrement();
 }
 
+/// Outcome of a single iteration of the VU's load-generation loop.
+enum IterationOutcome {
+    /// Normal shutdown — exit the loop with Ok(()).
+    Stop,
+    /// Continue the loop with the same client.
+    Continue,
+    /// Sample channel closed — exit the loop with Ok(()).
+    SampleSendFailed,
+}
+
 /// Inner VU loop logic, separated for clean exit handling.
 ///
 /// Returns `Ok(())` on normal shutdown, `Err(reason)` on permanent death.
@@ -253,7 +263,6 @@ async fn vu_loop_inner(
 ) -> Result<(), String> {
     let timeout = config.settings.timeout_as_duration();
 
-    // Initialize phase
     let mut client = try_initialize(
         vu_id,
         http_client,
@@ -267,55 +276,89 @@ async fn vu_loop_inner(
     .await
     .ok_or_else(|| "all initialize attempts failed".to_string())?;
 
-    // Build weighted distribution for step selection
     let weights: Vec<u32> = config.scenario.iter().map(|s| s.weight()).collect();
     let dist = WeightedIndex::new(&weights)
         .map_err(|e| format!("failed to build weighted distribution: {e}"))?;
     let mut rng = rand::rngs::StdRng::from_rng(&mut rand::rng());
 
-    // Load generation loop
     loop {
-        if cancel.is_cancelled() {
+        if cancel.is_cancelled()
+            || iteration_limit_reached(iteration_counter, max_iterations, cancel)
+        {
             return Ok(());
         }
 
-        if iteration_limit_reached(iteration_counter, max_iterations, cancel) {
-            return Ok(());
-        }
-
-        // Execute one step and emit sample
-        let step_idx = dist.sample(&mut rng);
-        let step = &config.scenario[step_idx];
-        let (result, sample) = execute_step_and_sample(&mut client, step).await;
-
-        if sample_tx.send(sample).await.is_err() {
-            return Ok(());
-        }
-
-        // Respawn on session-fatal errors
-        if should_respawn_session(&result) {
-            client = try_initialize(
-                vu_id,
-                http_client,
-                base_url,
-                timeout,
-                sample_tx,
-                cancel,
-                MAX_RESPAWN_ATTEMPTS,
-                http_middleware_chain.clone(),
-            )
-            .await
-            .ok_or_else(|| "all respawn attempts failed".to_string())?;
-        }
-
-        // Optional pacing
-        if let Some(interval_ms) = config.settings.request_interval_ms {
-            tokio::select! {
-                _ = tokio::time::sleep(Duration::from_millis(interval_ms)) => {},
-                _ = cancel.cancelled() => return Ok(()),
-            }
+        match run_one_iteration(
+            &mut client,
+            &dist,
+            &mut rng,
+            config,
+            sample_tx,
+            vu_id,
+            http_client,
+            base_url,
+            timeout,
+            cancel,
+            &http_middleware_chain,
+        )
+        .await?
+        {
+            IterationOutcome::Stop | IterationOutcome::SampleSendFailed => return Ok(()),
+            IterationOutcome::Continue => {},
         }
     }
+}
+
+/// Execute one iteration of the load-generation loop:
+///   1. Sample a scenario step from the weighted distribution.
+///   2. Run the step and emit a `RequestSample`.
+///   3. Respawn the client on session-fatal errors.
+///   4. Apply optional pacing delay.
+#[allow(clippy::too_many_arguments)]
+async fn run_one_iteration(
+    client: &mut McpClient,
+    dist: &WeightedIndex<u32>,
+    rng: &mut rand::rngs::StdRng,
+    config: &LoadTestConfig,
+    sample_tx: &mpsc::Sender<RequestSample>,
+    vu_id: u32,
+    http_client: &Client,
+    base_url: &str,
+    timeout: Duration,
+    cancel: &CancellationToken,
+    http_middleware_chain: &Option<Arc<HttpMiddlewareChain>>,
+) -> Result<IterationOutcome, String> {
+    let step_idx = dist.sample(rng);
+    let step = &config.scenario[step_idx];
+    let (result, sample) = execute_step_and_sample(client, step).await;
+
+    if sample_tx.send(sample).await.is_err() {
+        return Ok(IterationOutcome::SampleSendFailed);
+    }
+
+    if should_respawn_session(&result) {
+        *client = try_initialize(
+            vu_id,
+            http_client,
+            base_url,
+            timeout,
+            sample_tx,
+            cancel,
+            MAX_RESPAWN_ATTEMPTS,
+            http_middleware_chain.clone(),
+        )
+        .await
+        .ok_or_else(|| "all respawn attempts failed".to_string())?;
+    }
+
+    if let Some(interval_ms) = config.settings.request_interval_ms {
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_millis(interval_ms)) => {},
+            _ = cancel.cancelled() => return Ok(IterationOutcome::Stop),
+        }
+    }
+
+    Ok(IterationOutcome::Continue)
 }
 
 /// Atomically increment the iteration counter (if set) and check against the

@@ -501,26 +501,16 @@ fn try_find_workspace_pmcp(
 /// and return the `path = "..."` literal. Returns None if the section is
 /// missing or doesn't contain a path key.
 fn extract_workspace_pmcp_path(content: &str) -> Option<String> {
-    let mut in_pmcp_section = false;
-    for line in content.lines() {
-        let trimmed = line.trim();
-
-        if trimmed == "[workspace.dependencies.pmcp]" {
-            in_pmcp_section = true;
-            continue;
-        }
-
-        if trimmed.starts_with('[') && in_pmcp_section {
-            break;
-        }
-
-        if in_pmcp_section && trimmed.starts_with("path =") {
-            if let Some(path) = parse_path_literal(trimmed) {
-                return Some(path);
-            }
-        }
-    }
-    None
+    content
+        .lines()
+        .map(str::trim)
+        .skip_while(|line| *line != "[workspace.dependencies.pmcp]")
+        .skip(1) // step past the section header itself
+        .take_while(|line| !line.starts_with('['))
+        .find_map(|line| {
+            line.strip_prefix("path =")
+                .and_then(|_| parse_path_literal(line))
+        })
 }
 
 /// Parse `path = "..."` from a TOML line, returning the quoted literal.
@@ -720,4 +710,63 @@ fn create_gitignore(deploy_dir: &std::path::Path) -> Result<()> {
 
     println!(" ✅");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_workspace_pmcp_path_finds_path_in_pmcp_section() {
+        let content = r#"
+[workspace]
+members = ["a", "b"]
+
+[workspace.dependencies.pmcp]
+path = "../../rust-mcp-sdk"
+features = ["full"]
+
+[workspace.dependencies.serde]
+version = "1"
+"#;
+        assert_eq!(
+            extract_workspace_pmcp_path(content),
+            Some("../../rust-mcp-sdk".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_workspace_pmcp_path_returns_none_when_section_missing() {
+        let content = r#"
+[workspace]
+members = ["a"]
+
+[workspace.dependencies.serde]
+version = "1"
+"#;
+        assert_eq!(extract_workspace_pmcp_path(content), None);
+    }
+
+    #[test]
+    fn extract_workspace_pmcp_path_returns_none_when_path_missing() {
+        let content = r#"
+[workspace.dependencies.pmcp]
+version = "2.6.0"
+features = ["full"]
+"#;
+        assert_eq!(extract_workspace_pmcp_path(content), None);
+    }
+
+    #[test]
+    fn extract_workspace_pmcp_path_stops_at_next_section() {
+        // Path key in a *later* section must not be returned.
+        let content = r#"
+[workspace.dependencies.pmcp]
+version = "2.6.0"
+
+[workspace.dependencies.other]
+path = "../other"
+"#;
+        assert_eq!(extract_workspace_pmcp_path(content), None);
+    }
 }
