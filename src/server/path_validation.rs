@@ -240,11 +240,11 @@ fn enforce_pattern_blocklist(
 /// Validate a path with robust security checks.
 ///
 /// Refactored in 75-01 Task 1a-B (P1+P2): the original cog-103
-/// implementation was broken into focused helpers ([`check_path_sanity`],
-/// [`check_traversal`], [`absolutize_or_reject`], [`resolve_canonical_path`],
-/// [`canonicalize_nonexistent_path`], [`enforce_base_dir_confinement`],
-/// [`enforce_no_hidden_components`], [`enforce_max_depth`],
-/// [`enforce_pattern_blocklist`]) so this function reads as an
+/// implementation was broken into focused helpers (`check_path_sanity`,
+/// `check_traversal`, `absolutize_or_reject`, `resolve_canonical_path`,
+/// `canonicalize_nonexistent_path`, `enforce_base_dir_confinement`,
+/// `enforce_no_hidden_components`, `enforce_max_depth`,
+/// `enforce_pattern_blocklist`) so this function reads as an
 /// early-return pipeline.
 pub fn validate_path(path: &str, config: &PathValidationConfig) -> crate::Result<PathBuf> {
     check_path_sanity(path)?;
