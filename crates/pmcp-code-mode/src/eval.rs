@@ -814,15 +814,18 @@ fn eval_array_reduce<V: VariableProvider>(
     Ok(acc)
 }
 
+/// Clamp a half-open slice `[start, end)` to a known length.
+/// Returns `(skip, take)` for `Iterator::skip().take()`. `end` defaults to `len`.
+fn clamp_slice_bounds(len: usize, start: usize, end: Option<usize>) -> (usize, usize) {
+    let start = start.min(len);
+    let end = end.unwrap_or(len).min(len);
+    (start, end.saturating_sub(start))
+}
+
 /// `arr.slice(start, end)` — half-open interval, `end` defaults to `len`.
 fn eval_array_slice(arr: Vec<JsonValue>, start: usize, end: Option<usize>) -> JsonValue {
-    let len = arr.len();
-    let end_idx = end.unwrap_or(len).min(len);
-    let sliced: Vec<JsonValue> = arr
-        .into_iter()
-        .skip(start)
-        .take(end_idx.saturating_sub(start))
-        .collect();
+    let (skip, take) = clamp_slice_bounds(arr.len(), start, end);
+    let sliced: Vec<JsonValue> = arr.into_iter().skip(skip).take(take).collect();
     JsonValue::Array(sliced)
 }
 
@@ -967,7 +970,9 @@ fn evaluate_string_method<V: VariableProvider>(
     match method {
         ArrayMethodCall::Length => Ok(JsonValue::Number((s.chars().count() as i64).into())),
         ArrayMethodCall::Includes { item } => {
-            eval_string_includes(s, item, global_vars, local_vars)
+            eval_string_bool_predicate(s, item, global_vars, local_vars, |s, sub| {
+                s.contains(sub)
+            })
         },
         ArrayMethodCall::IndexOf { item } => eval_string_index_of(s, item, global_vars, local_vars),
         ArrayMethodCall::Slice { start, end } => Ok(eval_string_slice(s, *start, *end)),
@@ -975,10 +980,14 @@ fn evaluate_string_method<V: VariableProvider>(
         ArrayMethodCall::ToLowerCase => Ok(JsonValue::String(s.to_lowercase())),
         ArrayMethodCall::ToUpperCase => Ok(JsonValue::String(s.to_uppercase())),
         ArrayMethodCall::StartsWith { search } => {
-            eval_string_starts_with(s, search, global_vars, local_vars)
+            eval_string_bool_predicate(s, search, global_vars, local_vars, |s, sub| {
+                s.starts_with(sub)
+            })
         },
         ArrayMethodCall::EndsWith { search } => {
-            eval_string_ends_with(s, search, global_vars, local_vars)
+            eval_string_bool_predicate(s, search, global_vars, local_vars, |s, sub| {
+                s.ends_with(sub)
+            })
         },
         ArrayMethodCall::Trim => Ok(JsonValue::String(s.trim().to_string())),
         ArrayMethodCall::Replace {
@@ -1024,16 +1033,22 @@ fn array_only_method_label(method: &ArrayMethodCall) -> &'static str {
     }
 }
 
-/// `s.includes(sub)` — case-sensitive substring search; non-string args yield `false`.
-fn eval_string_includes<V: VariableProvider>(
+/// Run a `&str -> &str -> bool` predicate against an evaluated needle, returning
+/// `Bool(false)` for non-string args. Shared by `includes`, `startsWith`, `endsWith`.
+fn eval_string_bool_predicate<V, P>(
     s: &str,
-    item: &ValueExpr,
+    needle: &ValueExpr,
     global_vars: &V,
     local_vars: &HashMap<String, JsonValue>,
-) -> Result<JsonValue, ExecutionError> {
-    let search_val = evaluate_with_scope(item, global_vars, local_vars)?;
+    predicate: P,
+) -> Result<JsonValue, ExecutionError>
+where
+    V: VariableProvider,
+    P: FnOnce(&str, &str) -> bool,
+{
+    let search_val = evaluate_with_scope(needle, global_vars, local_vars)?;
     match search_val {
-        JsonValue::String(sub) => Ok(JsonValue::Bool(s.contains(sub.as_str()))),
+        JsonValue::String(sub) => Ok(JsonValue::Bool(predicate(s, sub.as_str()))),
         _ => Ok(JsonValue::Bool(false)),
     }
 }
@@ -1071,14 +1086,8 @@ fn char_index_of(haystack: &str, needle: &str) -> Option<i64> {
 
 /// `s.slice(start, end)` — char-based half-open interval, clamped to length.
 fn eval_string_slice(s: &str, start: usize, end: Option<usize>) -> JsonValue {
-    let char_count = s.chars().count();
-    let end_idx = end.unwrap_or(char_count).min(char_count);
-    let start_idx = start.min(char_count);
-    let sliced: String = s
-        .chars()
-        .skip(start_idx)
-        .take(end_idx.saturating_sub(start_idx))
-        .collect();
+    let (skip, take) = clamp_slice_bounds(s.chars().count(), start, end);
+    let sliced: String = s.chars().skip(skip).take(take).collect();
     JsonValue::String(sliced)
 }
 
@@ -1095,34 +1104,6 @@ fn eval_string_concat<V: VariableProvider>(
         s,
         json_to_string(&other_val)
     )))
-}
-
-/// `s.startsWith(sub)` / `s.endsWith(sub)` differ only by which `&str` predicate is used.
-fn eval_string_starts_with<V: VariableProvider>(
-    s: &str,
-    search: &ValueExpr,
-    global_vars: &V,
-    local_vars: &HashMap<String, JsonValue>,
-) -> Result<JsonValue, ExecutionError> {
-    let search_val = evaluate_with_scope(search, global_vars, local_vars)?;
-    match search_val {
-        JsonValue::String(sub) => Ok(JsonValue::Bool(s.starts_with(sub.as_str()))),
-        _ => Ok(JsonValue::Bool(false)),
-    }
-}
-
-/// See `eval_string_starts_with`.
-fn eval_string_ends_with<V: VariableProvider>(
-    s: &str,
-    search: &ValueExpr,
-    global_vars: &V,
-    local_vars: &HashMap<String, JsonValue>,
-) -> Result<JsonValue, ExecutionError> {
-    let search_val = evaluate_with_scope(search, global_vars, local_vars)?;
-    match search_val {
-        JsonValue::String(sub) => Ok(JsonValue::Bool(s.ends_with(sub.as_str()))),
-        _ => Ok(JsonValue::Bool(false)),
-    }
 }
 
 /// `s.replace(needle, repl)` — JS replaces only the first occurrence; non-string args

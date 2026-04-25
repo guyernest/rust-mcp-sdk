@@ -30,8 +30,7 @@ use std::collections::{HashMap, HashSet};
 
 // Import shared evaluation functions
 use crate::eval::{
-    evaluate as shared_evaluate, evaluate_with_binding as shared_evaluate_with_binding,
-    evaluate_with_two_bindings as shared_evaluate_with_two_bindings, is_truthy as shared_is_truthy,
+    evaluate as shared_evaluate, is_truthy as shared_is_truthy,
     json_to_string_with_mode as shared_json_to_string_with_mode, JsonStringMode,
 };
 use swc_common::{FileName, SourceMap};
@@ -680,9 +679,6 @@ enum ExtractedCall {
 
 /// Compiler that converts SWC AST to ExecutionPlan.
 pub struct PlanCompiler {
-    /// Configured maximum API calls per plan (retained for future enforcement diagnostics)
-    #[allow(dead_code)]
-    max_api_calls: usize,
     api_call_count: usize,
     endpoints: Vec<String>,
     methods_used: Vec<String>,
@@ -700,9 +696,8 @@ impl PlanCompiler {
     }
 
     /// Create a new compiler with custom config.
-    pub fn with_config(config: &ExecutionConfig) -> Self {
+    pub fn with_config(_config: &ExecutionConfig) -> Self {
         Self {
-            max_api_calls: config.max_api_calls,
             api_call_count: 0,
             endpoints: Vec::new(),
             methods_used: Vec::new(),
@@ -2498,9 +2493,6 @@ pub enum MockExecutionMode {
 /// }
 /// ```
 pub struct MockHttpExecutor {
-    /// Execution mode (retained for future per-mode dispatch; currently informational only)
-    #[allow(dead_code)]
-    mode: MockExecutionMode,
     /// Mock responses by path pattern (exact match or glob pattern with *)
     responses: std::sync::RwLock<HashMap<String, JsonValue>>,
     /// Default response for unmatched paths
@@ -2527,7 +2519,6 @@ impl MockHttpExecutor {
     /// Returns empty objects `{}` for all calls.
     pub fn new_dry_run() -> Self {
         Self {
-            mode: MockExecutionMode::DryRun,
             responses: std::sync::RwLock::new(HashMap::new()),
             default_response: JsonValue::Object(serde_json::Map::new()),
             recorded_calls: std::sync::RwLock::new(Vec::new()),
@@ -2538,7 +2529,6 @@ impl MockHttpExecutor {
     /// Configure responses with `with_response()`.
     pub fn new_testing() -> Self {
         Self {
-            mode: MockExecutionMode::Testing,
             responses: std::sync::RwLock::new(HashMap::new()),
             default_response: JsonValue::Object(serde_json::Map::new()),
             recorded_calls: std::sync::RwLock::new(Vec::new()),
@@ -3168,30 +3158,6 @@ impl<H: HttpExecutor> PlanExecutor<H> {
         shared_evaluate(expr, &self.variables)
     }
 
-    /// Evaluate an expression with a temporary variable binding.
-    /// Used for array method callbacks like .map(), .filter(), etc.
-    #[allow(dead_code)]
-    fn evaluate_with_binding(
-        &self,
-        expr: &ValueExpr,
-        var: &str,
-        value: &JsonValue,
-    ) -> Result<JsonValue, ExecutionError> {
-        shared_evaluate_with_binding(expr, &self.variables, var, value)
-    }
-
-    /// Evaluate with two bindings (for reduce).
-    #[allow(dead_code)]
-    fn evaluate_with_two_bindings(
-        &self,
-        expr: &ValueExpr,
-        var1: &str,
-        value1: &JsonValue,
-        var2: &str,
-        value2: &JsonValue,
-    ) -> Result<JsonValue, ExecutionError> {
-        shared_evaluate_with_two_bindings(expr, &self.variables, var1, value1, var2, value2)
-    }
 }
 
 // ============================================================================
