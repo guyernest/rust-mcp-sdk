@@ -110,6 +110,11 @@ pub mod __test_support {
     pub use crate::types::ServerRequest;
 }
 
+// Phase 75 Wave 5 Task 5-02 — empirical CI gate test only. Throwaway branch
+// regression-pr/75-05-gate-empirical-test; never lands on main.
+#[cfg(test)]
+mod __regression_test_75_05;
+
 /// Tower middleware layers for MCP HTTP security.
 #[cfg(feature = "streamable-http")]
 pub use server::tower_layers::{AllowedOrigins, DnsRebindingLayer, SecurityHeadersLayer};
