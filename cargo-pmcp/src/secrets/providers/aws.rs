@@ -93,7 +93,7 @@ impl SecretProvider for AwsSecretProvider {
 
     async fn list(&self, audience: Audience, _options: ListOptions) -> SecretResult<ListResult> {
         reject_billing_audience(self.id(), audience)?;
-        // TODO: Implement with aws-sdk-secretsmanager
+        // See #247 — wire aws-sdk-secretsmanager into AWS secrets provider.
         Err(SecretError::ProviderError {
             provider: "aws".to_string(),
             message: "AWS Secrets Manager provider not yet implemented. Enable with `cargo pmcp --features aws-secrets`".to_string(),
@@ -102,7 +102,7 @@ impl SecretProvider for AwsSecretProvider {
 
     async fn get(&self, audience: Audience, _name: &str) -> SecretResult<SecretValue> {
         reject_billing_audience(self.id(), audience)?;
-        // TODO: Implement with aws-sdk-secretsmanager
+        // See #247 — wire aws-sdk-secretsmanager into AWS secrets provider.
         Err(SecretError::ProviderError {
             provider: "aws".to_string(),
             message: "AWS Secrets Manager provider not yet implemented".to_string(),
@@ -117,7 +117,7 @@ impl SecretProvider for AwsSecretProvider {
         _options: SetOptions,
     ) -> SecretResult<SecretMetadata> {
         reject_billing_audience(self.id(), audience)?;
-        // TODO: Implement with aws-sdk-secretsmanager
+        // See #247 — wire aws-sdk-secretsmanager into AWS secrets provider.
         Err(SecretError::ProviderError {
             provider: "aws".to_string(),
             message: "AWS Secrets Manager provider not yet implemented".to_string(),
@@ -126,7 +126,7 @@ impl SecretProvider for AwsSecretProvider {
 
     async fn delete(&self, audience: Audience, _name: &str, _force: bool) -> SecretResult<()> {
         reject_billing_audience(self.id(), audience)?;
-        // TODO: Implement with aws-sdk-secretsmanager
+        // See #247 — wire aws-sdk-secretsmanager into AWS secrets provider.
         Err(SecretError::ProviderError {
             provider: "aws".to_string(),
             message: "AWS Secrets Manager provider not yet implemented".to_string(),

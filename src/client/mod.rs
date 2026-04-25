@@ -974,6 +974,7 @@ impl<T: Transport> Client<T> {
     /// ).await?;
     /// # Ok(()) }
     /// ```
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn call_tool_typed_and_poll<A: serde::Serialize + ?Sized + Sync>(
         &self,
         name: impl Into<String> + Send,
@@ -1909,7 +1910,6 @@ impl<T: Transport> Client<T> {
     }
 
     /// Send a request and wait for response.
-    #[allow(clippy::cognitive_complexity)]
     async fn send_request(
         &self,
         request_id: RequestId,

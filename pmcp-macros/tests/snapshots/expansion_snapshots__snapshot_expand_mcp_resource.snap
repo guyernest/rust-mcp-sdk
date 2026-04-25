@@ -1,0 +1,126 @@
+---
+source: pmcp-macros/tests/expansion_snapshots.rs
+assertion_line: 91
+expression: expanded
+---
+#![feature(prelude_import)]
+//! Snapshot fixture for `#[mcp_resource]` (Phase 75 Wave 0 Task 1).
+//!
+//! Captures the macro output for a templated resource provider so Wave 1b can
+//! detect any expansion drift via `cargo insta accept`.
+extern crate std;
+#[prelude_import]
+use std::prelude::rust_2021::*;
+use pmcp_macros::mcp_resource;
+async fn __read_doc_impl(topic: String) -> pmcp::Result<String> {
+    Ok(
+        ::alloc::__export::must_use({
+            ::alloc::fmt::format(
+                format_args!("# {0}\n\nDocumentation content for `{0}`.", topic),
+            )
+        }),
+    )
+}
+///Auto-generated resource provider for the `read_doc` MCP resource.
+pub struct ReadDocResource {}
+#[automatically_derived]
+impl ::core::clone::Clone for ReadDocResource {
+    #[inline]
+    fn clone(&self) -> ReadDocResource {
+        ReadDocResource {}
+    }
+}
+impl std::fmt::Debug for ReadDocResource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReadDocResource").finish()
+    }
+}
+impl pmcp::server::dynamic_resources::DynamicResourceProvider for ReadDocResource {
+    fn templates(&self) -> Vec<pmcp::types::ResourceTemplate> {
+        let mut tmpl = pmcp::types::ResourceTemplate::new("docs://{topic}", "read_doc")
+            .with_description("Documentation pages");
+        tmpl.mime_type = Some("text/plain".to_string());
+        ::alloc::boxed::box_assume_init_into_vec_unsafe(
+            ::alloc::intrinsics::write_box_via_move(
+                ::alloc::boxed::Box::new_uninit(),
+                [tmpl],
+            ),
+        )
+    }
+    #[allow(
+        elided_named_lifetimes,
+        clippy::async_yields_async,
+        clippy::diverging_sub_expression,
+        clippy::let_unit_value,
+        clippy::needless_arbitrary_self_type,
+        clippy::no_effect_underscore_binding,
+        clippy::shadow_same,
+        clippy::type_complexity,
+        clippy::type_repetition_in_bounds,
+        clippy::used_underscore_binding
+    )]
+    fn fetch<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        _uri: &'life1 str,
+        params: pmcp::server::dynamic_resources::UriParams,
+        _context: pmcp::server::dynamic_resources::RequestContext,
+    ) -> ::core::pin::Pin<
+        Box<
+            dyn ::core::future::Future<
+                Output = pmcp::Result<pmcp::types::ReadResourceResult>,
+            > + ::core::marker::Send + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            if let ::core::option::Option::Some(__ret)
+                = ::core::option::Option::None::<
+                    pmcp::Result<pmcp::types::ReadResourceResult>,
+                > {
+                #[allow(unreachable_code)] return __ret;
+            }
+            let __self = self;
+            let params = params;
+            let _context = _context;
+            let __ret: pmcp::Result<pmcp::types::ReadResourceResult> = {
+                let topic = params
+                    .get("topic")
+                    .ok_or_else(|| pmcp::Error::validation(
+                        ::alloc::__export::must_use({
+                            ::alloc::fmt::format(
+                                format_args!(
+                                    "Missing URI parameter \'{0}\' for resource \'{1}\'",
+                                    "topic", "docs://{topic}"
+                                ),
+                            )
+                        }),
+                    ))?
+                    .clone();
+                let content_str: String = __read_doc_impl(topic).await?;
+                Ok(
+                    pmcp::types::ReadResourceResult::new(
+                        ::alloc::boxed::box_assume_init_into_vec_unsafe(
+                            ::alloc::intrinsics::write_box_via_move(
+                                ::alloc::boxed::Box::new_uninit(),
+                                [pmcp::types::Content::text(content_str)],
+                            ),
+                        ),
+                    ),
+                )
+            };
+            #[allow(unreachable_code)] __ret
+        })
+    }
+}
+impl ReadDocResource {}
+///Create a new instance of the [`ReadDocResource`] resource provider.
+pub fn read_doc() -> ReadDocResource {
+    ReadDocResource {}
+}
+fn main() {
+    let _provider = read_doc();
+}

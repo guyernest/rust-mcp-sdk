@@ -16,161 +16,185 @@ pub fn execute(url: Option<&str>, global_flags: &GlobalFlags) -> Result<()> {
     let quiet = !global_flags.should_output();
     let mut issues = 0u32;
 
-    if !quiet {
-        println!();
-        println!(
-            "  {} Workspace Diagnostics",
-            "cargo pmcp doctor".bright_white().bold()
-        );
-        println!("  {}", "─".repeat(40).dimmed());
-        println!();
+    print_doctor_header(quiet);
+
+    issues += check_cargo_toml(quiet);
+    issues += check_rust_toolchain(quiet);
+    check_rustfmt(quiet);
+    check_clippy(quiet);
+
+    if let Some(server_url) = url {
+        issues += check_server_connectivity(server_url, quiet)?;
     }
 
-    // 1. Check Cargo.toml
-    let cargo_toml = std::path::Path::new("Cargo.toml");
-    if cargo_toml.exists() {
-        if !quiet {
-            println!("  {} Cargo.toml found", "✓".green());
-        }
+    print_doctor_summary(issues, quiet);
 
-        // Check if it has pmcp dependency
-        let content = std::fs::read_to_string(cargo_toml).unwrap_or_default();
-        if content.contains("pmcp") {
-            if !quiet {
-                println!("  {} pmcp dependency detected", "✓".green());
-            }
-        } else {
-            if !quiet {
-                println!(
-                    "  {} No pmcp dependency found (not an MCP workspace?)",
-                    "!".yellow()
-                );
-            }
-        }
-    } else {
+    if issues > 0 {
+        anyhow::bail!("{} diagnostic issue(s) found", issues);
+    }
+    Ok(())
+}
+
+fn print_doctor_header(quiet: bool) {
+    if quiet {
+        return;
+    }
+    println!();
+    println!(
+        "  {} Workspace Diagnostics",
+        "cargo pmcp doctor".bright_white().bold()
+    );
+    println!("  {}", "─".repeat(40).dimmed());
+    println!();
+}
+
+/// Verify Cargo.toml exists and pmcp dependency is present. Returns issue count (0 or 1).
+fn check_cargo_toml(quiet: bool) -> u32 {
+    let cargo_toml = std::path::Path::new("Cargo.toml");
+    if !cargo_toml.exists() {
         if !quiet {
             println!("  {} No Cargo.toml in current directory", "✗".red());
         }
-        issues += 1;
+        return 1;
     }
 
-    // 2. Check Rust toolchain
+    if !quiet {
+        println!("  {} Cargo.toml found", "✓".green());
+    }
+
+    let content = std::fs::read_to_string(cargo_toml).unwrap_or_default();
+    if !quiet {
+        if content.contains("pmcp") {
+            println!("  {} pmcp dependency detected", "✓".green());
+        } else {
+            println!(
+                "  {} No pmcp dependency found (not an MCP workspace?)",
+                "!".yellow()
+            );
+        }
+    }
+    0
+}
+
+/// Check rustc is available. Returns issue count (0 or 1).
+fn check_rust_toolchain(quiet: bool) -> u32 {
     match std::process::Command::new("rustc")
         .arg("--version")
         .output()
     {
         Ok(output) => {
             let version = String::from_utf8_lossy(&output.stdout);
-            let version = version.trim();
             if !quiet {
-                println!("  {} {}", "✓".green(), version);
+                println!("  {} {}", "✓".green(), version.trim());
             }
+            0
         },
         Err(_) => {
             if !quiet {
                 println!("  {} Rust toolchain not found", "✗".red());
             }
-            issues += 1;
+            1
         },
     }
+}
 
-    // 3. Check cargo fmt
-    match std::process::Command::new("rustfmt")
+/// Check rustfmt is installed (warning-only, does not count as an issue).
+fn check_rustfmt(quiet: bool) {
+    let ok = std::process::Command::new("rustfmt")
         .arg("--version")
         .output()
-    {
-        Ok(output) if output.status.success() => {
-            if !quiet {
-                println!("  {} rustfmt available", "✓".green());
-            }
-        },
-        _ => {
-            if !quiet {
-                println!(
-                    "  {} rustfmt not found (run: rustup component add rustfmt)",
-                    "!".yellow()
-                );
-            }
-        },
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if quiet {
+        return;
     }
+    if ok {
+        println!("  {} rustfmt available", "✓".green());
+    } else {
+        println!(
+            "  {} rustfmt not found (run: rustup component add rustfmt)",
+            "!".yellow()
+        );
+    }
+}
 
-    // 4. Check clippy
-    match std::process::Command::new("cargo")
+/// Check cargo clippy is installed (warning-only).
+fn check_clippy(quiet: bool) {
+    let ok = std::process::Command::new("cargo")
         .args(["clippy", "--version"])
         .output()
-    {
-        Ok(output) if output.status.success() => {
-            if !quiet {
-                println!("  {} clippy available", "✓".green());
-            }
-        },
-        _ => {
-            if !quiet {
-                println!(
-                    "  {} clippy not found (run: rustup component add clippy)",
-                    "!".yellow()
-                );
-            }
-        },
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if quiet {
+        return;
     }
-
-    // 5. Server connectivity (optional)
-    if let Some(server_url) = url {
-        if !quiet {
-            println!();
-            println!("  {} Server: {}", "→".blue(), server_url);
-        }
-
-        let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(async {
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()?;
-
-            match client.post(server_url)
-                .header("Content-Type", "application/json")
-                .header("Accept", "application/json, text/event-stream")
-                .body(r#"{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"pmcp-doctor","version":"0.1.0"}},"id":1}"#)
-                .send()
-                .await
-            {
-                Ok(resp) => {
-                    let status = resp.status();
-                    if status.is_success() {
-                        if !quiet {
-                            println!("  {} Server reachable (HTTP {})", "✓".green(), status);
-                        }
-                    } else {
-                        if !quiet {
-                            println!("  {} Server returned HTTP {}", "!".yellow(), status);
-                        }
-                    }
-                }
-                Err(e) => {
-                    if !quiet {
-                        println!("  {} Cannot reach server: {}", "✗".red(), e);
-                    }
-                    issues += 1;
-                }
-            }
-            Ok::<(), anyhow::Error>(())
-        })?;
+    if ok {
+        println!("  {} clippy available", "✓".green());
+    } else {
+        println!(
+            "  {} clippy not found (run: rustup component add clippy)",
+            "!".yellow()
+        );
     }
+}
 
-    // Summary
+/// Probe the MCP server URL with an initialize JSON-RPC request.
+/// Returns issue count (0 or 1).
+fn check_server_connectivity(server_url: &str, quiet: bool) -> Result<u32> {
     if !quiet {
         println!();
-        if issues == 0 {
-            println!("  {} All checks passed", "✓".green().bold());
-        } else {
-            println!("  {} {} issue(s) found", "!".yellow().bold(), issues);
-        }
-        println!();
+        println!("  {} Server: {}", "→".blue(), server_url);
     }
 
-    if issues > 0 {
-        anyhow::bail!("{} diagnostic issue(s) found", issues);
-    }
+    let rt = tokio::runtime::Runtime::new()?;
+    let issue_count = rt.block_on(async { probe_server_initialize(server_url, quiet).await })?;
+    Ok(issue_count)
+}
 
-    Ok(())
+/// Async worker for the initialize probe.
+async fn probe_server_initialize(server_url: &str, quiet: bool) -> Result<u32> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
+    match client
+        .post(server_url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .body(r#"{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"pmcp-doctor","version":"0.1.0"}},"id":1}"#)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            if !quiet {
+                if status.is_success() {
+                    println!("  {} Server reachable (HTTP {})", "✓".green(), status);
+                } else {
+                    println!("  {} Server returned HTTP {}", "!".yellow(), status);
+                }
+            }
+            Ok(0)
+        },
+        Err(e) => {
+            if !quiet {
+                println!("  {} Cannot reach server: {}", "✗".red(), e);
+            }
+            Ok(1)
+        },
+    }
+}
+
+/// Print the pass/fail summary banner.
+fn print_doctor_summary(issues: u32, quiet: bool) {
+    if quiet {
+        return;
+    }
+    println!();
+    if issues == 0 {
+        println!("  {} All checks passed", "✓".green().bold());
+    } else {
+        println!("  {} {} issue(s) found", "!".yellow().bold(), issues);
+    }
+    println!();
 }

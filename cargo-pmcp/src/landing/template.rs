@@ -88,35 +88,53 @@ pub fn clone_template(template_name: &str, output_dir: &Path) -> Result<()> {
 /// Find local template directory for development mode
 /// Searches upward from current directory to find cargo-pmcp/templates/
 fn find_local_template(template_path: &str) -> Option<std::path::PathBuf> {
-    // First check environment variable override for local development
-    // Should point to cargo-pmcp root directory
-    if let Ok(cargo_pmcp_dir) = std::env::var("CARGO_PMCP_DEV_DIR") {
-        let template_dir = std::path::PathBuf::from(cargo_pmcp_dir).join(template_path);
-        if template_dir.exists() && template_dir.is_dir() {
-            return Some(template_dir);
-        }
+    if let Some(dir) = find_template_via_env_var(template_path) {
+        return Some(dir);
     }
+    find_template_by_walking_up(template_path)
+}
 
-    // Then search upward from current directory
+/// Check `CARGO_PMCP_DEV_DIR` for a developer-mode override pointing at a
+/// cargo-pmcp root directory.
+fn find_template_via_env_var(template_path: &str) -> Option<std::path::PathBuf> {
+    let cargo_pmcp_dir = std::env::var("CARGO_PMCP_DEV_DIR").ok()?;
+    let template_dir = std::path::PathBuf::from(cargo_pmcp_dir).join(template_path);
+    if template_dir.exists() && template_dir.is_dir() {
+        Some(template_dir)
+    } else {
+        None
+    }
+}
+
+/// Walk up to 5 directories above cwd looking for `<dir>/cargo-pmcp/<template>/`
+/// or `<dir>/<template>/` (when we're already inside cargo-pmcp/).
+fn find_template_by_walking_up(template_path: &str) -> Option<std::path::PathBuf> {
     let current_dir = std::env::current_dir().ok()?;
     let mut dir = current_dir.as_path();
 
-    // Search up to 5 levels
     for _ in 0..5 {
-        // Check if this directory contains cargo-pmcp/templates/
-        let template_dir = dir.join("cargo-pmcp").join(template_path);
-        if template_dir.exists() && template_dir.is_dir() {
-            return Some(template_dir);
+        if let Some(found) = check_dir_for_template(dir, template_path) {
+            return Some(found);
         }
-
-        // Also check current directory (in case we're already in cargo-pmcp/)
-        let direct_template_dir = dir.join(template_path);
-        if direct_template_dir.exists() && direct_template_dir.is_dir() {
-            return Some(direct_template_dir);
-        }
-
-        // Move up one directory
         dir = dir.parent()?;
+    }
+
+    None
+}
+
+/// Check a single directory for `cargo-pmcp/<template>/` or `<template>/`.
+fn check_dir_for_template(
+    dir: &std::path::Path,
+    template_path: &str,
+) -> Option<std::path::PathBuf> {
+    let template_dir = dir.join("cargo-pmcp").join(template_path);
+    if template_dir.exists() && template_dir.is_dir() {
+        return Some(template_dir);
+    }
+
+    let direct_template_dir = dir.join(template_path);
+    if direct_template_dir.exists() && direct_template_dir.is_dir() {
+        return Some(direct_template_dir);
     }
 
     None

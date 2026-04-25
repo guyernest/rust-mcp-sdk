@@ -40,7 +40,23 @@ jobs:
       run: |
         # The crate is published as `pmat`, not `pmat-cli`. Fail loudly if
         # install breaks so we don't silently fall back to sentinel badges.
-        cargo install pmat --locked
+        # Pinned to =3.15.0 per Phase 75 D-09 / Pitfall 1 — the path-filter
+        # behavior, allow-suppression behavior, and gate exit semantics were
+        # all empirically verified against this exact version. Bumping the
+        # pin requires re-running .planning/phases/75-fix-pmat-issues/
+        # 75-W0-SPIKE-RESULTS.md to confirm behavior is unchanged.
+        cargo install pmat --version =3.15.0 --locked
+
+    - name: Verify PMAT Version
+      run: |
+        # Surface the installed PMAT version in CI logs and assert it matches
+        # the pin so a transparent dependency-resolution surprise doesn't slip
+        # through. Phase 75 D-09 / Pitfall 1.
+        pmat --version
+        pmat --version | grep -qE '^pmat 3\.15\.0' || {
+          echo "ERROR: PMAT version mismatch — expected pmat 3.15.0"
+          exit 1
+        }
     
     - name: Generate TDG Score Badge
       run: |
@@ -68,8 +84,8 @@ jobs:
     
     - name: Generate Quality Gate Badge
       run: |
-        # Check quality gate status
-        if pmat quality-gate --fail-on-violation --format json > quality_gate.json 2>/dev/null; then
+        # Scope to complexity to match ci.yml gate; bare gate fails on duplicate/SATD/entropy/sections (D-11-B).
+        if pmat quality-gate --fail-on-violation --checks complexity --format json > quality_gate.json 2>/dev/null; then
           GATE_STATUS="passing"
           GATE_COLOR="brightgreen"
         else

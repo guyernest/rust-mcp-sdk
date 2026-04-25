@@ -23,6 +23,13 @@ pub struct DeployConfig {
     #[serde(default)]
     pub composition: CompositionConfig,
 
+    /// IAM declarations for the Lambda execution role (tables, buckets, raw statements).
+    ///
+    /// The `skip_serializing_if` guard preserves byte-identity on the no-`[iam]`
+    /// path so pre-existing `.pmcp/deploy.toml` files round-trip unchanged.
+    #[serde(default, skip_serializing_if = "IamConfig::is_empty")]
+    pub iam: IamConfig,
+
     /// Project root directory (not serialized)
     #[serde(skip)]
     pub project_root: PathBuf,
@@ -545,6 +552,7 @@ impl DeployConfig {
             api_gateway: None,
             assets: AssetsConfig::default(),
             composition: CompositionConfig::default(),
+            iam: IamConfig::default(),
             project_root,
         }
     }
@@ -712,5 +720,397 @@ impl Default for CompositionConfig {
             internal_only: false,
             description: None,
         }
+    }
+}
+
+/// IAM declarations for the deployed Lambda's execution role.
+///
+/// Translated by [`crate::deployment::iam::render_iam_block`] into
+/// `mcpFunction.addToRolePolicy(...)` calls in the generated CDK `stack.ts`.
+/// An empty `IamConfig` is elided from serialised TOML via the
+/// `skip_serializing_if = "IamConfig::is_empty"` guard on `DeployConfig::iam`,
+/// so files without an `[iam]` section round-trip byte-identically.
+///
+/// See [`TablePermission`], [`BucketPermission`], and [`IamStatement`] for
+/// the per-kind details.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IamConfig {
+    /// DynamoDB table permissions (sugar form — see [`TablePermission`]).
+    #[serde(default)]
+    pub tables: Vec<TablePermission>,
+
+    /// S3 bucket permissions (sugar form — object-level ARNs only — see
+    /// [`BucketPermission`]).
+    #[serde(default)]
+    pub buckets: Vec<BucketPermission>,
+
+    /// Raw IAM policy statements (passthrough after the validator).
+    #[serde(default)]
+    pub statements: Vec<IamStatement>,
+}
+
+impl IamConfig {
+    /// Returns `true` when the IAM config contains no declarations
+    /// (all three vectors are empty).
+    ///
+    /// Used by `DeployConfig`'s
+    /// `#[serde(skip_serializing_if = "IamConfig::is_empty")]` to preserve
+    /// byte-identity for configs without an `[iam]` section (D-05).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.tables.is_empty() && self.buckets.is_empty() && self.statements.is_empty()
+    }
+}
+
+/// DynamoDB table permission (sugar form).
+///
+/// `actions` is a subset of `{"read", "write", "readwrite"}`. Wave 3's
+/// translation (`cargo_pmcp::deployment::iam::render_table`) expands each
+/// sugar keyword into the 4-action DynamoDB list per 76-CONTEXT.md D-02:
+/// - `read` → `GetItem`, `Query`, `Scan`, `BatchGetItem`
+/// - `write` → `PutItem`, `UpdateItem`, `DeleteItem`, `BatchWriteItem`
+/// - `readwrite` → union (8 actions)
+///
+/// When `include_indexes = true`, the resource list additionally grants
+/// `arn:aws:dynamodb:${this.region}:${this.account}:table/NAME/index/*`
+/// (GSI/LSI access).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TablePermission {
+    /// Table name (AWS region + account inherited from the deploy context).
+    pub name: String,
+
+    /// Sugar keywords — subset of `{"read", "write", "readwrite"}`. Unknown
+    /// values are rejected by Wave 4's validator.
+    pub actions: Vec<String>,
+
+    /// When `true`, grants access to `table/NAME/index/*` (GSI/LSI).
+    #[serde(default)]
+    pub include_indexes: bool,
+}
+
+/// S3 bucket permission (sugar form — object-level ARN only).
+///
+/// Wave 3's translation (`cargo_pmcp::deployment::iam::render_bucket`)
+/// expands sugar keywords per 76-CONTEXT.md D-02:
+/// - `read` → `GetObject`
+/// - `write` → `PutObject`, `DeleteObject`
+/// - `readwrite` → union (3 actions)
+///
+/// The resource ARN is `arn:aws:s3:::NAME/*` (object-level only).
+/// Bucket-level operations (e.g. `s3:ListBucket`) must be declared via
+/// `[[iam.statements]]` per CR scope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BucketPermission {
+    /// Bucket name.
+    pub name: String,
+
+    /// Sugar keywords — subset of `{"read", "write", "readwrite"}`.
+    pub actions: Vec<String>,
+}
+
+/// Raw IAM `PolicyStatement` (passthrough after Wave 4 validation).
+///
+/// Emitted verbatim as
+/// `new iam.PolicyStatement({ effect, actions, resources })` in the generated
+/// `stack.ts`. Wave 4's validator enforces:
+/// - `effect` is `"Allow"` or `"Deny"`
+/// - `actions` is non-empty, each matching `^[a-z0-9-]+:[A-Za-z0-9*]+$`
+/// - `resources` is non-empty (ARN or `*`)
+/// - Rejects Allow `*:*` with resources `*`
+/// - Warns on cross-account ARNs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IamStatement {
+    /// `"Allow"` or `"Deny"` (validated in Wave 4).
+    pub effect: String,
+
+    /// Non-empty list of `service:action` strings; `*` permitted as an
+    /// action-name wildcard.
+    pub actions: Vec<String>,
+
+    /// Non-empty list of ARNs (or `"*"`). Cross-account ARNs emit a validator
+    /// warning in Wave 4.
+    pub resources: Vec<String>,
+}
+
+#[cfg(test)]
+mod iam_wave1_tests {
+    use super::*;
+
+    #[test]
+    fn iam_config_default_is_empty() {
+        assert!(
+            IamConfig::default().is_empty(),
+            "IamConfig::default() must report empty in Wave 1"
+        );
+    }
+
+    #[test]
+    fn deploy_config_without_iam_block_parses() {
+        // Round-trip: serialise a default DeployConfig (no [iam]) and re-parse it.
+        // The `skip_serializing_if` guard must elide the [iam] table from the
+        // emitted TOML so that subsequent parses do not require the section.
+        let cfg = DeployConfig::default_for_server(
+            "demo-server".to_string(),
+            "us-west-2".to_string(),
+            std::path::PathBuf::from("/tmp/phase76-iam-wave1"),
+        );
+        let serialised = toml::to_string(&cfg).expect("DeployConfig serialises");
+        let parsed: DeployConfig =
+            toml::from_str(&serialised).expect("round-trip DeployConfig parses");
+        assert!(
+            parsed.iam.is_empty(),
+            "round-tripped DeployConfig must have empty IamConfig"
+        );
+    }
+
+    #[test]
+    fn deploy_config_serializes_without_iam_when_empty() {
+        let cfg = DeployConfig::default_for_server(
+            "demo-server".to_string(),
+            "us-west-2".to_string(),
+            std::path::PathBuf::from("/tmp/phase76-iam-wave1"),
+        );
+        let out = toml::to_string(&cfg).expect("DeployConfig serialises");
+        assert!(
+            !out.contains("[iam]"),
+            "empty IamConfig must not emit [iam] table (D-05 backward-compat) — got:\n{out}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod iam_wave2_tests {
+    //! Wave 2 (phase 76 Plan 02) — full `IamConfig` schema coverage.
+    //!
+    //! These tests drive the replacement of the Wave 1 zero-sized stub with the
+    //! three-vector schema described in CONTEXT.md (§Scope) and
+    //! `CLI_IAM_CHANGE_REQUEST.md`. They co-exist with `iam_wave1_tests` — the
+    //! Wave 1 invariants (default-empty, skip-serialize-empty, round-trip) are
+    //! still enforced there.
+    //!
+    //! Integration-level coverage (serde roundtrip through
+    //! `cargo_pmcp::deployment::config::*`) lives in
+    //! `cargo-pmcp/tests/iam_config.rs`. Because `cargo_pmcp`'s library surface
+    //! does not re-export `deployment::config` (same lib-boundary constraint
+    //! documented in Wave 1's summary, Rule 3 deviation #1), the struct-level
+    //! assertions live in-crate here where `super::*` makes the private types
+    //! directly accessible.
+
+    use super::*;
+
+    /// Builds a cost-coach-shaped TOML fixture by serialising a valid
+    /// `default_for_server` baseline and appending the three `[[iam.*]]`
+    /// blocks from 76-CONTEXT.md (§Scope). This sidesteps the fragility of
+    /// hand-crafting every required field (several structs — `ServerConfig`,
+    /// `ObservabilityConfig`, `TargetConfig` — have no `#[serde(default)]`)
+    /// and keeps the fixture locked to whatever non-IAM defaults the crate
+    /// currently ships.
+    fn cost_coach_deploy_toml() -> String {
+        let baseline = DeployConfig::default_for_server(
+            "cost-coach".to_string(),
+            "us-west-2".to_string(),
+            std::path::PathBuf::from("/tmp/phase76-wave2-fixture"),
+        );
+        let mut out = toml::to_string(&baseline).expect("baseline serialises");
+        out.push_str(
+            r#"
+[[iam.tables]]
+name = "cost-coach-tenants"
+actions = ["readwrite"]
+include_indexes = true
+
+[[iam.buckets]]
+name = "cost-coach-snapshots"
+actions = ["readwrite"]
+
+[[iam.statements]]
+effect = "Allow"
+actions = ["secretsmanager:GetSecretValue"]
+resources = ["arn:aws:secretsmanager:us-west-2:*:secret:cost-coach/*"]
+"#,
+        );
+        out
+    }
+
+    #[test]
+    fn iam_config_default_has_three_empty_vectors() {
+        let iam = IamConfig::default();
+        assert!(iam.tables.is_empty());
+        assert!(iam.buckets.is_empty());
+        assert!(iam.statements.is_empty());
+        assert!(iam.is_empty());
+    }
+
+    #[test]
+    fn iam_config_is_empty_flips_when_any_vector_is_populated() {
+        // Populating any one vector MUST flip is_empty to false — this is the
+        // exact condition that toggles the D-05 `skip_serializing_if` guard.
+        let mut iam = IamConfig::default();
+        iam.tables.push(TablePermission {
+            name: "t1".into(),
+            actions: vec!["read".into()],
+            include_indexes: false,
+        });
+        assert!(
+            !iam.is_empty(),
+            "populated tables vector must flip is_empty"
+        );
+
+        let mut iam = IamConfig::default();
+        iam.buckets.push(BucketPermission {
+            name: "b1".into(),
+            actions: vec!["read".into()],
+        });
+        assert!(
+            !iam.is_empty(),
+            "populated buckets vector must flip is_empty"
+        );
+
+        let mut iam = IamConfig::default();
+        iam.statements.push(IamStatement {
+            effect: "Allow".into(),
+            actions: vec!["s3:GetObject".into()],
+            resources: vec!["arn:aws:s3:::b/*".into()],
+        });
+        assert!(
+            !iam.is_empty(),
+            "populated statements vector must flip is_empty"
+        );
+    }
+
+    #[test]
+    fn cost_coach_shaped_toml_parses_into_populated_iam_config() {
+        let fixture = cost_coach_deploy_toml();
+        let cfg: DeployConfig = toml::from_str(&fixture).expect("cost-coach TOML parses");
+
+        assert_eq!(cfg.iam.tables.len(), 1);
+        assert_eq!(cfg.iam.tables[0].name, "cost-coach-tenants");
+        assert_eq!(cfg.iam.tables[0].actions, vec!["readwrite".to_string()]);
+        assert!(cfg.iam.tables[0].include_indexes);
+
+        assert_eq!(cfg.iam.buckets.len(), 1);
+        assert_eq!(cfg.iam.buckets[0].name, "cost-coach-snapshots");
+        assert_eq!(cfg.iam.buckets[0].actions, vec!["readwrite".to_string()]);
+
+        assert_eq!(cfg.iam.statements.len(), 1);
+        assert_eq!(cfg.iam.statements[0].effect, "Allow");
+        assert_eq!(
+            cfg.iam.statements[0].actions,
+            vec!["secretsmanager:GetSecretValue".to_string()]
+        );
+        assert_eq!(
+            cfg.iam.statements[0].resources,
+            vec!["arn:aws:secretsmanager:us-west-2:*:secret:cost-coach/*".to_string()]
+        );
+
+        assert!(!cfg.iam.is_empty());
+    }
+
+    #[test]
+    fn include_indexes_defaults_false_when_omitted() {
+        let baseline = DeployConfig::default_for_server(
+            "demo".to_string(),
+            "us-west-2".to_string(),
+            std::path::PathBuf::from("/tmp/phase76-wave2-include-indexes"),
+        );
+        let mut toml_str = toml::to_string(&baseline).expect("baseline serialises");
+        // Append a table entry WITHOUT `include_indexes` — default must be false.
+        toml_str.push_str(
+            r#"
+[[iam.tables]]
+name = "t1"
+actions = ["read"]
+"#,
+        );
+        let cfg: DeployConfig = toml::from_str(&toml_str).expect("parses");
+        assert_eq!(cfg.iam.tables.len(), 1);
+        assert!(
+            !cfg.iam.tables[0].include_indexes,
+            "include_indexes must default to false when TOML omits it"
+        );
+    }
+
+    #[test]
+    fn populated_iam_roundtrips_losslessly_through_toml() {
+        // Round-trip: parse → serialise → re-parse → structural equality
+        // (IamConfig intentionally derives no PartialEq per PATTERNS.md §S1, so
+        // compare each field individually).
+        let fixture = cost_coach_deploy_toml();
+        let orig: DeployConfig = toml::from_str(&fixture).expect("cost-coach TOML parses");
+        let serialised = toml::to_string(&orig).expect("DeployConfig serialises");
+        let reparsed: DeployConfig = toml::from_str(&serialised)
+            .unwrap_or_else(|e| panic!("reparse failed — serialised:\n{serialised}\nerror: {e}"));
+
+        assert_eq!(orig.iam.tables.len(), reparsed.iam.tables.len());
+        assert_eq!(orig.iam.tables[0].name, reparsed.iam.tables[0].name);
+        assert_eq!(orig.iam.tables[0].actions, reparsed.iam.tables[0].actions);
+        assert_eq!(
+            orig.iam.tables[0].include_indexes,
+            reparsed.iam.tables[0].include_indexes
+        );
+
+        assert_eq!(orig.iam.buckets.len(), reparsed.iam.buckets.len());
+        assert_eq!(orig.iam.buckets[0].name, reparsed.iam.buckets[0].name);
+        assert_eq!(orig.iam.buckets[0].actions, reparsed.iam.buckets[0].actions);
+
+        assert_eq!(orig.iam.statements.len(), reparsed.iam.statements.len());
+        assert_eq!(
+            orig.iam.statements[0].effect,
+            reparsed.iam.statements[0].effect
+        );
+        assert_eq!(
+            orig.iam.statements[0].actions,
+            reparsed.iam.statements[0].actions
+        );
+        assert_eq!(
+            orig.iam.statements[0].resources,
+            reparsed.iam.statements[0].resources
+        );
+    }
+
+    #[test]
+    fn d05_empty_iam_still_elides_every_iam_header() {
+        // D-05 backward-compat guard, refined: ensure that the post-Wave-2
+        // struct still elides ALL iam-related table headers when every vector
+        // is empty (not just the bare `[iam]` header that Wave 1 tested).
+        let cfg = DeployConfig::default_for_server(
+            "demo-server".to_string(),
+            "us-west-2".to_string(),
+            std::path::PathBuf::from("/tmp/phase76-iam-wave2"),
+        );
+        let out = toml::to_string(&cfg).expect("DeployConfig serialises");
+        for header in [
+            "[iam]",
+            "[[iam.tables]]",
+            "[[iam.buckets]]",
+            "[[iam.statements]]",
+        ] {
+            assert!(
+                !out.contains(header),
+                "empty IamConfig must not emit {header} header (D-05) — got:\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn sub_struct_types_are_constructable() {
+        // Sanity: the sub-structs are `pub` and their fields are `pub` — Wave 3
+        // (render_iam_block) and Wave 4 (validator) will need to build these by
+        // hand for test fixtures.
+        let _tp = TablePermission {
+            name: "t".into(),
+            actions: vec!["read".into()],
+            include_indexes: false,
+        };
+        let _bp = BucketPermission {
+            name: "b".into(),
+            actions: vec!["write".into()],
+        };
+        let _st = IamStatement {
+            effect: "Allow".into(),
+            actions: vec!["s3:GetObject".into()],
+            resources: vec!["arn:aws:s3:::bucket/*".into()],
+        };
+        let _iam = IamConfig::default();
     }
 }

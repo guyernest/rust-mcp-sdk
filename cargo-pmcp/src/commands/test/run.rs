@@ -61,84 +61,13 @@ pub fn execute(
         println!("  {} Target: {}", "→".blue(), target_url);
     }
 
-    // Try scenario-based testing if scenarios exist
-    let test_result = if scenarios_dir.exists() && scenarios_dir.read_dir()?.next().is_some() {
-        // Find YAML scenarios
-        let scenarios: Vec<_> = std::fs::read_dir(&scenarios_dir)?
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s == "yaml" || s == "yml")
-                    .unwrap_or(false)
-            })
-            .collect();
-
-        if !scenarios.is_empty() {
-            if global_flags.should_output() {
-                println!(
-                    "  {} Running {} scenario file(s) from {}",
-                    "→".blue(),
-                    scenarios.len(),
-                    scenarios_dir.display()
-                );
-            }
-
-            // Run each scenario using library
-            let mut all_passed = true;
-            for scenario in scenarios {
-                let scenario_path = scenario.path();
-                if global_flags.should_output() {
-                    println!("\n  Testing: {}", scenario_path.display());
-                }
-
-                let result = tokio::runtime::Runtime::new()?.block_on(async {
-                    run_scenario_with_transport(
-                        scenario_path.to_str().unwrap(),
-                        &target_url,
-                        detailed,
-                        transport.as_deref(),
-                    )
-                    .await
-                });
-
-                match result {
-                    Ok(_) => {
-                        println!("  {} Passed", "✓".green());
-                    },
-                    Err(e) => {
-                        println!("  {} Failed: {}", "✗".red(), e);
-                        all_passed = false;
-                    },
-                }
-            }
-
-            Ok(all_passed)
-        } else {
-            // No scenarios found
-            if global_flags.should_output() {
-                println!(
-                    "  {} No scenarios found in {}",
-                    "⚠".yellow(),
-                    scenarios_dir.display()
-                );
-                println!("    Run 'cargo pmcp test generate' to create test scenarios");
-            }
-            Ok(true)
-        }
-    } else {
-        // No scenarios directory
-        if global_flags.should_output() {
-            println!(
-                "  {} No scenarios directory found at {}",
-                "⚠".yellow(),
-                scenarios_dir.display()
-            );
-            println!("    Run 'cargo pmcp test generate' to create test scenarios");
-        }
-        Ok(true)
-    };
+    let test_result: Result<bool> = run_scenarios_if_present(
+        &scenarios_dir,
+        &target_url,
+        transport.as_deref(),
+        detailed,
+        global_flags,
+    );
 
     if global_flags.should_output() {
         println!();
@@ -165,5 +94,106 @@ pub fn execute(
             anyhow::bail!("Tests failed");
         },
         Err(e) => Err(e),
+    }
+}
+
+/// Discover scenarios in `scenarios_dir` and run each via
+/// `run_scenario_with_transport`, returning whether all passed. Handles the
+/// "no scenarios" / "no directory" cases with user-facing hints.
+fn run_scenarios_if_present(
+    scenarios_dir: &PathBuf,
+    target_url: &str,
+    transport: Option<&str>,
+    detailed: bool,
+    global_flags: &GlobalFlags,
+) -> Result<bool> {
+    if !scenarios_dir.exists() || scenarios_dir.read_dir()?.next().is_none() {
+        if global_flags.should_output() {
+            println!(
+                "  {} No scenarios directory found at {}",
+                "⚠".yellow(),
+                scenarios_dir.display()
+            );
+            println!("    Run 'cargo pmcp test generate' to create test scenarios");
+        }
+        return Ok(true);
+    }
+
+    let scenarios = discover_yaml_scenarios(scenarios_dir)?;
+
+    if scenarios.is_empty() {
+        if global_flags.should_output() {
+            println!(
+                "  {} No scenarios found in {}",
+                "⚠".yellow(),
+                scenarios_dir.display()
+            );
+            println!("    Run 'cargo pmcp test generate' to create test scenarios");
+        }
+        return Ok(true);
+    }
+
+    if global_flags.should_output() {
+        println!(
+            "  {} Running {} scenario file(s) from {}",
+            "→".blue(),
+            scenarios.len(),
+            scenarios_dir.display()
+        );
+    }
+
+    let mut all_passed = true;
+    for scenario in scenarios {
+        let scenario_path = scenario.path();
+        if global_flags.should_output() {
+            println!("\n  Testing: {}", scenario_path.display());
+        }
+        if !run_single_scenario(&scenario_path, target_url, transport, detailed)? {
+            all_passed = false;
+        }
+    }
+    Ok(all_passed)
+}
+
+/// Read `scenarios_dir` for files with .yaml/.yml extensions.
+fn discover_yaml_scenarios(scenarios_dir: &PathBuf) -> Result<Vec<std::fs::DirEntry>> {
+    Ok(std::fs::read_dir(scenarios_dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s == "yaml" || s == "yml")
+                .unwrap_or(false)
+        })
+        .collect())
+}
+
+/// Execute a single scenario file and log pass/fail; return whether it passed.
+fn run_single_scenario(
+    scenario_path: &std::path::Path,
+    target_url: &str,
+    transport: Option<&str>,
+    detailed: bool,
+) -> Result<bool> {
+    let result = tokio::runtime::Runtime::new()?.block_on(async {
+        run_scenario_with_transport(
+            scenario_path.to_str().unwrap(),
+            target_url,
+            detailed,
+            transport,
+        )
+        .await
+    });
+
+    match result {
+        Ok(_) => {
+            println!("  {} Passed", "✓".green());
+            Ok(true)
+        },
+        Err(e) => {
+            println!("  {} Failed: {}", "✗".red(), e);
+            Ok(false)
+        },
     }
 }

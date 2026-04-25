@@ -97,9 +97,20 @@ pub mod avp;
 #[cfg(feature = "js-runtime")]
 pub mod executor;
 
-// Shared expression evaluation logic (used by both sync and async executors)
+// Shared expression evaluation logic (used by both sync and async executors).
+//
+// `pub` (rather than the original `mod`) so that `tests/eval_semantic_regression.rs`
+// can pin the JsonValue output of `evaluate_with_scope` and
+// `evaluate_array_method_with_scope` against representative ValueExpr programs
+// (Phase 75 Wave 0 Task 2 — regression contract for Wave 3's mandatory cog 123/117 → ≤25 refactor).
+//
+// Why public: the eval functions need to be directly callable from a separate
+// `tests/` integration target so the snapshot can detect semantic drift. Making
+// the module `pub` is the smallest change that exposes the symbols; alternative
+// (per-symbol re-export at the crate root) would clutter the public surface
+// with internal helpers like `is_truthy` / `to_number` / `evaluate_binary_op`.
 #[cfg(feature = "js-runtime")]
-mod eval;
+pub mod eval;
 
 // Re-export async_trait to avoid version conflicts in derive macro output (D-07)
 pub use async_trait::async_trait;

@@ -243,12 +243,31 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    init_tracing(cli.verbose);
 
-    // Initialize logging - respect RUST_LOG if set, otherwise use verbosity
+    if matches!(cli.format, OutputFormat::Pretty) {
+        print_header();
+    }
+
+    let oauth_config = (
+        cli.oauth_issuer.clone(),
+        cli.oauth_client_id.clone(),
+        cli.oauth_scopes.clone(),
+        cli.oauth_no_cache,
+        cli.oauth_redirect_port,
+    );
+
+    let result = dispatch_command(&cli, oauth_config).await;
+    handle_command_result(result, cli.format);
+    Ok(())
+}
+
+/// Initialize tracing/logging from RUST_LOG or the `--verbose` count.
+fn init_tracing(verbose: u8) {
     let env_filter = if std::env::var("RUST_LOG").is_ok() {
         tracing_subscriber::EnvFilter::from_default_env()
     } else {
-        let log_level = match cli.verbose {
+        let log_level = match verbose {
             0 => "error",
             1 => "warn",
             2 => "info",
@@ -260,218 +279,175 @@ async fn main() -> Result<()> {
             log_level, log_level
         ))
     };
-
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
+}
 
-    // Print header
-    if matches!(cli.format, OutputFormat::Pretty) {
-        print_header();
-    }
-
-    // OAuth config will be created per-command with the actual URL
-    let oauth_config = (
-        cli.oauth_issuer.clone(),
-        cli.oauth_client_id.clone(),
-        cli.oauth_scopes.clone(),
-        cli.oauth_no_cache,
-        cli.oauth_redirect_port,
-    );
-
-    // Execute command
-    let result = match cli.command {
+/// Dispatch the parsed `Commands` variant to its `run_*` handler.
+///
+/// The command match arms collapse to one helper per command — the common
+/// pattern is "build OAuth middleware then call the run_<cmd> async fn".
+/// Diagnose has its own non-OAuth shape (handled in run_diagnose_command).
+async fn dispatch_command(cli: &Cli, oauth_config: OAuthConfigTuple) -> Result<TestReport> {
+    match &cli.command {
         Commands::Test {
             url,
             with_tools,
             tool,
             args,
         } => {
-            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
+            let oauth = create_oauth_from_config(url, &oauth_config).await?;
             run_full_test(
-                &url,
-                with_tools,
-                tool,
-                args,
+                url,
+                *with_tools,
+                tool.clone(),
+                args.clone(),
                 cli.timeout,
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
-                oauth_middleware,
+                oauth,
             )
             .await
         },
-
         Commands::Quick { url } => {
-            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
+            let oauth = create_oauth_from_config(url, &oauth_config).await?;
             run_quick_test(
-                &url,
+                url,
                 cli.timeout,
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
-                oauth_middleware,
+                oauth,
             )
             .await
         },
-
         Commands::Conformance {
             url,
             strict,
             domain,
         } => {
-            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
+            let oauth = create_oauth_from_config(url, &oauth_config).await?;
             run_conformance_test(
-                &url,
-                strict,
-                domain,
+                url,
+                *strict,
+                domain.clone(),
                 cli.timeout,
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
-                oauth_middleware,
+                oauth,
             )
             .await
         },
-
         Commands::Tools { url, test_all } => {
-            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
+            let oauth = create_oauth_from_config(url, &oauth_config).await?;
             run_tools_test(
-                &url,
-                test_all,
+                url,
+                *test_all,
                 cli.timeout,
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
                 cli.verbose > 0,
-                oauth_middleware.clone(),
+                oauth.clone(),
             )
             .await
         },
-
         Commands::Resources { url } => {
-            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
+            let oauth = create_oauth_from_config(url, &oauth_config).await?;
             run_resources_test(
-                &url,
+                url,
                 cli.timeout,
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
                 cli.verbose > 0,
-                oauth_middleware.clone(),
+                oauth.clone(),
             )
             .await
         },
-
         Commands::Prompts { url } => {
-            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
+            let oauth = create_oauth_from_config(url, &oauth_config).await?;
             run_prompts_test(
-                &url,
+                url,
                 cli.timeout,
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
                 cli.verbose > 0,
-                oauth_middleware.clone(),
+                oauth.clone(),
             )
             .await
         },
-
-        Commands::Diagnose { url, network } => {
-            // Keep JSON/minimal outputs clean by running diagnostics in quiet mode
-            let use_quiet = !matches!(cli.format, OutputFormat::Pretty | OutputFormat::Verbose);
-            let report = if use_quiet {
-                diagnostics::run_diagnostics_quiet(
-                    &url,
-                    network,
-                    Duration::from_secs(cli.timeout),
-                    cli.insecure,
-                    cli.api_key.as_deref(),
-                )
-                .await?
-            } else {
-                diagnostics::run_diagnostics(
-                    &url,
-                    network,
-                    Duration::from_secs(cli.timeout),
-                    cli.insecure,
-                    cli.api_key.as_deref(),
-                )
-                .await?
-            };
-            Ok(report)
-        },
-
+        Commands::Diagnose { url, network } => run_diagnose_command(cli, url, *network).await,
         Commands::Compare {
             server1,
             server2,
             with_perf,
         } => {
-            let oauth_middleware = create_oauth_from_config(&server1, &oauth_config).await?;
+            let oauth = create_oauth_from_config(server1, &oauth_config).await?;
             run_comparison(
-                &server1,
-                &server2,
-                with_perf,
+                server1,
+                server2,
+                *with_perf,
                 cli.timeout,
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
-                oauth_middleware.clone(),
+                oauth.clone(),
             )
             .await
         },
-
         Commands::Health { url } => {
-            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
+            let oauth = create_oauth_from_config(url, &oauth_config).await?;
             run_health_check(
-                &url,
+                url,
                 cli.timeout,
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
-                oauth_middleware.clone(),
+                oauth.clone(),
             )
             .await
         },
-
         Commands::Scenario {
             url,
             file,
             detailed,
         } => {
-            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
+            let oauth = create_oauth_from_config(url, &oauth_config).await?;
             run_scenario(
-                &url,
-                &file,
-                detailed,
+                url,
+                file,
+                *detailed,
                 cli.timeout,
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
-                oauth_middleware.clone(),
+                oauth.clone(),
             )
             .await
         },
-
         Commands::Apps {
             url,
             mode,
             tool,
             strict,
         } => {
-            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
+            let oauth = create_oauth_from_config(url, &oauth_config).await?;
             run_apps_validation(
-                &url,
-                &mode,
-                tool,
-                strict,
+                url,
+                mode,
+                tool.clone(),
+                *strict,
                 cli.timeout,
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
-                oauth_middleware,
+                oauth,
             )
             .await
         },
-
         Commands::GenerateScenario {
             url,
             output,
@@ -479,34 +455,59 @@ async fn main() -> Result<()> {
             with_resources,
             with_prompts,
         } => {
-            let oauth_middleware = create_oauth_from_config(&url, &oauth_config).await?;
+            let oauth = create_oauth_from_config(url, &oauth_config).await?;
             generate_scenario(
-                &url,
-                &output,
-                all_tools,
-                with_resources,
-                with_prompts,
+                url,
+                output,
+                *all_tools,
+                *with_resources,
+                *with_prompts,
                 cli.timeout,
                 cli.insecure,
                 cli.api_key.as_deref(),
                 cli.transport.as_deref(),
-                oauth_middleware.clone(),
+                oauth.clone(),
             )
             .await
         },
-    };
+    }
+}
 
-    // Handle results and output
+/// Run the `Diagnose` subcommand, choosing quiet vs full mode by output format.
+async fn run_diagnose_command(cli: &Cli, url: &str, network: bool) -> Result<TestReport> {
+    let use_quiet = !matches!(cli.format, OutputFormat::Pretty | OutputFormat::Verbose);
+    if use_quiet {
+        diagnostics::run_diagnostics_quiet(
+            url,
+            network,
+            Duration::from_secs(cli.timeout),
+            cli.insecure,
+            cli.api_key.as_deref(),
+        )
+        .await
+    } else {
+        diagnostics::run_diagnostics(
+            url,
+            network,
+            Duration::from_secs(cli.timeout),
+            cli.insecure,
+            cli.api_key.as_deref(),
+        )
+        .await
+    }
+}
+
+/// Print the result, exit non-zero on failure (CI-friendly).
+fn handle_command_result(result: Result<TestReport>, format: OutputFormat) {
     match result {
         Ok(report) => {
-            report.print(cli.format);
-            // Always use non-zero exit code on failures for all formats (CI-friendly)
+            report.print(format);
             if report.has_failures() {
                 std::process::exit(1);
             }
         },
         Err(e) => {
-            if cli.format == OutputFormat::Json {
+            if format == OutputFormat::Json {
                 let error_report = TestReport::from_error(e);
                 error_report.print(OutputFormat::Json);
             } else {
@@ -515,8 +516,6 @@ async fn main() -> Result<()> {
             std::process::exit(1);
         },
     }
-
-    Ok(())
 }
 
 fn print_header() {

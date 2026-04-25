@@ -121,35 +121,46 @@ pub fn inline_ext_apps_shim(html: &str) -> std::borrow::Cow<'_, str> {
 /// the (start, end) byte offsets spanning from `import` to the trailing `;`
 /// or end of line.
 fn find_cdn_import(html: &str, markers: &[&str]) -> Option<(usize, usize)> {
-    for marker in markers {
-        if let Some(marker_pos) = html.find(marker) {
-            // Walk backward to find the opening quote, then `from`, then `import`
-            let before = &html[..marker_pos];
-            // Find the quote that opens this URL (scanning backward)
-            let quote_pos = before.rfind(['"', '\'']);
-            if let Some(qp) = quote_pos {
-                // Bound backward search to the current line to avoid matching
-                // an unrelated `import` keyword from an earlier statement.
-                let line_start = html[..qp].rfind('\n').map_or(0, |i| i + 1);
-                let on_line = &html[line_start..qp];
-                if let Some(rel_offset) = on_line.rfind("import") {
-                    let import_kw = line_start + rel_offset;
-                    // Find end: closing quote + optional semicolon
-                    let after_marker = &html[marker_pos + marker.len()..];
-                    let close_quote = after_marker
-                        .find(['"', '\''])
-                        .map_or(html.len(), |i| marker_pos + marker.len() + i + 1);
-                    // Skip trailing semicolon and whitespace
-                    let mut end = close_quote;
-                    while end < html.len() && matches!(html.as_bytes()[end], b';' | b' ' | b'\t') {
-                        end += 1;
-                    }
-                    return Some((import_kw, end));
-                }
-            }
-        }
+    markers
+        .iter()
+        .find_map(|marker| find_cdn_import_for_marker(html, marker))
+}
+
+/// Try to locate a CDN import for one specific marker. Returns the byte
+/// range `(import_kw_start, end_after_terminator)` if all four anchor
+/// points (marker → opening quote → `import` keyword on same line →
+/// closing quote) are found.
+fn find_cdn_import_for_marker(html: &str, marker: &str) -> Option<(usize, usize)> {
+    let marker_pos = html.find(marker)?;
+    let import_kw = locate_import_keyword_for_marker(html, marker_pos)?;
+    let end = compute_import_end(html, marker_pos, marker.len());
+    Some((import_kw, end))
+}
+
+/// Walk backward from `marker_pos` to find the start of the `import`
+/// keyword on the same line that opens the URL with `"` or `'`.
+fn locate_import_keyword_for_marker(html: &str, marker_pos: usize) -> Option<usize> {
+    let before = &html[..marker_pos];
+    let qp = before.rfind(['"', '\''])?;
+    // Bound the backward search to the current line to avoid matching an
+    // unrelated `import` keyword from an earlier statement.
+    let line_start = html[..qp].rfind('\n').map_or(0, |i| i + 1);
+    let on_line = &html[line_start..qp];
+    on_line.rfind("import").map(|rel| line_start + rel)
+}
+
+/// Compute the end byte offset of an import statement: starting from the
+/// closing quote, advance past any trailing `;`, space, or tab.
+fn compute_import_end(html: &str, marker_pos: usize, marker_len: usize) -> usize {
+    let after_marker = &html[marker_pos + marker_len..];
+    let close_quote = after_marker
+        .find(['"', '\''])
+        .map_or(html.len(), |i| marker_pos + marker_len + i + 1);
+    let mut end = close_quote;
+    while end < html.len() && matches!(html.as_bytes()[end], b';' | b' ' | b'\t') {
+        end += 1;
     }
-    None
+    end
 }
 
 /// Minimal inline implementation of the `@modelcontextprotocol/ext-apps` `App` class.

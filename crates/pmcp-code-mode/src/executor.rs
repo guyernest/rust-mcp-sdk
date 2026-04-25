@@ -30,8 +30,7 @@ use std::collections::{HashMap, HashSet};
 
 // Import shared evaluation functions
 use crate::eval::{
-    evaluate as shared_evaluate, evaluate_with_binding as shared_evaluate_with_binding,
-    evaluate_with_two_bindings as shared_evaluate_with_two_bindings, is_truthy as shared_is_truthy,
+    evaluate as shared_evaluate, is_truthy as shared_is_truthy,
     json_to_string_with_mode as shared_json_to_string_with_mode, JsonStringMode,
 };
 use swc_common::{FileName, SourceMap};
@@ -185,38 +184,58 @@ fn find_blocked_fields_recursive(
     violations: &mut Vec<String>,
 ) {
     match value {
-        JsonValue::Object(map) => {
-            for (key, v) in map {
-                if blocked_fields.contains(key) {
-                    // Found a blocked field
-                    if path.is_empty() {
-                        violations.push(key.clone());
-                    } else {
-                        violations.push(format!("{}.{}", path, key));
-                    }
-                }
-
-                // Continue checking nested values
-                let new_path = if path.is_empty() {
-                    key.clone()
-                } else {
-                    format!("{}.{}", path, key)
-                };
-                find_blocked_fields_recursive(v, blocked_fields, &new_path, violations);
-            }
-        },
-        JsonValue::Array(arr) => {
-            for (i, v) in arr.iter().enumerate() {
-                let new_path = if path.is_empty() {
-                    format!("[{}]", i)
-                } else {
-                    format!("{}[{}]", path, i)
-                };
-                find_blocked_fields_recursive(v, blocked_fields, &new_path, violations);
-            }
-        },
-        // Non-container values don't need checking
+        JsonValue::Object(map) => visit_object(map, blocked_fields, path, violations),
+        JsonValue::Array(arr) => visit_array(arr, blocked_fields, path, violations),
+        // Non-container values don't need checking.
         _ => {},
+    }
+}
+
+/// Walk a JSON object: record direct blocked-key matches, then recurse into
+/// each value with an extended dotted path.
+fn visit_object(
+    map: &serde_json::Map<String, JsonValue>,
+    blocked_fields: &HashSet<String>,
+    path: &str,
+    violations: &mut Vec<String>,
+) {
+    for (key, v) in map {
+        let key_path = join_field_path(path, key);
+        if blocked_fields.contains(key) {
+            violations.push(key_path.clone());
+        }
+        find_blocked_fields_recursive(v, blocked_fields, &key_path, violations);
+    }
+}
+
+/// Walk a JSON array: recurse into each element with an indexed path.
+fn visit_array(
+    arr: &[JsonValue],
+    blocked_fields: &HashSet<String>,
+    path: &str,
+    violations: &mut Vec<String>,
+) {
+    for (i, v) in arr.iter().enumerate() {
+        let elem_path = join_index_path(path, i);
+        find_blocked_fields_recursive(v, blocked_fields, &elem_path, violations);
+    }
+}
+
+/// Append a dotted field segment to a path: `""` + `"k"` → `"k"`, `"a.b"` + `"k"` → `"a.b.k"`.
+fn join_field_path(path: &str, key: &str) -> String {
+    if path.is_empty() {
+        key.to_string()
+    } else {
+        format!("{}.{}", path, key)
+    }
+}
+
+/// Append an indexed segment to a path: `""` + `0` → `"[0]"`, `"a"` + `1` → `"a[1]"`.
+fn join_index_path(path: &str, idx: usize) -> String {
+    if path.is_empty() {
+        format!("[{}]", idx)
+    } else {
+        format!("{}[{}]", path, idx)
     }
 }
 
@@ -680,7 +699,6 @@ enum ExtractedCall {
 
 /// Compiler that converts SWC AST to ExecutionPlan.
 pub struct PlanCompiler {
-    max_api_calls: usize,
     api_call_count: usize,
     endpoints: Vec<String>,
     methods_used: Vec<String>,
@@ -698,9 +716,8 @@ impl PlanCompiler {
     }
 
     /// Create a new compiler with custom config.
-    pub fn with_config(config: &ExecutionConfig) -> Self {
+    pub fn with_config(_config: &ExecutionConfig) -> Self {
         Self {
-            max_api_calls: config.max_api_calls,
             api_call_count: 0,
             endpoints: Vec::new(),
             methods_used: Vec::new(),
@@ -1220,13 +1237,11 @@ impl PlanCompiler {
             // Array literal: [1, 2, 3]
             Expr::Array(arr) => {
                 let mut items = Vec::new();
-                for elem in &arr.elems {
-                    if let Some(elem) = elem {
-                        if elem.spread.is_some() {
-                            return Err(CompileError::UnsupportedExpression("spread".into()));
-                        }
-                        items.push(self.compile_expr(&elem.expr)?);
+                for elem in arr.elems.iter().flatten() {
+                    if elem.spread.is_some() {
+                        return Err(CompileError::UnsupportedExpression("spread".into()));
                     }
+                    items.push(self.compile_expr(&elem.expr)?);
                 }
                 Ok(ValueExpr::ArrayLiteral { items })
             }
@@ -1439,10 +1454,8 @@ impl PlanCompiler {
                                 if let Some(arg) = call.args.first() {
                                     if let Expr::Array(arr) = arg.expr.as_ref() {
                                         let mut items = Vec::new();
-                                        for elem in &arr.elems {
-                                            if let Some(elem) = elem {
-                                                items.push(self.compile_expr(&elem.expr)?);
-                                            }
+                                        for elem in arr.elems.iter().flatten() {
+                                            items.push(self.compile_expr(&elem.expr)?);
                                         }
                                         return Ok(ValueExpr::PromiseAll { items });
                                     }
@@ -1621,22 +1634,19 @@ impl PlanCompiler {
                                 }
                             }
                         },
-                        "reduce" => {
-                            // reduce((acc, item) => expr, initialValue)
-                            if call.args.len() >= 2 {
-                                let (acc_var, item_var, body) =
-                                    self.extract_reduce_callback(call)?;
-                                let initial = Box::new(self.compile_expr(&call.args[1].expr)?);
-                                return Ok(ValueExpr::ArrayMethod {
-                                    array,
-                                    method: ArrayMethodCall::Reduce {
-                                        acc_var,
-                                        item_var,
-                                        body: Box::new(body),
-                                        initial,
-                                    },
-                                });
-                            }
+                        // reduce((acc, item) => expr, initialValue)
+                        "reduce" if call.args.len() >= 2 => {
+                            let (acc_var, item_var, body) = self.extract_reduce_callback(call)?;
+                            let initial = Box::new(self.compile_expr(&call.args[1].expr)?);
+                            return Ok(ValueExpr::ArrayMethod {
+                                array,
+                                method: ArrayMethodCall::Reduce {
+                                    acc_var,
+                                    item_var,
+                                    body: Box::new(body),
+                                    initial,
+                                },
+                            });
                         },
                         "toFixed" => {
                             // Number.toFixed(digits) - treat as a number method
@@ -2130,10 +2140,12 @@ impl PlanCompiler {
     }
 
     fn extract_bound(&self, expr: &ValueExpr) -> Option<usize> {
-        if let ValueExpr::ArrayMethod { method, .. } = expr {
-            if let ArrayMethodCall::Slice { end, .. } = method {
-                return *end;
-            }
+        if let ValueExpr::ArrayMethod {
+            method: ArrayMethodCall::Slice { end, .. },
+            ..
+        } = expr
+        {
+            return *end;
         }
         None
     }
@@ -2501,8 +2513,6 @@ pub enum MockExecutionMode {
 /// }
 /// ```
 pub struct MockHttpExecutor {
-    /// Execution mode
-    mode: MockExecutionMode,
     /// Mock responses by path pattern (exact match or glob pattern with *)
     responses: std::sync::RwLock<HashMap<String, JsonValue>>,
     /// Default response for unmatched paths
@@ -2529,7 +2539,6 @@ impl MockHttpExecutor {
     /// Returns empty objects `{}` for all calls.
     pub fn new_dry_run() -> Self {
         Self {
-            mode: MockExecutionMode::DryRun,
             responses: std::sync::RwLock::new(HashMap::new()),
             default_response: JsonValue::Object(serde_json::Map::new()),
             recorded_calls: std::sync::RwLock::new(Vec::new()),
@@ -2540,7 +2549,6 @@ impl MockHttpExecutor {
     /// Configure responses with `with_response()`.
     pub fn new_testing() -> Self {
         Self {
-            mode: MockExecutionMode::Testing,
             responses: std::sync::RwLock::new(HashMap::new()),
             default_response: JsonValue::Object(serde_json::Map::new()),
             recorded_calls: std::sync::RwLock::new(Vec::new()),
@@ -2901,7 +2909,7 @@ impl<H: HttpExecutor> PlanExecutor<H> {
                     };
 
                     let limit = (*max_iterations).min(self.config.max_loop_iterations);
-                    'outer: for (_i, item) in items.into_iter().take(limit).enumerate() {
+                    'outer: for item in items.into_iter().take(limit) {
                         self.variables.insert(item_var.clone(), item);
 
                         for step in body {
@@ -3169,29 +3177,6 @@ impl<H: HttpExecutor> PlanExecutor<H> {
     fn evaluate(&self, expr: &ValueExpr) -> Result<JsonValue, ExecutionError> {
         shared_evaluate(expr, &self.variables)
     }
-
-    /// Evaluate an expression with a temporary variable binding.
-    /// Used for array method callbacks like .map(), .filter(), etc.
-    fn evaluate_with_binding(
-        &self,
-        expr: &ValueExpr,
-        var: &str,
-        value: &JsonValue,
-    ) -> Result<JsonValue, ExecutionError> {
-        shared_evaluate_with_binding(expr, &self.variables, var, value)
-    }
-
-    /// Evaluate with two bindings (for reduce).
-    fn evaluate_with_two_bindings(
-        &self,
-        expr: &ValueExpr,
-        var1: &str,
-        value1: &JsonValue,
-        var2: &str,
-        value2: &JsonValue,
-    ) -> Result<JsonValue, ExecutionError> {
-        shared_evaluate_with_two_bindings(expr, &self.variables, var1, value1, var2, value2)
-    }
 }
 
 // ============================================================================
@@ -3339,7 +3324,7 @@ mod tests {
         let result = compiler.compile_code(code);
 
         // Currently this compiles - runtime will enforce iteration limits
-        // TODO: Consider adding compile-time bounds checking
+        // See #249 — investigate compile-time loop-bounds checking.
         assert!(result.is_ok(), "Loop compiled: {:?}", result);
     }
 
@@ -4611,7 +4596,11 @@ return { discriminant: discriminant.result, root_type: root_type, roots: [x1.res
         let mock_http = MockHttpExecutor::new();
         let mut executor = PlanExecutor::new(mock_http, ExecutionConfig::default());
         let result = executor.execute(&plan).await.unwrap();
-        assert_eq!(result.value, serde_json::json!(3.14));
+        // Why: test fixture uses 3.14 as a representative non-integer parse target,
+        // not the mathematical PI constant — clippy::approx_constant is a false positive here.
+        #[allow(clippy::approx_constant)]
+        let expected = serde_json::json!(3.14);
+        assert_eq!(result.value, expected);
     }
 
     #[tokio::test]

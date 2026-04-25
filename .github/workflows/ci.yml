@@ -11,6 +11,8 @@ env:
   RUST_BACKTRACE: 1
   # Override .cargo/config.toml target-cpu=native to avoid SIGILL on CI runners
   RUSTFLAGS: ""
+  # Pin matches .github/workflows/quality-badges.yml so badge and gate stay aligned (Phase 75 D-09).
+  PMAT_VERSION: "3.15.0"
 
 jobs:
   test:
@@ -158,6 +160,10 @@ jobs:
   quality-gate:
     name: Quality Gate
     runs-on: ubuntu-latest
+    # Phase 75 Wave 5 / D-07: when adding PMAT here, pin via `cargo install pmat --version =3.15.0 --locked`
+    # The pin matches .github/workflows/quality-badges.yml so badge and gate
+    # semantics stay aligned. See .planning/phases/75-fix-pmat-issues/
+    # 75-W0-SPIKE-RESULTS.md for the empirical justification (D-09).
     steps:
     - uses: actions/checkout@v6
 
@@ -207,6 +213,15 @@ jobs:
 
     - name: Run quality gate
       run: make quality-gate
+
+    - name: Install PMAT (cache-aware; reused across runs via ~/.cargo/bin)
+      run: |
+        if ! command -v pmat &>/dev/null || ! pmat --version | grep -qE "^pmat ${PMAT_VERSION}$"; then
+          cargo install pmat --version "=${PMAT_VERSION}" --locked
+        fi
+
+    - name: Run PMAT quality gate (complexity only — see CONTEXT.md D-01 / D-11-B)
+      run: pmat quality-gate --fail-on-violation --checks complexity
 
     - name: Check disk space after quality gate
       run: df -h

@@ -142,72 +142,94 @@ fn save_config_cache(config: &PmcpRunConfig) -> Result<()> {
 async fn fetch_pmcp_config() -> Result<PmcpRunConfig> {
     let api_url = get_api_base_url();
     let discovery_url = format!("{}/.well-known/pmcp-config", api_url);
-
     let client = reqwest::Client::new();
 
-    // Try up to 2 times (initial + 1 retry on transient failure)
     let mut last_err = None;
     for attempt in 0..2 {
         if attempt > 0 {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
 
-        match client
+        let send_result = client
             .get(&discovery_url)
             .timeout(Duration::from_secs(10))
             .send()
-            .await
-        {
-            Ok(response) => {
-                if !response.status().is_success() {
-                    let status = response.status();
-                    // 4xx errors are not transient — don't retry
-                    if status.is_client_error() {
-                        bail!(
-                            "Discovery endpoint returned status {}: {}",
-                            status,
-                            discovery_url
-                        );
-                    }
-                    last_err = Some(anyhow::anyhow!(
-                        "Discovery endpoint returned status {}: {}",
-                        status,
-                        discovery_url
-                    ));
-                    continue;
-                }
+            .await;
 
-                let config: PmcpRunConfig = response
-                    .json()
-                    .await
-                    .context("Failed to parse pmcp.run configuration")?;
-
-                // Validate api_type if present
-                if let Some(ref api_type) = config.api_type {
-                    if api_type != "graphql" {
-                        bail!(
-                            "Unsupported API type: \"{}\". This version of cargo-pmcp only supports \"graphql\".\n\
-                             💡 Update cargo-pmcp: cargo install cargo-pmcp",
-                            api_type
-                        );
-                    }
-                }
-
-                // Cache the fetched config
-                if let Err(e) = save_config_cache(&config) {
-                    eprintln!("⚠️  Warning: Could not cache config: {}", e);
-                }
-
-                return Ok(config);
-            },
-            Err(e) => {
-                last_err = Some(e.into());
+        match try_fetch_once(send_result, &discovery_url).await? {
+            FetchOutcome::Success(config) => return Ok(config),
+            FetchOutcome::TransientError(e) => {
+                last_err = Some(e);
                 continue;
             },
         }
     }
 
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("Discovery endpoint unreachable")))
+}
+
+/// One attempt of the discovery-endpoint fetch — classified into either a
+/// successful config (validated + cached) or a transient error that warrants
+/// a retry.
+enum FetchOutcome {
+    Success(PmcpRunConfig),
+    TransientError(anyhow::Error),
+}
+
+async fn try_fetch_once(
+    send_result: Result<reqwest::Response, reqwest::Error>,
+    discovery_url: &str,
+) -> Result<FetchOutcome> {
+    let response = match send_result {
+        Ok(r) => r,
+        Err(e) => return Ok(FetchOutcome::TransientError(e.into())),
+    };
+
+    if !response.status().is_success() {
+        let status = response.status();
+        // 4xx errors are not transient — bubble out as a hard failure.
+        if status.is_client_error() {
+            bail!(
+                "Discovery endpoint returned status {}: {}",
+                status,
+                discovery_url
+            );
+        }
+        return Ok(FetchOutcome::TransientError(anyhow::anyhow!(
+            "Discovery endpoint returned status {}: {}",
+            status,
+            discovery_url
+        )));
+    }
+
+    let config: PmcpRunConfig = response
+        .json()
+        .await
+        .context("Failed to parse pmcp.run configuration")?;
+
+    // Validate api_type if present
+    validate_api_type(config.api_type.as_deref())?;
+
+    // Cache the fetched config (best-effort — warn on failure)
+    if let Err(e) = save_config_cache(&config) {
+        eprintln!("⚠️  Warning: Could not cache config: {}", e);
+    }
+
+    Ok(FetchOutcome::Success(config))
+}
+
+/// Enforce that the discovered config advertises a supported api_type.
+fn validate_api_type(api_type: Option<&str>) -> Result<()> {
+    if let Some(api_type) = api_type {
+        if api_type != "graphql" {
+            bail!(
+                "Unsupported API type: \"{}\". This version of cargo-pmcp only supports \"graphql\".\n\
+                 💡 Update cargo-pmcp: cargo install cargo-pmcp",
+                api_type
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Get pmcp.run configuration with fallback chain:
@@ -587,53 +609,63 @@ fn start_callback_server() -> Result<String> {
         CALLBACK_PORT
     );
 
-    std::thread::spawn(move || {
-        let server = tiny_http::Server::http(format!("127.0.0.1:{}", CALLBACK_PORT)).unwrap();
-
-        for request in server.incoming_requests() {
-            let url = request.url().to_string();
-
-            // Parse query parameters
-            let mut code_value = None;
-            if let Some(query) = url.split('?').nth(1) {
-                for param in query.split('&') {
-                    if let Some((key, value)) = param.split_once('=') {
-                        if key == "code" {
-                            code_value = Some(value.to_string());
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if let Some(code) = code_value {
-                // Send success response
-                let response = tiny_http::Response::from_string(
-                    "<html><body><h1>✅ Authentication Successful!</h1>\
-                    <p>You can close this window and return to your terminal.</p>\
-                    </body></html>",
-                )
-                .with_header(
-                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..]).unwrap(),
-                );
-
-                let _ = request.respond(response);
-                let decoded = urlencoding::decode(&code).unwrap();
-                tx.send(decoded.to_string()).unwrap();
-                return;
-            } else {
-                let response = tiny_http::Response::from_string(
-                    "<html><body><h1>❌ Authentication Failed</h1>\
-                    <p>No code received. Please try again.</p>\
-                    </body></html>",
-                );
-                let _ = request.respond(response);
-            }
-        }
-    });
+    std::thread::spawn(move || run_callback_server_loop(&tx));
 
     rx.recv_timeout(Duration::from_secs(300))
         .context("Authentication timed out (5 minutes)")
+}
+
+/// Main loop of the OAuth callback HTTP server: accept one matching request,
+/// send success/failure HTML, and forward the decoded code through `tx`.
+fn run_callback_server_loop(tx: &mpsc::Sender<String>) {
+    let server = tiny_http::Server::http(format!("127.0.0.1:{}", CALLBACK_PORT)).unwrap();
+
+    for request in server.incoming_requests() {
+        let code_value = extract_code_from_url(&request.url().to_string());
+
+        if let Some(code) = code_value {
+            respond_callback_success(request);
+            let decoded = urlencoding::decode(&code).unwrap();
+            tx.send(decoded.to_string()).unwrap();
+            return;
+        }
+
+        respond_callback_failure(request);
+    }
+}
+
+/// Parse a callback URL's query string and return the first `code` value.
+fn extract_code_from_url(url: &str) -> Option<String> {
+    let query = url.split('?').nth(1)?;
+    for param in query.split('&') {
+        if let Some((key, value)) = param.split_once('=') {
+            if key == "code" {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Send the success HTML response for the callback.
+fn respond_callback_success(request: tiny_http::Request) {
+    let response = tiny_http::Response::from_string(
+        "<html><body><h1>✅ Authentication Successful!</h1>\
+        <p>You can close this window and return to your terminal.</p>\
+        </body></html>",
+    )
+    .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..]).unwrap());
+    let _ = request.respond(response);
+}
+
+/// Send the failure HTML response for the callback.
+fn respond_callback_failure(request: tiny_http::Request) {
+    let response = tiny_http::Response::from_string(
+        "<html><body><h1>❌ Authentication Failed</h1>\
+        <p>No code received. Please try again.</p>\
+        </body></html>",
+    );
+    let _ = request.respond(response);
 }
 
 /// Execute OAuth login flow with PKCE

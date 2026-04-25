@@ -1,0 +1,21 @@
+# PMAT path-ignore file (gitignore-style globs).
+# Per Phase 75 Wave 0 spike (.planning/phases/75-fix-pmat-issues/75-W0-SPIKE-RESULTS.md),
+# PMAT 3.15.0's `quality-gate` subcommand has NO `--include`/`--exclude` flag,
+# so .pmatignore is the only honored path-filter mechanism for the gate.
+#
+# These directories are excluded from the complexity gate for the reasons below.
+# The Phase 75 README badge command and the Wave 5 CI gate command both rely on
+# this file producing the correct in-scope-only count.
+
+# Fuzz harnesses — variant-enumeration code intentionally branchy; complexity
+# limits don't translate to harness clarity (see 75-CONTEXT.md D-09).
+fuzz/
+
+# TypeScript widget-runtime sources — out of scope for the Rust complexity
+# phase; covered by separate JS/TS tooling in `packages/`.
+packages/
+
+# Defensive entry: examples/ count is currently 0 per Wave 0 spike, but a future
+# example with branchy code shouldn't silently regress the gate. Examples are
+# illustrative demo code by definition and exempt from the production cog ≤25 cap.
+examples/

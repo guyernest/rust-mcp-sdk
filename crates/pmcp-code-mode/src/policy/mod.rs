@@ -220,7 +220,7 @@ mod noop_tests {
 
     #[test]
     fn noop_evaluator_default() {
-        let evaluator = NoopPolicyEvaluator::default();
+        let evaluator = NoopPolicyEvaluator;
         assert_eq!(evaluator.name(), "noop");
     }
 }

@@ -25,6 +25,22 @@ pub enum ValidateCommand {
         #[arg(long)]
         server: Option<String>,
     },
+
+    /// Validate `.pmcp/deploy.toml` — focuses on IAM footgun detection.
+    ///
+    /// Hard-errors on wildcard-`Allow`, malformed actions, empty resource
+    /// lists, bad effects, and sugar-keyword typos. Warnings (unknown
+    /// service prefix, cross-account ARN) print but do not fail.
+    ///
+    /// This is the pre-flight equivalent of the same validation that runs
+    /// inside `cargo pmcp deploy` — the deploy flow itself also invokes
+    /// this validator before any AWS call, so a failing `validate deploy`
+    /// guarantees a failing `deploy` for the same config.
+    Deploy {
+        /// Server directory to validate (defaults to current directory).
+        #[arg(long)]
+        server: Option<String>,
+    },
 }
 
 impl ValidateCommand {
@@ -33,6 +49,7 @@ impl ValidateCommand {
             ValidateCommand::Workflows { generate, server } => {
                 validate_workflows(generate, global_flags.verbose, server)
             },
+            ValidateCommand::Deploy { server } => validate_deploy(server, global_flags.verbose),
         }
     }
 }
@@ -69,7 +86,42 @@ fn validate_workflows(generate: bool, verbose: bool, server: Option<String>) -> 
 }
 
 fn run_validation(generate: bool, verbose: bool, not_quiet: bool) -> Result<()> {
-    // Step 1: Run cargo check
+    // Step 1: Compilation check
+    run_cargo_check(verbose, not_quiet)?;
+
+    // Step 2: Discover workflow tests
+    if not_quiet {
+        println!(
+            "\n{} Looking for workflow validation tests...",
+            style("Step 2:").bold()
+        );
+    }
+    let test_patterns = find_workflow_tests()?;
+
+    if test_patterns.is_empty() {
+        return handle_no_patterns(generate, not_quiet);
+    }
+
+    if not_quiet {
+        println!(
+            "  {} Found {} workflow test pattern(s)",
+            style("✓").green(),
+            test_patterns.len()
+        );
+        println!(
+            "\n{} Running workflow validation tests...",
+            style("Step 3:").bold()
+        );
+    }
+
+    let (all_passed, total_tests, passed_tests) =
+        run_all_test_patterns(&test_patterns, verbose, not_quiet)?;
+
+    print_validation_summary(all_passed, total_tests, passed_tests, not_quiet)
+}
+
+/// Run `cargo check --message-format=short` and bail on failure.
+fn run_cargo_check(verbose: bool, not_quiet: bool) -> Result<()> {
     if not_quiet {
         println!("\n{} Checking compilation...", style("Step 1:").bold());
     }
@@ -99,70 +151,54 @@ fn run_validation(generate: bool, verbose: bool, not_quiet: bool) -> Result<()> 
     if not_quiet {
         println!("  {} Compilation successful", style("✓").green());
     }
+    Ok(())
+}
 
-    // Step 2: Check for workflow tests
-    if not_quiet {
-        println!(
-            "\n{} Looking for workflow validation tests...",
-            style("Step 2:").bold()
-        );
-    }
-
-    let test_patterns = find_workflow_tests()?;
-
-    if test_patterns.is_empty() {
-        if generate {
-            if not_quiet {
-                println!(
-                    "  {} No workflow tests found. Generating scaffolding...",
-                    style("!").yellow()
-                );
-            }
-            generate_validation_scaffolding(not_quiet)?;
-            if not_quiet {
-                println!(
-                    "  {} Generated validation test scaffolding",
-                    style("✓").green()
-                );
-                println!(
-                    "\n  Run {} again to validate",
-                    style("cargo pmcp validate workflows").cyan()
-                );
-            }
-            return Ok(());
-        } else {
-            if not_quiet {
-                println!(
-                    "  {} No workflow validation tests found",
-                    style("!").yellow()
-                );
-                print_test_guidance(not_quiet);
-            }
-            return Ok(());
+/// When no workflow-test patterns match: emit `generate_validation_scaffolding`
+/// (if `generate`) or user-facing guidance.
+fn handle_no_patterns(generate: bool, not_quiet: bool) -> Result<()> {
+    if generate {
+        if not_quiet {
+            println!(
+                "  {} No workflow tests found. Generating scaffolding...",
+                style("!").yellow()
+            );
         }
+        generate_validation_scaffolding(not_quiet)?;
+        if not_quiet {
+            println!(
+                "  {} Generated validation test scaffolding",
+                style("✓").green()
+            );
+            println!(
+                "\n  Run {} again to validate",
+                style("cargo pmcp validate workflows").cyan()
+            );
+        }
+        return Ok(());
     }
 
     if not_quiet {
         println!(
-            "  {} Found {} workflow test pattern(s)",
-            style("✓").green(),
-            test_patterns.len()
+            "  {} No workflow validation tests found",
+            style("!").yellow()
         );
+        print_test_guidance(not_quiet);
     }
+    Ok(())
+}
 
-    // Step 3: Run workflow tests
-    if not_quiet {
-        println!(
-            "\n{} Running workflow validation tests...",
-            style("Step 3:").bold()
-        );
-    }
-
+/// Run each test pattern. Returns (all_passed, total_tests, passed_tests).
+fn run_all_test_patterns(
+    test_patterns: &[String],
+    verbose: bool,
+    not_quiet: bool,
+) -> Result<(bool, usize, usize)> {
     let mut all_passed = true;
     let mut total_tests = 0;
     let mut passed_tests = 0;
 
-    for pattern in &test_patterns {
+    for pattern in test_patterns {
         let test_output = Command::new("cargo")
             .args(["test", pattern, "--", "--nocapture"])
             .output()
@@ -171,7 +207,6 @@ fn run_validation(generate: bool, verbose: bool, not_quiet: bool) -> Result<()> 
         let stdout = String::from_utf8_lossy(&test_output.stdout);
         let stderr = String::from_utf8_lossy(&test_output.stderr);
 
-        // Parse test results
         let (tests_run, tests_passed, tests_failed) = parse_test_output(&stdout, &stderr);
         total_tests += tests_run;
         passed_tests += tests_passed;
@@ -183,41 +218,79 @@ fn run_validation(generate: bool, verbose: bool, not_quiet: bool) -> Result<()> 
             }
         }
 
-        if tests_failed > 0 {
+        let passed = print_pattern_result(
+            pattern,
+            tests_run,
+            tests_passed,
+            tests_failed,
+            &stdout,
+            &stderr,
+            verbose,
+            not_quiet,
+        );
+        if !passed {
             all_passed = false;
-            if not_quiet {
-                println!(
-                    "  {} Pattern '{}': {} passed, {} failed",
-                    style("✗").red(),
-                    pattern,
-                    tests_passed,
-                    style(tests_failed).red()
-                );
-            }
-
-            // Show failure details
-            if !verbose {
-                print_failure_summary(&stdout, &stderr);
-            }
-        } else if tests_run > 0 {
-            if not_quiet {
-                println!(
-                    "  {} Pattern '{}': {} passed",
-                    style("✓").green(),
-                    pattern,
-                    tests_passed
-                );
-            }
-        } else if not_quiet {
-            println!(
-                "  {} Pattern '{}': no tests matched",
-                style("-").dim(),
-                pattern
-            );
         }
     }
 
-    // Summary
+    Ok((all_passed, total_tests, passed_tests))
+}
+
+/// Print one test-pattern's result and return whether it passed.
+#[allow(clippy::too_many_arguments)]
+fn print_pattern_result(
+    pattern: &str,
+    tests_run: usize,
+    tests_passed: usize,
+    tests_failed: usize,
+    stdout: &str,
+    stderr: &str,
+    verbose: bool,
+    not_quiet: bool,
+) -> bool {
+    if tests_failed > 0 {
+        if not_quiet {
+            println!(
+                "  {} Pattern '{}': {} passed, {} failed",
+                style("✗").red(),
+                pattern,
+                tests_passed,
+                style(tests_failed).red()
+            );
+        }
+        if !verbose {
+            print_failure_summary(stdout, stderr);
+        }
+        return false;
+    }
+
+    if tests_run > 0 {
+        if not_quiet {
+            println!(
+                "  {} Pattern '{}': {} passed",
+                style("✓").green(),
+                pattern,
+                tests_passed
+            );
+        }
+    } else if not_quiet {
+        println!(
+            "  {} Pattern '{}': no tests matched",
+            style("-").dim(),
+            pattern
+        );
+    }
+    true
+}
+
+/// Print the final "all passed / X of Y / no tests" summary and return
+/// an Err when validation failed.
+fn print_validation_summary(
+    all_passed: bool,
+    total_tests: usize,
+    passed_tests: usize,
+    not_quiet: bool,
+) -> Result<()> {
     if not_quiet {
         println!("\n{}", style("━".repeat(50)).dim());
     }
@@ -231,7 +304,10 @@ fn run_validation(generate: bool, verbose: bool, not_quiet: bool) -> Result<()> 
             );
             println!("\n  Your workflows are structurally valid and ready for use.");
         }
-    } else if total_tests == 0 {
+        return Ok(());
+    }
+
+    if total_tests == 0 {
         if not_quiet {
             println!(
                 "{} No workflow tests were executed",
@@ -239,17 +315,16 @@ fn run_validation(generate: bool, verbose: bool, not_quiet: bool) -> Result<()> 
             );
             print_test_guidance(not_quiet);
         }
-    } else {
-        println!(
-            "{} Workflow validation failed: {} of {} tests passed",
-            style("✗").red().bold(),
-            passed_tests,
-            total_tests
-        );
-        return Err(anyhow::anyhow!("Workflow validation failed"));
+        return Ok(());
     }
 
-    Ok(())
+    println!(
+        "{} Workflow validation failed: {} of {} tests passed",
+        style("✗").red().bold(),
+        passed_tests,
+        total_tests
+    );
+    Err(anyhow::anyhow!("Workflow validation failed"))
 }
 
 /// Find test patterns that match workflow tests
@@ -284,49 +359,44 @@ fn find_workflow_tests() -> Result<Vec<String>> {
 
 /// Parse test output to extract pass/fail counts
 fn parse_test_output(stdout: &str, stderr: &str) -> (usize, usize, usize) {
-    // Look for "test result: ok. X passed; Y failed" pattern
     let combined = format!("{}\n{}", stdout, stderr);
 
-    for line in combined.lines() {
-        if line.starts_with("test result:") {
-            let passed = line
-                .split_whitespace()
-                .find_map(|word| word.strip_suffix(" passed").and_then(|n| n.parse().ok()))
-                .or_else(|| {
-                    // Try another pattern: "X passed"
-                    let parts: Vec<&str> = line.split(';').collect();
-                    for part in parts {
-                        if part.contains("passed") {
-                            return part.split_whitespace().next().and_then(|n| n.parse().ok());
-                        }
-                    }
-                    None
-                })
-                .unwrap_or(0);
-
-            let failed = line
-                .split_whitespace()
-                .find_map(|word| word.strip_suffix(" failed").and_then(|n| n.parse().ok()))
-                .or_else(|| {
-                    let parts: Vec<&str> = line.split(';').collect();
-                    for part in parts {
-                        if part.contains("failed") {
-                            return part.split_whitespace().next().and_then(|n| n.parse().ok());
-                        }
-                    }
-                    None
-                })
-                .unwrap_or(0);
-
-            return (passed + failed, passed, failed);
-        }
+    if let Some(counts) = parse_test_result_line(&combined) {
+        return counts;
     }
 
     // Alternative: count individual test lines
     let passed = combined.matches("... ok").count();
     let failed = combined.matches("... FAILED").count();
-
     (passed + failed, passed, failed)
+}
+
+/// Parse the `test result: ...` line if present.
+fn parse_test_result_line(combined: &str) -> Option<(usize, usize, usize)> {
+    let line = combined.lines().find(|l| l.starts_with("test result:"))?;
+
+    let passed = count_for_keyword(line, "passed");
+    let failed = count_for_keyword(line, "failed");
+    Some((passed + failed, passed, failed))
+}
+
+/// Extract the integer count preceding `keyword` (e.g. "passed" or "failed")
+/// in a cargo-test result line. Tries the `"N <keyword>"` token form first,
+/// then falls back to semicolon-separated segments.
+fn count_for_keyword(line: &str, keyword: &str) -> usize {
+    let with_space = format!(" {keyword}");
+    line.split_whitespace()
+        .find_map(|word| {
+            word.strip_suffix(with_space.as_str())
+                .and_then(|n| n.parse().ok())
+        })
+        .or_else(|| {
+            line.split(';')
+                .find(|part| part.contains(keyword))
+                .and_then(|part| part.split_whitespace().next())
+                .and_then(|n| n.parse().ok())
+        })
+        .unwrap_or(0)
 }
 
 /// Print failure summary from test output
@@ -494,6 +564,191 @@ fn print_test_guidance(not_quiet: bool) {
         println!(
             "        but tests let you catch errors at {} time.",
             style("cargo test").cyan()
+        );
+    }
+}
+
+/// Validate the deployment configuration (`.pmcp/deploy.toml`) — IAM focus.
+///
+/// This is the pre-flight equivalent of the same validation that runs inside
+/// `cargo pmcp deploy`. Returns `Ok(())` on success (even when warnings are
+/// emitted); returns `Err` on any CR-locked hard-error rule.
+///
+/// Warnings are printed to stderr with a yellow `warning:` prefix; they do
+/// not fail the command.
+///
+/// # Errors
+/// Returns `Err` when:
+/// - `.pmcp/deploy.toml` is missing or malformed
+/// - Any hard-error rule in [`crate::deployment::iam::validate`] is violated
+pub fn validate_deploy(server: Option<String>, verbose: bool) -> Result<()> {
+    let not_quiet = std::env::var("PMCP_QUIET").is_err();
+
+    let project_root = match server {
+        Some(path) => std::path::PathBuf::from(path),
+        None => std::env::current_dir().context("failed to read current directory")?,
+    };
+
+    if not_quiet {
+        println!("\n{}", style("PMCP Deploy Config Validation").cyan().bold());
+        println!("{}", style("━".repeat(50)).dim());
+        if verbose {
+            println!("  Project: {}", project_root.display());
+        }
+    }
+
+    let config = crate::deployment::config::DeployConfig::load(&project_root)
+        .context("failed to load .pmcp/deploy.toml")?;
+
+    let warnings = crate::deployment::iam::validate(&config.iam)
+        .context("IAM validation failed — fix .pmcp/deploy.toml before deploying")?;
+
+    if not_quiet {
+        crate::deployment::iam::emit_warnings(&warnings);
+        if warnings.is_empty() {
+            println!(
+                "  {} IAM configuration valid (no warnings)",
+                style("✓").green()
+            );
+        } else {
+            println!(
+                "  {} IAM configuration valid ({} warning{})",
+                style("✓").green(),
+                warnings.len(),
+                if warnings.len() == 1 { "" } else { "s" }
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod deploy_validate_gate_tests {
+    //! Phase 76 Wave 4 — integration tests for `cargo pmcp validate deploy`.
+    //!
+    //! **Rule-3 deviation note (consistent with Waves 1/2/3):** the plan
+    //! called for this file at `cargo-pmcp/tests/deploy_validate_gate.rs`,
+    //! but `cargo_pmcp::commands` is NOT re-exported from
+    //! `cargo-pmcp/src/lib.rs` (lib surface intentionally minimal at
+    //! `loadtest`/`pentest`/`test_support_cache`). Expanding lib visibility
+    //! would drag in the entire CLI subsystem for very little over the
+    //! in-crate coverage that works against `validate_deploy` via
+    //! `super::*`. Tests are otherwise identical in intent — they write a
+    //! synthetic `.pmcp/deploy.toml` into a tempdir and invoke the public
+    //! `validate_deploy` handler, asserting the CR gate behaviour.
+
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Deploy-TOML stanzas common to every fixture. Inserted verbatim at the
+    /// top of each fixture constant so individual tests only have to vary
+    /// the `[iam.*]` section they care about.
+    const COMMON_FIXTURE_HEADER: &str = r#"
+[target]
+type = "aws-lambda"
+version = "1.0.0"
+
+[aws]
+region = "us-west-2"
+
+[server]
+name = "demo-server"
+memory_mb = 512
+timeout_seconds = 30
+
+[environment]
+
+[auth]
+enabled = false
+
+[observability]
+log_retention_days = 30
+enable_xray = false
+create_dashboard = false
+"#;
+
+    fn fixture_with_iam(iam_section: &str) -> String {
+        format!("{COMMON_FIXTURE_HEADER}{iam_section}")
+    }
+
+    fn write_fixture(toml_str: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pmcp_dir = dir.path().join(".pmcp");
+        std::fs::create_dir_all(&pmcp_dir).expect("mkdir .pmcp");
+        std::fs::write(pmcp_dir.join("deploy.toml"), toml_str).expect("write deploy.toml");
+        let project_root = dir.path().to_path_buf();
+        (dir, project_root)
+    }
+
+    #[test]
+    fn validate_deploy_accepts_valid_config() {
+        std::env::set_var("PMCP_QUIET", "1");
+        let toml_str = fixture_with_iam(
+            r#"
+[[iam.tables]]
+name = "demo-table"
+actions = ["read"]
+"#,
+        );
+        let (_dir, project_root) = write_fixture(&toml_str);
+        let result = validate_deploy(Some(project_root.to_string_lossy().into_owned()), false);
+        assert!(result.is_ok(), "valid config rejected: {:?}", result.err());
+    }
+
+    #[test]
+    fn validate_deploy_rejects_wildcard_allow() {
+        std::env::set_var("PMCP_QUIET", "1");
+        let toml_str = fixture_with_iam(
+            r#"
+[[iam.statements]]
+effect = "Allow"
+actions = ["*"]
+resources = ["*"]
+"#,
+        );
+        let (_dir, project_root) = write_fixture(&toml_str);
+        let result = validate_deploy(Some(project_root.to_string_lossy().into_owned()), false);
+        let err = result.expect_err("wildcard Allow must be rejected");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.to_lowercase().contains("wildcard"),
+            "expected 'wildcard' in error chain, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_deploy_rejects_bad_bucket_sugar() {
+        std::env::set_var("PMCP_QUIET", "1");
+        let toml_str = fixture_with_iam(
+            r#"
+[[iam.buckets]]
+name = "my-bucket"
+actions = ["devour"]
+"#,
+        );
+        let (_dir, project_root) = write_fixture(&toml_str);
+        let result = validate_deploy(Some(project_root.to_string_lossy().into_owned()), false);
+        assert!(result.is_err(), "bad bucket sugar must be rejected");
+    }
+
+    #[test]
+    fn validate_deploy_reports_unknown_service_prefix_but_returns_ok() {
+        std::env::set_var("PMCP_QUIET", "1");
+        let toml_str = fixture_with_iam(
+            r#"
+[[iam.statements]]
+effect = "Allow"
+actions = ["totallyfake:DoThing"]
+resources = ["*"]
+"#,
+        );
+        let (_dir, project_root) = write_fixture(&toml_str);
+        let result = validate_deploy(Some(project_root.to_string_lossy().into_owned()), false);
+        assert!(
+            result.is_ok(),
+            "unknown prefix must be a warning, not Err: {:?}",
+            result.err()
         );
     }
 }

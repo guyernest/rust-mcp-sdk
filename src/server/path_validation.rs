@@ -61,9 +61,8 @@ impl PathValidationConfig {
     }
 }
 
-/// Validate a path with robust security checks
-pub fn validate_path(path: &str, config: &PathValidationConfig) -> crate::Result<PathBuf> {
-    // Basic sanity checks
+/// Reject empty paths and paths containing null bytes (security guard).
+fn check_path_sanity(path: &str) -> crate::Result<()> {
     if path.is_empty() {
         return Err(
             ValidationError::new(ValidationErrorCode::MissingField, "path")
@@ -71,8 +70,6 @@ pub fn validate_path(path: &str, config: &PathValidationConfig) -> crate::Result
                 .to_error(),
         );
     }
-
-    // Check for null bytes (security issue)
     if path.contains('\0') {
         return Err(
             ValidationError::new(ValidationErrorCode::SecurityViolation, "path")
@@ -80,150 +77,198 @@ pub fn validate_path(path: &str, config: &PathValidationConfig) -> crate::Result
                 .to_error(),
         );
     }
+    Ok(())
+}
 
-    // Platform-specific path separators
-    let path = normalize_path_separators(path);
-
-    // Check for basic path traversal attempts
-    if path.contains("..") && !config.allow_relative {
+/// Reject path-traversal strings (`..`) when relative paths are disallowed.
+fn check_traversal(path: &str, allow_relative: bool) -> crate::Result<()> {
+    if path.contains("..") && !allow_relative {
         return Err(
             ValidationError::new(ValidationErrorCode::SecurityViolation, "path")
                 .message("Path traversal detected (.. not allowed)")
                 .to_error(),
         );
     }
+    Ok(())
+}
 
-    // Convert to PathBuf for manipulation
-    let mut path_buf = PathBuf::from(&path);
+/// Join a relative path with the configured base directory, or reject
+/// relative paths outright if disallowed.
+fn absolutize_or_reject(
+    path_buf: PathBuf,
+    config: &PathValidationConfig,
+) -> crate::Result<PathBuf> {
+    if path_buf.is_absolute() {
+        return Ok(path_buf);
+    }
+    if !config.allow_relative {
+        return Err(
+            ValidationError::new(ValidationErrorCode::SecurityViolation, "path")
+                .message("Relative paths not allowed")
+                .expected("Absolute path")
+                .to_error(),
+        );
+    }
+    Ok(config.base_dir.join(&path_buf))
+}
 
-    // If not absolute, join with base directory
-    if !path_buf.is_absolute() {
-        if !config.allow_relative {
+/// Canonicalize a path that may not exist yet: if the leaf is missing, try
+/// canonicalizing the parent and re-joining the final component.
+fn canonicalize_nonexistent_path(path_buf: &Path, err: &std::io::Error) -> crate::Result<PathBuf> {
+    let parent = path_buf.parent().ok_or_else(|| {
+        ValidationError::new(ValidationErrorCode::InvalidFormat, "path")
+            .message("Path has no parent directory")
+            .to_error()
+    })?;
+    let canonical_parent = parent.canonicalize().map_err(|e| {
+        ValidationError::new(ValidationErrorCode::InvalidFormat, "path")
+            .message(format!("Cannot resolve parent directory: {}", e))
+            .to_error()
+    })?;
+    let file_name = path_buf.file_name().ok_or_else(|| {
+        ValidationError::new(ValidationErrorCode::InvalidFormat, "path")
+            .message(format!("Invalid path format: {}", err))
+            .to_error()
+    })?;
+    Ok(canonical_parent.join(file_name))
+}
+
+/// Resolve the canonical form of a path respecting `config.resolve_symlinks`.
+fn resolve_canonical_path(
+    path_buf: &Path,
+    config: &PathValidationConfig,
+) -> crate::Result<PathBuf> {
+    if !config.resolve_symlinks {
+        return normalize_path(path_buf);
+    }
+    match path_buf.canonicalize() {
+        Ok(p) => Ok(p),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            canonicalize_nonexistent_path(path_buf, &e)
+        },
+        Err(e) => Err(
+            ValidationError::new(ValidationErrorCode::InvalidFormat, "path")
+                .message(format!("Cannot canonicalize path: {}", e))
+                .to_error(),
+        ),
+    }
+}
+
+/// Enforce confinement of a canonical path under the canonical base directory.
+fn enforce_base_dir_confinement(canonical_path: &Path, canonical_base: &Path) -> crate::Result<()> {
+    if canonical_path.starts_with(canonical_base) {
+        return Ok(());
+    }
+    Err(
+        ValidationError::new(ValidationErrorCode::SecurityViolation, "path")
+            .message(format!(
+                "Path escapes base directory. Path must be under: {}",
+                canonical_base.display()
+            ))
+            .to_error(),
+    )
+}
+
+/// Reject hidden components (starting with `.`) in the canonical path.
+fn enforce_no_hidden_components(canonical_path: &Path) -> crate::Result<()> {
+    for component in canonical_path.components() {
+        let std::path::Component::Normal(name) = component else {
+            continue;
+        };
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if name_str.starts_with('.') && name_str != "." && name_str != ".." {
             return Err(
-                ValidationError::new(ValidationErrorCode::SecurityViolation, "path")
-                    .message("Relative paths not allowed")
-                    .expected("Absolute path")
+                ValidationError::new(ValidationErrorCode::NotAllowed, "path")
+                    .message("Hidden files/directories not allowed")
                     .to_error(),
             );
         }
-        path_buf = config.base_dir.join(&path_buf);
     }
+    Ok(())
+}
 
-    // Canonicalize to resolve symlinks and normalize
-    let canonical_path = if config.resolve_symlinks {
-        match path_buf.canonicalize() {
-            Ok(p) => p,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // File doesn't exist yet, canonicalize parent and append filename
-                if let Some(parent) = path_buf.parent() {
-                    if let Ok(canonical_parent) = parent.canonicalize() {
-                        if let Some(file_name) = path_buf.file_name() {
-                            canonical_parent.join(file_name)
-                        } else {
-                            return Err(ValidationError::new(
-                                ValidationErrorCode::InvalidFormat,
-                                "path",
-                            )
-                            .message(format!("Invalid path format: {}", e))
-                            .to_error());
-                        }
-                    } else {
-                        return Err(ValidationError::new(
-                            ValidationErrorCode::InvalidFormat,
-                            "path",
-                        )
-                        .message(format!("Cannot resolve parent directory: {}", e))
-                        .to_error());
-                    }
-                } else {
-                    return Err(
-                        ValidationError::new(ValidationErrorCode::InvalidFormat, "path")
-                            .message("Path has no parent directory")
-                            .to_error(),
-                    );
-                }
-            },
-            Err(e) => {
-                return Err(
-                    ValidationError::new(ValidationErrorCode::InvalidFormat, "path")
-                        .message(format!("Cannot canonicalize path: {}", e))
-                        .to_error(),
-                );
-            },
-        }
-    } else {
-        // Just normalize without resolving symlinks
-        normalize_path(&path_buf)?
+/// Enforce the configured maximum depth relative to the base directory.
+fn enforce_max_depth(
+    canonical_path: &Path,
+    canonical_base: &Path,
+    max_depth: Option<usize>,
+) -> crate::Result<()> {
+    let Some(max_depth) = max_depth else {
+        return Ok(());
     };
+    let depth = canonical_path
+        .strip_prefix(canonical_base)
+        .unwrap_or(canonical_path)
+        .components()
+        .count();
+    if depth <= max_depth {
+        return Ok(());
+    }
+    Err(
+        ValidationError::new(ValidationErrorCode::OutOfRange, "path")
+            .message(format!(
+                "Path depth {} exceeds maximum {}",
+                depth, max_depth
+            ))
+            .to_error(),
+    )
+}
 
-    // Canonicalize base directory for comparison
+/// Enforce the configured blocked-pattern list against the canonical path.
+fn enforce_pattern_blocklist(
+    canonical_path: &Path,
+    blocked_patterns: &[String],
+) -> crate::Result<()> {
+    if blocked_patterns.is_empty() {
+        return Ok(());
+    }
+    let path_str = canonical_path.to_string_lossy();
+    for pattern in blocked_patterns {
+        if glob_match(pattern, &path_str) {
+            return Err(
+                ValidationError::new(ValidationErrorCode::NotAllowed, "path")
+                    .message(format!("Path matches blocked pattern: {}", pattern))
+                    .to_error(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Validate a path with robust security checks.
+///
+/// Refactored in 75-01 Task 1a-B (P1+P2): the original cog-103
+/// implementation was broken into focused helpers (`check_path_sanity`,
+/// `check_traversal`, `absolutize_or_reject`, `resolve_canonical_path`,
+/// `canonicalize_nonexistent_path`, `enforce_base_dir_confinement`,
+/// `enforce_no_hidden_components`, `enforce_max_depth`,
+/// `enforce_pattern_blocklist`) so this function reads as an
+/// early-return pipeline.
+pub fn validate_path(path: &str, config: &PathValidationConfig) -> crate::Result<PathBuf> {
+    check_path_sanity(path)?;
+    let path = normalize_path_separators(path);
+    check_traversal(&path, config.allow_relative)?;
+
+    let path_buf = PathBuf::from(&path);
+    let path_buf = absolutize_or_reject(path_buf, config)?;
+
+    let canonical_path = resolve_canonical_path(&path_buf, config)?;
+
     let canonical_base = config
         .base_dir
         .canonicalize()
         .unwrap_or_else(|_| config.base_dir.clone());
 
-    // Check if path is under base directory
-    if !canonical_path.starts_with(&canonical_base) {
-        return Err(
-            ValidationError::new(ValidationErrorCode::SecurityViolation, "path")
-                .message(format!(
-                    "Path escapes base directory. Path must be under: {}",
-                    canonical_base.display()
-                ))
-                .to_error(),
-        );
-    }
+    enforce_base_dir_confinement(&canonical_path, &canonical_base)?;
 
-    // Check for hidden files/directories
     if !config.allow_hidden {
-        for component in canonical_path.components() {
-            if let std::path::Component::Normal(name) = component {
-                if let Some(name_str) = name.to_str() {
-                    if name_str.starts_with('.') && name_str != "." && name_str != ".." {
-                        return Err(
-                            ValidationError::new(ValidationErrorCode::NotAllowed, "path")
-                                .message("Hidden files/directories not allowed")
-                                .to_error(),
-                        );
-                    }
-                }
-            }
-        }
+        enforce_no_hidden_components(&canonical_path)?;
     }
 
-    // Check path depth
-    if let Some(max_depth) = config.max_depth {
-        let depth = canonical_path
-            .strip_prefix(&canonical_base)
-            .unwrap_or(&canonical_path)
-            .components()
-            .count();
-
-        if depth > max_depth {
-            return Err(
-                ValidationError::new(ValidationErrorCode::OutOfRange, "path")
-                    .message(format!(
-                        "Path depth {} exceeds maximum {}",
-                        depth, max_depth
-                    ))
-                    .to_error(),
-            );
-        }
-    }
-
-    // Check against blocked patterns
-    if !config.blocked_patterns.is_empty() {
-        let path_str = canonical_path.to_string_lossy();
-        for pattern in &config.blocked_patterns {
-            if glob_match(pattern, &path_str) {
-                return Err(
-                    ValidationError::new(ValidationErrorCode::NotAllowed, "path")
-                        .message(format!("Path matches blocked pattern: {}", pattern))
-                        .to_error(),
-                );
-            }
-        }
-    }
+    enforce_max_depth(&canonical_path, &canonical_base, config.max_depth)?;
+    enforce_pattern_blocklist(&canonical_path, &config.blocked_patterns)?;
 
     Ok(canonical_path)
 }

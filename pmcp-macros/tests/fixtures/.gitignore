@@ -1,0 +1,3 @@
+# Per-fixture build artifacts. Cargo.lock is intentionally NOT ignored so
+# snapshot expansion is reproducible across CI runs.
+target/

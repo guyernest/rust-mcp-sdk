@@ -56,78 +56,103 @@ pub fn normalize_schema(schema: Value) -> Value {
     normalize_schema_with_config(schema, &NormalizerConfig::default())
 }
 
-/// Normalize a JSON schema with custom configuration
+/// Strip schema metadata fields (`$schema`, `$id`) in place.
+#[cfg(feature = "schema-generation")]
+fn strip_schema_metadata(schema: &mut Value) {
+    let Some(obj) = schema.as_object_mut() else {
+        return;
+    };
+    obj.remove("$schema");
+    obj.remove("$id");
+}
+
+/// Extract (removing from `schema` unless `keep_definitions` is true) the
+/// `definitions` / `$defs` block, returning it as an owned `Value` if present.
+#[cfg(feature = "schema-generation")]
+fn extract_definitions_block(schema: &mut Value, keep_definitions: bool) -> Option<Value> {
+    if keep_definitions {
+        return schema
+            .as_object()
+            .and_then(|obj| obj.get("definitions").or_else(|| obj.get("$defs")))
+            .cloned();
+    }
+    schema
+        .as_object_mut()
+        .and_then(|obj| obj.remove("definitions"))
+        .or_else(|| schema.as_object_mut().and_then(|obj| obj.remove("$defs")))
+}
+
+/// Attempt to inline a root-level `$ref` pointing into `#/definitions/` or
+/// `#/$defs/`, returning the replacement value if found.
+#[cfg(feature = "schema-generation")]
+fn try_inline_root_ref(schema: &Value, defs: Option<&Value>) -> Option<Value> {
+    let obj = schema.as_object()?;
+    let Value::String(ref_str) = obj.get("$ref")? else {
+        return None;
+    };
+    if !ref_str.starts_with("#/definitions/") && !ref_str.starts_with("#/$defs/") {
+        return None;
+    }
+    let def_name = ref_str.rsplit('/').next().unwrap_or("");
+    defs?.get(def_name).cloned()
+}
+
+/// Apply `extract_definitions_block` output: inline refs and restore the
+/// definitions block if requested.
+#[cfg(feature = "schema-generation")]
+fn apply_inline_pass(
+    schema: &mut Value,
+    definitions: Value,
+    schema_size: usize,
+    config: &NormalizerConfig,
+) {
+    let mut context = InlineContext {
+        definitions: &definitions,
+        current_depth: 0,
+        max_depth: config.max_inline_depth,
+        current_size: schema_size,
+        max_size: config.max_inline_size,
+    };
+    inline_refs_with_context(schema, &mut context);
+    if config.keep_definitions {
+        if let Some(obj) = schema.as_object_mut() {
+            obj.insert("definitions".to_string(), definitions);
+        }
+    }
+}
+
+/// Normalize a JSON schema with custom configuration.
+///
+/// Refactored in 75-01 Task 1a-B (P1): extracted
+/// `strip_schema_metadata`, `extract_definitions_block`,
+/// `try_inline_root_ref`, `apply_inline_pass` so this orchestrator is a
+/// sequential pipeline.
 #[cfg(feature = "schema-generation")]
 pub fn normalize_schema_with_config(mut schema: Value, config: &NormalizerConfig) -> Value {
-    // Check size limit early
     let schema_size = serde_json::to_string(&schema).unwrap_or_default().len();
     if schema_size > config.max_inline_size {
         // Schema too large, return with minimal processing
         if config.remove_metadata {
-            if let Some(obj) = schema.as_object_mut() {
-                obj.remove("$schema");
-                obj.remove("$id");
-            }
+            strip_schema_metadata(&mut schema);
         }
         return schema;
     }
 
-    // Extract definitions if they exist
-    let definitions = if config.keep_definitions {
-        // Keep definitions but still process refs
-        schema
-            .as_object()
-            .and_then(|obj| obj.get("definitions").or_else(|| obj.get("$defs")))
-            .cloned()
-    } else {
-        // Remove definitions from schema
-        schema
-            .as_object_mut()
-            .and_then(|obj| obj.remove("definitions"))
-            .or_else(|| schema.as_object_mut().and_then(|obj| obj.remove("$defs")))
-    };
-
-    // Clone definitions for later reference if needed
+    let definitions = extract_definitions_block(&mut schema, config.keep_definitions);
     let defs_clone = definitions.clone();
 
     if let Some(defs) = definitions {
-        // Inline references with depth tracking
-        let mut context = InlineContext {
-            definitions: &defs,
-            current_depth: 0,
-            max_depth: config.max_inline_depth,
-            current_size: schema_size,
-            max_size: config.max_inline_size,
-        };
-        inline_refs_with_context(&mut schema, &mut context);
-
-        // If keeping definitions, put them back
-        if config.keep_definitions {
-            if let Some(obj) = schema.as_object_mut() {
-                obj.insert("definitions".to_string(), defs);
-            }
-        }
+        apply_inline_pass(&mut schema, defs, schema_size, config);
     }
 
-    // Remove schema metadata if configured
-    if config.remove_metadata {
-        if let Some(obj) = schema.as_object_mut() {
-            obj.remove("$schema");
-            obj.remove("$id");
+    if !config.remove_metadata {
+        return schema;
+    }
+    strip_schema_metadata(&mut schema);
 
-            // If the schema has a single root definition reference, inline it
-            if !config.keep_definitions {
-                if let Some(Value::String(ref_str)) = obj.get("$ref") {
-                    if ref_str.starts_with("#/definitions/") || ref_str.starts_with("#/$defs/") {
-                        let def_name = ref_str.rsplit('/').next().unwrap_or("");
-                        if let Some(defs) = defs_clone.as_ref() {
-                            if let Some(def_value) = defs.get(def_name) {
-                                return def_value.clone();
-                            }
-                        }
-                    }
-                }
-            }
+    if !config.keep_definitions {
+        if let Some(inlined) = try_inline_root_ref(&schema, defs_clone.as_ref()) {
+            return inlined;
         }
     }
 
@@ -144,56 +169,80 @@ struct InlineContext<'a> {
     max_size: usize,
 }
 
-/// Recursively inline references with depth and size tracking
+/// Parse a `$ref` string pointing at `#/definitions/<name>` or
+/// `#/$defs/<name>`, returning the definition name.
+#[cfg(feature = "schema-generation")]
+fn parse_local_ref_name(ref_str: &str) -> Option<&str> {
+    if ref_str.starts_with("#/definitions/") || ref_str.starts_with("#/$defs/") {
+        return ref_str.rsplit('/').next();
+    }
+    None
+}
+
+/// Attempt to inline a single `$ref` in `map`, subject to the context's
+/// size budget. Returns `true` if the ref was inlined.
+#[cfg(feature = "schema-generation")]
+fn try_inline_single_ref(
+    map: &mut serde_json::Map<String, Value>,
+    context: &InlineContext<'_>,
+) -> bool {
+    let Some(Value::String(ref_str)) = map.get("$ref") else {
+        return false;
+    };
+    let Some(def_name) = parse_local_ref_name(ref_str) else {
+        return false;
+    };
+    let Some(def_value) = context.definitions.get(def_name) else {
+        return false;
+    };
+    let def_size = serde_json::to_string(&def_value).unwrap_or_default().len();
+    if context.current_size + def_size > context.max_size {
+        return false;
+    }
+    let Some(def_obj) = def_value.as_object() else {
+        return false;
+    };
+    map.remove("$ref");
+    for (key, val) in def_obj {
+        if !map.contains_key(key) {
+            map.insert(key.clone(), val.clone());
+        }
+    }
+    true
+}
+
+/// Walk an object, inline any resolvable `$ref`, and recurse into children.
+#[cfg(feature = "schema-generation")]
+fn inline_refs_in_object(
+    map: &mut serde_json::Map<String, Value>,
+    context: &mut InlineContext<'_>,
+) {
+    let _ = try_inline_single_ref(map, context);
+    for val in map.values_mut() {
+        inline_refs_with_context(val, context);
+    }
+}
+
+/// Recursively inline references with depth and size tracking.
+///
+/// Refactored in 75-01 Task 1a-B (P1): extracted [`parse_local_ref_name`],
+/// [`try_inline_single_ref`], [`inline_refs_in_object`] so this function
+/// reads as a flat depth/size-guarded recursion.
 #[cfg(feature = "schema-generation")]
 fn inline_refs_with_context(value: &mut Value, context: &mut InlineContext<'_>) {
-    // Check depth limit
     if context.current_depth >= context.max_depth {
         return;
     }
-
-    // Check size limit
     let value_size = serde_json::to_string(&value).unwrap_or_default().len();
     if context.current_size + value_size > context.max_size {
         return;
     }
-
     context.current_depth += 1;
     context.current_size += value_size;
 
     match value {
-        Value::Object(map) => {
-            // Check if this object has a $ref
-            if let Some(Value::String(ref_str)) = map.get("$ref") {
-                if ref_str.starts_with("#/definitions/") || ref_str.starts_with("#/$defs/") {
-                    let def_name = ref_str.rsplit('/').next().unwrap_or("");
-
-                    // Find the definition and clone it
-                    if let Some(def_value) = context.definitions.get(def_name) {
-                        // Check if inlining this would exceed size limit
-                        let def_size = serde_json::to_string(&def_value).unwrap_or_default().len();
-                        if context.current_size + def_size <= context.max_size {
-                            // Replace the entire object with the definition
-                            if let Some(def_obj) = def_value.as_object() {
-                                map.remove("$ref");
-                                for (key, val) in def_obj {
-                                    if !map.contains_key(key) {
-                                        map.insert(key.clone(), val.clone());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Process all values in the object
-            for (_key, val) in map.iter_mut() {
-                inline_refs_with_context(val, context);
-            }
-        },
+        Value::Object(map) => inline_refs_in_object(map, context),
         Value::Array(arr) => {
-            // Process all items in the array
             for item in arr.iter_mut() {
                 inline_refs_with_context(item, context);
             }
@@ -204,46 +253,9 @@ fn inline_refs_with_context(value: &mut Value, context: &mut InlineContext<'_>) 
     context.current_depth -= 1;
 }
 
-/// Recursively inline all $ref references in a JSON value (legacy, unlimited)
-#[cfg(feature = "schema-generation")]
-#[allow(dead_code)]
-fn inline_refs(value: &mut Value, definitions: &Value) {
-    match value {
-        Value::Object(map) => {
-            // Check if this object has a $ref
-            if let Some(Value::String(ref_str)) = map.get("$ref") {
-                if ref_str.starts_with("#/definitions/") || ref_str.starts_with("#/$defs/") {
-                    let def_name = ref_str.rsplit('/').next().unwrap_or("");
-
-                    // Find the definition and clone it
-                    if let Some(def_value) = definitions.get(def_name) {
-                        // Replace the entire object with the definition
-                        if let Some(def_obj) = def_value.as_object() {
-                            map.remove("$ref");
-                            for (key, val) in def_obj {
-                                if !map.contains_key(key) {
-                                    map.insert(key.clone(), val.clone());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Process all values in the object
-            for (_key, val) in map.iter_mut() {
-                inline_refs(val, definitions);
-            }
-        },
-        Value::Array(arr) => {
-            // Process all items in the array
-            for item in arr.iter_mut() {
-                inline_refs(item, definitions);
-            }
-        },
-        _ => {},
-    }
-}
+// Note: the legacy `inline_refs` helper was removed in 75-01 Task 1a-B as
+// dead code — confirmed no callers via workspace grep. The current
+// implementation is `inline_refs_with_context` with depth/size tracking.
 
 /// Create a simple schema for primitive types
 ///

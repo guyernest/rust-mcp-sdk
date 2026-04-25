@@ -17,6 +17,58 @@ Runs validation checks on workflows, tools, and other server components. Helps c
 | Subcommand | Description |
 |------------|-------------|
 | `workflows` | Validate all workflows in the project |
+| `deploy` | Validate `.pmcp/deploy.toml` — dry-run for IAM declarations before `cargo pmcp deploy` |
+
+---
+
+## validate deploy
+
+Dry-run validator for `.pmcp/deploy.toml`. Runs the same gate that `cargo pmcp deploy` runs immediately before `cdk deploy`, but makes no AWS API calls — use it as a pre-flight check.
+
+```
+cargo pmcp validate deploy [OPTIONS]
+```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--verbose`, `-v` | Print the resolved project root |
+| `<server>` | Positional: path to the server directory (defaults to current directory) |
+
+### What it checks
+
+Full rule catalog lives in [DEPLOYMENT.md § IAM Declarations → Validation rules](../../DEPLOYMENT.md#validation-rules). Summary:
+
+- **Hard error** — Wildcard escalation (`Allow` + `actions=["*"]` + `resources=["*"]`) in any `[[iam.statements]]` entry.
+- **Hard error** — `effect` not in `{"Allow", "Deny"}` (case-sensitive).
+- **Hard error** — Empty `actions` or `resources` in any `[[iam.statements]]`.
+- **Hard error** — Action does not match `^[a-z0-9-]+:[A-Za-z0-9*]+$`.
+- **Hard error** — Sugar keyword not in `{"read", "write", "readwrite"}`.
+- **Hard error** — Empty `name` in any `[[iam.tables]]` or `[[iam.buckets]]`.
+- **Warning** — Unknown service prefix (not in the curated 40-service list).
+- **Warning** — Cross-account ARN pins (12-digit account segment).
+
+Hard errors return non-zero; warnings print to stderr but return zero.
+
+### Examples
+
+```bash
+# Validate the project in the current directory
+cargo pmcp validate deploy
+
+# Validate a specific server directory, with verbose output
+cargo pmcp validate deploy --verbose ./servers/cost-coach
+
+# CI gate — fails on any hard-error rule
+cargo pmcp validate deploy || exit 1
+```
+
+### Related
+
+- [`cargo pmcp deploy`](deploy.md) — runs the same validator immediately before deploying (fail-closed)
+- [IAM.md](../IAM.md) — task-oriented guide for declaring IAM in `.pmcp/deploy.toml`
+- [DEPLOYMENT.md § IAM Declarations](../../DEPLOYMENT.md#iam-declarations-iam-section) — schema reference
 
 ---
 

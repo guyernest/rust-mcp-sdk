@@ -771,41 +771,57 @@ pub fn pattern_matches(pattern: &str, text: &str) -> bool {
     let pattern = pattern.to_lowercase();
     let text = text.to_lowercase();
 
-    // Simple glob matching with * wildcard
     let parts: Vec<&str> = pattern.split('*').collect();
-
     if parts.len() == 1 {
-        // No wildcards, exact match
         return pattern == text;
     }
 
+    match_glob_parts(&parts, &text)
+}
+
+/// Glob-match `text` against `parts` (split of the original pattern on `*`).
+/// Caller has already handled the no-wildcard case.
+fn match_glob_parts(parts: &[&str], text: &str) -> bool {
+    let last_idx = parts.len() - 1;
     let mut pos = 0;
     for (i, part) in parts.iter().enumerate() {
         if part.is_empty() {
             continue;
         }
-
-        if i == 0 {
-            // First part must match at the start
-            if !text.starts_with(part) {
-                return false;
-            }
-            pos = part.len();
-        } else if i == parts.len() - 1 {
-            // Last part must match at the end
-            if !text[pos..].ends_with(part) {
-                return false;
-            }
-        } else {
-            // Middle parts can match anywhere after current position
-            match text[pos..].find(part) {
-                Some(found) => pos += found + part.len(),
-                None => return false,
-            }
+        match match_glob_segment(part, text, pos, i, last_idx) {
+            Some(new_pos) => pos = new_pos,
+            None => return false,
         }
     }
-
     true
+}
+
+/// Match a single non-empty glob segment, returning the new scan position or `None`
+/// on mismatch. Position semantics:
+///   - First part (i==0): must anchor at the start of `text`.
+///   - Last part: must anchor at the end of `text[pos..]`.
+///   - Middle parts: may appear anywhere in `text[pos..]`.
+fn match_glob_segment(
+    part: &str,
+    text: &str,
+    pos: usize,
+    i: usize,
+    last_idx: usize,
+) -> Option<usize> {
+    if i == 0 {
+        if !text.starts_with(part) {
+            return None;
+        }
+        return Some(part.len());
+    }
+    if i == last_idx {
+        if !text[pos..].ends_with(part) {
+            return None;
+        }
+        return Some(pos);
+    }
+    // Middle segment: scan for the next occurrence after `pos`.
+    text[pos..].find(part).map(|found| pos + found + part.len())
 }
 
 // ============================================================================

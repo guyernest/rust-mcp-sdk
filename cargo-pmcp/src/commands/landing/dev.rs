@@ -11,7 +11,7 @@ pub async fn run_dev_server(
     _project_root: PathBuf,
     dir: PathBuf,
     port: u16,
-    _watch: bool, // TODO: Implement watch mode in P1
+    _watch: bool, // See #248 — implement watch mode (cargo-pmcp commands roadmap).
 ) -> Result<()> {
     let not_quiet = std::env::var("PMCP_QUIET").is_err();
     if not_quiet {

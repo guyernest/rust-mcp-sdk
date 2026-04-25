@@ -188,4 +188,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-12 after Phase 67 (v2.1 docs.rs pipeline and feature flags — explicit 15-feature list, CRATE-README.md, 29 rustdoc warnings fixed, make doc-check CI gate, pmcp 2.3.0 unchanged) completion*
+*Last updated: 2026-04-23 after Phase 76 (cargo-pmcp IAM declarations, 0.10.0); previously 2026-04-12 after Phase 67 (v2.1 docs.rs pipeline and feature flags — explicit 15-feature list, CRATE-README.md, 29 rustdoc warnings fixed, make doc-check CI gate, pmcp 2.3.0 unchanged) completion*

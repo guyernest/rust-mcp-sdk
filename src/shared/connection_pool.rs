@@ -156,7 +156,6 @@ impl<T: Transport + Clone + Send + Sync + 'static> ConnectionPool<T> {
     }
 
     /// Start the connection pool and initialize minimum connections
-    #[allow(clippy::cognitive_complexity)]
     pub async fn start<F>(&mut self, connection_factory: F) -> Result<()>
     where
         F: Fn() -> Result<T> + Send + Sync + 'static,

@@ -485,11 +485,28 @@ app.synth();
     fn create_stack_ts(&self, deploy_dir: &PathBuf, server_name: &str) -> Result<()> {
         let lib_dir = deploy_dir.join("lib");
         std::fs::create_dir_all(&lib_dir)?;
+        let iam = crate::deployment::config::IamConfig::default();
+        let stack_ts = self.render_stack_ts(server_name, &iam);
+        std::fs::write(lib_dir.join("stack.ts"), stack_ts)?;
+        Ok(())
+    }
+
+    /// Render the CDK `stack.ts` as a string, without touching the filesystem.
+    ///
+    /// Operator-declared `[iam]` is spliced in at a single `{iam_block}` seam
+    /// in each template branch; empty config renders as `""` so files with no
+    /// `[iam]` section produce byte-identical output.
+    pub(crate) fn render_stack_ts(
+        &self,
+        server_name: &str,
+        iam: &crate::deployment::config::IamConfig,
+    ) -> String {
+        let iam_block = crate::deployment::render_iam_block(iam);
 
         // For pmcp-run target: Lambda-only stack (no API Gateway)
         // The shared pmcp.run API Gateway handles all routing
         if self.target_type == "pmcp-run" {
-            let stack_ts = format!(
+            return format!(
                 r#"import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
@@ -550,7 +567,7 @@ export class McpServerStack extends cdk.Stack {{
 
     // Get configuration from context or environment
     // These can be overridden via CDK context: -c serverId=myserver
-    const serverId = this.node.tryGetContext('serverId') || '{}';
+    const serverId = this.node.tryGetContext('serverId') || '{server_name}';
     const organizationId = this.node.tryGetContext('organizationId') || process.env.PMCP_ORGANIZATION_ID || 'default-org';
     const mcpServersTable = this.node.tryGetContext('mcpServersTable') || process.env.MCP_SERVERS_TABLE || 'McpServer';
 
@@ -610,7 +627,7 @@ export class McpServerStack extends cdk.Stack {{
       resources: [
         `arn:aws:lambda:${{this.region}}:${{this.account}}:function:*`,
       ],
-    }}));
+    }}));{iam_block}
 
     // Outputs
     new cdk.CfnOutput(this, 'LambdaArn', {{
@@ -635,29 +652,32 @@ export class McpServerStack extends cdk.Stack {{
       value: `https://console.aws.amazon.com/cloudwatch/home?region=${{this.region}}`,
       description: 'CloudWatch Console',
     }});
+
+    new cdk.CfnOutput(this, 'McpRoleArn', {{
+      value: mcpFunction.role!.roleArn,
+      description: 'MCP Server Lambda execution role ARN (stable export for downstream stacks)',
+      exportName: `pmcp-${{serverId}}-McpRoleArn`,
+    }});
   }}
 }}
-"#,
-                server_name
+"#
             );
-
-            std::fs::write(lib_dir.join("stack.ts"), stack_ts)?;
-            return Ok(());
         }
 
         // For aws-lambda target: Full stack with API Gateway
-        let stack_ts = format!(
+        format!(
             r#"import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import {{ Construct }} from 'constructs';
 
 export class McpServerStack extends cdk.Stack {{
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {{
     super(scope, id, props);
 
-    const serverName = '{}';
+    const serverName = '{server_name}';
 
     // Cost allocation tags — propagate to all resources in this stack
     cdk.Tags.of(this).add('project', serverName);
@@ -691,7 +711,7 @@ export class McpServerStack extends cdk.Stack {{
 
     // HTTP API
     const httpApi = new apigatewayv2.HttpApi(this, 'HttpApi', {{
-      apiName: '{}',
+      apiName: '{server_name}',
       description: 'MCP Server HTTP API',
       corsPreflight: {{
         allowOrigins: ['*'],
@@ -723,7 +743,7 @@ export class McpServerStack extends cdk.Stack {{
     mcpFunction.addPermission('ApiGatewayInvoke', {{
       principal: new cdk.aws_iam.ServicePrincipal('apigateway.amazonaws.com'),
       sourceArn: `arn:aws:execute-api:${{this.region}}:${{this.account}}:${{httpApi.apiId}}/*/*`,
-    }});
+    }});{iam_block}
 
     // Outputs
     new cdk.CfnOutput(this, 'ApiUrl', {{
@@ -740,15 +760,16 @@ export class McpServerStack extends cdk.Stack {{
       value: `https://console.aws.amazon.com/cloudwatch/home?region=${{this.region}}`,
       description: 'CloudWatch Console',
     }});
+
+    new cdk.CfnOutput(this, 'McpRoleArn', {{
+      value: mcpFunction.role!.roleArn,
+      description: 'MCP Server Lambda execution role ARN (stable export for downstream stacks)',
+      exportName: `pmcp-${{serverName}}-McpRoleArn`,
+    }});
   }}
 }}
-"#,
-            server_name, server_name
-        );
-
-        std::fs::write(lib_dir.join("stack.ts"), stack_ts)?;
-
-        Ok(())
+"#
+        )
     }
 
     fn create_constructs(&self, deploy_dir: &PathBuf) -> Result<()> {
@@ -1730,5 +1751,313 @@ export class McpServerStack extends cdk.Stack {{
         self.add_to_workspace(format!("{}-authorizer", server_name))?;
 
         Ok(())
+    }
+}
+
+/// Render `deploy/lib/stack.ts` for an already-loaded `DeployConfig`.
+///
+/// Used by `cargo pmcp deploy` to regenerate the stack file from the user's
+/// current `.pmcp/deploy.toml` before handing off to `cdk deploy`, so declared
+/// `[iam]` permissions land in the synthesised template.
+pub(crate) fn render_stack_ts_for_deploy(
+    target_type: &str,
+    server_name: &str,
+    iam: &crate::deployment::config::IamConfig,
+) -> String {
+    let init = InitCommand {
+        project_root: PathBuf::new(),
+        region: String::new(),
+        check_credentials: false,
+        oauth_options: OAuthOptions::default(),
+        target_type: target_type.to_string(),
+    };
+    init.render_stack_ts(server_name, iam)
+}
+
+#[cfg(test)]
+mod wave1_stack_ts_tests {
+    //! Phase 76 Wave 1: in-crate tests for `render_stack_ts`.
+    //!
+    //! `InitCommand`'s fields are private, so these assertions live in the same
+    //! module as the struct rather than in `tests/` where only public APIs are
+    //! reachable. The byte-identical golden-file coverage (Task 3) lives in
+    //! `tests/backward_compat_stack_ts.rs` and reads committed golden files.
+
+    use super::*;
+    use crate::deployment::config::IamConfig;
+
+    fn make_init(target_type: &str) -> InitCommand {
+        InitCommand {
+            project_root: PathBuf::from("/tmp/phase76-test"),
+            region: "us-west-2".to_string(),
+            check_credentials: false,
+            oauth_options: OAuthOptions::default(),
+            target_type: target_type.to_string(),
+        }
+    }
+
+    #[test]
+    fn pmcp_run_stack_ts_emits_mcp_role_arn_output() {
+        let init = make_init("pmcp-run");
+        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        assert!(
+            ts.contains("new cdk.CfnOutput(this, 'McpRoleArn', {"),
+            "pmcp-run stack.ts missing McpRoleArn CfnOutput.\nGot:\n{ts}"
+        );
+        assert!(
+            ts.contains("mcpFunction.role!.roleArn"),
+            "pmcp-run stack.ts missing mcpFunction.role!.roleArn value"
+        );
+        assert!(
+            ts.contains("pmcp-${serverId}-McpRoleArn"),
+            "pmcp-run stack.ts missing exportName pmcp-${{serverId}}-McpRoleArn"
+        );
+    }
+
+    #[test]
+    fn aws_lambda_stack_ts_emits_mcp_role_arn_output() {
+        let init = make_init("aws-lambda");
+        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        assert!(
+            ts.contains("new cdk.CfnOutput(this, 'McpRoleArn', {"),
+            "aws-lambda stack.ts missing McpRoleArn CfnOutput"
+        );
+        assert!(
+            ts.contains("mcpFunction.role!.roleArn"),
+            "aws-lambda stack.ts missing mcpFunction.role!.roleArn value"
+        );
+        assert!(
+            ts.contains("pmcp-${serverName}-McpRoleArn"),
+            "aws-lambda stack.ts missing exportName pmcp-${{serverName}}-McpRoleArn"
+        );
+    }
+
+    #[test]
+    fn aws_lambda_stack_ts_imports_iam_module() {
+        let init = make_init("aws-lambda");
+        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        assert!(
+            ts.contains("import * as iam from 'aws-cdk-lib/aws-iam';"),
+            "aws-lambda stack.ts missing 'import * as iam from aws-cdk-lib/aws-iam' (D-03)"
+        );
+    }
+
+    #[test]
+    fn pmcp_run_role_output_placed_after_existing_outputs() {
+        // Regression guard: McpRoleArn must appear AFTER DashboardUrl so the
+        // backward-compat golden (Task 3) diff is minimal when future waves
+        // regenerate the file.
+        let init = make_init("pmcp-run");
+        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        let dashboard_idx = ts.find("'DashboardUrl'").expect("DashboardUrl present");
+        let role_idx = ts.find("'McpRoleArn'").expect("McpRoleArn present");
+        assert!(
+            role_idx > dashboard_idx,
+            "McpRoleArn must be emitted after DashboardUrl (ordering matters for golden diff)"
+        );
+    }
+
+    // ==========================================================================
+    // Golden-file backward-compat tests (Task 3, D-05)
+    // ==========================================================================
+    //
+    // These pin the byte-for-byte output of `render_stack_ts` when IamConfig is
+    // empty. Any change to the renderer that affects the no-`[iam]` code path
+    // must explicitly regenerate the goldens via
+    //   `UPDATE_GOLDEN=1 cargo test -p cargo-pmcp golden`
+    // — otherwise CI fails loud on Waves 2-5.
+    //
+    // Why live here (in-crate) rather than in `tests/backward_compat_stack_ts.rs`:
+    // `InitCommand`'s fields are private, and `cargo-pmcp/src/lib.rs` exposes
+    // only the `loadtest`/`pentest`/`test_support` surface. Integration tests
+    // therefore cannot reach `render_stack_ts` directly. The companion file
+    // `tests/backward_compat_stack_ts.rs` reads these committed goldens from
+    // disk and runs grep-level invariant checks — that file is where the
+    // `files_modified` frontmatter declaration lands.
+
+    fn golden_path(filename: &str) -> std::path::PathBuf {
+        // CARGO_MANIFEST_DIR points at `cargo-pmcp/`, so goldens live at
+        // `cargo-pmcp/tests/golden/<filename>`.
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("golden")
+            .join(filename)
+    }
+
+    fn check_or_update_golden(filename: &str, rendered: &str) {
+        let path = golden_path(filename);
+        if std::env::var("UPDATE_GOLDEN").is_ok() {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap_or_else(|e| {
+                    panic!("UPDATE_GOLDEN=1 could not create {}: {e}", parent.display())
+                });
+            }
+            std::fs::write(&path, rendered).unwrap_or_else(|e| {
+                panic!("UPDATE_GOLDEN=1 could not write {}: {e}", path.display())
+            });
+            eprintln!("UPDATE_GOLDEN: regenerated {}", path.display());
+            return;
+        }
+        let golden = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "cannot read golden {}: {e}\n\
+                 First run? Generate it with:\n\
+                 \tUPDATE_GOLDEN=1 cargo test -p cargo-pmcp golden\n\
+                 Then inspect the diff and commit if intentional.",
+                path.display()
+            )
+        });
+        assert_eq!(
+            rendered,
+            golden,
+            "{} drift — D-05 backward-compat invariant violated.\n\
+             Run with UPDATE_GOLDEN=1 to regenerate if the change is intentional.",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn golden_pmcp_run_stack_ts_empty_iam() {
+        let init = make_init("pmcp-run");
+        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        check_or_update_golden("pmcp-run-empty.ts", &ts);
+    }
+
+    #[test]
+    fn golden_aws_lambda_stack_ts_empty_iam() {
+        let init = make_init("aws-lambda");
+        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        check_or_update_golden("aws-lambda-empty.ts", &ts);
+    }
+
+    // ==========================================================================
+    // Phase 76 Wave 3 Task 2: render_stack_ts injects render_iam_block output
+    // into both template branches via a single `{iam_block}` named placeholder.
+    // ==========================================================================
+    //
+    // These in-crate tests complement the byte-identical golden guards above by
+    // checking that a *populated* IamConfig materialises as `addToRolePolicy`
+    // calls in the rendered TS on both pmcp-run and aws-lambda targets. They
+    // additionally lock the insertion point (between the platform-composition
+    // IAM calls and the first `// Outputs` / `new cdk.CfnOutput` block — per
+    // RESEARCH.md Q4 ordering) so that future waves don't silently reposition
+    // operator-declared IAM.
+
+    use crate::deployment::config::{BucketPermission, IamStatement, TablePermission};
+
+    fn cost_coach_iam() -> IamConfig {
+        IamConfig {
+            tables: vec![TablePermission {
+                name: "cost-coach-tenants".into(),
+                actions: vec!["readwrite".into()],
+                include_indexes: true,
+            }],
+            buckets: vec![BucketPermission {
+                name: "cost-coach-snapshots".into(),
+                actions: vec!["readwrite".into()],
+            }],
+            statements: vec![IamStatement {
+                effect: "Allow".into(),
+                actions: vec!["secretsmanager:GetSecretValue".into()],
+                resources: vec!["arn:aws:secretsmanager:us-west-2:*:secret:cost-coach/*".into()],
+            }],
+        }
+    }
+
+    #[test]
+    fn wave3_pmcp_run_stack_ts_emits_iam_block_before_outputs() {
+        let init = make_init("pmcp-run");
+        let ts = init.render_stack_ts("demo-server", &cost_coach_iam());
+
+        // Locate the operator-declared IAM banner.
+        let banner_idx = ts
+            .find("// Operator-declared IAM")
+            .expect("wave3: operator IAM banner missing");
+        let outputs_idx = ts
+            .find("// Outputs")
+            .expect("wave3: // Outputs comment missing");
+        assert!(
+            banner_idx < outputs_idx,
+            "wave3: operator IAM block must appear BEFORE // Outputs — banner={banner_idx}, outputs={outputs_idx}"
+        );
+
+        // Locate the second platform-composition `addToRolePolicy` (the
+        // lambda:InvokeFunction one) — operator IAM must come AFTER it.
+        let platform_invoke_idx = ts
+            .find("'lambda:InvokeFunction'")
+            .expect("wave3: platform InvokeFunction addToRolePolicy missing");
+        assert!(
+            platform_invoke_idx < banner_idx,
+            "wave3: operator IAM must follow platform-composition IAM calls"
+        );
+
+        // Locate the D-02 DynamoDB action set (readwrite → 8 actions).
+        for needle in &[
+            "dynamodb:GetItem",
+            "dynamodb:BatchGetItem",
+            "dynamodb:PutItem",
+            "dynamodb:BatchWriteItem",
+            "table/cost-coach-tenants/index/*",
+            "s3:GetObject",
+            "s3:PutObject",
+            "s3:DeleteObject",
+            "arn:aws:s3:::cost-coach-snapshots/*",
+            "secretsmanager:GetSecretValue",
+            "arn:aws:secretsmanager:us-west-2:*:secret:cost-coach/*",
+        ] {
+            assert!(
+                ts.contains(needle),
+                "wave3 pmcp-run: missing {needle} in rendered stack.ts"
+            );
+        }
+    }
+
+    #[test]
+    fn wave3_aws_lambda_stack_ts_emits_iam_block_before_outputs() {
+        let init = make_init("aws-lambda");
+        let ts = init.render_stack_ts("demo-server", &cost_coach_iam());
+
+        let banner_idx = ts
+            .find("// Operator-declared IAM")
+            .expect("wave3 aws-lambda: banner missing");
+        let outputs_idx = ts
+            .find("// Outputs")
+            .expect("wave3 aws-lambda: // Outputs missing");
+        assert!(
+            banner_idx < outputs_idx,
+            "wave3 aws-lambda: banner={banner_idx}, outputs={outputs_idx}"
+        );
+
+        // The aws-lambda branch's preceding block is the API Gateway addPermission
+        // call ('ApiGatewayInvoke'). Operator IAM must come after it.
+        let api_gw_idx = ts
+            .find("'ApiGatewayInvoke'")
+            .expect("wave3 aws-lambda: ApiGatewayInvoke anchor missing");
+        assert!(
+            api_gw_idx < banner_idx,
+            "wave3 aws-lambda: operator IAM must follow API Gateway permission"
+        );
+
+        for needle in &[
+            "dynamodb:BatchGetItem",
+            "dynamodb:BatchWriteItem",
+            "arn:aws:s3:::cost-coach-snapshots/*",
+            "secretsmanager:GetSecretValue",
+        ] {
+            assert!(ts.contains(needle), "wave3 aws-lambda: missing {needle}");
+        }
+    }
+
+    #[test]
+    fn wave3_empty_iam_still_byte_identical_to_golden() {
+        // Redundant with `golden_pmcp_run_stack_ts_empty_iam` but localised
+        // here as a Wave 3 guard: the iam_block placeholder must collapse to
+        // the empty string without leaving residual whitespace.
+        let init = make_init("pmcp-run");
+        let ts = init.render_stack_ts("demo-server", &IamConfig::default());
+        assert!(
+            !ts.contains("// Operator-declared IAM"),
+            "wave3: empty IamConfig must not emit the operator banner"
+        );
     }
 }

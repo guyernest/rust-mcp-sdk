@@ -27,28 +27,7 @@ pub async fn execute_run(
     auth_flags: &AuthFlags,
 ) -> Result<()> {
     let no_color = global_flags.no_color;
-    // Step 1: Load config
-    let config_file = match config_path {
-        Some(path) => {
-            if !path.exists() {
-                anyhow::bail!(
-                    "Config file not found: {}\nUse `cargo pmcp loadtest init` to create one.",
-                    path.display()
-                );
-            }
-            path
-        },
-        None => match discover_config() {
-            Some(path) => path,
-            None => {
-                anyhow::bail!(
-                    "No loadtest config found.\n\
-                     Run `cargo pmcp loadtest init` to create .pmcp/loadtest.toml,\n\
-                     or use `--config path/to/file.toml` to specify one."
-                );
-            },
-        },
-    };
+    let config_file = resolve_config_path(config_path)?;
 
     if global_flags.should_output() {
         eprintln!("Loading config from: {}", config_file.display());
@@ -57,21 +36,9 @@ pub async fn execute_run(
     let mut config = LoadTestConfig::load(&config_file)
         .map_err(|e| anyhow::anyhow!("Failed to load config '{}': {}", config_file.display(), e))?;
 
-    // Step 2: Apply CLI overrides
     apply_overrides(&mut config, vus, duration, global_flags);
 
-    // Step 2.5: Set up authentication middleware (acquire token ONCE before spawning VUs)
-    let auth_method = auth_flags.resolve();
-    let is_oauth = matches!(&auth_method, AuthMethod::OAuth { .. });
-    let http_middleware_chain = auth::resolve_auth_middleware(&url, &auth_method).await?;
-
-    if global_flags.should_output() {
-        match &http_middleware_chain {
-            Some(_) if is_oauth => eprintln!("Authentication: OAuth 2.0 (token acquired)"),
-            Some(_) => eprintln!("Authentication: API key"),
-            None => eprintln!("Authentication: none"),
-        }
-    }
+    let http_middleware_chain = resolve_auth_with_logging(&url, auth_flags, global_flags).await?;
 
     // Step 3: Build and run the engine
     let mut engine = LoadTestEngine::new(config, url.clone());
@@ -87,32 +54,94 @@ pub async fn execute_run(
         .map_err(|e| anyhow::anyhow!("Load test failed: {}", e))?;
 
     // Step 4: Output k6-style terminal summary
-    // Color override is already set globally in main() — no local override needed
     let summary = render_summary(&result, engine.config(), &url);
     println!("{summary}");
 
     // Step 5: Write JSON report (unless --no-report)
     if !no_report {
-        let report = LoadTestReport::from_result(&result, engine.config(), &url);
-        let cwd = std::env::current_dir()?;
-        match write_report(&report, &cwd) {
-            Ok(path) => {
-                if global_flags.should_output() {
-                    eprintln!();
-                    eprintln!("Report written to: {}", path.display());
-                }
-            },
-            Err(e) => {
-                if global_flags.should_output() {
-                    eprintln!();
-                    eprintln!("Warning: Failed to write report: {}", e);
-                }
-                // Non-fatal -- the test still completed successfully
-            },
-        }
+        write_json_report(&result, engine.config(), &url, global_flags);
     }
 
     Ok(())
+}
+
+/// Resolve the config-file path from CLI flag, auto-discovery, or emit a
+/// user-facing error.
+fn resolve_config_path(config_path: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(path) = config_path {
+        if !path.exists() {
+            anyhow::bail!(
+                "Config file not found: {}\nUse `cargo pmcp loadtest init` to create one.",
+                path.display()
+            );
+        }
+        return Ok(path);
+    }
+
+    discover_config().ok_or_else(|| {
+        anyhow::anyhow!(
+            "No loadtest config found.\n\
+             Run `cargo pmcp loadtest init` to create .pmcp/loadtest.toml,\n\
+             or use `--config path/to/file.toml` to specify one."
+        )
+    })
+}
+
+/// Resolve the auth middleware chain (OAuth/API-key/none) and log which mode
+/// is active.
+async fn resolve_auth_with_logging(
+    url: &str,
+    auth_flags: &AuthFlags,
+    global_flags: &GlobalFlags,
+) -> Result<Option<std::sync::Arc<pmcp::client::http_middleware::HttpMiddlewareChain>>> {
+    let auth_method = auth_flags.resolve();
+    let is_oauth = matches!(&auth_method, AuthMethod::OAuth { .. });
+    let http_middleware_chain = auth::resolve_auth_middleware(url, &auth_method).await?;
+
+    if global_flags.should_output() {
+        match &http_middleware_chain {
+            Some(_) if is_oauth => eprintln!("Authentication: OAuth 2.0 (token acquired)"),
+            Some(_) => eprintln!("Authentication: API key"),
+            None => eprintln!("Authentication: none"),
+        }
+    }
+
+    Ok(http_middleware_chain)
+}
+
+/// Write the JSON report for a completed load test. Non-fatal on failure
+/// (logs a warning when output is enabled).
+fn write_json_report(
+    result: &cargo_pmcp::loadtest::engine::LoadTestResult,
+    config: &LoadTestConfig,
+    url: &str,
+    global_flags: &GlobalFlags,
+) {
+    let report = LoadTestReport::from_result(result, config, url);
+    let cwd = match std::env::current_dir() {
+        Ok(c) => c,
+        Err(e) => {
+            if global_flags.should_output() {
+                eprintln!();
+                eprintln!("Warning: Failed to read cwd for report: {}", e);
+            }
+            return;
+        },
+    };
+    match write_report(&report, &cwd) {
+        Ok(path) => {
+            if global_flags.should_output() {
+                eprintln!();
+                eprintln!("Report written to: {}", path.display());
+            }
+        },
+        Err(e) => {
+            if global_flags.should_output() {
+                eprintln!();
+                eprintln!("Warning: Failed to write report: {}", e);
+            }
+        },
+    }
 }
 
 /// Apply CLI flag overrides to a loaded config.

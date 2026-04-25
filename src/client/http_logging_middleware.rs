@@ -329,7 +329,6 @@ impl HttpLoggingMiddleware {
     }
 
     /// Log a request with redacted headers.
-    #[allow(clippy::cognitive_complexity)]
     fn log_request(&self, request: &HttpRequest, context: &HttpMiddlewareContext) {
         let url = self.redact_url(&request.url);
         let headers_str = self.format_headers(&request.headers);
@@ -398,7 +397,6 @@ impl HttpLoggingMiddleware {
     }
 
     /// Log a response with redacted headers.
-    #[allow(clippy::cognitive_complexity)]
     fn log_response(&self, response: &HttpResponse, context: &HttpMiddlewareContext) {
         let headers_str = self.format_headers(&response.headers);
 

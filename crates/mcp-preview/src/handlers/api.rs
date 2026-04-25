@@ -171,73 +171,96 @@ pub struct ReadResourceParams {
     pub uri: String,
 }
 
+/// Outcome of fetching proxy-side UI resources.
+enum ProxyResourcesOutcome {
+    /// Proxy returned a (possibly empty) resource list — already merged into the accumulator.
+    Merged,
+    /// Proxy errored AND no disk widgets exist; caller returns this Json directly.
+    EmptyResultWithError(Value),
+    /// Proxy errored but disk widgets exist; carry on without proxy contribution.
+    ErrorIgnored,
+}
+
 /// List UI resources from the MCP server and any file-based widgets.
 ///
 /// When `widgets_dir` is configured, discovered `.html` files are merged with
 /// proxy-fetched resources. Proxy resources are filtered to those whose MIME type
 /// contains "html" (case-insensitive).
 pub async fn list_resources(State(state): State<Arc<AppState>>) -> Json<Value> {
-    let mut all_resources: Vec<serde_json::Value> = Vec::new();
+    let mut all_resources: Vec<Value> = Vec::new();
 
-    // Add file-based widgets from widgets_dir (if configured)
     if let Some(ref widgets_dir) = state.config.widgets_dir {
-        match std::fs::read_dir(widgets_dir) {
-            Ok(entries) => {
-                let mut widget_entries: Vec<_> = entries
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("html"))
-                    .collect();
-                widget_entries.sort_by_key(|e| e.file_name());
+        merge_disk_widgets(&mut all_resources, widgets_dir);
+    }
 
-                for entry in widget_entries {
-                    if let Some(stem) = entry
-                        .path()
-                        .file_stem()
-                        .and_then(|s| s.to_str().map(String::from))
-                    {
-                        all_resources.push(json!({
-                            "uri": format!("ui://app/{}", stem),
-                            "name": stem,
-                            "description": format!("Widget from {}", entry.path().display()),
-                            "mimeType": "text/html"
-                        }));
-                    }
-                }
+    if let ProxyResourcesOutcome::EmptyResultWithError(err_json) =
+        merge_proxy_resources(&mut all_resources, &state).await
+    {
+        return Json(err_json);
+    }
 
-                tracing::debug!(
-                    "Discovered {} widget(s) from {}",
-                    all_resources.len(),
-                    widgets_dir.display()
-                );
-            },
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to read widgets directory {}: {}",
-                    widgets_dir.display(),
-                    e
-                );
-            },
+    if state.config.mode == crate::server::PreviewMode::ChatGpt {
+        for resource in &mut all_resources {
+            enrich_value_meta_for_chatgpt(resource);
         }
     }
 
-    // Also fetch proxy resources (from the MCP server)
+    Json(json!({ "resources": all_resources }))
+}
+
+/// Walk `widgets_dir` for `.html` files and append each as a `ui://app/{stem}`
+/// resource entry.
+fn merge_disk_widgets(all_resources: &mut Vec<Value>, widgets_dir: &std::path::Path) {
+    let entries = match std::fs::read_dir(widgets_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(
+                "Failed to read widgets directory {}: {}",
+                widgets_dir.display(),
+                e
+            );
+            return;
+        },
+    };
+
+    let mut widget_entries: Vec<_> = entries
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().and_then(|ext| ext.to_str()) == Some("html"))
+        .collect();
+    widget_entries.sort_by_key(std::fs::DirEntry::file_name);
+
+    for entry in widget_entries {
+        if let Some(stem) = entry
+            .path()
+            .file_stem()
+            .and_then(|s| s.to_str().map(String::from))
+        {
+            all_resources.push(json!({
+                "uri": format!("ui://app/{}", stem),
+                "name": stem,
+                "description": format!("Widget from {}", entry.path().display()),
+                "mimeType": "text/html"
+            }));
+        }
+    }
+
+    tracing::debug!(
+        "Discovered {} widget(s) from {}",
+        all_resources.len(),
+        widgets_dir.display()
+    );
+}
+
+/// Fetch proxy resources, filter to HTML/ui:// surface, and merge into the
+/// accumulator. Returns an outcome describing how the caller should proceed.
+async fn merge_proxy_resources(
+    all_resources: &mut Vec<Value>,
+    state: &Arc<AppState>,
+) -> ProxyResourcesOutcome {
     match state.proxy.list_resources().await {
         Ok(resources) => {
-            let ui_resources = resources.into_iter().filter(|r| {
-                // Accept resources with HTML MIME types or ui:// URIs (MCP Apps convention)
-                let mime_match = r
-                    .mime_type
-                    .as_deref()
-                    .is_some_and(|m| m.to_lowercase().contains("html"));
-                let uri_match = r.uri.starts_with("ui://");
-                mime_match || uri_match
-            });
-            for r in ui_resources {
-                // Avoid duplicates: skip proxy resources whose URI matches a disk widget
-                let dominated = all_resources
-                    .iter()
-                    .any(|existing| existing.get("uri").and_then(|v| v.as_str()) == Some(&r.uri));
-                if !dominated {
+            for r in resources.into_iter().filter(is_ui_resource) {
+                if !uri_already_present(all_resources, &r.uri) {
                     all_resources.push(json!({
                         "uri": r.uri,
                         "name": r.name,
@@ -247,30 +270,47 @@ pub async fn list_resources(State(state): State<Arc<AppState>>) -> Json<Value> {
                     }));
                 }
             }
+            ProxyResourcesOutcome::Merged
         },
         Err(McpRequestError::AuthRequired(_, _)) => {
-            // Auth errors from list_resources are non-fatal when widgets_dir provides resources
             tracing::warn!("Proxy list_resources returned auth error (401/403)");
             if all_resources.is_empty() {
-                return Json(json!({ "resources": [], "error": "Authentication required" }));
+                ProxyResourcesOutcome::EmptyResultWithError(
+                    json!({ "resources": [], "error": "Authentication required" }),
+                )
+            } else {
+                ProxyResourcesOutcome::ErrorIgnored
             }
         },
         Err(McpRequestError::Other(e)) => {
             tracing::warn!("Proxy list_resources failed: {}", e);
             if all_resources.is_empty() {
-                return Json(json!({ "resources": [], "error": e.to_string() }));
+                ProxyResourcesOutcome::EmptyResultWithError(
+                    json!({ "resources": [], "error": e.to_string() }),
+                )
+            } else {
+                ProxyResourcesOutcome::ErrorIgnored
             }
         },
     }
+}
 
-    // In ChatGPT mode, enrich each resource's _meta with openai/* keys
-    if state.config.mode == crate::server::PreviewMode::ChatGpt {
-        for resource in &mut all_resources {
-            enrich_value_meta_for_chatgpt(resource);
-        }
-    }
+/// Predicate: accept resources with HTML MIME types or `ui://` URIs (MCP Apps convention).
+fn is_ui_resource(r: &crate::proxy::ResourceInfo) -> bool {
+    let mime_match = r
+        .mime_type
+        .as_deref()
+        .is_some_and(|m| m.to_lowercase().contains("html"));
+    let uri_match = r.uri.starts_with("ui://");
+    mime_match || uri_match
+}
 
-    Json(json!({ "resources": all_resources }))
+/// Predicate: a resource with `target_uri` is already in the accumulator
+/// (used to skip proxy resources dominated by disk widgets).
+fn uri_already_present(all_resources: &[Value], target_uri: &str) -> bool {
+    all_resources
+        .iter()
+        .any(|existing| existing.get("uri").and_then(|v| v.as_str()) == Some(target_uri))
 }
 
 /// Read a resource by URI.
@@ -500,5 +540,87 @@ fn enrich_meta_for_chatgpt(meta: &mut Option<Value>) {
 fn enrich_value_meta_for_chatgpt(resource: &mut Value) {
     if let Some(Value::Object(map)) = resource.get_mut("_meta") {
         enrich_chatgpt_meta_map(map);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enrich_chatgpt_meta_map_derives_from_nested_ui_resource_uri() {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "ui".to_string(),
+            json!({ "resourceUri": "ui://app/widget1" }),
+        );
+
+        enrich_chatgpt_meta_map(&mut map);
+
+        assert_eq!(
+            map.get("openai/outputTemplate").and_then(Value::as_str),
+            Some("ui://app/widget1")
+        );
+        assert_eq!(
+            map.get("openai/widgetAccessible").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(map.contains_key("openai/toolInvocation/invoking"));
+        assert!(map.contains_key("openai/toolInvocation/invoked"));
+    }
+
+    #[test]
+    fn enrich_chatgpt_meta_map_uses_flat_legacy_key() {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "ui/resourceUri".to_string(),
+            Value::String("ui://app/legacy".to_string()),
+        );
+
+        enrich_chatgpt_meta_map(&mut map);
+
+        assert_eq!(
+            map.get("openai/outputTemplate").and_then(Value::as_str),
+            Some("ui://app/legacy")
+        );
+    }
+
+    #[test]
+    fn enrich_chatgpt_meta_map_preserves_server_provided_keys() {
+        let mut map = serde_json::Map::new();
+        map.insert("ui".to_string(), json!({ "resourceUri": "ui://app/x" }));
+        map.insert(
+            "openai/outputTemplate".to_string(),
+            Value::String("ui://app/server-set".to_string()),
+        );
+
+        enrich_chatgpt_meta_map(&mut map);
+
+        assert_eq!(
+            map.get("openai/outputTemplate").and_then(Value::as_str),
+            Some("ui://app/server-set"),
+            "server value must not be overwritten"
+        );
+    }
+
+    #[test]
+    fn enrich_chatgpt_meta_map_no_op_without_resource_uri() {
+        let mut map = serde_json::Map::new();
+        map.insert("other".to_string(), Value::String("x".to_string()));
+
+        enrich_chatgpt_meta_map(&mut map);
+
+        assert!(!map.contains_key("openai/outputTemplate"));
+        assert!(!map.contains_key("openai/widgetAccessible"));
+    }
+
+    #[test]
+    fn widget_error_html_includes_path_and_error() {
+        let path = std::path::Path::new("/widgets/foo.html");
+        let html = widget_error_html("foo", path, "missing file");
+        assert!(html.contains("foo"));
+        assert!(html.contains("/widgets/foo.html"));
+        assert!(html.contains("missing file"));
+        assert!(html.contains("Widget Load Error"));
     }
 }

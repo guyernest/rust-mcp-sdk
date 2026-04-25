@@ -88,54 +88,89 @@ async fn start_http_in_background(server: pmcp::Server) -> Result<SocketAddr, Er
 /// Proxy Lambda HTTP events to the background StreamableHttpServer.
 async fn handler(event: Request) -> Result<Response<Body>, Error> {
     let method = event.method().clone();
+
+    if method.as_str() == "GET" {
+        return Ok(build_health_response());
+    }
+    if method.as_str() == "OPTIONS" {
+        return Ok(build_cors_preflight_response());
+    }
+    proxy_to_backend(event).await
+}
+
+/// Build the GET health-check response.
+fn build_health_response() -> Response<Body> {
+    let body = serde_json::json!({
+        "ok": true,
+        "server": "pmcp-server",
+        "message": "POST JSON-RPC to '/' for MCP requests."
+    })
+    .to_string();
+    Response::builder()
+        .status(200)
+        .header("content-type", "application/json")
+        .header("access-control-allow-origin", "*")
+        .body(Body::Text(body))
+        .expect("valid response")
+}
+
+/// Build the OPTIONS CORS preflight response.
+fn build_cors_preflight_response() -> Response<Body> {
+    Response::builder()
+        .status(200)
+        .header("access-control-allow-origin", "*")
+        .header("access-control-allow-methods", "POST, OPTIONS, GET, DELETE")
+        .header(
+            "access-control-allow-headers",
+            "content-type, authorization, mcp-session-id",
+        )
+        .body(Body::Empty)
+        .expect("valid response")
+}
+
+/// Proxy a non-GET/OPTIONS request through to the backend StreamableHttpServer.
+async fn proxy_to_backend(event: Request) -> Result<Response<Body>, Error> {
     let path_q = event
         .uri()
         .path_and_query()
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| "/".to_string());
 
-    // Health check
-    if method.as_str() == "GET" {
-        let body = serde_json::json!({
-            "ok": true,
-            "server": "pmcp-server",
-            "message": "POST JSON-RPC to '/' for MCP requests."
-        })
-        .to_string();
-        return Ok(Response::builder()
-            .status(200)
-            .header("content-type", "application/json")
-            .header("access-control-allow-origin", "*")
-            .body(Body::Text(body))
-            .expect("valid response"));
-    }
-
-    // CORS preflight
-    if method.as_str() == "OPTIONS" {
-        return Ok(Response::builder()
-            .status(200)
-            .header("access-control-allow-origin", "*")
-            .header("access-control-allow-methods", "POST, OPTIONS, GET, DELETE")
-            .header(
-                "access-control-allow-headers",
-                "content-type, authorization, mcp-session-id",
-            )
-            .body(Body::Empty)
-            .expect("valid response"));
-    }
-
     let base = BASE_URL
         .get()
         .ok_or_else(|| Error::from("Server not started"))?;
-    let client = HTTP.get().expect("client initialized");
+    let client = HTTP
+        .get()
+        .ok_or_else(|| Error::from("HTTP client not started"))?;
 
     let url = format!("{}{}", base, path_q);
-    let reqwest_method = reqwest::Method::from_bytes(method.as_str().as_bytes())
+    let reqwest_method = reqwest::Method::from_bytes(event.method().as_str().as_bytes())
         .map_err(|e| Error::from(e.to_string()))?;
 
-    let mut req = client.request(reqwest_method, &url);
+    let req = build_proxied_request(client, reqwest_method, &url, event);
 
-    // Forward headers (skip Host), then take ownership of body to avoid cloning.
+    let resp = req.send().await.map_err(|e| Error::from(e.to_string()))?;
+    let status = resp.status();
+    let headers = resp.headers().clone();
+    let bytes = resp.bytes().await.map_err(|e| Error::from(e.to_string()))?;
+
+    Ok(build_lambda_response(
+        status.as_u16(),
+        &headers,
+        bytes.into(),
+    ))
+}
+
+/// Construct the outbound reqwest request: forward inbound headers (skip Host)
+/// and consume the inbound body bytes.
+fn build_proxied_request(
+    client: &reqwest::Client,
+    method: reqwest::Method,
+    url: &str,
+    event: Request,
+) -> reqwest::RequestBuilder {
+    let mut req = client.request(method, url);
+
     for (name, value) in event.headers() {
         if let Ok(val) = value.to_str() {
             if !name.as_str().eq_ignore_ascii_case("host") {
@@ -150,19 +185,21 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         Body::Binary(b) => b,
         _ => Vec::new(),
     };
-    req = req.body(body_bytes);
+    req.body(body_bytes)
+}
 
-    // Send to StreamableHttpServer
-    let resp = req.send().await.map_err(|e| Error::from(e.to_string()))?;
-    let status = resp.status();
-    let headers = resp.headers().clone();
-    let bytes = resp.bytes().await.map_err(|e| Error::from(e.to_string()))?;
+/// Build the outbound Lambda response from the backend response, copying
+/// headers (skipping `transfer-encoding` and `content-length`).
+fn build_lambda_response(
+    status: u16,
+    headers: &reqwest::header::HeaderMap,
+    bytes: Vec<u8>,
+) -> Response<Body> {
+    let mut builder = Response::builder()
+        .status(status)
+        .header("access-control-allow-origin", "*");
 
-    // Build Lambda response
-    let mut builder = Response::builder().status(status.as_u16());
-    builder = builder.header("access-control-allow-origin", "*");
-
-    for (name, value) in headers.iter() {
+    for (name, value) in headers {
         if let Ok(val) = value.to_str() {
             let n = name.as_str();
             if !n.eq_ignore_ascii_case("transfer-encoding")
@@ -173,7 +210,63 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         }
     }
 
-    Ok(builder
+    builder
         .body(Body::Binary(bytes.into()))
-        .expect("valid response"))
+        .expect("valid response")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lambda_http::http::Method;
+
+    fn build_request(method: Method, body: Body) -> Request {
+        let mut req = Request::new(body);
+        *req.method_mut() = method;
+        *req.uri_mut() = "/".parse().expect("valid uri");
+        req
+    }
+
+    #[tokio::test]
+    async fn handler_get_returns_health_check() {
+        let req = build_request(Method::GET, Body::Empty);
+        let resp = handler(req).await.expect("handler ok");
+        assert_eq!(resp.status(), 200);
+        let body_str = match resp.into_body() {
+            Body::Text(s) => s,
+            _ => panic!("expected text body"),
+        };
+        assert!(body_str.contains("\"ok\":true"));
+        assert!(body_str.contains("\"server\":\"pmcp-server\""));
+    }
+
+    #[tokio::test]
+    async fn handler_options_returns_cors_preflight() {
+        let req = build_request(Method::OPTIONS, Body::Empty);
+        let resp = handler(req).await.expect("handler ok");
+        assert_eq!(resp.status(), 200);
+        let headers = resp.headers();
+        assert_eq!(
+            headers
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("*")
+        );
+        assert!(headers
+            .get("access-control-allow-methods")
+            .map(|v| v.to_str().unwrap_or("").contains("POST"))
+            .unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn handler_post_without_base_url_returns_error() {
+        // BASE_URL is intentionally unset in tests — ensures the OnceLock-not-set
+        // path returns Err rather than panicking.
+        let req = build_request(Method::POST, Body::Text("{}".into()));
+        let result = handler(req).await;
+        assert!(
+            result.is_err(),
+            "POST without initialized BASE_URL must err"
+        );
+    }
 }

@@ -514,12 +514,67 @@ impl TaskWorkflowPromptHandler {
     }
 }
 
+/// Find a producing step by binding name and return it with its status.
+fn find_producing_step<'a>(
+    binding_name: &str,
+    all_steps: &'a [WorkflowStep],
+    step_statuses: &[StepStatus],
+) -> Option<(&'a WorkflowStep, StepStatus)> {
+    for (idx, producing_step) in all_steps.iter().enumerate() {
+        let Some(binding) = producing_step.binding() else {
+            continue;
+        };
+        if binding.as_str() != binding_name {
+            continue;
+        }
+        let status = step_statuses.get(idx).copied()?;
+        return Some((producing_step, status));
+    }
+    None
+}
+
+/// Inspect a single `(arg_name, data_source)` entry for a `StepOutput`
+/// dependency whose producer failed or was skipped, returning a matching
+/// `UnresolvedDependency` reason if so.
+fn dependency_failure_for_arg(
+    data_source: &DataSource,
+    all_steps: &[WorkflowStep],
+    step_statuses: &[StepStatus],
+    blocked_step: &str,
+) -> Option<PauseReason> {
+    let DataSource::StepOutput {
+        step: binding_name, ..
+    } = data_source
+    else {
+        return None;
+    };
+    let (producing_step, status) =
+        find_producing_step(binding_name.as_str(), all_steps, step_statuses)?;
+    if status != StepStatus::Failed && status != StepStatus::Skipped {
+        return None;
+    }
+    let producing_tool = producing_step
+        .tool()
+        .map(|t| t.name().to_string())
+        .unwrap_or_default();
+    Some(PauseReason::UnresolvedDependency {
+        blocked_step: blocked_step.to_string(),
+        missing_output: binding_name.to_string(),
+        producing_step: producing_step.name().to_string(),
+        suggested_tool: producing_tool,
+    })
+}
+
 /// Classify a parameter resolution failure into a typed [`PauseReason`].
 ///
 /// When parameter resolution fails for a step, this function inspects the
 /// step's arguments to determine if the failure is due to a dependency on
 /// a failed or skipped producing step ([`PauseReason::UnresolvedDependency`])
 /// or a generic resolution failure ([`PauseReason::UnresolvableParams`]).
+///
+/// Refactored in 75-01 Task 1a-B (P1): extracted [`find_producing_step`]
+/// and [`dependency_failure_for_arg`] so the outer function is a flat scan
+/// with a fallback.
 fn classify_resolution_failure(
     step: &WorkflowStep,
     all_steps: &[WorkflowStep],
@@ -531,38 +586,14 @@ fn classify_resolution_failure(
         .map(|t| t.name().to_string())
         .unwrap_or_default();
 
-    // Check each argument to see if it depends on a failed/skipped step
     for (_arg_name, data_source) in step.arguments() {
-        if let DataSource::StepOutput {
-            step: binding_name, ..
-        } = data_source
+        if let Some(reason) =
+            dependency_failure_for_arg(data_source, all_steps, step_statuses, &blocked_step)
         {
-            // Find the producing step by matching its binding name
-            for (idx, producing_step) in all_steps.iter().enumerate() {
-                if let Some(binding) = producing_step.binding() {
-                    if binding.as_str() == binding_name.as_str() {
-                        // Found the producer -- check its status
-                        if let Some(status) = step_statuses.get(idx) {
-                            if *status == StepStatus::Failed || *status == StepStatus::Skipped {
-                                let producing_tool = producing_step
-                                    .tool()
-                                    .map(|t| t.name().to_string())
-                                    .unwrap_or_default();
-                                return PauseReason::UnresolvedDependency {
-                                    blocked_step,
-                                    missing_output: binding_name.to_string(),
-                                    producing_step: producing_step.name().to_string(),
-                                    suggested_tool: producing_tool,
-                                };
-                            }
-                        }
-                    }
-                }
-            }
+            return reason;
         }
     }
 
-    // No dependency issue found -- generic unresolvable params
     let missing_param = step
         .arguments()
         .keys()

@@ -36,126 +36,183 @@ async fn run_diagnostics_internal(
     let mut report = TestReport::new();
     let start = Instant::now();
 
-    if !quiet {
-        println!("{}", "═══════════════════════════════════════════".cyan());
-        println!("{}", "CONNECTION DIAGNOSTICS".cyan().bold());
-        println!("{}", "═══════════════════════════════════════════".cyan());
-        if api_key.is_some() {
-            println!("Using API key: [REDACTED]");
-        }
-        println!();
+    print_diagnostics_header(quiet, api_key);
+
+    // Stage 1: URL parse
+    if !run_url_diagnostic_stage(&mut report, url, quiet) {
+        report.duration = start.elapsed();
+        return Ok(report);
     }
 
-    // Parse URL
+    // Stage 2: stdio short-circuit
+    if url == "stdio" {
+        record_stdio_result(&mut report, quiet);
+        report.duration = start.elapsed();
+        return Ok(report);
+    }
+
+    // Stage 3: network (DNS / TCP / TLS) — short-circuits report on early failure
+    if network && !run_network_diagnostic_stages(&mut report, url, timeout, quiet).await? {
+        report.duration = start.elapsed();
+        return Ok(report);
+    }
+
+    // Stage 4: HTTP probe
+    run_http_diagnostic_stage(&mut report, url, timeout, quiet).await;
+
+    // Stage 5: MCP handshake
+    run_mcp_diagnostic_stage(&mut report, url, timeout, api_key, quiet).await;
+
+    report.duration = start.elapsed();
+
+    print_diagnostics_summary(&report, quiet);
+    Ok(report)
+}
+
+/// Print the cyan-bordered "CONNECTION DIAGNOSTICS" header banner.
+fn print_diagnostics_header(quiet: bool, api_key: Option<&str>) {
+    if quiet {
+        return;
+    }
+    println!("{}", "═══════════════════════════════════════════".cyan());
+    println!("{}", "CONNECTION DIAGNOSTICS".cyan().bold());
+    println!("{}", "═══════════════════════════════════════════".cyan());
+    if api_key.is_some() {
+        println!("Using API key: [REDACTED]");
+    }
+    println!();
+}
+
+/// Run the URL-parse diagnostic and print it. Returns `true` if the caller
+/// should continue to subsequent stages, `false` if it should short-circuit.
+fn run_url_diagnostic_stage(report: &mut TestReport, url: &str, quiet: bool) -> bool {
     let url_result = diagnose_url(url);
+    let passed = url_result.status == TestStatus::Passed;
     report.add_test(url_result.clone());
     if !quiet {
         print_diagnostic_result(&url_result);
     }
+    passed
+}
 
-    if url_result.status != TestStatus::Passed {
-        report.duration = start.elapsed();
-        return Ok(report);
+/// Append the stdio "Stdio Transport" passed result to the report.
+fn record_stdio_result(report: &mut TestReport, quiet: bool) {
+    let stdio_result = TestResult {
+        name: "Stdio Transport".to_string(),
+        category: TestCategory::Core,
+        status: TestStatus::Passed,
+        duration: Duration::from_millis(0),
+        error: None,
+        details: Some("Stdio transport ready for use".to_string()),
+    };
+    report.add_test(stdio_result.clone());
+    if !quiet {
+        print_diagnostic_result(&stdio_result);
     }
+}
 
-    // For stdio, skip network tests
-    if url == "stdio" {
-        let stdio_result = TestResult {
-            name: "Stdio Transport".to_string(),
-            category: TestCategory::Core,
-            status: TestStatus::Passed,
-            duration: Duration::from_millis(0),
-            error: None,
-            details: Some("Stdio transport ready for use".to_string()),
-        };
-        report.add_test(stdio_result.clone());
-        if !quiet {
-            print_diagnostic_result(&stdio_result);
-        }
-        report.duration = start.elapsed();
-        return Ok(report);
+/// Run DNS, TCP, and (when scheme=https) TLS diagnostics in sequence.
+///
+/// Returns `Ok(true)` to indicate later stages should run, `Ok(false)` to
+/// short-circuit because DNS or TCP failed.
+async fn run_network_diagnostic_stages(
+    report: &mut TestReport,
+    url: &str,
+    timeout: Duration,
+    quiet: bool,
+) -> Result<bool> {
+    let parsed_url = Url::parse(url)?;
+
+    if !run_dns_stage(report, &parsed_url, quiet).await {
+        return Ok(false);
     }
+    if !run_tcp_stage(report, &parsed_url, timeout, quiet).await {
+        return Ok(false);
+    }
+    if parsed_url.scheme() == "https" {
+        run_tls_stage(report, &parsed_url, quiet).await;
+    }
+    Ok(true)
+}
 
-    // Network diagnostics
-    if network {
-        let parsed_url = Url::parse(url)?;
-
-        // DNS resolution
-        let dns_result = diagnose_dns(&parsed_url).await;
-        report.add_test(dns_result.clone());
-        if !quiet {
-            print_diagnostic_result(&dns_result);
-        }
-
-        if dns_result.status != TestStatus::Passed {
-            if !quiet {
-                print_suggestions_for_dns();
-            }
-            report.duration = start.elapsed();
-            return Ok(report);
-        }
-
-        // TCP connectivity
-        let tcp_result = diagnose_tcp(&parsed_url, timeout).await;
-        report.add_test(tcp_result.clone());
-        if !quiet {
-            print_diagnostic_result(&tcp_result);
-        }
-
-        if tcp_result.status != TestStatus::Passed {
-            if !quiet {
-                print_suggestions_for_tcp(&parsed_url);
-            }
-            report.duration = start.elapsed();
-            return Ok(report);
-        }
-
-        // TLS/SSL (for HTTPS)
-        if parsed_url.scheme() == "https" {
-            let tls_result = diagnose_tls(&parsed_url).await;
-            report.add_test(tls_result.clone());
-            if !quiet {
-                print_diagnostic_result(&tls_result);
-            }
-
-            if tls_result.status == TestStatus::Failed && !quiet {
-                print_suggestions_for_tls();
-            }
+async fn run_dns_stage(report: &mut TestReport, parsed_url: &Url, quiet: bool) -> bool {
+    let dns_result = diagnose_dns(parsed_url).await;
+    let passed = dns_result.status == TestStatus::Passed;
+    report.add_test(dns_result.clone());
+    if !quiet {
+        print_diagnostic_result(&dns_result);
+        if !passed {
+            print_suggestions_for_dns();
         }
     }
+    passed
+}
 
-    // HTTP specific tests
+async fn run_tcp_stage(
+    report: &mut TestReport,
+    parsed_url: &Url,
+    timeout: Duration,
+    quiet: bool,
+) -> bool {
+    let tcp_result = diagnose_tcp(parsed_url, timeout).await;
+    let passed = tcp_result.status == TestStatus::Passed;
+    report.add_test(tcp_result.clone());
+    if !quiet {
+        print_diagnostic_result(&tcp_result);
+        if !passed {
+            print_suggestions_for_tcp(parsed_url);
+        }
+    }
+    passed
+}
+
+async fn run_tls_stage(report: &mut TestReport, parsed_url: &Url, quiet: bool) {
+    let tls_result = diagnose_tls(parsed_url).await;
+    let failed = tls_result.status == TestStatus::Failed;
+    report.add_test(tls_result.clone());
+    if !quiet {
+        print_diagnostic_result(&tls_result);
+        if failed {
+            print_suggestions_for_tls();
+        }
+    }
+}
+
+async fn run_http_diagnostic_stage(
+    report: &mut TestReport,
+    url: &str,
+    timeout: Duration,
+    quiet: bool,
+) {
     let http_result = diagnose_http(url, timeout).await;
     report.add_test(http_result.clone());
     if !quiet {
         print_diagnostic_result(&http_result);
+        if http_result.status != TestStatus::Passed {
+            print_suggestions_for_http(url);
+        }
     }
+}
 
-    if http_result.status != TestStatus::Passed && !quiet {
-        print_suggestions_for_http(url);
-    }
-
-    // MCP protocol test
+async fn run_mcp_diagnostic_stage(
+    report: &mut TestReport,
+    url: &str,
+    timeout: Duration,
+    api_key: Option<&str>,
+    quiet: bool,
+) {
     let mcp_result = diagnose_mcp_protocol(url, timeout, api_key).await;
     report.add_test(mcp_result.clone());
     if !quiet {
         print_diagnostic_result(&mcp_result);
     }
-
     if mcp_result.status != TestStatus::Passed {
         print_suggestions_for_mcp(&mcp_result);
     }
+}
 
-    report.duration = start.elapsed();
-
-    // Print summary
-    if !quiet {
-        println!();
-        println!("{}", "═══════════════════════════════════════════".cyan());
-        println!("{}", "DIAGNOSTIC SUMMARY".cyan().bold());
-        println!("{}", "═══════════════════════════════════════════".cyan());
-    }
-
+/// Tally pass/fail/warn counts from `report.tests` (pure helper).
+fn count_test_outcomes(report: &TestReport) -> (usize, usize, usize) {
     let passed = report
         .tests
         .iter()
@@ -171,26 +228,34 @@ async fn run_diagnostics_internal(
         .iter()
         .filter(|t| t.status == TestStatus::Warning)
         .count();
+    (passed, failed, warnings)
+}
 
-    if !quiet {
-        println!(
-            "  {} {} Passed  {} {} Failed  {} {} Warnings",
-            "✓".green().bold(),
-            passed.to_string().green(),
-            "✗".red().bold(),
-            failed.to_string().red(),
-            "⚠".yellow().bold(),
-            warnings.to_string().yellow()
-        );
+fn print_diagnostics_summary(report: &TestReport, quiet: bool) {
+    if quiet {
+        return;
     }
+    println!();
+    println!("{}", "═══════════════════════════════════════════".cyan());
+    println!("{}", "DIAGNOSTIC SUMMARY".cyan().bold());
+    println!("{}", "═══════════════════════════════════════════".cyan());
 
-    if !quiet && failed > 0 {
+    let (passed, failed, warnings) = count_test_outcomes(report);
+    println!(
+        "  {} {} Passed  {} {} Failed  {} {} Warnings",
+        "✓".green().bold(),
+        passed.to_string().green(),
+        "✗".red().bold(),
+        failed.to_string().red(),
+        "⚠".yellow().bold(),
+        warnings.to_string().yellow()
+    );
+
+    if failed > 0 {
         println!();
         println!("{}", "RECOMMENDATIONS:".yellow().bold());
-        print_overall_recommendations(&report);
+        print_overall_recommendations(report);
     }
-
-    Ok(report)
 }
 
 fn diagnose_url(url: &str) -> TestResult {
@@ -362,59 +427,71 @@ async fn diagnose_tls(url: &Url) -> TestResult {
 async fn diagnose_http(url: &str, timeout: Duration) -> TestResult {
     let start = Instant::now();
 
-    // Try a simple HTTP request
-    match reqwest::Client::builder().timeout(timeout).build() {
-        Ok(client) => match client.get(url).send().await {
-            Ok(response) => {
-                let status = response.status();
-                let headers = response.headers();
+    let client = match reqwest::Client::builder().timeout(timeout).build() {
+        Ok(c) => c,
+        Err(e) => return http_failed_result(start, format!("Failed to create HTTP client: {}", e)),
+    };
 
-                let mut details = vec![format!("Status: {}", status)];
+    match client.get(url).send().await {
+        Ok(response) => http_success_result(start, response),
+        Err(e) => http_failed_result(start, e.to_string()),
+    }
+}
 
-                if let Some(content_type) = headers.get("content-type") {
-                    details.push(format!("Content-Type: {:?}", content_type));
-                }
+/// Construct a Failed `HTTP Response` `TestResult` (DRY for the two error arms).
+fn http_failed_result(start: Instant, error: String) -> TestResult {
+    TestResult {
+        name: "HTTP Response".to_string(),
+        category: TestCategory::Core,
+        status: TestStatus::Failed,
+        duration: start.elapsed(),
+        error: Some(error),
+        details: None,
+    }
+}
 
-                if let Some(server) = headers.get("server") {
-                    details.push(format!("Server: {:?}", server));
-                }
+/// Build the success-path `TestResult` from a reqwest response — pure mapping
+/// (status code → TestStatus + error string + headers → details).
+fn http_success_result(start: Instant, response: reqwest::Response) -> TestResult {
+    let status = response.status();
+    let headers = response.headers();
 
-                TestResult {
-                    name: "HTTP Response".to_string(),
-                    category: TestCategory::Core,
-                    status: if status.is_success() || status.as_u16() == 404 {
-                        TestStatus::Passed
-                    } else if status.is_server_error() {
-                        TestStatus::Failed
-                    } else {
-                        TestStatus::Warning
-                    },
-                    duration: start.elapsed(),
-                    error: if !status.is_success() && status.as_u16() != 404 {
-                        Some(format!("HTTP {}", status))
-                    } else {
-                        None
-                    },
-                    details: Some(details.join(", ")),
-                }
-            },
-            Err(e) => TestResult {
-                name: "HTTP Response".to_string(),
-                category: TestCategory::Core,
-                status: TestStatus::Failed,
-                duration: start.elapsed(),
-                error: Some(e.to_string()),
-                details: None,
-            },
-        },
-        Err(e) => TestResult {
-            name: "HTTP Response".to_string(),
-            category: TestCategory::Core,
-            status: TestStatus::Failed,
-            duration: start.elapsed(),
-            error: Some(format!("Failed to create HTTP client: {}", e)),
-            details: None,
-        },
+    let mut details = vec![format!("Status: {}", status)];
+    if let Some(content_type) = headers.get("content-type") {
+        details.push(format!("Content-Type: {:?}", content_type));
+    }
+    if let Some(server) = headers.get("server") {
+        details.push(format!("Server: {:?}", server));
+    }
+
+    let test_status = classify_http_status(status);
+    let error = if !status.is_success() && status.as_u16() != 404 {
+        Some(format!("HTTP {}", status))
+    } else {
+        None
+    };
+
+    TestResult {
+        name: "HTTP Response".to_string(),
+        category: TestCategory::Core,
+        status: test_status,
+        duration: start.elapsed(),
+        error,
+        details: Some(details.join(", ")),
+    }
+}
+
+/// Classify an HTTP status code into a `TestStatus` (pure helper).
+///
+/// 2xx and 404 → Passed (404 is acceptable for a base-URL probe). 5xx → Failed.
+/// Other (3xx/4xx-non-404) → Warning.
+fn classify_http_status(status: reqwest::StatusCode) -> TestStatus {
+    if status.is_success() || status.as_u16() == 404 {
+        TestStatus::Passed
+    } else if status.is_server_error() {
+        TestStatus::Failed
+    } else {
+        TestStatus::Warning
     }
 }
 

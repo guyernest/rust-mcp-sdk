@@ -20,15 +20,159 @@ pub async fn deploy_landing_page(
         println!();
     }
 
-    // Validate target
+    validate_landing_target(&target)?;
+    validate_landing_dir(&dir)?;
+
+    let config_path = dir.join("pmcp-landing.toml");
+    validate_config_path(&config_path)?;
+
+    let config = LandingConfig::load(&config_path)?;
+    let deployment_info = crate::landing::config::load_deployment_info(&project_root);
+
+    let server_id = resolve_landing_server_id(server_id, deployment_info.as_ref(), &config)?;
+    let endpoint = resolve_landing_endpoint(deployment_info.as_ref(), &config, &server_id);
+
+    print_landing_config_summary(&config, &server_id, &endpoint, &target, not_quiet);
+
+    let credentials = authenticate_for_landing(not_quiet).await?;
+    run_npm_build_pipeline(&dir, &endpoint, &config, not_quiet)?;
+
+    let out_dir = dir.join("out");
+    verify_build_outputs(&out_dir)?;
+
+    let (landing_id, landing_url) = package_and_upload_landing(
+        &out_dir,
+        &server_id,
+        &config,
+        &credentials.access_token,
+        not_quiet,
+    )
+    .await?;
+
+    if not_quiet {
+        println!("Building landing page...");
+    }
+    poll_landing_status(&landing_id, &credentials.access_token).await?;
+    print_landing_success(&landing_url, not_quiet);
+
+    Ok(())
+}
+
+/// Authenticate with pmcp.run and log the result.
+async fn authenticate_for_landing(
+    not_quiet: bool,
+) -> Result<crate::deployment::targets::pmcp_run::auth::Credentials> {
+    if not_quiet {
+        println!("Authenticating with pmcp.run...");
+    }
+    let credentials = auth::get_credentials().await.context(
+        "Failed to get pmcp.run credentials. Run: cargo pmcp deploy login --target pmcp-run",
+    )?;
+    if not_quiet {
+        println!("   Authenticated");
+        println!();
+    }
+    Ok(credentials)
+}
+
+/// Run the npm install + npm build pipeline with output framing.
+fn run_npm_build_pipeline(
+    dir: &PathBuf,
+    endpoint: &str,
+    config: &LandingConfig,
+    not_quiet: bool,
+) -> Result<()> {
+    if not_quiet {
+        println!("Installing dependencies...");
+    }
+    check_node_installed(dir)?;
+    run_npm_install(dir)?;
+    if not_quiet {
+        println!("   Dependencies installed");
+        println!();
+        println!("Building landing page...");
+    }
+    run_npm_build(dir, endpoint, config)?;
+    if not_quiet {
+        println!("   Build completed");
+        println!();
+    }
+    Ok(())
+}
+
+/// Verify that the Next.js static export produced `out/` with `index.html`.
+fn verify_build_outputs(out_dir: &std::path::Path) -> Result<()> {
+    if !out_dir.exists() {
+        anyhow::bail!(
+            "Build failed: out/ directory not created.\n\
+             Check that next.config.js has output: 'export'"
+        );
+    }
+    if !out_dir.join("index.html").exists() {
+        anyhow::bail!("Build failed: out/index.html not found");
+    }
+    Ok(())
+}
+
+/// Package the out/ directory into a zip, upload via GraphQL, and clean up.
+async fn package_and_upload_landing(
+    out_dir: &std::path::Path,
+    server_id: &str,
+    config: &LandingConfig,
+    access_token: &str,
+    not_quiet: bool,
+) -> Result<(String, String)> {
+    if not_quiet {
+        println!("Creating deployment package...");
+    }
+    let zip_path = create_deployment_zip(&out_dir.to_path_buf())?;
+    let zip_size = std::fs::metadata(&zip_path)?.len();
+    if not_quiet {
+        println!("   Created {} ({} KB)", zip_path.display(), zip_size / 1024);
+        println!();
+        println!("Uploading to pmcp.run...");
+    }
+
+    let (landing_id, landing_url) =
+        upload_landing_via_graphql(&zip_path, server_id, config, access_token).await?;
+
+    if not_quiet {
+        println!("   Uploaded (ID: {})", landing_id);
+        println!();
+    }
+
+    // Clean up zip file (best-effort)
+    let _ = std::fs::remove_file(&zip_path);
+
+    Ok((landing_id, landing_url))
+}
+
+/// Print the final success banner.
+fn print_landing_success(landing_url: &str, not_quiet: bool) {
+    if !not_quiet {
+        return;
+    }
+    println!();
+    println!("Landing page deployed successfully!");
+    println!();
+    println!("URL: {}", landing_url);
+    println!();
+    println!("Tip: You can update your landing page by running this command again");
+}
+
+/// Ensure the deployment target is supported by this command.
+fn validate_landing_target(target: &str) -> Result<()> {
     if target != "pmcp-run" && target != "pmcp.run" {
         anyhow::bail!(
             "Target '{}' not supported. Currently only 'pmcp-run' is available.",
             target
         );
     }
+    Ok(())
+}
 
-    // Check if landing directory exists
+/// Ensure the landing directory exists (points user at `landing init` if missing).
+fn validate_landing_dir(dir: &PathBuf) -> Result<()> {
     if !dir.exists() {
         anyhow::bail!(
             "Landing directory not found: {}\n\
@@ -36,9 +180,11 @@ pub async fn deploy_landing_page(
             dir.display()
         );
     }
+    Ok(())
+}
 
-    // Load configuration
-    let config_path = dir.join("pmcp-landing.toml");
+/// Ensure the pmcp-landing.toml config file exists.
+fn validate_config_path(config_path: &PathBuf) -> Result<()> {
     if !config_path.exists() {
         anyhow::bail!(
             "Configuration file not found: {}\n\
@@ -46,26 +192,19 @@ pub async fn deploy_landing_page(
             config_path.display()
         );
     }
+    Ok(())
+}
 
-    let config = LandingConfig::load(&config_path)?;
-
-    // Load deployment info from .pmcp/deployment.toml (created by `cargo pmcp deploy`)
-    // This has the CURRENT deployment info, which takes precedence over stale config
-    let deployment_info = crate::landing::config::load_deployment_info(&project_root);
-
-    // Determine server ID with helpful fallback chain:
-    // 1. CLI flag (highest priority)
-    // 2. .pmcp/deployment.toml (current deployment)
-    // 3. pmcp-landing.toml config (may be stale)
-    let server_id = server_id
-        .or_else(|| {
-            // Try .pmcp/deployment.toml first (current deployment)
-            deployment_info.as_ref().map(|(id, _)| id.clone())
-        })
-        .or_else(|| {
-            // Fall back to pmcp-landing.toml
-            config.deployment.server_id.clone()
-        })
+/// Determine the server ID with the CLI→deployment.toml→landing.toml
+/// fallback chain. Emits the long user-facing error when none present.
+fn resolve_landing_server_id(
+    cli_server_id: Option<String>,
+    deployment_info: Option<&(String, String)>,
+    config: &LandingConfig,
+) -> Result<String> {
+    cli_server_id
+        .or_else(|| deployment_info.map(|(id, _)| id.clone()))
+        .or_else(|| config.deployment.server_id.clone())
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "❌ Server ID not found. The landing page needs to be linked to your deployed MCP server.\n\
@@ -84,106 +223,39 @@ pub async fn deploy_landing_page(
                  \n\
                  ℹ️  The server ID links your landing page to your MCP server deployment."
             )
-        })?;
+        })
+}
 
-    // Determine endpoint with fallback chain:
-    // 1. .pmcp/deployment.toml (current deployment - highest priority)
-    // 2. pmcp-landing.toml config (may be stale)
-    // 3. Default constructed from server_id
-    let endpoint = deployment_info
-        .as_ref()
+/// Determine the MCP endpoint: prefer deployment.toml (current), then
+/// landing.toml config, then default-constructed from server_id.
+fn resolve_landing_endpoint(
+    deployment_info: Option<&(String, String)>,
+    config: &LandingConfig,
+    server_id: &str,
+) -> String {
+    deployment_info
         .map(|(_, ep)| ep.clone())
         .or_else(|| config.deployment.endpoint.clone())
-        .unwrap_or_else(|| format!("https://pmcp.run/{}", server_id));
+        .unwrap_or_else(|| format!("https://pmcp.run/{}", server_id))
+}
 
-    if not_quiet {
-        println!("Configuration:");
-        println!("   Server: {}", config.display_title());
-        println!("   Server ID: {}", server_id);
-        println!("   Endpoint: {}", endpoint);
-        println!("   Target: {}", target);
-        println!();
-
-        // Authenticate with pmcp.run
-        println!("Authenticating with pmcp.run...");
+/// Print the config summary block (Server / Server ID / Endpoint / Target).
+fn print_landing_config_summary(
+    config: &LandingConfig,
+    server_id: &str,
+    endpoint: &str,
+    target: &str,
+    not_quiet: bool,
+) {
+    if !not_quiet {
+        return;
     }
-    let credentials = auth::get_credentials().await.context(
-        "Failed to get pmcp.run credentials. Run: cargo pmcp deploy login --target pmcp-run",
-    )?;
-    if not_quiet {
-        println!("   Authenticated");
-        println!();
-
-        // Install dependencies
-        println!("Installing dependencies...");
-    }
-    check_node_installed(&dir)?;
-    run_npm_install(&dir)?;
-    if not_quiet {
-        println!("   Dependencies installed");
-        println!();
-
-        // Build the landing page with environment variables
-        println!("Building landing page...");
-    }
-    run_npm_build(&dir, &endpoint, &config)?;
-    if not_quiet {
-        println!("   Build completed");
-        println!();
-    }
-
-    // Verify out/ directory exists
-    let out_dir = dir.join("out");
-    if !out_dir.exists() {
-        anyhow::bail!(
-            "Build failed: out/ directory not created.\n\
-             Check that next.config.js has output: 'export'"
-        );
-    }
-    if !out_dir.join("index.html").exists() {
-        anyhow::bail!("Build failed: out/index.html not found");
-    }
-
-    // Create zip file from out/ directory CONTENTS (not the directory itself)
-    if not_quiet {
-        println!("Creating deployment package...");
-    }
-    let zip_path = create_deployment_zip(&out_dir)?;
-    let zip_size = std::fs::metadata(&zip_path)?.len();
-    if not_quiet {
-        println!("   Created {} ({} KB)", zip_path.display(), zip_size / 1024);
-        println!();
-
-        // Upload to pmcp.run via GraphQL (same as server deployment)
-        println!("Uploading to pmcp.run...");
-    }
-    let (landing_id, landing_url) =
-        upload_landing_via_graphql(&zip_path, &server_id, &config, &credentials.access_token)
-            .await?;
-    if not_quiet {
-        println!("   Uploaded (ID: {})", landing_id);
-        println!();
-    }
-
-    // Clean up zip file
-    std::fs::remove_file(&zip_path)?;
-
-    // Poll for deployment status
-    if not_quiet {
-        println!("Building landing page...");
-    }
-    poll_landing_status(&landing_id, &credentials.access_token).await?;
-
-    if not_quiet {
-        println!();
-        println!("Landing page deployed successfully!");
-        println!();
-        println!("URL: {}", landing_url);
-        println!();
-        println!("Tip: You can update your landing page by running this command again");
-    }
-
-    Ok(())
+    println!("Configuration:");
+    println!("   Server: {}", config.display_title());
+    println!("   Server ID: {}", server_id);
+    println!("   Endpoint: {}", endpoint);
+    println!("   Target: {}", target);
+    println!();
 }
 
 /// Create a zip file from the out/ directory (built static files)

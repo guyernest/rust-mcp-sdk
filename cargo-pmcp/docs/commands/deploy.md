@@ -50,6 +50,26 @@ cargo pmcp deploy --target aws-lambda
 cargo pmcp deploy --target pmcp-run --shared-pool agent-framework
 ```
 
+### Flow
+
+For AWS Lambda targets, `cargo pmcp deploy` runs:
+
+1. Loads `.pmcp/deploy.toml` via `DeployConfig::load`.
+2. **Validates the `[iam]` section** — runs the same gate as [`cargo pmcp validate deploy`](validate.md#validate-deploy) and fails fast before any AWS API call if validation errors are present. Warnings print to stderr but don't block.
+3. Builds the Lambda binary.
+4. **Regenerates `deploy/lib/stack.ts` from the loaded config** — splices the `[iam]` declarations into the CDK template at a single seam. Changes to `.pmcp/deploy.toml` therefore take effect on the next `cargo pmcp deploy` without manual re-init.
+5. Runs `cdk deploy` with `--require-approval never`.
+
+> Both generated stacks (`pmcp-run` and `aws-lambda`) emit a stable `McpRoleArn` CFN output with `exportName: pmcp-${serverName}-McpRoleArn` — consume it from external stacks via `Fn::ImportValue` instead of looking up the role by its CFN-generated name.
+
+### Declaring IAM
+
+To give the deployed Lambda AWS permissions (DynamoDB, S3, SecretsManager, …), add an `[iam]` section to `.pmcp/deploy.toml`. See:
+
+- [IAM.md](../IAM.md) — how-to guide with recipes, troubleshooting, and migration from hand-written bolt-on stacks
+- [DEPLOYMENT.md § IAM Declarations](../../DEPLOYMENT.md#iam-declarations-iam-section) — schema reference and full translation tables
+- [`cargo pmcp validate deploy`](validate.md#validate-deploy) — pre-flight the config before deploying
+
 ---
 
 ## deploy init

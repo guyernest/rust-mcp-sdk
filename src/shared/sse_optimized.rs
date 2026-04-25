@@ -222,7 +222,6 @@ impl OptimizedSseTransport {
     }
 
     /// Connect to SSE endpoint
-    #[allow(clippy::cognitive_complexity)]
     async fn connect_sse(
         config: &OptimizedSseConfig,
         client: &reqwest::Client,

@@ -66,15 +66,9 @@ pub fn render_summary(result: &LoadTestResult, config: &LoadTestConfig, url: &st
     ));
 
     // Latency metrics
-    let latency_value = format!("p50={}ms  p95={}ms  p99={}ms", snap.p50, snap.p95, snap.p99);
-    let latency_colored = if snap.p99 < 1000 {
-        latency_value.green().to_string()
-    } else {
-        latency_value.yellow().to_string()
-    };
     lines.push(format_metric_row(
         "mcp_req_duration",
-        &latency_colored,
+        &format_latency_metric(snap),
         PAD_WIDTH,
     ));
 
@@ -86,30 +80,16 @@ pub fn render_summary(result: &LoadTestResult, config: &LoadTestConfig, url: &st
     ));
 
     // Error count
-    let error_count_str = if snap.error_count > 0 {
-        snap.error_count.to_string().red().to_string()
-    } else {
-        snap.error_count.to_string()
-    };
     lines.push(format_metric_row(
         "mcp_req_error_count",
-        &error_count_str,
+        &format_error_count(snap),
         PAD_WIDTH,
     ));
 
     // Error rate
-    let error_rate_pct = snap.error_rate * 100.0;
-    let error_rate_str = format!("{error_rate_pct:.1}%");
-    let error_rate_colored = if error_rate_pct > 5.0 {
-        error_rate_str.red().to_string()
-    } else if error_rate_pct > 1.0 {
-        error_rate_str.yellow().to_string()
-    } else {
-        error_rate_str.green().to_string()
-    };
     lines.push(format_metric_row(
         "mcp_req_error_rate",
-        &error_rate_colored,
+        &format_error_rate(snap),
         PAD_WIDTH,
     ));
 
@@ -245,6 +225,39 @@ fn render_header(url: &str, vus: u32, duration_secs: u64, scenario_count: usize)
 /// to pad the metric name with dots up to `pad_width` characters.
 fn format_metric_row(name: &str, value: &str, pad_width: usize) -> String {
     format!("  {name:.<pad_width$}: {value}")
+}
+
+/// Format the p50/p95/p99 latency row with green/yellow color based on p99.
+fn format_latency_metric(snap: &crate::loadtest::metrics::MetricsSnapshot) -> String {
+    let latency_value = format!("p50={}ms  p95={}ms  p99={}ms", snap.p50, snap.p95, snap.p99);
+    if snap.p99 < 1000 {
+        latency_value.green().to_string()
+    } else {
+        latency_value.yellow().to_string()
+    }
+}
+
+/// Format the error count (red when non-zero, plain when zero).
+fn format_error_count(snap: &crate::loadtest::metrics::MetricsSnapshot) -> String {
+    if snap.error_count > 0 {
+        snap.error_count.to_string().red().to_string()
+    } else {
+        snap.error_count.to_string()
+    }
+}
+
+/// Format the error rate percentage with red/yellow/green color thresholds
+/// (>5% red, >1% yellow, otherwise green).
+fn format_error_rate(snap: &crate::loadtest::metrics::MetricsSnapshot) -> String {
+    let error_rate_pct = snap.error_rate * 100.0;
+    let error_rate_str = format!("{error_rate_pct:.1}%");
+    if error_rate_pct > 5.0 {
+        error_rate_str.red().to_string()
+    } else if error_rate_pct > 1.0 {
+        error_rate_str.yellow().to_string()
+    } else {
+        error_rate_str.green().to_string()
+    }
 }
 
 #[cfg(test)]

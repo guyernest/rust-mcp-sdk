@@ -19,7 +19,15 @@ use super::{auth, graphql};
 ///
 /// Returns None if version cannot be determined.
 fn extract_version_from_cargo(project_root: &Path) -> Option<String> {
-    // Use cargo metadata to get package information - this handles all Cargo.toml formats
+    let metadata = run_cargo_metadata(project_root)?;
+    let workspace_root = metadata.get("workspace_root")?.as_str()?;
+    let packages = metadata.get("packages")?.as_array()?;
+    select_best_version(packages, workspace_root)
+}
+
+/// Invoke `cargo metadata` and parse stdout into a JSON Value. Returns None
+/// on any failure (process spawn, non-zero status, invalid JSON).
+fn run_cargo_metadata(project_root: &Path) -> Option<serde_json::Value> {
     let output = std::process::Command::new("cargo")
         .args(["metadata", "--format-version", "1", "--no-deps"])
         .current_dir(project_root)
@@ -30,35 +38,26 @@ fn extract_version_from_cargo(project_root: &Path) -> Option<String> {
         return None;
     }
 
-    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    serde_json::from_slice(&output.stdout).ok()
+}
 
-    // Get workspace root to find the "main" package
-    let workspace_root = metadata.get("workspace_root")?.as_str()?;
-
-    // Find packages in the workspace
-    let packages = metadata.get("packages")?.as_array()?;
-
-    // Strategy: prefer package at workspace root, then any package with version
+/// From a list of cargo-metadata package entries, prefer the workspace-root
+/// package's version; fallback to the first package with a version field.
+fn select_best_version(packages: &[serde_json::Value], workspace_root: &str) -> Option<String> {
     let mut root_package_version: Option<String> = None;
     let mut any_version: Option<String> = None;
 
     for package in packages {
-        let version = match package.get("version").and_then(|v| v.as_str()) {
-            Some(v) => v,
-            None => continue,
+        let Some(version) = package.get("version").and_then(|v| v.as_str()) else {
+            continue;
         };
         let manifest_path = package
             .get("manifest_path")
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        // Check if this package's Cargo.toml is at workspace root
-        if !manifest_path.is_empty() && manifest_path.starts_with(workspace_root) {
-            let relative = &manifest_path[workspace_root.len()..];
-            // Package at root has manifest at /Cargo.toml (just one path component)
-            if relative == "/Cargo.toml" || relative.matches('/').count() == 1 {
-                root_package_version = Some(version.to_string());
-            }
+        if is_workspace_root_manifest(manifest_path, workspace_root) {
+            root_package_version = Some(version.to_string());
         }
 
         if any_version.is_none() {
@@ -66,8 +65,17 @@ fn extract_version_from_cargo(project_root: &Path) -> Option<String> {
         }
     }
 
-    // Prefer root package version, fallback to any package version
     root_package_version.or(any_version)
+}
+
+/// Return true when `manifest_path` is the workspace-root Cargo.toml
+/// (single-path-component suffix relative to workspace_root).
+fn is_workspace_root_manifest(manifest_path: &str, workspace_root: &str) -> bool {
+    if manifest_path.is_empty() || !manifest_path.starts_with(workspace_root) {
+        return false;
+    }
+    let relative = &manifest_path[workspace_root.len()..];
+    relative == "/Cargo.toml" || relative.matches('/').count() == 1
 }
 
 /// Deploy to pmcp.run managed service using 3-step flow:
@@ -81,6 +89,11 @@ pub async fn deploy_to_pmcp_run(
     println!("🚀 Deploying to pmcp.run...");
     println!();
 
+    // Fail-closed IAM gate + stack.ts regeneration. Mirrors the aws-lambda
+    // path (commands/deploy/deploy.rs) so the operator-declared `[iam]`
+    // contract is identical across targets. Must run before any network call.
+    validate_and_regenerate_stack_ts(config)?;
+
     // Get credentials (OAuth tokens)
     let credentials = auth::get_credentials().await?;
 
@@ -89,8 +102,92 @@ pub async fn deploy_to_pmcp_run(
     let cdk_out = deploy_dir.join("cdk.out");
 
     // Step 0: Extract MCP metadata for the CloudFormation template
+    let metadata = extract_metadata_with_log(&config.project_root);
+
+    // Step 1: Synthesize CloudFormation template with metadata context
+    println!("📝 Synthesizing CloudFormation template...");
+    run_cdk_synth(&deploy_dir, metadata.as_ref())?;
+    println!("✅ CloudFormation template synthesized");
+
+    // Step 2: Find the synthesized template
+    let template_path = find_template_file(&cdk_out)?;
+    println!("   Template: {}", template_path.display());
+
+    // Step 3: Extract bootstrap data + content-type from the build artifact.
+    let upload = read_bootstrap_upload(artifact)?;
+    println!();
+
+    // Step 4: Read template file
+    let template = std::fs::read_to_string(&template_path)
+        .context("Failed to read CloudFormation template")?;
+    log_upload_sizes(template.len(), upload.data.len(), upload.has_assets);
+    println!();
+
+    // Step 5: Get presigned S3 URLs from GraphQL
+    println!("🔑 Getting upload URLs from pmcp.run...");
+    let urls = graphql::get_upload_urls(
+        &credentials.access_token,
+        &config.server.name,
+        template.len(),
+        upload.data.len(),
+    )
+    .await
+    .context("Failed to get upload URLs")?;
+    println!("   URLs expire in {} seconds", urls.expires_in);
+    println!();
+
+    // Step 6: Upload files to S3 in parallel
+    upload_template_and_bootstrap(&urls, template.into_bytes(), upload).await?;
+
+    // Step 7: Create deployment via GraphQL with composition settings and version
+    println!("🚀 Creating deployment...");
+    let deployment =
+        create_deployment_with_composition(&credentials.access_token, &urls, config).await?;
+    println!("   Deployment ID: {}", deployment.deployment_id);
+    println!();
+
+    // Step 8: Poll deployment status (wait for completion)
+    let deployment_outputs =
+        poll_deployment_status(&credentials.access_token, &deployment.deployment_id)
+            .await
+            .context("Deployment failed")?;
+
+    // Step 9: Configure OAuth (explicit config or backend-registered)
+    let oauth_config =
+        resolve_oauth_for_deployment(&credentials.access_token, config, &deployment).await;
+
+    // Step 10: Build URLs + print summary + assemble outputs
+    let mcp_url = compute_mcp_url(&deployment_outputs, &deployment.deployment_id);
+    let health_url = compute_health_url(&mcp_url);
+    let server_id = deployment_outputs
+        .custom
+        .get("project_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&config.server.name);
+
+    print_deployment_summary(
+        &config.server.name,
+        server_id,
+        &deployment.deployment_id,
+        &mcp_url,
+        &health_url,
+        oauth_config.as_ref(),
+    );
+
+    Ok(build_deployment_outputs(
+        &mcp_url,
+        &health_url,
+        server_id,
+        &deployment.deployment_id,
+        oauth_config,
+    ))
+}
+
+/// Extract MCP metadata and log what was found. Returns None when the project
+/// has no metadata (defaults apply).
+fn extract_metadata_with_log(project_root: &Path) -> Option<McpMetadata> {
     println!("📋 Extracting MCP server metadata...");
-    let metadata = match McpMetadata::extract(&config.project_root) {
+    match McpMetadata::extract(project_root) {
         Ok(m) => {
             println!("   Server: {} ({})", m.server_id, m.server_type);
             if !m.resources.secrets.is_empty() {
@@ -105,12 +202,11 @@ pub async fn deploy_to_pmcp_run(
             println!("   No metadata found (using defaults)");
             None
         },
-    };
+    }
+}
 
-    // Step 1: Synthesize CloudFormation template with metadata context
-    println!("📝 Synthesizing CloudFormation template...");
-
-    // Use shell to run npx/cdk to ensure PATH is correctly set
+/// Run `npx cdk synth --quiet` with optional metadata context args.
+fn run_cdk_synth(deploy_dir: &Path, metadata: Option<&McpMetadata>) -> Result<()> {
     let shell_cmd = if cfg!(target_os = "windows") {
         "cmd"
     } else {
@@ -122,9 +218,7 @@ pub async fn deploy_to_pmcp_run(
         "-c"
     };
 
-    // Build CDK synth command with metadata context
     let cdk_context_args = metadata
-        .as_ref()
         .map(|m| m.to_cdk_context().join(" "))
         .unwrap_or_default();
 
@@ -135,7 +229,7 @@ pub async fn deploy_to_pmcp_run(
     };
 
     let synth_output = std::process::Command::new(shell_cmd)
-        .current_dir(&deploy_dir)
+        .current_dir(deploy_dir)
         .arg(shell_arg)
         .arg(&synth_command)
         .output()
@@ -145,95 +239,88 @@ pub async fn deploy_to_pmcp_run(
         let stderr = String::from_utf8_lossy(&synth_output.stderr);
         bail!("CDK synthesis failed:\n{}", stderr);
     }
+    Ok(())
+}
 
-    println!("✅ CloudFormation template synthesized");
+/// Payload prepared for upload to S3: raw bytes, content-type, whether the
+/// zip contains runtime assets (affects log label).
+struct BootstrapUpload {
+    data: Vec<u8>,
+    content_type: &'static str,
+    has_assets: bool,
+}
 
-    // Step 2: Find the synthesized template
-    let template_path = find_template_file(&cdk_out)?;
-    println!("   Template: {}", template_path.display());
-
-    // Step 3: Extract bootstrap binary path and deployment package from artifact
+/// Read the correct upload payload from a BuildArtifact — prefer the
+/// deployment package zip if present, otherwise fall back to the raw binary.
+fn read_bootstrap_upload(artifact: BuildArtifact) -> Result<BootstrapUpload> {
     let (bootstrap_path, deployment_package) = match artifact {
         BuildArtifact::Binary {
             path,
             deployment_package,
             ..
-        } => (path, deployment_package),
-        BuildArtifact::Wasm {
+        }
+        | BuildArtifact::Wasm {
             path,
             deployment_package,
             ..
-        } => (path, deployment_package),
-        BuildArtifact::Custom {
+        }
+        | BuildArtifact::Custom {
             path,
             deployment_package,
             ..
         } => (path, deployment_package),
     };
 
-    // Determine what to upload: deployment package (zip with assets) or raw binary
-    let (bootstrap_data, bootstrap_content_type, has_assets) = if let Some(ref package_path) =
-        deployment_package
-    {
+    if let Some(ref package_path) = deployment_package {
         if package_path.exists() {
             println!("   📦 Using deployment package with assets");
             println!("   Package: {}", package_path.display());
             let data = std::fs::read(package_path).context("Failed to read deployment package")?;
-            (data, "application/zip", true)
-        } else {
-            // Fall back to raw binary if package doesn't exist
-            if !bootstrap_path.exists() {
-                bail!("Bootstrap binary not found: {}", bootstrap_path.display());
-            }
-            println!("   Bootstrap: {}", bootstrap_path.display());
-            let data = std::fs::read(&bootstrap_path).context("Failed to read bootstrap binary")?;
-            (data, "application/octet-stream", false)
+            return Ok(BootstrapUpload {
+                data,
+                content_type: "application/zip",
+                has_assets: true,
+            });
         }
-    } else {
-        if !bootstrap_path.exists() {
-            bail!("Bootstrap binary not found: {}", bootstrap_path.display());
-        }
-        println!("   Bootstrap: {}", bootstrap_path.display());
-        let data = std::fs::read(&bootstrap_path).context("Failed to read bootstrap binary")?;
-        (data, "application/octet-stream", false)
-    };
-
-    println!();
-
-    // Step 4: Read template file
-    let template = std::fs::read_to_string(&template_path)
-        .context("Failed to read CloudFormation template")?;
-
-    println!("📦 Template size: {} KB", template.len() / 1024);
-    if has_assets {
-        println!(
-            "📦 Deployment package size: {} KB",
-            bootstrap_data.len() / 1024
-        );
-    } else {
-        println!("📦 Bootstrap size: {} KB", bootstrap_data.len() / 1024);
     }
-    println!();
 
-    // Step 5: Get presigned S3 URLs from GraphQL
-    println!("🔑 Getting upload URLs from pmcp.run...");
-    let urls = graphql::get_upload_urls(
-        &credentials.access_token,
-        &config.server.name,
-        template.len(),
-        bootstrap_data.len(),
-    )
-    .await
-    .context("Failed to get upload URLs")?;
+    println!("   Bootstrap: {}", bootstrap_path.display());
+    let data = std::fs::read(&bootstrap_path).with_context(|| {
+        format!(
+            "Bootstrap binary not found or unreadable: {}",
+            bootstrap_path.display()
+        )
+    })?;
+    Ok(BootstrapUpload {
+        data,
+        content_type: "application/octet-stream",
+        has_assets: false,
+    })
+}
 
-    println!("   URLs expire in {} seconds", urls.expires_in);
-    println!();
+/// Log KB sizes for the template + the (bootstrap or package) payload.
+fn log_upload_sizes(template_len: usize, upload_len: usize, has_assets: bool) {
+    println!("📦 Template size: {} KB", template_len / 1024);
+    if has_assets {
+        println!("📦 Deployment package size: {} KB", upload_len / 1024);
+    } else {
+        println!("📦 Bootstrap size: {} KB", upload_len / 1024);
+    }
+}
 
-    // Step 6: Upload files to S3 in parallel
+/// Upload template + bootstrap to their presigned S3 URLs in parallel.
+async fn upload_template_and_bootstrap(
+    urls: &graphql::UploadUrls,
+    template_bytes: Vec<u8>,
+    upload: BootstrapUpload,
+) -> Result<()> {
     println!("⬆️  Uploading files to S3...");
 
-    let template_bytes = template.into_bytes();
-    let bootstrap_label = if has_assets { "Package" } else { "Bootstrap" };
+    let bootstrap_label = if upload.has_assets {
+        "Package"
+    } else {
+        "Bootstrap"
+    };
     let (template_result, bootstrap_result) = tokio::join!(
         graphql::upload_to_s3(
             &urls.template_upload_url,
@@ -243,8 +330,8 @@ pub async fn deploy_to_pmcp_run(
         ),
         graphql::upload_to_s3(
             &urls.bootstrap_upload_url,
-            bootstrap_data,
-            bootstrap_content_type,
+            upload.data,
+            upload.content_type,
             bootstrap_label,
         )
     );
@@ -254,11 +341,16 @@ pub async fn deploy_to_pmcp_run(
 
     println!("✅ Files uploaded successfully to S3");
     println!();
+    Ok(())
+}
 
-    // Step 7: Create deployment via GraphQL with composition settings and version
-    println!("🚀 Creating deployment...");
-
-    // Extract version from Cargo.toml (supports workspace inheritance)
+/// Extract version + build composition settings and invoke graphql to create
+/// the deployment record.
+async fn create_deployment_with_composition(
+    access_token: &str,
+    urls: &graphql::UploadUrls,
+    config: &DeployConfig,
+) -> Result<graphql::DeploymentInfo> {
     let server_version = extract_version_from_cargo(&config.project_root);
     if let Some(ref version) = server_version {
         println!("   Version: {}", version);
@@ -271,174 +363,150 @@ pub async fn deploy_to_pmcp_run(
         description: config.composition.description.clone(),
         server_version,
     };
-    let deployment = graphql::create_deployment_from_s3_with_composition(
-        &credentials.access_token,
-        &urls,
+    graphql::create_deployment_from_s3_with_composition(
+        access_token,
+        urls,
         &config.server.name,
         composition,
     )
     .await
-    .context("Failed to create deployment")?;
+    .context("Failed to create deployment")
+}
 
-    println!("   Deployment ID: {}", deployment.deployment_id);
-    println!();
-
-    // Step 8: Poll deployment status (wait for completion)
-    let deployment_outputs =
-        poll_deployment_status(&credentials.access_token, &deployment.deployment_id)
-            .await
-            .context("Deployment failed")?;
-
-    // Step 9: Configure OAuth if enabled in local config
-    let oauth_config = if config.auth.enabled {
-        println!("🔐 Configuring OAuth for MCP server...");
-
-        let scopes = if config.auth.dcr.default_scopes.is_empty() {
-            None
-        } else {
-            Some(config.auth.dcr.default_scopes.clone())
-        };
-
-        let public_patterns = if config.auth.dcr.public_client_patterns.is_empty() {
-            None
-        } else {
-            Some(config.auth.dcr.public_client_patterns.clone())
-        };
-
-        match graphql::configure_server_oauth(
-            &credentials.access_token,
-            &deployment.deployment_id,
-            true,
-            scopes,
-            Some(config.auth.dcr.enabled),
-            public_patterns,
-            None, // shared_pool_name - not supported in local config yet
-        )
-        .await
-        {
-            Ok(oauth) => {
-                println!("✅ OAuth configured successfully");
-                println!();
-                Some(oauth)
-            },
-            Err(e) => {
-                eprintln!("⚠️  Failed to configure OAuth: {}", e);
-                eprintln!("   You can manually enable OAuth with:");
-                eprintln!(
-                    "   cargo pmcp oauth enable --server {}",
-                    deployment.deployment_id
-                );
-                println!();
-                None
-            },
-        }
+/// Determine OAuth configuration for the freshly-created deployment. If the
+/// local config enables OAuth, call configure_server_oauth; otherwise check
+/// backend state (may have been enabled in a prior session).
+async fn resolve_oauth_for_deployment(
+    access_token: &str,
+    config: &DeployConfig,
+    deployment: &graphql::DeploymentInfo,
+) -> Option<graphql::OAuthConfig> {
+    if config.auth.enabled {
+        configure_new_oauth(access_token, config, &deployment.deployment_id).await
     } else {
-        // Even if local config doesn't enable OAuth, check if it's enabled on the backend
-        // (e.g., from a previous `cargo pmcp deploy oauth enable` command)
-        // Use server name (e.g., "true-agent") not deployment_id - OAuth is keyed by serverId
-        match graphql::fetch_server_oauth_endpoints(&credentials.access_token, &config.server.name)
-            .await
-        {
-            Ok(oauth) => {
-                if oauth.oauth_enabled {
-                    // Convert OAuthEndpoints to OAuthConfig
-                    Some(graphql::OAuthConfig {
-                        server_id: oauth.server_id,
-                        oauth_enabled: oauth.oauth_enabled,
-                        user_pool_id: oauth.user_pool_id,
-                        user_pool_region: oauth.user_pool_region,
-                        discovery_url: oauth.discovery_url,
-                        registration_endpoint: oauth.registration_endpoint,
-                        authorization_endpoint: oauth.authorization_endpoint,
-                        token_endpoint: oauth.token_endpoint,
-                    })
-                } else {
-                    eprintln!(
-                        "   (OAuth query returned oauthEnabled=false for {})",
-                        config.server.name
-                    );
-                    None
-                }
-            },
-            Err(e) => {
-                eprintln!(
-                    "   (OAuth status check failed for {}: {})",
-                    config.server.name, e
-                );
-                None
-            },
-        }
+        fetch_existing_oauth(access_token, &config.server.name).await
+    }
+}
+
+/// Configure OAuth on a new deployment using local config's DCR settings.
+async fn configure_new_oauth(
+    access_token: &str,
+    config: &DeployConfig,
+    deployment_id: &str,
+) -> Option<graphql::OAuthConfig> {
+    println!("🔐 Configuring OAuth for MCP server...");
+
+    let scopes = if config.auth.dcr.default_scopes.is_empty() {
+        None
+    } else {
+        Some(config.auth.dcr.default_scopes.clone())
     };
 
-    // Use URL from server response (contains stable serverId-based URL)
-    // Fallback to constructing from deployment ID if not provided
-    let mcp_url = deployment_outputs
+    let public_patterns = if config.auth.dcr.public_client_patterns.is_empty() {
+        None
+    } else {
+        Some(config.auth.dcr.public_client_patterns.clone())
+    };
+
+    match graphql::configure_server_oauth(
+        access_token,
+        deployment_id,
+        true,
+        scopes,
+        Some(config.auth.dcr.enabled),
+        public_patterns,
+        None, // shared_pool_name - not supported in local config yet
+    )
+    .await
+    {
+        Ok(oauth) => {
+            println!("✅ OAuth configured successfully");
+            println!();
+            Some(oauth)
+        },
+        Err(e) => {
+            eprintln!("⚠️  Failed to configure OAuth: {}", e);
+            eprintln!("   You can manually enable OAuth with:");
+            eprintln!("   cargo pmcp oauth enable --server {}", deployment_id);
+            println!();
+            None
+        },
+    }
+}
+
+/// Backend OAuth state check for a server not enabling OAuth in local config.
+async fn fetch_existing_oauth(
+    access_token: &str,
+    server_name: &str,
+) -> Option<graphql::OAuthConfig> {
+    match graphql::fetch_server_oauth_endpoints(access_token, server_name).await {
+        Ok(oauth) => {
+            if oauth.oauth_enabled {
+                Some(graphql::OAuthConfig {
+                    server_id: oauth.server_id,
+                    oauth_enabled: oauth.oauth_enabled,
+                    user_pool_id: oauth.user_pool_id,
+                    user_pool_region: oauth.user_pool_region,
+                    discovery_url: oauth.discovery_url,
+                    registration_endpoint: oauth.registration_endpoint,
+                    authorization_endpoint: oauth.authorization_endpoint,
+                    token_endpoint: oauth.token_endpoint,
+                })
+            } else {
+                eprintln!(
+                    "   (OAuth query returned oauthEnabled=false for {})",
+                    server_name
+                );
+                None
+            }
+        },
+        Err(e) => {
+            eprintln!("   (OAuth status check failed for {}: {})", server_name, e);
+            None
+        },
+    }
+}
+
+/// Resolve the MCP endpoint URL: backend-provided, with fallback to constructing
+/// from deployment ID.
+fn compute_mcp_url(deployment_outputs: &DeploymentOutputs, deployment_id: &str) -> String {
+    deployment_outputs
         .url
         .clone()
-        .unwrap_or_else(|| format!("https://api.pmcp.run/{}/mcp", deployment.deployment_id));
-    // Replace only the trailing /mcp path, not /mcp- in subdomains like mcp-reference
-    // e.g. https://mcp-reference.us-east.true-mcp.com/mcp → .../health
-    let health_url = if let Some(base) = mcp_url.strip_suffix("/mcp") {
+        .unwrap_or_else(|| format!("https://api.pmcp.run/{}/mcp", deployment_id))
+}
+
+/// Derive the health-check URL from the MCP URL (replace trailing /mcp,
+/// not /mcp- in subdomains).
+fn compute_health_url(mcp_url: &str) -> String {
+    if let Some(base) = mcp_url.strip_suffix("/mcp") {
         format!("{}/health", base)
     } else {
         mcp_url.replace("/mcp", "/health")
-    };
+    }
+}
 
-    // Get server_id from the deployment outputs (projectName returned by backend)
-    // This is the clean server name like "chess", not the full URL
-    let server_id = deployment_outputs
-        .custom
-        .get("project_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or(&config.server.name);
-
-    // Display deployment information
+/// Print the final human-readable "deployment successful" summary with
+/// OAuth-aware branching (endpoint labels + auth hints).
+fn print_deployment_summary(
+    server_name: &str,
+    server_id: &str,
+    deployment_id: &str,
+    mcp_url: &str,
+    health_url: &str,
+    oauth_config: Option<&graphql::OAuthConfig>,
+) {
     println!("🎉 Deployment successful!");
     println!();
     println!("📊 Deployment Details:");
-    println!("   Name: {}", config.server.name);
+    println!("   Name: {}", server_name);
     println!("   Server ID: {}", server_id);
-    println!("   Deployment ID: {}", deployment.deployment_id);
+    println!("   Deployment ID: {}", deployment_id);
 
-    // Display endpoints based on OAuth status
-    if let Some(ref oauth) = oauth_config {
-        // OAuth-protected deployment
-        println!();
-        println!("🔐 MCP Endpoint (OAuth Protected):");
-        println!("   URL: {}", mcp_url);
-        println!();
-        println!("🔑 OAuth Configuration:");
-        if let Some(ref discovery) = oauth.discovery_url {
-            println!("   Discovery:     {}", discovery);
-        }
-        if let Some(ref register) = oauth.registration_endpoint {
-            println!("   Registration:  {}", register);
-        }
-        if let Some(ref authorize) = oauth.authorization_endpoint {
-            println!("   Authorization: {}", authorize);
-        }
-        if let Some(ref token) = oauth.token_endpoint {
-            println!("   Token:         {}", token);
-        }
-        println!();
-        println!("🏥 Health Check:");
-        println!("   URL: {}", health_url);
-        println!();
-        println!("Clients must authenticate via OAuth to access this server.");
+    if let Some(oauth) = oauth_config {
+        print_oauth_endpoint_block(mcp_url, health_url, oauth);
     } else {
-        // No OAuth - open access
-        println!();
-        println!("🔌 MCP Endpoint:");
-        println!("   URL: {}", mcp_url);
-        println!();
-        println!("🏥 Health Check:");
-        println!("   URL: {}", health_url);
-        println!();
-        println!("No authentication required. Anyone can access this server.");
-        println!(
-            "To enable OAuth: cargo pmcp oauth enable {}",
-            deployment.deployment_id
-        );
+        print_open_endpoint_block(mcp_url, health_url, deployment_id);
     }
 
     println!();
@@ -447,59 +515,115 @@ pub async fn deploy_to_pmcp_run(
     println!("   • Test deployment: cargo pmcp deploy test --target pmcp-run");
     println!("   • View dashboard: https://pmcp.run/dashboard");
     println!();
+}
 
-    // Build outputs with shared API Gateway URL pattern
-    let mut outputs_with_id = DeploymentOutputs {
-        // Primary URL is always the shared API Gateway
-        url: Some(mcp_url.clone()),
-        additional_urls: vec![health_url.clone()],
+/// Print the OAuth-protected endpoint block.
+fn print_oauth_endpoint_block(mcp_url: &str, health_url: &str, oauth: &graphql::OAuthConfig) {
+    println!();
+    println!("🔐 MCP Endpoint (OAuth Protected):");
+    println!("   URL: {}", mcp_url);
+    println!();
+    println!("🔑 OAuth Configuration:");
+    if let Some(ref discovery) = oauth.discovery_url {
+        println!("   Discovery:     {}", discovery);
+    }
+    if let Some(ref register) = oauth.registration_endpoint {
+        println!("   Registration:  {}", register);
+    }
+    if let Some(ref authorize) = oauth.authorization_endpoint {
+        println!("   Authorization: {}", authorize);
+    }
+    if let Some(ref token) = oauth.token_endpoint {
+        println!("   Token:         {}", token);
+    }
+    println!();
+    println!("🏥 Health Check:");
+    println!("   URL: {}", health_url);
+    println!();
+    println!("Clients must authenticate via OAuth to access this server.");
+}
+
+/// Print the open-access endpoint block + enable-OAuth hint.
+fn print_open_endpoint_block(mcp_url: &str, health_url: &str, deployment_id: &str) {
+    println!();
+    println!("🔌 MCP Endpoint:");
+    println!("   URL: {}", mcp_url);
+    println!();
+    println!("🏥 Health Check:");
+    println!("   URL: {}", health_url);
+    println!();
+    println!("No authentication required. Anyone can access this server.");
+    println!("To enable OAuth: cargo pmcp oauth enable {}", deployment_id);
+}
+
+/// Assemble the final `DeploymentOutputs` record with custom fields populated
+/// for downstream save_deployment_info (server_id, deployment_id, endpoints,
+/// OAuth metadata).
+fn build_deployment_outputs(
+    mcp_url: &str,
+    health_url: &str,
+    server_id: &str,
+    deployment_id: &str,
+    oauth_config: Option<graphql::OAuthConfig>,
+) -> DeploymentOutputs {
+    let mut outputs = DeploymentOutputs {
+        url: Some(mcp_url.to_string()),
+        additional_urls: vec![health_url.to_string()],
         regions: vec![],
         stack_name: None,
         version: None,
         custom: std::collections::HashMap::new(),
     };
 
-    outputs_with_id.custom.insert(
+    outputs.custom.insert(
         "server_id".to_string(),
         serde_json::Value::String(server_id.to_string()),
     );
-    outputs_with_id.custom.insert(
+    outputs.custom.insert(
         "deployment_id".to_string(),
-        serde_json::Value::String(deployment.deployment_id.clone()),
+        serde_json::Value::String(deployment_id.to_string()),
     );
-    outputs_with_id.custom.insert(
+    outputs.custom.insert(
         "mcp_endpoint".to_string(),
-        serde_json::Value::String(mcp_url),
+        serde_json::Value::String(mcp_url.to_string()),
     );
-    outputs_with_id.custom.insert(
+    outputs.custom.insert(
         "health_endpoint".to_string(),
-        serde_json::Value::String(health_url),
+        serde_json::Value::String(health_url.to_string()),
     );
 
-    if let Some(oauth) = oauth_config {
-        outputs_with_id.custom.insert(
-            "oauth_enabled".to_string(),
-            serde_json::Value::Bool(oauth.oauth_enabled),
-        );
-        if let Some(discovery) = oauth.discovery_url {
-            outputs_with_id.custom.insert(
-                "oauth_discovery_url".to_string(),
-                serde_json::Value::String(discovery),
-            );
-        }
-        if let Some(pool_id) = oauth.user_pool_id {
-            outputs_with_id.custom.insert(
-                "cognito_user_pool_id".to_string(),
-                serde_json::Value::String(pool_id),
-            );
-        }
-    } else {
-        outputs_with_id
-            .custom
-            .insert("oauth_enabled".to_string(), serde_json::Value::Bool(false));
-    }
+    insert_oauth_fields(&mut outputs.custom, oauth_config);
+    outputs
+}
 
-    Ok(outputs_with_id)
+/// Insert OAuth-related custom fields (or the `oauth_enabled=false` flag).
+fn insert_oauth_fields(
+    custom: &mut std::collections::HashMap<String, serde_json::Value>,
+    oauth_config: Option<graphql::OAuthConfig>,
+) {
+    match oauth_config {
+        Some(oauth) => {
+            custom.insert(
+                "oauth_enabled".to_string(),
+                serde_json::Value::Bool(oauth.oauth_enabled),
+            );
+            if let Some(discovery) = oauth.discovery_url {
+                custom.insert(
+                    "oauth_discovery_url".to_string(),
+                    serde_json::Value::String(discovery),
+                );
+            }
+            if let Some(pool_id) = oauth.user_pool_id {
+                custom.insert(
+                    "cognito_user_pool_id".to_string(),
+                    serde_json::Value::String(pool_id),
+                );
+            }
+        },
+        None => {
+            custom.insert("oauth_enabled".to_string(), serde_json::Value::Bool(false));
+        },
+    }
 }
 
 /// Poll deployment status until complete or failed
@@ -575,12 +699,12 @@ async fn poll_deployment_status(
 
 /// Find the CloudFormation template file in cdk.out directory
 fn find_template_file(cdk_out: &PathBuf) -> Result<PathBuf> {
-    if !cdk_out.exists() {
-        bail!("CDK output directory not found: {}", cdk_out.display());
-    }
-
-    // Look for *.template.json files
-    let entries = std::fs::read_dir(cdk_out).context("Failed to read cdk.out directory")?;
+    let entries = std::fs::read_dir(cdk_out).with_context(|| {
+        format!(
+            "CDK output directory not found or unreadable: {}",
+            cdk_out.display()
+        )
+    })?;
 
     for entry in entries {
         let entry = entry?;
@@ -597,4 +721,111 @@ fn find_template_file(cdk_out: &PathBuf) -> Result<PathBuf> {
     }
 
     bail!("No CloudFormation template found in {}", cdk_out.display());
+}
+
+/// Run the fail-closed IAM validator and rewrite `deploy/lib/stack.ts` from
+/// the loaded [`DeployConfig`], so `[iam]` declared in `.pmcp/deploy.toml`
+/// lands in the synthesized CloudFormation template. Mirrors
+/// `DeployExecutor::regenerate_stack_ts` from the aws-lambda path.
+fn validate_and_regenerate_stack_ts(config: &DeployConfig) -> Result<()> {
+    let warnings = crate::deployment::iam::validate(&config.iam)
+        .context("IAM validation failed — fix .pmcp/deploy.toml before deploying")?;
+    crate::deployment::iam::emit_warnings(&warnings);
+
+    let lib_dir = config.project_root.join("deploy").join("lib");
+    std::fs::create_dir_all(&lib_dir).context("Failed to create deploy/lib directory")?;
+    let stack_ts = crate::commands::deploy::init::render_stack_ts_for_deploy(
+        &config.target.target_type,
+        &config.server.name,
+        &config.iam,
+    );
+    std::fs::write(lib_dir.join("stack.ts"), stack_ts)
+        .context("Failed to write deploy/lib/stack.ts")?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::deployment::config::{IamConfig, IamStatement, TablePermission};
+
+    fn cfg_with_target_and_iam(
+        project_root: PathBuf,
+        target_type: &str,
+        iam: IamConfig,
+    ) -> DeployConfig {
+        let mut cfg = DeployConfig::default_for_server(
+            "demo-server".to_string(),
+            "us-east-1".to_string(),
+            project_root,
+        );
+        cfg.target.target_type = target_type.to_string();
+        cfg.iam = iam;
+        cfg
+    }
+
+    #[test]
+    fn pmcp_run_deploy_regenerates_stack_ts_with_iam_block() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let iam = IamConfig {
+            tables: vec![TablePermission {
+                name: "Users".to_string(),
+                actions: vec!["read".to_string()],
+                include_indexes: false,
+            }],
+            ..IamConfig::default()
+        };
+        let config = cfg_with_target_and_iam(tmp.path().to_path_buf(), "pmcp-run", iam);
+
+        validate_and_regenerate_stack_ts(&config).expect("should succeed with valid iam");
+
+        let stack_ts =
+            std::fs::read_to_string(tmp.path().join("deploy").join("lib").join("stack.ts"))
+                .expect("stack.ts written");
+
+        assert!(
+            stack_ts.contains("Operator-declared IAM"),
+            "pmcp-run stack.ts missing user-declared IAM banner — renderer was not invoked"
+        );
+        assert!(
+            stack_ts.contains("table/Users"),
+            "pmcp-run stack.ts missing the Users table resource ARN"
+        );
+        assert!(
+            stack_ts.contains("pmcp-${serverId}-McpRoleArn"),
+            "pmcp-run branch signature (McpRoleArn exportName) missing — wrong template branch was rendered"
+        );
+    }
+
+    #[test]
+    fn pmcp_run_deploy_rejects_iam_footgun_before_writing_stack_ts() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let iam = IamConfig {
+            statements: vec![IamStatement {
+                effect: "Allow".to_string(),
+                actions: vec!["*".to_string()],
+                resources: vec!["*".to_string()],
+            }],
+            ..IamConfig::default()
+        };
+        let config = cfg_with_target_and_iam(tmp.path().to_path_buf(), "pmcp-run", iam);
+
+        let err = validate_and_regenerate_stack_ts(&config)
+            .expect_err("Allow-*-* must be rejected by the validator gate");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("IAM validation failed"),
+            "expected validator gate message, got: {msg}"
+        );
+
+        assert!(
+            !tmp.path()
+                .join("deploy")
+                .join("lib")
+                .join("stack.ts")
+                .exists(),
+            "stack.ts must not be written when validator rejects config (fail-closed)"
+        );
+    }
 }

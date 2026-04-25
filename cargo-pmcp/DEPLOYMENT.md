@@ -1191,6 +1191,118 @@ export class CalculatorServerStack extends cdk.Stack {
 
 ---
 
+## IAM Declarations (`[iam]` section)
+
+> **Looking for a task-oriented guide?** See [docs/IAM.md](./docs/IAM.md) for workflow, recipes (DynamoDB + GSI, S3, SecretsManager, KMS, cross-Lambda invoke), troubleshooting, and migration from hand-written bolt-on stacks. This section is the schema reference.
+
+`cargo pmcp deploy` supports declarative IAM in `.pmcp/deploy.toml`. The `[iam]`
+block gets translated to `mcpFunction.addToRolePolicy(...)` calls in the
+generated CDK stack, giving your Lambda the AWS permissions it needs — no more
+hand-written bolt-on stacks.
+
+### Phase 76 release notes
+
+- **0.10.0** (2026-04) — Introduces the `[iam]` section (CR:
+  `pmcp-run/docs/CLI_IAM_CHANGE_REQUEST.md`). Also adds a stable
+  `McpRoleArn` CfnOutput (`Export.Name = pmcp-${serverName}-McpRoleArn`)
+  to all generated stacks, unblocking operator-written bolt-on CDK stacks
+  via `Fn::ImportValue`. Backward compatible — servers without an `[iam]`
+  section emit byte-identical stack.ts (except for the additive `McpRoleArn`
+  output).
+
+### Schema
+
+Three repeated tables, all optional (empty defaults):
+
+```toml
+# DynamoDB tables — sugar block for common read/write patterns.
+[[iam.tables]]
+name = "cost-coach-tenants"
+actions = ["readwrite"]       # "read" | "write" | "readwrite"
+include_indexes = true        # default false
+
+# S3 buckets — object-level access only.
+[[iam.buckets]]
+name = "cost-coach-snapshots"
+actions = ["readwrite"]
+
+# Raw IAM PolicyStatement — passthrough for anything the sugar blocks don't cover.
+[[iam.statements]]
+effect = "Allow"
+actions = ["secretsmanager:GetSecretValue"]
+resources = ["arn:aws:secretsmanager:us-west-2:*:secret:cost-coach/*"]
+```
+
+### Action translation (DynamoDB)
+
+| sugar keyword | emitted `dynamodb:` actions                                      |
+|---------------|------------------------------------------------------------------|
+| `read`        | `dynamodb:GetItem`, `dynamodb:Query`, `dynamodb:Scan`, `dynamodb:BatchGetItem`       |
+| `write`       | `dynamodb:PutItem`, `dynamodb:UpdateItem`, `dynamodb:DeleteItem`, `dynamodb:BatchWriteItem`  |
+| `readwrite`   | union (8 actions — includes `dynamodb:BatchGetItem` and `dynamodb:BatchWriteItem`)           |
+
+Resources always include `arn:aws:dynamodb:${region}:${account}:table/NAME`.
+`include_indexes = true` adds `arn:aws:dynamodb:${region}:${account}:table/NAME/index/*`
+for GSI/LSI access.
+
+### Action translation (S3)
+
+| sugar keyword | emitted `s3:` actions                          |
+|---------------|------------------------------------------------|
+| `read`        | `s3:GetObject`                                 |
+| `write`       | `s3:PutObject`, `s3:DeleteObject`              |
+| `readwrite`   | union (3 actions)                              |
+
+Resource is always `arn:aws:s3:::NAME/*` (object-level). Bucket-level
+operations (e.g. `s3:ListBucket`) must go through `[[iam.statements]]`.
+
+### Validation rules
+
+The CLI rejects the following at both `cargo pmcp validate deploy` and
+`cargo pmcp deploy` entry points:
+
+- **Hard error — wildcard escalation.** `effect = "Allow"` +
+  `actions = ["*"]` + `resources = ["*"]` in any `[[iam.statements]]`
+  entry. Refuses to deploy. (T-76-02 footgun.)
+- **Hard error.** `effect` not in `{"Allow", "Deny"}`.
+- **Hard error.** `actions` or `resources` empty in any `[[iam.statements]]` entry.
+- **Hard error.** Action does not match `^[a-z0-9-]+:[A-Za-z0-9*]+$`.
+- **Hard error.** Sugar keyword not in `{"read", "write", "readwrite"}`.
+- **Hard error.** Empty `name` in any `[[iam.tables]]` or `[[iam.buckets]]`.
+- **Warning.** Unknown service prefix (not in the curated 40-prefix list).
+- **Warning.** Cross-account ARN hints.
+
+### Migrating bolt-on stacks: consume `McpRoleArn`
+
+Stacks that previously looked up the role by name with `iam.Role.fromRoleName`
+should switch to the stable CFN export:
+
+```typescript
+// Before (brittle — role name changes on redeploy):
+const role = iam.Role.fromRoleName(this, 'McpRole', 'my-server-McpFunctionServiceRole1234ABCD');
+
+// After (stable across redeploys) — use Fn::ImportValue on the pmcp-${serverName}-McpRoleArn export:
+const role = iam.Role.fromRoleArn(
+  this,
+  'McpRole',
+  cdk.Fn.importValue(`pmcp-${serverName}-McpRoleArn`),
+);
+
+// Grant whatever the bolt-on stack needs:
+myTable.grantReadWriteData(role);
+```
+
+### Reference example
+
+See `examples/deploy_with_iam.rs` — end-to-end walkthrough of parse → validate
+→ render for a cost-coach-shaped config. Run with:
+
+```bash
+cargo run -p cargo-pmcp --example deploy_with_iam
+```
+
+---
+
 **End of Document**
 
 *This design document will be updated as implementation progresses and new features are added.*

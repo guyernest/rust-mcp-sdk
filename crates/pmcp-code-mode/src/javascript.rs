@@ -65,6 +65,10 @@ impl HttpMethod {
     }
 
     /// Parse from string.
+    // Why: existing public API surface — renaming to satisfy `should_implement_trait`
+    // would be a breaking change. Returning Option (vs Result for FromStr) is intentional
+    // since unknown methods map to None, not a typed error.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "get" => Some(HttpMethod::Get),
@@ -353,7 +357,7 @@ impl JavaScriptValidator {
 
         // Extract everything after the tag
         let after_tag = &text[returns_pos..];
-        let content_start = after_tag.find(|c: char| c == '{' || c == '(')?;
+        let content_start = after_tag.find(['{', '('])?;
 
         // Find the matching closing bracket
         let chars: Vec<char> = after_tag[content_start..].chars().collect();
@@ -395,7 +399,7 @@ impl JavaScriptValidator {
         let mut current_word = String::new();
         let mut in_word = false;
 
-        for (_i, c) in chars.iter().enumerate() {
+        for c in chars.iter() {
             if c.is_alphanumeric() || *c == '_' {
                 current_word.push(*c);
                 in_word = true;
@@ -433,8 +437,7 @@ impl JavaScriptValidator {
 
             // Check wildcard patterns like *.fieldName
             for blocked in blocked_fields {
-                if blocked.starts_with("*.") {
-                    let pattern = &blocked[2..];
+                if let Some(pattern) = blocked.strip_prefix("*.") {
                     if field == pattern {
                         violations.push(format!(
                             "Output declares blocked field pattern: {}",
@@ -802,7 +805,7 @@ impl SafetyVisitor {
                 let mut path = String::new();
                 for quasi in &tpl.quasis {
                     // quasi.raw is an Atom (UTF-8), not Wtf8Atom
-                    path.push_str(&quasi.raw.to_string());
+                    path.push_str(quasi.raw.as_ref());
                     if !tpl.exprs.is_empty() {
                         path.push_str("{...}");
                     }
