@@ -1018,13 +1018,13 @@ Plans:
 
 ### Phase 75.5: PMAT ex-P5 refactor backlog
 
-**Goal:** Absorb the refactor work that Phase 75 could not land under P5 (`#[allow(clippy::cognitive_complexity)]` + `// Why:`) because Wave 0 D-10 spike proved PMAT 3.15.0 ignores the allow attribute. Category A: the 13 pre-existing bare-allow sites in `src/` migrated wholesale from 75-01 Task 1a-C. Category B: escapees logged to `75.5-ESCAPEES.md` during Plans 75-01..75-04 — functions that could not reach cog ≤25 after P1-P4 extraction. Each site either refactors to ≤25 or has the ineffective `#[allow]` removed because the underlying function already simplified.
+**Goal:** Absorb the refactor work that Phase 75 could not land under P5 (`#[allow(clippy::cognitive_complexity)]` + `// Why:`) because Wave 0 D-10 spike proved PMAT 3.15.0 ignores the allow attribute. Category A: the 12 pre-existing bare-allow sites in `src/` (orchestrator-verified count; PATTERNS.md said "13" but the 13th — `streamable_http_server.rs:1004 handle_post_with_middleware` — was already refactored in Phase 75 Wave 1a). Category B: escapees logged to `75.5-ESCAPEES.md` during Plans 75-01..75-04 — empty (zero entries logged across Phase 75 Waves 1-4). Each Category A site either refactors to ≤25 or has the ineffective `#[allow]` removed because the underlying function already simplified.
 **Requirements**: None (quality-debt remediation, sibling of Phase 75)
-**Depends on:** Phase 75 Waves 1-4 complete (so Category B is known). MAY land in parallel with Phase 75 Wave 5 or before it.
-**Plans:** TBD — scope after Category B is concrete
+**Depends on:** Phase 75 Waves 1-4 complete (so Category B is known — confirmed empty as of 2026-04-25). MAY land in parallel with Phase 75 Wave 5 or before it.
+**Plans:** 1 plan
 
 Plans:
-- [ ] TBD — plans drafted once Plans 75-01 through 75-04 complete and `75.5-ESCAPEES.md` is populated
+- [ ] 75.5-01-PLAN.md — Wave 1: remove 12 Category-A bare `#[allow(clippy::cognitive_complexity)]` attributes from src/ (server/, server/transport/, shared/, client/) + final `make quality-gate` + `pmat quality-gate --fail-on-violation --checks complexity` + `cargo test --workspace --all-features` + SUMMARY.md
 
 ### Phase 76: cargo-pmcp IAM declarations — servers declare IAM needs in deploy.toml
 
