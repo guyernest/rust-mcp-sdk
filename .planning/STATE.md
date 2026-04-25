@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: Executing Phase 75
-stopped_at: Phase 75 Wave 4 (75-04-PLAN.md) complete — 5 plan-named scattered hotspots cleared to ≤25 + 8 Rule-3 warning-level cog reductions + .pmatignore for fuzz/+packages/+examples/ + SATD triage (3 umbrella issues #247/#248/#249); PMAT complexity-gate 22 → 0 (−22); aggregate Phase 75 delta 94 → 0; ready for Wave 5 (75-05-PLAN.md, CI gate + badge workflow patch)
-last_updated: "2026-04-25T03:30:00.000Z"
+stopped_at: Phase 75 Wave 5 (75-05-PLAN.md) complete — D-07 CI gate (pmat quality-gate --fail-on-violation --checks complexity) landed in ci.yml; D-11-B badge alignment landed in quality-badges.yml; CLAUDE.md documents the gate; 75-05-GATE-VERIFICATION.md records local-pmat evidence (Task 5-02 replanned option A → option B per user); Task 5-03 badge-flip observation deferred until Wave 5 lands on paiml/main
+last_updated: "2026-04-25T04:15:00.000Z"
 progress:
   total_phases: 40
   completed_phases: 35
-  total_plans: 90
-  completed_plans: 88
-  percent: 97
+  total_plans: 84
+  completed_plans: 84
+  percent: 100
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 75 (fix-pmat-issues) — EXECUTING
-Plan: 6 of 6 (75-00 complete, 75-01 complete 2026-04-24, 75-02 complete 2026-04-24, 75-03 complete 2026-04-24, 75-04 complete 2026-04-25)
+Plan: 1 of 6
 Next: 75-05-PLAN.md (Wave 5: D-07 CI gate enforcement + D-11-B quality-badges.yml patch). Phase 75.5 Category A (13 retro-justify sites migrated from 75-01 Task 1a-C) can land in parallel or after Phase 75 Wave 5. Phase 75.5 Category B is empty (zero escapees logged across Waves 1+2+3+4).
 After: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
 
@@ -131,8 +131,17 @@ v2.1 decisions:
 - [Phase 75 Wave 4]: Pre-existing build error in crates/pmcp-code-mode/src/cedar_validation.rs (missing get_sql_baseline_policies import in the --all-features test build) fixed under Rule 3 — required for the plan's `cargo test --workspace --all-features` verification step. Reproducible against pre-Wave-4 HEAD.
 - [Phase 75 Wave 4]: Wave 5 ready — needs (a) `--checks complexity` job in .github/workflows/ci.yml and (b) patch `quality-badges.yml:~72` per D-11-B.
 
+### Phase 75 Wave 5 Decisions (2026-04-25)
+
+- [Phase 75 Wave 5]: PMAT quality-gate complexity-only check landed in `.github/workflows/ci.yml` `quality-gate` job (3 new steps: install pinned PMAT 3.15.0, verify version, run `pmat quality-gate --fail-on-violation --checks complexity`). The `gate` aggregate job already lists `quality-gate` in `needs:`, so a PMAT failure now propagates to the org-required `gate` status check and PR-blocks merge.
+- [Phase 75 Wave 5]: D-11-B badge alignment landed in `.github/workflows/quality-badges.yml` line 92 — added `--checks complexity` so the badge command matches the new ci.yml gate command. Without this, the README badge would stay red on duplicate/SATD/entropy/sections dimensions even after Phase 75's complexity work brings complexity to 0.
+- [Phase 75 Wave 5]: CLAUDE.md gained `### CI Quality Gates (PR-blocking, added Phase 75 Wave 5)` subsection documenting the gate, the PMAT 3.15.0 pin, the debug recipe (P1–P6 refactor catalog + `// Why:` `#[allow]` template), and the "do not weaken" warning.
+- [Phase 75 Wave 5]: **Task 5-02 replanned mid-execution (option A → option B per user)**: original plan was a regression-PR fail-closed test on upstream; user challenged the value (the bare PMAT exit-code-on-violations was already established by every prior red-badge run). Tried fork-internal PR (#3 on guyernest/rust-mcp-sdk) — GitHub did NOT trigger the CI workflow, likely because fork main is 21+ commits behind upstream/local main (phase 64 unmerged) yielding `mergeable: CONFLICTING`. Switched to local-pmat evidence: `pmat quality-gate --fail-on-violation --checks complexity` against a deliberate-complexity fixture (cog 77) exits 1 by name. PR #3 closed; throwaway branch deleted local + remote. Full audit in `75-05-GATE-VERIFICATION.md`.
+- [Phase 75 Wave 5]: **Task 5-03 (badge flip observation) deferred** — requires Wave 5 to land on `paiml/rust-mcp-sdk:main`. Operator follow-up: trigger `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` post-merge and append observation to `75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
+- [Phase 75 Wave 5]: Aggregate Phase 75 status: complexity violations 94 → 0 (clean); CI gate live; badge command aligned. Phase complete pending the deferred badge-flip observation post-merge.
+
 ## Session Continuity
 
-Last session: 2026-04-25T03:30:00.000Z
-Stopped at: Phase 75 Wave 4 (75-04-PLAN.md) complete — 5 plan-named hotspots + 8 Rule-3 cog reductions; .pmatignore configured; SATD triaged with 3 umbrella issues filed; PMAT complexity-gate at 0; ready for Wave 5
-Resume: Run `/gsd-execute-phase 75` to continue with 75-05-PLAN.md (Wave 5: CI gate enforcement + D-11-B badge workflow patch).
+Last session: 2026-04-25T04:15:00.000Z
+Stopped at: Phase 75 Wave 5 (75-05-PLAN.md) complete — D-07 CI gate landed in ci.yml; D-11-B badge alignment landed in quality-badges.yml; CLAUDE.md documents the gate; gate-verification doc records local-pmat evidence (Task 5-02 replanned per user); Task 5-03 badge-flip deferred until Wave 5 lands on paiml/main
+Resume: Run `make quality-gate` and open the Wave 5 PR to upstream per CLAUDE.md "Release Steps". Post-merge, run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and record observation in 75-05-GATE-VERIFICATION.md "## Badge flip observation".
