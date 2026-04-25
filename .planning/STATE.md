@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
-status: Phase 75.5 complete — Phase 75 + 75.5 complexity-debt program closed
-stopped_at: Phase 75.5 (75.5-01-PLAN.md) complete — 12 Category-A bare clippy::cognitive_complexity allows removed from src/; make quality-gate + pmat complexity-only gate both exit 0; ESCAPEES.md (Category B) unchanged at 0 entries. Phase 75 Wave 5 closure follow-up (badge-flip observation post-merge to paiml/main) still pending operator action.
-last_updated: "2026-04-25T05:19:04Z"
+status: "Phase 75 + 75.5 shipped — PR #250 (upstream paiml/rust-mcp-sdk)"
+stopped_at: "Phase 75.5 (75.5-01-PLAN.md) complete — 12 Category-A bare `#[allow(clippy::cognitive_complexity)]` attributes removed from src/ in 2 task commits (fae333fa server/+server/transport/, 7a0cc362 shared/+client/). `make quality-gate` exit 0; `pmat quality-gate --fail-on-violation --checks complexity` exit 0; SUMMARY.md written. Phase 75 + 75.5 complexity-debt program closed."
+last_updated: "2026-04-25T05:51:41.352Z"
 progress:
   total_phases: 40
   completed_phases: 35
