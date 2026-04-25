@@ -11,6 +11,8 @@ env:
   RUST_BACKTRACE: 1
   # Override .cargo/config.toml target-cpu=native to avoid SIGILL on CI runners
   RUSTFLAGS: ""
+  # Pin matches .github/workflows/quality-badges.yml so badge and gate stay aligned (Phase 75 D-09).
+  PMAT_VERSION: "3.15.0"
 
 jobs:
   test:
@@ -212,16 +214,11 @@ jobs:
     - name: Run quality gate
       run: make quality-gate
 
-    - name: Install PMAT (pinned per Phase 75 Wave 0 / matches quality-badges.yml)
-      run: cargo install pmat --version =3.15.0 --locked
-
-    - name: Verify PMAT version
+    - name: Install PMAT (cache-aware; reused across runs via ~/.cargo/bin)
       run: |
-        pmat --version
-        pmat --version | grep -qE '^pmat 3\.15\.0' || {
-          echo "ERROR PMAT version mismatch - expected pmat 3.15.0"
-          exit 1
-        }
+        if ! command -v pmat &>/dev/null || ! pmat --version | grep -qE "^pmat ${PMAT_VERSION}$"; then
+          cargo install pmat --version "=${PMAT_VERSION}" --locked
+        fi
 
     - name: Run PMAT quality gate (complexity only — see CONTEXT.md D-01 / D-11-B)
       run: pmat quality-gate --fail-on-violation --checks complexity

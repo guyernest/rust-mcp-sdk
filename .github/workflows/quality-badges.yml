@@ -84,11 +84,7 @@ jobs:
     
     - name: Generate Quality Gate Badge
       run: |
-        # Check quality gate status
-        # Phase 75 Wave 5 / D-11-B: scope to complexity to match the CI gate command
-        # in .github/workflows/ci.yml `quality-gate` job. Without --checks complexity,
-        # this command stays red on duplicate/SATD/entropy/sections dimensions even
-        # after Phase 75 brings complexity to 0. See badge-vs-gate-verification.md.
+        # Scope to complexity to match ci.yml gate; bare gate fails on duplicate/SATD/entropy/sections (D-11-B).
         if pmat quality-gate --fail-on-violation --checks complexity --format json > quality_gate.json 2>/dev/null; then
           GATE_STATUS="passing"
           GATE_COLOR="brightgreen"
