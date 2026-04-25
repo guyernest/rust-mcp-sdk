@@ -3325,7 +3325,7 @@ mod tests {
         let result = compiler.compile_code(code);
 
         // Currently this compiles - runtime will enforce iteration limits
-        // TODO: Consider adding compile-time bounds checking
+        // See #249 — investigate compile-time loop-bounds checking.
         assert!(result.is_ok(), "Loop compiled: {:?}", result);
     }
 

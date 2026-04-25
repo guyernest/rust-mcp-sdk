@@ -333,7 +333,7 @@ pub fn tool(
         println!("\n{}", "Adding tool".bright_cyan().bold());
         println!("{}", "────────────────".bright_cyan());
 
-        // TODO: Implement tool scaffolding
+        // See #248 — implement tool scaffolding (cargo-pmcp commands roadmap).
         println!(
             "  {} Tool '{}' scaffolding for server '{}'",
             "ok".green(),
@@ -355,7 +355,7 @@ pub fn workflow(
         println!("\n{}", "Adding workflow".bright_cyan().bold());
         println!("{}", "──────────────────────".bright_cyan());
 
-        // TODO: Implement workflow scaffolding
+        // See #248 — implement workflow scaffolding (cargo-pmcp commands roadmap).
         println!(
             "  {} Workflow '{}' scaffolding for server '{}'",
             "ok".green(),

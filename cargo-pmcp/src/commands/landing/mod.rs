@@ -89,7 +89,7 @@ impl LandingCommand {
             },
 
             LandingCommand::Build { dir, output: _ } => {
-                // TODO: Implement in P1
+                // See #248 — implement `landing build` subcommand (cargo-pmcp commands roadmap).
                 if std::env::var("PMCP_QUIET").is_err() {
                     println!("Build command coming in Phase 1!");
                     println!("   For now, use: cd {} && npm run build", dir.display());
