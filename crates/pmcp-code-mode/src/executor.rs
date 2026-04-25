@@ -184,38 +184,58 @@ fn find_blocked_fields_recursive(
     violations: &mut Vec<String>,
 ) {
     match value {
-        JsonValue::Object(map) => {
-            for (key, v) in map {
-                if blocked_fields.contains(key) {
-                    // Found a blocked field
-                    if path.is_empty() {
-                        violations.push(key.clone());
-                    } else {
-                        violations.push(format!("{}.{}", path, key));
-                    }
-                }
-
-                // Continue checking nested values
-                let new_path = if path.is_empty() {
-                    key.clone()
-                } else {
-                    format!("{}.{}", path, key)
-                };
-                find_blocked_fields_recursive(v, blocked_fields, &new_path, violations);
-            }
-        },
-        JsonValue::Array(arr) => {
-            for (i, v) in arr.iter().enumerate() {
-                let new_path = if path.is_empty() {
-                    format!("[{}]", i)
-                } else {
-                    format!("{}[{}]", path, i)
-                };
-                find_blocked_fields_recursive(v, blocked_fields, &new_path, violations);
-            }
-        },
-        // Non-container values don't need checking
+        JsonValue::Object(map) => visit_object(map, blocked_fields, path, violations),
+        JsonValue::Array(arr) => visit_array(arr, blocked_fields, path, violations),
+        // Non-container values don't need checking.
         _ => {},
+    }
+}
+
+/// Walk a JSON object: record direct blocked-key matches, then recurse into
+/// each value with an extended dotted path.
+fn visit_object(
+    map: &serde_json::Map<String, JsonValue>,
+    blocked_fields: &HashSet<String>,
+    path: &str,
+    violations: &mut Vec<String>,
+) {
+    for (key, v) in map {
+        let key_path = join_field_path(path, key);
+        if blocked_fields.contains(key) {
+            violations.push(key_path.clone());
+        }
+        find_blocked_fields_recursive(v, blocked_fields, &key_path, violations);
+    }
+}
+
+/// Walk a JSON array: recurse into each element with an indexed path.
+fn visit_array(
+    arr: &[JsonValue],
+    blocked_fields: &HashSet<String>,
+    path: &str,
+    violations: &mut Vec<String>,
+) {
+    for (i, v) in arr.iter().enumerate() {
+        let elem_path = join_index_path(path, i);
+        find_blocked_fields_recursive(v, blocked_fields, &elem_path, violations);
+    }
+}
+
+/// Append a dotted field segment to a path: `""` + `"k"` → `"k"`, `"a.b"` + `"k"` → `"a.b.k"`.
+fn join_field_path(path: &str, key: &str) -> String {
+    if path.is_empty() {
+        key.to_string()
+    } else {
+        format!("{}.{}", path, key)
+    }
+}
+
+/// Append an indexed segment to a path: `""` + `0` → `"[0]"`, `"a"` + `1` → `"a[1]"`.
+fn join_index_path(path: &str, idx: usize) -> String {
+    if path.is_empty() {
+        format!("[{}]", idx)
+    } else {
+        format!("{}[{}]", path, idx)
     }
 }
 

@@ -24,31 +24,53 @@ fn validate_utf8_or_err(input: &[u8]) -> Result<(), JsonError> {
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 fn strip_whitespace_simd_aware(input: &[u8], ws_positions: &[usize]) -> Vec<u8> {
     let mut cleaned = Vec::with_capacity(input.len().saturating_sub(ws_positions.len()));
-    let mut in_string = false;
-    let mut escape_next = false;
+    let mut state = StripState::default();
 
     for (i, &byte) in input.iter().enumerate() {
-        if escape_next {
-            escape_next = false;
-            cleaned.push(byte);
-            continue;
+        if let Some(b) = state.next_output_byte(byte, i, ws_positions) {
+            cleaned.push(b);
         }
-        if byte == b'\\' && in_string {
-            escape_next = true;
-            cleaned.push(byte);
-            continue;
-        }
-        if byte == b'"' {
-            in_string = !in_string;
-            cleaned.push(byte);
-            continue;
-        }
-        if !in_string && ws_positions.binary_search(&i).is_ok() {
-            continue;
-        }
-        cleaned.push(byte);
     }
     cleaned
+}
+
+/// State machine for whitespace stripping inside/outside JSON string literals.
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+#[derive(Default)]
+struct StripState {
+    in_string: bool,
+    escape_next: bool,
+}
+
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
+impl StripState {
+    /// Process one byte and decide whether it ends up in the cleaned output.
+    ///
+    /// Returns `Some(byte)` if the byte should be emitted, `None` if it is a
+    /// whitespace byte (outside a string) at a SIMD-detected position.
+    fn next_output_byte(
+        &mut self,
+        byte: u8,
+        index: usize,
+        ws_positions: &[usize],
+    ) -> Option<u8> {
+        if self.escape_next {
+            self.escape_next = false;
+            return Some(byte);
+        }
+        if byte == b'\\' && self.in_string {
+            self.escape_next = true;
+            return Some(byte);
+        }
+        if byte == b'"' {
+            self.in_string = !self.in_string;
+            return Some(byte);
+        }
+        if !self.in_string && ws_positions.binary_search(&index).is_ok() {
+            return None;
+        }
+        Some(byte)
+    }
 }
 
 /// Parse JSON with SIMD acceleration when available.
