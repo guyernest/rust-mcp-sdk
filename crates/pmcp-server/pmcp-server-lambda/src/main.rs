@@ -177,3 +177,56 @@ async fn handler(event: Request) -> Result<Response<Body>, Error> {
         .body(Body::Binary(bytes.into()))
         .expect("valid response"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lambda_http::http::Method;
+
+    fn build_request(method: Method, body: Body) -> Request {
+        let mut req = Request::new(body);
+        *req.method_mut() = method;
+        *req.uri_mut() = "/".parse().expect("valid uri");
+        req
+    }
+
+    #[tokio::test]
+    async fn handler_get_returns_health_check() {
+        let req = build_request(Method::GET, Body::Empty);
+        let resp = handler(req).await.expect("handler ok");
+        assert_eq!(resp.status(), 200);
+        let body_str = match resp.into_body() {
+            Body::Text(s) => s,
+            _ => panic!("expected text body"),
+        };
+        assert!(body_str.contains("\"ok\":true"));
+        assert!(body_str.contains("\"server\":\"pmcp-server\""));
+    }
+
+    #[tokio::test]
+    async fn handler_options_returns_cors_preflight() {
+        let req = build_request(Method::OPTIONS, Body::Empty);
+        let resp = handler(req).await.expect("handler ok");
+        assert_eq!(resp.status(), 200);
+        let headers = resp.headers();
+        assert_eq!(
+            headers
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("*")
+        );
+        assert!(headers
+            .get("access-control-allow-methods")
+            .map(|v| v.to_str().unwrap_or("").contains("POST"))
+            .unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn handler_post_without_base_url_returns_error() {
+        // BASE_URL is intentionally unset in tests — ensures the OnceLock-not-set
+        // path returns Err rather than panicking.
+        let req = build_request(Method::POST, Body::Text("{}".into()));
+        let result = handler(req).await;
+        assert!(result.is_err(), "POST without initialized BASE_URL must err");
+    }
+}

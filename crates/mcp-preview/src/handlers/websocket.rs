@@ -102,3 +102,65 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_ping_message() {
+        let raw = r#"{"type":"ping"}"#;
+        let msg: WsMessage = serde_json::from_str(raw).expect("parse ping");
+        assert!(matches!(msg, WsMessage::Ping));
+    }
+
+    #[test]
+    fn parses_call_tool_message() {
+        let raw = r#"{"type":"call_tool","data":{"name":"echo","arguments":{"value":1}}}"#;
+        let msg: WsMessage = serde_json::from_str(raw).expect("parse call_tool");
+        match msg {
+            WsMessage::CallTool { name, arguments } => {
+                assert_eq!(name, "echo");
+                assert_eq!(arguments.get("value").and_then(Value::as_i64), Some(1));
+            },
+            other => panic!("expected CallTool, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_log_message() {
+        let raw = r#"{"type":"log","data":{"level":"info","message":"hi"}}"#;
+        let msg: WsMessage = serde_json::from_str(raw).expect("parse log");
+        match msg {
+            WsMessage::Log { level, message } => {
+                assert_eq!(level, "info");
+                assert_eq!(message, "hi");
+            },
+            other => panic!("expected Log, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_message() {
+        let raw = r#"{"type":"nonexistent"}"#;
+        let result: Result<WsMessage, _> = serde_json::from_str(raw);
+        assert!(result.is_err(), "unknown variant must fail to parse");
+    }
+
+    #[test]
+    fn pong_serializes_with_type_tag() {
+        let msg = WsMessage::Pong;
+        let json = serde_json::to_string(&msg).expect("serialize pong");
+        assert!(json.contains(r#""type":"pong""#));
+    }
+
+    #[test]
+    fn error_serializes_with_message() {
+        let msg = WsMessage::Error {
+            message: "boom".to_string(),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize error");
+        assert!(json.contains(r#""type":"error""#));
+        assert!(json.contains(r#""message":"boom""#));
+    }
+}

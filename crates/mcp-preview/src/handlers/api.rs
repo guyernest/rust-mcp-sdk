@@ -502,3 +502,92 @@ fn enrich_value_meta_for_chatgpt(resource: &mut Value) {
         enrich_chatgpt_meta_map(map);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enrich_chatgpt_meta_map_derives_from_nested_ui_resource_uri() {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "ui".to_string(),
+            json!({ "resourceUri": "ui://app/widget1" }),
+        );
+
+        enrich_chatgpt_meta_map(&mut map);
+
+        assert_eq!(
+            map.get("openai/outputTemplate")
+                .and_then(Value::as_str),
+            Some("ui://app/widget1")
+        );
+        assert_eq!(
+            map.get("openai/widgetAccessible")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(map.contains_key("openai/toolInvocation/invoking"));
+        assert!(map.contains_key("openai/toolInvocation/invoked"));
+    }
+
+    #[test]
+    fn enrich_chatgpt_meta_map_uses_flat_legacy_key() {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "ui/resourceUri".to_string(),
+            Value::String("ui://app/legacy".to_string()),
+        );
+
+        enrich_chatgpt_meta_map(&mut map);
+
+        assert_eq!(
+            map.get("openai/outputTemplate")
+                .and_then(Value::as_str),
+            Some("ui://app/legacy")
+        );
+    }
+
+    #[test]
+    fn enrich_chatgpt_meta_map_preserves_server_provided_keys() {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "ui".to_string(),
+            json!({ "resourceUri": "ui://app/x" }),
+        );
+        map.insert(
+            "openai/outputTemplate".to_string(),
+            Value::String("ui://app/server-set".to_string()),
+        );
+
+        enrich_chatgpt_meta_map(&mut map);
+
+        assert_eq!(
+            map.get("openai/outputTemplate")
+                .and_then(Value::as_str),
+            Some("ui://app/server-set"),
+            "server value must not be overwritten"
+        );
+    }
+
+    #[test]
+    fn enrich_chatgpt_meta_map_no_op_without_resource_uri() {
+        let mut map = serde_json::Map::new();
+        map.insert("other".to_string(), Value::String("x".to_string()));
+
+        enrich_chatgpt_meta_map(&mut map);
+
+        assert!(!map.contains_key("openai/outputTemplate"));
+        assert!(!map.contains_key("openai/widgetAccessible"));
+    }
+
+    #[test]
+    fn widget_error_html_includes_path_and_error() {
+        let path = std::path::Path::new("/widgets/foo.html");
+        let html = widget_error_html("foo", path, "missing file");
+        assert!(html.contains("foo"));
+        assert!(html.contains("/widgets/foo.html"));
+        assert!(html.contains("missing file"));
+        assert!(html.contains("Widget Load Error"));
+    }
+}
