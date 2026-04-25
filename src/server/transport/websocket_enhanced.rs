@@ -229,7 +229,6 @@ impl EnhancedWebSocketServer {
     }
 
     /// Handle outgoing messages for a client
-    #[allow(clippy::cognitive_complexity)]
     async fn handle_client_send(
         client_id: ClientId,
         mut client_rx: mpsc::Receiver<TransportMessage>,
@@ -268,7 +267,6 @@ impl EnhancedWebSocketServer {
     }
 
     /// Handle individual client connection
-    #[allow(clippy::cognitive_complexity)]
     async fn handle_connection(
         stream: tokio::net::TcpStream,
         addr: SocketAddr,

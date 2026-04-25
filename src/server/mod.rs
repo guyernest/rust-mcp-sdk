@@ -1058,7 +1058,6 @@ impl Server {
         })?)
     }
 
-    #[allow(clippy::cognitive_complexity)]
     async fn handle_call_tool(
         &self,
         request_id: RequestId,

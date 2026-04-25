@@ -63,7 +63,6 @@ impl ElicitationManager {
     }
 
     /// Request input from the user using the spec-compliant elicitation/create method.
-    #[allow(clippy::cognitive_complexity)]
     pub async fn elicit_input(&self, request: ElicitRequestParams) -> Result<ElicitResult> {
         let request_tx = self.request_tx.as_ref().ok_or_else(|| {
             Error::protocol(ErrorCode::INTERNAL_ERROR, "Elicitation not configured")
