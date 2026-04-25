@@ -21,6 +21,33 @@ git add -A
 git commit -m "message"  # Will be blocked if quality fails
 ```
 
+### CI Quality Gates (PR-blocking, added Phase 75 Wave 5)
+
+**PRs are blocked from merging if PMAT detects new cognitive-complexity violations.**
+
+The check runs in `.github/workflows/ci.yml` `quality-gate` job:
+
+```bash
+pmat quality-gate --fail-on-violation --checks complexity
+```
+
+PMAT version is pinned to `3.15.0` (matches `.github/workflows/quality-badges.yml`; see Phase 75 Wave 0 Task 3 for rationale). The `gate` aggregate job lists `quality-gate` in its `needs:` array, so a PMAT failure propagates to the org-required `gate` status check and blocks merge.
+
+**If your PR fails this check:**
+
+1. Run locally to see which functions exceed cog 25:
+   ```bash
+   pmat analyze complexity --format json --max-cognitive 25 \
+     | jq '.violations[] | select(.path | startswith("src/"))'
+   ```
+2. Apply one of the 6 refactor techniques (P1–P6) documented in `.planning/phases/75-fix-pmat-issues/75-RESEARCH.md` Architecture Patterns.
+3. If the function is irreducibly complex (parser, AST walker, protocol dispatch), apply a `// Why:` annotated `#[allow(clippy::cognitive_complexity)]` per the template in `.planning/phases/75-fix-pmat-issues/75-00-PLAN.md`. Hard cap is cog 50 (D-03).
+4. Re-push and the gate re-runs.
+
+**DO NOT** disable, weaken, or remove this gate without explicit Phase-level approval — it is the mechanism that keeps the README "Quality Gate: passing" badge accurate.
+
+Pre-commit `make quality-gate` covers fmt/clippy/build/test/audit but does **not** run PMAT (per Phase 75 D-07: PMAT runs only in CI to keep the dev loop fast).
+
 ### PMAT Quality-Gate Proxy Mode (REQUIRED DURING DEVELOPMENT)
 
 **MANDATORY: Use pmat quality-gate proxy via MCP during development**
