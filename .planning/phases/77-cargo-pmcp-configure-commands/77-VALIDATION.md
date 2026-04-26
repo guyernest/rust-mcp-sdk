@@ -59,6 +59,7 @@ created: 2026-04-26
 | REQ-77-08 | Atomic write — concurrent writers last-writer-wins, no partial file | property | `cargo test -p cargo-pmcp configure::config::tests::atomic_write_no_partial` | ❌ Wave 0 | ⬜ pending |
 | REQ-77-09 | No `~/.pmcp/config.toml` ⇒ deploy behavior identical to Phase 76 | integration | `cargo test -p cargo-pmcp configure::resolver::tests::no_config_zero_touch` | ❌ Wave 0 | ⬜ pending |
 | REQ-77-10 | Working monorepo example (two servers: pmcp-run + aws-lambda) | example | `cargo run --example multi_target_monorepo -p cargo-pmcp` | ❌ Wave 0 (new example) | ⬜ pending |
+| REQ-77-11 | Banner emitter integrates with deploy + test/upload + loadtest/upload + landing/deploy | integration | `cargo test -p cargo-pmcp --test configure_integration -- target_consuming_commands_emit_banner` | ❌ Wave 0 (added by reviews iter-3) | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
