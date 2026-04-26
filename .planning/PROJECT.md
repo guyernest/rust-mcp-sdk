@@ -86,7 +86,7 @@ Tool handlers can manage long-running operations through a durable task lifecycl
 
 ## Current State
 
-v2.1 in progress. All prior milestones (v1.0-v2.0) shipped.
+v2.1 in progress. All prior milestones (v1.0-v2.0) shipped. Phase 77 complete — `cargo pmcp configure {add,use,list,show}` ships in cargo-pmcp 0.11.0 with TOML config in `~/.pmcp/config.toml`, per-workspace `.pmcp/active-target` marker, 4-source precedence resolver (ENV > flag > target > deploy.toml), and fixed-order banner emission.
 
 **Shipped milestones:**
 - v1.0: MCP Tasks Foundation (types, store, server integration)
@@ -188,4 +188,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-23 after Phase 76 (cargo-pmcp IAM declarations, 0.10.0); previously 2026-04-12 after Phase 67 (v2.1 docs.rs pipeline and feature flags — explicit 15-feature list, CRATE-README.md, 29 rustdoc warnings fixed, make doc-check CI gate, pmcp 2.3.0 unchanged) completion*
+*Last updated: 2026-04-26 after Phase 77 (cargo pmcp configure commands, cargo-pmcp 0.11.0); previously 2026-04-23 after Phase 76 (cargo-pmcp IAM declarations, 0.10.0)*
