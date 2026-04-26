@@ -62,6 +62,19 @@ struct Cli {
     #[arg(long, global = true)]
     quiet: bool,
 
+    /// Named target from ~/.pmcp/config.toml (one-off override of .pmcp/active-target).
+    ///
+    /// Phase 77: this flag selects a NAMED target defined via `cargo pmcp configure add <name>`.
+    /// Distinct from `cargo pmcp deploy --target-type <type>` which selects the deployment backend.
+    /// Resolution order: PMCP_TARGET env > this flag > .pmcp/active-target file > none.
+    ///
+    /// Note: `global = true` is intentionally NOT set on this flag — the deploy subcommand
+    /// owns a `--target` alias (deprecated, points to `--target-type`) and clap requires
+    /// unique long-option names across the global+local arg namespace. Top-level resolution
+    /// is sufficient since main.rs reads `cli.target` directly before dispatching.
+    #[arg(long)]
+    pub target: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -526,7 +539,7 @@ mod cli_target_flag_tests {
             "deploy",
             "--target",
             "aws-lambda",
-            "status",
+            "outputs",
         ]);
         assert!(
             cli.target.is_none(),
@@ -543,7 +556,7 @@ mod cli_target_flag_tests {
             "deploy",
             "--target-type",
             "aws-lambda",
-            "status",
+            "outputs",
         ]);
         assert_eq!(cli.target.as_deref(), Some("dev"));
     }
