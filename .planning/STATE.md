@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
-status: Phase 75.5 complete — Phase 75 + 75.5 complexity-debt program closed
+status: Executing Phase 77
 stopped_at: Phase 77 context gathered
-last_updated: "2026-04-26T14:45:07.531Z"
+last_updated: "2026-04-26T19:03:23.833Z"
 progress:
   total_phases: 40
   completed_phases: 34
@@ -20,12 +20,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-10)
 
 **Core value:** Close credibility and DX gaps where rmcp outshines PMCP -- documentation accuracy, feature gate presentation, macro documentation, example index, repo hygiene.
-**Current focus:** Phase 75.5 — pmat-ex-p5-refactor-backlog
+**Current focus:** Phase 77 — cargo-pmcp-configure-commands
 
 ## Current Position
 
-Phase: 75.5 (pmat-ex-p5-refactor-backlog) — COMPLETE
-Plan: 1 of 1 — complete
+Phase: 77 (cargo-pmcp-configure-commands) — EXECUTING
+Plan: 1 of 9
 Next: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
 After: Phase 73 (Typed client helpers + list_all pagination, PARITY-CLIENT-01)
 Operator follow-ups (deferred from Phase 75 Wave 5, not blocking Phase 74): (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
