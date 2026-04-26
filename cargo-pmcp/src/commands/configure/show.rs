@@ -13,6 +13,7 @@ use clap::Args;
 use crate::commands::configure::config::{
     default_user_config_path, TargetConfigV1, TargetEntry,
 };
+use crate::commands::configure::resolver::{resolve_target, ResolvedField, TargetSource};
 use crate::commands::configure::use_cmd::read_active_marker;
 use crate::commands::configure::workspace::find_workspace_root;
 use crate::commands::GlobalFlags;
@@ -50,7 +51,7 @@ pub fn execute(args: ShowArgs, _gf: &GlobalFlags) -> Result<()> {
     if args.raw {
         print_raw(&name, entry)?;
     } else {
-        print_merged_with_attribution(&name, entry);
+        print_merged_with_attribution(&name, entry)?;
     }
     Ok(())
 }
@@ -92,41 +93,93 @@ fn print_raw(name: &str, entry: &TargetEntry) -> Result<()> {
 
 /// Print the merged form with per-field source attribution. Field order is fixed
 /// per D-13 (api_url, aws_profile, region, then type-specific extras), matching
-/// the banner Plan 06 will emit. Currently every value's source is "target"
-/// because the full resolver isn't wired yet — Plan 06 will replace this body.
-fn print_merged_with_attribution(name: &str, entry: &TargetEntry) {
-    println!("→ Target: {} ({})", name, entry.type_tag());
+/// the banner Plan 06 emits.
+///
+/// **Plan 06 enrichment:** calls `resolve_target(Some(name), …)` so each printed
+/// field carries its real source label (env / flag / target / workspace_marker /
+/// deploy.toml). When the resolver returns `None` (no config + no selection +
+/// no deploy.toml), falls back to the entry-only display with `(source: target)`.
+fn print_merged_with_attribution(name: &str, entry: &TargetEntry) -> Result<()> {
+    // Resolve via the full precedence walk (env > flag > target > deploy.toml).
+    // **MED-1 fix per 77-REVIEWS.md**: pass `Some(name)` as `explicit_name` so
+    // `configure show <name>` resolves the *requested* target's fields, even when a
+    // different target is currently active. We pass None for cli_flag (show doesn't
+    // take --target) and None for deploy_config (show introspects without invoking
+    // a deploy — Plan 07 wires real DeployConfig into deploy/test/loadtest).
+    let project_root = find_workspace_root().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let resolved = resolve_target(Some(name), None, &project_root, None)?;
 
-    let (api_url, aws_profile, region, type_specific) = collect_for_display(entry);
-    println!(
-        "  api_url     = {}{}",
-        api_url.as_deref().unwrap_or("<unset>"),
-        if api_url.is_some() {
-            "  (source: target)"
-        } else {
-            ""
-        }
-    );
-    println!(
-        "  aws_profile = {}{}",
-        aws_profile.as_deref().unwrap_or("<unset>"),
-        if aws_profile.is_some() {
-            "  (source: target)"
-        } else {
-            ""
-        }
-    );
-    println!(
-        "  region      = {}{}",
-        region.as_deref().unwrap_or("<unset>"),
-        if region.is_some() {
-            "  (source: target)"
-        } else {
-            ""
-        }
-    );
-    for (k, v) in type_specific {
-        println!("  {:<11} = {}  (source: target)", k, v);
+    println!("→ Target: {} ({})", name, entry.type_tag());
+    match resolved {
+        Some(r) if r.name.as_deref() == Some(name) => {
+            // HIGH-3: walk the BTreeMap<String, ResolvedField> via convenience accessors.
+            // Banner-style fixed order first; then any variant-specific extras present.
+            print_field("api_url    ", r.api_url());
+            print_field("aws_profile", r.aws_profile());
+            print_field("region     ", r.region());
+            // Type-specific extras now have real source attribution (HIGH-3).
+            if r.account_id().is_some() {
+                print_field("account_id ", r.account_id());
+            }
+            if r.gcp_project().is_some() {
+                print_field("gcp_project", r.gcp_project());
+            }
+            if r.api_token_env().is_some() {
+                print_field("api_token_env", r.api_token_env());
+            }
+        },
+        _ => {
+            // Resolver returned None — fall back to entry-only display (no source attribution).
+            let (api, prof, region, extras) = collect_for_display(entry);
+            println!(
+                "  api_url     = {}{}",
+                api.as_deref().unwrap_or("<unset>"),
+                if api.is_some() {
+                    "  (source: target)"
+                } else {
+                    ""
+                }
+            );
+            println!(
+                "  aws_profile = {}{}",
+                prof.as_deref().unwrap_or("<unset>"),
+                if prof.is_some() {
+                    "  (source: target)"
+                } else {
+                    ""
+                }
+            );
+            println!(
+                "  region      = {}{}",
+                region.as_deref().unwrap_or("<unset>"),
+                if region.is_some() {
+                    "  (source: target)"
+                } else {
+                    ""
+                }
+            );
+            for (k, v) in extras {
+                println!("  {:<11} = {}  (source: target)", k, v);
+            }
+        },
+    }
+    Ok(())
+}
+
+/// Format a resolved field with its source label. `<unset>` when None.
+fn print_field(label: &str, field: Option<&ResolvedField>) {
+    match field {
+        Some(f) => {
+            let src_label = match f.source {
+                TargetSource::Env => "env",
+                TargetSource::Flag => "flag",
+                TargetSource::WorkspaceMarker => "workspace_marker",
+                TargetSource::Target => "target",
+                TargetSource::DeployToml => "deploy.toml",
+            };
+            println!("  {} = {}  (source: {})", label, f.value, src_label);
+        },
+        None => println!("  {} = <unset>", label),
     }
 }
 
@@ -334,5 +387,37 @@ mod tests {
         assert_eq!(x[0].1, "A");
         assert_eq!(x[1].0, "api_token_env");
         assert_eq!(x[1].1, "T");
+    }
+
+    #[test]
+    #[serial]
+    fn show_default_uses_resolver_sources() {
+        // Plan 06 enrichment: `configure show <name>` default form must call the resolver
+        // and label fields with their real sources (env / target / etc) — not the Plan 05
+        // placeholder `(source: target)`.
+        run_in_isolated_home(|home| {
+            let path = home.join(".pmcp").join("config.toml");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let mut cfg = TargetConfigV1::empty();
+            cfg.targets.insert(
+                "dev".into(),
+                TargetEntry::PmcpRun(PmcpRunEntry {
+                    api_url: Some("https://x".into()),
+                    aws_profile: Some("p".into()),
+                    region: Some("us-west-2".into()),
+                }),
+            );
+            cfg.write_atomic(&path).unwrap();
+            let gf = GlobalFlags::default();
+            // execute prints to stdout in real run; here we only verify it does not error.
+            execute(
+                ShowArgs {
+                    name: Some("dev".into()),
+                    raw: false,
+                },
+                &gf,
+            )
+            .unwrap();
+        });
     }
 }
