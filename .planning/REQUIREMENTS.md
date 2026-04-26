@@ -78,6 +78,22 @@ Consolidates OAuth handling for all server-connecting `cargo pmcp` commands into
 - [x] **SDK-DCR-01** (SDK, `pmcp` minor bump): Add public RFC 7591 Dynamic Client Registration support in `src/client/oauth.rs`. `OAuthConfig` gains `client_name: Option<String>` and `dcr_enabled: bool` fields (additive, no breaking change). `OAuthHelper` auto-performs DCR when `dcr_enabled && client_id.is_none() && discovery.registration_endpoint.is_some()`. Request body matches RFC 7591 public-PKCE-client shape. Response parsed for `client_id` (required) and optional `client_secret`. Error surface: actionable message when server does not advertise a registration_endpoint. Ships with fuzz + property + unit tests + working example per CLAUDE.md ALWAYS requirements.
 - [x] **CLI-AUTH-01** (CLI, `cargo-pmcp 0.8.1 → 0.9.0` minor bump): New `cargo pmcp auth` command group with `login`, `logout`, `status`, `token`, `refresh` subcommands. Per-server-keyed token cache at `~/.pmcp/oauth-cache.json` with `schema_version: 1` (legacy `~/.pmcp/oauth-tokens.json` left untouched — users re-login once). `login` accepts `--client <name>` (mutually exclusive with `--oauth-client-id`) which sets `OAuthConfig::client_name` for SDK DCR. `logout` with no args errors (`--all` or `<url>` required). `token <url>` prints raw access token to stdout. `login` prints success message only (never the token). Precedence for all server-connecting commands: explicit flag > env var > cache. Transparent on-demand refresh when cached token is expired or within 60s of expiry. `cargo-pmcp/src/commands/pentest.rs` migrated from its duplicate `--api-key` flag to shared `AuthFlags`.
 
+### CLI configure subcommand (Phase 77)
+
+Seeded by Phase 77 cargo-pmcp configure commands research (`.planning/phases/77-cargo-pmcp-configure-commands/77-RESEARCH.md` + `77-VALIDATION.md`). One REQ-ID per Phase 77 testable behavior.
+
+- [ ] **REQ-77-01**: `cargo pmcp configure {add,use,list,show}` subcommand group ships under a new `configure/` module — each subcommand persists or reads target state and emits stable text/JSON output.
+- [ ] **REQ-77-02**: `~/.pmcp/config.toml` schema is a `#[serde(tag = "type")]` enum with variants `pmcp-run`, `aws-lambda`, `google-cloud-run`, `cloudflare-workers`; per-variant structs use `#[serde(deny_unknown_fields)]` so typos are rejected at parse time.
+- [ ] **REQ-77-03**: `.pmcp/active-target` workspace marker is a single-line plain-text file containing only the active target name; permissive on read (trim+UTF-8 normalize), strict on write.
+- [ ] **REQ-77-04**: `PMCP_TARGET=<name>` env var is the highest-priority target selector and emits a stderr override note when it overrides the workspace marker; the note fires even when `--quiet` is set. `--target <name>` is a new global flag on the top-level `Cli`.
+- [ ] **REQ-77-05**: A header banner is emitted to stderr by every target-consuming command before any AWS API / CDK / upload call; field ordering is fixed (api_url / aws_profile / region / source); banner is suppressible by `--quiet` (except the D-03 PMCP_TARGET override note).
+- [ ] **REQ-77-06**: Field-level precedence at command-execution time is `ENV > explicit --flag > active target > .pmcp/deploy.toml`; verified by property test.
+- [ ] **REQ-77-07**: `configure add` rejects raw-credential patterns (AKIA[0-9A-Z]{16}, ASIA[0-9A-Z]{16}, ghp_*, github_pat_*, sk_live_*, AIza*) with an actionable error pointing the user at AWS profile names / env-var refs / Secrets Manager ARNs.
+- [ ] **REQ-77-08**: `~/.pmcp/config.toml` writes are atomic via `tempfile::NamedTempFile::persist`; on Unix the file is `0o600`, the parent dir `0o700`; concurrent writers are last-writer-wins (no partial file).
+- [ ] **REQ-77-09**: When `~/.pmcp/config.toml` does not exist, `cargo pmcp deploy` and `cargo pmcp pmcp.run upload` behave byte-identically to Phase 76 — no banner about targets, no migration nag, zero touch.
+- [ ] **REQ-77-10**: ALWAYS gates pass: `cargo fuzz run pmcp_config_toml_parser -- -max_total_time=60`, `cargo test -p cargo-pmcp configure::config::proptests`, `cargo test -p cargo-pmcp configure::resolver::proptests::precedence_holds`, `cargo run --example multi_target_monorepo -p cargo-pmcp` all exit 0.
+- [ ] **REQ-77-11**: Banner emission integrates with ALL target-consuming entry points enumerated in 77-RESEARCH §7 (HIGH-2 per 77-REVIEWS.md): `commands/deploy/mod.rs` (8+ AWS-touching sites), `commands/test/upload.rs` (top of `execute` before `auth::get_credentials()`), `commands/loadtest/upload.rs` (same pattern), and `commands/landing/deploy.rs` (lines 69, 215, 334). The OnceLock-guarded `emit_resolved_banner_once` makes duplicate calls within a single process invocation safe.
+
 ## Previous Requirements
 
 <details>
@@ -174,10 +190,21 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LAND-CR03-01 | Phase 72.1 | Complete |
 | SDK-DCR-01 | Phase 74 | Complete |
 | CLI-AUTH-01 | Phase 74 | Complete |
+| REQ-77-01 | Phase 77 | Pending |
+| REQ-77-02 | Phase 77 | Pending |
+| REQ-77-03 | Phase 77 | Pending |
+| REQ-77-04 | Phase 77 | Pending |
+| REQ-77-05 | Phase 77 | Pending |
+| REQ-77-06 | Phase 77 | Pending |
+| REQ-77-07 | Phase 77 | Pending |
+| REQ-77-08 | Phase 77 | Pending |
+| REQ-77-09 | Phase 77 | Pending |
+| REQ-77-10 | Phase 77 | Pending |
+| REQ-77-11 | Phase 77 | Pending |
 
 **Coverage:**
-- v2.1 requirements: 31 total (20 pre-seed + 3 seeded by Phase 69 + 5 seeded by Phase 72 + 1 seeded by Phase 72.1 CR-03 + 2 seeded by Phase 74)
-- Mapped to phases: 31
+- v2.1 requirements: 42 total (20 pre-seed + 3 seeded by Phase 69 + 5 seeded by Phase 72 + 1 seeded by Phase 72.1 CR-03 + 2 seeded by Phase 74 + 11 seeded by Phase 77)
+- Mapped to phases: 42
 - Unmapped: 0
 
 ---
@@ -188,3 +215,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 *Last updated: 2026-04-20 — Phase 72 Plan 03 closed RMCP-EVAL-05 (recommendation = D). Traceability updated.*
 *Last updated: 2026-04-20 — added LAND-CR03-01 seeded by Phase 72.1 CR-03 rev-2 (cargo-pmcp 0.8.1 landing runtime fetch).*
 *Last updated: 2026-04-20 — Phase 72.1 complete: cargo-pmcp 0.8.1 landing template runtime /landing-config fetch (AC-11 manual offline gate approved by operator guy).*
+*Last updated: 2026-04-26 — added 11 REQ-77-* IDs seeded by Phase 77 cargo pmcp configure commands research.*
