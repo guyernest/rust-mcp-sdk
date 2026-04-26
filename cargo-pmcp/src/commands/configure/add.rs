@@ -86,7 +86,8 @@ pub fn execute(args: AddArgs, _global_flags: &GlobalFlags) -> Result<()> {
 }
 
 /// Builds a `TargetEntry` from CLI flags, falling back to interactive prompts for any unset
-/// optional fields. The `--type` selector picks the variant.
+/// optional fields. The `--type` selector picks the variant; per-variant builders below
+/// keep this dispatch shallow (P4 — Phase 75 refactor catalog).
 fn build_entry_from_args_or_prompts(args: &AddArgs) -> Result<TargetEntry> {
     let target_type = match &args.r#type {
         Some(t) => t.clone(),
@@ -96,32 +97,52 @@ fn build_entry_from_args_or_prompts(args: &AddArgs) -> Result<TargetEntry> {
     };
 
     match target_type.as_str() {
-        "pmcp-run" => Ok(TargetEntry::PmcpRun(PmcpRunEntry {
-            api_url: optional_field(&args.api_url, "api_url (e.g. https://api.pmcp.run): ")?,
-            aws_profile: optional_field(&args.aws_profile, "aws_profile (AWS CLI profile name): ")?,
-            region: optional_field(&args.region, "region (e.g. us-west-2): ")?,
-        })),
-        "aws-lambda" => Ok(TargetEntry::AwsLambda(AwsLambdaEntry {
-            aws_profile: optional_field(&args.aws_profile, "aws_profile: ")?,
-            region: optional_field(&args.region, "region: ")?,
-            account_id: optional_field(&args.account_id, "account_id (12-digit, optional): ")?,
-        })),
-        "google-cloud-run" => Ok(TargetEntry::GoogleCloudRun(GoogleCloudRunEntry {
-            gcp_project: optional_field(&args.gcp_project, "gcp_project: ")?,
-            region: optional_field(&args.region, "region (e.g. us-central1): ")?,
-        })),
-        "cloudflare-workers" => Ok(TargetEntry::CloudflareWorkers(CloudflareWorkersEntry {
-            account_id: required_field(&args.account_id, "account_id: ")?,
-            api_token_env: required_field(
-                &args.api_token_env,
-                "api_token_env (env var NAME, e.g. MY_CF_TOKEN): ",
-            )?,
-        })),
+        "pmcp-run" => build_pmcp_run_entry(args),
+        "aws-lambda" => build_aws_lambda_entry(args),
+        "google-cloud-run" => build_google_cloud_run_entry(args),
+        "cloudflare-workers" => build_cloudflare_workers_entry(args),
         other => bail!(
             "unknown target type '{}' — must be one of: pmcp-run, aws-lambda, google-cloud-run, cloudflare-workers",
             other
         ),
     }
+}
+
+/// Builds a `pmcp-run` entry from flags / prompts.
+fn build_pmcp_run_entry(args: &AddArgs) -> Result<TargetEntry> {
+    Ok(TargetEntry::PmcpRun(PmcpRunEntry {
+        api_url: optional_field(&args.api_url, "api_url (e.g. https://api.pmcp.run): ")?,
+        aws_profile: optional_field(&args.aws_profile, "aws_profile (AWS CLI profile name): ")?,
+        region: optional_field(&args.region, "region (e.g. us-west-2): ")?,
+    }))
+}
+
+/// Builds an `aws-lambda` entry from flags / prompts.
+fn build_aws_lambda_entry(args: &AddArgs) -> Result<TargetEntry> {
+    Ok(TargetEntry::AwsLambda(AwsLambdaEntry {
+        aws_profile: optional_field(&args.aws_profile, "aws_profile: ")?,
+        region: optional_field(&args.region, "region: ")?,
+        account_id: optional_field(&args.account_id, "account_id (12-digit, optional): ")?,
+    }))
+}
+
+/// Builds a `google-cloud-run` entry from flags / prompts.
+fn build_google_cloud_run_entry(args: &AddArgs) -> Result<TargetEntry> {
+    Ok(TargetEntry::GoogleCloudRun(GoogleCloudRunEntry {
+        gcp_project: optional_field(&args.gcp_project, "gcp_project: ")?,
+        region: optional_field(&args.region, "region (e.g. us-central1): ")?,
+    }))
+}
+
+/// Builds a `cloudflare-workers` entry from flags / prompts.
+fn build_cloudflare_workers_entry(args: &AddArgs) -> Result<TargetEntry> {
+    Ok(TargetEntry::CloudflareWorkers(CloudflareWorkersEntry {
+        account_id: required_field(&args.account_id, "account_id: ")?,
+        api_token_env: required_field(
+            &args.api_token_env,
+            "api_token_env (env var NAME, e.g. MY_CF_TOKEN): ",
+        )?,
+    }))
 }
 
 /// Returns the flag value if set, otherwise prompts; empty input yields `None`.

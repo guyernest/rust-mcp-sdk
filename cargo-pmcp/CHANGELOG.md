@@ -5,7 +5,7 @@ All notable changes to the `cargo-pmcp` crate will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
-## [0.11.0] - 2026-04-XX
+## [0.11.0] - 2026-04-26
 
 ### Added
 - `cargo pmcp configure {add,use,list,show}` command group for managing named deployment targets (dev / prod / staging / …) — modeled on `aws configure`. Targets are defined in `~/.pmcp/config.toml` (typed-per-variant TOML schema with `pmcp-run`, `aws-lambda`, `google-cloud-run`, `cloudflare-workers` variants). A workspace selects a target via `.pmcp/active-target` (single-line marker file). Resolution precedence: `PMCP_TARGET` env > `--target` flag > `.pmcp/active-target` > none.
