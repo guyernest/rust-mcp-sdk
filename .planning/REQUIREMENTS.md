@@ -88,7 +88,7 @@ Seeded by Phase 77 cargo-pmcp configure commands research (`.planning/phases/77-
 - [ ] **REQ-77-04**: `PMCP_TARGET=<name>` env var is the highest-priority target selector and emits a stderr override note when it overrides the workspace marker; the note fires even when `--quiet` is set. `--target <name>` is a new global flag on the top-level `Cli`.
 - [ ] **REQ-77-05**: A header banner is emitted to stderr by every target-consuming command before any AWS API / CDK / upload call; field ordering is fixed (api_url / aws_profile / region / source); banner is suppressible by `--quiet` (except the D-03 PMCP_TARGET override note).
 - [ ] **REQ-77-06**: Field-level precedence at command-execution time is `ENV > explicit --flag > active target > .pmcp/deploy.toml`; verified by property test.
-- [ ] **REQ-77-07**: `configure add` rejects raw-credential patterns (AKIA[0-9A-Z]{16}, ASIA[0-9A-Z]{16}, ghp_*, github_pat_*, sk_live_*, AIza*) with an actionable error pointing the user at AWS profile names / env-var refs / Secrets Manager ARNs.
+- [x] **REQ-77-07**: `configure add` rejects raw-credential patterns (AKIA[0-9A-Z]{16}, ASIA[0-9A-Z]{16}, ghp_*, github_pat_*, sk_live_*, AIza*) with an actionable error pointing the user at AWS profile names / env-var refs / Secrets Manager ARNs.
 - [x] **REQ-77-08**: `~/.pmcp/config.toml` writes are atomic via `tempfile::NamedTempFile::persist`; on Unix the file is `0o600`, the parent dir `0o700`; concurrent writers are last-writer-wins (no partial file).
 - [ ] **REQ-77-09**: When `~/.pmcp/config.toml` does not exist, `cargo pmcp deploy` and `cargo pmcp pmcp.run upload` behave byte-identically to Phase 76 — no banner about targets, no migration nag, zero touch.
 - [ ] **REQ-77-10**: ALWAYS gates pass: `cargo fuzz run pmcp_config_toml_parser -- -max_total_time=60`, `cargo test -p cargo-pmcp configure::config::proptests`, `cargo test -p cargo-pmcp configure::resolver::proptests::precedence_holds`, `cargo run --example multi_target_monorepo -p cargo-pmcp` all exit 0.
@@ -196,7 +196,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-77-04 | Phase 77 | Pending |
 | REQ-77-05 | Phase 77 | Pending |
 | REQ-77-06 | Phase 77 | Pending |
-| REQ-77-07 | Phase 77 | Pending |
+| REQ-77-07 | Phase 77 | Complete |
 | REQ-77-08 | Phase 77 | Complete |
 | REQ-77-09 | Phase 77 | Pending |
 | REQ-77-10 | Phase 77 | Pending |

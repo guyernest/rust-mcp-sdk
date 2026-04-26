@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: Ready to execute
-stopped_at: Phase 77 context gathered
-last_updated: "2026-04-26T20:16:18.142Z"
+stopped_at: Phase 77 Plan 04 complete (configure add + use)
+last_updated: "2026-04-26T21:00:00.000Z"
 progress:
   total_phases: 40
   completed_phases: 34
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 77 (cargo-pmcp-configure-commands) — EXECUTING
-Plan: 3 of 9
+Plan: 4 of 9
 Next: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
 After: Phase 73 (Typed client helpers + list_all pagination, PARITY-CLIENT-01)
 Operator follow-ups (deferred from Phase 75 Wave 5, not blocking Phase 74): (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
@@ -71,6 +71,7 @@ v2.1 decisions:
 - [Phase 72.1]: CR-03 rev-2 shipped — cargo-pmcp 0.8.0 -> 0.8.1 (patch, additive). Landing Next.js template now uses runtime `fetch('/landing-config')` via shared `useLandingConfig` hook; 4 consumers (signup, callback, connect [server->client flip], Header [conditional button]) routed through the hook; 4 NEXT_PUBLIC_* reads deleted; 3 stale rustdoc refs in `src/landing/config.rs` rewritten. MCP_SERVER_NAME branding preserved (CR-03 §0). 12/12 CR-03 ACs PASS; G1..G8 guardrails green (G7 scaffold smoke added per Codex M3; G8 77-line LOC delta ≤100 budget). AC-11 manual offline gate approved by operator guy 2026-04-20. Unblocks pmcp.run Phase 71 UAT Test 7 + Cost Coach prod launch. crates.io release is a separate follow-up (git tag v0.8.1 triggers .github/workflows/release.yml).
 - [Phase ?]: Phase 74 release state landed — pmcp 2.5.0 + cargo-pmcp 0.9.0 + mcp-tester 0.5.2; 8 pins bumped; CHANGELOG dated 2026-04-21; quality-gate green. Tagging is operator-driven.
 - [Phase ?]: [Phase 77 Plan 03]: TargetConfigV1 + per-variant named-struct serde-tagged enum; find_project_root lifted to configure/workspace.rs::find_workspace_root (pub); test_support_configure #[path] bridge in lib.rs; serial_test=3 dev-dep added; 12 tests pass; Default derive added on GlobalFlags.
+- [Phase ?]: [Phase 77 Plan 04]: configure add + configure use shipped — 6-pattern raw-credential validator (AKIA/ASIA/ghp_/github_pat_/sk_live_/AIza), name regex `[A-Za-z0-9_-]+` (T-77-03 path-traversal mitigation), GEM-1 escape-hatch in error msg, GEM-2 stderr switching note on overwrite, BOM-tolerant `pub fn read_active_marker` for downstream resolver. 16 unit tests pass; 2 commits (03908c2f + 0d8bb8ee).
 
 ### Roadmap Evolution
 
@@ -153,6 +154,6 @@ v2.1 decisions:
 
 ## Session Continuity
 
-Last session: 2026-04-26T20:16:03.397Z
-Stopped at: Phase 77 context gathered
-Resume: Open the consolidated Phase 75 Wave 5 + Phase 75.5 PR to `paiml/rust-mcp-sdk:main` per CLAUDE.md "Release Steps". Post-merge, run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and record observation in `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation". Then proceed to Phase 74 (cargo pmcp auth subcommand).
+Last session: 2026-04-26T21:00:00.000Z
+Stopped at: Phase 77 Plan 04 complete (configure add + use)
+Resume: Execute Phase 77 Plan 05 (configure list + show). Plans 04 and 05 are sibling plans in Wave 3; 05 unblocks Plan 06 (resolver + banner). Plan 04 left `pub fn read_active_marker` in `configure/use_cmd.rs` ready for Plan 06's resolver to consume. Plan 04 also documented `validate_target_name` duplication for Plan 09 to consolidate during quality-gate cleanup.
