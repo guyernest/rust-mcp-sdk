@@ -109,7 +109,9 @@ fn validate_target_name(name: &str) -> Result<()> {
 fn build_entry_from_args_or_prompts(args: &AddArgs) -> Result<TargetEntry> {
     let target_type = match &args.r#type {
         Some(t) => t.clone(),
-        None => prompt("Target type [pmcp-run / aws-lambda / google-cloud-run / cloudflare-workers]: ")?,
+        None => {
+            prompt("Target type [pmcp-run / aws-lambda / google-cloud-run / cloudflare-workers]: ")?
+        },
     };
 
     match target_type.as_str() {

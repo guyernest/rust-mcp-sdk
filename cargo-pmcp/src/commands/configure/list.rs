@@ -8,9 +8,7 @@ use anyhow::Result;
 use clap::Args;
 use serde::Serialize;
 
-use crate::commands::configure::config::{
-    default_user_config_path, TargetConfigV1, TargetEntry,
-};
+use crate::commands::configure::config::{default_user_config_path, TargetConfigV1, TargetEntry};
 use crate::commands::configure::use_cmd::read_active_marker;
 use crate::commands::configure::workspace::find_workspace_root;
 use crate::commands::GlobalFlags;
@@ -108,7 +106,11 @@ fn print_text(
     // is the scriptable channel.)
     println!("{:<6}  {:<22}  {:<20}  fields", "", "NAME", "TYPE");
     for (name, entry) in &cfg.targets {
-        let marker = if Some(name.as_str()) == active { "*" } else { " " };
+        let marker = if Some(name.as_str()) == active {
+            "*"
+        } else {
+            " "
+        };
         let type_tag = entry.type_tag();
         let summary = field_summary(entry);
         println!("{:<6}  {:<22}  {:<20}  {}", marker, name, type_tag, summary);
@@ -181,9 +183,7 @@ fn field_summary(entry: &TargetEntry) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::configure::config::{
-        AwsLambdaEntry, PmcpRunEntry, TargetEntry,
-    };
+    use crate::commands::configure::config::{AwsLambdaEntry, PmcpRunEntry, TargetEntry};
     use serial_test::serial;
 
     /// Run `f` with HOME and CWD overridden to fresh tempdirs, with a Cargo.toml
@@ -257,8 +257,7 @@ mod tests {
             write_two_targets(home);
             set_active_marker(ws, "dev");
             // Build the same struct print_json would print and verify shape.
-            let cfg =
-                TargetConfigV1::read(&home.join(".pmcp").join("config.toml")).unwrap();
+            let cfg = TargetConfigV1::read(&home.join(".pmcp").join("config.toml")).unwrap();
             let (active, src) = compute_active_target().unwrap();
             assert_eq!(active.as_deref(), Some("dev"));
             assert!(matches!(src, ActiveSource::WorkspaceMarker));

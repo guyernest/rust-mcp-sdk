@@ -17,9 +17,9 @@ pub fn find_workspace_root() -> Result<PathBuf> {
         if dir.join("Cargo.toml").exists() {
             return Ok(dir.to_path_buf());
         }
-        dir = dir.parent().ok_or_else(|| {
-            anyhow::anyhow!("Could not find Cargo.toml in any parent directory")
-        })?;
+        dir = dir
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Could not find Cargo.toml in any parent directory"))?;
     }
 }
 

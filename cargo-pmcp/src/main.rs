@@ -465,8 +465,8 @@ fn main() -> Result<()> {
         // Discover the workspace root for the resolver. Fall back to current_dir when the walk
         // fails (e.g. from a system-tmp dir during tests) — the resolver tolerates a non-Cargo
         // path and just won't find deploy.toml.
-        let project_root = commands::configure::workspace::find_workspace_root()
-            .unwrap_or_else(|_| {
+        let project_root =
+            commands::configure::workspace::find_workspace_root().unwrap_or_else(|_| {
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
             });
 
@@ -615,13 +615,7 @@ mod cli_target_flag_tests {
     #[test]
     fn legacy_deploy_target_alias_still_works() {
         // The DEPLOY-level `--target aws-lambda` (alias for `--target-type`) still parses
-        let cli = Cli::parse_from([
-            "cargo-pmcp",
-            "deploy",
-            "--target",
-            "aws-lambda",
-            "outputs",
-        ]);
+        let cli = Cli::parse_from(["cargo-pmcp", "deploy", "--target", "aws-lambda", "outputs"]);
         assert!(
             cli.target.is_none(),
             "global --target should NOT consume the deploy-scoped --target alias"
@@ -660,7 +654,11 @@ mod cli_target_flag_tests {
             "aws-lambda",
             "outputs",
         ]);
-        assert_eq!(cli.target.as_deref(), Some("dev"), "top-level --target = dev");
+        assert_eq!(
+            cli.target.as_deref(),
+            Some("dev"),
+            "top-level --target = dev"
+        );
         if let Commands::Deploy(deploy_cmd) = cli.command {
             let dbg = format!("{:?}", deploy_cmd);
             assert!(
@@ -677,13 +675,7 @@ mod cli_target_flag_tests {
         // `cargo pmcp deploy --target aws-lambda <args>` — `--target` is the deprecated
         // alias for `--target-type`. The top-level Cli.target must REMAIN None (the deploy-scoped
         // alias is not consumed by the global --target).
-        let cli = Cli::parse_from([
-            "cargo-pmcp",
-            "deploy",
-            "--target",
-            "aws-lambda",
-            "outputs",
-        ]);
+        let cli = Cli::parse_from(["cargo-pmcp", "deploy", "--target", "aws-lambda", "outputs"]);
         assert!(
             cli.target.is_none(),
             "top-level --target must NOT be populated by deploy-scoped alias"
@@ -703,7 +695,11 @@ mod cli_target_flag_tests {
             "prod",
             "outputs",
         ]);
-        assert_eq!(cli.target.as_deref(), Some("dev"), "top-level --target = dev");
+        assert_eq!(
+            cli.target.as_deref(),
+            Some("dev"),
+            "top-level --target = dev"
+        );
         if let Commands::Deploy(deploy_cmd) = cli.command {
             let dbg = format!("{:?}", deploy_cmd);
             assert!(
@@ -822,8 +818,7 @@ mod configure_dispatch_tests {
 
     #[test]
     fn parses_configure_list_with_format_json() {
-        let cli =
-            Cli::parse_from(["cargo-pmcp", "configure", "list", "--format", "json"]);
+        let cli = Cli::parse_from(["cargo-pmcp", "configure", "list", "--format", "json"]);
         match cli.command {
             Commands::Configure {
                 command: commands::configure::ConfigureCommand::List(args),

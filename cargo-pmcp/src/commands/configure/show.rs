@@ -10,9 +10,7 @@
 use anyhow::{bail, Context, Result};
 use clap::Args;
 
-use crate::commands::configure::config::{
-    default_user_config_path, TargetConfigV1, TargetEntry,
-};
+use crate::commands::configure::config::{default_user_config_path, TargetConfigV1, TargetEntry};
 use crate::commands::configure::resolver::{resolve_target, ResolvedField, TargetSource};
 use crate::commands::configure::use_cmd::read_active_marker;
 use crate::commands::configure::workspace::find_workspace_root;
@@ -228,9 +226,7 @@ fn collect_for_display(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::configure::config::{
-        CloudflareWorkersEntry, PmcpRunEntry, TargetEntry,
-    };
+    use crate::commands::configure::config::{CloudflareWorkersEntry, PmcpRunEntry, TargetEntry};
     use serial_test::serial;
 
     /// Run `f` with HOME and CWD overridden to fresh tempdirs (with a Cargo.toml
@@ -334,10 +330,7 @@ mod tests {
             )
             .unwrap_err();
             let msg = err.to_string();
-            assert!(
-                msg.contains("no") && msg.contains("active"),
-                "got: {err}"
-            );
+            assert!(msg.contains("no") && msg.contains("active"), "got: {err}");
         });
     }
 

@@ -23,13 +23,11 @@ pub async fn deploy_landing_page(
         crate::commands::configure::workspace::find_workspace_root().unwrap_or_else(|_| {
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
         });
-    if let Ok(Some(resolved)) = crate::commands::configure::resolver::resolve_target(
-        None,
-        None,
-        &banner_root,
-        None,
-    ) {
-        let _ = crate::commands::configure::banner::emit_resolved_banner_once(&resolved, !not_quiet);
+    if let Ok(Some(resolved)) =
+        crate::commands::configure::resolver::resolve_target(None, None, &banner_root, None)
+    {
+        let _ =
+            crate::commands::configure::banner::emit_resolved_banner_once(&resolved, !not_quiet);
     }
 
     if not_quiet {

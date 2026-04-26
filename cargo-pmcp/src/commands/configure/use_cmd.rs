@@ -111,10 +111,7 @@ pub fn read_active_marker(workspace_root: &std::path::Path) -> Result<Option<Str
             }
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(anyhow::anyhow!(
-            "failed to read {}: {e}",
-            marker.display()
-        )),
+        Err(e) => Err(anyhow::anyhow!("failed to read {}: {e}", marker.display())),
     }
 }
 
@@ -186,15 +183,8 @@ mod tests {
         run_in_isolated_home_and_workspace(|home, ws| {
             write_config_with_target(home, "dev");
             let gf = GlobalFlags::default();
-            execute(
-                UseArgs {
-                    name: "dev".into(),
-                },
-                &gf,
-            )
-            .unwrap();
-            let body =
-                std::fs::read_to_string(ws.join(".pmcp").join("active-target")).unwrap();
+            execute(UseArgs { name: "dev".into() }, &gf).unwrap();
+            let body = std::fs::read_to_string(ws.join(".pmcp").join("active-target")).unwrap();
             assert_eq!(body, "dev\n");
         });
     }
@@ -205,22 +195,9 @@ mod tests {
         run_in_isolated_home_and_workspace(|home, ws| {
             write_config_with_target(home, "dev");
             let gf = GlobalFlags::default();
-            execute(
-                UseArgs {
-                    name: "dev".into(),
-                },
-                &gf,
-            )
-            .unwrap();
-            execute(
-                UseArgs {
-                    name: "dev".into(),
-                },
-                &gf,
-            )
-            .unwrap();
-            let body =
-                std::fs::read_to_string(ws.join(".pmcp").join("active-target")).unwrap();
+            execute(UseArgs { name: "dev".into() }, &gf).unwrap();
+            execute(UseArgs { name: "dev".into() }, &gf).unwrap();
+            let body = std::fs::read_to_string(ws.join(".pmcp").join("active-target")).unwrap();
             assert_eq!(body, "dev\n");
         });
     }
@@ -274,13 +251,7 @@ mod tests {
             write_config_with_target(home, "dev");
             write_config_with_target(home, "prod");
             let gf = GlobalFlags::default();
-            execute(
-                UseArgs {
-                    name: "dev".into(),
-                },
-                &gf,
-            )
-            .unwrap();
+            execute(UseArgs { name: "dev".into() }, &gf).unwrap();
             // Second call hits the overwrite branch and emits the note.
             execute(
                 UseArgs {
@@ -289,8 +260,7 @@ mod tests {
                 &gf,
             )
             .unwrap();
-            let body =
-                std::fs::read_to_string(ws.join(".pmcp").join("active-target")).unwrap();
+            let body = std::fs::read_to_string(ws.join(".pmcp").join("active-target")).unwrap();
             assert_eq!(body, "prod\n");
         });
     }
@@ -302,13 +272,7 @@ mod tests {
             write_config_with_target(home, "dev");
             write_config_with_target(home, "prod");
             let gf = GlobalFlags::default();
-            execute(
-                UseArgs {
-                    name: "dev".into(),
-                },
-                &gf,
-            )
-            .unwrap();
+            execute(UseArgs { name: "dev".into() }, &gf).unwrap();
             execute(
                 UseArgs {
                     name: "prod".into(),
@@ -316,8 +280,7 @@ mod tests {
                 &gf,
             )
             .unwrap();
-            let body =
-                std::fs::read_to_string(ws.join(".pmcp").join("active-target")).unwrap();
+            let body = std::fs::read_to_string(ws.join(".pmcp").join("active-target")).unwrap();
             assert_eq!(body, "prod\n");
         });
     }

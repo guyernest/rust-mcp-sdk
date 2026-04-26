@@ -17,14 +17,13 @@ pub async fn execute(
     global_flags: &GlobalFlags,
 ) -> Result<()> {
     // Phase 77 banner — emit before any AWS/pmcp.run upload call. Idempotent (OnceLock-guarded).
-    let project_root = crate::commands::configure::workspace::find_workspace_root()
-        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
-    if let Ok(Some(resolved)) = crate::commands::configure::resolver::resolve_target(
-        None,
-        None,
-        &project_root,
-        None,
-    ) {
+    let project_root =
+        crate::commands::configure::workspace::find_workspace_root().unwrap_or_else(|_| {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        });
+    if let Ok(Some(resolved)) =
+        crate::commands::configure::resolver::resolve_target(None, None, &project_root, None)
+    {
         let _ = crate::commands::configure::banner::emit_resolved_banner_once(
             &resolved,
             global_flags.quiet,

@@ -19,10 +19,7 @@ static BANNER_EMITTED: OnceLock<()> = OnceLock::new();
 /// `quiet=true` suppresses the banner BUT NOT the PMCP_TARGET override note.
 ///
 /// Returns `Ok(())` regardless of whether output was actually emitted.
-pub fn emit_resolved_banner_once(
-    resolved: &ResolvedTarget,
-    quiet: bool,
-) -> std::io::Result<()> {
+pub fn emit_resolved_banner_once(resolved: &ResolvedTarget, quiet: bool) -> std::io::Result<()> {
     emit_with_writer(resolved, quiet, &mut std::io::stderr())
 }
 
@@ -41,7 +38,12 @@ pub fn emit_with_writer<W: Write>(
     if let Some(TargetSource::Env) = resolved.name_source {
         let marker_path = crate::commands::configure::workspace::find_workspace_root()
             .ok()
-            .map(|root| root.join(".pmcp").join("active-target").display().to_string())
+            .map(|root| {
+                root.join(".pmcp")
+                    .join("active-target")
+                    .display()
+                    .to_string()
+            })
             .unwrap_or_else(|| ".pmcp/active-target".to_string());
         writeln!(
             w,
@@ -66,17 +68,11 @@ pub fn emit_with_writer<W: Write>(
 /// Emit the banner body unconditionally (no OnceLock, no quiet check).
 /// Used by tests to verify field ordering deterministically without contending
 /// with the process-wide `BANNER_EMITTED` static.
-pub fn emit_body_to_writer<W: Write>(
-    resolved: &ResolvedTarget,
-    w: &mut W,
-) -> std::io::Result<()> {
+pub fn emit_body_to_writer<W: Write>(resolved: &ResolvedTarget, w: &mut W) -> std::io::Result<()> {
     emit_body_inner(resolved, w)
 }
 
-fn emit_body_inner<W: Write>(
-    resolved: &ResolvedTarget,
-    w: &mut W,
-) -> std::io::Result<()> {
+fn emit_body_inner<W: Write>(resolved: &ResolvedTarget, w: &mut W) -> std::io::Result<()> {
     let name = resolved.name.as_deref().unwrap_or("<unset>");
     let kind = resolved.kind.as_deref().unwrap_or("<unset>");
     writeln!(w, "→ Using target: {} ({})", name, kind)?;

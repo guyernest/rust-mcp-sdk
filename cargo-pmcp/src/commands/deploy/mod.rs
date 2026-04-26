@@ -492,20 +492,12 @@ impl DeployCommand {
                     },
                     DeployAction::Logs { tail, lines } => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
-                        emit_target_banner_if_resolved(
-                            global_flags,
-                            &project_root,
-                            Some(&config),
-                        );
+                        emit_target_banner_if_resolved(global_flags, &project_root, Some(&config));
                         target.logs(&config, *tail, *lines).await
                     },
                     DeployAction::Metrics { period } => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
-                        emit_target_banner_if_resolved(
-                            global_flags,
-                            &project_root,
-                            Some(&config),
-                        );
+                        emit_target_banner_if_resolved(global_flags, &project_root, Some(&config));
                         let metrics = target.metrics(&config, period).await?;
                         // Requested data -- always show
                         println!("Metrics for {}: {}", target.name(), metrics.period);
@@ -513,11 +505,7 @@ impl DeployCommand {
                     },
                     DeployAction::Test {} => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
-                        emit_target_banner_if_resolved(
-                            global_flags,
-                            &project_root,
-                            Some(&config),
-                        );
+                        emit_target_banner_if_resolved(global_flags, &project_root, Some(&config));
                         let results = target.test(&config, global_flags.verbose).await?;
                         // Test results are requested output
                         if results.success {
@@ -535,11 +523,7 @@ impl DeployCommand {
                     },
                     DeployAction::Rollback { version, yes: _ } => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
-                        emit_target_banner_if_resolved(
-                            global_flags,
-                            &project_root,
-                            Some(&config),
-                        );
+                        emit_target_banner_if_resolved(global_flags, &project_root, Some(&config));
                         target.rollback(&config, version.as_deref()).await
                     },
                     DeployAction::Destroy {
@@ -548,11 +532,7 @@ impl DeployCommand {
                         no_wait,
                     } => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
-                        emit_target_banner_if_resolved(
-                            global_flags,
-                            &project_root,
-                            Some(&config),
-                        );
+                        emit_target_banner_if_resolved(global_flags, &project_root, Some(&config));
 
                         if !yes {
                             println!("WARNING: This will destroy deployment on {}", target.name());
@@ -591,11 +571,7 @@ impl DeployCommand {
                     },
                     DeployAction::Secrets { action } => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
-                        emit_target_banner_if_resolved(
-                            global_flags,
-                            &project_root,
-                            Some(&config),
-                        );
+                        emit_target_banner_if_resolved(global_flags, &project_root, Some(&config));
                         let secrets_action = match action {
                             SecretsAction::Set { key, from_env } => {
                                 crate::deployment::SecretsAction::Set {
@@ -615,11 +591,7 @@ impl DeployCommand {
                     },
                     DeployAction::Outputs { format } => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
-                        emit_target_banner_if_resolved(
-                            global_flags,
-                            &project_root,
-                            Some(&config),
-                        );
+                        emit_target_banner_if_resolved(global_flags, &project_root, Some(&config));
                         let outputs = target.outputs(&config).await?;
 
                         match format {
@@ -636,11 +608,7 @@ impl DeployCommand {
                         // Login is target-specific
                         match target_id.as_str() {
                             "pmcp-run" => {
-                                emit_target_banner_if_resolved(
-                                    global_flags,
-                                    &project_root,
-                                    None,
-                                );
+                                emit_target_banner_if_resolved(global_flags, &project_root, None);
                                 crate::deployment::targets::pmcp_run::login().await
                             },
                             _ => {

@@ -17,9 +17,7 @@
 use anyhow::{bail, Result};
 use std::path::Path;
 
-use crate::commands::configure::config::{
-    default_user_config_path, TargetConfigV1, TargetEntry,
-};
+use crate::commands::configure::config::{default_user_config_path, TargetConfigV1, TargetEntry};
 use crate::commands::configure::use_cmd::read_active_marker;
 use crate::commands::configure::workspace::find_workspace_root;
 

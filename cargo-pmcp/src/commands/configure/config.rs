@@ -334,12 +334,11 @@ api_token_env = "MY_TOKEN"
     fn default_path_is_home_pmcp_config_toml() {
         let p = default_user_config_path();
         // Last 2 components: <home>/.pmcp/config.toml
+        assert_eq!(p.file_name().and_then(|s| s.to_str()), Some("config.toml"));
         assert_eq!(
-            p.file_name().and_then(|s| s.to_str()),
-            Some("config.toml")
-        );
-        assert_eq!(
-            p.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()),
+            p.parent()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str()),
             Some(".pmcp")
         );
     }
