@@ -442,11 +442,14 @@ The `schema_version` field is for forward-compat (matches Phase 74 cache pattern
 rg "lazy_static|OnceLock|once_cell" cargo-pmcp/src/ | rg "env::var|std::env"
 ```
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Phase requirement IDs not formally minted.** ROADMAP.md:1058 says `Requirements: TBD`. Planner should mint REQ-77-01..REQ-77-10 (suggested above) or pull from a separate REQUIREMENTS.md file if one is added before planning.
+   **RESOLVED:** Plan 01 mints REQ-77-01..REQ-77-10 in `.planning/REQUIREMENTS.md` and pins them in each PLAN's `requirements:` frontmatter list.
 2. **Whether to add `dialoguer` as a new dep for interactive prompts.** Recommended NO (hand-roll); but if PLAN.md prefers richer UX, dialoguer is a small additive dep.
+   **RESOLVED:** Plan 04 hand-rolls prompts via `eprint!` + `io::stdin().read_line` (no `dialoguer` dependency added) — see Pitfall §10 + 77-PATTERNS.md `prompt()` helper.
 3. **Test isolation strategy for HOME-directory tests.** `tempfile::tempdir()` + `std::env::set_var("HOME", tmp.path())` works locally but is racy in `cargo test` (default thread-parallel). Either set `RUST_TEST_THREADS=1` for the configure suite or use `serial_test` crate. Planner picks.
+   **RESOLVED:** Plan 04 wires `serial_test = "3"` into `cargo-pmcp/[dev-dependencies]` and decorates HOME-mutating tests with `#[serial]`; Plan 08 integration tests additionally pass `-- --test-threads=1` as belt-and-suspenders.
 
 ## Environment Availability
 
