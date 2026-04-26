@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: Ready to execute
-stopped_at: Phase 77 Plan 08 complete (integration tests + fuzz + example)
-last_updated: "2026-04-26T22:30:00.000Z"
+stopped_at: Phase 77 Plan 09 complete (Phase 77 closeout — DRY cleanup + CHANGELOG date + quality-gate cert + manual TTY checkpoint)
+last_updated: "2026-04-26T23:30:00.000Z"
 progress:
   total_phases: 40
   completed_phases: 34
-  total_plans: 83
-  completed_plans: 83
+  total_plans: 84
+  completed_plans: 84
   percent: 100
 ---
 
@@ -24,8 +24,8 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 
 ## Current Position
 
-Phase: 77 (cargo-pmcp-configure-commands) — EXECUTING
-Plan: 8 of 9
+Phase: 77 (cargo-pmcp-configure-commands) — COMPLETE (ready for /gsd-verify-work)
+Plan: 9 of 9 (all plans shipped)
 Next: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
 After: Phase 73 (Typed client helpers + list_all pagination, PARITY-CLIENT-01)
 Operator follow-ups (deferred from Phase 75 Wave 5, not blocking Phase 74): (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
@@ -76,6 +76,7 @@ v2.1 decisions:
 - [Phase ?]: [Phase 77 Plan 06]: resolver + banner shipped — TargetSource enum + ResolvedField/ResolvedTarget pair (HIGH-3 BTreeMap covers api_url/aws_profile/region/account_id/gcp_project/api_token_env), 4-level precedence (env > flag > target > deploy.toml per D-04/REQ-77-06), MED-1 explicit_name bypass, OnceLock-guarded D-13 banner with emit_body_to_writer test seam, MED-4 verbatim source-description snapshot tests. 30 unit tests pass; 70/70 configure-suite under --test-threads=1. 2 commits: 385552f1 + f4c05bda.
 - [Phase ?]: [Phase 77 Plan 07]: CLI wiring + dispatch-time env injection + banner emission — Commands::Configure registered with after_long_help; Commands::is_target_consuming() (MED-2) gates env injection to deploy/test/loadtest/landing only; resolver+inject runs in main.rs BEFORE execute_command (T-77-05 mitigation). emit_target_banner_if_resolved at 13 deploy/mod.rs AWS-touching call sites + HIGH-2 inline emission at test/upload + loadtest/upload + landing/deploy (3 additional target-consuming entry points per RESEARCH §7). 6 new tests pass; 483/483 cargo-pmcp suite. 3 commits: 6fcb89f8 + 4bf3f85d + bbd796a8.
 - [Phase ?]: [Phase 77 Plan 08]: integration tests + fuzz target + working example shipped — `tests/configure_integration.rs` 7-test full-lifecycle suite (full flow, D-11 zero-touch, PMCP_TARGET env override, marker idempotency, Unix 0o600 perms, concurrent writers last-writer-wins, BTreeMap ordering) using subprocess invocation against env!("CARGO_BIN_EXE_cargo-pmcp") + schema-direct setup via cargo_pmcp::test_support::configure_config (HIGH-1 lib bridge). `pmcp_config_toml_parser` libfuzzer target landed (T-77-02-A mitigation; nightly-only run, stable check confirms compile). `examples/multi_target_monorepo.rs` runnable demo: tempdir-isolated HOME + monorepo with 2 sibling servers each pinned to a different target via per-server marker; uses schema-layer simulation rather than the plan-body's subprocess approach (cargo refuses to run from a server tempdir without [[bin]]). 7/7 integration tests pass; 483/483 cargo-pmcp suite unchanged. 3 commits: c189da39 + 83c130ed + 55fe11cc.
+- [Phase ?]: [Phase 77 Plan 09]: phase closeout — DRY cleanup (validate_target_name extracted to commands/configure/name_validation.rs with 10 unit tests; doctest marked `ignore` per HIGH-1 — commands::configure::* is bin-only); CHANGELOG dated `## [0.11.0] - 2026-04-26`; Toyota Way certification: `make quality-gate` exits 0 + `pmat quality-gate --fail-on-violation --checks complexity` exits 0 (PMAT 3.15.0 — same command as CI per Phase 75 Wave 5 D-07); Rule 3 deviation absorbed mid-Task-2: `add.rs::build_entry_from_args_or_prompts` decomposed via P4 per-variant dispatch (build_pmcp_run_entry / build_aws_lambda_entry / build_google_cloud_run_entry / build_cloudflare_workers_entry) to drop cog from 24 to <23. Manual TTY checkpoint (REQ-77-01 interactive add prompts + REQ-77-05 banner UX with --quiet suppression and PMCP_TARGET override note under --quiet) approved verbatim "approved" by operator. Fuzz runtime stress deferred to CI/nightly (libfuzzer-sys requires nightly); compile-check on stable confirms target builds. 80/80 configure-suite tests pass. 2 commits: 2e3ec056 + 599ff26c. Phase 77 ready for /gsd-verify-work.
 
 ### Roadmap Evolution
 
@@ -158,6 +159,6 @@ v2.1 decisions:
 
 ## Session Continuity
 
-Last session: 2026-04-26T22:30:00.000Z
-Stopped at: Phase 77 Plan 08 complete (integration tests + fuzz + example)
-Resume: Execute Phase 77 Plan 09 (DRY cleanup + rustdoc audit + CHANGELOG date + make quality-gate certification + manual interactive UX checkpoint). Plan 08 shipped the CLAUDE.md ALWAYS testing requirements: `cargo-pmcp/tests/configure_integration.rs` (7 tests covering full add/use/list/show lifecycle, D-11 zero-touch, PMCP_TARGET env override, marker idempotency, Unix 0o600 perms, concurrent writers last-writer-wins, BTreeMap ordering — uses subprocess invocation via `env!("CARGO_BIN_EXE_cargo-pmcp")` for subcommand flow + `cargo_pmcp::test_support::configure_config::*` for schema-direct setup); `cargo-pmcp/fuzz/fuzz_targets/pmcp_config_toml_parser.rs` libfuzzer target consuming arbitrary bytes through `toml::from_str::<TargetConfigV1>` (T-77-02-A mitigation; nightly-only run, stable check confirms compile); `cargo-pmcp/examples/multi_target_monorepo.rs` runnable demo of D-01 per-server marker semantic with isolated tempdir HOME (deviates from plan body by using schema-layer simulation instead of subprocess invocation — cargo refuses to run from a server tempdir without [[bin]]). All 7 integration tests pass; 483/483 cargo-pmcp bin suite unchanged; example runs end-to-end and prints both `resolved name = dev` and `resolved name = prod`. Plan 09 (final wave) consolidates the inline duplicates (`validate_target_name` in add.rs + use_cmd.rs, `compute_active_target` in list.rs, `resolve_active_or_fail` in show.rs all subsumed by Plan 06's resolver), audits rustdoc, dates the CHANGELOG, runs `make quality-gate` for certification, and gates the phase on a manual interactive UX checkpoint per VALIDATION.md.
+Last session: 2026-04-26T23:30:00.000Z
+Stopped at: Phase 77 Plan 09 complete (Phase 77 closeout — DRY cleanup + CHANGELOG date + Toyota Way quality-gate certification + manual TTY UX checkpoint approved)
+Resume: Phase 77 is COMPLETE — all 9 plans executed, all 11 REQ-77-* requirements marked Complete in REQUIREMENTS.md. Run `/gsd-verify-work` for Phase 77 to validate the full deliverable. After verification, the next focus is Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21. Plan 09 shipped: (1) `commands/configure/name_validation.rs` (101 lines, 10 unit tests) consolidating the inline `validate_target_name` from add.rs + use_cmd.rs into a single private module — doctest marked `ignore` per HIGH-1 (commands::configure::* is bin-only); (2) CHANGELOG dated `## [0.11.0] - 2026-04-26`; (3) `make quality-gate` exits 0 + `pmat quality-gate --fail-on-violation --checks complexity` exits 0 (PMAT 3.15.0 — matches CI command per Phase 75 Wave 5 D-07); (4) Rule 3 deviation absorbed: `add.rs::build_entry_from_args_or_prompts` decomposed via P4 per-variant dispatch to drop cog from 24 to <23; (5) Manual TTY checkpoint (REQ-77-01 interactive add prompts + REQ-77-05 banner UX including --quiet suppression and PMCP_TARGET override note under --quiet per D-03) approved verbatim "approved" by operator. Fuzz runtime stress (60s) deferred to CI/nightly per Plan 08's same disposition. 80/80 configure-suite tests pass. 2 commits: 2e3ec056 + 599ff26c.

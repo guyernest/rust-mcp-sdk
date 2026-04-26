@@ -91,8 +91,8 @@ Seeded by Phase 77 cargo-pmcp configure commands research (`.planning/phases/77-
 - [x] **REQ-77-07**: `configure add` rejects raw-credential patterns (AKIA[0-9A-Z]{16}, ASIA[0-9A-Z]{16}, ghp_*, github_pat_*, sk_live_*, AIza*) with an actionable error pointing the user at AWS profile names / env-var refs / Secrets Manager ARNs.
 - [x] **REQ-77-08**: `~/.pmcp/config.toml` writes are atomic via `tempfile::NamedTempFile::persist`; on Unix the file is `0o600`, the parent dir `0o700`; concurrent writers are last-writer-wins (no partial file).
 - [x] **REQ-77-09**: When `~/.pmcp/config.toml` does not exist, `cargo pmcp deploy` and `cargo pmcp pmcp.run upload` behave byte-identically to Phase 76 — no banner about targets, no migration nag, zero touch.
-- [ ] **REQ-77-10**: ALWAYS gates pass: `cargo fuzz run pmcp_config_toml_parser -- -max_total_time=60`, `cargo test -p cargo-pmcp configure::config::proptests`, `cargo test -p cargo-pmcp configure::resolver::proptests::precedence_holds`, `cargo run --example multi_target_monorepo -p cargo-pmcp` all exit 0.
-- [ ] **REQ-77-11**: Banner emission integrates with ALL target-consuming entry points enumerated in 77-RESEARCH §7 (HIGH-2 per 77-REVIEWS.md): `commands/deploy/mod.rs` (8+ AWS-touching sites), `commands/test/upload.rs` (top of `execute` before `auth::get_credentials()`), `commands/loadtest/upload.rs` (same pattern), and `commands/landing/deploy.rs` (lines 69, 215, 334). The OnceLock-guarded `emit_resolved_banner_once` makes duplicate calls within a single process invocation safe.
+- [x] **REQ-77-10**: ALWAYS gates pass: `cargo fuzz run pmcp_config_toml_parser -- -max_total_time=60`, `cargo test -p cargo-pmcp configure::config::proptests`, `cargo test -p cargo-pmcp configure::resolver::proptests::precedence_holds`, `cargo run --example multi_target_monorepo -p cargo-pmcp` all exit 0.
+- [x] **REQ-77-11**: Banner emission integrates with ALL target-consuming entry points enumerated in 77-RESEARCH §7 (HIGH-2 per 77-REVIEWS.md): `commands/deploy/mod.rs` (8+ AWS-touching sites), `commands/test/upload.rs` (top of `execute` before `auth::get_credentials()`), `commands/loadtest/upload.rs` (same pattern), and `commands/landing/deploy.rs` (lines 69, 215, 334). The OnceLock-guarded `emit_resolved_banner_once` makes duplicate calls within a single process invocation safe.
 
 ## Previous Requirements
 
@@ -199,8 +199,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REQ-77-07 | Phase 77 | Complete |
 | REQ-77-08 | Phase 77 | Complete |
 | REQ-77-09 | Phase 77 | Complete |
-| REQ-77-10 | Phase 77 | Pending |
-| REQ-77-11 | Phase 77 | Pending |
+| REQ-77-10 | Phase 77 | Complete |
+| REQ-77-11 | Phase 77 | Complete |
 
 **Coverage:**
 - v2.1 requirements: 42 total (20 pre-seed + 3 seeded by Phase 69 + 5 seeded by Phase 72 + 1 seeded by Phase 72.1 CR-03 + 2 seeded by Phase 74 + 11 seeded by Phase 77)
