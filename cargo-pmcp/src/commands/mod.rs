@@ -2,6 +2,7 @@ pub mod add;
 pub mod app;
 pub mod auth;
 pub mod auth_cmd;
+pub mod configure;
 pub mod connect;
 pub mod deploy;
 pub mod dev;
@@ -26,7 +27,7 @@ pub mod validate;
 ///
 /// The `quiet` field reflects the *resolved* value after verbose-wins-over-quiet
 /// precedence: if both `--verbose` and `--quiet` are passed, quiet is disabled.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct GlobalFlags {
     /// Enable verbose output for debugging.
     ///

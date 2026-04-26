@@ -42,7 +42,15 @@ pub mod utils {
 #[path = "commands/auth_cmd/cache.rs"]
 pub mod test_support_cache;
 
+// Compiled via `#[path]` to bypass the bin-only `commands::configure` tree.
+// Mirrors the test_support_cache pattern (see lib.rs above for the established convention).
+// Only the leaf `config.rs` schema is bridged — the full configure command tree stays bin-only.
+#[doc(hidden)]
+#[path = "commands/configure/config.rs"]
+pub mod test_support_configure;
+
 #[doc(hidden)]
 pub mod test_support {
     pub use crate::test_support_cache as cache;
+    pub use crate::test_support_configure as configure_config;
 }

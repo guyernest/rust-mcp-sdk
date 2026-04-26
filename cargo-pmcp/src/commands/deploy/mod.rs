@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use std::path::{Path, PathBuf};
 
+use crate::commands::configure::workspace::find_workspace_root;
 use crate::commands::flags::FormatValue;
 
 /// Detect server name from Cargo.toml in the project root or core workspace
@@ -373,7 +374,7 @@ impl DeployCommand {
     }
 
     async fn execute_async(&self, global_flags: &crate::commands::GlobalFlags) -> Result<()> {
-        let project_root = Self::find_project_root()?;
+        let project_root = find_workspace_root()?;
 
         // Get target from flag or config
         let target_id = self.get_target_id(&project_root)?;
@@ -754,22 +755,6 @@ impl DeployCommand {
 
         // Default to AWS Lambda
         Ok("aws-lambda".to_string())
-    }
-
-    fn find_project_root() -> Result<PathBuf> {
-        let current_dir = std::env::current_dir().context("Failed to get current directory")?;
-
-        let mut dir = current_dir.as_path();
-
-        loop {
-            if dir.join("Cargo.toml").exists() {
-                return Ok(dir.to_path_buf());
-            }
-
-            dir = dir.parent().ok_or_else(|| {
-                anyhow::anyhow!("Could not find Cargo.toml in any parent directory")
-            })?;
-        }
     }
 
     /// Save deployment info to .pmcp/deployment.toml for landing page integration
