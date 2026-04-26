@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Protocol Modernization
 status: Ready to execute
-stopped_at: Phase 77 Plan 05 complete (configure list + show)
-last_updated: "2026-04-26T22:00:00.000Z"
+stopped_at: Phase 77 Plan 06 complete (resolver + banner)
+last_updated: "2026-04-26T20:45:02.327Z"
 progress:
   total_phases: 40
   completed_phases: 34
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-04-10)
 ## Current Position
 
 Phase: 77 (cargo-pmcp-configure-commands) — EXECUTING
-Plan: 5 of 9
+Plan: 6 of 9
 Next: Phase 74 (cargo pmcp auth subcommand, multi-server OAuth token cache) — reordered ahead of Phase 73 per operator direction 2026-04-21
 After: Phase 73 (Typed client helpers + list_all pagination, PARITY-CLIENT-01)
 Operator follow-ups (deferred from Phase 75 Wave 5, not blocking Phase 74): (a) merge Phase 75 Wave 5 + 75.5 to paiml/rust-mcp-sdk:main; (b) post-merge run `gh workflow run quality-badges.yml -R paiml/rust-mcp-sdk` and append observation to `.planning/phases/75-fix-pmat-issues/75-05-GATE-VERIFICATION.md` "## Badge flip observation" section.
@@ -73,6 +73,7 @@ v2.1 decisions:
 - [Phase ?]: [Phase 77 Plan 03]: TargetConfigV1 + per-variant named-struct serde-tagged enum; find_project_root lifted to configure/workspace.rs::find_workspace_root (pub); test_support_configure #[path] bridge in lib.rs; serial_test=3 dev-dep added; 12 tests pass; Default derive added on GlobalFlags.
 - [Phase ?]: [Phase 77 Plan 04]: configure add + configure use shipped — 6-pattern raw-credential validator (AKIA/ASIA/ghp_/github_pat_/sk_live_/AIza), name regex `[A-Za-z0-9_-]+` (T-77-03 path-traversal mitigation), GEM-1 escape-hatch in error msg, GEM-2 stderr switching note on overwrite, BOM-tolerant `pub fn read_active_marker` for downstream resolver. 16 unit tests pass; 2 commits (03908c2f + 0d8bb8ee).
 - [Phase ?]: [Phase 77 Plan 05]: configure list + configure show shipped — `list` outputs text (BTreeMap-ordered with `*` active marker, stderr note when PMCP_TARGET overrides) or stable `--format json` (`{ schema_version, active, active_source: env|workspace_marker|none, targets[] }`); `show [<name>]` falls through to active marker when name omitted; `--raw` dumps stored TOML block, default form prints fixed banner field order (api_url/aws_profile/region/extras) with `(source: target)` placeholder ready for Plan 06's resolver to enrich. 12 unit tests pass; 2 commits (27be341a + cb4fd522). `compute_active_target` (list.rs) + `resolve_active_or_fail` (show.rs) both inline-duplicate the env > marker walk — Plan 06's full resolver subsumes both.
+- [Phase ?]: [Phase 77 Plan 06]: resolver + banner shipped — TargetSource enum + ResolvedField/ResolvedTarget pair (HIGH-3 BTreeMap covers api_url/aws_profile/region/account_id/gcp_project/api_token_env), 4-level precedence (env > flag > target > deploy.toml per D-04/REQ-77-06), MED-1 explicit_name bypass, OnceLock-guarded D-13 banner with emit_body_to_writer test seam, MED-4 verbatim source-description snapshot tests. 30 unit tests pass; 70/70 configure-suite under --test-threads=1. 2 commits: 385552f1 + f4c05bda.
 
 ### Roadmap Evolution
 
@@ -155,6 +156,6 @@ v2.1 decisions:
 
 ## Session Continuity
 
-Last session: 2026-04-26T22:00:00.000Z
-Stopped at: Phase 77 Plan 05 complete (configure list + show)
-Resume: Execute Phase 77 Plan 06 (resolver + banner) — Wave 4. Plan 06 builds the full 4-source precedence resolver (env > flag > target > deploy.toml) consumed by `cargo pmcp deploy`/`upload`/etc., adds the OnceLock-guarded `emit_resolved_banner_once` (D-13 fixed field order), and replaces `print_merged_with_attribution`'s body in show.rs to label each field with its real source instead of the `(source: target)` placeholder. Plan 05 left a stable `collect_for_display` contract in show.rs returning `(api_url, aws_profile, region, extras)` for Plan 06 to plug into; `compute_active_target` (list.rs) and `resolve_active_or_fail` (show.rs) duplicate the env > marker walk inline — Plan 06's resolver should subsume both, with Plan 09 cleanup consolidating any residual duplication alongside `validate_target_name`.
+Last session: 2026-04-26T20:44:39.371Z
+Stopped at: Phase 77 Plan 06 complete (resolver + banner)
+Resume: Execute Phase 77 Plan 07 (CLI wiring + main.rs banner emission). Plan 06 shipped the full 4-source precedence resolver (`resolver::resolve_target` walks env > flag > target > deploy.toml per D-04 / REQ-77-06), MED-1 `explicit_name` parameter for `configure show <name>` bypass of active-target, HIGH-3 uniform `BTreeMap<String, ResolvedField>` field map covering api_url/aws_profile/region/account_id/gcp_project/api_token_env, OnceLock-guarded D-13 banner emitter (`emit_resolved_banner_once`) with `emit_body_to_writer` test escape hatch, MED-4 verbatim D-03/D-13 source-description snapshot tests. show.rs default form now uses resolver-attributed sources (`env`/`flag`/`target`/`workspace_marker`/`deploy.toml`) instead of the Plan 05 `(source: target)` placeholder. 30 unit tests + 1 proptest pass; full configure suite 70/70 under `--test-threads=1`. Plan 07 wires `ConfigureCommand` into the top-level `Cli`, adds `--target`/`--quiet`/`--verbose` global flags, calls `inject_resolved_env_into_process` then `emit_resolved_banner_once` in `main.rs` post-arg/pre-dispatch, and threads the resolver into deploy/test/loadtest/preview commands. The Plan 05 inline duplicates (`compute_active_target` in list.rs, `resolve_active_or_fail` in show.rs) are now superseded by `resolve_active_target_name` — Plan 09 quality-gate cleanup may consolidate them alongside `validate_target_name`.
