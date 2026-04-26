@@ -144,7 +144,8 @@ fn demo_resolve(
     let resolved_kind = entry.type_tag();
 
     assert_eq!(
-        resolved_name, expected_name,
+        resolved_name,
+        expected_name,
         "marker in {} must resolve to {expected_name}; got {resolved_name}",
         server_dir.display()
     );
