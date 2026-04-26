@@ -91,9 +91,11 @@ use init::InitCommand;
 
 #[derive(Debug, Parser)]
 pub struct DeployCommand {
-    /// Deployment target (aws-lambda, cloudflare-workers)
-    #[arg(long, global = true)]
-    target: Option<String>,
+    /// Deployment target TYPE (aws-lambda, cloudflare-workers, pmcp-run, google-cloud-run).
+    /// Selects which deployment backend to use. NOT to be confused with the global `--target`
+    /// flag which selects a NAMED target from `~/.pmcp/config.toml` (Phase 77).
+    #[arg(long = "target-type", alias = "target", global = true)]
+    target_type: Option<String>,
 
     /// Use shared OAuth pool for SSO (pmcp-run only).
     ///
@@ -740,8 +742,8 @@ impl DeployCommand {
     }
 
     fn get_target_id(&self, project_root: &PathBuf) -> Result<String> {
-        // Priority: --target flag > config file > default
-        if let Some(target) = &self.target {
+        // Priority: --target-type flag > config file > default
+        if let Some(target) = &self.target_type {
             return Ok(target.clone());
         }
 
