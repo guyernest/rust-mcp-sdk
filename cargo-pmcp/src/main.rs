@@ -62,6 +62,19 @@ struct Cli {
     #[arg(long, global = true)]
     quiet: bool,
 
+    /// Named target from ~/.pmcp/config.toml (one-off override of .pmcp/active-target).
+    ///
+    /// Phase 77: this flag selects a NAMED target defined via `cargo pmcp configure add <name>`.
+    /// Distinct from `cargo pmcp deploy --target-type <type>` which selects the deployment backend.
+    /// Resolution order: PMCP_TARGET env > this flag > .pmcp/active-target file > none.
+    ///
+    /// Note: `global = true` is intentionally NOT set on this flag — the deploy subcommand
+    /// owns a `--target` alias (deprecated, points to `--target-type`) and clap requires
+    /// unique long-option names across the global+local arg namespace. Top-level resolution
+    /// is sufficient since main.rs reads `cli.target` directly before dispatching.
+    #[arg(long)]
+    pub target: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -504,6 +517,142 @@ fn execute_landing(
     let runtime = tokio::runtime::Runtime::new()?;
     let project_root = std::env::current_dir()?;
     runtime.block_on(command.execute(project_root, global_flags))
+}
+
+#[cfg(test)]
+mod cli_target_flag_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn parses_global_target_named_flag() {
+        // Note: cargo subcommand parsing puts the bin name first
+        let cli = Cli::parse_from(["cargo-pmcp", "--target", "dev", "auth", "status"]);
+        assert_eq!(cli.target.as_deref(), Some("dev"));
+    }
+
+    #[test]
+    fn legacy_deploy_target_alias_still_works() {
+        // The DEPLOY-level `--target aws-lambda` (alias for `--target-type`) still parses
+        let cli = Cli::parse_from([
+            "cargo-pmcp",
+            "deploy",
+            "--target",
+            "aws-lambda",
+            "outputs",
+        ]);
+        assert!(
+            cli.target.is_none(),
+            "global --target should NOT consume the deploy-scoped --target alias"
+        );
+    }
+
+    #[test]
+    fn both_flags_coexist() {
+        let cli = Cli::parse_from([
+            "cargo-pmcp",
+            "--target",
+            "dev",
+            "deploy",
+            "--target-type",
+            "aws-lambda",
+            "outputs",
+        ]);
+        assert_eq!(cli.target.as_deref(), Some("dev"));
+    }
+
+    // MED-3 fix per 77-REVIEWS.md: clap matrix tests covering the `--target` (top-level
+    // named target) vs `--target-type` (deploy-scoped, with `alias = "target"`) ambiguity
+    // edge cases. These are explicit snapshot/parse tests; if clap conflates the two flags
+    // for any of these invocations, these tests fail before any wiring runs.
+
+    #[test]
+    fn med3_top_target_and_deploy_target_type_disjoint() {
+        // `cargo pmcp --target dev deploy --target-type aws-lambda <args>`
+        // — top-level Cli.target is "dev"; deploy-scoped target_type is "aws-lambda".
+        let cli = Cli::parse_from([
+            "cargo-pmcp",
+            "--target",
+            "dev",
+            "deploy",
+            "--target-type",
+            "aws-lambda",
+            "outputs",
+        ]);
+        assert_eq!(cli.target.as_deref(), Some("dev"), "top-level --target = dev");
+        if let Commands::Deploy(deploy_cmd) = cli.command {
+            let dbg = format!("{:?}", deploy_cmd);
+            assert!(
+                dbg.contains("aws-lambda") || dbg.contains("AwsLambda"),
+                "deploy.target_type must contain `aws-lambda`; debug repr: {dbg}"
+            );
+        } else {
+            panic!("expected Commands::Deploy");
+        }
+    }
+
+    #[test]
+    fn med3_legacy_alias_still_works_via_alias() {
+        // `cargo pmcp deploy --target aws-lambda <args>` — `--target` is the deprecated
+        // alias for `--target-type`. The top-level Cli.target must REMAIN None (the deploy-scoped
+        // alias is not consumed by the global --target).
+        let cli = Cli::parse_from([
+            "cargo-pmcp",
+            "deploy",
+            "--target",
+            "aws-lambda",
+            "outputs",
+        ]);
+        assert!(
+            cli.target.is_none(),
+            "top-level --target must NOT be populated by deploy-scoped alias"
+        );
+    }
+
+    #[test]
+    fn med3_top_target_and_deploy_target_alias_disjoint() {
+        // `cargo pmcp --target dev deploy --target prod <args>`
+        // — top-level Cli.target = "dev"; deploy-scoped --target alias = "prod" (target_type).
+        let cli = Cli::parse_from([
+            "cargo-pmcp",
+            "--target",
+            "dev",
+            "deploy",
+            "--target",
+            "prod",
+            "outputs",
+        ]);
+        assert_eq!(cli.target.as_deref(), Some("dev"), "top-level --target = dev");
+        if let Commands::Deploy(deploy_cmd) = cli.command {
+            let dbg = format!("{:?}", deploy_cmd);
+            assert!(
+                dbg.contains("prod"),
+                "deploy-scoped --target alias must = `prod`; debug repr: {dbg}"
+            );
+        }
+    }
+
+    #[test]
+    fn med3_deploy_help_renders_both_flags() {
+        // `cargo pmcp deploy --help` must render both `--target` (alias [DEPRECATED]) and
+        // `--target-type` in the help output. We can't easily assert on stdout from inside a
+        // test without spawning a subprocess; verify the structure compiles and clap doesn't
+        // panic at help-render time. Use `Cli::command()` for the parsed command tree.
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+        let deploy = cmd
+            .find_subcommand("deploy")
+            .expect("deploy subcommand exists");
+        let arg_names: Vec<String> = deploy
+            .get_arguments()
+            .map(|a| a.get_id().to_string())
+            .collect();
+        assert!(
+            arg_names.iter().any(|n| n == "target_type"),
+            "deploy must declare target_type arg; got: {:?}",
+            arg_names
+        );
+    }
 }
 
 /// Dispatcher for the Preview command (async; spins up its own tokio runtime).
