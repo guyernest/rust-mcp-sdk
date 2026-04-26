@@ -15,6 +15,23 @@ pub async fn deploy_landing_page(
     server_id: Option<String>,
 ) -> Result<()> {
     let not_quiet = std::env::var("PMCP_QUIET").is_err();
+
+    // Phase 77 banner — emit before any pmcp.run upload / OAuth call. Idempotent
+    // (OnceLock-guarded) so the three internal entry points (lines 215/334/etc per
+    // RESEARCH §7) coalesce to a single emission per process invocation.
+    let banner_root =
+        crate::commands::configure::workspace::find_workspace_root().unwrap_or_else(|_| {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        });
+    if let Ok(Some(resolved)) = crate::commands::configure::resolver::resolve_target(
+        None,
+        None,
+        &banner_root,
+        None,
+    ) {
+        let _ = crate::commands::configure::banner::emit_resolved_banner_once(&resolved, !not_quiet);
+    }
+
     if not_quiet {
         println!("Deploying landing page...");
         println!();

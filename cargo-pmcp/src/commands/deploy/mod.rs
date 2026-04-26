@@ -90,6 +90,37 @@ pub mod init;
 
 use init::InitCommand;
 
+/// Phase 77: resolve target and emit D-13 banner. Idempotent (OnceLock-guarded).
+///
+/// Safe to call from every AWS-touching code path; the OnceLock prevents duplicate output.
+/// Errors are logged but not propagated (banner is informational, not load-bearing).
+///
+/// `project_root` is the workspace root (typically `find_workspace_root()`); `deploy_config`
+/// is the loaded `DeployConfig` (when available — pass `None` for early-init paths that don't
+/// yet have one). The resolver re-runs precedence resolution; the OnceLock guard makes
+/// duplicate emissions across the dispatch tree no-ops.
+fn emit_target_banner_if_resolved(
+    global_flags: &crate::commands::GlobalFlags,
+    project_root: &std::path::Path,
+    deploy_config: Option<&crate::deployment::config::DeployConfig>,
+) {
+    match crate::commands::configure::resolver::resolve_target(
+        None,
+        None,
+        project_root,
+        deploy_config,
+    ) {
+        Ok(Some(resolved)) => {
+            let _ = crate::commands::configure::banner::emit_resolved_banner_once(
+                &resolved,
+                global_flags.quiet,
+            );
+        },
+        Ok(None) => { /* D-11 zero-touch: no banner */ },
+        Err(_) => { /* swallow — error already surfaced at dispatch time in main.rs */ },
+    }
+}
+
 #[derive(Debug, Parser)]
 pub struct DeployCommand {
     /// Deployment target TYPE (aws-lambda, cloudflare-workers, pmcp-run, google-cloud-run).
@@ -397,6 +428,7 @@ impl DeployCommand {
                     } => {
                         // For init, we can use the old approach or new depending on target
                         if target_id == "aws-lambda" {
+                            emit_target_banner_if_resolved(global_flags, &project_root, None);
                             let mut cmd = InitCommand::new(project_root)
                                 .with_region(region)
                                 .with_credentials_check(!skip_credentials_check);
@@ -450,15 +482,30 @@ impl DeployCommand {
                                 }
                             }
 
+                            emit_target_banner_if_resolved(
+                                global_flags,
+                                &project_root,
+                                Some(&config),
+                            );
                             target.init(&config).await
                         }
                     },
                     DeployAction::Logs { tail, lines } => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        emit_target_banner_if_resolved(
+                            global_flags,
+                            &project_root,
+                            Some(&config),
+                        );
                         target.logs(&config, *tail, *lines).await
                     },
                     DeployAction::Metrics { period } => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        emit_target_banner_if_resolved(
+                            global_flags,
+                            &project_root,
+                            Some(&config),
+                        );
                         let metrics = target.metrics(&config, period).await?;
                         // Requested data -- always show
                         println!("Metrics for {}: {}", target.name(), metrics.period);
@@ -466,6 +513,11 @@ impl DeployCommand {
                     },
                     DeployAction::Test {} => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        emit_target_banner_if_resolved(
+                            global_flags,
+                            &project_root,
+                            Some(&config),
+                        );
                         let results = target.test(&config, global_flags.verbose).await?;
                         // Test results are requested output
                         if results.success {
@@ -483,6 +535,11 @@ impl DeployCommand {
                     },
                     DeployAction::Rollback { version, yes: _ } => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        emit_target_banner_if_resolved(
+                            global_flags,
+                            &project_root,
+                            Some(&config),
+                        );
                         target.rollback(&config, version.as_deref()).await
                     },
                     DeployAction::Destroy {
@@ -491,6 +548,11 @@ impl DeployCommand {
                         no_wait,
                     } => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        emit_target_banner_if_resolved(
+                            global_flags,
+                            &project_root,
+                            Some(&config),
+                        );
 
                         if !yes {
                             println!("WARNING: This will destroy deployment on {}", target.name());
@@ -529,6 +591,11 @@ impl DeployCommand {
                     },
                     DeployAction::Secrets { action } => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        emit_target_banner_if_resolved(
+                            global_flags,
+                            &project_root,
+                            Some(&config),
+                        );
                         let secrets_action = match action {
                             SecretsAction::Set { key, from_env } => {
                                 crate::deployment::SecretsAction::Set {
@@ -548,6 +615,11 @@ impl DeployCommand {
                     },
                     DeployAction::Outputs { format } => {
                         let config = crate::deployment::DeployConfig::load(&project_root)?;
+                        emit_target_banner_if_resolved(
+                            global_flags,
+                            &project_root,
+                            Some(&config),
+                        );
                         let outputs = target.outputs(&config).await?;
 
                         match format {
@@ -563,14 +635,22 @@ impl DeployCommand {
                     DeployAction::Login => {
                         // Login is target-specific
                         match target_id.as_str() {
-                            "pmcp-run" => crate::deployment::targets::pmcp_run::login().await,
+                            "pmcp-run" => {
+                                emit_target_banner_if_resolved(
+                                    global_flags,
+                                    &project_root,
+                                    None,
+                                );
+                                crate::deployment::targets::pmcp_run::login().await
+                            },
                             _ => {
                                 bail!("Login is not supported for target: {}", target_id);
                             },
                         }
                     },
                     DeployAction::Logout => {
-                        // Logout is target-specific
+                        // Logout is target-specific (local-only — no AWS/pmcp.run call,
+                        // banner intentionally NOT emitted per RESEARCH §7).
                         match target_id.as_str() {
                             "pmcp-run" => crate::deployment::targets::pmcp_run::logout(),
                             _ => {
@@ -583,6 +663,7 @@ impl DeployCommand {
                         if target_id != "pmcp-run" {
                             bail!("OAuth management is only supported for pmcp-run target");
                         }
+                        emit_target_banner_if_resolved(global_flags, &project_root, None);
                         handle_oauth_action(action).await
                     },
                     DeployAction::Status { operation_id } => {
@@ -599,6 +680,7 @@ impl DeployCommand {
                             println!();
                         }
 
+                        emit_target_banner_if_resolved(global_flags, &project_root, None);
                         let status = target.get_operation_status(operation_id).await?;
 
                         // Status output is requested data
@@ -666,6 +748,7 @@ impl DeployCommand {
                     );
                 }
 
+                emit_target_banner_if_resolved(global_flags, &project_root, Some(&config));
                 let artifact = target.build(&config).await?;
                 let outputs = target.deploy(&config, artifact).await?;
 
@@ -1186,5 +1269,37 @@ fn resolve_public_clients(
         Some(default_public_clients)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod phase_77_banner_smoke_tests {
+    use super::*;
+
+    /// Phase 77 helper smoke: when no `~/.pmcp/config.toml` exists and no PMCP_TARGET is set,
+    /// `emit_target_banner_if_resolved` must be a silent no-op (D-11 zero-touch). Establishing
+    /// this for free preserves Phase 76 behavior for users who never ran `cargo pmcp configure`.
+    #[test]
+    #[serial_test::serial]
+    fn helper_does_not_panic_when_no_config() {
+        let home_tmp = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home_tmp.path());
+        let saved_target = std::env::var_os("PMCP_TARGET");
+        std::env::remove_var("PMCP_TARGET");
+
+        let gf = crate::commands::GlobalFlags::default();
+        let project_root = std::env::temp_dir();
+        // Helper must NOT panic and MUST NOT print a banner when no config exists.
+        emit_target_banner_if_resolved(&gf, &project_root, None);
+
+        match saved_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match saved_target {
+            Some(v) => std::env::set_var("PMCP_TARGET", v),
+            None => std::env::remove_var("PMCP_TARGET"),
+        }
     }
 }
