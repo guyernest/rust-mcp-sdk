@@ -15,6 +15,7 @@ pub mod add;
 pub mod banner;
 pub mod config;
 pub mod list;
+pub mod name_validation;
 pub mod resolver;
 pub mod show;
 pub mod use_cmd;

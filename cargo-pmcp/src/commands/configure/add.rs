@@ -14,6 +14,7 @@ use crate::commands::configure::config::{
     default_user_config_path, AwsLambdaEntry, CloudflareWorkersEntry, GoogleCloudRunEntry,
     PmcpRunEntry, TargetConfigV1, TargetEntry,
 };
+use crate::commands::configure::name_validation::validate_target_name;
 use crate::commands::GlobalFlags;
 
 /// Arguments for `cargo pmcp configure add`.
@@ -81,26 +82,6 @@ pub fn execute(args: AddArgs, _global_flags: &GlobalFlags) -> Result<()> {
         "  run `cargo pmcp configure use {}` to make it active in this workspace",
         args.name
     );
-    Ok(())
-}
-
-/// Validates the target name against `[A-Za-z0-9_-]+` (T-77-03 path-traversal mitigation).
-fn validate_target_name(name: &str) -> Result<()> {
-    if name.is_empty() {
-        bail!("target name must not be empty");
-    }
-    if name.starts_with('-') {
-        bail!("target name must not start with '-'");
-    }
-    for ch in name.chars() {
-        if !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-' {
-            bail!(
-                "target name '{}' contains invalid character '{}' — must match [A-Za-z0-9_-]+",
-                name,
-                ch
-            );
-        }
-    }
     Ok(())
 }
 

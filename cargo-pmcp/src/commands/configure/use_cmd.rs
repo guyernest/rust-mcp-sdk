@@ -11,6 +11,7 @@ use anyhow::{bail, Context, Result};
 use clap::Args;
 
 use crate::commands::configure::config::{default_user_config_path, TargetConfigV1};
+use crate::commands::configure::name_validation::validate_target_name;
 use crate::commands::configure::workspace::find_workspace_root;
 use crate::commands::GlobalFlags;
 
@@ -70,28 +71,6 @@ pub fn execute(args: UseArgs, gf: &GlobalFlags) -> Result<()> {
         workspace_root.display(),
         args.name
     );
-    Ok(())
-}
-
-/// Validates that `name` matches `[A-Za-z0-9_-]+` and does not start with `-`.
-/// Mirrors the validator in `add.rs` (T-77-03 path-traversal mitigation).
-/// Plan 77-09 may consolidate this into a shared module during quality-gate cleanup.
-fn validate_target_name(name: &str) -> Result<()> {
-    if name.is_empty() {
-        bail!("target name must not be empty");
-    }
-    if name.starts_with('-') {
-        bail!("target name must not start with '-'");
-    }
-    for ch in name.chars() {
-        if !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-' {
-            bail!(
-                "target name '{}' contains invalid character '{}' — must match [A-Za-z0-9_-]+",
-                name,
-                ch
-            );
-        }
-    }
     Ok(())
 }
 
