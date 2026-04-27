@@ -106,10 +106,15 @@ fn emit_body_inner<W: Write>(resolved: &ResolvedTarget, w: &mut W) -> std::io::R
 }
 
 /// Emit a loud per-field warning when any banner field's value came from a
-/// `PMCP_*` / `AWS_*` env var instead of the resolved target. The aggregate
-/// `source` line (e.g. `~/.pmcp/config.toml + .pmcp/active-target`) only
-/// describes how the *target name* was selected — without these warnings,
-/// stale env vars set in a long-lived shell can silently misroute deploys.
+/// `PMCP_*` / `AWS_*` env var AND that env value differs from what the
+/// active target says (a real conflict). Suppresses warnings when the env
+/// value matches the target value — those are benign shadows that just
+/// repeat the target's intent.
+///
+/// The aggregate `source` line only describes how the *target name* was
+/// selected; per-field provenance lives in `ResolvedField.source` and the
+/// shadowed-target comparison is what tells operators whether they have a
+/// stale env var silently misrouting deploys.
 fn emit_env_override_warnings<W: Write>(
     resolved: &ResolvedTarget,
     w: &mut W,
@@ -120,13 +125,25 @@ fn emit_env_override_warnings<W: Write>(
         ("region", "AWS_REGION"),
     ] {
         if let Some(f) = resolved.fields.get(field) {
-            if matches!(f.source, TargetSource::Env) {
-                let target_name = resolved.name.as_deref().unwrap_or("<unset>");
-                writeln!(
+            if !matches!(f.source, TargetSource::Env) {
+                continue;
+            }
+            // Suppress when env value equals the target's value — no real conflict.
+            if f.shadowed_target_value.as_deref() == Some(f.value.as_str()) {
+                continue;
+            }
+            let target_name = resolved.name.as_deref().unwrap_or("<unset>");
+            match f.shadowed_target_value.as_deref() {
+                Some(target_value) => writeln!(
                     w,
-                    "  ⚠ ENV override: {} = {} comes from ${}, not from target '{}'",
-                    field, f.value, env_var, target_name
-                )?;
+                    "  ⚠ ENV override: {} = {} (from ${}; target '{}' says {})",
+                    field, f.value, env_var, target_name, target_value
+                )?,
+                None => writeln!(
+                    w,
+                    "  ⚠ ENV override: {} = {} (from ${}; target '{}' has no {} field)",
+                    field, f.value, env_var, target_name, field
+                )?,
             }
         }
     }
@@ -187,6 +204,7 @@ mod tests {
             ResolvedField {
                 value: "https://x".into(),
                 source: TargetSource::Target,
+                shadowed_target_value: None,
             },
         );
         fields.insert(
@@ -194,6 +212,7 @@ mod tests {
             ResolvedField {
                 value: "p".into(),
                 source: TargetSource::Target,
+                shadowed_target_value: None,
             },
         );
         fields.insert(
@@ -201,6 +220,7 @@ mod tests {
             ResolvedField {
                 value: "us-west-2".into(),
                 source: TargetSource::Target,
+                shadowed_target_value: None,
             },
         );
         ResolvedTarget {
@@ -315,13 +335,18 @@ mod tests {
         );
     }
 
+    /// Replaces a field with an env-sourced value, capturing the prior (target)
+    /// value as `shadowed_target_value` so the banner can compare and decide
+    /// whether the override is a real conflict or a benign no-op.
     fn make_resolved_with_env_override(field: &str, env_value: &str) -> ResolvedTarget {
         let mut r = make_resolved(Some(TargetSource::WorkspaceMarker));
+        let prior_target_value = r.fields.get(field).map(|f| f.value.clone());
         r.fields.insert(
             field.into(),
             ResolvedField {
                 value: env_value.into(),
                 source: TargetSource::Env,
+                shadowed_target_value: prior_target_value,
             },
         );
         r
@@ -329,31 +354,35 @@ mod tests {
 
     #[test]
     fn env_override_warning_fires_for_api_url() {
+        // make_resolved fixture's target api_url = "https://x"; env value differs.
         let resolved = make_resolved_with_env_override("api_url", "https://stale.example.com");
         let mut buf: Vec<u8> = Vec::new();
         emit_body_to_writer(&resolved, &mut buf).unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert!(
-            s.contains(
-                "⚠ ENV override: api_url = https://stale.example.com comes from $PMCP_API_URL"
-            ),
+            s.contains("⚠ ENV override: api_url = https://stale.example.com (from $PMCP_API_URL"),
             "expected ENV-override warning for api_url; got: {s}"
         );
         assert!(
-            s.contains("not from target 'dev'"),
-            "warning must name the target; got: {s}"
+            s.contains("target 'dev' says https://x"),
+            "warning must include shadowed target value; got: {s}"
         );
     }
 
     #[test]
     fn env_override_warning_fires_for_region_with_aws_region_envvar() {
+        // target region = "us-west-2"; env value = "us-east-1" → real conflict.
         let resolved = make_resolved_with_env_override("region", "us-east-1");
         let mut buf: Vec<u8> = Vec::new();
         emit_body_to_writer(&resolved, &mut buf).unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert!(
-            s.contains("⚠ ENV override: region = us-east-1 comes from $AWS_REGION"),
+            s.contains("⚠ ENV override: region = us-east-1 (from $AWS_REGION"),
             "expected AWS_REGION warning; got: {s}"
+        );
+        assert!(
+            s.contains("target 'dev' says us-west-2"),
+            "warning must include shadowed value; got: {s}"
         );
     }
 
@@ -364,7 +393,7 @@ mod tests {
         emit_body_to_writer(&resolved, &mut buf).unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert!(
-            s.contains("⚠ ENV override: aws_profile = stale-profile comes from $AWS_PROFILE"),
+            s.contains("⚠ ENV override: aws_profile = stale-profile (from $AWS_PROFILE"),
             "expected AWS_PROFILE warning; got: {s}"
         );
     }
@@ -382,8 +411,48 @@ mod tests {
     }
 
     #[test]
+    fn env_override_warning_silent_when_env_matches_target_value() {
+        // Env winner with the same value as the target — benign shadow, NOT a conflict.
+        // make_resolved's region = "us-west-2"; env also says "us-west-2".
+        let resolved = make_resolved_with_env_override("region", "us-west-2");
+        let mut buf: Vec<u8> = Vec::new();
+        emit_body_to_writer(&resolved, &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(
+            !s.contains("ENV override"),
+            "warning must be suppressed when env value matches target value; got: {s}"
+        );
+    }
+
+    #[test]
+    fn env_override_warning_when_target_has_no_field_uses_no_field_phrasing() {
+        // Env value with no shadowed target value — env-only override.
+        let mut r = make_resolved(Some(TargetSource::WorkspaceMarker));
+        r.fields.insert(
+            "api_url".into(),
+            ResolvedField {
+                value: "https://from-env".into(),
+                source: TargetSource::Env,
+                shadowed_target_value: None,
+            },
+        );
+        let mut buf: Vec<u8> = Vec::new();
+        emit_body_to_writer(&r, &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(
+            s.contains("⚠ ENV override: api_url = https://from-env (from $PMCP_API_URL"),
+            "warning should fire when target has no value; got: {s}"
+        );
+        assert!(
+            s.contains("target 'dev' has no api_url field"),
+            "warning should use 'has no <field> field' phrasing when shadowed value is None; got: {s}"
+        );
+    }
+
+    #[test]
     fn env_override_warning_appears_after_source_line() {
-        let resolved = make_resolved_with_env_override("api_url", "https://x");
+        // Use a value that differs from target's "https://x" so the warning fires.
+        let resolved = make_resolved_with_env_override("api_url", "https://different");
         let mut buf: Vec<u8> = Vec::new();
         emit_body_to_writer(&resolved, &mut buf).unwrap();
         let s = String::from_utf8(buf).unwrap();

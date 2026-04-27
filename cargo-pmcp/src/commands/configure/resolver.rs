@@ -44,6 +44,14 @@ pub struct ResolvedField {
     pub value: String,
     /// Where the value came from (env / flag / target / deploy.toml).
     pub source: TargetSource,
+    /// What the active target said for this field, if anything, when the
+    /// winning source was NOT the target itself. Used by the banner to
+    /// distinguish a real ENV override (env value differs from target value)
+    /// from a benign one (env value matches target value), and to surface
+    /// the shadowed value in warnings. `None` when source==Target or when
+    /// the target had no value for this field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shadowed_target_value: Option<String>,
 }
 
 /// Result of resolving the active target and merging fields per D-04.
@@ -199,13 +207,29 @@ pub fn resolve_target(
         std::collections::BTreeMap::new();
 
     // Helper closure to register a field if any source has a value.
+    // Captures the target value before precedence so callers can distinguish
+    // a real ENV override (target value differs) from a benign shadow
+    // (target value matches the env value).
     let mut put = |key: &str,
                    env: Option<String>,
                    flag: Option<String>,
                    target: Option<String>,
                    deploy: Option<String>| {
+        let target_for_shadow = target.clone();
         if let Some((value, source)) = pick_first_four(env, flag, target, deploy) {
-            fields.insert(key.to_string(), ResolvedField { value, source });
+            let shadowed_target_value = if matches!(source, TargetSource::Target) {
+                None
+            } else {
+                target_for_shadow
+            };
+            fields.insert(
+                key.to_string(),
+                ResolvedField {
+                    value,
+                    source,
+                    shadowed_target_value,
+                },
+            );
         }
     };
 
@@ -573,6 +597,7 @@ create_dashboard = false
                 Some(&ResolvedField {
                     value: "https://x".into(),
                     source: TargetSource::Target,
+                    shadowed_target_value: None,
                 })
             );
             assert_eq!(
@@ -580,6 +605,7 @@ create_dashboard = false
                 Some(&ResolvedField {
                     value: "dev-profile".into(),
                     source: TargetSource::Target,
+                    shadowed_target_value: None,
                 })
             );
             assert_eq!(
@@ -587,6 +613,7 @@ create_dashboard = false
                 Some(&ResolvedField {
                     value: "us-west-2".into(),
                     source: TargetSource::Target,
+                    shadowed_target_value: None,
                 })
             );
         });
@@ -752,6 +779,7 @@ create_dashboard = false
                 Some(&ResolvedField {
                     value: "us-west-2".into(),
                     source: TargetSource::DeployToml,
+                    shadowed_target_value: None,
                 })
             );
         });
@@ -767,6 +795,7 @@ create_dashboard = false
                 ResolvedField {
                     value: "p1".into(),
                     source: TargetSource::Target,
+                    shadowed_target_value: None,
                 },
             );
             fields.insert(
@@ -774,6 +803,7 @@ create_dashboard = false
                 ResolvedField {
                     value: "us-west-2".into(),
                     source: TargetSource::Target,
+                    shadowed_target_value: None,
                 },
             );
             let r = ResolvedTarget {
