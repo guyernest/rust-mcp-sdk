@@ -76,11 +76,20 @@ pub struct PmcpRunConfig {
     pub version: Option<String>,
 }
 
-/// Cached configuration with timestamp
+/// Cached configuration with timestamp and source.
+///
+/// `source_api_url` is the `PMCP_API_URL` value that produced this cache entry.
+/// On read, the cache is treated as invalid when this no longer matches the
+/// current `get_api_base_url()` — switching environments (dev↔prod) must NOT
+/// silently reuse the previous environment's GraphQL/Cognito/MCP URLs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedConfig {
     config: PmcpRunConfig,
     cached_at: String,
+    /// Defaulted for forward-compat with caches written before this field existed —
+    /// those caches will fail the api_url match check below and get refreshed.
+    #[serde(default)]
+    source_api_url: String,
 }
 
 /// Get the base API URL from environment or use default.
@@ -101,7 +110,7 @@ fn config_cache_path() -> Result<PathBuf> {
     Ok(pmcp_dir.join("pmcp-run-config.json"))
 }
 
-/// Load cached config if valid (within TTL).
+/// Load cached config if valid (within TTL AND keyed to the current `PMCP_API_URL`).
 /// Exposed as pub(crate) so graphql.rs and secrets provider can reuse it
 /// instead of reimplementing cache reads.
 pub(crate) fn load_cached_config() -> Option<PmcpRunConfig> {
@@ -113,7 +122,13 @@ pub(crate) fn load_cached_config() -> Option<PmcpRunConfig> {
     let content = std::fs::read_to_string(&path).ok()?;
     let cached: CachedConfig = serde_json::from_str(&content).ok()?;
 
-    // Check if cache is still valid
+    // Cache is keyed to the api_url that produced it. Switching environments
+    // (dev↔prod, by toggling PMCP_API_URL or the active configure target) must
+    // NOT reuse the previous environment's discovery output.
+    if cached.source_api_url != get_api_base_url() {
+        return None;
+    }
+
     let cached_at = chrono::DateTime::parse_from_rfc3339(&cached.cached_at).ok()?;
     let age = chrono::Utc::now()
         .signed_duration_since(cached_at)
@@ -126,12 +141,13 @@ pub(crate) fn load_cached_config() -> Option<PmcpRunConfig> {
     }
 }
 
-/// Save config to cache
+/// Save config to cache, stamped with the api_url that produced it.
 fn save_config_cache(config: &PmcpRunConfig) -> Result<()> {
     let path = config_cache_path()?;
     let cached = CachedConfig {
         config: config.clone(),
         cached_at: chrono::Utc::now().to_rfc3339(),
+        source_api_url: get_api_base_url(),
     };
     std::fs::write(&path, serde_json::to_string_pretty(&cached)?)?;
     Ok(())
@@ -795,4 +811,111 @@ pub fn logout() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use serial_test::serial;
+
+    /// Run `f` with `HOME` and the two PMCP_*_URL env vars overridden to a
+    /// fresh tempdir / known values, restoring the originals on return.
+    fn with_isolated_env<F, R>(api_url: &str, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        let home_tmp = tempfile::tempdir().unwrap();
+        let saved_home = std::env::var_os("HOME");
+        let saved_api = std::env::var_os("PMCP_API_URL");
+        let saved_legacy = std::env::var_os("PMCP_RUN_API_URL");
+
+        std::env::set_var("HOME", home_tmp.path());
+        std::env::set_var("PMCP_API_URL", api_url);
+        std::env::remove_var("PMCP_RUN_API_URL");
+
+        let result = f();
+
+        match saved_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match saved_api {
+            Some(v) => std::env::set_var("PMCP_API_URL", v),
+            None => std::env::remove_var("PMCP_API_URL"),
+        }
+        if let Some(v) = saved_legacy {
+            std::env::set_var("PMCP_RUN_API_URL", v);
+        }
+        result
+    }
+
+    fn fixture_config(mcp_url: &str) -> PmcpRunConfig {
+        PmcpRunConfig {
+            cognito_client_id: "client-id".into(),
+            cognito_domain: "https://auth.example.com".into(),
+            graphql_url: Some("https://graphql.example.com/graphql".into()),
+            mcp_url: Some(mcp_url.into()),
+            api_type: Some("graphql".into()),
+            version: Some("1.0".into()),
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn cache_hits_when_api_url_unchanged() {
+        with_isolated_env("https://dev.api.example.com", || {
+            let config = fixture_config("https://dev.mcp.example.com");
+            save_config_cache(&config).unwrap();
+            let loaded = load_cached_config().expect("cache should hit on same api_url");
+            assert_eq!(
+                loaded.mcp_url.as_deref(),
+                Some("https://dev.mcp.example.com")
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn cache_misses_when_api_url_changes() {
+        // Save under the dev api_url, then read under prod — must miss.
+        with_isolated_env("https://dev.api.example.com", || {
+            let config = fixture_config("https://dev.mcp.example.com");
+            save_config_cache(&config).unwrap();
+
+            // Switch api_url within the same isolated HOME.
+            std::env::set_var("PMCP_API_URL", "https://prod.api.example.com");
+            assert!(
+                load_cached_config().is_none(),
+                "cache must NOT hit when PMCP_API_URL differs from the cached source"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn cache_misses_for_legacy_payload_with_no_source_api_url() {
+        // Caches written before #2 will have an empty source_api_url after
+        // serde-default. They must fail the api_url match and refresh.
+        with_isolated_env("https://dev.api.example.com", || {
+            let path = config_cache_path().unwrap();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            // Legacy shape: no `source_api_url` field at all.
+            let legacy = serde_json::json!({
+                "config": {
+                    "cognito_client_id": "cid",
+                    "cognito_domain": "https://auth.example.com",
+                    "graphql_url": "https://graphql.example.com/graphql",
+                    "mcp_url": "https://stale.example.com",
+                    "api_type": "graphql",
+                    "version": "1.0",
+                },
+                "cached_at": chrono::Utc::now().to_rfc3339(),
+            });
+            std::fs::write(&path, serde_json::to_string_pretty(&legacy).unwrap()).unwrap();
+            assert!(
+                load_cached_config().is_none(),
+                "legacy cache (missing source_api_url) must miss so it gets refreshed"
+            );
+        });
+    }
 }
