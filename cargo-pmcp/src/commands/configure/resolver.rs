@@ -44,15 +44,33 @@ pub struct ResolvedField {
     pub value: String,
     /// Where the value came from (env / flag / target / deploy.toml).
     pub source: TargetSource,
-    /// What the active target said for this field, if anything, when the
-    /// winning source was NOT the target itself. Used by the banner to
-    /// distinguish a real ENV override (env value differs from target value)
-    /// from a benign one (env value matches target value), and to surface
-    /// the shadowed value in warnings. `None` when source==Target or when
-    /// the target had no value for this field.
+    /// Target value, if any, when source != Target. `None` when source == Target
+    /// or when the target had no value for this field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shadowed_target_value: Option<String>,
 }
+
+impl ResolvedField {
+    /// Returns the shadowed target value only when this field is a *real* override —
+    /// i.e. source != Target AND the target's value differs from the resolved value.
+    /// `None` for source==Target, no-shadow, and benign same-value shadows.
+    /// The banner uses this single call to decide whether to warn and what to print.
+    pub fn shadowing_target_value(&self) -> Option<&str> {
+        self.shadowed_target_value
+            .as_deref()
+            .filter(|tv| *tv != self.value.as_str())
+    }
+}
+
+/// Canonical (banner-field, env-var) bindings shared by the resolver (which reads
+/// the env vars) and the banner (which warns about overrides). Keep these in lockstep
+/// — drift would mean the banner names a different env var than the one the resolver
+/// actually consulted.
+pub const BANNER_FIELD_ENV_BINDINGS: &[(&str, &str)] = &[
+    ("api_url", "PMCP_API_URL"),
+    ("aws_profile", "AWS_PROFILE"),
+    ("region", "AWS_REGION"),
+];
 
 /// Result of resolving the active target and merging fields per D-04.
 ///
@@ -206,10 +224,6 @@ pub fn resolve_target(
     let mut fields: std::collections::BTreeMap<String, ResolvedField> =
         std::collections::BTreeMap::new();
 
-    // Helper closure to register a field if any source has a value.
-    // Captures the target value before precedence so callers can distinguish
-    // a real ENV override (target value differs) from a benign shadow
-    // (target value matches the env value).
     let mut put = |key: &str,
                    env: Option<String>,
                    flag: Option<String>,

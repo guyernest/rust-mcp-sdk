@@ -9,7 +9,9 @@
 use std::io::Write;
 use std::sync::OnceLock;
 
-use crate::commands::configure::resolver::{ResolvedField, ResolvedTarget, TargetSource};
+use crate::commands::configure::resolver::{
+    ResolvedField, ResolvedTarget, TargetSource, BANNER_FIELD_ENV_BINDINGS,
+};
 
 static BANNER_EMITTED: OnceLock<()> = OnceLock::new();
 
@@ -105,47 +107,35 @@ fn emit_body_inner<W: Write>(resolved: &ResolvedTarget, w: &mut W) -> std::io::R
     Ok(())
 }
 
-/// Emit a loud per-field warning when any banner field's value came from a
-/// `PMCP_*` / `AWS_*` env var AND that env value differs from what the
-/// active target says (a real conflict). Suppresses warnings when the env
-/// value matches the target value — those are benign shadows that just
-/// repeat the target's intent.
-///
-/// The aggregate `source` line only describes how the *target name* was
-/// selected; per-field provenance lives in `ResolvedField.source` and the
-/// shadowed-target comparison is what tells operators whether they have a
-/// stale env var silently misrouting deploys.
+/// Per-field warning when an env var overrode the target's value. The aggregate
+/// `source` line only describes how the target *name* was picked, so without
+/// these warnings a stale env var silently misroutes deploys with no
+/// operator-visible signal. Suppresses warnings for benign same-value shadows.
 fn emit_env_override_warnings<W: Write>(
     resolved: &ResolvedTarget,
     w: &mut W,
 ) -> std::io::Result<()> {
-    for (field, env_var) in [
-        ("api_url", "PMCP_API_URL"),
-        ("aws_profile", "AWS_PROFILE"),
-        ("region", "AWS_REGION"),
-    ] {
-        if let Some(f) = resolved.fields.get(field) {
-            if !matches!(f.source, TargetSource::Env) {
-                continue;
-            }
-            // Suppress when env value equals the target's value — no real conflict.
-            if f.shadowed_target_value.as_deref() == Some(f.value.as_str()) {
-                continue;
-            }
-            let target_name = resolved.name.as_deref().unwrap_or("<unset>");
-            match f.shadowed_target_value.as_deref() {
-                Some(target_value) => writeln!(
-                    w,
-                    "  ⚠ ENV override: {} = {} (from ${}; target '{}' says {})",
-                    field, f.value, env_var, target_name, target_value
-                )?,
-                None => writeln!(
-                    w,
-                    "  ⚠ ENV override: {} = {} (from ${}; target '{}' has no {} field)",
-                    field, f.value, env_var, target_name, field
-                )?,
-            }
+    let target_name = resolved.name.as_deref().unwrap_or("<unset>");
+    for (field, env_var) in BANNER_FIELD_ENV_BINDINGS {
+        let Some(f) = resolved.fields.get(*field) else {
+            continue;
+        };
+        if !matches!(f.source, TargetSource::Env) {
+            continue;
         }
+        let suffix = match (
+            f.shadowing_target_value(),
+            f.shadowed_target_value.as_deref(),
+        ) {
+            (Some(tv), _) => format!("target '{target_name}' says {tv}"),
+            (None, None) => format!("target '{target_name}' has no {field} field"),
+            (None, Some(_)) => continue, // benign same-value shadow
+        };
+        writeln!(
+            w,
+            "  ⚠ ENV override: {field} = {} (from ${env_var}; {suffix})",
+            f.value
+        )?;
     }
     Ok(())
 }
