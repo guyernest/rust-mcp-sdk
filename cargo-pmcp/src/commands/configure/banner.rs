@@ -101,6 +101,35 @@ fn emit_body_inner<W: Write>(resolved: &ResolvedTarget, w: &mut W) -> std::io::R
         "  source      = {}",
         source_description_exact(resolved.name_source, marker_name.as_deref())
     )?;
+    emit_env_override_warnings(resolved, w)?;
+    Ok(())
+}
+
+/// Emit a loud per-field warning when any banner field's value came from a
+/// `PMCP_*` / `AWS_*` env var instead of the resolved target. The aggregate
+/// `source` line (e.g. `~/.pmcp/config.toml + .pmcp/active-target`) only
+/// describes how the *target name* was selected — without these warnings,
+/// stale env vars set in a long-lived shell can silently misroute deploys.
+fn emit_env_override_warnings<W: Write>(
+    resolved: &ResolvedTarget,
+    w: &mut W,
+) -> std::io::Result<()> {
+    for (field, env_var) in [
+        ("api_url", "PMCP_API_URL"),
+        ("aws_profile", "AWS_PROFILE"),
+        ("region", "AWS_REGION"),
+    ] {
+        if let Some(f) = resolved.fields.get(field) {
+            if matches!(f.source, TargetSource::Env) {
+                let target_name = resolved.name.as_deref().unwrap_or("<unset>");
+                writeln!(
+                    w,
+                    "  ⚠ ENV override: {} = {} comes from ${}, not from target '{}'",
+                    field, f.value, env_var, target_name
+                )?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -283,6 +312,86 @@ mod tests {
         assert_eq!(
             source_description_exact(Some(TargetSource::WorkspaceMarker), None),
             "~/.pmcp/config.toml + .pmcp/active-target"
+        );
+    }
+
+    fn make_resolved_with_env_override(field: &str, env_value: &str) -> ResolvedTarget {
+        let mut r = make_resolved(Some(TargetSource::WorkspaceMarker));
+        r.fields.insert(
+            field.into(),
+            ResolvedField {
+                value: env_value.into(),
+                source: TargetSource::Env,
+            },
+        );
+        r
+    }
+
+    #[test]
+    fn env_override_warning_fires_for_api_url() {
+        let resolved = make_resolved_with_env_override("api_url", "https://stale.example.com");
+        let mut buf: Vec<u8> = Vec::new();
+        emit_body_to_writer(&resolved, &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(
+            s.contains(
+                "⚠ ENV override: api_url = https://stale.example.com comes from $PMCP_API_URL"
+            ),
+            "expected ENV-override warning for api_url; got: {s}"
+        );
+        assert!(
+            s.contains("not from target 'dev'"),
+            "warning must name the target; got: {s}"
+        );
+    }
+
+    #[test]
+    fn env_override_warning_fires_for_region_with_aws_region_envvar() {
+        let resolved = make_resolved_with_env_override("region", "us-east-1");
+        let mut buf: Vec<u8> = Vec::new();
+        emit_body_to_writer(&resolved, &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(
+            s.contains("⚠ ENV override: region = us-east-1 comes from $AWS_REGION"),
+            "expected AWS_REGION warning; got: {s}"
+        );
+    }
+
+    #[test]
+    fn env_override_warning_fires_for_aws_profile() {
+        let resolved = make_resolved_with_env_override("aws_profile", "stale-profile");
+        let mut buf: Vec<u8> = Vec::new();
+        emit_body_to_writer(&resolved, &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(
+            s.contains("⚠ ENV override: aws_profile = stale-profile comes from $AWS_PROFILE"),
+            "expected AWS_PROFILE warning; got: {s}"
+        );
+    }
+
+    #[test]
+    fn env_override_warning_silent_when_no_fields_overridden() {
+        let resolved = make_resolved(Some(TargetSource::WorkspaceMarker));
+        let mut buf: Vec<u8> = Vec::new();
+        emit_body_to_writer(&resolved, &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(
+            !s.contains("ENV override"),
+            "no warnings expected when all fields come from target; got: {s}"
+        );
+    }
+
+    #[test]
+    fn env_override_warning_appears_after_source_line() {
+        let resolved = make_resolved_with_env_override("api_url", "https://x");
+        let mut buf: Vec<u8> = Vec::new();
+        emit_body_to_writer(&resolved, &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        let source_pos = s.find("source").expect("source line");
+        let warn_pos = s.find("ENV override").expect("warning line");
+        assert!(
+            source_pos < warn_pos,
+            "warning must appear AFTER the source line so it reads as an addendum"
         );
     }
 
