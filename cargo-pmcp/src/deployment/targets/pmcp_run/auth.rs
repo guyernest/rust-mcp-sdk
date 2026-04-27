@@ -76,20 +76,26 @@ pub struct PmcpRunConfig {
     pub version: Option<String>,
 }
 
-/// Cached configuration with timestamp and source.
-///
-/// `source_api_url` is the `PMCP_API_URL` value that produced this cache entry.
-/// On read, the cache is treated as invalid when this no longer matches the
-/// current `get_api_base_url()` — switching environments (dev↔prod) must NOT
-/// silently reuse the previous environment's GraphQL/Cognito/MCP URLs.
+/// Cache entry tagged with the api_url that produced it; mismatched endpoints invalidate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedConfig {
     config: PmcpRunConfig,
     cached_at: String,
-    /// Defaulted for forward-compat with caches written before this field existed —
-    /// those caches will fail the api_url match check below and get refreshed.
+    /// `#[serde(default)]` lets pre-field caches deserialize and miss the endpoint check.
     #[serde(default)]
     source_api_url: String,
+}
+
+impl CachedConfig {
+    fn matches_endpoint(&self, current: &str) -> bool {
+        normalize_api_url(&self.source_api_url) == normalize_api_url(current)
+    }
+}
+
+/// Normalize an api_url for cache-key equality: trim, drop trailing `/`, ASCII-lowercase.
+/// `https://api.example.com/` and `HTTPS://api.example.com` collapse to the same key.
+fn normalize_api_url(s: &str) -> String {
+    s.trim().trim_end_matches('/').to_ascii_lowercase()
 }
 
 /// Get the base API URL from environment or use default.
@@ -115,17 +121,10 @@ fn config_cache_path() -> Result<PathBuf> {
 /// instead of reimplementing cache reads.
 pub(crate) fn load_cached_config() -> Option<PmcpRunConfig> {
     let path = config_cache_path().ok()?;
-    if !path.exists() {
-        return None;
-    }
-
     let content = std::fs::read_to_string(&path).ok()?;
     let cached: CachedConfig = serde_json::from_str(&content).ok()?;
 
-    // Cache is keyed to the api_url that produced it. Switching environments
-    // (dev↔prod, by toggling PMCP_API_URL or the active configure target) must
-    // NOT reuse the previous environment's discovery output.
-    if cached.source_api_url != get_api_base_url() {
+    if !cached.matches_endpoint(&get_api_base_url()) {
         return None;
     }
 
@@ -817,36 +816,50 @@ pub fn logout() -> Result<()> {
 mod cache_tests {
     use super::*;
     use serial_test::serial;
+    use std::ffi::{OsStr, OsString};
 
-    /// Run `f` with `HOME` and the two PMCP_*_URL env vars overridden to a
-    /// fresh tempdir / known values, restoring the originals on return.
+    /// RAII guard that restores an env var on drop — including on panic, so a
+    /// failing test cannot leak mutated env state into other `#[serial]` tests.
+    struct EnvGuard {
+        key: &'static str,
+        prev: Option<OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+            let prev = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, prev }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let prev = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, prev }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    /// Run `f` with `HOME` pointing at a fresh tempdir, `PMCP_API_URL` set to
+    /// `api_url`, and `PMCP_RUN_API_URL` cleared. All three are restored on
+    /// drop (even if `f` panics).
     fn with_isolated_env<F, R>(api_url: &str, f: F) -> R
     where
         F: FnOnce() -> R,
     {
         let home_tmp = tempfile::tempdir().unwrap();
-        let saved_home = std::env::var_os("HOME");
-        let saved_api = std::env::var_os("PMCP_API_URL");
-        let saved_legacy = std::env::var_os("PMCP_RUN_API_URL");
-
-        std::env::set_var("HOME", home_tmp.path());
-        std::env::set_var("PMCP_API_URL", api_url);
-        std::env::remove_var("PMCP_RUN_API_URL");
-
-        let result = f();
-
-        match saved_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
-        match saved_api {
-            Some(v) => std::env::set_var("PMCP_API_URL", v),
-            None => std::env::remove_var("PMCP_API_URL"),
-        }
-        if let Some(v) = saved_legacy {
-            std::env::set_var("PMCP_RUN_API_URL", v);
-        }
-        result
+        let _home = EnvGuard::set("HOME", home_tmp.path());
+        let _api = EnvGuard::set("PMCP_API_URL", api_url);
+        let _legacy = EnvGuard::remove("PMCP_RUN_API_URL");
+        f()
     }
 
     fn fixture_config(mcp_url: &str) -> PmcpRunConfig {
@@ -887,6 +900,23 @@ mod cache_tests {
             assert!(
                 load_cached_config().is_none(),
                 "cache must NOT hit when PMCP_API_URL differs from the cached source"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn cache_hits_when_api_url_differs_only_in_trailing_slash_or_case() {
+        // Trailing-slash and case differences must not produce a spurious miss.
+        with_isolated_env("https://Dev.API.example.com/", || {
+            let config = fixture_config("https://dev.mcp.example.com");
+            save_config_cache(&config).unwrap();
+
+            // Same endpoint, different casing + no trailing slash.
+            std::env::set_var("PMCP_API_URL", "https://dev.api.example.com");
+            assert!(
+                load_cached_config().is_some(),
+                "normalize_api_url should treat case + trailing-slash variants as equal"
             );
         });
     }
