@@ -1,7 +1,7 @@
 //! MCP Protocol Conformance Test Suite
 //!
 //! Validates any MCP server against the MCP protocol spec (2025-11-25).
-//! Scenarios are grouped by domain: Core, Tools, Resources, Prompts, Tasks.
+//! Scenarios are grouped by domain: Core, Transport, Tools, Resources, Prompts, Tasks.
 //! Each domain reports independently -- a server with no resources passes
 //! if it correctly reports empty capabilities.
 
@@ -10,6 +10,7 @@ pub(crate) mod prompts;
 pub(crate) mod resources;
 pub(crate) mod tasks;
 pub(crate) mod tools;
+pub(crate) mod transport;
 
 use crate::report::{TestCategory, TestReport, TestResult};
 use crate::tester::ServerTester;
@@ -24,6 +25,8 @@ pub enum ConformanceDomain {
     Resources,
     Prompts,
     Tasks,
+    /// HTTP transport-surface (GET/OPTIONS/DELETE on the MCP endpoint).
+    Transport,
 }
 
 impl ConformanceDomain {
@@ -35,6 +38,7 @@ impl ConformanceDomain {
             "resources" => Some(Self::Resources),
             "prompts" => Some(Self::Prompts),
             "tasks" => Some(Self::Tasks),
+            "transport" => Some(Self::Transport),
             _ => None,
         }
     }
@@ -88,6 +92,14 @@ impl ConformanceRunner {
 
         // Only proceed with other domains if core didn't fail
         if !report.has_failures() {
+            // Transport runs second (per CI summary order constraint) — purely
+            // HTTP-surface, does not require capabilities to be advertised.
+            if self.should_run(ConformanceDomain::Transport) {
+                for result in transport::run_transport_conformance(tester).await {
+                    report.add_test(result);
+                }
+            }
+
             if self.should_run(ConformanceDomain::Tools) {
                 for result in tools::run_tools_conformance(tester).await {
                     report.add_test(result);
