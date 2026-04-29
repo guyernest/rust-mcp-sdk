@@ -91,11 +91,12 @@ pub async fn execute(
 
 /// Print a single-line per-domain summary for CI consumption.
 ///
-/// Output format: `Conformance: Core=PASS Tools=PASS Resources=SKIP Prompts=PASS Tasks=SKIP`
+/// Output format: `Conformance: Core=PASS Transport=PASS Tools=PASS Resources=SKIP Prompts=PASS Tasks=SKIP`
 /// This line is easy to grep/parse in CI pipelines.
 fn print_domain_summary(report: &TestReport) {
     let domains = [
         ("Core", TestCategory::Core),
+        ("Transport", TestCategory::Transport),
         ("Tools", TestCategory::Tools),
         ("Resources", TestCategory::Resources),
         ("Prompts", TestCategory::Prompts),
