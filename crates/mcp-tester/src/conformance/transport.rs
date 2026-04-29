@@ -10,8 +10,11 @@
 //!   silently breaks spec-compliant SSE clients.
 //! - `OPTIONS /mcp` — must return CORS preflight headers (any 2xx with at
 //!   least one `Access-Control-*` header) or `405`.
-//! - `DELETE /mcp` — session termination is per-spec but optional; we surface
-//!   non-conforming responses as a warning, not a failure.
+//! - `DELETE /mcp` — session termination. Spec-compliant responses include
+//!   `200`/`204` (terminated), `405` (stateless), or any `4xx` carrying a
+//!   JSON-RPC error envelope (stateful server correctly rejecting a probe
+//!   that omits `Mcp-Session-Id`). Anything else is surfaced as a warning,
+//!   not a failure, since session-termination semantics vary across servers.
 //!
 //! All probes go through the existing `HttpMiddlewareChain` produced by
 //! `cargo pmcp auth`, so OAuth-protected servers are exercised with the
@@ -213,43 +216,62 @@ async fn test_options_mcp_returns_cors_or_405(
     }
 }
 
-/// `Transport: DELETE /mcp returns 200/204/405`
+/// `Transport: DELETE /mcp returns 200/204/405 OR JSON-RPC rejection`
 ///
-/// Session-termination is per-spec but not currently a known live-failure
-/// mode; treat unexpected statuses as warning until we see it in the wild.
+/// Spec-compliant DELETE responses, given the probe sends no `Mcp-Session-Id`:
+/// - `200` / `204` — session terminated (lenient stateful server).
+/// - `405` — stateless server: DELETE not supported.
+/// - any `4xx` with a JSON-RPC error envelope — stateful server correctly
+///   rejecting a session-less DELETE.
+///
+/// Anything else is surfaced as a warning, not a failure, since session-
+/// termination semantics vary across implementations.
 async fn test_delete_mcp_returns_session_termination_or_405(
     tester: &ServerTester,
     client: &Client,
 ) -> TestResult {
     let start = Instant::now();
-    let name = "Transport: DELETE /mcp returns 200/204/405";
+    let name = "Transport: DELETE /mcp returns 200/204/405 OR JSON-RPC rejection";
     let extra: [(&str, &str); 0] = [];
 
     match raw_probe_with_headers(tester, client, "DELETE", &extra, PROBE_RECEIVE_TIMEOUT).await {
-        Ok((status, ct, body_prefix, _has_cors)) => {
-            let conforming = status == StatusCode::OK.as_u16()
-                || status == StatusCode::NO_CONTENT.as_u16()
-                || status == StatusCode::METHOD_NOT_ALLOWED.as_u16();
-            if conforming {
-                TestResult::passed(
-                    name,
-                    TestCategory::Transport,
-                    start.elapsed(),
-                    format!("status={status}"),
-                )
-            } else if is_auth_status(status) {
-                auth_warning(name, start, status)
-            } else {
-                TestResult::warning(
-                    name,
-                    TestCategory::Transport,
-                    start.elapsed(),
-                    format_unexpected(status, &ct, &body_prefix),
-                )
-            }
+        Ok((status, ct, body_prefix, _has_cors)) => match classify_delete_mcp(status, &body_prefix)
+        {
+            TestStatus::Passed => TestResult::passed(
+                name,
+                TestCategory::Transport,
+                start.elapsed(),
+                format!("status={status}"),
+            ),
+            TestStatus::Warning if is_auth_status(status) => auth_warning(name, start, status),
+            TestStatus::Warning | TestStatus::Failed | TestStatus::Skipped => TestResult::warning(
+                name,
+                TestCategory::Transport,
+                start.elapsed(),
+                format_unexpected(status, &ct, &body_prefix),
+            ),
         },
         Err(e) => TestResult::warning(name, TestCategory::Transport, start.elapsed(), e),
     }
+}
+
+/// Pure classifier for `DELETE /mcp` responses. Returns `Passed` for any
+/// spec-compliant shape; `Warning` for everything else (auth or unexpected).
+pub fn classify_delete_mcp(status: u16, body_prefix: &str) -> TestStatus {
+    if status == StatusCode::OK.as_u16()
+        || status == StatusCode::NO_CONTENT.as_u16()
+        || status == StatusCode::METHOD_NOT_ALLOWED.as_u16()
+    {
+        return TestStatus::Passed;
+    }
+    if is_4xx(status) && looks_like_jsonrpc_error(body_prefix) {
+        return TestStatus::Passed;
+    }
+    TestStatus::Warning
+}
+
+fn is_4xx(status: u16) -> bool {
+    (400..500).contains(&status)
 }
 
 fn auth_warning(name: &'static str, start: Instant, status: u16) -> TestResult {
@@ -496,6 +518,48 @@ mod tests {
             classify_get_mcp(405, "application/json", body),
             TestStatus::Failed
         );
+    }
+
+    // Truth-table tests for `classify_delete_mcp`.
+
+    #[test]
+    fn classify_delete_mcp_200_204_405_pass() {
+        assert_eq!(classify_delete_mcp(200, ""), TestStatus::Passed);
+        assert_eq!(classify_delete_mcp(204, ""), TestStatus::Passed);
+        assert_eq!(classify_delete_mcp(405, ""), TestStatus::Passed);
+    }
+
+    #[test]
+    fn classify_delete_mcp_4xx_with_jsonrpc_error_passes() {
+        // A stateful server rejecting a session-less DELETE with a JSON-RPC
+        // error envelope is spec-compliant — this is the cost-coach case.
+        let body = r#"{"jsonrpc":"2.0","error":{"code":-32600,"message":"No session ID provided"},"id":null}"#;
+        assert_eq!(classify_delete_mcp(404, body), TestStatus::Passed);
+        assert_eq!(classify_delete_mcp(400, body), TestStatus::Passed);
+        assert_eq!(classify_delete_mcp(409, body), TestStatus::Passed);
+    }
+
+    #[test]
+    fn classify_delete_mcp_4xx_without_jsonrpc_warns() {
+        assert_eq!(classify_delete_mcp(404, ""), TestStatus::Warning);
+        assert_eq!(
+            classify_delete_mcp(404, r#"{"message":"Not Found"}"#),
+            TestStatus::Warning
+        );
+        assert_eq!(
+            classify_delete_mcp(400, "<html>Bad</html>"),
+            TestStatus::Warning
+        );
+    }
+
+    #[test]
+    fn classify_delete_mcp_other_warns() {
+        assert_eq!(classify_delete_mcp(500, ""), TestStatus::Warning);
+        assert_eq!(classify_delete_mcp(502, ""), TestStatus::Warning);
+        assert_eq!(classify_delete_mcp(301, ""), TestStatus::Warning);
+        // 5xx with JSON-RPC body is still warning — server-side failure.
+        let body = r#"{"jsonrpc":"2.0","error":{"code":-32603,"message":"x"},"id":null}"#;
+        assert_eq!(classify_delete_mcp(500, body), TestStatus::Warning);
     }
 
     /// Failure-detail strings only embed response-side data; the function

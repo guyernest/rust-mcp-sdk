@@ -227,3 +227,52 @@ async fn transport_domain_options_passes_with_cors() {
         .expect("OPTIONS /mcp test exists");
     assert_eq!(opts.status, TestStatus::Passed);
 }
+
+/// Stateful server that rejects a session-less DELETE with a JSON-RPC error
+/// envelope (the cost-coach response shape). Spec-compliant: should PASS.
+fn stateful_delete_handler(req: &str) -> Vec<u8> {
+    let method = req.split_whitespace().next().unwrap_or("");
+    match method {
+        "GET" => http_response(
+            "HTTP/1.1 405 Method Not Allowed",
+            Some("application/json"),
+            r#"{"jsonrpc":"2.0","error":{"code":-32601,"message":"SSE not supported in stateless mode"},"id":null}"#,
+        ),
+        "OPTIONS" => {
+            let mut header = String::from("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n");
+            header.push_str("Access-Control-Allow-Origin: *\r\n");
+            header.push_str("Connection: close\r\n\r\n");
+            header.into_bytes()
+        },
+        "DELETE" => http_response(
+            "HTTP/1.1 404 Not Found",
+            Some("application/json"),
+            r#"{"jsonrpc":"2.0","error":{"code":-32600,"message":"No session ID provided"},"id":null}"#,
+        ),
+        _ => http_response("HTTP/1.1 404 Not Found", None, ""),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn transport_domain_delete_passes_when_server_rejects_with_jsonrpc() {
+    let (addr, handle) = spawn_stub_server(Arc::new(stateful_delete_handler)).await;
+    let mut tester = build_tester(addr);
+
+    let report = run_transport_only(&mut tester).await;
+    handle.abort();
+
+    let del = report
+        .tests
+        .iter()
+        .find(|t| t.name.starts_with("Transport: DELETE /mcp"))
+        .expect("DELETE /mcp test exists");
+    assert_eq!(del.category, TestCategory::Transport);
+    assert_eq!(
+        del.status,
+        TestStatus::Passed,
+        "DELETE must PASS when server returns 4xx + JSON-RPC error envelope; \
+         details={:?} error={:?}",
+        del.details,
+        del.error
+    );
+}
