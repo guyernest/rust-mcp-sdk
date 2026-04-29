@@ -24,6 +24,12 @@ pub enum TestStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TestCategory {
     Core,
+    /// HTTP transport-surface conformance (GET/OPTIONS/DELETE on the MCP endpoint).
+    ///
+    /// Distinct from the JSON-RPC-over-POST `Core` domain: catches Streamable-HTTP
+    /// misconfigurations a POST-only suite cannot see (e.g. `GET /mcp` rewritten
+    /// to a JSON health endpoint by a reverse proxy or edge function).
+    Transport,
     Protocol,
     Tools,
     Resources,
@@ -429,5 +435,60 @@ impl TestReport {
 
             println!();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Transport variant must exist and round-trip through serde JSON unchanged.
+    #[test]
+    fn transport_category_serde_roundtrip() {
+        let original = TestCategory::Transport;
+        let json = serde_json::to_string(&original).expect("serialize");
+        assert_eq!(json, "\"Transport\"");
+        let parsed: TestCategory = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, TestCategory::Transport);
+    }
+
+    /// Transport variant participates in equality / clone / debug like its siblings.
+    #[test]
+    fn transport_category_traits() {
+        let a = TestCategory::Transport;
+        let b = a.clone();
+        assert_eq!(a, b);
+        assert_ne!(a, TestCategory::Core);
+        // Debug must produce the variant name (used by print_pretty grouping).
+        assert_eq!(format!("{:?}", a), "Transport");
+    }
+
+    /// A TestResult tagged Transport must aggregate correctly in the summary counters.
+    #[test]
+    fn transport_results_aggregate_in_summary() {
+        let mut report = TestReport::new();
+        report.add_test(TestResult::passed(
+            "Transport: GET /mcp",
+            TestCategory::Transport,
+            Duration::from_millis(10),
+            "ok",
+        ));
+        report.add_test(TestResult::failed(
+            "Transport: OPTIONS /mcp",
+            TestCategory::Transport,
+            Duration::from_millis(10),
+            "boom",
+        ));
+        report.add_test(TestResult::warning(
+            "Transport: DELETE /mcp",
+            TestCategory::Transport,
+            Duration::from_millis(10),
+            "warn",
+        ));
+        assert_eq!(report.summary.total, 3);
+        assert_eq!(report.summary.passed, 1);
+        assert_eq!(report.summary.failed, 1);
+        assert_eq!(report.summary.warnings, 1);
+        assert!(report.has_failures());
     }
 }
