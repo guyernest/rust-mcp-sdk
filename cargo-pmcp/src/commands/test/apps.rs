@@ -116,9 +116,35 @@ pub async fn execute(
         println!("{}", "3. Validating App metadata...".bright_white());
     }
 
+    // REVISION HIGH-4: clone the filter for use both by AppValidator (metadata
+    // validation) and the widget-read site below (so --tool restricts which
+    // widgets are read). Without the clone, we'd move it into AppValidator::new.
+    let tool_filter = tool.clone();
+
     // Run validation
     let validator = AppValidator::new(validation_mode, tool);
-    let results = validator.validate_tools(&tools, &resources);
+    let mut results = validator.validate_tools(&tools, &resources);
+
+    // REVISION HIGH-4: build app_tools applying the same `tool_filter` semantics
+    // AppValidator uses internally (see app_validator.rs lines 76-85). If a
+    // filter is set, ONLY tools whose name matches are included; otherwise
+    // every App-capable tool is included.
+    let app_tools: Vec<&pmcp::types::ToolInfo> = tools
+        .iter()
+        .filter(|t| match tool_filter.as_deref() {
+            Some(name) => t.name == name,
+            None => AppValidator::is_app_capable(t),
+        })
+        .collect();
+
+    // Fetch widget HTML bodies via resources/read for every (filtered)
+    // App-capable tool. Emits ERROR-tier results in claude-desktop mode (one
+    // per missing handler/signal); standard mode emits ONE summary WARN per
+    // widget; chatgpt mode emits zero widget rows (per Plan 01 RESEARCH Q4).
+    let (widget_bodies, mut read_failures) =
+        read_widget_bodies(&mut tester, &app_tools, verbose).await;
+    results.extend(validator.validate_widgets(&widget_bodies));
+    results.append(&mut read_failures);
 
     if results.is_empty() {
         if global_flags.should_output() {
@@ -294,7 +320,6 @@ fn dedup_widget_uris(
 /// Per-widget read failures DO NOT abort the run; they are surfaced as
 /// `TestStatus::Failed` rows in the returned `read_failures` Vec so the
 /// user still sees them in the report (per RESEARCH §Pitfall 4).
-#[allow(dead_code)] // Wired into execute() in Task 2 of this plan.
 async fn read_widget_bodies(
     tester: &mut mcp_tester::ServerTester,
     app_tools: &[&pmcp::types::ToolInfo],
