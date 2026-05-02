@@ -26,10 +26,26 @@ use super::GlobalFlags;
 
 #[derive(Debug, Subcommand)]
 pub enum TestCommand {
-    /// Validate MCP App metadata compliance
+    /// Validate MCP App metadata compliance.
     ///
-    /// Checks tools for App-capable metadata (ui.resourceUri), validates MIME types,
-    /// cross-references with resources, and optionally validates host-specific keys.
+    /// Checks tools for App-capable metadata (ui.resourceUri), validates MIME
+    /// types, cross-references with resources, and optionally validates
+    /// host-specific keys.
+    ///
+    /// MODES:
+    ///   * `standard` (default) - permissive: emits ONE summary Warning per
+    ///     widget (MCP Apps is optional in the spec).
+    ///   * `chatgpt` - also checks for openai/* _meta keys ChatGPT requires.
+    ///     For widget validation specifically, `chatgpt` mode is a no-op
+    ///     (no widget rows emitted) — preserves the previous behavior.
+    ///   * `claude-desktop` - STRICT: statically inspects each widget HTML body
+    ///     fetched via resources/read for the @modelcontextprotocol/ext-apps
+    ///     import, the new App({...}) constructor, the four required protocol
+    ///     handlers (onteardown, ontoolinput, ontoolcancelled, onerror),
+    ///     and the app.connect() call. Missing signals are emitted as ERROR
+    ///     (one row per missing handler). Honors `--tool` to restrict the
+    ///     check to a single tool's widget. Recommended pre-deploy check
+    ///     for servers shipping to Claude clients.
     Apps {
         /// URL of the MCP server to validate
         url: String,

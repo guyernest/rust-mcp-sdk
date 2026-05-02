@@ -101,6 +101,23 @@ Output includes a per-domain CI summary line:
 Conformance: Core=PASS Tools=PASS Resources=SKIP Prompts=PASS Tasks=SKIP
 ```
 
+## App Validation
+
+Validate MCP App metadata on a running server. Cross-references tools that declare `ui.resourceUri` against the resources they reference, validates MIME types, and (in strict modes) statically inspects the widget HTML for required protocol handler wiring.
+
+```bash
+# Default (permissive) — one summary Warning per widget
+mcp-tester apps http://localhost:3000
+
+# ChatGPT compatibility mode (no-op for widget HTML inspection)
+mcp-tester apps http://localhost:3000 --mode chatgpt
+
+# Claude Desktop / Claude.ai pre-deploy gate (strict static widget inspection)
+mcp-tester apps http://localhost:3000 --mode claude-desktop
+```
+
+`--mode claude-desktop` statically inspects each widget HTML body for the `@modelcontextprotocol/ext-apps` import and the four required protocol handlers (`onteardown`, `ontoolinput`, `ontoolcancelled`, `onerror`) before `connect()`. This catches the silent-fail class where Claude Desktop tears down the MCP connection after a missing handler — see [src/server/mcp_apps/GUIDE.md#handlers-before-connect](https://github.com/paiml/rust-mcp-sdk/blob/main/src/server/mcp_apps/GUIDE.md#handlers-before-connect).
+
 ## Generate Test Scenarios
 
 Auto-generate test scenarios from your server's capabilities. The generator discovers all tools, analyzes their JSON schemas, and creates YAML scenario files with smart placeholder values:

@@ -41,7 +41,7 @@ this plan's `#[allow(dead_code)]` annotations.
 
 ## Pre-existing clippy errors in `cargo-pmcp` pentest/loadtest/deployment modules
 
-**Discovered during:** Plan 78-02 Task 1 verification (`cargo clippy -p cargo-pmcp --all-targets -- -D warnings`)
+**Discovered during:** Plan 78-02 Task 1 verification AND Plan 78-04 Task 3 verification — both ran `cargo clippy -p cargo-pmcp --all-targets -- -D warnings` and surfaced the same 5 pre-existing errors. Consolidated here for traceability.
 
 **Errors (unrelated files):**
 
@@ -51,8 +51,8 @@ this plan's `#[allow(dead_code)]` annotations.
 - `cargo-pmcp/src/loadtest/summary.rs:58` — `clippy::vec_init_then_push` (1x: push immediately after creation)
 - `cargo-pmcp/src/deployment/config.rs:491` — `clippy::collapsible_match` (1x)
 
-**Verification this is pre-existing:** Stashed Plan 78-02 Task 1 changes and re-ran `cargo clippy -p cargo-pmcp --all-targets -- -D warnings` against base commit `a5fd2844` — same errors reproduced. They are independent of Plan 78-02 changes.
+**Verification this is pre-existing:** Stashed plan changes (separately for both 78-02 and 78-04) and re-ran `cargo clippy -p cargo-pmcp --all-targets -- -D warnings` against base commit `a5fd2844` — same errors reproduced. They are independent of any Phase 78 plan changes.
 
-**Why not fixed inline:** Out-of-scope per executor SCOPE BOUNDARY rule (only auto-fix issues directly caused by the current task's changes). Plan 78-02 modifies `cargo-pmcp/src/commands/test/apps.rs`, `cargo-pmcp/tests/apps_helpers.rs`, `cargo-pmcp/tests/cli_acceptance.rs`, and `cargo-pmcp/Cargo.toml` only.
+**Why not fixed inline:** Out-of-scope per executor SCOPE BOUNDARY rule. Plan 78-02 modifies `cargo-pmcp/src/commands/test/apps.rs`, `cargo-pmcp/tests/apps_helpers.rs`, `cargo-pmcp/tests/cli_acceptance.rs`, `cargo-pmcp/Cargo.toml`. Plan 78-04 modifies markdown READMEs and a `///`-doc clap comment on `cargo-pmcp/src/commands/test/mod.rs::TestCommand::Apps`. None of the clippy errors above are in files touched by either plan.
 
-**Plan 78-02 verification scope:** Per Plan 78-01 precedent, Plan 78-02 `cargo clippy -p cargo-pmcp` runs are scoped to `--lib --tests --bins` (excluding examples + integration of unrelated pentest crate code). The new code in `apps.rs` itself is clippy-clean.
+**Plan 78-02 / 78-04 verification scope:** Both plans scope `cargo clippy -p cargo-pmcp` runs to `--lib --tests --bins` (excluding examples + unrelated pentest code). The new code in `apps.rs`, `apps_helpers.rs`, `cli_acceptance.rs`, `report.rs`, and `mod.rs` is clippy-clean.
