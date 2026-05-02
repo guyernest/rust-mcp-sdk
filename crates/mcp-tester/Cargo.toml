@@ -41,6 +41,7 @@ http = "1"
 
 [dev-dependencies]
 tempfile = "3"
+proptest = "1"
 
 [package.metadata.binstall]
 pkg-url = "https://github.com/paiml/rust-mcp-sdk/releases/download/v{ version }/{ name }-{ target }{ binary-ext }"
