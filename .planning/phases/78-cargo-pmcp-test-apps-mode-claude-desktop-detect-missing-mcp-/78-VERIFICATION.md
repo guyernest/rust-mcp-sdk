@@ -1,8 +1,9 @@
 ---
 phase: 78-cargo-pmcp-test-apps-mode-claude-desktop-detect-missing-mcp-
 verified: 2026-05-02T00:00:00Z
-status: human_needed
-score: 9/9 must-haves verified
+updated: 2026-05-02T00:00:00Z
+status: gaps_found
+score: 9/9 must-haves verified at lib boundary; AC-78-1..3 fail at binary boundary against real prod (cost-coach false-positive evidence)
 overrides_applied: 0
 human_verification:
   - test: "Run `cargo pmcp test apps --mode claude-desktop` against a real MCP server with broken widget HTML"
@@ -150,17 +151,81 @@ See `human_verification` block in frontmatter. Five items:
 
 The CLI binary boundary verification is gated on a fixture binary that the planner explicitly deferred to a follow-up phase (REVISION HIGH-2 in Plan 78-02; documented at `cargo-pmcp/tests/fixtures/mcp_widget_server.rs.todo`). Until that fixture binary lands as a `[[bin]]` target, the only path to verifying AC-78-1..4 at the binary boundary is manual: the developer points `cargo pmcp test apps --mode claude-desktop` at a real running MCP server with broken/corrected widgets.
 
-### Gaps Summary
+### Gaps Summary (UPDATED 2026-05-02 — cost-coach prod feedback)
 
-**No goal-blocking gaps.** Every observable truth is verified at the library level. Every required artifact exists, is substantive, is wired into its consumers, and produces real data. Every key link is connected. Every requirement ID has implementation evidence.
+Status escalated from `human_needed` → `gaps_found`. Human UAT against the cost-coach production server (`https://cost-coach.us-west.pmcp.run/mcp`, 8 widgets, 97 tests, 33 failures, 4 warnings) revealed that **all 33 failures are false positives**. Every cost-coach widget has the SDK correctly wired and renders correctly in Claude Desktop / claude.ai. The validator's static-analysis patterns are defeated by Vite singlefile minification on bundled prod widgets. AC-78-1..3 fail at the binary boundary against real prod input.
 
-The only gap is **CLI binary-boundary verification of AC-78-1..4**, which is intentionally skip-gated by the planner (plan 78-02 REVISION HIGH-2). The library-level verification is comprehensive (7 widget integration tests + 5 apps_helpers tests + 9 unit tests), and the CLI plumbing is fully wired (`results.extend(validator.validate_widgets(&widget_bodies))` at apps.rs:146, with `tool_filter` applied at the read site and `validate_widgets` reachable from `execute()`). The deferred fixture binary is documented at `cargo-pmcp/tests/fixtures/mcp_widget_server.rs.todo` as a follow-up that does not block the phase.
+Source: `/Users/guy/projects/mcp/cost-coach/drafts/feedback-pmcp-test-apps-v1-false-positives.md` (8.4 KB, dated 2026-05-02). Three concrete root causes:
 
-**Recommendation:** Status is `human_needed` rather than `passed` because while every must-have is verified at the library and integration boundaries, the binary-level AC contracts (AC-78-1..4) require either:
-1. A human to manually run `cargo pmcp test apps --mode claude-desktop` against a real server with broken widgets and verify the exit code + handler-naming, OR
-2. A follow-up that wires the `mcp_widget_server` fixture binary as a `[[bin]]` target so `cli_acceptance.rs` runs assertions instead of skipping.
+#### Gap G1 (HIGH, blocks AC-78-3): SDK-presence regex `import.*ext-apps` matches zero bundled widgets
 
-Phase 78 has shipped the value (validator catches broken widgets, CLI plumbing routes data correctly, docs explain the mode); the remaining verification is acceptance-test rigor at the binary boundary, which the planner explicitly accepted as a known skip.
+Vite singlefile inlines `import { App } from '@modelcontextprotocol/ext-apps'` — the literal import string is gone from prod bundles. The package name only survives as a log-prefix string `[ext-apps]` inside the inlined SDK runtime (e.g. `[ext-apps] App.${e}() called before connect`).
+
+**Evidence:** Cost-coach reports `grep '[ext-apps]' widget/dist/*.html` finds the log prefix in all 8 bundles, but `import.*ext-apps` matches zero.
+
+**Fix:** Replace the `import.*ext-apps` literal with three minification-resistant signals (any one is sufficient SDK evidence): `[ext-apps]` log prefix OR `ui/initialize` method string OR `ui/notifications/tool-result` method string. These are protocol-level JSON-RPC method names — minifiers cannot rename them.
+
+**Acceptance:** `app_validator::scan_widget` returns `signals.has_sdk = true` for `widget/dist/cost-summary.html` (Cost-Coach's actual prod bundle, captured as a fixture).
+
+#### Gap G2 (HIGH, blocks AC-78-1, AC-78-3): Constructor regex `new App\(` matches zero bundled widgets
+
+Vite minification renames the imported `App` class to a 2-letter identifier (different per bundle hash): `App` → `yl` / `gl` / `ol` / etc. The current regex `new App\(` finds nothing on minified bundles. The user-controlled payload `{name: "...", version: "..."}` survives intact because that's the data the cost-coach team passes in.
+
+**Evidence:** Cost-coach reports concrete construction sites: `new yl({name:"cost-coach-cost-summary",version:"1.0.0"})`, `new gl({name:"cost-coach-cost-over-time",version:"1.0.0"})`, `new ol({name:"cost-coach-savings-summary",version:"1.0.0"})`.
+
+**Fix:** Replace `new App\(` with a regex that tolerates a mangled constructor identifier paired with the unmangled payload: `new [a-zA-Z_$][a-zA-Z0-9_$]{0,5}\(\s*\{\s*name\s*:\s*"[^"]+"\s*,\s*version\s*:\s*"[^"]+"\s*\}`. The `{name, version}` literal is what user code controls; minifiers don't touch string keys or quoted values.
+
+**Acceptance:** `app_validator::scan_widget` returns `signals.has_app_constructor = true` for all three captured fixtures (`cost-summary.html`, `cost-over-time.html`, `savings-summary.html`).
+
+#### Gap G3 (HIGH, blocks AC-78-1): SDK-detection failure cascades to all 8 handler/connect checks (single FN → 8× FN)
+
+Output across cost-coach widgets: 5 widgets where SDK was somehow detected → 1 failure each (only `new App({...})`); 3 widget URIs where SDK was not detected → **8 failures each** (every check). This pattern is the classic cascade: when the SDK-presence signal is missing, the validator treats the entire widget as un-wired and fails every downstream check, ignoring the per-handler evidence that the bundle does contain `\.onteardown\s*=`, `\.connect\(\)`, etc.
+
+**Evidence:** From feedback report — "5 widgets where SDK import was somehow detected: 1 failure each (only `new App({...})`); 3 widget URIs where SDK import wasn't detected: 8 failures each (everything). Single false negative → 8× false negatives."
+
+**Fix:** Make every per-signal check independent of `has_sdk`. If `\.onteardown\s*=` is in the bundle, that's positive handler evidence regardless of whether the SDK-presence heuristic fired. The cascade should be reserved for cases where independent evidence is genuinely absent. Member names (`.onteardown`, `.ontoolinput`, `.ontoolcancelled`, `.onerror`, `.ontoolresult`) and method names (`.connect()`) are protocol-level identifiers the SDK exposes by string name — they survive minification untouched.
+
+**Acceptance:** A widget with all 5 handler member-assignments and `.connect()` PRESENT but `[ext-apps]` log prefix ABSENT must report `has_handlers = true`, `has_connect = true`, `has_sdk = false` — three independent verdicts, no cascade.
+
+#### Gap G4 (MEDIUM, follow-up to G1–G3): No `--widgets-dir <path>` source-scan mode
+
+The validator currently fetches `resources/read` and scans the served HTML — the bundle. Bundles are the worst surface to static-analyze: minified, inlined, intentionally compact. Source HTML (e.g. `widget/*.html` in cost-coach's repo) has unmangled identifiers, intact import statements, clear handler assignments. Pre-deploy this is the higher-confidence path.
+
+**Fix:** Add `--widgets-dir <path>` flag to `cargo pmcp test apps`. When provided, the command scans `<path>/*.html` instead of fetching via `resources/read`. `cargo pmcp preview` already has a similar flag — same name, same path-resolution semantics, different scanner.
+
+**Acceptance:** `cargo pmcp test apps --widgets-dir cost-coach/widget --mode claude-desktop` exits zero and reports zero failures; `cargo pmcp test apps https://cost-coach.us-west.pmcp.run/mcp --mode claude-desktop` (bundle scan) also exits zero after G1+G2+G3 land.
+
+#### Gap G5 (MEDIUM): Captured cost-coach bundle fixtures missing from regression suite
+
+We have synthetic fixtures (`broken_no_sdk.html`, `broken_no_handlers.html`, `corrected_minimal.html`) but no fixtures that resemble real Vite singlefile bundle output. Without these, the false-positive class is invisible to the test suite — the test fixtures look nothing like the prod bundles that broke.
+
+**Fix:** Add three captured-from-prod fixtures (or convincing synthesizations) under `crates/mcp-tester/tests/fixtures/widgets/bundled/`:
+- `cost_summary_minified.html` (mangled `new yl({name:"...",version:"..."})` constructor; all 5 handlers; `.connect()`; `[ext-apps]` log prefix; no `import` literal)
+- `cost_over_time_minified.html` (same shape, different mangled id)
+- `synthetic_cascade_repro.html` (minimal: handlers + connect present; SDK signals absent — must report `has_handlers=true`, `has_sdk=false`, NO cascade)
+
+Plus integration tests asserting the exact verdict shape per fixture × mode (Standard/ClaudeDesktop/ChatGpt). Use the cost-coach evidence as the spec: the test must FAIL today (exposing G1+G2+G3) and PASS after fixes.
+
+#### Cross-references
+
+- Source feedback: `/Users/guy/projects/mcp/cost-coach/drafts/feedback-pmcp-test-apps-v1-false-positives.md`
+- Cost-coach prod endpoint: `https://cost-coach.us-west.pmcp.run/mcp`
+- v1 result on cost-coach: 97 tests, 60 passed, 33 failed, 4 warnings — overall FAILED
+- All 33 failures are confirmed false-positives (cost-coach team verified each widget renders correctly in Claude Desktop AND that `widget/dist/*.html` contains all 5 handlers, mangled constructor, `.connect()`, `[ext-apps]` log prefix)
+- Original 5 human_verification items (CLI binary boundary tests) are NO LONGER addressable in the current state — they were already executed against prod and found the false-positive class. Those items remain `pending` in `78-HUMAN-UAT.md` until the gap closure lands and re-verification is run.
+
+#### Out of scope (defer to a later phase)
+
+- Constructor-side detection of `Implementation` shape with non-empty `name` — already implicit in G2's regex. Don't deepen it.
+- AST parsing of bundled JS via `swc` or similar — complexity exceeds value given regex patterns above are sufficient.
+- `PreviewMode::ClaudeDesktop` host emulator — already deferred per phase 78 ROADMAP scope notes.
+- Replacing the deferred `cli_acceptance.rs` fixture binary — orthogonal concern; keep as documented in `mcp_widget_server.rs.todo`.
+
+#### Why `gaps_found` not `human_needed`
+
+The previous `human_needed` flag assumed CLI verification was the only outstanding work. The cost-coach feedback proves that even a successful CLI run is currently misleading — the validator produces false-positive output on correctly-wired prod bundles. This is a detection-correctness gap, not a verification-rigor gap. Closing it requires code changes (G1–G5), not human attention. After G1–G3 land and re-verification against cost-coach prod returns zero failures, the original 5 human_verification items can be re-evaluated as part of `human_needed` resolution.
+
+**Risk if NOT closed:** A 100% false-positive rate on correctly-wired widgets trains users to ignore the validator output. Then on the day they ship a real bug, the same red CI doesn't surface as a signal — it's been trained out as background noise. This second-order risk converts a useful pre-deploy check into anti-signal.
 
 ---
 *Verified: 2026-05-02*
